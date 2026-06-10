@@ -146,6 +146,20 @@ export const revealInExplorer = (path: string) =>
 export const openWithDefault = (path: string) =>
   invoke<void>("open_with_default", { path });
 
+export const openInTerminal = (
+  path: string,
+  terminal?: string,
+  program?: string,
+) =>
+  invoke<void>("open_in_terminal", {
+    path,
+    terminal: terminal || null,
+    program: program || null,
+  });
+
+export const ghRepoUrl = (repoPath: string) =>
+  invoke<string>("gh_repo_url", { repoPath });
+
 export const gitRecentCommits = (repoPath: string, limit: number) =>
   invoke<CommitSummary[]>("git_recent_commits", { repoPath, limit });
 
@@ -278,6 +292,16 @@ export interface DetectedEditor {
 }
 
 export const detectEditors = () => invoke<DetectedEditor[]>("detect_editors");
+
+export interface DetectedTerminal {
+  /** Known kind id the launcher dispatches on, e.g. "powershell". */
+  id: string;
+  name: string;
+  path: string;
+}
+
+export const detectTerminals = () =>
+  invoke<DetectedTerminal[]>("detect_terminals");
 
 export const readRepoInstructions = (repoPath: string) =>
   invoke<string | null>("read_repo_instructions", { repoPath });

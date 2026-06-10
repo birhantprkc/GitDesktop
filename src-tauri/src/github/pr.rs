@@ -66,6 +66,25 @@ pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
     })
 }
 
+/// The repository's web URL (works for github.com and GitHub Enterprise).
+/// Append paths like `/issues/new` for specific pages.
+#[tauri::command]
+pub async fn gh_repo_url(repo_path: String) -> AppResult<String> {
+    let out = run_gh(
+        Some(&repo_path),
+        &["repo", "view", "--json", "url", "-q", ".url"],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let url = out.stdout_lossy().trim().to_string();
+    if url.is_empty() {
+        return Err(AppError::Gh(
+            "could not determine the repository URL".into(),
+        ));
+    }
+    Ok(url)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrRef {

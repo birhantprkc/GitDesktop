@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useUiStore } from "@/lib/stores/ui";
 import { BranchSwitcher } from "./BranchSwitcher";
+import { RepositoryMenu } from "./RepositoryMenu";
 import { SyncControls } from "./SyncControls";
 
 export function RepoHeader({ repoPath }: { repoPath: string }) {
@@ -20,7 +21,7 @@ export function RepoHeader({ repoPath }: { repoPath: string }) {
       >
         <ArrowLeftIcon />
       </Button>
-      <span className="text-sm font-medium">{repoName}</span>
+      <RepositoryMenu repoPath={repoPath} repoName={repoName ?? "Repository"} />
       <Separator orientation="vertical" className="h-5" />
       <BranchSwitcher repoPath={repoPath} />
       <div className="flex-1" />

@@ -28,6 +28,10 @@ customizable AI commit message generation.
   reset, checkout, revert, branch/tag from commit, cherry-pick onto the
   current branch, copy SHA). Shift/Ctrl-click selects a range of commits to
   cherry-pick onto another branch (rolled back entirely if any conflict)
+- Repository menu (click the repo name): View on GitHub / Create issue (via
+  gh), open a terminal at the repo root (Command Prompt, PowerShell, Git Bash,
+  WSL, or a custom one — chosen in Settings), show in Explorer, open in your
+  configured editor, copy the path, or remove it from the recent list
 - Undo the latest unpushed commit (soft reset; message returns to the box)
 - Diverged-branch handling: when local history was rewritten (e.g. after an
   amend), Push becomes a confirmed force push using --force-with-lease

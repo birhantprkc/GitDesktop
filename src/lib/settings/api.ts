@@ -16,6 +16,10 @@ export interface AppSettings {
   externalEditor: string;
   /** Friendly name for the configured editor, used in menu labels. */
   externalEditorName: string;
+  /** Terminal kind id for "Open in terminal" (empty = default). */
+  terminal: string;
+  /** Executable path for the chosen terminal (empty for default/built-ins). */
+  terminalPath: string;
   /** Branch name used by `git init` for newly created repositories. */
   defaultBranch: string;
   recentRepos: RecentRepo[];
@@ -32,6 +36,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aiIgnorePatterns: "",
   externalEditor: "",
   externalEditorName: "",
+  terminal: "",
+  terminalPath: "",
   defaultBranch: "main",
   recentRepos: [],
   diffViewMode: "unified",

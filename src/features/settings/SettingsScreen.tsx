@@ -8,6 +8,7 @@ import { AiProviderSection } from "./AiProviderSection";
 import { EditorSection } from "./EditorSection";
 import { GitSection } from "./GitSection";
 import { InstructionsSection } from "./InstructionsSection";
+import { TerminalSection } from "./TerminalSection";
 
 export function SettingsScreen() {
   const closeSettings = useUiStore((s) => s.closeSettings);
@@ -39,6 +40,7 @@ export function SettingsScreen() {
               <InstructionsSection settings={settings.data} />
               <GitSection settings={settings.data} />
               <EditorSection settings={settings.data} />
+              <TerminalSection settings={settings.data} />
             </>
           )}
         </main>
