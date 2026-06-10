@@ -8,16 +8,20 @@ customizable AI commit message generation.
 - Open, clone, or create repositories (README/gitignore-template/license
   scaffolding, configurable default branch name); recent list persisted
 - Working-tree status with stage/unstage (single file or all at once)
-- Branch menu: switch, create, rename, delete (auto-switches off the current
-  branch first), discard all changes, stash/pop, update from the default
-  branch, merge, squash-merge (leaves changes staged for your own commit
-  message — AI included), and rebase (auto-aborts on conflicts); right-click
-  any branch for rename/copy/delete
+- Branch menu: switch (prompts to bring or stash in-progress changes),
+  create, rename, delete (auto-switches off the current branch first),
+  discard all changes, stash/pop, update from the default branch, merge,
+  squash-merge (leaves changes staged for your own commit message — AI
+  included), and rebase (auto-aborts on conflicts); right-click any branch
+  for rename/copy/delete
+- Error toasts include a Copy button for long git/provider messages
 - Commit history browser: commit list with per-commit changed files and diffs
 - Right-click context menus: files (discard to recycle bin, add to
   .gitignore by file/folder/extension, copy paths, show in Explorer, open in
   your configured editor or the default program) and commits (amend, mixed
-  reset, checkout, revert, branch/tag from commit, cherry-pick, copy SHA)
+  reset, checkout, revert, branch/tag from commit, cherry-pick onto the
+  current branch, copy SHA). Shift/Ctrl-click selects a range of commits to
+  cherry-pick onto another branch (rolled back entirely if any conflict)
 - Undo the latest unpushed commit (soft reset; message returns to the box)
 - Diverged-branch handling: when local history was rewritten (e.g. after an
   amend), Push becomes a confirmed force push using --force-with-lease

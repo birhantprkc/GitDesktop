@@ -37,6 +37,7 @@ import {
   useSecretPreview,
 } from "@/lib/settings/queries";
 import { errorMessage } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 
 const PROVIDER_IDS = Object.keys(PROVIDER_LABELS) as AiProviderId[];
 
@@ -98,7 +99,7 @@ export function AiProviderSection({ settings }: { settings: AppSettings }) {
         toast.success(`${PROVIDER_LABELS[provider]} key saved to OS keychain`);
       }
     } catch (e) {
-      toast.error(errorMessage(e));
+      toastError(e);
     } finally {
       setSavingKey(false);
     }
@@ -112,7 +113,7 @@ export function AiProviderSection({ settings }: { settings: AppSettings }) {
       });
       toast.success("Key removed");
     } catch (e) {
-      toast.error(errorMessage(e));
+      toastError(e);
     }
   }
 

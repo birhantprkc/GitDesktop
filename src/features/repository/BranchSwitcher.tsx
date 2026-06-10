@@ -44,7 +44,7 @@ import {
   useStashCount,
   useStashPop,
 } from "@/lib/git/queries";
-import { errorMessage } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 
 type PickerMode = "merge" | "squash" | "rebase";
 
@@ -105,6 +105,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [discardAllOpen, setDiscardAllOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
   const [pickerBranch, setPickerBranch] = useState("");
+  const [switchTarget, setSwitchTarget] = useState<string | null>(null);
 
   const head = status.data?.branch;
   const currentName = head?.name ?? null;
@@ -116,11 +117,38 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const defaultName = defaultBranch.data ?? null;
   const stashes = stashCount.data ?? 0;
 
-  const onError = (e: unknown) => toast.error(errorMessage(e));
+  const onError = (e: unknown) => toastError(e);
 
   function switchTo(name: string) {
     setOpen(false);
+    // with work in progress, let the user choose to bring or stash it
+    if ((status.data?.entries.length ?? 0) > 0) {
+      setSwitchTarget(name);
+      return;
+    }
     checkout.mutate(name, { onError });
+  }
+
+  function bringAndSwitch() {
+    if (!switchTarget) return;
+    const target = switchTarget;
+    setSwitchTarget(null);
+    checkout.mutate(target, { onError });
+  }
+
+  async function stashAndSwitch() {
+    if (!switchTarget) return;
+    const target = switchTarget;
+    setSwitchTarget(null);
+    try {
+      await stashAll.mutateAsync(undefined);
+      await checkout.mutateAsync(target);
+      toast.success(
+        `Stashed changes and switched to ${target} — "Pop latest stash" restores them`,
+      );
+    } catch (e) {
+      onError(e);
+    }
   }
 
   function create() {
@@ -580,6 +608,39 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             </Button>
             <Button onClick={runPicker} disabled={!pickerBranch}>
               {pickerMode ? PICKER_COPY[pickerMode].action : ""}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={switchTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setSwitchTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>You have changes in progress</DialogTitle>
+            <DialogDescription>
+              Bring your uncommitted changes along to {switchTarget}, or stash
+              them so {currentLabel} stays as you left it. "Pop latest stash"
+              restores stashed changes later.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSwitchTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              disabled={stashAll.isPending || checkout.isPending}
+              onClick={stashAndSwitch}
+            >
+              Stash and switch
+            </Button>
+            <Button disabled={checkout.isPending} onClick={bringAndSwitch}>
+              Bring changes
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -10,7 +10,7 @@ import {
 } from "@/lib/git/api";
 import { loadSettings } from "@/lib/settings/api";
 import { useUiStore } from "@/lib/stores/ui";
-import { errorMessage } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 
 /** Raw diff bytes requested from the backend; prompt budgeting trims further. */
 const RAW_DIFF_MAX_BYTES = 200_000;
@@ -75,7 +75,7 @@ export function useGenerateCommitMessage(repoPath: string) {
       }
     } catch (e) {
       if (!abort.signal.aborted) {
-        toast.error(errorMessage(e));
+        toastError(e);
       }
     } finally {
       setGenerating(false);

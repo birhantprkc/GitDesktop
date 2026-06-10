@@ -174,6 +174,14 @@ export function useCherryPick(repo: string) {
   return useRepoMutation(repo, (hash: string) => api.gitCherryPick(repo, hash));
 }
 
+export function useCherryPickOnto(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { hashes: string[]; targetBranch: string }) =>
+      api.gitCherryPickOnto(repo, args.hashes, args.targetBranch),
+  );
+}
+
 export function useCreateTag(repo: string) {
   return useRepoMutation(repo, (args: { name: string; hash: string }) =>
     api.gitTag(repo, args.name, args.hash),

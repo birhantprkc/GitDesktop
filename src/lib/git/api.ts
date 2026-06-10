@@ -108,8 +108,28 @@ export const gitCheckoutCommit = (repoPath: string, hash: string) =>
 export const gitRevert = (repoPath: string, hash: string) =>
   invoke<void>("git_revert", { repoPath, hash });
 
+/** Resolves true when a commit was created, false when there was nothing
+ *  to apply (the changes already exist on this branch). */
 export const gitCherryPick = (repoPath: string, hash: string) =>
-  invoke<void>("git_cherry_pick", { repoPath, hash });
+  invoke<boolean>("git_cherry_pick", { repoPath, hash });
+
+export interface CherryPickRangeResult {
+  applied: number;
+  skipped: number;
+}
+
+/** Copies `hashes` (oldest-first) onto `targetBranch` and leaves you there.
+ *  Rolls back entirely if any commit conflicts. */
+export const gitCherryPickOnto = (
+  repoPath: string,
+  hashes: string[],
+  targetBranch: string,
+) =>
+  invoke<CherryPickRangeResult>("git_cherry_pick_onto", {
+    repoPath,
+    hashes,
+    targetBranch,
+  });
 
 export const gitTag = (repoPath: string, name: string, hash: string) =>
   invoke<void>("git_tag", { repoPath, name, hash });

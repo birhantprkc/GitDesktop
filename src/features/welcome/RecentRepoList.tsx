@@ -17,7 +17,8 @@ import {
   useSettings,
 } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { errorMessage, isAppError } from "@/lib/tauri/invoke";
+import { isAppError } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 
 export function RecentRepoList() {
   const settings = useSettings();
@@ -42,7 +43,7 @@ export function RecentRepoList() {
           },
         });
       } else {
-        toast.error(errorMessage(e));
+        toastError(e);
       }
     }
   }

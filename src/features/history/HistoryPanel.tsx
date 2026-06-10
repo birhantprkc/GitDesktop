@@ -20,12 +20,21 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { copyText } from "@/lib/clipboard";
 import { gitCommitDetails } from "@/lib/git/api";
 import {
+  useBranches,
   useCheckoutCommit,
   useCherryPick,
+  useCherryPickOnto,
   useCreateBranch,
   useCreateTag,
   useLog,
@@ -35,8 +44,8 @@ import {
   useUndoCommit,
 } from "@/lib/git/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { errorMessage } from "@/lib/tauri/invoke";
 import { formatRelativeTime } from "@/lib/time";
+import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 export function HistoryPanel({ repoPath }: { repoPath: string }) {
@@ -53,16 +62,28 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const checkoutCommit = useCheckoutCommit(repoPath);
   const revertCommit = useRevertCommit(repoPath);
   const cherryPick = useCherryPick(repoPath);
+  const cherryPickOnto = useCherryPickOnto(repoPath);
   const createBranch = useCreateBranch(repoPath);
   const createTag = useCreateTag(repoPath);
+  const branches = useBranches(repoPath);
 
   const [resetHash, setResetHash] = useState<string | null>(null);
   const [branchHash, setBranchHash] = useState<string | null>(null);
   const [branchName, setBranchName] = useState("");
   const [tagHash, setTagHash] = useState<string | null>(null);
   const [tagName, setTagName] = useState("");
+  // Multi-/range-selection for "cherry-pick to branch". Kept separate from the
+  // ui store's focused commit (which drives the diff panel).
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [anchorIndex, setAnchorIndex] = useState<number | null>(null);
+  // Hashes to copy, oldest-first, and the chosen destination branch.
+  const [pickOntoHashes, setPickOntoHashes] = useState<string[] | null>(null);
+  const [pickOntoBranch, setPickOntoBranch] = useState("");
 
-  const onError = (e: unknown) => toast.error(errorMessage(e));
+  const onError = (e: unknown) => toastError(e);
+
+  const currentBranch = status.data?.branch?.name ?? null;
+  const targetBranches = (branches.data ?? []).filter((b) => !b.isCurrent);
 
   async function startAmend(hash: string) {
     try {
@@ -121,6 +142,72 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     );
   }
 
+  function onRowClick(e: React.MouseEvent, index: number, hash: string) {
+    // Keep the diff panel on the clicked commit regardless of modifiers.
+    selectCommit(hash);
+    if (e.shiftKey && anchorIndex !== null) {
+      const [a, b] = [anchorIndex, index].sort((x, y) => x - y);
+      setSelected(new Set(commits.slice(a, b + 1).map((c) => c.hash)));
+    } else if (e.ctrlKey || e.metaKey) {
+      const next = new Set(selected);
+      if (next.has(hash)) {
+        next.delete(hash);
+      } else {
+        next.add(hash);
+      }
+      setSelected(next);
+      setAnchorIndex(index);
+    } else {
+      setSelected(new Set([hash]));
+      setAnchorIndex(index);
+    }
+  }
+
+  // The commits a context-menu action applies to: the multi-selection when the
+  // right-clicked commit is part of it, otherwise just that one commit.
+  function effectiveSelection(hash: string): string[] {
+    const base =
+      selected.has(hash) && selected.size > 1 ? selected : new Set([hash]);
+    // Cherry-pick wants oldest-first; the log is newest-first.
+    return commits
+      .filter((c) => base.has(c.hash))
+      .map((c) => c.hash)
+      .reverse();
+  }
+
+  function openCherryPickOnto(hash: string) {
+    setPickOntoHashes(effectiveSelection(hash));
+    setPickOntoBranch(targetBranches[0]?.name ?? "");
+  }
+
+  function runCherryPickOnto() {
+    if (!pickOntoHashes || !pickOntoBranch) return;
+    const branch = pickOntoBranch;
+    cherryPickOnto.mutate(
+      { hashes: pickOntoHashes, targetBranch: branch },
+      {
+        onSuccess: ({ applied, skipped }) => {
+          if (applied === 0) {
+            toast.info(
+              `Nothing to copy onto ${branch} — those changes are already there.`,
+            );
+          } else {
+            const note = skipped > 0 ? ` (${skipped} already present)` : "";
+            toast.success(
+              `Copied ${applied} commit${applied === 1 ? "" : "s"} onto ${branch}${note}`,
+            );
+          }
+          setPickOntoHashes(null);
+          setSelected(new Set());
+        },
+        onError: (e) => {
+          onError(e);
+          setPickOntoHashes(null);
+        },
+      },
+    );
+  }
+
   return (
     <>
       {canUndo && lastCommit && (
@@ -153,11 +240,13 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                     type="button"
                     className={cn(
                       "block w-full border-b px-3 py-2 text-left",
-                      selectedCommitHash === commit.hash
+                      selected.has(commit.hash) ||
+                        (selected.size === 0 &&
+                          selectedCommitHash === commit.hash)
                         ? "bg-accent text-accent-foreground"
                         : "hover:bg-muted/60",
                     )}
-                    onClick={() => selectCommit(commit.hash)}
+                    onClick={(e) => onRowClick(e, index, commit.hash)}
                   >
                     <p className="truncate text-xs font-medium">
                       {commit.subject}
@@ -218,9 +307,32 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                   Create tag…
                 </ContextMenuItem>
                 <ContextMenuItem
-                  onClick={() => cherryPick.mutate(commit.hash, { onError })}
+                  onClick={() =>
+                    cherryPick.mutate(commit.hash, {
+                      onSuccess: (applied) => {
+                        if (applied) {
+                          toast.success(
+                            `Cherry-picked ${commit.hash.slice(0, 7)}`,
+                          );
+                        } else {
+                          toast.info(
+                            "Nothing to cherry-pick — these changes are already on this branch.",
+                          );
+                        }
+                      },
+                      onError,
+                    })
+                  }
                 >
                   Cherry-pick commit
+                </ContextMenuItem>
+                <ContextMenuItem
+                  disabled={targetBranches.length === 0}
+                  onClick={() => openCherryPickOnto(commit.hash)}
+                >
+                  {selected.has(commit.hash) && selected.size > 1
+                    ? `Cherry-pick ${selected.size} commits to branch…`
+                    : "Cherry-pick to branch…"}
                 </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem
@@ -378,6 +490,58 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
               }}
             >
               Create tag
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pickOntoHashes !== null}
+        onOpenChange={(open) => {
+          if (!open) setPickOntoHashes(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cherry-pick to branch</DialogTitle>
+            <DialogDescription>
+              {pickOntoHashes && pickOntoHashes.length > 1
+                ? `Copies these ${pickOntoHashes.length} commits onto the chosen branch and switches to it. `
+                : "Copies this commit onto the chosen branch and switches to it. "}
+              They stay on {currentBranch ?? "this branch"} too. Commits already
+              present are skipped; a conflict rolls the whole thing back.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Destination branch</Label>
+            <Select
+              items={Object.fromEntries(
+                targetBranches.map((b) => [b.name, b.name]),
+              )}
+              value={pickOntoBranch || null}
+              onValueChange={(v) => v && setPickOntoBranch(v)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {targetBranches.map((b) => (
+                  <SelectItem key={b.name} value={b.name}>
+                    {b.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPickOntoHashes(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={runCherryPickOnto}
+              disabled={!pickOntoBranch || cherryPickOnto.isPending}
+            >
+              Cherry-pick
             </Button>
           </DialogFooter>
         </DialogContent>

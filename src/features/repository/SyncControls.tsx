@@ -24,7 +24,7 @@ import {
   usePush,
   useRepoStatus,
 } from "@/lib/git/queries";
-import { errorMessage } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 
 export function SyncControls({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
@@ -39,7 +39,7 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   // other lacks, so neither pull --ff-only nor a normal push can succeed
   const diverged = Boolean(head && head.ahead > 0 && head.behind > 0);
   const busy = fetchRemote.isPending || pull.isPending || push.isPending;
-  const onError = (e: unknown) => toast.error(errorMessage(e));
+  const onError = (e: unknown) => toastError(e);
 
   function doPush(force: boolean) {
     push.mutate(

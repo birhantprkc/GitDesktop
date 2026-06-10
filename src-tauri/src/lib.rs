@@ -43,6 +43,7 @@ pub fn run() {
             git::ops::git_checkout_commit,
             git::ops::git_revert,
             git::ops::git_cherry_pick,
+            git::ops::git_cherry_pick_onto,
             git::ops::git_tag,
             git::ops::git_discard_all,
             git::ops::git_stash_all,

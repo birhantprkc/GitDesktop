@@ -6,7 +6,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useCommit, useRepoStatus } from "@/lib/git/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { errorMessage } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useGenerateCommitMessage } from "./useGenerateCommitMessage";
 
@@ -40,7 +40,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
             `${amending ? "Amended" : "Committed"} ${result.hash.slice(0, 7)}`,
           );
         },
-        onError: (e) => toast.error(errorMessage(e)),
+        onError: (e) => toastError(e),
       },
     );
   }

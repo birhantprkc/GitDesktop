@@ -1,6 +1,5 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,7 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { cloneRepo, validateRepo } from "@/lib/git/api";
 import { useAddRecentRepo } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { errorMessage } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 
 export function CloneRepoDialog({
   open,
@@ -49,7 +48,7 @@ export function CloneRepoDialog({
       setUrl("");
       openRepo(info);
     } catch (e) {
-      toast.error(errorMessage(e));
+      toastError(e);
     } finally {
       setCloning(false);
     }

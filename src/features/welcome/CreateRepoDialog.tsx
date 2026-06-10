@@ -23,7 +23,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { createRepo, validateRepo } from "@/lib/git/api";
 import { useAddRecentRepo, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { errorMessage } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 
 const NONE = "__none__";
 const GITIGNORE_TEMPLATES = ["Node", "Python", "Rust", "Go"];
@@ -84,7 +84,7 @@ export function CreateRepoDialog({
       openRepo(info);
       toast.success(`Created ${info.name}`);
     } catch (e) {
-      toast.error(errorMessage(e));
+      toastError(e);
     } finally {
       setCreating(false);
     }

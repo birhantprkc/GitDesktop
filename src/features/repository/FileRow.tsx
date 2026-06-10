@@ -20,7 +20,7 @@ import {
 import { useAppendToGitignore } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
 import { useSettings } from "@/lib/settings/queries";
-import { errorMessage } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 const KIND_BADGE: Record<ChangeKind, { letter: string; className: string }> = {
@@ -86,11 +86,11 @@ export function FileRow({
   function ignore(pattern: string) {
     appendIgnore.mutate(pattern, {
       onSuccess: () => toast.success(`Added "${pattern}" to .gitignore`),
-      onError: (e) => toast.error(errorMessage(e)),
+      onError: (e) => toastError(e),
     });
   }
 
-  const onError = (e: unknown) => toast.error(errorMessage(e));
+  const onError = (e: unknown) => toastError(e);
 
   return (
     <ContextMenu>

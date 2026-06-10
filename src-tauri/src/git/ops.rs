@@ -66,15 +66,154 @@ pub async fn git_revert(
     Ok(())
 }
 
+/// Returns true when a commit was created. Cherry-picking changes that are
+/// already present makes git stop with an in-progress empty pick; that's not
+/// an error worth surfacing raw — clean up with --skip and report false.
 #[tauri::command]
 pub async fn git_cherry_pick(
     state: State<'_, AppState>,
     repo_path: String,
     hash: String,
-) -> AppResult<()> {
+) -> AppResult<bool> {
     validate_hash(&hash)?;
-    run_git_mutating(&state, &repo_path, &["cherry-pick", &hash], DEFAULT_TIMEOUT).await?;
-    Ok(())
+    match run_git_mutating(&state, &repo_path, &["cherry-pick", &hash], DEFAULT_TIMEOUT).await {
+        Ok(_) => Ok(true),
+        Err(AppError::Git { stderr, .. })
+            if stderr.contains("is now empty") || stderr.contains("--allow-empty") =>
+        {
+            let _ = run_git_mutating(
+                &state,
+                &repo_path,
+                &["cherry-pick", "--skip"],
+                DEFAULT_TIMEOUT,
+            )
+            .await;
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CherryPickRangeResult {
+    pub applied: usize,
+    pub skipped: usize,
+}
+
+/// Copies the given commits (oldest-first) onto `target_branch`, then leaves
+/// you on that branch. Commits whose changes already exist there are skipped
+/// rather than erroring. If any commit conflicts, the whole operation is
+/// rolled back — the target branch is reset to its prior tip and you return to
+/// where you started — so the repo is never left mid-conflict.
+#[tauri::command]
+pub async fn git_cherry_pick_onto(
+    state: State<'_, AppState>,
+    repo_path: String,
+    hashes: Vec<String>,
+    target_branch: String,
+) -> AppResult<CherryPickRangeResult> {
+    use crate::git::runner::run_git;
+
+    validate_branch_arg(&target_branch)?;
+    for h in &hashes {
+        validate_hash(h)?;
+    }
+    if hashes.is_empty() {
+        return Ok(CherryPickRangeResult {
+            applied: 0,
+            skipped: 0,
+        });
+    }
+
+    // Where we are now, so we can return on failure. A detached HEAD has no
+    // branch name, so fall back to restoring its commit directly.
+    let original_ref = run_git(
+        Some(&repo_path),
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?
+    .stdout_lossy()
+    .trim()
+    .to_string();
+    let detached = original_ref == "HEAD";
+    let original_restore = if detached {
+        run_git(Some(&repo_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
+            .await?
+            .stdout_lossy()
+            .trim()
+            .to_string()
+    } else {
+        original_ref
+    };
+
+    // The target's tip before we touch it, so we can roll back cleanly.
+    let target_tip = run_git(
+        Some(&repo_path),
+        &["rev-parse", &target_branch],
+        DEFAULT_TIMEOUT,
+    )
+    .await?
+    .stdout_lossy()
+    .trim()
+    .to_string();
+
+    run_git_mutating(&state, &repo_path, &["switch", &target_branch], DEFAULT_TIMEOUT).await?;
+
+    let mut applied = 0usize;
+    let mut skipped = 0usize;
+    for hash in &hashes {
+        match run_git_mutating(&state, &repo_path, &["cherry-pick", hash], DEFAULT_TIMEOUT).await {
+            Ok(_) => applied += 1,
+            Err(AppError::Git { stderr, .. })
+                if stderr.contains("is now empty") || stderr.contains("--allow-empty") =>
+            {
+                let _ = run_git_mutating(
+                    &state,
+                    &repo_path,
+                    &["cherry-pick", "--skip"],
+                    DEFAULT_TIMEOUT,
+                )
+                .await;
+                skipped += 1;
+            }
+            Err(AppError::Git { code, stderr }) => {
+                // Roll everything back: abort the in-progress pick, drop the
+                // commits already applied in this batch, and return home.
+                let _ = run_git_mutating(
+                    &state,
+                    &repo_path,
+                    &["cherry-pick", "--abort"],
+                    DEFAULT_TIMEOUT,
+                )
+                .await;
+                let _ = run_git_mutating(
+                    &state,
+                    &repo_path,
+                    &["reset", "--hard", &target_tip],
+                    DEFAULT_TIMEOUT,
+                )
+                .await;
+                let restore_args: Vec<&str> = if detached {
+                    vec!["switch", "--detach", &original_restore]
+                } else {
+                    vec!["switch", &original_restore]
+                };
+                let _ = run_git_mutating(&state, &repo_path, &restore_args, DEFAULT_TIMEOUT).await;
+                let short = &hash[..hash.len().min(7)];
+                return Err(AppError::Git {
+                    code,
+                    stderr: format!(
+                        "Cherry-pick hit conflicts on {short} and was rolled back; {target_branch} is unchanged.\n{stderr}"
+                    ),
+                });
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(CherryPickRangeResult { applied, skipped })
 }
 
 /// Discards every uncommitted change: untracked files go to the recycle bin,

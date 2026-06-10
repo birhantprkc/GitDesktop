@@ -19,7 +19,7 @@ import {
 } from "@/lib/git/queries";
 import type { FileEntry } from "@/lib/git/types";
 import { useUiStore } from "@/lib/stores/ui";
-import { errorMessage } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 import { FileRow } from "./FileRow";
 
 /**
@@ -55,7 +55,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     if (!stillThere) selectFile(null);
   }, [status.data, selectedFile, selectFile]);
   const mutating = stage.isPending || unstage.isPending;
-  const onError = (e: unknown) => toast.error(errorMessage(e));
+  const onError = (e: unknown) => toastError(e);
 
   function select(entry: FileEntry, staged: boolean) {
     selectFile({
@@ -206,7 +206,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                       setDiscardTarget(null);
                     },
                     onError: (e) => {
-                      toast.error(errorMessage(e));
+                      toastError(e);
                       setDiscardTarget(null);
                     },
                   },

@@ -1,7 +1,6 @@
 import { FolderOpenIcon, GearIcon, GitBranchIcon } from "@phosphor-icons/react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,7 +12,7 @@ import {
 import { validateRepo } from "@/lib/git/api";
 import { useAddRecentRepo } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { errorMessage } from "@/lib/tauri/invoke";
+import { toastError } from "@/lib/toast";
 import { CloneRepoDialog } from "./CloneRepoDialog";
 import { CreateRepoDialog } from "./CreateRepoDialog";
 import { RecentRepoList } from "./RecentRepoList";
@@ -36,7 +35,7 @@ export function WelcomeScreen() {
       addRecent.mutate({ path: info.root, name: info.name });
       openRepo(info);
     } catch (e) {
-      toast.error(errorMessage(e));
+      toastError(e);
     }
   }
 
