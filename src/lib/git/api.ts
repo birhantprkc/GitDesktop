@@ -20,6 +20,19 @@ export const validateRepo = (path: string) =>
 export const cloneRepo = (url: string, parentDir: string, dirName?: string) =>
   invoke<string>("clone_repo", { url, parentDir, dirName: dirName ?? null });
 
+export interface CreateRepoOptions {
+  name: string;
+  description: string;
+  parentDir: string;
+  initReadme: boolean;
+  gitignore: string | null;
+  license: string | null;
+  defaultBranch: string;
+}
+
+export const createRepo = (options: CreateRepoOptions) =>
+  invoke<string>("create_repo", { options });
+
 export const gitStatus = (repoPath: string) =>
   invoke<RepoStatus>("git_status", { repoPath });
 

@@ -70,8 +70,9 @@ export function FileRow({
 }) {
   const appendIgnore = useAppendToGitignore(repoPath);
   const settings = useSettings();
-  const externalEditor = settings.data?.externalEditor.trim() ?? "";
-  const editorName = settings.data?.externalEditorName.trim() || "editor";
+  const externalEditor = (settings.data?.externalEditor ?? "").trim();
+  const editorName =
+    (settings.data?.externalEditorName ?? "").trim() || "editor";
   const badge = KIND_BADGE[kind];
   const label = entry.origPath
     ? `${entry.origPath} → ${entry.path}`

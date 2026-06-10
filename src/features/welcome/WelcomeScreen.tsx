@@ -15,6 +15,7 @@ import { useAddRecentRepo } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { CloneRepoDialog } from "./CloneRepoDialog";
+import { CreateRepoDialog } from "./CreateRepoDialog";
 import { RecentRepoList } from "./RecentRepoList";
 
 export function WelcomeScreen() {
@@ -22,6 +23,7 @@ export function WelcomeScreen() {
   const openSettings = useUiStore((s) => s.openSettings);
   const addRecent = useAddRecentRepo();
   const [cloneOpen, setCloneOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
   async function pickAndOpen() {
     const path = await openDialog({
@@ -71,6 +73,9 @@ export function WelcomeScreen() {
             <Button variant="outline" onClick={() => setCloneOpen(true)}>
               Clone repository
             </Button>
+            <Button variant="outline" onClick={() => setCreateOpen(true)}>
+              Create repository
+            </Button>
           </CardContent>
         </Card>
 
@@ -78,6 +83,7 @@ export function WelcomeScreen() {
       </main>
 
       <CloneRepoDialog open={cloneOpen} onOpenChange={setCloneOpen} />
+      <CreateRepoDialog open={createOpen} onOpenChange={setCreateOpen} />
     </div>
   );
 }

@@ -5,7 +5,8 @@ customizable AI commit message generation.
 
 ## Features (Milestone 1)
 
-- Open, clone, and switch between local repositories (recent list persisted)
+- Open, clone, or create repositories (README/gitignore-template/license
+  scaffolding, configurable default branch name); recent list persisted
 - Working-tree status with stage/unstage (single file or all at once), branch
   switching/creation
 - Commit history browser: commit list with per-commit changed files and diffs

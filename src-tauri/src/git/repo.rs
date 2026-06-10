@@ -84,3 +84,177 @@ fn default_clone_dir_name(url: &str) -> Option<String> {
     let name = last.trim_end_matches(".git").trim();
     (!name.is_empty()).then(|| name.to_string())
 }
+
+const GITIGNORE_TEMPLATES: &[(&str, &str)] = &[
+    (
+        "Node",
+        "node_modules/\ndist/\nbuild/\ncoverage/\n.env\n.env.local\nnpm-debug.log*\nyarn-error.log*\n.DS_Store\n",
+    ),
+    (
+        "Python",
+        "__pycache__/\n*.py[cod]\n.venv/\nvenv/\ndist/\nbuild/\n*.egg-info/\n.pytest_cache/\n.mypy_cache/\n.env\n.DS_Store\n",
+    ),
+    ("Rust", "/target\n**/*.rs.bk\n.DS_Store\n"),
+    ("Go", "bin/\n*.exe\n*.test\n*.out\nvendor/\n.env\n.DS_Store\n"),
+];
+
+const MIT_LICENSE: &str = r#"MIT License
+
+Copyright (c) {year} {holder}
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"#;
+
+const UNLICENSE: &str = r#"This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute
+this software, either in source code form or as a compiled binary, for any
+purpose, commercial or non-commercial, and by any means.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+
+For more information, please refer to <https://unlicense.org>
+"#;
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateRepoOptions {
+    pub name: String,
+    pub description: String,
+    pub parent_dir: String,
+    pub init_readme: bool,
+    pub gitignore: Option<String>,
+    pub license: Option<String>,
+    pub default_branch: String,
+}
+
+#[tauri::command]
+pub async fn create_repo(
+    state: tauri::State<'_, crate::state::AppState>,
+    options: CreateRepoOptions,
+) -> AppResult<String> {
+    let name = options.name.trim();
+    if name.is_empty() || name.contains(['<', '>', ':', '"', '/', '\\', '|', '?', '*']) {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid repository name: {name}"
+        )));
+    }
+    let branch = {
+        let b = options.default_branch.trim();
+        if b.is_empty() { "main" } else { b }
+    };
+    if branch.starts_with('-') || branch.contains(' ') {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid branch name: {branch}"
+        )));
+    }
+
+    let root = Path::new(&options.parent_dir).join(name);
+    let occupied = root.exists()
+        && std::fs::read_dir(&root)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(true);
+    if occupied {
+        return Err(AppError::InvalidArgument(format!(
+            "{} already exists and is not empty",
+            root.display()
+        )));
+    }
+    tokio::fs::create_dir_all(&root).await.map_err(AppError::Io)?;
+    let root_str = root.to_string_lossy().into_owned();
+
+    run_git(Some(&root_str), &["init", "-b", branch], DEFAULT_TIMEOUT).await?;
+
+    let description = options.description.trim();
+    if !description.is_empty() {
+        let desc_path = root.join(".git").join("description");
+        tokio::fs::write(&desc_path, format!("{description}\n"))
+            .await
+            .map_err(AppError::Io)?;
+    }
+
+    let mut wrote_files = false;
+    if options.init_readme {
+        let mut readme = format!("# {name}\n");
+        if !description.is_empty() {
+            readme.push_str(&format!("\n{description}\n"));
+        }
+        tokio::fs::write(root.join("README.md"), readme)
+            .await
+            .map_err(AppError::Io)?;
+        wrote_files = true;
+    }
+    if let Some(template) = options.gitignore.as_deref() {
+        if let Some((_, content)) = GITIGNORE_TEMPLATES.iter().find(|(n, _)| *n == template) {
+            tokio::fs::write(root.join(".gitignore"), content)
+                .await
+                .map_err(AppError::Io)?;
+            wrote_files = true;
+        }
+    }
+    if let Some(license) = options.license.as_deref() {
+        let text = match license {
+            "MIT" => {
+                let holder = run_git_raw(Some(&root_str), &["config", "user.name"], DEFAULT_TIMEOUT)
+                    .await
+                    .map(|o| o.stdout_lossy().trim().to_string())
+                    .unwrap_or_default();
+                let year = time_year();
+                Some(
+                    MIT_LICENSE
+                        .replace("{year}", &year)
+                        .replace("{holder}", if holder.is_empty() { name } else { &holder }),
+                )
+            }
+            "Unlicense" => Some(UNLICENSE.to_string()),
+            _ => None,
+        };
+        if let Some(text) = text {
+            tokio::fs::write(root.join("LICENSE"), text)
+                .await
+                .map_err(AppError::Io)?;
+            wrote_files = true;
+        }
+    }
+
+    if wrote_files {
+        crate::git::runner::run_git_mutating(&state, &root_str, &["add", "-A"], DEFAULT_TIMEOUT)
+            .await?;
+        crate::git::runner::run_git_mutating(
+            &state,
+            &root_str,
+            &["commit", "-m", "Initial commit"],
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+    }
+
+    Ok(root_str)
+}
+
+fn time_year() -> String {
+    // chrono-free current year from the unix epoch; close enough for a license
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    (1970 + secs / 31_557_600).to_string()
+}

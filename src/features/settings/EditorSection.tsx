@@ -26,10 +26,10 @@ export function EditorSection({ settings }: { settings: AppSettings }) {
     queryFn: detectEditors,
     staleTime: 5 * 60 * 1000,
   });
-  const [pathDraft, setPathDraft] = useState(settings.externalEditor);
+  const [pathDraft, setPathDraft] = useState(settings.externalEditor ?? "");
 
   useEffect(() => {
-    setPathDraft(settings.externalEditor);
+    setPathDraft(settings.externalEditor ?? "");
   }, [settings.externalEditor]);
 
   const editors = detected.data ?? [];

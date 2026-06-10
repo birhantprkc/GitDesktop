@@ -16,6 +16,8 @@ export interface AppSettings {
   externalEditor: string;
   /** Friendly name for the configured editor, used in menu labels. */
   externalEditorName: string;
+  /** Branch name used by `git init` for newly created repositories. */
+  defaultBranch: string;
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -30,6 +32,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aiIgnorePatterns: "",
   externalEditor: "",
   externalEditorName: "",
+  defaultBranch: "main",
   recentRepos: [],
   diffViewMode: "unified",
 };

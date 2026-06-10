@@ -19,6 +19,7 @@ pub fn run() {
             git::repo::check_git_installed,
             git::repo::validate_repo,
             git::repo::clone_repo,
+            git::repo::create_repo,
             git::status::git_status,
             git::branches::git_branches,
             git::branches::git_checkout_branch,
