@@ -92,3 +92,15 @@ export interface BranchComparison {
   /** On `base` but not `compare` — what `compare` is missing. */
   behind: CommitSummary[];
 }
+
+export interface GhStatus {
+  installed: boolean;
+  authenticated: boolean;
+  /** "owner/name" when this repo has a GitHub remote gh recognizes. */
+  repo: string | null;
+}
+
+export interface PrRef {
+  number: number;
+  url: string;
+}

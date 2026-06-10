@@ -7,7 +7,9 @@ import type {
   CommitSummary,
   DiffStatEntry,
   FileDiff,
+  GhStatus,
   GitInfo,
+  PrRef,
   RepoInfo,
   RepoStatus,
   StagedDiff,
@@ -232,6 +234,39 @@ export const gitBranchFileDiff = (
     base,
     compare,
     filePath,
+  });
+
+export const gitBranchDiff = (
+  repoPath: string,
+  base: string,
+  compare: string,
+  maxBytes?: number,
+) =>
+  invoke<StagedDiff>("git_branch_diff", {
+    repoPath,
+    base,
+    compare,
+    maxBytes: maxBytes ?? null,
+  });
+
+export const ghStatus = (repoPath: string) =>
+  invoke<GhStatus>("gh_status", { repoPath });
+
+export const ghPrCreate = (
+  repoPath: string,
+  base: string,
+  head: string,
+  title: string,
+  body: string,
+  draft: boolean,
+) =>
+  invoke<PrRef>("gh_pr_create", {
+    repoPath,
+    base,
+    head,
+    title,
+    body,
+    draft,
   });
 
 export const openWithProgram = (program: string, path: string) =>

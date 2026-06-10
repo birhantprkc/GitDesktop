@@ -111,6 +111,7 @@ export function CreateRepoDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               disabled={creating}
+              autoComplete="off"
             />
           </div>
           <div className="space-y-2">

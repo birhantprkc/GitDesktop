@@ -9,6 +9,10 @@ pub enum AppError {
     NotARepo(String),
     #[error("git executable not found on PATH")]
     GitNotFound,
+    #[error("GitHub CLI (gh) not found on PATH")]
+    GhNotFound,
+    #[error("{0}")]
+    Gh(String),
     #[error("keychain error: {0}")]
     Keyring(String),
     #[error("invalid argument: {0}")]
@@ -34,6 +38,8 @@ impl Serialize for AppError {
             AppError::Git { .. } => "git",
             AppError::NotARepo(_) => "notARepo",
             AppError::GitNotFound => "gitNotFound",
+            AppError::GhNotFound => "ghNotFound",
+            AppError::Gh(_) => "gh",
             AppError::Keyring(_) => "keyring",
             AppError::InvalidArgument(_) => "invalidArgument",
             AppError::Io(_) => "io",

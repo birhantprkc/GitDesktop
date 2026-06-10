@@ -1,5 +1,10 @@
-import { FilesIcon, GitCommitIcon } from "@phosphor-icons/react";
-import { useEffect } from "react";
+import {
+  FilesIcon,
+  GitCommitIcon,
+  GitPullRequestIcon,
+} from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -9,10 +14,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CreatePrDialog } from "@/features/pulls/CreatePrDialog";
 import {
   useBranches,
   useCompareBranches,
   useDefaultBranch,
+  useGhStatus,
   useRepoStatus,
 } from "@/lib/git/queries";
 import type { CommitSummary } from "@/lib/git/types";
@@ -24,10 +31,12 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
   const branches = useBranches(repoPath);
   const defaultBranch = useDefaultBranch(repoPath);
+  const gh = useGhStatus(repoPath);
   const compareBranch = useUiStore((s) => s.compareBranch);
   const setCompareBranch = useUiStore((s) => s.setCompareBranch);
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const selectCommit = useUiStore((s) => s.selectCommit);
+  const [prOpen, setPrOpen] = useState(false);
 
   const currentName = status.data?.branch?.name ?? null;
   const detached = status.data?.branch?.detached ?? false;
@@ -69,6 +78,9 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
 
   const ahead = comparison.data?.ahead ?? [];
   const behind = comparison.data?.behind ?? [];
+  const canPr = Boolean(
+    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -92,7 +104,35 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
             ))}
           </SelectContent>
         </Select>
+        {canPr && compareBranch && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full"
+            disabled={ahead.length === 0}
+            onClick={() => setPrOpen(true)}
+            title={
+              ahead.length === 0
+                ? `${currentName} has no commits to propose onto ${compareBranch}`
+                : `Open a pull request into ${compareBranch}`
+            }
+          >
+            <GitPullRequestIcon data-icon="inline-start" />
+            Create pull request…
+          </Button>
+        )}
       </div>
+
+      {canPr && compareBranch && (
+        <CreatePrDialog
+          repoPath={repoPath}
+          base={compareBranch}
+          head={currentName}
+          commitSubjects={ahead.map((c) => c.subject)}
+          open={prOpen}
+          onOpenChange={setPrOpen}
+        />
+      )}
 
       <button
         type="button"

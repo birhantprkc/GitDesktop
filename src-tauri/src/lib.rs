@@ -1,6 +1,7 @@
 mod error;
 mod fsops;
 mod git;
+mod github;
 mod instructions;
 mod secrets;
 mod state;
@@ -54,6 +55,9 @@ pub fn run() {
             git::compare::git_compare_branches,
             git::compare::git_branch_diff_files,
             git::compare::git_branch_file_diff,
+            git::compare::git_branch_diff,
+            github::pr::gh_status,
+            github::pr::gh_pr_create,
             fsops::append_to_gitignore,
             fsops::reveal_in_explorer,
             fsops::open_with_default,

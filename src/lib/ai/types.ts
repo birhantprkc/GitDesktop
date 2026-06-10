@@ -29,3 +29,15 @@ export interface CommitPromptInput {
   repoInstructions: string | null;
   globalInstructions: string;
 }
+
+export interface PrPromptInput {
+  diffText: string;
+  diffTruncated: boolean;
+  files: { path: string; added: number; deleted: number; isBinary: boolean }[];
+  /** Subjects of the commits this PR would introduce (base..head). */
+  commitSubjects: string[];
+  baseBranch: string;
+  headBranch: string;
+  repoInstructions: string | null;
+  globalInstructions: string;
+}

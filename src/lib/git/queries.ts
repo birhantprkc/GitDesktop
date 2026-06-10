@@ -149,6 +149,15 @@ export function useBranchFileDiff(
   });
 }
 
+export function useGhStatus(repo: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "gh-status"] as const,
+    queryFn: () => api.ghStatus(repo),
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 /** Builds a mutation that invalidates everything under the repo when done. */
 function useRepoMutation<TArgs, TData>(
   repo: string,
@@ -304,4 +313,25 @@ export function useMergeBranch(repo: string) {
 
 export function useRebaseBranch(repo: string) {
   return useRepoMutation(repo, (branch: string) => api.gitRebase(repo, branch));
+}
+
+export function useCreatePr(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      base: string;
+      head: string;
+      title: string;
+      body: string;
+      draft: boolean;
+    }) =>
+      api.ghPrCreate(
+        repo,
+        args.base,
+        args.head,
+        args.title,
+        args.body,
+        args.draft,
+      ),
+  );
 }

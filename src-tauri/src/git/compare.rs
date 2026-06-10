@@ -3,7 +3,7 @@ use serde::Serialize;
 use crate::error::{AppError, AppResult};
 use crate::git::diff::{parse_numstat_z, truncate_at_char_boundary};
 use crate::git::runner::{run_git, DEFAULT_TIMEOUT};
-use crate::git::types::{CommitSummary, DiffStatEntry, FileDiff};
+use crate::git::types::{CommitSummary, DiffStatEntry, FileDiff, StagedDiff};
 
 /// Commits that distinguish two branches, from the current branch's point of
 /// view: `ahead` are on `compare` but not `base`, `behind` are on `base` but
@@ -87,6 +87,40 @@ pub async fn git_branch_diff_files(
     )
     .await?;
     Ok(parse_numstat_z(&out.stdout_lossy()))
+}
+
+/// The full combined `base...compare` diff text plus its file summary, for
+/// feeding AI PR description generation. Mirrors `git_staged_diff`.
+#[tauri::command]
+pub async fn git_branch_diff(
+    repo_path: String,
+    base: String,
+    compare: String,
+    max_bytes: Option<usize>,
+) -> AppResult<StagedDiff> {
+    validate_ref(&base)?;
+    validate_ref(&compare)?;
+    let range = format!("{base}...{compare}");
+    let text_out = run_git(
+        Some(&repo_path),
+        &["diff", "--no-color", &range],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let (text, truncated) =
+        truncate_at_char_boundary(text_out.stdout_lossy(), max_bytes.unwrap_or(1_000_000));
+    let files_out = run_git(
+        Some(&repo_path),
+        &["diff", "--numstat", "-z", &range],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(StagedDiff {
+        text,
+        truncated,
+        files: parse_numstat_z(&files_out.stdout_lossy()),
+        excluded_files: 0,
+    })
 }
 
 #[tauri::command]
