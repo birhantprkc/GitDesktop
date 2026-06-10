@@ -104,3 +104,13 @@ export interface PrRef {
   number: number;
   url: string;
 }
+
+export interface PrInfo {
+  number: number;
+  url: string;
+  title: string;
+  baseRefName: string;
+  headRefName: string;
+  isDraft: boolean;
+  state: string;
+}

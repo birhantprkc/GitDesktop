@@ -9,6 +9,7 @@ import type {
   FileDiff,
   GhStatus,
   GitInfo,
+  PrInfo,
   PrRef,
   RepoInfo,
   RepoStatus,
@@ -190,6 +191,9 @@ export const gitPush = (
   force = false,
 ) => invoke<void>("git_push", { repoPath, setUpstream, force });
 
+export const gitRemotes = (repoPath: string) =>
+  invoke<string[]>("git_remotes", { repoPath });
+
 export const gitUndoCommit = (repoPath: string) =>
   invoke<void>("git_undo_commit", { repoPath });
 
@@ -282,6 +286,22 @@ export const ghPrCreate = (
     body,
     draft,
   });
+
+export const ghPublishRepo = (
+  repoPath: string,
+  name: string,
+  isPrivate: boolean,
+  description: string,
+) =>
+  invoke<string>("gh_publish_repo", {
+    repoPath,
+    name,
+    private: isPrivate,
+    description,
+  });
+
+export const ghPrsForBranch = (repoPath: string, head: string) =>
+  invoke<PrInfo[]>("gh_prs_for_branch", { repoPath, head });
 
 export const openWithProgram = (program: string, path: string) =>
   invoke<void>("open_with_program", { program, path });

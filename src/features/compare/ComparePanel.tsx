@@ -1,8 +1,10 @@
 import {
+  ArrowSquareOutIcon,
   FilesIcon,
   GitCommitIcon,
   GitPullRequestIcon,
 } from "@phosphor-icons/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -20,6 +22,7 @@ import {
   useCompareBranches,
   useDefaultBranch,
   useGhStatus,
+  usePrsForBranch,
   useRepoStatus,
 } from "@/lib/git/queries";
 import type { CommitSummary } from "@/lib/git/types";
@@ -40,6 +43,10 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
 
   const currentName = status.data?.branch?.name ?? null;
   const detached = status.data?.branch?.detached ?? false;
+  const ghReady = Boolean(
+    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
+  );
+  const branchPrs = usePrsForBranch(repoPath, currentName, ghReady);
   const otherBranches = (branches.data ?? []).filter((b) => !b.isCurrent);
   const firstOther = otherBranches[0]?.name ?? null;
   const compareValid =
@@ -78,8 +85,10 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
 
   const ahead = comparison.data?.ahead ?? [];
   const behind = comparison.data?.behind ?? [];
-  const canPr = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
+  const canPr = ghReady;
+  // An open PR from the current branch into the compared branch already exists.
+  const existingPr = (branchPrs.data ?? []).find(
+    (p) => p.baseRefName === compareBranch,
   );
 
   return (
@@ -104,7 +113,20 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
             ))}
           </SelectContent>
         </Select>
-        {canPr && compareBranch && (
+        {canPr && compareBranch && existingPr && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full"
+            onClick={() => openUrl(existingPr.url)}
+            title={existingPr.title}
+          >
+            <ArrowSquareOutIcon data-icon="inline-start" />
+            View pull request #{existingPr.number}
+            {existingPr.isDraft ? " (draft)" : ""}
+          </Button>
+        )}
+        {canPr && compareBranch && !existingPr && (
           <Button
             variant="outline"
             size="sm"
@@ -123,7 +145,7 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
         )}
       </div>
 
-      {canPr && compareBranch && (
+      {canPr && compareBranch && !existingPr && (
         <CreatePrDialog
           repoPath={repoPath}
           base={compareBranch}

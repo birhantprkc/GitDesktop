@@ -54,8 +54,17 @@ export function buildCommitPrompt(input: CommitPromptInput): {
   };
 }
 
-const PR_SYSTEM = `You write GitHub pull request descriptions.
-Output the PR title on the first line: concise, imperative mood, no trailing period and no "PR:"/"Title:" prefix. Then a blank line, then the description body in GitHub-flavored Markdown: a short summary of what the change does and why, followed by a bulleted list of the notable changes. Keep it factual and grounded in the diff.
+const PR_SYSTEM = `You write GitHub pull request descriptions for reviewers.
+
+First line: the PR title — concise, imperative mood, no trailing period, no "PR:"/"Title:" prefix.
+Then a blank line, then the description in GitHub-flavored Markdown.
+
+Structure the description like a strong human-written PR:
+- Open with a 1-3 sentence summary that states what the change accomplishes AND why — the goal or motivation behind it — not just a restatement of the diff.
+- Then cover the notable changes. If the diff spans several distinct areas or concerns, GROUP related changes under short \`###\` section headings (by feature, layer, or component, e.g. "### API layer", "### Documentation") with a few bullets under each. If the change is small or single-purpose, skip the headings and use one flat bulleted list.
+- In every bullet, name the concrete file, directory, or symbol involved so a reviewer can find it — e.g. "Adds validation in \`src/contact.ts\`". This grounding is what makes the description trustworthy.
+- Order from most to least significant. Be specific and factual; describe only what the diff shows. Do not invent changes, tests, motivations, or file names you cannot see.
+
 Do not wrap the output in code fences. Do not add commentary before the title or after the body.`;
 
 export function buildPrPrompt(input: PrPromptInput): {
@@ -99,7 +108,9 @@ export function buildPrPrompt(input: PrPromptInput): {
     diffSection += `\n[diff truncated —${omitted} Rely on the commit list and file summary above for full coverage.]`;
   }
   promptParts.push(diffSection);
-  promptParts.push("Write the pull request title and description.");
+  promptParts.push(
+    "Write the pull request title and description. Lead with a summary of the goal, then group related changes by theme under `###` headings when the diff touches several areas, citing the files involved.",
+  );
 
   return {
     system: systemParts.join("\n\n"),

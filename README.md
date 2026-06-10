@@ -19,6 +19,8 @@ customizable AI commit message generation.
 - Compare branches: pick a branch to see what the current one adds (the
   merge-base/three-dot diff a PR would show), the commits ahead and behind,
   and drill into any of them
+- Publish a local repository to GitHub (via gh): for a repo with no remote,
+  create the GitHub repo, wire up `origin`, and push in one step
 - Pull requests (via the GitHub CLI): from the Compare tab, push the current
   branch and open a PR into the compared branch, with an AI-generated title
   and description from the branch diff and its commits

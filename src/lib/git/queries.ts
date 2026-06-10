@@ -149,6 +149,34 @@ export function useBranchFileDiff(
   });
 }
 
+export function useRemotes(repo: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "remotes"] as const,
+    queryFn: () => api.gitRemotes(repo),
+  });
+}
+
+export function usePublishRepo(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { name: string; isPrivate: boolean; description: string }) =>
+      api.ghPublishRepo(repo, args.name, args.isPrivate, args.description),
+  );
+}
+
+export function usePrsForBranch(
+  repo: string,
+  head: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "prs", head ?? ""] as const,
+    queryFn: () => api.ghPrsForBranch(repo, head ?? ""),
+    enabled: enabled && head !== null,
+    staleTime: 30_000,
+  });
+}
+
 export function useGhStatus(repo: string) {
   return useQuery({
     queryKey: ["repo", repo, "gh-status"] as const,

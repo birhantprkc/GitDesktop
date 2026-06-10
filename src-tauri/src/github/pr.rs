@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
@@ -66,6 +66,37 @@ pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
     })
 }
 
+/// Creates a GitHub repository from the local one, wires up `origin`, and
+/// pushes the current branch — GitHub Desktop's "Publish repository". `name`
+/// may be `repo` (under your account) or `owner/repo` (under an org).
+#[tauri::command]
+pub async fn gh_publish_repo(
+    repo_path: String,
+    name: String,
+    private: bool,
+    description: String,
+) -> AppResult<String> {
+    let name = name.trim();
+    if name.is_empty() || name.starts_with('-') {
+        return Err(AppError::InvalidArgument(
+            "a repository name is required".into(),
+        ));
+    }
+    let visibility = if private { "--private" } else { "--public" };
+    let mut args: Vec<&str> = vec![
+        "repo", "create", name, "--source", ".", "--remote", "origin", "--push", visibility,
+    ];
+    let description = description.trim();
+    if !description.is_empty() {
+        args.push("--description");
+        args.push(description);
+    }
+    run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT).await?;
+
+    // gh's create output is human-prose on stderr; read back the canonical URL.
+    gh_repo_url(repo_path).await
+}
+
 /// The repository's web URL (works for github.com and GitHub Enterprise).
 /// Append paths like `/issues/new` for specific pages.
 #[tauri::command]
@@ -90,6 +121,44 @@ pub async fn gh_repo_url(repo_path: String) -> AppResult<String> {
 pub struct PrRef {
     pub number: u64,
     pub url: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrInfo {
+    pub number: u64,
+    pub url: String,
+    pub title: String,
+    pub base_ref_name: String,
+    pub head_ref_name: String,
+    pub is_draft: bool,
+    pub state: String,
+}
+
+/// Open PRs whose head is `head` (there's at most one per base). Lets the UI
+/// offer "View pull request" instead of "Create" once one already exists.
+#[tauri::command]
+pub async fn gh_prs_for_branch(repo_path: String, head: String) -> AppResult<Vec<PrInfo>> {
+    if head.is_empty() || head.starts_with('-') {
+        return Err(AppError::InvalidArgument(format!("invalid branch: {head}")));
+    }
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "pr",
+            "list",
+            "--head",
+            &head,
+            "--state",
+            "open",
+            "--json",
+            "number,url,title,baseRefName,headRefName,isDraft,state",
+        ],
+        GH_TIMEOUT,
+    )
+    .await?;
+    serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse gh pr list: {e}")))
 }
 
 /// Pushes `head` to origin, then opens a PR from `head` into `base`. Returns

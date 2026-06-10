@@ -2,6 +2,7 @@ import {
   ArrowDownIcon,
   ArrowsClockwiseIcon,
   ArrowUpIcon,
+  UploadSimpleIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
 import { useState } from "react";
@@ -20,18 +21,31 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import {
   useFetchRemote,
+  useGhStatus,
   usePull,
   usePush,
+  useRemotes,
   useRepoStatus,
 } from "@/lib/git/queries";
+import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { PublishDialog } from "./PublishDialog";
 
 export function SyncControls({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
+  const remotes = useRemotes(repoPath);
+  const gh = useGhStatus(repoPath);
+  const repoName = useUiStore((s) => s.repoName);
   const fetchRemote = useFetchRemote(repoPath);
   const pull = usePull(repoPath);
   const push = usePush(repoPath);
   const [forceConfirmOpen, setForceConfirmOpen] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+
+  // A repo with no `origin` (e.g. created locally in GitDesktop) can't push;
+  // offer to create the GitHub repo instead.
+  const noOrigin = remotes.isSuccess && !remotes.data.includes("origin");
+  const canGh = Boolean(gh.data?.installed && gh.data?.authenticated);
 
   const head = status.data?.branch;
   const hasUpstream = Boolean(head?.upstream);
@@ -54,6 +68,33 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
           setForceConfirmOpen(false);
         },
       },
+    );
+  }
+
+  if (noOrigin) {
+    return (
+      <>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!canGh}
+          onClick={() => setPublishOpen(true)}
+          title={
+            canGh
+              ? "Create a GitHub repository and push this one"
+              : "Sign in with the GitHub CLI (gh auth login) to publish"
+          }
+        >
+          <UploadSimpleIcon data-icon="inline-start" />
+          Publish repository…
+        </Button>
+        <PublishDialog
+          repoPath={repoPath}
+          defaultName={repoName ?? ""}
+          open={publishOpen}
+          onOpenChange={setPublishOpen}
+        />
+      </>
     );
   }
 
