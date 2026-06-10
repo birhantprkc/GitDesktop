@@ -1,3 +1,4 @@
+import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -28,8 +29,10 @@ import {
   useCreateBranch,
   useCreateTag,
   useLog,
+  useRepoStatus,
   useResetToCommit,
   useRevertCommit,
+  useUndoCommit,
 } from "@/lib/git/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { errorMessage } from "@/lib/tauri/invoke";
@@ -38,6 +41,8 @@ import { cn } from "@/lib/utils";
 
 export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const log = useLog(repoPath);
+  const status = useRepoStatus(repoPath);
+  const undoCommit = useUndoCommit(repoPath);
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const selectCommit = useUiStore((s) => s.selectCommit);
   const setCommitDraft = useUiStore((s) => s.setCommitDraft);
@@ -70,6 +75,33 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     }
   }
 
+  // GitHub Desktop-style undo: offered while the latest commit hasn't been
+  // pushed anywhere (no upstream, or we're ahead of it).
+  const head = status.data?.branch;
+  const lastCommit = log.data?.[0];
+  const canUndo = Boolean(
+    lastCommit && head && (head.upstream === null || head.ahead > 0),
+  );
+
+  async function undoLast() {
+    if (!lastCommit) return;
+    try {
+      const details = await gitCommitDetails(repoPath, lastCommit.hash);
+      undoCommit.mutate(undefined, {
+        onSuccess: () => {
+          setCommitDraft(details.subject, details.body);
+          setRepoTab("changes");
+          toast.success(
+            `Undid ${lastCommit.hash.slice(0, 7)} — changes are staged again`,
+          );
+        },
+        onError,
+      });
+    } catch (e) {
+      onError(e);
+    }
+  }
+
   if (log.isPending) {
     return (
       <div className="flex-1 space-y-3 p-3">
@@ -91,6 +123,26 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
 
   return (
     <>
+      {canUndo && lastCommit && (
+        <div className="flex items-center justify-between gap-2 border-b bg-muted/50 px-3 py-1.5 text-xs">
+          <span
+            className="truncate text-muted-foreground"
+            title={lastCommit.subject}
+          >
+            Unpushed: {lastCommit.subject}
+          </span>
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={undoCommit.isPending}
+            onClick={undoLast}
+            title="Undo the last commit, keeping its changes staged"
+          >
+            <ArrowCounterClockwiseIcon data-icon="inline-start" />
+            Undo
+          </Button>
+        </div>
+      )}
       <ScrollArea className="min-h-0 flex-1">
         <div>
           {commits.map((commit, index) => (

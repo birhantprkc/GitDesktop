@@ -134,8 +134,24 @@ export const gitFetch = (repoPath: string) =>
 export const gitPull = (repoPath: string) =>
   invoke<void>("git_pull", { repoPath });
 
-export const gitPush = (repoPath: string, setUpstream: boolean) =>
-  invoke<void>("git_push", { repoPath, setUpstream });
+export const gitPush = (
+  repoPath: string,
+  setUpstream: boolean,
+  force = false,
+) => invoke<void>("git_push", { repoPath, setUpstream, force });
+
+export const gitUndoCommit = (repoPath: string) =>
+  invoke<void>("git_undo_commit", { repoPath });
+
+export const openWithProgram = (program: string, path: string) =>
+  invoke<void>("open_with_program", { program, path });
+
+export interface DetectedEditor {
+  name: string;
+  path: string;
+}
+
+export const detectEditors = () => invoke<DetectedEditor[]>("detect_editors");
 
 export const readRepoInstructions = (repoPath: string) =>
   invoke<string | null>("read_repo_instructions", { repoPath });

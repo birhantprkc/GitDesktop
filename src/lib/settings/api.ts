@@ -12,6 +12,10 @@ export interface AppSettings {
   globalInstructions: string;
   /** gitignore-style globs (one per line) excluded from AI context. */
   aiIgnorePatterns: string;
+  /** Path to a program used by "Open in editor" (empty = not configured). */
+  externalEditor: string;
+  /** Friendly name for the configured editor, used in menu labels. */
+  externalEditorName: string;
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -24,6 +28,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   globalInstructions: "",
   aiIgnorePatterns: "",
+  externalEditor: "",
+  externalEditorName: "",
   recentRepos: [],
   diffViewMode: "unified",
 };

@@ -12,9 +12,14 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { copyText } from "@/lib/clipboard";
-import { openWithDefault, revealInExplorer } from "@/lib/git/api";
+import {
+  openWithDefault,
+  openWithProgram,
+  revealInExplorer,
+} from "@/lib/git/api";
 import { useAppendToGitignore } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
+import { useSettings } from "@/lib/settings/queries";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { cn } from "@/lib/utils";
 
@@ -64,6 +69,9 @@ export function FileRow({
   onDiscard?: () => void;
 }) {
   const appendIgnore = useAppendToGitignore(repoPath);
+  const settings = useSettings();
+  const externalEditor = settings.data?.externalEditor.trim() ?? "";
+  const editorName = settings.data?.externalEditorName.trim() || "editor";
   const badge = KIND_BADGE[kind];
   const label = entry.origPath
     ? `${entry.origPath} → ${entry.path}`
@@ -174,6 +182,15 @@ export function FileRow({
         >
           Show in Explorer
         </ContextMenuItem>
+        {externalEditor && (
+          <ContextMenuItem
+            onClick={() =>
+              openWithProgram(externalEditor, absolutePath).catch(onError)
+            }
+          >
+            Open in {editorName}
+          </ContextMenuItem>
+        )}
         <ContextMenuItem
           onClick={() => openWithDefault(absolutePath).catch(onError)}
         >

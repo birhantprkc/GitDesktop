@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { AiProviderSection } from "./AiProviderSection";
+import { EditorSection } from "./EditorSection";
 import { InstructionsSection } from "./InstructionsSection";
 
 export function SettingsScreen() {
@@ -35,6 +36,7 @@ export function SettingsScreen() {
             <>
               <AiProviderSection settings={settings.data} />
               <InstructionsSection settings={settings.data} />
+              <EditorSection settings={settings.data} />
             </>
           )}
         </main>

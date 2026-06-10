@@ -189,7 +189,13 @@ export function usePull(repo: string) {
 }
 
 export function usePush(repo: string) {
-  return useRepoMutation(repo, (setUpstream: boolean) =>
-    api.gitPush(repo, setUpstream),
+  return useRepoMutation(
+    repo,
+    (args: { setUpstream: boolean; force?: boolean }) =>
+      api.gitPush(repo, args.setUpstream, args.force ?? false),
   );
+}
+
+export function useUndoCommit(repo: string) {
+  return useRepoMutation(repo, () => api.gitUndoCommit(repo));
 }

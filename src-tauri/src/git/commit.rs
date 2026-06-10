@@ -29,6 +29,28 @@ pub async fn git_commit(
     })
 }
 
+/// Undoes the latest commit, keeping its changes staged (soft reset).
+/// A root commit has no parent to reset to, so the branch ref is deleted
+/// instead, which leaves the repo in the pre-first-commit state.
+#[tauri::command]
+pub async fn git_undo_commit(state: State<'_, AppState>, repo_path: String) -> AppResult<()> {
+    let has_parent = run_git_raw(
+        Some(&repo_path),
+        &["rev-parse", "--verify", "--quiet", "HEAD~1"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?
+    .code
+        == 0;
+    let args: &[&str] = if has_parent {
+        &["reset", "--soft", "HEAD~1"]
+    } else {
+        &["update-ref", "-d", "HEAD"]
+    };
+    run_git_mutating(&state, &repo_path, args, DEFAULT_TIMEOUT).await?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn git_recent_commits(repo_path: String, limit: u32) -> AppResult<Vec<CommitSummary>> {
     let head_exists = run_git_raw(
