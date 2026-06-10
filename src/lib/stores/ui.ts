@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { RepoInfo } from "@/lib/git/types";
 
 export type AppView = "welcome" | "repo" | "settings";
-export type RepoTab = "changes" | "history";
+export type RepoTab = "changes" | "history" | "compare";
 
 export interface SelectedFile {
   path: string;
@@ -17,6 +17,8 @@ interface UiState {
   repoPath: string | null;
   repoName: string | null;
   repoTab: RepoTab;
+  /** Branch to compare the current branch against, on the Compare tab. */
+  compareBranch: string | null;
   selectedFile: SelectedFile | null;
   selectedCommitHash: string | null;
   commitTitle: string;
@@ -30,6 +32,7 @@ interface UiState {
   openSettings: () => void;
   closeSettings: () => void;
   setRepoTab: (tab: RepoTab) => void;
+  setCompareBranch: (branch: string | null) => void;
   selectFile: (file: SelectedFile | null) => void;
   selectCommit: (hash: string | null) => void;
   setCommitDraft: (title: string, body: string) => void;
@@ -46,6 +49,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
   repoPath: null,
   repoName: null,
   repoTab: "changes",
+  compareBranch: null,
   selectedFile: null,
   selectedCommitHash: null,
   commitTitle: "",
@@ -60,6 +64,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
       repoPath: info.root,
       repoName: info.name,
       repoTab: "changes",
+      compareBranch: null,
       selectedFile: null,
       selectedCommitHash: null,
       commitTitle: "",
@@ -73,10 +78,12 @@ export const useUiStore = create<UiState>()((set, get) => ({
       repoPath: null,
       repoName: null,
       repoTab: "changes",
+      compareBranch: null,
       selectedFile: null,
       selectedCommitHash: null,
     }),
   setRepoTab: (tab) => set({ repoTab: tab }),
+  setCompareBranch: (branch) => set({ compareBranch: branch }),
   selectCommit: (hash) => set({ selectedCommitHash: hash }),
   openSettings: () => {
     const { view } = get();

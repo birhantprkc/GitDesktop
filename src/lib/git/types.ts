@@ -85,3 +85,10 @@ export interface CommitDetails {
 export interface CommitResult {
   hash: string;
 }
+
+export interface BranchComparison {
+  /** On `compare` but not `base` — what a PR would introduce. */
+  ahead: CommitSummary[];
+  /** On `base` but not `compare` — what `compare` is missing. */
+  behind: CommitSummary[];
+}

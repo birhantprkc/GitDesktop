@@ -16,6 +16,9 @@ customizable AI commit message generation.
   for rename/copy/delete
 - Error toasts include a Copy button for long git/provider messages
 - Commit history browser: commit list with per-commit changed files and diffs
+- Compare branches: pick a branch to see what the current one adds (the
+  merge-base/three-dot diff a PR would show), the commits ahead and behind,
+  and drill into any of them
 - Right-click context menus: files (discard to recycle bin, add to
   .gitignore by file/folder/extension, copy paths, show in Explorer, open in
   your configured editor or the default program) and commits (amend, mixed

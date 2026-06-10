@@ -15,6 +15,12 @@ export const repoKeys = {
     ["repo", repo, "commit", hash, "files"] as const,
   commitFileDiff: (repo: string, hash: string, file: string) =>
     ["repo", repo, "commit", hash, "diff", file] as const,
+  compare: (repo: string, base: string, compare: string) =>
+    ["repo", repo, "compare", base, compare] as const,
+  branchDiffFiles: (repo: string, base: string, compare: string) =>
+    ["repo", repo, "compare", base, compare, "files"] as const,
+  branchFileDiff: (repo: string, base: string, compare: string, file: string) =>
+    ["repo", repo, "compare", base, compare, "diff", file] as const,
 };
 
 export function useGitInstalled() {
@@ -96,6 +102,50 @@ export function useCommitFileDiff(
     queryFn: () => api.gitCommitFileDiff(repo, hash ?? "", file ?? ""),
     enabled: hash !== null && file !== null,
     staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+export function useCompareBranches(
+  repo: string,
+  base: string | null,
+  compare: string | null,
+) {
+  return useQuery({
+    queryKey: repoKeys.compare(repo, base ?? "", compare ?? ""),
+    queryFn: () => api.gitCompareBranches(repo, base ?? "", compare ?? ""),
+    enabled: base !== null && compare !== null && base !== compare,
+  });
+}
+
+export function useBranchDiffFiles(
+  repo: string,
+  base: string | null,
+  compare: string | null,
+) {
+  return useQuery({
+    queryKey: repoKeys.branchDiffFiles(repo, base ?? "", compare ?? ""),
+    queryFn: () => api.gitBranchDiffFiles(repo, base ?? "", compare ?? ""),
+    enabled: base !== null && compare !== null && base !== compare,
+  });
+}
+
+export function useBranchFileDiff(
+  repo: string,
+  base: string | null,
+  compare: string | null,
+  file: string | null,
+) {
+  return useQuery({
+    queryKey: repoKeys.branchFileDiff(
+      repo,
+      base ?? "",
+      compare ?? "",
+      file ?? "",
+    ),
+    queryFn: () =>
+      api.gitBranchFileDiff(repo, base ?? "", compare ?? "", file ?? ""),
+    enabled:
+      base !== null && compare !== null && base !== compare && file !== null,
   });
 }
 

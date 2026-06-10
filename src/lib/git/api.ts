@@ -1,6 +1,7 @@
 import { invoke } from "@/lib/tauri/invoke";
 import type {
   Branch,
+  BranchComparison,
   CommitDetails,
   CommitResult,
   CommitSummary,
@@ -205,6 +206,33 @@ export const gitMerge = (repoPath: string, branch: string, squash: boolean) =>
 
 export const gitRebase = (repoPath: string, branch: string) =>
   invoke<void>("git_rebase", { repoPath, branch });
+
+export const gitCompareBranches = (
+  repoPath: string,
+  base: string,
+  compare: string,
+) =>
+  invoke<BranchComparison>("git_compare_branches", { repoPath, base, compare });
+
+export const gitBranchDiffFiles = (
+  repoPath: string,
+  base: string,
+  compare: string,
+) =>
+  invoke<DiffStatEntry[]>("git_branch_diff_files", { repoPath, base, compare });
+
+export const gitBranchFileDiff = (
+  repoPath: string,
+  base: string,
+  compare: string,
+  filePath: string,
+) =>
+  invoke<FileDiff>("git_branch_file_diff", {
+    repoPath,
+    base,
+    compare,
+    filePath,
+  });
 
 export const openWithProgram = (program: string, path: string) =>
   invoke<void>("open_with_program", { program, path });
