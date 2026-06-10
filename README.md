@@ -7,8 +7,12 @@ customizable AI commit message generation.
 
 - Open, clone, or create repositories (README/gitignore-template/license
   scaffolding, configurable default branch name); recent list persisted
-- Working-tree status with stage/unstage (single file or all at once), branch
-  switching/creation
+- Working-tree status with stage/unstage (single file or all at once)
+- Branch menu: switch, create, rename, delete (auto-switches off the current
+  branch first), discard all changes, stash/pop, update from the default
+  branch, merge, squash-merge (leaves changes staged for your own commit
+  message — AI included), and rebase (auto-aborts on conflicts); right-click
+  any branch for rename/copy/delete
 - Commit history browser: commit list with per-commit changed files and diffs
 - Right-click context menus: files (discard to recycle bin, add to
   .gitignore by file/folder/extension, copy paths, show in Explorer, open in

@@ -156,6 +156,36 @@ export const gitPush = (
 export const gitUndoCommit = (repoPath: string) =>
   invoke<void>("git_undo_commit", { repoPath });
 
+export const gitRenameBranch = (
+  repoPath: string,
+  oldName: string,
+  newName: string,
+) => invoke<void>("git_rename_branch", { repoPath, oldName, newName });
+
+export const gitDeleteBranch = (repoPath: string, name: string) =>
+  invoke<void>("git_delete_branch", { repoPath, name });
+
+export const gitDefaultBranch = (repoPath: string) =>
+  invoke<string | null>("git_default_branch", { repoPath });
+
+export const gitDiscardAll = (repoPath: string) =>
+  invoke<void>("git_discard_all", { repoPath });
+
+export const gitStashAll = (repoPath: string) =>
+  invoke<void>("git_stash_all", { repoPath });
+
+export const gitStashPop = (repoPath: string) =>
+  invoke<void>("git_stash_pop", { repoPath });
+
+export const gitStashCount = (repoPath: string) =>
+  invoke<number>("git_stash_count", { repoPath });
+
+export const gitMerge = (repoPath: string, branch: string, squash: boolean) =>
+  invoke<void>("git_merge", { repoPath, branch, squash });
+
+export const gitRebase = (repoPath: string, branch: string) =>
+  invoke<void>("git_rebase", { repoPath, branch });
+
 export const openWithProgram = (program: string, path: string) =>
   invoke<void>("open_with_program", { program, path });
 

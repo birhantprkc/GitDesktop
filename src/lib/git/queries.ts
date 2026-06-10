@@ -199,3 +199,51 @@ export function usePush(repo: string) {
 export function useUndoCommit(repo: string) {
   return useRepoMutation(repo, () => api.gitUndoCommit(repo));
 }
+
+export function useDefaultBranch(repo: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "default-branch"] as const,
+    queryFn: () => api.gitDefaultBranch(repo),
+  });
+}
+
+export function useStashCount(repo: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "stash-count"] as const,
+    queryFn: () => api.gitStashCount(repo),
+  });
+}
+
+export function useRenameBranch(repo: string) {
+  return useRepoMutation(repo, (args: { oldName: string; newName: string }) =>
+    api.gitRenameBranch(repo, args.oldName, args.newName),
+  );
+}
+
+export function useDeleteBranch(repo: string) {
+  return useRepoMutation(repo, (name: string) =>
+    api.gitDeleteBranch(repo, name),
+  );
+}
+
+export function useDiscardAll(repo: string) {
+  return useRepoMutation(repo, () => api.gitDiscardAll(repo));
+}
+
+export function useStashAll(repo: string) {
+  return useRepoMutation(repo, () => api.gitStashAll(repo));
+}
+
+export function useStashPop(repo: string) {
+  return useRepoMutation(repo, () => api.gitStashPop(repo));
+}
+
+export function useMergeBranch(repo: string) {
+  return useRepoMutation(repo, (args: { branch: string; squash: boolean }) =>
+    api.gitMerge(repo, args.branch, args.squash),
+  );
+}
+
+export function useRebaseBranch(repo: string) {
+  return useRepoMutation(repo, (branch: string) => api.gitRebase(repo, branch));
+}

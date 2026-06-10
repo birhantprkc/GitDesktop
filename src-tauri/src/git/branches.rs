@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::git::runner::{run_git, run_git_mutating, DEFAULT_TIMEOUT};
+use crate::git::runner::{run_git, run_git_mutating, run_git_raw, DEFAULT_TIMEOUT};
 use crate::git::types::Branch;
 use crate::state::AppState;
 
@@ -43,6 +43,81 @@ pub async fn git_branches(repo_path: String) -> AppResult<Vec<Branch>> {
         });
     }
     Ok(branches)
+}
+
+#[tauri::command]
+pub async fn git_rename_branch(
+    state: State<'_, AppState>,
+    repo_path: String,
+    old_name: String,
+    new_name: String,
+) -> AppResult<()> {
+    validate_ref_name(&old_name)?;
+    validate_ref_name(&new_name)?;
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["branch", "-m", "--", &old_name, &new_name],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Force-deletes a local branch (the UI confirms first, GitHub Desktop style).
+#[tauri::command]
+pub async fn git_delete_branch(
+    state: State<'_, AppState>,
+    repo_path: String,
+    name: String,
+) -> AppResult<()> {
+    validate_ref_name(&name)?;
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["branch", "-D", "--", &name],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// The repository's default branch: origin's HEAD when known, otherwise a
+/// local "main"/"master" if one exists.
+#[tauri::command]
+pub async fn git_default_branch(repo_path: String) -> AppResult<Option<String>> {
+    let out = run_git_raw(
+        Some(&repo_path),
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if out.code == 0 {
+        let full = out.stdout_lossy().trim().to_string();
+        let name = full.strip_prefix("origin/").unwrap_or(&full).to_string();
+        if !name.is_empty() {
+            return Ok(Some(name));
+        }
+    }
+    for candidate in ["main", "master"] {
+        let exists = run_git_raw(
+            Some(&repo_path),
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{candidate}"),
+            ],
+            DEFAULT_TIMEOUT,
+        )
+        .await?
+        .code
+            == 0;
+        if exists {
+            return Ok(Some(candidate.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 #[tauri::command]
