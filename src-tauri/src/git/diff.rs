@@ -116,7 +116,7 @@ pub async fn git_staged_diff(
     })
 }
 
-fn truncate_at_char_boundary(text: String, max: usize) -> (String, bool) {
+pub fn truncate_at_char_boundary(text: String, max: usize) -> (String, bool) {
     if text.len() <= max {
         return (text, false);
     }
@@ -163,7 +163,7 @@ fn truncate_at_file_boundary(text: String, max: usize) -> (String, bool) {
 /// Regular entry: `added\tdeleted\tpath\0`.
 /// Rename entry:  `added\tdeleted\t\0oldpath\0newpath\0`.
 /// Binary files report `-` for both counts.
-fn parse_numstat_z(text: &str) -> Vec<DiffStatEntry> {
+pub fn parse_numstat_z(text: &str) -> Vec<DiffStatEntry> {
     let mut entries = Vec::new();
     let mut tokens = text.split('\0').peekable();
     while let Some(token) = tokens.next() {

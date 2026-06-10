@@ -3,6 +3,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -14,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { createAiClient } from "@/lib/ai/client";
+import { useAvailableModels } from "@/lib/ai/models";
 import {
   MODEL_SUGGESTIONS,
   PROVIDER_LABELS,
@@ -46,6 +55,11 @@ export function AiProviderSection({ settings }: { settings: AppSettings }) {
   const provider = settings.ai.provider;
   const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
   const keyPreview = useSecretPreview(provider);
+  const availableModels = useAvailableModels(
+    settings.ai,
+    Boolean(keyPreview.data),
+  );
+  const models = availableModels.data?.models ?? [];
 
   const [keyInput, setKeyInput] = useState("");
   const [savingKey, setSavingKey] = useState(false);
@@ -157,18 +171,45 @@ export function AiProviderSection({ settings }: { settings: AppSettings }) {
 
         <div className="space-y-2">
           <Label htmlFor="ai-model">Model</Label>
-          <Input
-            id="ai-model"
-            list="model-suggestions"
-            value={settings.ai.model}
-            onChange={(e) => updateAi({ model: e.target.value })}
-            placeholder={MODEL_SUGGESTIONS[provider][0]}
-          />
-          <datalist id="model-suggestions">
-            {MODEL_SUGGESTIONS[provider].map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
+          <Combobox
+            items={models}
+            inputValue={settings.ai.model}
+            onInputValueChange={(value) => updateAi({ model: value })}
+            value={
+              models.includes(settings.ai.model) ? settings.ai.model : null
+            }
+            onValueChange={(value) => {
+              if (value) updateAi({ model: value });
+            }}
+            openOnInputClick
+          >
+            <ComboboxInput
+              id="ai-model"
+              className="w-full"
+              placeholder={MODEL_SUGGESTIONS[provider][0]}
+            />
+            <ComboboxContent>
+              <ComboboxEmpty>
+                No matching models — the typed id is used as-is
+              </ComboboxEmpty>
+              <ComboboxList>
+                {(item: string) => (
+                  <ComboboxItem key={item} value={item}>
+                    <span className="truncate font-mono">{item}</span>
+                  </ComboboxItem>
+                )}
+              </ComboboxList>
+            </ComboboxContent>
+          </Combobox>
+          <p className="text-xs text-muted-foreground">
+            {availableModels.isPending
+              ? "Loading models…"
+              : availableModels.data?.live
+                ? `${models.length} models from ${PROVIDER_LABELS[provider]}`
+                : needsKey
+                  ? "Suggestions only — save an API key to load the live list"
+                  : "Suggestions only — provider list unavailable"}
+          </p>
         </div>
       </div>
 

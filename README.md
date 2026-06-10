@@ -6,12 +6,17 @@ customizable AI commit message generation.
 ## Features (Milestone 1)
 
 - Open, clone, and switch between local repositories (recent list persisted)
-- Working-tree status with stage/unstage, branch switching/creation
+- Working-tree status with stage/unstage (single file or all at once), branch
+  switching/creation
+- Commit history browser: commit list with per-commit changed files and diffs
 - Unified/split diff viewer
 - Commit with title + body; fetch/pull/push with ahead/behind indicators
 - **AI commit messages**: streams a title/body into the commit box from the
   staged diff, recent commit style, and your instructions
-- **Bring your own model**: Anthropic, OpenAI, OpenRouter, or local Ollama
+- **AI ignore patterns**: keep noisy paths (lockfiles, vendored folders) out
+  of the AI context while still committing them normally
+- **Bring your own model**: Anthropic, OpenAI, OpenRouter, or local Ollama,
+  with live model lists fetched from each provider in a searchable picker
 - API keys live in the OS keychain (Windows Credential Manager, macOS
   Keychain, libsecret) — never in app files
 
@@ -23,6 +28,14 @@ Two layers, both included in every generation:
   Conventional Commits").
 - **Per-repo** — create `.gitdesktop/instructions.md` in a repository.
   Takes precedence over global instructions.
+
+## AI ignore patterns
+
+Exclude files from the AI's context (they stay staged/committed as usual).
+gitignore-style globs, applied as git pathspec excludes:
+
+- **Global** — Settings → "Excluded files" (one pattern per line).
+- **Per-repo** — create `.gitdesktop/aiignore` in a repository.
 
 ## Development
 

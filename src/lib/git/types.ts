@@ -73,6 +73,15 @@ export interface CommitSummary {
   date: string;
 }
 
+export interface CommitDetails {
+  hash: string;
+  subject: string;
+  body: string;
+  author: string;
+  authorEmail: string;
+  date: string;
+}
+
 export interface CommitResult {
   hash: string;
 }

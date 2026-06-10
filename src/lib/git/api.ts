@@ -1,8 +1,10 @@
 import { invoke } from "@/lib/tauri/invoke";
 import type {
   Branch,
+  CommitDetails,
   CommitResult,
   CommitSummary,
+  DiffStatEntry,
   FileDiff,
   GitInfo,
   RepoInfo,
@@ -63,6 +65,21 @@ export const gitCommit = (repoPath: string, title: string, body?: string) =>
 
 export const gitRecentCommits = (repoPath: string, limit: number) =>
   invoke<CommitSummary[]>("git_recent_commits", { repoPath, limit });
+
+export const gitLog = (repoPath: string, limit: number, skip: number) =>
+  invoke<CommitSummary[]>("git_log", { repoPath, limit, skip });
+
+export const gitCommitDetails = (repoPath: string, hash: string) =>
+  invoke<CommitDetails>("git_commit_details", { repoPath, hash });
+
+export const gitCommitFiles = (repoPath: string, hash: string) =>
+  invoke<DiffStatEntry[]>("git_commit_files", { repoPath, hash });
+
+export const gitCommitFileDiff = (
+  repoPath: string,
+  hash: string,
+  filePath: string,
+) => invoke<FileDiff>("git_commit_file_diff", { repoPath, hash, filePath });
 
 export const gitFetch = (repoPath: string) =>
   invoke<void>("git_fetch", { repoPath });

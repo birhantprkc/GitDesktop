@@ -101,6 +101,17 @@ pub struct CommitSummary {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CommitDetails {
+    pub hash: String,
+    pub subject: String,
+    pub body: String,
+    pub author: String,
+    pub author_email: String,
+    pub date: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitResult {
     pub hash: String,
 }

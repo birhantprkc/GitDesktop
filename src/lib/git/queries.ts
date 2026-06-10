@@ -8,6 +8,13 @@ export const repoKeys = {
   diff: (repo: string, file: string, staged: boolean) =>
     ["repo", repo, "diff", file, staged] as const,
   commits: (repo: string) => ["repo", repo, "commits"] as const,
+  log: (repo: string) => ["repo", repo, "log"] as const,
+  commitDetails: (repo: string, hash: string) =>
+    ["repo", repo, "commit", hash] as const,
+  commitFiles: (repo: string, hash: string) =>
+    ["repo", repo, "commit", hash, "files"] as const,
+  commitFileDiff: (repo: string, hash: string, file: string) =>
+    ["repo", repo, "commit", hash, "diff", file] as const,
 };
 
 export function useGitInstalled() {
@@ -49,6 +56,46 @@ export function useFileDiff(
         file?.untracked ?? false,
       ),
     enabled: file !== null,
+  });
+}
+
+const HISTORY_PAGE_SIZE = 200;
+
+export function useLog(repo: string) {
+  return useQuery({
+    queryKey: repoKeys.log(repo),
+    queryFn: () => api.gitLog(repo, HISTORY_PAGE_SIZE, 0),
+  });
+}
+
+export function useCommitDetails(repo: string, hash: string | null) {
+  return useQuery({
+    queryKey: repoKeys.commitDetails(repo, hash ?? ""),
+    queryFn: () => api.gitCommitDetails(repo, hash ?? ""),
+    enabled: hash !== null,
+    staleTime: Number.POSITIVE_INFINITY, // commits are immutable
+  });
+}
+
+export function useCommitFiles(repo: string, hash: string | null) {
+  return useQuery({
+    queryKey: repoKeys.commitFiles(repo, hash ?? ""),
+    queryFn: () => api.gitCommitFiles(repo, hash ?? ""),
+    enabled: hash !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+export function useCommitFileDiff(
+  repo: string,
+  hash: string | null,
+  file: string | null,
+) {
+  return useQuery({
+    queryKey: repoKeys.commitFileDiff(repo, hash ?? "", file ?? ""),
+    queryFn: () => api.gitCommitFileDiff(repo, hash ?? "", file ?? ""),
+    enabled: hash !== null && file !== null,
+    staleTime: Number.POSITIVE_INFINITY,
   });
 }
 
