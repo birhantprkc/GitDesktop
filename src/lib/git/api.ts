@@ -33,7 +33,14 @@ export const gitCreateBranch = (
   repoPath: string,
   name: string,
   checkout: boolean,
-) => invoke<void>("git_create_branch", { repoPath, name, checkout });
+  startPoint?: string,
+) =>
+  invoke<void>("git_create_branch", {
+    repoPath,
+    name,
+    checkout,
+    startPoint: startPoint ?? null,
+  });
 
 export const gitDiffFile = (
   repoPath: string,
@@ -60,8 +67,48 @@ export const gitStage = (repoPath: string, paths: string[]) =>
 export const gitUnstage = (repoPath: string, paths: string[]) =>
   invoke<void>("git_unstage", { repoPath, paths });
 
-export const gitCommit = (repoPath: string, title: string, body?: string) =>
-  invoke<CommitResult>("git_commit", { repoPath, title, body: body ?? null });
+export const gitCommit = (
+  repoPath: string,
+  title: string,
+  body?: string,
+  amend = false,
+) =>
+  invoke<CommitResult>("git_commit", {
+    repoPath,
+    title,
+    body: body ?? null,
+    amend,
+  });
+
+export const gitDiscard = (
+  repoPath: string,
+  path: string,
+  untracked: boolean,
+) => invoke<void>("git_discard", { repoPath, path, untracked });
+
+export const gitReset = (repoPath: string, hash: string) =>
+  invoke<void>("git_reset", { repoPath, hash });
+
+export const gitCheckoutCommit = (repoPath: string, hash: string) =>
+  invoke<void>("git_checkout_commit", { repoPath, hash });
+
+export const gitRevert = (repoPath: string, hash: string) =>
+  invoke<void>("git_revert", { repoPath, hash });
+
+export const gitCherryPick = (repoPath: string, hash: string) =>
+  invoke<void>("git_cherry_pick", { repoPath, hash });
+
+export const gitTag = (repoPath: string, name: string, hash: string) =>
+  invoke<void>("git_tag", { repoPath, name, hash });
+
+export const appendToGitignore = (repoPath: string, pattern: string) =>
+  invoke<void>("append_to_gitignore", { repoPath, pattern });
+
+export const revealInExplorer = (path: string) =>
+  invoke<void>("reveal_in_explorer", { path });
+
+export const openWithDefault = (path: string) =>
+  invoke<void>("open_with_default", { path });
 
 export const gitRecentCommits = (repoPath: string, limit: number) =>
   invoke<CommitSummary[]>("git_recent_commits", { repoPath, limit });

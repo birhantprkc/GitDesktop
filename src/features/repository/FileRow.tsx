@@ -1,6 +1,21 @@
 import { MinusIcon, PlusIcon } from "@phosphor-icons/react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { copyText } from "@/lib/clipboard";
+import { openWithDefault, revealInExplorer } from "@/lib/git/api";
+import { useAppendToGitignore } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
+import { errorMessage } from "@/lib/tauri/invoke";
 import { cn } from "@/lib/utils";
 
 const KIND_BADGE: Record<ChangeKind, { letter: string; className: string }> = {
@@ -14,60 +29,157 @@ const KIND_BADGE: Record<ChangeKind, { letter: string; className: string }> = {
   conflicted: { letter: "!", className: "text-destructive" },
 };
 
+/** "src/lib/x.ts" -> ["src/lib", "src"] (closest folder first). */
+function ancestorFolders(path: string): string[] {
+  const folders: string[] = [];
+  let current = path;
+  for (;;) {
+    const slash = current.lastIndexOf("/");
+    if (slash === -1) break;
+    current = current.slice(0, slash);
+    folders.push(current);
+  }
+  return folders;
+}
+
 export function FileRow({
   entry,
   kind,
   staged,
   selected,
   disabled,
+  repoPath,
   onSelect,
   onToggle,
+  onDiscard,
 }: {
   entry: FileEntry;
   kind: ChangeKind;
   staged: boolean;
   selected: boolean;
   disabled: boolean;
+  repoPath: string;
   onSelect: () => void;
   onToggle: () => void;
+  onDiscard?: () => void;
 }) {
+  const appendIgnore = useAppendToGitignore(repoPath);
   const badge = KIND_BADGE[kind];
   const label = entry.origPath
     ? `${entry.origPath} → ${entry.path}`
     : entry.path;
+  const absolutePath = `${repoPath}\\${entry.path.replaceAll("/", "\\")}`;
+  const folders = ancestorFolders(entry.path);
+  const dot = entry.path.lastIndexOf(".");
+  const extension =
+    dot > entry.path.lastIndexOf("/") + 1 ? entry.path.slice(dot + 1) : null;
+
+  function ignore(pattern: string) {
+    appendIgnore.mutate(pattern, {
+      onSuccess: () => toast.success(`Added "${pattern}" to .gitignore`),
+      onError: (e) => toast.error(errorMessage(e)),
+    });
+  }
+
+  const onError = (e: unknown) => toast.error(errorMessage(e));
 
   return (
-    <div
-      className={cn(
-        "group flex w-full cursor-pointer items-center gap-2 px-2 py-1 text-left text-xs",
-        selected ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
-      )}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") onSelect();
-      }}
-      role="button"
-      tabIndex={0}
-    >
-      <span className={cn("w-3 shrink-0 font-semibold", badge.className)}>
-        {badge.letter}
-      </span>
-      <span className="min-w-0 flex-1 truncate" title={label}>
-        {label}
-      </span>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        className="opacity-0 group-hover:opacity-100"
-        aria-label={staged ? `Unstage ${entry.path}` : `Stage ${entry.path}`}
-        disabled={disabled}
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle();
-        }}
-      >
-        {staged ? <MinusIcon /> : <PlusIcon />}
-      </Button>
-    </div>
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <div
+            className={cn(
+              "group flex w-full cursor-pointer items-center gap-2 px-2 py-1 text-left text-xs",
+              selected
+                ? "bg-accent text-accent-foreground"
+                : "hover:bg-muted/60",
+            )}
+            onClick={onSelect}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") onSelect();
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            <span className={cn("w-3 shrink-0 font-semibold", badge.className)}>
+              {badge.letter}
+            </span>
+            <span className="min-w-0 flex-1 truncate" title={label}>
+              {label}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="opacity-0 group-hover:opacity-100"
+              aria-label={
+                staged ? `Unstage ${entry.path}` : `Stage ${entry.path}`
+              }
+              disabled={disabled}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle();
+              }}
+            >
+              {staged ? <MinusIcon /> : <PlusIcon />}
+            </Button>
+          </div>
+        }
+      />
+      <ContextMenuContent className="min-w-64">
+        {!staged && onDiscard && (
+          <>
+            <ContextMenuItem onClick={onDiscard}>
+              Discard changes…
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        <ContextMenuItem onClick={() => ignore(`/${entry.path}`)}>
+          Ignore file (add to .gitignore)
+        </ContextMenuItem>
+        {folders.length > 0 && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              Ignore folder (add to .gitignore)
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {folders.map((folder) => (
+                <ContextMenuItem
+                  key={folder}
+                  onClick={() => ignore(`/${folder}/`)}
+                >
+                  <span className="font-mono">{folder}/</span>
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
+        {extension && (
+          <ContextMenuItem onClick={() => ignore(`*.${extension}`)}>
+            Ignore all .{extension} files (add to .gitignore)
+          </ContextMenuItem>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => copyText(absolutePath, "Path copied")}>
+          Copy file path
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => copyText(entry.path, "Relative path copied")}
+        >
+          Copy relative file path
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onClick={() => revealInExplorer(absolutePath).catch(onError)}
+        >
+          Show in Explorer
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => openWithDefault(absolutePath).catch(onError)}
+        >
+          Open with default program
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

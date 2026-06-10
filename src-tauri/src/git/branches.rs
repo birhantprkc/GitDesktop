@@ -62,13 +62,20 @@ pub async fn git_create_branch(
     repo_path: String,
     name: String,
     checkout: bool,
+    start_point: Option<String>,
 ) -> AppResult<()> {
     validate_ref_name(&name)?;
-    let args: Vec<&str> = if checkout {
+    if let Some(start) = &start_point {
+        crate::git::history::validate_hash(start)?;
+    }
+    let mut args: Vec<&str> = if checkout {
         vec!["switch", "-c", &name]
     } else {
         vec!["branch", "--", &name]
     };
+    if let Some(start) = &start_point {
+        args.push(start);
+    }
     run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
     Ok(())
 }

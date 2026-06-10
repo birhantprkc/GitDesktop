@@ -15,23 +15,30 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   const commit = useCommit(repoPath);
   const title = useUiStore((s) => s.commitTitle);
   const body = useUiStore((s) => s.commitBody);
+  const amendingHash = useUiStore((s) => s.amendingHash);
   const setCommitTitle = useUiStore((s) => s.setCommitTitle);
   const setCommitBody = useUiStore((s) => s.setCommitBody);
   const clearCommitDraft = useUiStore((s) => s.clearCommitDraft);
   const { generate, cancel, generating } = useGenerateCommitMessage(repoPath);
 
+  const amending = amendingHash !== null;
   const stagedCount =
     status.data?.entries.filter((e) => e.staged !== null).length ?? 0;
+  // amending without staged changes is valid (message-only edit)
   const canCommit =
-    title.trim().length > 0 && stagedCount > 0 && !commit.isPending;
+    title.trim().length > 0 &&
+    (stagedCount > 0 || amending) &&
+    !commit.isPending;
 
   function doCommit() {
     commit.mutate(
-      { title: title.trim(), body: body.trim() || undefined },
+      { title: title.trim(), body: body.trim() || undefined, amend: amending },
       {
         onSuccess: (result) => {
           clearCommitDraft();
-          toast.success(`Committed ${result.hash.slice(0, 7)}`);
+          toast.success(
+            `${amending ? "Amended" : "Committed"} ${result.hash.slice(0, 7)}`,
+          );
         },
         onError: (e) => toast.error(errorMessage(e)),
       },
@@ -40,6 +47,19 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
 
   return (
     <div className="space-y-2 border-t p-3">
+      {amending && (
+        <div className="flex items-center justify-between bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-400">
+          <span>Amending {amendingHash?.slice(0, 7)}</span>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Cancel amend"
+            onClick={clearCommitDraft}
+          >
+            <XIcon />
+          </Button>
+        </div>
+      )}
       <div className="relative">
         <Input
           placeholder="Commit title"
@@ -96,7 +116,9 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
           onClick={doCommit}
         >
           {commit.isPending && <Spinner data-icon="inline-start" />}
-          Commit{stagedCount > 0 && ` (${stagedCount})`}
+          {amending
+            ? "Amend"
+            : `Commit${stagedCount > 0 ? ` (${stagedCount})` : ""}`}
         </Button>
       </div>
     </div>

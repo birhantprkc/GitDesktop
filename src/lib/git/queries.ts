@@ -123,8 +123,10 @@ export function useUnstage(repo: string) {
 }
 
 export function useCommit(repo: string) {
-  return useRepoMutation(repo, (args: { title: string; body?: string }) =>
-    api.gitCommit(repo, args.title, args.body),
+  return useRepoMutation(
+    repo,
+    (args: { title: string; body?: string; amend?: boolean }) =>
+      api.gitCommit(repo, args.title, args.body, args.amend ?? false),
   );
 }
 
@@ -135,8 +137,46 @@ export function useCheckoutBranch(repo: string) {
 }
 
 export function useCreateBranch(repo: string) {
-  return useRepoMutation(repo, (args: { name: string; checkout: boolean }) =>
-    api.gitCreateBranch(repo, args.name, args.checkout),
+  return useRepoMutation(
+    repo,
+    (args: { name: string; checkout: boolean; startPoint?: string }) =>
+      api.gitCreateBranch(repo, args.name, args.checkout, args.startPoint),
+  );
+}
+
+export function useDiscard(repo: string) {
+  return useRepoMutation(repo, (args: { path: string; untracked: boolean }) =>
+    api.gitDiscard(repo, args.path, args.untracked),
+  );
+}
+
+export function useAppendToGitignore(repo: string) {
+  return useRepoMutation(repo, (pattern: string) =>
+    api.appendToGitignore(repo, pattern),
+  );
+}
+
+export function useResetToCommit(repo: string) {
+  return useRepoMutation(repo, (hash: string) => api.gitReset(repo, hash));
+}
+
+export function useCheckoutCommit(repo: string) {
+  return useRepoMutation(repo, (hash: string) =>
+    api.gitCheckoutCommit(repo, hash),
+  );
+}
+
+export function useRevertCommit(repo: string) {
+  return useRepoMutation(repo, (hash: string) => api.gitRevert(repo, hash));
+}
+
+export function useCherryPick(repo: string) {
+  return useRepoMutation(repo, (hash: string) => api.gitCherryPick(repo, hash));
+}
+
+export function useCreateTag(repo: string) {
+  return useRepoMutation(repo, (args: { name: string; hash: string }) =>
+    api.gitTag(repo, args.name, args.hash),
   );
 }
 

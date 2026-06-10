@@ -9,6 +9,10 @@ customizable AI commit message generation.
 - Working-tree status with stage/unstage (single file or all at once), branch
   switching/creation
 - Commit history browser: commit list with per-commit changed files and diffs
+- Right-click context menus: files (discard to recycle bin, add to
+  .gitignore by file/folder/extension, copy paths, show in Explorer, open)
+  and commits (amend, mixed reset, checkout, revert, branch/tag from commit,
+  cherry-pick, copy SHA)
 - Unified/split diff viewer
 - Commit with title + body; fetch/pull/push with ahead/behind indicators
 - **AI commit messages**: streams a title/body into the commit box from the

@@ -22,6 +22,8 @@ interface UiState {
   commitTitle: string;
   commitBody: string;
   generating: boolean;
+  /** Hash of the commit being amended, or null for a normal commit. */
+  amendingHash: string | null;
 
   openRepo: (info: RepoInfo) => void;
   closeRepo: () => void;
@@ -35,6 +37,7 @@ interface UiState {
   setCommitBody: (body: string) => void;
   clearCommitDraft: () => void;
   setGenerating: (generating: boolean) => void;
+  setAmending: (hash: string | null) => void;
 }
 
 export const useUiStore = create<UiState>()((set, get) => ({
@@ -48,6 +51,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
   commitTitle: "",
   commitBody: "",
   generating: false,
+  amendingHash: null,
 
   openRepo: (info) =>
     set({
@@ -60,6 +64,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
       selectedCommitHash: null,
       commitTitle: "",
       commitBody: "",
+      amendingHash: null,
     }),
   closeRepo: () =>
     set({
@@ -86,6 +91,8 @@ export const useUiStore = create<UiState>()((set, get) => ({
     set({ commitTitle: title, commitBody: body }),
   setCommitTitle: (title) => set({ commitTitle: title }),
   setCommitBody: (body) => set({ commitBody: body }),
-  clearCommitDraft: () => set({ commitTitle: "", commitBody: "" }),
+  clearCommitDraft: () =>
+    set({ commitTitle: "", commitBody: "", amendingHash: null }),
   setGenerating: (generating) => set({ generating }),
+  setAmending: (hash) => set({ amendingHash: hash }),
 }));

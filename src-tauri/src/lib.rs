@@ -1,4 +1,5 @@
 mod error;
+mod fsops;
 mod git;
 mod instructions;
 mod secrets;
@@ -32,6 +33,15 @@ pub fn run() {
             git::history::git_commit_details,
             git::history::git_commit_files,
             git::history::git_commit_file_diff,
+            git::ops::git_discard,
+            git::ops::git_reset,
+            git::ops::git_checkout_commit,
+            git::ops::git_revert,
+            git::ops::git_cherry_pick,
+            git::ops::git_tag,
+            fsops::append_to_gitignore,
+            fsops::reveal_in_explorer,
+            fsops::open_with_default,
             git::remote::git_fetch,
             git::remote::git_pull,
             git::remote::git_push,

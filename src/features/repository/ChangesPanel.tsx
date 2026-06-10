@@ -1,9 +1,22 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useRepoStatus, useStage, useUnstage } from "@/lib/git/queries";
+import {
+  useDiscard,
+  useRepoStatus,
+  useStage,
+  useUnstage,
+} from "@/lib/git/queries";
 import type { FileEntry } from "@/lib/git/types";
 import { useUiStore } from "@/lib/stores/ui";
 import { errorMessage } from "@/lib/tauri/invoke";
@@ -21,8 +34,10 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
   const stage = useStage(repoPath);
   const unstage = useUnstage(repoPath);
+  const discard = useDiscard(repoPath);
   const selectedFile = useUiStore((s) => s.selectedFile);
   const selectFile = useUiStore((s) => s.selectFile);
+  const [discardTarget, setDiscardTarget] = useState<FileEntry | null>(null);
 
   const entries = status.data?.entries ?? [];
   const unstagedEntries = entries.filter((e) => e.unstaged !== null);
@@ -103,6 +118,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                 kind={entry.staged ?? "modified"}
                 staged
                 disabled={mutating}
+                repoPath={repoPath}
                 selected={
                   selectedFile?.path === entry.path &&
                   selectedFile.staged === true
@@ -139,17 +155,69 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                 kind={entry.unstaged ?? "modified"}
                 staged={false}
                 disabled={mutating}
+                repoPath={repoPath}
                 selected={
                   selectedFile?.path === entry.path &&
                   selectedFile.staged === false
                 }
                 onSelect={() => select(entry, false)}
                 onToggle={() => stage.mutate([entry.path], { onError })}
+                onDiscard={() => setDiscardTarget(entry)}
               />
             ))}
           </section>
         )}
       </div>
+
+      <Dialog
+        open={discardTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDiscardTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard changes?</DialogTitle>
+            <DialogDescription>
+              {discardTarget?.unstaged === "untracked"
+                ? `${discardTarget.path} is untracked — it will be moved to the recycle bin.`
+                : `Unstaged changes to ${discardTarget?.path} will be restored to the last committed version. This cannot be undone.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscardTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={discard.isPending}
+              onClick={() => {
+                if (!discardTarget) return;
+                discard.mutate(
+                  {
+                    path: discardTarget.path,
+                    untracked: discardTarget.unstaged === "untracked",
+                  },
+                  {
+                    onSuccess: () => {
+                      toast.success(
+                        `Discarded changes to ${discardTarget.path}`,
+                      );
+                      setDiscardTarget(null);
+                    },
+                    onError: (e) => {
+                      toast.error(errorMessage(e));
+                      setDiscardTarget(null);
+                    },
+                  },
+                );
+              }}
+            >
+              Discard
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </ScrollArea>
   );
 }

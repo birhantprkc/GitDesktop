@@ -11,8 +11,13 @@ pub async fn git_commit(
     repo_path: String,
     title: String,
     body: Option<String>,
+    amend: bool,
 ) -> AppResult<CommitResult> {
-    let mut args = vec!["commit", "-m", title.as_str()];
+    let mut args = vec!["commit"];
+    if amend {
+        args.push("--amend");
+    }
+    args.extend(["-m", title.as_str()]);
     let body = body.filter(|b| !b.trim().is_empty());
     if let Some(body) = &body {
         args.extend(["-m", body.as_str()]);

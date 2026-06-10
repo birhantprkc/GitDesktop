@@ -3,7 +3,7 @@ use crate::git::diff::parse_numstat_z;
 use crate::git::runner::{run_git, run_git_raw, DEFAULT_TIMEOUT};
 use crate::git::types::{CommitDetails, CommitSummary, DiffStatEntry, FileDiff};
 
-fn validate_hash(hash: &str) -> AppResult<()> {
+pub fn validate_hash(hash: &str) -> AppResult<()> {
     if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(crate::error::AppError::InvalidArgument(format!(
             "invalid commit hash: {hash}"
