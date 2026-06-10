@@ -1,0 +1,31 @@
+export type AiProviderId = "anthropic" | "openai" | "openrouter" | "ollama";
+
+export interface AiSettings {
+  provider: AiProviderId;
+  model: string;
+  ollamaBaseUrl: string;
+}
+
+export interface AiStreamRequest {
+  system: string;
+  prompt: string;
+  abortSignal?: AbortSignal;
+}
+
+export interface AiClient {
+  /** Streams raw text chunks from the model. */
+  stream: (req: AiStreamRequest) => AsyncIterable<string>;
+  /** Cheap round-trip used by the Settings "Test connection" button. */
+  testConnection: () => Promise<{ ok: true } | { ok: false; message: string }>;
+}
+
+export interface CommitPromptInput {
+  diffText: string;
+  diffTruncated: boolean;
+  files: { path: string; added: number; deleted: number; isBinary: boolean }[];
+  /** Changed files hidden from this context by the user's ignore patterns. */
+  excludedFiles: number;
+  recentSubjects: string[];
+  repoInstructions: string | null;
+  globalInstructions: string;
+}
