@@ -77,9 +77,19 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
         )}
 
         <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">GitHub</p>
-        {!ghReady ? (
+        {gh.isPending ? (
+          <div className="space-y-2 p-3">
+            <Skeleton className="h-9 w-full" />
+          </div>
+        ) : !ghReady ? (
           <p className="px-3 py-4 text-xs text-muted-foreground">
-            Sign in with the GitHub CLI (gh auth login) to see pull requests.
+            {/* Name the actual blocker — "sign in" is wrong advice when the
+                repo simply isn't on GitHub. */}
+            {!gh.data?.installed
+              ? "Install the GitHub CLI (gh) to see pull requests."
+              : !gh.data?.authenticated
+                ? "Sign in with the GitHub CLI (gh auth login) to see pull requests."
+                : "This repository isn't on GitHub. Publish it (from the repository header) to use pull requests."}
           </p>
         ) : prList.isPending ? (
           <div className="space-y-2 p-3">

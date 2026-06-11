@@ -1,13 +1,17 @@
 import {
   ArrowSquareOutIcon,
   CaretDownIcon,
+  CheckCircleIcon,
+  CircleIcon,
   GitMergeIcon,
+  XCircleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -48,18 +52,49 @@ import { PrReviewPanel } from "./PrReviewPanel";
 
 type Section = "conversation" | "commits" | "files" | "review";
 
+/**
+ * Whether a thread body renders any visible content. Raw HTML is disabled in
+ * our Markdown component, so a body that is only HTML comments (e.g. an
+ * unfilled PR template) displays as nothing.
+ */
+function hasVisibleBody(body: string): boolean {
+  return body.replace(/<!--[\s\S]*?-->/g, "").trim().length > 0;
+}
+
 const MERGE_LABEL: Record<MergeStrategy, string> = {
   merge: "Create a merge commit",
   squash: "Squash and merge",
   rebase: "Rebase and merge",
 };
 
-function checkTone(status: string): string {
+/**
+ * Tone + glyph for a CI check, so pass/fail isn't conveyed by color alone.
+ */
+function checkPresentation(status: string): {
+  tone: string;
+  Icon: typeof CheckCircleIcon;
+  label: string;
+} {
   const s = status.toUpperCase();
-  if (s === "SUCCESS") return "text-green-600 dark:text-green-400";
-  if (["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"].includes(s))
-    return "text-red-600 dark:text-red-400";
-  return "text-amber-600 dark:text-amber-400";
+  if (s === "SUCCESS") {
+    return {
+      tone: "text-green-600 dark:text-green-400",
+      Icon: CheckCircleIcon,
+      label: "passed",
+    };
+  }
+  if (["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"].includes(s)) {
+    return {
+      tone: "text-red-600 dark:text-red-400",
+      Icon: XCircleIcon,
+      label: "failed",
+    };
+  }
+  return {
+    tone: "text-amber-600 dark:text-amber-400",
+    Icon: CircleIcon,
+    label: "pending",
+  };
 }
 
 export function RemotePrView({
@@ -215,14 +250,19 @@ export function RemotePrView({
         </div>
         {pr.checks.length > 0 && (
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
-            {pr.checks.map((c) => (
-              <span
-                key={c.name}
-                className={cn("truncate", checkTone(c.status))}
-              >
-                {c.name}
-              </span>
-            ))}
+            {pr.checks.map((c) => {
+              const { tone, Icon, label } = checkPresentation(c.status);
+              return (
+                <span
+                  key={c.name}
+                  className={cn("flex items-center gap-1 truncate", tone)}
+                  title={`${c.name}: ${label}`}
+                >
+                  <Icon className="size-3 shrink-0" aria-label={label} />
+                  {c.name}
+                </span>
+              );
+            })}
           </div>
         )}
         <div className="flex gap-1 pt-1">
@@ -232,6 +272,7 @@ export function RemotePrView({
                 key={s}
                 variant={section === s ? "secondary" : "ghost"}
                 size="xs"
+                aria-pressed={section === s}
                 onClick={() => setSection(s)}
               >
                 {s === "conversation"
@@ -291,12 +332,19 @@ export function RemotePrView({
                   </p>
                 )}
               </div>
-              {pr.reviews.map((r, i) => (
-                <Thread key={`r${i}-${r.author}`} thread={r} />
-              ))}
-              {pr.comments.map((c, i) => (
-                <Thread key={`c${i}-${c.author}`} thread={c} />
-              ))}
+              {/* Events with nothing visible to say (empty body, or only an
+                  unfilled-template HTML comment) render as a bare author
+                  line — drop them. */}
+              {pr.reviews
+                .filter((r) => hasVisibleBody(r.body) || r.state)
+                .map((r, i) => (
+                  <Thread key={`r${i}-${r.author}`} thread={r} />
+                ))}
+              {pr.comments
+                .filter((c) => hasVisibleBody(c.body))
+                .map((c, i) => (
+                  <Thread key={`c${i}-${c.author}`} thread={c} />
+                ))}
               {pr.reviews.length === 0 && pr.comments.length === 0 && (
                 <p className="text-xs text-muted-foreground">
                   No activity yet.
@@ -310,6 +358,17 @@ export function RemotePrView({
                 placeholder="Leave a comment…"
                 value={composeBody}
                 onChange={(e) => setComposeBody(e.target.value)}
+                onKeyDown={(e) => {
+                  if (
+                    (e.ctrlKey || e.metaKey) &&
+                    e.key === "Enter" &&
+                    composeBody.trim() &&
+                    !busy
+                  ) {
+                    e.preventDefault();
+                    submitComment();
+                  }
+                }}
                 rows={2}
                 className="max-h-32 min-h-12 resize-y"
               />
@@ -319,6 +378,7 @@ export function RemotePrView({
                   size="sm"
                   disabled={!composeBody.trim() || busy}
                   onClick={submitComment}
+                  title="Ctrl+Enter"
                 >
                   Comment
                 </Button>
@@ -490,12 +550,10 @@ export function RemotePrView({
               This cannot be easily undone.
             </DialogDescription>
           </DialogHeader>
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <Checkbox
               checked={deleteBranch}
-              onChange={(e) => setDeleteBranch(e.target.checked)}
-              className="size-3.5 accent-primary"
+              onCheckedChange={(checked) => setDeleteBranch(checked === true)}
             />
             Delete <span className="font-mono">{pr.headRefName}</span> after
             merging

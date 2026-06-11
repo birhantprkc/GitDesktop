@@ -193,7 +193,6 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
       >
         <FilesIcon className="size-3.5 shrink-0" />
         <span className="font-medium">All changes</span>
-        <span className="text-muted-foreground">(files changed)</span>
       </button>
 
       {comparison.isPending ? (

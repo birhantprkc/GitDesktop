@@ -1,7 +1,9 @@
 import {
+  ArrowCounterClockwiseIcon,
   CaretDownIcon,
   CheckCircleIcon,
   GitMergeIcon,
+  PencilSimpleIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
 import { useState } from "react";
@@ -9,18 +11,32 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { gitBranchDiff, type MergeStrategy } from "@/lib/git/api";
-import { useCompareBranches, useMergeLocalPr } from "@/lib/git/queries";
+import {
+  useBranchDiffFiles,
+  useCompareBranches,
+  useMergeLocalPr,
+} from "@/lib/git/queries";
 import {
   useDeleteLocalPr,
   useLocalPrs,
@@ -48,8 +64,17 @@ export function LocalPrView({
   const selectPr = useUiStore((s) => s.selectPr);
   const [section, setSection] = useState<Section>("conversation");
   const [comment, setComment] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [bodyDraft, setBodyDraft] = useState("");
 
   const comparison = useCompareBranches(
+    repoPath,
+    pr?.base ?? null,
+    pr?.head ?? null,
+  );
+  const diffFiles = useBranchDiffFiles(
     repoPath,
     pr?.base ?? null,
     pr?.head ?? null,
@@ -62,6 +87,7 @@ export function LocalPrView({
   }
 
   const ahead = comparison.data?.ahead ?? [];
+  const fileCount = diffFiles.data?.length;
   const canMerge = pr.status === "open" && pr.approved;
 
   function addComment() {
@@ -83,6 +109,21 @@ export function LocalPrView({
   function toggleApprove() {
     if (!pr) return;
     save.mutate({ ...pr, approved: !pr.approved });
+  }
+
+  function openEdit() {
+    if (!pr) return;
+    setTitleDraft(pr.title);
+    setBodyDraft(pr.body);
+    setEditOpen(true);
+  }
+
+  function saveEdit() {
+    if (!pr || !titleDraft.trim()) return;
+    save.mutate(
+      { ...pr, title: titleDraft.trim(), body: bodyDraft },
+      { onSuccess: () => setEditOpen(false) },
+    );
   }
 
   function doMerge(strategy: MergeStrategy) {
@@ -116,6 +157,17 @@ export function LocalPrView({
         <div className="flex items-start gap-2">
           <h2 className="text-sm font-medium">{pr.title}</h2>
           <span className="flex-1" />
+          {pr.status === "open" && (
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={openEdit}
+              title="Edit the title and description"
+            >
+              <PencilSimpleIcon data-icon="inline-start" />
+              Edit
+            </Button>
+          )}
           <Badge
             variant={pr.status === "open" ? "default" : "secondary"}
             className="capitalize"
@@ -140,6 +192,7 @@ export function LocalPrView({
                 key={s}
                 variant={section === s ? "secondary" : "ghost"}
                 size="xs"
+                aria-pressed={section === s}
                 onClick={() => setSection(s)}
               >
                 {s === "conversation"
@@ -147,7 +200,7 @@ export function LocalPrView({
                   : s === "commits"
                     ? `Commits (${ahead.length})`
                     : s === "files"
-                      ? "Files"
+                      ? `Files${fileCount === undefined ? "" : ` (${fileCount})`}`
                       : "Review"}
               </Button>
             ),
@@ -218,6 +271,12 @@ export function LocalPrView({
                 placeholder="Leave a note…"
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    addComment();
+                  }
+                }}
                 rows={2}
                 className="max-h-32 min-h-12 resize-y"
               />
@@ -227,6 +286,7 @@ export function LocalPrView({
                   size="sm"
                   disabled={!comment.trim()}
                   onClick={addComment}
+                  title="Ctrl+Enter"
                 >
                   Comment
                 </Button>
@@ -278,7 +338,7 @@ export function LocalPrView({
           variant="outline"
           size="sm"
           className="text-destructive"
-          onClick={() => del.mutate(pr.id, { onSuccess: () => selectPr(null) })}
+          onClick={() => setConfirmDelete(true)}
         >
           <TrashIcon data-icon="inline-start" />
           Delete
@@ -325,7 +385,96 @@ export function LocalPrView({
             </DropdownMenu>
           </>
         )}
+        {pr.status === "closed" && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => save.mutate({ ...pr, status: "open" })}
+          >
+            <ArrowCounterClockwiseIcon data-icon="inline-start" />
+            Reopen
+          </Button>
+        )}
       </div>
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this local pull request?</DialogTitle>
+            <DialogDescription>
+              Permanently deletes "{pr.title}"
+              {pr.comments.length > 0
+                ? ` and its ${pr.comments.length} comment${
+                    pr.comments.length === 1 ? "" : "s"
+                  }`
+                : ""}
+              . The branches are not affected. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={del.isPending}
+              onClick={() =>
+                del.mutate(pr.id, {
+                  onSuccess: () => {
+                    setConfirmDelete(false);
+                    selectPr(null);
+                  },
+                  onError: toastError,
+                })
+              }
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit pull request</DialogTitle>
+            <DialogDescription>
+              Updates the title and description of this local pull request.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="local-pr-title">Title</Label>
+              <Input
+                id="local-pr-title"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="local-pr-body">Description</Label>
+              <Textarea
+                id="local-pr-body"
+                rows={8}
+                className="max-h-72"
+                value={bodyDraft}
+                onChange={(e) => setBodyDraft(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!titleDraft.trim() || save.isPending}
+              onClick={saveEdit}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
