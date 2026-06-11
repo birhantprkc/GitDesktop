@@ -1,6 +1,7 @@
 import {
   ArrowSquareOutIcon,
   FilesIcon,
+  GitBranchIcon,
   GitCommitIcon,
   GitPullRequestIcon,
 } from "@phosphor-icons/react";
@@ -16,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CreateLocalPrDialog } from "@/features/pulls/CreateLocalPrDialog";
 import { CreatePrDialog } from "@/features/pulls/CreatePrDialog";
 import {
   useBranches,
@@ -40,6 +42,7 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const selectCommit = useUiStore((s) => s.selectCommit);
   const [prOpen, setPrOpen] = useState(false);
+  const [localPrOpen, setLocalPrOpen] = useState(false);
 
   const currentName = status.data?.branch?.name ?? null;
   const detached = status.data?.branch?.detached ?? false;
@@ -143,6 +146,19 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
             Create pull request…
           </Button>
         )}
+        {compareBranch && compareBranch !== currentName && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full"
+            disabled={ahead.length === 0}
+            onClick={() => setLocalPrOpen(true)}
+            title={`Propose merging ${currentName} into ${compareBranch} locally`}
+          >
+            <GitBranchIcon data-icon="inline-start" />
+            Create local PR…
+          </Button>
+        )}
       </div>
 
       {canPr && compareBranch && !existingPr && (
@@ -153,6 +169,15 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
           commitSubjects={ahead.map((c) => c.subject)}
           open={prOpen}
           onOpenChange={setPrOpen}
+        />
+      )}
+      {compareBranch && (
+        <CreateLocalPrDialog
+          repoPath={repoPath}
+          defaultBase={compareBranch}
+          defaultHead={currentName}
+          open={localPrOpen}
+          onOpenChange={setLocalPrOpen}
         />
       )}
 

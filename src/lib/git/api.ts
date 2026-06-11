@@ -9,6 +9,7 @@ import type {
   FileDiff,
   GhStatus,
   GitInfo,
+  PrDetails,
   PrInfo,
   PrRef,
   RepoInfo,
@@ -227,6 +228,23 @@ export const gitMerge = (repoPath: string, branch: string, squash: boolean) =>
 export const gitRebase = (repoPath: string, branch: string) =>
   invoke<void>("git_rebase", { repoPath, branch });
 
+export type MergeStrategy = "merge" | "squash" | "rebase";
+
+export const gitMergeLocalPr = (
+  repoPath: string,
+  base: string,
+  head: string,
+  message: string,
+  strategy: MergeStrategy,
+) =>
+  invoke<void>("git_merge_local_pr", {
+    repoPath,
+    base,
+    head,
+    message,
+    strategy,
+  });
+
 export const gitCompareBranches = (
   repoPath: string,
   base: string,
@@ -302,6 +320,15 @@ export const ghPublishRepo = (
 
 export const ghPrsForBranch = (repoPath: string, head: string) =>
   invoke<PrInfo[]>("gh_prs_for_branch", { repoPath, head });
+
+export const ghPrList = (repoPath: string) =>
+  invoke<PrInfo[]>("gh_pr_list", { repoPath });
+
+export const ghPrView = (repoPath: string, number: number) =>
+  invoke<PrDetails>("gh_pr_view", { repoPath, number });
+
+export const ghPrDiff = (repoPath: string, number: number) =>
+  invoke<string>("gh_pr_diff", { repoPath, number });
 
 export const openWithProgram = (program: string, path: string) =>
   invoke<void>("open_with_program", { program, path });

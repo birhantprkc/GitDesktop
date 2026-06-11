@@ -114,3 +114,48 @@ export interface PrInfo {
   isDraft: boolean;
   state: string;
 }
+
+export interface PrCommitOut {
+  oid: string;
+  headline: string;
+  date: string;
+  author: string;
+}
+
+export interface PrFileOut {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface PrThreadOut {
+  author: string;
+  /** Review state (APPROVED/COMMENTED/CHANGES_REQUESTED); "" for comments. */
+  state: string;
+  body: string;
+  date: string;
+}
+
+export interface PrCheckOut {
+  name: string;
+  status: string;
+}
+
+export interface PrDetails {
+  number: number;
+  title: string;
+  body: string;
+  author: string;
+  state: string;
+  isDraft: boolean;
+  baseRefName: string;
+  headRefName: string;
+  additions: number;
+  deletions: number;
+  url: string;
+  commits: PrCommitOut[];
+  files: PrFileOut[];
+  reviews: PrThreadOut[];
+  comments: PrThreadOut[];
+  checks: PrCheckOut[];
+}

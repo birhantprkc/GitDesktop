@@ -6,6 +6,9 @@ import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffViewer } from "@/features/diff/DiffViewer";
 import { CommitDetailView } from "@/features/history/CommitDetailView";
 import { HistoryPanel } from "@/features/history/HistoryPanel";
+import { LocalPrView } from "@/features/pulls/LocalPrView";
+import { PullRequestsPanel } from "@/features/pulls/PullRequestsPanel";
+import { RemotePrView } from "@/features/pulls/RemotePrView";
 import { useRepoStatus } from "@/lib/git/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { ChangesPanel } from "./ChangesPanel";
@@ -17,9 +20,63 @@ export function RepositoryView() {
   const setRepoTab = useUiStore((s) => s.setRepoTab);
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const compareBranch = useUiStore((s) => s.compareBranch);
+  const selectedPr = useUiStore((s) => s.selectedPr);
   const status = useRepoStatus(repoPath ?? "");
   const currentName = status.data?.branch?.name ?? null;
   if (!repoPath) return null;
+
+  function sidebar() {
+    if (!repoPath) return null;
+    switch (repoTab) {
+      case "changes":
+        return (
+          <>
+            <ChangesPanel repoPath={repoPath} />
+            <CommitBox repoPath={repoPath} />
+          </>
+        );
+      case "history":
+        return <HistoryPanel repoPath={repoPath} />;
+      case "compare":
+        return <ComparePanel repoPath={repoPath} />;
+      case "pulls":
+        return <PullRequestsPanel repoPath={repoPath} />;
+    }
+  }
+
+  function main() {
+    if (!repoPath) return null;
+    switch (repoTab) {
+      case "changes":
+        return <DiffViewer repoPath={repoPath} />;
+      case "history":
+        return selectedCommitHash ? (
+          <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
+        ) : (
+          <DiffPlaceholder message="Select a commit to see its changes" />
+        );
+      case "compare":
+        return selectedCommitHash ? (
+          <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
+        ) : compareBranch && currentName && compareBranch !== currentName ? (
+          <BranchDiffView
+            repoPath={repoPath}
+            base={compareBranch}
+            compare={currentName}
+          />
+        ) : (
+          <DiffPlaceholder message="Pick a branch to compare against" />
+        );
+      case "pulls":
+        return selectedPr?.kind === "remote" ? (
+          <RemotePrView repoPath={repoPath} number={Number(selectedPr.id)} />
+        ) : selectedPr?.kind === "local" ? (
+          <LocalPrView repoPath={repoPath} id={selectedPr.id} />
+        ) : (
+          <DiffPlaceholder message="Select a pull request" />
+        );
+    }
+  }
 
   return (
     <div className="flex h-screen flex-col">
@@ -40,40 +97,14 @@ export function RepositoryView() {
               <TabsTrigger value="compare" className="flex-1">
                 Compare
               </TabsTrigger>
+              <TabsTrigger value="pulls" className="flex-1">
+                Pull Requests
+              </TabsTrigger>
             </TabsList>
           </Tabs>
-          {repoTab === "changes" ? (
-            <>
-              <ChangesPanel repoPath={repoPath} />
-              <CommitBox repoPath={repoPath} />
-            </>
-          ) : repoTab === "history" ? (
-            <HistoryPanel repoPath={repoPath} />
-          ) : (
-            <ComparePanel repoPath={repoPath} />
-          )}
+          {sidebar()}
         </aside>
-        <main className="min-w-0 flex-1">
-          {repoTab === "changes" ? (
-            <DiffViewer repoPath={repoPath} />
-          ) : repoTab === "history" ? (
-            selectedCommitHash ? (
-              <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
-            ) : (
-              <DiffPlaceholder message="Select a commit to see its changes" />
-            )
-          ) : selectedCommitHash ? (
-            <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
-          ) : compareBranch && currentName && compareBranch !== currentName ? (
-            <BranchDiffView
-              repoPath={repoPath}
-              base={compareBranch}
-              compare={currentName}
-            />
-          ) : (
-            <DiffPlaceholder message="Pick a branch to compare against" />
-          )}
-        </main>
+        <main className="min-w-0 flex-1">{main()}</main>
       </div>
     </div>
   );

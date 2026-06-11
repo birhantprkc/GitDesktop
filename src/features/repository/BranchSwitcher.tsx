@@ -99,6 +99,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
+  const [createFrom, setCreateFrom] = useState("");
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -116,6 +117,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const otherBranches = allBranches.filter((b) => !b.isCurrent);
   const defaultName = defaultBranch.data ?? null;
   const stashes = stashCount.data ?? 0;
+  // Bases offered when creating a branch: the current branch and/or the
+  // default branch (deduped — they're the same when you're on the default).
+  const baseOptions = [
+    ...new Set(
+      [currentName, defaultName].filter((b): b is string => Boolean(b)),
+    ),
+  ];
 
   const onError = (e: unknown) => toastError(e);
 
@@ -153,7 +161,11 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   function create() {
     createBranch.mutate(
-      { name: newName.trim(), checkout: true },
+      {
+        name: newName.trim(),
+        checkout: true,
+        startPoint: createFrom || undefined,
+      },
       {
         onSuccess: () => {
           setCreateOpen(false);
@@ -320,6 +332,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 <MenuRow
                   onClick={() => {
                     setOpen(false);
+                    setCreateFrom(currentName ?? defaultName ?? "");
                     setCreateOpen(true);
                   }}
                 >
@@ -427,7 +440,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
           <DialogHeader>
             <DialogTitle>New branch</DialogTitle>
             <DialogDescription>
-              Creates a branch from the current HEAD and switches to it.
+              Branches from{" "}
+              <span className="font-mono">{createFrom || "HEAD"}</span> and
+              switches to it.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
@@ -442,6 +457,29 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               }}
             />
           </div>
+          {baseOptions.length > 1 && (
+            <div className="space-y-2">
+              <Label>Base it on</Label>
+              <Select
+                items={Object.fromEntries(baseOptions.map((b) => [b, b]))}
+                value={createFrom || null}
+                onValueChange={(v) => v && setCreateFrom(v)}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {baseOptions.map((b) => (
+                    <SelectItem key={b} value={b}>
+                      {b}
+                      {b === currentName ? " (current)" : ""}
+                      {b === defaultName ? " (default)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
               Cancel

@@ -177,6 +177,31 @@ export function usePrsForBranch(
   });
 }
 
+export function usePrList(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr-list"] as const,
+    queryFn: () => api.ghPrList(repo),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function usePrDetails(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr", number ?? 0] as const,
+    queryFn: () => api.ghPrView(repo, number ?? 0),
+    enabled: number !== null,
+  });
+}
+
+export function usePrDiff(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr", number ?? 0, "diff"] as const,
+    queryFn: () => api.ghPrDiff(repo, number ?? 0),
+    enabled: number !== null,
+  });
+}
+
 export function useGhStatus(repo: string) {
   return useQuery({
     queryKey: ["repo", repo, "gh-status"] as const,
@@ -341,6 +366,25 @@ export function useMergeBranch(repo: string) {
 
 export function useRebaseBranch(repo: string) {
   return useRepoMutation(repo, (branch: string) => api.gitRebase(repo, branch));
+}
+
+export function useMergeLocalPr(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      base: string;
+      head: string;
+      message: string;
+      strategy: api.MergeStrategy;
+    }) =>
+      api.gitMergeLocalPr(
+        repo,
+        args.base,
+        args.head,
+        args.message,
+        args.strategy,
+      ),
+  );
 }
 
 export function useCreatePr(repo: string) {

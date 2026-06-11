@@ -24,6 +24,11 @@ customizable AI commit message generation.
 - Pull requests (via the GitHub CLI): from the Compare tab, push the current
   branch and open a PR into the compared branch, with an AI-generated title
   and description from the branch diff and its commits
+- Pull Requests tab: browse open GitHub PRs with a full in-app read view
+  (description, commits, changed files + diffs, CI checks, review comments),
+  plus **local PRs** — propose a branch merge, review the diff/commits, leave
+  notes, approve, and merge locally (a `--no-ff` merge commit) without ever
+  touching GitHub; local PRs are private to you, never written into the repo
 - Right-click context menus: files (discard to recycle bin, add to
   .gitignore by file/folder/extension, copy paths, show in Explorer, open in
   your configured editor or the default program) and commits (amend, mixed

@@ -31,14 +31,39 @@ export function DiffSurface({
   filePath: string;
   diff: UseQueryResult<FileDiff>;
 }) {
+  return (
+    <DiffContent
+      filePath={filePath}
+      data={diff.data}
+      isPending={diff.isPending}
+      isError={diff.isError}
+    />
+  );
+}
+
+/**
+ * The diff renderer itself, decoupled from TanStack Query so callers with an
+ * already-resolved FileDiff (e.g. a PR's split unified diff) can reuse it.
+ */
+export function DiffContent({
+  filePath,
+  data,
+  isPending,
+  isError,
+}: {
+  filePath: string;
+  data: FileDiff | undefined;
+  isPending: boolean;
+  isError: boolean;
+}) {
   const settings = useSettings();
   const saveSettings = useSaveSettings();
   const isDark = useIsDark();
   const viewMode = settings.data?.diffViewMode ?? "unified";
 
   const diffFile = useMemo(() => {
-    const text = diff.data?.text;
-    if (!text || diff.data?.isBinary) return null;
+    const text = data?.text;
+    if (!text || data?.isBinary) return null;
     try {
       const file = DiffFile.createInstance({
         oldFile: { fileName: filePath },
@@ -50,9 +75,9 @@ export function DiffSurface({
     } catch {
       return null;
     }
-  }, [diff.data, filePath]);
+  }, [data, filePath]);
 
-  if (diff.isPending) {
+  if (isPending) {
     return (
       <div className="space-y-2 p-4">
         <Skeleton className="h-4 w-1/3" />
@@ -61,13 +86,13 @@ export function DiffSurface({
       </div>
     );
   }
-  if (diff.isError) {
+  if (isError || !data) {
     return <DiffPlaceholder message="Could not load diff for this file" />;
   }
-  if (diff.data.isBinary) {
+  if (data.isBinary) {
     return <DiffPlaceholder message="Binary file — no text diff available" />;
   }
-  if (!diff.data.text.trim() || !diffFile) {
+  if (!data.text.trim() || !diffFile) {
     return <DiffPlaceholder message="No changes to show" />;
   }
 
@@ -76,7 +101,7 @@ export function DiffSurface({
       <div className="flex items-center justify-between border-b px-3 py-1.5">
         <span className="truncate font-mono text-xs text-muted-foreground">
           {filePath}
-          {diff.data.isTruncated && " (truncated — diff too large)"}
+          {data.isTruncated && " (truncated — diff too large)"}
         </span>
         <ButtonGroup>
           <Button

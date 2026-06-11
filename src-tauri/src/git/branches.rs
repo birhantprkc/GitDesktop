@@ -141,7 +141,9 @@ pub async fn git_create_branch(
 ) -> AppResult<()> {
     validate_ref_name(&name)?;
     if let Some(start) = &start_point {
-        crate::git::history::validate_hash(start)?;
+        // start_point may be a branch name or a commit hash — validate as a ref
+        // (non-empty, no leading '-') rather than strictly a hash.
+        validate_ref_name(start)?;
     }
     let mut args: Vec<&str> = if checkout {
         vec!["switch", "-c", &name]

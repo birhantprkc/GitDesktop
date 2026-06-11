@@ -357,6 +357,138 @@ pub async fn git_rebase(
     }
 }
 
+/// Merges `head` into `base` for a local PR using one of three strategies,
+/// matching GitHub's merge options:
+/// - "merge"  → a `--no-ff` merge commit carrying `message`
+/// - "squash" → squash all of head's commits into one commit with `message`
+/// - "rebase" → replay head's commits onto base (cherry-pick range, no merge
+///   commit), preserving their individual messages
+///
+/// Checks out `base` first and leaves you there on success. Any failure
+/// (conflict, etc.) is rolled back: base is reset to its prior tip and your
+/// original branch restored, so nothing is left half-merged.
+#[tauri::command]
+pub async fn git_merge_local_pr(
+    state: State<'_, AppState>,
+    repo_path: String,
+    base: String,
+    head: String,
+    message: String,
+    strategy: String,
+) -> AppResult<()> {
+    use crate::git::runner::run_git;
+
+    validate_branch_arg(&base)?;
+    validate_branch_arg(&head)?;
+    let message = if message.trim().is_empty() {
+        format!("Merge {head} into {base}")
+    } else {
+        message
+    };
+
+    // Remember where we are + base's tip so any failure can be undone.
+    let original = run_git(
+        Some(&repo_path),
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?
+    .stdout_lossy()
+    .trim()
+    .to_string();
+    let detached = original == "HEAD";
+    let original_restore = if detached {
+        run_git(Some(&repo_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
+            .await?
+            .stdout_lossy()
+            .trim()
+            .to_string()
+    } else {
+        original
+    };
+    let base_tip = run_git(Some(&repo_path), &["rev-parse", &base], DEFAULT_TIMEOUT)
+        .await?
+        .stdout_lossy()
+        .trim()
+        .to_string();
+
+    run_git_mutating(&state, &repo_path, &["switch", &base], DEFAULT_TIMEOUT).await?;
+
+    let range = format!("{base}..{head}");
+    let result: AppResult<()> = match strategy.as_str() {
+        "squash" => {
+            match run_git_mutating(
+                &state,
+                &repo_path,
+                &["merge", "--squash", &head],
+                DEFAULT_TIMEOUT,
+            )
+            .await
+            {
+                Ok(_) => run_git_mutating(
+                    &state,
+                    &repo_path,
+                    &["commit", "-m", &message],
+                    DEFAULT_TIMEOUT,
+                )
+                .await
+                .map(|_| ()),
+                Err(e) => Err(e),
+            }
+        }
+        "rebase" => run_git_mutating(&state, &repo_path, &["cherry-pick", &range], DEFAULT_TIMEOUT)
+            .await
+            .map(|_| ()),
+        _ => run_git_mutating(
+            &state,
+            &repo_path,
+            &["merge", "--no-ff", "-m", &message, &head],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .map(|_| ()),
+    };
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            // Roll back any half-applied state, then return home. The aborts
+            // are best-effort (only one applies); the hard reset is the
+            // guarantee that base is left exactly as it was.
+            let _ = run_git_mutating(&state, &repo_path, &["merge", "--abort"], DEFAULT_TIMEOUT).await;
+            let _ = run_git_mutating(
+                &state,
+                &repo_path,
+                &["cherry-pick", "--abort"],
+                DEFAULT_TIMEOUT,
+            )
+            .await;
+            let _ = run_git_mutating(
+                &state,
+                &repo_path,
+                &["reset", "--hard", &base_tip],
+                DEFAULT_TIMEOUT,
+            )
+            .await;
+            let restore: Vec<&str> = if detached {
+                vec!["switch", "--detach", &original_restore]
+            } else {
+                vec!["switch", &original_restore]
+            };
+            let _ = run_git_mutating(&state, &repo_path, &restore, DEFAULT_TIMEOUT).await;
+            match err {
+                AppError::Git { code, stderr } => Err(AppError::Git {
+                    code,
+                    stderr: format!(
+                        "{strategy} merge hit conflicts and was rolled back; {base} is unchanged.\n{stderr}"
+                    ),
+                }),
+                other => Err(other),
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn git_tag(
     state: State<'_, AppState>,

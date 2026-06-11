@@ -135,6 +135,293 @@ pub struct PrInfo {
     pub state: String,
 }
 
+const PR_LIST_FIELDS: &str = "number,url,title,baseRefName,headRefName,isDraft,state";
+
+/// All open PRs in the repo, for the Pull Requests list.
+#[tauri::command]
+pub async fn gh_pr_list(repo_path: String) -> AppResult<Vec<PrInfo>> {
+    let out = run_gh(
+        Some(&repo_path),
+        &["pr", "list", "--state", "open", "--json", PR_LIST_FIELDS],
+        GH_TIMEOUT,
+    )
+    .await?;
+    serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse gh pr list: {e}")))
+}
+
+// --- gh pr view: deserialize gh's JSON, then map to a clean frontend shape ---
+
+#[derive(Deserialize)]
+struct RawLogin {
+    #[serde(default)]
+    login: String,
+}
+
+#[derive(Deserialize)]
+struct RawCommitAuthor {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    login: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawCommit {
+    #[serde(default)]
+    oid: String,
+    #[serde(default)]
+    message_headline: String,
+    #[serde(default)]
+    authored_date: String,
+    #[serde(default)]
+    authors: Vec<RawCommitAuthor>,
+}
+
+#[derive(Deserialize)]
+struct RawFile {
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    additions: u32,
+    #[serde(default)]
+    deletions: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawReview {
+    author: Option<RawLogin>,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    submitted_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawComment {
+    author: Option<RawLogin>,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    created_at: String,
+}
+
+/// statusCheckRollup is a union of CheckRun (name/conclusion) and StatusContext
+/// (context/state); accept any of the keys and normalize below.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawCheck {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    context: String,
+    #[serde(default)]
+    conclusion: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawPr {
+    #[serde(default)]
+    number: u64,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    body: String,
+    author: Option<RawLogin>,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    is_draft: bool,
+    #[serde(default)]
+    base_ref_name: String,
+    #[serde(default)]
+    head_ref_name: String,
+    #[serde(default)]
+    additions: u32,
+    #[serde(default)]
+    deletions: u32,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    commits: Vec<RawCommit>,
+    #[serde(default)]
+    files: Vec<RawFile>,
+    #[serde(default)]
+    reviews: Vec<RawReview>,
+    #[serde(default)]
+    comments: Vec<RawComment>,
+    #[serde(default)]
+    status_check_rollup: Vec<RawCheck>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrCommitOut {
+    pub oid: String,
+    pub headline: String,
+    pub date: String,
+    pub author: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrFileOut {
+    pub path: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrThreadOut {
+    pub author: String,
+    pub state: String,
+    pub body: String,
+    pub date: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrCheckOut {
+    pub name: String,
+    pub status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrDetails {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    pub author: String,
+    pub state: String,
+    pub is_draft: bool,
+    pub base_ref_name: String,
+    pub head_ref_name: String,
+    pub additions: u32,
+    pub deletions: u32,
+    pub url: String,
+    pub commits: Vec<PrCommitOut>,
+    pub files: Vec<PrFileOut>,
+    pub reviews: Vec<PrThreadOut>,
+    pub comments: Vec<PrThreadOut>,
+    pub checks: Vec<PrCheckOut>,
+}
+
+const PR_VIEW_FIELDS: &str = "number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup";
+
+/// Full details for one PR's read view.
+#[tauri::command]
+pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> {
+    let out = run_gh(
+        Some(&repo_path),
+        &["pr", "view", &number.to_string(), "--json", PR_VIEW_FIELDS],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let raw: RawPr = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse gh pr view: {e}")))?;
+
+    let login = |a: Option<RawLogin>| a.map(|x| x.login).unwrap_or_default();
+    Ok(PrDetails {
+        number: raw.number,
+        title: raw.title,
+        body: raw.body,
+        author: login(raw.author),
+        state: raw.state,
+        is_draft: raw.is_draft,
+        base_ref_name: raw.base_ref_name,
+        head_ref_name: raw.head_ref_name,
+        additions: raw.additions,
+        deletions: raw.deletions,
+        url: raw.url,
+        commits: raw
+            .commits
+            .into_iter()
+            .map(|c| {
+                let author = c
+                    .authors
+                    .into_iter()
+                    .next()
+                    .map(|a| if a.name.is_empty() { a.login } else { a.name })
+                    .unwrap_or_default();
+                PrCommitOut {
+                    oid: c.oid,
+                    headline: c.message_headline,
+                    date: c.authored_date,
+                    author,
+                }
+            })
+            .collect(),
+        files: raw
+            .files
+            .into_iter()
+            .map(|f| PrFileOut {
+                path: f.path,
+                additions: f.additions,
+                deletions: f.deletions,
+            })
+            .collect(),
+        reviews: raw
+            .reviews
+            .into_iter()
+            .map(|r| PrThreadOut {
+                author: login(r.author),
+                state: r.state,
+                body: r.body,
+                date: r.submitted_at,
+            })
+            .collect(),
+        comments: raw
+            .comments
+            .into_iter()
+            .map(|c| PrThreadOut {
+                author: login(c.author),
+                state: String::new(),
+                body: c.body,
+                date: c.created_at,
+            })
+            .collect(),
+        checks: raw
+            .status_check_rollup
+            .into_iter()
+            .map(|c| {
+                let name = if c.name.is_empty() { c.context } else { c.name };
+                let status = [c.conclusion, c.state, c.status]
+                    .into_iter()
+                    .find(|s| !s.is_empty())
+                    .unwrap_or_default();
+                PrCheckOut { name, status }
+            })
+            .collect(),
+    })
+}
+
+/// The PR's full unified diff (`gh pr diff`), capped for the webview. The
+/// frontend splits it per file for the diff viewer.
+#[tauri::command]
+pub async fn gh_pr_diff(repo_path: String, number: u64) -> AppResult<String> {
+    let out = run_gh(
+        Some(&repo_path),
+        &["pr", "diff", &number.to_string()],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let (text, _) =
+        crate::git::diff::truncate_at_char_boundary(out.stdout_lossy(), 2_000_000);
+    Ok(text)
+}
+
 /// Open PRs whose head is `head` (there's at most one per base). Lets the UI
 /// offer "View pull request" instead of "Create" once one already exists.
 #[tauri::command]
