@@ -9,6 +9,8 @@ export interface RecentRepo {
 
 export interface AppSettings {
   ai: AiSettings;
+  /** Provider/model for AI PR review (independent of the commit model). */
+  reviewAi: AiSettings;
   globalInstructions: string;
   /** gitignore-style globs (one per line) excluded from AI context. */
   aiIgnorePatterns: string;
@@ -30,6 +32,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ai: {
     provider: "anthropic",
     model: "claude-haiku-4-5",
+    ollamaBaseUrl: "http://localhost:11434",
+  },
+  reviewAi: {
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
     ollamaBaseUrl: "http://localhost:11434",
   },
   globalInstructions: "",
@@ -59,6 +66,7 @@ export async function loadSettings(): Promise<AppSettings> {
     ...DEFAULT_SETTINGS,
     ...saved,
     ai: { ...DEFAULT_SETTINGS.ai, ...saved?.ai },
+    reviewAi: { ...DEFAULT_SETTINGS.reviewAi, ...saved?.reviewAi },
   };
 }
 

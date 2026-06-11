@@ -41,3 +41,14 @@ export interface PrPromptInput {
   repoInstructions: string | null;
   globalInstructions: string;
 }
+
+export type ReviewMode = "general" | "security";
+
+export interface ReviewPromptInput {
+  title: string;
+  body: string;
+  commitSubjects: string[];
+  diffText: string;
+  diffTruncated: boolean;
+  files: { path: string; added: number; deleted: number; isBinary: boolean }[];
+}

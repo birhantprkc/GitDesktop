@@ -135,6 +135,95 @@ pub struct PrInfo {
     pub state: String,
 }
 
+/// Submits a review: `action` is "approve", "comment", or "request_changes".
+/// gh requires a body for comment/request-changes (it surfaces the error).
+#[tauri::command]
+pub async fn gh_pr_review(
+    repo_path: String,
+    number: u64,
+    action: String,
+    body: String,
+) -> AppResult<()> {
+    let n = number.to_string();
+    let flag = match action.as_str() {
+        "approve" => "--approve",
+        "comment" => "--comment",
+        "request_changes" => "--request-changes",
+        _ => {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown review action: {action}"
+            )));
+        }
+    };
+    let body = body.trim();
+    let mut args = vec!["pr", "review", &n, flag];
+    if !body.is_empty() {
+        args.push("--body");
+        args.push(body);
+    }
+    run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+/// Adds a standalone comment to the PR conversation.
+#[tauri::command]
+pub async fn gh_pr_comment(repo_path: String, number: u64, body: String) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    let n = number.to_string();
+    run_gh(
+        Some(&repo_path),
+        &["pr", "comment", &n, "--body", &body],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Merges the PR with the given strategy ("merge"/"squash"/"rebase"),
+/// optionally deleting the head branch afterwards.
+#[tauri::command]
+pub async fn gh_pr_merge(
+    repo_path: String,
+    number: u64,
+    strategy: String,
+    delete_branch: bool,
+) -> AppResult<()> {
+    let n = number.to_string();
+    let method = match strategy.as_str() {
+        "merge" => "--merge",
+        "squash" => "--squash",
+        "rebase" => "--rebase",
+        _ => {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown merge strategy: {strategy}"
+            )));
+        }
+    };
+    let mut args = vec!["pr", "merge", &n, method];
+    if delete_branch {
+        args.push("--delete-branch");
+    }
+    run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn gh_pr_close(repo_path: String, number: u64) -> AppResult<()> {
+    let n = number.to_string();
+    run_gh(Some(&repo_path), &["pr", "close", &n], GH_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+/// Marks a draft PR as ready for review.
+#[tauri::command]
+pub async fn gh_pr_ready(repo_path: String, number: u64) -> AppResult<()> {
+    let n = number.to_string();
+    run_gh(Some(&repo_path), &["pr", "ready", &n], GH_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
 const PR_LIST_FIELDS: &str = "number,url,title,baseRefName,headRefName,isDraft,state";
 
 /// All open PRs in the repo, for the Pull Requests list.

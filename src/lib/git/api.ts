@@ -330,6 +330,31 @@ export const ghPrView = (repoPath: string, number: number) =>
 export const ghPrDiff = (repoPath: string, number: number) =>
   invoke<string>("gh_pr_diff", { repoPath, number });
 
+export type ReviewAction = "approve" | "comment" | "request_changes";
+
+export const ghPrReview = (
+  repoPath: string,
+  number: number,
+  action: ReviewAction,
+  body: string,
+) => invoke<void>("gh_pr_review", { repoPath, number, action, body });
+
+export const ghPrComment = (repoPath: string, number: number, body: string) =>
+  invoke<void>("gh_pr_comment", { repoPath, number, body });
+
+export const ghPrMerge = (
+  repoPath: string,
+  number: number,
+  strategy: MergeStrategy,
+  deleteBranch: boolean,
+) => invoke<void>("gh_pr_merge", { repoPath, number, strategy, deleteBranch });
+
+export const ghPrClose = (repoPath: string, number: number) =>
+  invoke<void>("gh_pr_close", { repoPath, number });
+
+export const ghPrReady = (repoPath: string, number: number) =>
+  invoke<void>("gh_pr_ready", { repoPath, number });
+
 export const openWithProgram = (program: string, path: string) =>
   invoke<void>("open_with_program", { program, path });
 

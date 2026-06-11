@@ -19,7 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
-import type { MergeStrategy } from "@/lib/git/api";
+import { gitBranchDiff, type MergeStrategy } from "@/lib/git/api";
 import { useCompareBranches, useMergeLocalPr } from "@/lib/git/queries";
 import {
   useDeleteLocalPr,
@@ -29,8 +29,9 @@ import {
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
+import { PrReviewPanel } from "./PrReviewPanel";
 
-type Section = "conversation" | "commits" | "files";
+type Section = "conversation" | "commits" | "files" | "review";
 
 export function LocalPrView({
   repoPath,
@@ -133,22 +134,55 @@ export function LocalPrView({
           <span>local · {formatRelativeTime(pr.createdAt)}</span>
         </div>
         <div className="flex gap-1 pt-1">
-          {(["conversation", "commits", "files"] as const).map((s) => (
-            <Button
-              key={s}
-              variant={section === s ? "secondary" : "ghost"}
-              size="xs"
-              onClick={() => setSection(s)}
-            >
-              {s === "conversation"
-                ? "Conversation"
-                : s === "commits"
-                  ? `Commits (${ahead.length})`
-                  : "Files"}
-            </Button>
-          ))}
+          {(["conversation", "commits", "files", "review"] as const).map(
+            (s) => (
+              <Button
+                key={s}
+                variant={section === s ? "secondary" : "ghost"}
+                size="xs"
+                onClick={() => setSection(s)}
+              >
+                {s === "conversation"
+                  ? "Conversation"
+                  : s === "commits"
+                    ? `Commits (${ahead.length})`
+                    : s === "files"
+                      ? "Files"
+                      : "Review"}
+              </Button>
+            ),
+          )}
         </div>
       </header>
+
+      {section === "review" && (
+        <PrReviewPanel
+          context={{
+            title: pr.title,
+            body: pr.body,
+            commitSubjects: ahead.map((c) => c.subject),
+            loadDiff: () =>
+              gitBranchDiff(repoPath, pr.base, pr.head, 200000).then((d) => ({
+                text: d.text,
+                truncated: d.truncated,
+                files: d.files,
+              })),
+          }}
+          onPost={(body) =>
+            save.mutate({
+              ...pr,
+              comments: [
+                ...pr.comments,
+                {
+                  id: crypto.randomUUID(),
+                  body,
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            })
+          }
+        />
+      )}
 
       {section === "conversation" && (
         <>

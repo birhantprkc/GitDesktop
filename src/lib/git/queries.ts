@@ -387,6 +387,39 @@ export function useMergeLocalPr(repo: string) {
   );
 }
 
+export function useReviewPr(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { number: number; action: api.ReviewAction; body: string }) =>
+      api.ghPrReview(repo, args.number, args.action, args.body),
+  );
+}
+
+export function useCommentPr(repo: string) {
+  return useRepoMutation(repo, (args: { number: number; body: string }) =>
+    api.ghPrComment(repo, args.number, args.body),
+  );
+}
+
+export function useMergePr(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      number: number;
+      strategy: api.MergeStrategy;
+      deleteBranch: boolean;
+    }) => api.ghPrMerge(repo, args.number, args.strategy, args.deleteBranch),
+  );
+}
+
+export function useClosePr(repo: string) {
+  return useRepoMutation(repo, (number: number) => api.ghPrClose(repo, number));
+}
+
+export function useReadyPr(repo: string) {
+  return useRepoMutation(repo, (number: number) => api.ghPrReady(repo, number));
+}
+
 export function useCreatePr(repo: string) {
   return useRepoMutation(
     repo,
