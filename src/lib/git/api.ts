@@ -13,6 +13,7 @@ import type {
   PrInfo,
   PrRef,
   RepoInfo,
+  RepoLabel,
   RepoOwner,
   RepoStatus,
   StagedDiff,
@@ -325,8 +326,10 @@ export const ghPublishRepo = (
 export const ghPrsForBranch = (repoPath: string, head: string) =>
   invoke<PrInfo[]>("gh_prs_for_branch", { repoPath, head });
 
-export const ghPrList = (repoPath: string) =>
-  invoke<PrInfo[]>("gh_pr_list", { repoPath });
+export type PrStateFilter = "open" | "closed";
+
+export const ghPrList = (repoPath: string, state: PrStateFilter) =>
+  invoke<PrInfo[]>("gh_pr_list", { repoPath, state });
 
 export const ghPrView = (repoPath: string, number: number) =>
   invoke<PrDetails>("gh_pr_view", { repoPath, number });
@@ -358,6 +361,29 @@ export const ghPrClose = (repoPath: string, number: number) =>
 
 export const ghPrReady = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_ready", { repoPath, number });
+
+export const ghPrEdit = (
+  repoPath: string,
+  number: number,
+  title: string,
+  body: string,
+) => invoke<void>("gh_pr_edit", { repoPath, number, title, body });
+
+export const ghRepoLabels = (repoPath: string) =>
+  invoke<RepoLabel[]>("gh_repo_labels", { repoPath });
+
+export const ghPrEditLabels = (
+  repoPath: string,
+  labelableId: string,
+  addIds: string[],
+  removeIds: string[],
+) =>
+  invoke<void>("gh_pr_edit_labels", {
+    repoPath,
+    labelableId,
+    addIds,
+    removeIds,
+  });
 
 export const openWithProgram = (program: string, path: string) =>
   invoke<void>("open_with_program", { program, path });

@@ -1,13 +1,17 @@
+import { Popover } from "@base-ui/react/popover";
 import {
   ArrowSquareOutIcon,
   CaretDownIcon,
   CheckCircleIcon,
   CircleIcon,
   GitMergeIcon,
+  PencilSimpleIcon,
+  QuotesIcon,
+  TagIcon,
   XCircleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +30,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -38,16 +44,20 @@ import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
   useClosePr,
   useCommentPr,
+  useEditPr,
+  useEditPrLabels,
   useMergePr,
   usePrDetails,
   usePrDiff,
   useReadyPr,
+  useRepoLabels,
   useReviewPr,
 } from "@/lib/git/queries";
-import type { PrThreadOut } from "@/lib/git/types";
+import type { PrThreadOut, RepoLabel } from "@/lib/git/types";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { MarkdownEditor } from "./MarkdownEditor";
 import { PrReviewPanel } from "./PrReviewPanel";
 
 type Section = "conversation" | "commits" | "files" | "review";
@@ -111,14 +121,73 @@ export function RemotePrView({
   const mergePr = useMergePr(repoPath);
   const closePr = useClosePr(repoPath);
   const readyPr = useReadyPr(repoPath);
+  const editPr = useEditPr(repoPath);
+  const editLabels = useEditPrLabels(repoPath);
+  const repoLabels = useRepoLabels(repoPath, true);
   const [section, setSection] = useState<Section>("conversation");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [composeBody, setComposeBody] = useState("");
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeStrategy, setMergeStrategy] = useState<MergeStrategy>("merge");
   const [deleteBranch, setDeleteBranch] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [bodyDraft, setBodyDraft] = useState("");
+  // Label edits are drafted locally while the picker is open and committed
+  // as one batched mutation when it closes — instant checkboxes, no popover
+  // re-anchoring as chips change, one network call.
+  const [labelsOpen, setLabelsOpen] = useState(false);
+  const [draftLabels, setDraftLabels] = useState<Set<string>>(new Set());
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const onError = (e: unknown) => toastError(e);
+
+  function toggleDraftLabel(name: string, on: boolean) {
+    setDraftLabels((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(name);
+      else next.delete(name);
+      return next;
+    });
+  }
+
+  function handleLabelsOpenChange(open: boolean) {
+    const current = details.data;
+    if (!current) return;
+    if (open) {
+      setDraftLabels(new Set(current.labels.map((l) => l.name)));
+      setLabelsOpen(true);
+      return;
+    }
+    setLabelsOpen(false);
+    const applied = new Set(current.labels.map((l) => l.name));
+    const idByName = new Map(
+      (repoLabels.data ?? []).map((l) => [l.name, l.id]),
+    );
+    const ids = (names: string[]) =>
+      names.map((n) => idByName.get(n)).filter((id): id is string => !!id);
+    const addIds = ids([...draftLabels].filter((n) => !applied.has(n)));
+    const removeIds = ids([...applied].filter((n) => !draftLabels.has(n)));
+    if (addIds.length > 0 || removeIds.length > 0) {
+      editLabels.mutate(
+        { labelableId: current.id, addIds, removeIds },
+        { onError },
+      );
+    }
+  }
+
+  /** GitHub-style quote reply: prefixes each line with "> " in the composer. */
+  function quoteReply(body: string) {
+    const quoted = body
+      .trim()
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    setComposeBody((prev) =>
+      prev.trim() ? `${prev.trimEnd()}\n\n${quoted}\n\n` : `${quoted}\n\n`,
+    );
+    composerRef.current?.focus();
+  }
 
   function submitReview(action: ReviewAction) {
     review.mutate(
@@ -222,6 +291,21 @@ export function RemotePrView({
             </span>
           </h2>
           <span className="flex-1" />
+          {isOpen && (
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => {
+                setTitleDraft(pr.title);
+                setBodyDraft(pr.body);
+                setEditOpen(true);
+              }}
+              title="Edit the title and description"
+            >
+              <PencilSimpleIcon data-icon="inline-start" />
+              Edit
+            </Button>
+          )}
           <Button
             variant="outline"
             size="xs"
@@ -248,6 +332,79 @@ export function RemotePrView({
             -{pr.deletions}
           </span>
         </div>
+        {(pr.labels.length > 0 || isOpen) && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* Trigger first, so it never shifts as chips come and go. */}
+            {isOpen && (
+              <Popover.Root
+                open={labelsOpen}
+                onOpenChange={handleLabelsOpenChange}
+              >
+                <Popover.Trigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      aria-label="Edit labels"
+                    />
+                  }
+                >
+                  {editLabels.isPending ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <TagIcon data-icon="inline-start" />
+                  )}
+                  Labels
+                </Popover.Trigger>
+                <Popover.Portal>
+                  <Popover.Positioner
+                    align="start"
+                    sideOffset={4}
+                    className="isolate z-50"
+                  >
+                    <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
+                      <p className="px-1 pb-1.5 text-xs font-medium">Labels</p>
+                      {(repoLabels.data ?? []).length === 0 && (
+                        <p className="px-1 py-1 text-xs text-muted-foreground">
+                          {repoLabels.isPending
+                            ? "Loading labels…"
+                            : "This repository has no labels."}
+                        </p>
+                      )}
+                      {(repoLabels.data ?? []).map((label) => (
+                        <label
+                          key={label.name}
+                          className="flex cursor-pointer items-center gap-2 px-1 py-1.5 text-xs hover:bg-muted/60"
+                        >
+                          <Checkbox
+                            checked={draftLabels.has(label.name)}
+                            onCheckedChange={(v) =>
+                              toggleDraftLabel(label.name, v === true)
+                            }
+                          />
+                          <span
+                            aria-hidden
+                            className="size-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: `#${label.color}` }}
+                          />
+                          <span className="flex-1 truncate">{label.name}</span>
+                        </label>
+                      ))}
+                      {(repoLabels.data ?? []).length > 0 && (
+                        <p className="mt-1 border-t px-1 pt-1.5 text-[11px] text-muted-foreground">
+                          Changes apply when this closes.
+                        </p>
+                      )}
+                    </Popover.Popup>
+                  </Popover.Positioner>
+                </Popover.Portal>
+              </Popover.Root>
+            )}
+            {pr.labels.map((label) => (
+              <LabelChip key={label.name} label={label} />
+            ))}
+          </div>
+        )}
         {pr.checks.length > 0 && (
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
             {pr.checks.map((c) => {
@@ -338,12 +495,24 @@ export function RemotePrView({
               {pr.reviews
                 .filter((r) => hasVisibleBody(r.body) || r.state)
                 .map((r, i) => (
-                  <Thread key={`r${i}-${r.author}`} thread={r} />
+                  <Thread
+                    key={`r${i}-${r.author}`}
+                    thread={r}
+                    onQuote={
+                      isOpen && hasVisibleBody(r.body)
+                        ? () => quoteReply(r.body)
+                        : undefined
+                    }
+                  />
                 ))}
               {pr.comments
                 .filter((c) => hasVisibleBody(c.body))
                 .map((c, i) => (
-                  <Thread key={`c${i}-${c.author}`} thread={c} />
+                  <Thread
+                    key={`c${i}-${c.author}`}
+                    thread={c}
+                    onQuote={isOpen ? () => quoteReply(c.body) : undefined}
+                  />
                 ))}
               {pr.reviews.length === 0 && pr.comments.length === 0 && (
                 <p className="text-xs text-muted-foreground">
@@ -355,6 +524,7 @@ export function RemotePrView({
           {isOpen && (
             <div className="space-y-2 border-t p-3">
               <Textarea
+                ref={composerRef}
                 placeholder="Leave a comment…"
                 value={composeBody}
                 onChange={(e) => setComposeBody(e.target.value)}
@@ -569,13 +739,73 @@ export function RemotePrView({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit pull request</DialogTitle>
+            <DialogDescription>
+              Updates the title and description of #{number} on GitHub.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="pr-edit-title">Title</Label>
+              <Input
+                id="pr-edit-title"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="pr-edit-body">Description</Label>
+              <MarkdownEditor
+                id="pr-edit-body"
+                value={bodyDraft}
+                onChange={setBodyDraft}
+                rows={8}
+                textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!titleDraft.trim() || editPr.isPending}
+              onClick={() =>
+                editPr.mutate(
+                  { number, title: titleDraft.trim(), body: bodyDraft },
+                  {
+                    onSuccess: () => {
+                      setEditOpen(false);
+                      toast.success("Pull request updated");
+                    },
+                    onError,
+                  },
+                )
+              }
+            >
+              {editPr.isPending && <Spinner data-icon="inline-start" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function Thread({ thread }: { thread: PrThreadOut }) {
+function Thread({
+  thread,
+  onQuote,
+}: {
+  thread: PrThreadOut;
+  onQuote?: () => void;
+}) {
   return (
-    <div className="space-y-1">
+    <div className="group space-y-1">
       <p className="flex items-center gap-2 text-xs">
         <span className="font-medium">{thread.author || "unknown"}</span>
         {thread.state && (
@@ -584,8 +814,36 @@ function Thread({ thread }: { thread: PrThreadOut }) {
         <span className="text-muted-foreground">
           {thread.date && formatRelativeTime(thread.date)}
         </span>
+        {onQuote && (
+          <>
+            <span className="flex-1" />
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Quote reply"
+              title="Quote reply"
+              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              onClick={onQuote}
+            >
+              <QuotesIcon />
+            </Button>
+          </>
+        )}
       </p>
       {thread.body.trim() && <Markdown>{thread.body}</Markdown>}
     </div>
+  );
+}
+
+function LabelChip({ label }: { label: RepoLabel }) {
+  return (
+    <span className="flex items-center gap-1 border px-1.5 py-0.5 text-[11px]">
+      <span
+        aria-hidden
+        className="size-2 shrink-0 rounded-full"
+        style={{ backgroundColor: `#${label.color}` }}
+      />
+      {label.name}
+    </span>
   );
 }

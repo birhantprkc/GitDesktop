@@ -148,7 +148,17 @@ export interface PrCheckOut {
   status: string;
 }
 
+export interface RepoLabel {
+  /** GraphQL node id; empty on labels embedded in PR details. */
+  id: string;
+  name: string;
+  /** Hex without the leading '#', as GitHub returns it. */
+  color: string;
+}
+
 export interface PrDetails {
+  /** GraphQL node id, used by the label mutations. */
+  id: string;
   number: number;
   title: string;
   body: string;
@@ -165,4 +175,5 @@ export interface PrDetails {
   reviews: PrThreadOut[];
   comments: PrThreadOut[];
   checks: PrCheckOut[];
+  labels: RepoLabel[];
 }

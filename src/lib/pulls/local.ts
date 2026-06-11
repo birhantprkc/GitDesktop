@@ -16,6 +16,8 @@ export interface LocalPr {
   head: string;
   status: LocalPrStatus;
   approved: boolean;
+  /** Free-form labels (local PRs aren't tied to the repo's GitHub labels). */
+  labels: string[];
   comments: LocalPrComment[];
   createdAt: string;
   mergedAt?: string;
@@ -30,7 +32,9 @@ function getStore(): Promise<Store> {
 
 export async function listLocalPrs(repo: string): Promise<LocalPr[]> {
   const store = await getStore();
-  return (await store.get<LocalPr[]>(repo)) ?? [];
+  const prs = (await store.get<LocalPr[]>(repo)) ?? [];
+  // Tolerate PRs saved before the labels field existed.
+  return prs.map((p) => ({ ...p, labels: p.labels ?? [] }));
 }
 
 async function writeAll(repo: string, prs: LocalPr[]): Promise<void> {
@@ -50,6 +54,7 @@ export async function createLocalPr(
     head: input.head,
     status: "open",
     approved: false,
+    labels: [],
     comments: [],
     createdAt: new Date().toISOString(),
   };

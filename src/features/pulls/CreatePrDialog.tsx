@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -14,9 +15,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
 import { useCreatePr } from "@/lib/git/queries";
 import { toastError } from "@/lib/toast";
+import { MarkdownEditor } from "./MarkdownEditor";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 
 export function CreatePrDialog({
@@ -93,47 +94,45 @@ export function CreatePrDialog({
           />
         </div>
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="pr-body">Description</Label>
-            {generating ? (
-              <Button variant="outline" size="xs" onClick={cancel}>
-                <XIcon data-icon="inline-start" />
-                Cancel
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={() =>
-                  generate(base, head, commitSubjects, (d) => {
-                    setTitle(d.title);
-                    setBody(d.body);
-                  })
-                }
-                title="Generate the title and description with AI"
-              >
-                <SparkleIcon data-icon="inline-start" />
-                Generate
-              </Button>
-            )}
-          </div>
-          <Textarea
+          <Label htmlFor="pr-body">Description</Label>
+          <MarkdownEditor
             id="pr-body"
             placeholder="Describe what changed and why"
             value={body}
-            onChange={(e) => setBody(e.target.value)}
+            onChange={setBody}
             rows={8}
-            className="max-h-72 min-h-24 resize-y font-mono"
+            textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+            actions={
+              generating ? (
+                <Button variant="outline" size="xs" onClick={cancel}>
+                  <XIcon data-icon="inline-start" />
+                  Cancel
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() =>
+                    generate(base, head, commitSubjects, (d) => {
+                      setTitle(d.title);
+                      setBody(d.body);
+                    })
+                  }
+                  title="Generate the title and description with AI"
+                >
+                  <SparkleIcon data-icon="inline-start" />
+                  Generate
+                </Button>
+              )
+            }
           />
         </div>
 
         <DialogFooter className="sm:items-center">
-          <label className="mr-auto flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
+          <label className="mr-auto flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <Checkbox
               checked={draft}
-              onChange={(e) => setDraft(e.target.checked)}
-              className="size-3.5 accent-primary"
+              onCheckedChange={(checked) => setDraft(checked === true)}
             />
             Create as draft
           </label>

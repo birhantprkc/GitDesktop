@@ -226,17 +226,175 @@ pub async fn gh_pr_ready(repo_path: String, number: u64) -> AppResult<()> {
 
 const PR_LIST_FIELDS: &str = "number,url,title,baseRefName,headRefName,isDraft,state";
 
-/// All open PRs in the repo, for the Pull Requests list.
+/// PRs for the Pull Requests list. `state` is "open" or "closed"; closed
+/// uses the search qualifier so merged PRs are included, matching the
+/// semantics of GitHub's own Closed tab.
 #[tauri::command]
-pub async fn gh_pr_list(repo_path: String) -> AppResult<Vec<PrInfo>> {
+pub async fn gh_pr_list(repo_path: String, state: String) -> AppResult<Vec<PrInfo>> {
+    let args: &[&str] = match state.as_str() {
+        "open" => &["pr", "list", "--state", "open", "--json", PR_LIST_FIELDS],
+        "closed" => &[
+            "pr",
+            "list",
+            "--search",
+            "is:closed",
+            "--json",
+            PR_LIST_FIELDS,
+        ],
+        _ => {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown PR state filter: {state}"
+            )));
+        }
+    };
+    let out = run_gh(Some(&repo_path), args, GH_TIMEOUT).await?;
+    serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse gh pr list: {e}")))
+}
+
+// NOTE: `gh pr edit` is unusable on older gh versions (its GraphQL query
+// still selects the sunset Projects-classic `projectCards` field, which the
+// API now rejects outright), so PR edits go through `gh api` instead: REST
+// for title/body, GraphQL mutations for labels.
+
+/// Updates a PR's title and body via the REST API.
+#[tauri::command]
+pub async fn gh_pr_edit(
+    repo_path: String,
+    number: u64,
+    title: String,
+    body: String,
+) -> AppResult<()> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::InvalidArgument("a PR title is required".into()));
+    }
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "--method",
+            "PATCH",
+            &format!("repos/{{owner}}/{{repo}}/pulls/{number}"),
+            "-f",
+            &format!("title={title}"),
+            "-f",
+            &format!("body={body}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoLabel {
+    /// GraphQL node id; needed for the label mutations. May be empty on
+    /// labels embedded in `gh pr view` output.
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// Hex without the leading '#', as GitHub returns it.
+    #[serde(default)]
+    pub color: String,
+}
+
+/// GraphQL node ids and owner/repo names are embedded into query strings;
+/// restrict them to their known-safe alphabets so quoting can't be escaped.
+fn validate_graphql_embed(value: &str, what: &str) -> AppResult<()> {
+    let ok = !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '=' | '+' | '/'));
+    if ok {
+        Ok(())
+    } else {
+        Err(AppError::InvalidArgument(format!("invalid {what}: {value}")))
+    }
+}
+
+/// The repository's labels with their GraphQL node ids, for the PR label
+/// picker. (`gh label list --json id` returns empty ids on older gh.)
+#[tauri::command]
+pub async fn gh_repo_labels(repo_path: String) -> AppResult<Vec<RepoLabel>> {
     let out = run_gh(
         Some(&repo_path),
-        &["pr", "list", "--state", "open", "--json", PR_LIST_FIELDS],
+        &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
         GH_TIMEOUT,
     )
     .await?;
-    serde_json::from_str(&out.stdout_lossy())
-        .map_err(|e| AppError::Gh(format!("could not parse gh pr list: {e}")))
+    let name_with_owner = out.stdout_lossy().trim().to_string();
+    let Some((owner, name)) = name_with_owner.split_once('/') else {
+        return Err(AppError::Gh("could not determine the repository owner".into()));
+    };
+    validate_graphql_embed(owner, "repository owner")?;
+    validate_graphql_embed(name, "repository name")?;
+
+    let query = format!(
+        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ labels(first:100){{ nodes{{ id name color }} }} }} }}"#
+    );
+    let out = run_gh(
+        Some(&repo_path),
+        &["api", "graphql", "-f", &format!("query={query}")],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the label query: {e}")))?;
+    let nodes = value
+        .pointer("/data/repository/labels/nodes")
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Array(vec![]));
+    serde_json::from_value(nodes)
+        .map_err(|e| AppError::Gh(format!("could not parse the label query: {e}")))
+}
+
+/// Adds/removes labels on a PR via GraphQL mutations. `labelable_id` is the
+/// PR's GraphQL node id; the label ids come from `gh_repo_labels`.
+#[tauri::command]
+pub async fn gh_pr_edit_labels(
+    repo_path: String,
+    labelable_id: String,
+    add_ids: Vec<String>,
+    remove_ids: Vec<String>,
+) -> AppResult<()> {
+    if add_ids.is_empty() && remove_ids.is_empty() {
+        return Ok(());
+    }
+    validate_graphql_embed(&labelable_id, "PR id")?;
+    for id in add_ids.iter().chain(remove_ids.iter()) {
+        validate_graphql_embed(id, "label id")?;
+    }
+
+    let quote_list = |ids: &[String]| {
+        ids.iter()
+            .map(|i| format!(r#""{i}""#))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let mut parts = Vec::new();
+    if !add_ids.is_empty() {
+        parts.push(format!(
+            r#"a: addLabelsToLabelable(input:{{labelableId:"{labelable_id}", labelIds:[{}]}}){{ clientMutationId }}"#,
+            quote_list(&add_ids)
+        ));
+    }
+    if !remove_ids.is_empty() {
+        parts.push(format!(
+            r#"r: removeLabelsFromLabelable(input:{{labelableId:"{labelable_id}", labelIds:[{}]}}){{ clientMutationId }}"#,
+            quote_list(&remove_ids)
+        ));
+    }
+    let query = format!("mutation{{ {} }}", parts.join(" "));
+    run_gh(
+        Some(&repo_path),
+        &["api", "graphql", "-f", &format!("query={query}")],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
 }
 
 // --- gh pr view: deserialize gh's JSON, then map to a clean frontend shape ---
@@ -320,6 +478,9 @@ struct RawCheck {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawPr {
+    /// GraphQL node id, used by the label mutations.
+    #[serde(default)]
+    id: String,
     #[serde(default)]
     number: u64,
     #[serde(default)]
@@ -351,6 +512,8 @@ struct RawPr {
     comments: Vec<RawComment>,
     #[serde(default)]
     status_check_rollup: Vec<RawCheck>,
+    #[serde(default)]
+    labels: Vec<RepoLabel>,
 }
 
 #[derive(Serialize)]
@@ -389,6 +552,8 @@ pub struct PrCheckOut {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrDetails {
+    /// GraphQL node id, used by the label mutations.
+    pub id: String,
     pub number: u64,
     pub title: String,
     pub body: String,
@@ -405,9 +570,10 @@ pub struct PrDetails {
     pub reviews: Vec<PrThreadOut>,
     pub comments: Vec<PrThreadOut>,
     pub checks: Vec<PrCheckOut>,
+    pub labels: Vec<RepoLabel>,
 }
 
-const PR_VIEW_FIELDS: &str = "number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup";
+const PR_VIEW_FIELDS: &str = "id,number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup,labels";
 
 /// Full details for one PR's read view.
 #[tauri::command]
@@ -423,6 +589,7 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
 
     let login = |a: Option<RawLogin>| a.map(|x| x.login).unwrap_or_default();
     Ok(PrDetails {
+        id: raw.id,
         number: raw.number,
         title: raw.title,
         body: raw.body,
@@ -493,6 +660,7 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                 PrCheckOut { name, status }
             })
             .collect(),
+        labels: raw.labels,
     })
 }
 

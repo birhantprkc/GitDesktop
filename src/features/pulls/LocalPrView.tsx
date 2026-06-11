@@ -1,12 +1,16 @@
+import { Popover } from "@base-ui/react/popover";
 import {
   ArrowCounterClockwiseIcon,
   CaretDownIcon,
   CheckCircleIcon,
   GitMergeIcon,
   PencilSimpleIcon,
+  QuotesIcon,
+  TagIcon,
   TrashIcon,
+  XIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,6 +49,7 @@ import {
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
+import { MarkdownEditor } from "./MarkdownEditor";
 import { PrReviewPanel } from "./PrReviewPanel";
 
 type Section = "conversation" | "commits" | "files" | "review";
@@ -68,6 +73,8 @@ export function LocalPrView({
   const [editOpen, setEditOpen] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [bodyDraft, setBodyDraft] = useState("");
+  const [labelInput, setLabelInput] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const comparison = useCompareBranches(
     repoPath,
@@ -109,6 +116,33 @@ export function LocalPrView({
   function toggleApprove() {
     if (!pr) return;
     save.mutate({ ...pr, approved: !pr.approved });
+  }
+
+  function addLabel() {
+    const name = labelInput.trim();
+    if (!pr || !name) return;
+    if (!pr.labels.includes(name)) {
+      save.mutate({ ...pr, labels: [...pr.labels, name] });
+    }
+    setLabelInput("");
+  }
+
+  function removeLabel(label: string) {
+    if (!pr) return;
+    save.mutate({ ...pr, labels: pr.labels.filter((l) => l !== label) });
+  }
+
+  /** GitHub-style quote reply: prefixes each line with "> " in the composer. */
+  function quoteReply(body: string) {
+    const quoted = body
+      .trim()
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    setComment((prev) =>
+      prev.trim() ? `${prev.trimEnd()}\n\n${quoted}\n\n` : `${quoted}\n\n`,
+    );
+    composerRef.current?.focus();
   }
 
   function openEdit() {
@@ -185,6 +219,76 @@ export function LocalPrView({
           <span>•</span>
           <span>local · {formatRelativeTime(pr.createdAt)}</span>
         </div>
+        {(pr.labels.length > 0 || pr.status === "open") && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* Trigger first, so it never shifts as chips come and go. */}
+            {pr.status === "open" && (
+              <Popover.Root>
+                <Popover.Trigger
+                  render={
+                    <Button variant="ghost" size="xs" aria-label="Add label" />
+                  }
+                >
+                  <TagIcon data-icon="inline-start" />
+                  Labels
+                </Popover.Trigger>
+                <Popover.Portal>
+                  <Popover.Positioner
+                    align="start"
+                    sideOffset={4}
+                    className="isolate z-50"
+                  >
+                    <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
+                      <p className="px-1 pb-1.5 text-xs font-medium">
+                        Add label
+                      </p>
+                      <div className="flex gap-2 px-1">
+                        <Input
+                          value={labelInput}
+                          onChange={(e) => setLabelInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              addLabel();
+                            }
+                          }}
+                          placeholder="e.g. bug, refactor"
+                          className="h-7 flex-1"
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!labelInput.trim()}
+                          onClick={addLabel}
+                        >
+                          Add
+                        </Button>
+                      </div>
+                    </Popover.Popup>
+                  </Popover.Positioner>
+                </Popover.Portal>
+              </Popover.Root>
+            )}
+            {pr.labels.map((label) => (
+              <span
+                key={label}
+                className="flex items-center gap-1 border px-1.5 py-0.5 text-[11px]"
+              >
+                {label}
+                {pr.status === "open" && (
+                  <button
+                    type="button"
+                    aria-label={`Remove label ${label}`}
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={() => removeLabel(label)}
+                  >
+                    <XIcon className="size-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="flex gap-1 pt-1">
           {(["conversation", "commits", "files", "review"] as const).map(
             (s) => (
@@ -251,9 +355,24 @@ export function LocalPrView({
                 )}
               </div>
               {pr.comments.map((c) => (
-                <div key={c.id} className="space-y-1">
-                  <p className="text-[11px] text-muted-foreground">
+                <div key={c.id} className="group space-y-1">
+                  <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
                     {formatRelativeTime(c.createdAt)}
+                    {pr.status === "open" && (
+                      <>
+                        <span className="flex-1" />
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Quote reply"
+                          title="Quote reply"
+                          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                          onClick={() => quoteReply(c.body)}
+                        >
+                          <QuotesIcon />
+                        </Button>
+                      </>
+                    )}
                   </p>
                   <Markdown>{c.body}</Markdown>
                 </div>
@@ -268,6 +387,7 @@ export function LocalPrView({
           {pr.status === "open" && (
             <div className="space-y-2 border-t p-3">
               <Textarea
+                ref={composerRef}
                 placeholder="Leave a note…"
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
@@ -453,12 +573,12 @@ export function LocalPrView({
             </div>
             <div className="space-y-2">
               <Label htmlFor="local-pr-body">Description</Label>
-              <Textarea
+              <MarkdownEditor
                 id="local-pr-body"
-                rows={8}
-                className="max-h-72"
                 value={bodyDraft}
-                onChange={(e) => setBodyDraft(e.target.value)}
+                onChange={setBodyDraft}
+                rows={8}
+                textareaClassName="max-h-72"
               />
             </div>
           </div>

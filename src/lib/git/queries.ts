@@ -188,12 +188,25 @@ export function usePrsForBranch(
   });
 }
 
-export function usePrList(repo: string, enabled: boolean) {
+export function usePrList(
+  repo: string,
+  enabled: boolean,
+  state: api.PrStateFilter,
+) {
   return useQuery({
-    queryKey: ["repo", repo, "pr-list"] as const,
-    queryFn: () => api.ghPrList(repo),
+    queryKey: ["repo", repo, "pr-list", state] as const,
+    queryFn: () => api.ghPrList(repo, state),
     enabled,
     staleTime: 30_000,
+  });
+}
+
+export function useRepoLabels(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "labels"] as const,
+    queryFn: () => api.ghRepoLabels(repo),
+    enabled,
+    staleTime: 5 * 60_000,
   });
 }
 
@@ -429,6 +442,22 @@ export function useClosePr(repo: string) {
 
 export function useReadyPr(repo: string) {
   return useRepoMutation(repo, (number: number) => api.ghPrReady(repo, number));
+}
+
+export function useEditPr(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { number: number; title: string; body: string }) =>
+      api.ghPrEdit(repo, args.number, args.title, args.body),
+  );
+}
+
+export function useEditPrLabels(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { labelableId: string; addIds: string[]; removeIds: string[] }) =>
+      api.ghPrEditLabels(repo, args.labelableId, args.addIds, args.removeIds),
+  );
 }
 
 export function useCreatePr(repo: string) {

@@ -20,7 +20,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
 import {
   useBranches,
   useCompareBranches,
@@ -30,6 +29,7 @@ import {
 import { useCreateLocalPr } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { MarkdownEditor } from "./MarkdownEditor";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 
 export function CreateLocalPrDialog({
@@ -170,43 +170,43 @@ export function CreateLocalPrDialog({
           />
         </div>
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="lpr-body">Description</Label>
-            {generating ? (
-              <Button variant="outline" size="xs" onClick={cancel}>
-                <XIcon data-icon="inline-start" />
-                Cancel
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                size="xs"
-                disabled={sameBranch || ahead.length === 0}
-                onClick={() =>
-                  generate(
-                    base,
-                    head,
-                    ahead.map((c) => c.subject),
-                    (d) => {
-                      setTitle(d.title);
-                      setBody(d.body);
-                    },
-                  )
-                }
-                title="Generate the title and description with AI"
-              >
-                <SparkleIcon data-icon="inline-start" />
-                Generate
-              </Button>
-            )}
-          </div>
-          <Textarea
+          <Label htmlFor="lpr-body">Description</Label>
+          <MarkdownEditor
             id="lpr-body"
             placeholder="Describe what changed and why"
             value={body}
-            onChange={(e) => setBody(e.target.value)}
+            onChange={setBody}
             rows={7}
-            className="max-h-72 min-h-24 resize-y font-mono"
+            textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+            actions={
+              generating ? (
+                <Button variant="outline" size="xs" onClick={cancel}>
+                  <XIcon data-icon="inline-start" />
+                  Cancel
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={sameBranch || ahead.length === 0}
+                  onClick={() =>
+                    generate(
+                      base,
+                      head,
+                      ahead.map((c) => c.subject),
+                      (d) => {
+                        setTitle(d.title);
+                        setBody(d.body);
+                      },
+                    )
+                  }
+                  title="Generate the title and description with AI"
+                >
+                  <SparkleIcon data-icon="inline-start" />
+                  Generate
+                </Button>
+              )
+            }
           />
         </div>
 

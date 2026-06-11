@@ -29,12 +29,15 @@ customizable AI commit message generation.
 - Pull requests (via the GitHub CLI): from the Compare tab, push the current
   branch and open a PR into the compared branch, with an AI-generated title
   and description from the branch diff and its commits
-- Pull Requests tab: browse open GitHub PRs with a full in-app read view
-  (description, commits, changed files + diffs, CI checks, review comments)
-  and act on them — comment, review (approve / comment / request changes),
-  merge (merge commit / squash / rebase, with optional branch deletion),
-  close, and mark drafts ready
-- Local PRs: propose a branch merge, review the diff/commits, leave notes,
+- Pull Requests tab: browse GitHub PRs (Open/Closed filter, like GitHub's
+  tabs) with a full in-app read view (description, commits, changed files +
+  diffs, CI checks, review comments) and act on them — comment (with
+  quote-reply), review (approve / comment / request changes), edit the title
+  and description, add/remove labels, merge (merge commit / squash / rebase,
+  with optional branch deletion), close, and mark drafts ready. PR
+  descriptions get GitHub-style Write/Preview tabs wherever you author them
+- Local PRs: propose a branch merge, review the diff/commits, leave notes
+  (with quote-reply), tag with free-form labels, edit the title/description,
   approve, and merge locally (merge commit / squash / rebase) without ever
   touching GitHub; local PRs are private to you, never written into the repo
 - **AI PR review** (any PR, GitHub or local): a streamed general code review or
