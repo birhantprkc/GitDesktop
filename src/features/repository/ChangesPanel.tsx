@@ -1,10 +1,13 @@
 import { Popover } from "@base-ui/react/popover";
 import {
+  ArrowSquareOutIcon,
   ClockCounterClockwiseIcon,
   FunnelIcon,
+  GitPullRequestIcon,
   PencilSimpleIcon,
   TerminalIcon,
 } from "@phosphor-icons/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -20,9 +23,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { openInTerminal, openWithProgram } from "@/lib/git/api";
+import { ghRepoUrl, openInTerminal, openWithProgram } from "@/lib/git/api";
 import {
+  useCompareBranches,
+  useDefaultBranch,
   useDiscard,
+  useGhStatus,
   useRepoStatus,
   useStage,
   useUnstage,
@@ -73,6 +79,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const selectedFile = useUiStore((s) => s.selectedFile);
   const selectFile = useUiStore((s) => s.selectFile);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
+  const setCompareBranch = useUiStore((s) => s.setCompareBranch);
   const settings = useSettings();
   const editorPath = (settings.data?.externalEditor ?? "").trim();
   const editorName =
@@ -82,6 +89,34 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const [activeKinds, setActiveKinds] = useState<Set<FilterKind>>(new Set());
 
   const entries = status.data?.entries ?? [];
+
+  // Empty-state suggestions: a published repo offers "View on GitHub"; a
+  // branch with commits the default branch doesn't have offers a PR. The
+  // comparison only runs while the tree is clean, so the daily loop never
+  // pays for it.
+  const gh = useGhStatus(repoPath);
+  const ghReady = Boolean(
+    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
+  );
+  const defaultBranch = useDefaultBranch(repoPath);
+  const branch = status.data?.branch;
+  const currentName = branch?.name ?? null;
+  const defaultName = defaultBranch.data ?? null;
+  const treeClean = !status.isPending && entries.length === 0;
+  const canCompareDefault =
+    treeClean &&
+    !branch?.detached &&
+    currentName !== null &&
+    defaultName !== null &&
+    currentName !== defaultName;
+  const aheadOfDefault = useCompareBranches(
+    repoPath,
+    canCompareDefault ? defaultName : null,
+    canCompareDefault ? currentName : null,
+  );
+  const proposeCount = canCompareDefault
+    ? (aheadOfDefault.data?.ahead.length ?? 0)
+    : 0;
 
   const text = filterText.trim().toLowerCase();
   function visible(entry: FileEntry): boolean {
@@ -159,7 +194,37 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
           <p className="mt-1 text-xs text-muted-foreground">
             Your working tree is clean.
           </p>
-          <div className="mx-auto mt-4 flex max-w-52 flex-col gap-2">
+          <div className="mx-auto mt-4 flex max-w-60 flex-col gap-2">
+            {proposeCount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setCompareBranch(defaultName);
+                  setRepoTab("compare");
+                }}
+                title={`${currentName} is ${proposeCount} commit${
+                  proposeCount === 1 ? "" : "s"
+                } ahead of ${defaultName}`}
+              >
+                <GitPullRequestIcon data-icon="inline-start" />
+                Open pull request
+              </Button>
+            )}
+            {ghReady && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  ghRepoUrl(repoPath)
+                    .then((url) => openUrl(url))
+                    .catch(onError)
+                }
+              >
+                <ArrowSquareOutIcon data-icon="inline-start" />
+                View on GitHub
+              </Button>
+            )}
             {editorPath && (
               <Button
                 variant="outline"
