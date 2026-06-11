@@ -11,8 +11,21 @@ import { useUiStore } from "@/lib/stores/ui";
 
 function App() {
   const view = useUiStore((s) => s.view);
+  const openSettings = useUiStore((s) => s.openSettings);
   const gitInstalled = useGitInstalled();
   const queryClient = useQueryClient();
+
+  // Ctrl+, (Cmd+, on macOS) opens settings — the platform convention.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+        e.preventDefault();
+        openSettings();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [openSettings]);
 
   // The webview stays "visible" when the window loses focus, so TanStack's
   // own focus refetch never fires in Tauri; bridge the native focus event.

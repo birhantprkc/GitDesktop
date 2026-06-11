@@ -1,33 +1,12 @@
-import { useEffect, useState } from "react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { AppSettings } from "@/lib/settings/api";
-import { useSaveSettings } from "@/lib/settings/queries";
+import type { SectionProps } from "./SettingsScreen";
 
-export function InstructionsSection({ settings }: { settings: AppSettings }) {
-  const saveSettings = useSaveSettings();
-  const [instructionsDraft, setInstructionsDraft] = useState(
-    settings.globalInstructions,
-  );
-  const [ignoreDraft, setIgnoreDraft] = useState(settings.aiIgnorePatterns);
-
-  useEffect(() => {
-    setInstructionsDraft(settings.globalInstructions);
-  }, [settings.globalInstructions]);
-  useEffect(() => {
-    setIgnoreDraft(settings.aiIgnorePatterns);
-  }, [settings.aiIgnorePatterns]);
-
-  const dirty =
-    instructionsDraft !== settings.globalInstructions ||
-    ignoreDraft !== settings.aiIgnorePatterns;
-
+export function InstructionsSection({ draft, update }: SectionProps) {
   return (
-    <section className="space-y-4">
+    <section className="space-y-4 border-t pt-4">
       <div>
-        <h2 className="text-sm font-medium">Commit message generation</h2>
+        <h2 className="text-sm font-medium">Instructions</h2>
         <p className="text-xs text-muted-foreground">
           Applied to every AI generation. Use instructions for team conventions,
           e.g. "Follow Conventional Commits" or "Explain intent, not
@@ -43,8 +22,8 @@ export function InstructionsSection({ settings }: { settings: AppSettings }) {
           placeholder={
             "You must follow Conventional Commits.\nAlways explain the business context in the body."
           }
-          value={instructionsDraft}
-          onChange={(e) => setInstructionsDraft(e.target.value)}
+          value={draft.globalInstructions}
+          onChange={(e) => update({ globalInstructions: e.target.value })}
         />
       </div>
       <div className="space-y-2">
@@ -54,35 +33,14 @@ export function InstructionsSection({ settings }: { settings: AppSettings }) {
           rows={4}
           className="max-h-48 font-mono"
           placeholder={".agents\n*.lock\ndocs/generated"}
-          value={ignoreDraft}
-          onChange={(e) => setIgnoreDraft(e.target.value)}
+          value={draft.aiIgnorePatterns}
+          onChange={(e) => update({ aiIgnorePatterns: e.target.value })}
         />
         <p className="text-xs text-muted-foreground">
           gitignore-style patterns, one per line. Matching files stay staged and
           committed as usual, but their diffs are left out of what the AI sees,
           so noisy folders don't dominate the message.
         </p>
-      </div>
-      <div className="flex items-center gap-3">
-        <Button
-          size="sm"
-          disabled={!dirty || saveSettings.isPending}
-          onClick={() =>
-            saveSettings.mutate(
-              {
-                ...settings,
-                globalInstructions: instructionsDraft,
-                aiIgnorePatterns: ignoreDraft,
-              },
-              { onSuccess: () => toast.success("Saved") },
-            )
-          }
-        >
-          Save
-        </Button>
-        {dirty && (
-          <span className="text-xs text-muted-foreground">Unsaved changes</span>
-        )}
       </div>
       <p className="text-xs text-muted-foreground">
         Per-repository overrides: create{" "}

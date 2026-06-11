@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState } from "react";
-import { toast } from "sonner";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,31 +12,29 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { detectEditors } from "@/lib/git/api";
-import type { AppSettings } from "@/lib/settings/api";
-import { useSaveSettings } from "@/lib/settings/queries";
+import type { SectionProps } from "./SettingsScreen";
 
 const CUSTOM = "__custom__";
 const NONE = "__none__";
 
-export function EditorSection({ settings }: { settings: AppSettings }) {
-  const saveSettings = useSaveSettings();
+export function EditorSection({ draft, update }: SectionProps) {
   const detected = useQuery({
     queryKey: ["detected-editors"],
     queryFn: detectEditors,
     staleTime: 5 * 60 * 1000,
   });
-  const [pathDraft, setPathDraft] = useState(settings.externalEditor ?? "");
-
-  useEffect(() => {
-    setPathDraft(settings.externalEditor ?? "");
-  }, [settings.externalEditor]);
+  // "Custom…" picked while a detected editor is still set: reveal the path
+  // input without changing the draft yet.
+  const [forceCustom, setForceCustom] = useState(false);
 
   const editors = detected.data ?? [];
-  const matched = editors.find((e) => e.path === settings.externalEditor);
-  const selectValue = !settings.externalEditor
-    ? NONE
-    : (matched?.path ?? CUSTOM);
-  const isCustom = Boolean(settings.externalEditor) && !matched;
+  const matched = editors.find((e) => e.path === draft.externalEditor);
+  const selectValue = forceCustom
+    ? CUSTOM
+    : !draft.externalEditor
+      ? NONE
+      : (matched?.path ?? CUSTOM);
+  const showCustom = selectValue === CUSTOM;
 
   // Base UI's Select.Value renders the raw value unless given value→label items
   const selectItems: Record<string, string> = {
@@ -46,24 +43,16 @@ export function EditorSection({ settings }: { settings: AppSettings }) {
     ...Object.fromEntries(editors.map((e) => [e.path, e.name])),
   };
 
-  function save(path: string, name: string) {
-    saveSettings.mutate(
-      { ...settings, externalEditor: path, externalEditorName: name },
-      {
-        onSuccess: () =>
-          toast.success(path ? `Editor set to ${name}` : "Editor cleared"),
-      },
-    );
-  }
-
-  async function browse() {
+  async function choose() {
     const picked = await openDialog({
       title: "Choose a program",
       filters: [{ name: "Programs", extensions: ["exe", "cmd", "bat"] }],
     });
     if (picked) {
-      setPathDraft(picked);
-      save(picked, programLabel(picked));
+      update({
+        externalEditor: picked,
+        externalEditorName: programLabel(picked),
+      });
     }
   }
 
@@ -77,23 +66,29 @@ export function EditorSection({ settings }: { settings: AppSettings }) {
         </p>
       </div>
       <div className="space-y-2">
-        <Label>Editor</Label>
+        <Label htmlFor="editor-select">Editor</Label>
         <Select
           items={selectItems}
           value={selectValue}
           onValueChange={(value) => {
             if (value === NONE) {
-              save("", "");
+              setForceCustom(false);
+              update({ externalEditor: "", externalEditorName: "" });
             } else if (value === CUSTOM) {
-              // keep current path; just reveal the custom input
-              if (!isCustom) save(settings.externalEditor, "Custom");
+              setForceCustom(true);
             } else if (value) {
               const editor = editors.find((e) => e.path === value);
-              if (editor) save(editor.path, editor.name);
+              if (editor) {
+                setForceCustom(false);
+                update({
+                  externalEditor: editor.path,
+                  externalEditorName: editor.name,
+                });
+              }
             }
           }}
         >
-          <SelectTrigger className="w-full">
+          <SelectTrigger id="editor-select" className="w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -109,13 +104,13 @@ export function EditorSection({ settings }: { settings: AppSettings }) {
         {detected.isPending && (
           <p className="text-xs text-muted-foreground">Detecting editors…</p>
         )}
-        {matched && (
+        {!showCustom && matched && (
           <p className="truncate font-mono text-xs text-muted-foreground">
             {matched.path}
           </p>
         )}
       </div>
-      {(isCustom || selectValue === CUSTOM) && (
+      {showCustom && (
         <div className="space-y-2">
           <Label htmlFor="external-editor">Program path</Label>
           <div className="flex gap-2">
@@ -123,17 +118,16 @@ export function EditorSection({ settings }: { settings: AppSettings }) {
               id="external-editor"
               className="flex-1 font-mono"
               placeholder="C:\\path\\to\\editor.exe"
-              value={pathDraft}
-              onChange={(e) => setPathDraft(e.target.value)}
-              onBlur={() => {
-                const trimmed = pathDraft.trim();
-                if (trimmed !== settings.externalEditor) {
-                  save(trimmed, programLabel(trimmed));
-                }
-              }}
+              value={draft.externalEditor}
+              onChange={(e) =>
+                update({
+                  externalEditor: e.target.value,
+                  externalEditorName: programLabel(e.target.value),
+                })
+              }
             />
-            <Button variant="outline" onClick={browse}>
-              Browse
+            <Button variant="outline" onClick={choose}>
+              Choose…
             </Button>
           </div>
         </div>

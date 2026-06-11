@@ -1,6 +1,6 @@
-import { CheckCircleIcon, XCircleIcon } from "@phosphor-icons/react";
+import { CheckCircleIcon, CopyIcon, XCircleIcon } from "@phosphor-icons/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +11,14 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -28,16 +36,12 @@ import {
   PROVIDER_LABELS,
   PROVIDERS_REQUIRING_KEY,
 } from "@/lib/ai/providers";
-import type { AiProviderId } from "@/lib/ai/types";
+import type { AiProviderId, AiSettings } from "@/lib/ai/types";
 import { deleteSecret, setSecret } from "@/lib/git/api";
-import type { AppSettings } from "@/lib/settings/api";
-import {
-  settingsKeys,
-  useSaveSettings,
-  useSecretPreview,
-} from "@/lib/settings/queries";
+import { settingsKeys, useSecretPreview } from "@/lib/settings/queries";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
+import type { SectionProps } from "./SettingsScreen";
 
 const PROVIDER_IDS = Object.keys(PROVIDER_LABELS) as AiProviderId[];
 
@@ -50,29 +54,122 @@ const KEY_HINTS: Partial<
   openrouter: { prefix: "sk-or-", minLength: 40 },
 };
 
-export function AiProviderSection({ settings }: { settings: AppSettings }) {
-  const saveSettings = useSaveSettings();
+/**
+ * Provider + model picker pair, shared by the generation and review model
+ * blocks. Edits are draft-local; switching provider remembers the model you
+ * had chosen for each provider and restores it when you switch back.
+ */
+function ModelPicker({
+  idPrefix,
+  value,
+  onChange,
+}: {
+  idPrefix: string;
+  value: AiSettings;
+  onChange: (next: AiSettings) => void;
+}) {
+  const keyPreview = useSecretPreview(value.provider);
+  const availableModels = useAvailableModels(value, Boolean(keyPreview.data));
+  const models = availableModels.data?.models ?? [];
+  const needsKey = PROVIDERS_REQUIRING_KEY.includes(value.provider);
+  const modelMemory = useRef<Partial<Record<AiProviderId, string>>>({});
+
+  function switchProvider(provider: AiProviderId) {
+    modelMemory.current[value.provider] = value.model;
+    onChange({
+      ...value,
+      provider,
+      model:
+        modelMemory.current[provider] ?? MODEL_SUGGESTIONS[provider][0] ?? "",
+    });
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <div className="space-y-2">
+        <Label htmlFor={`${idPrefix}-provider`}>Provider</Label>
+        <Select
+          items={PROVIDER_LABELS}
+          value={value.provider}
+          onValueChange={(v) => {
+            if (v) switchProvider(v as AiProviderId);
+          }}
+        >
+          <SelectTrigger id={`${idPrefix}-provider`} className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PROVIDER_IDS.map((id) => (
+              <SelectItem key={id} value={id}>
+                {PROVIDER_LABELS[id]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor={`${idPrefix}-model`}>Model</Label>
+        <Combobox
+          items={models}
+          inputValue={value.model}
+          onInputValueChange={(model) => onChange({ ...value, model })}
+          value={models.includes(value.model) ? value.model : null}
+          onValueChange={(model) => {
+            if (model) onChange({ ...value, model });
+          }}
+          openOnInputClick
+        >
+          <ComboboxInput
+            id={`${idPrefix}-model`}
+            className="w-full"
+            placeholder={MODEL_SUGGESTIONS[value.provider][0]}
+          />
+          <ComboboxContent>
+            <ComboboxEmpty>
+              No matching models — the typed id is used as-is
+            </ComboboxEmpty>
+            <ComboboxList>
+              {(item: string) => (
+                <ComboboxItem key={item} value={item}>
+                  <span className="truncate font-mono">{item}</span>
+                </ComboboxItem>
+              )}
+            </ComboboxList>
+          </ComboboxContent>
+        </Combobox>
+        <p className="text-xs text-muted-foreground">
+          {availableModels.isPending
+            ? "Loading models…"
+            : availableModels.data?.live
+              ? `${models.length} models from ${PROVIDER_LABELS[value.provider]}`
+              : needsKey
+                ? "Suggestions only — save an API key to load the live list"
+                : "Suggestions only — provider list unavailable"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+export function AiProviderSection({ draft, update }: SectionProps) {
   const queryClient = useQueryClient();
-  const provider = settings.ai.provider;
+  const provider = draft.ai.provider;
   const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
   const keyPreview = useSecretPreview(provider);
-  const availableModels = useAvailableModels(
-    settings.ai,
-    Boolean(keyPreview.data),
-  );
-  const models = availableModels.data?.models ?? [];
 
   const [keyInput, setKeyInput] = useState("");
   const [savingKey, setSavingKey] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     ok: boolean;
     message?: string;
   } | null>(null);
 
-  function updateAi(patch: Partial<AppSettings["ai"]>) {
+  function setAi(ai: AiSettings) {
     setTestResult(null);
-    saveSettings.mutate({ ...settings, ai: { ...settings.ai, ...patch } });
+    update({ ai });
   }
 
   async function saveKey() {
@@ -111,6 +208,7 @@ export function AiProviderSection({ settings }: { settings: AppSettings }) {
       queryClient.invalidateQueries({
         queryKey: settingsKeys.secret(provider),
       });
+      setConfirmClear(false);
       toast.success("Key removed");
     } catch (e) {
       toastError(e);
@@ -121,7 +219,7 @@ export function AiProviderSection({ settings }: { settings: AppSettings }) {
     setTesting(true);
     setTestResult(null);
     try {
-      const client = await createAiClient(settings.ai);
+      const client = await createAiClient(draft.ai);
       const result = await client.testConnection();
       setTestResult(
         result.ok ? { ok: true } : { ok: false, message: result.message },
@@ -138,89 +236,22 @@ export function AiProviderSection({ settings }: { settings: AppSettings }) {
       <div>
         <h2 className="text-sm font-medium">AI provider</h2>
         <p className="text-xs text-muted-foreground">
-          Used to generate commit messages. Keys are stored in the OS keychain,
-          never in app files.
+          Powers commit message and pull request generation. API keys are stored
+          in the OS keychain, never in app files.
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>Provider</Label>
-          <Select
-            value={provider}
-            onValueChange={(value) => {
-              if (value) {
-                updateAi({
-                  provider: value as AiProviderId,
-                  model: MODEL_SUGGESTIONS[value as AiProviderId][0] ?? "",
-                });
-              }
-            }}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PROVIDER_IDS.map((id) => (
-                <SelectItem key={id} value={id}>
-                  {PROVIDER_LABELS[id]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="ai-model">Model</Label>
-          <Combobox
-            items={models}
-            inputValue={settings.ai.model}
-            onInputValueChange={(value) => updateAi({ model: value })}
-            value={
-              models.includes(settings.ai.model) ? settings.ai.model : null
-            }
-            onValueChange={(value) => {
-              if (value) updateAi({ model: value });
-            }}
-            openOnInputClick
-          >
-            <ComboboxInput
-              id="ai-model"
-              className="w-full"
-              placeholder={MODEL_SUGGESTIONS[provider][0]}
-            />
-            <ComboboxContent>
-              <ComboboxEmpty>
-                No matching models — the typed id is used as-is
-              </ComboboxEmpty>
-              <ComboboxList>
-                {(item: string) => (
-                  <ComboboxItem key={item} value={item}>
-                    <span className="truncate font-mono">{item}</span>
-                  </ComboboxItem>
-                )}
-              </ComboboxList>
-            </ComboboxContent>
-          </Combobox>
-          <p className="text-xs text-muted-foreground">
-            {availableModels.isPending
-              ? "Loading models…"
-              : availableModels.data?.live
-                ? `${models.length} models from ${PROVIDER_LABELS[provider]}`
-                : needsKey
-                  ? "Suggestions only — save an API key to load the live list"
-                  : "Suggestions only — provider list unavailable"}
-          </p>
-        </div>
-      </div>
+      <ModelPicker idPrefix="ai" value={draft.ai} onChange={setAi} />
 
       {provider === "ollama" && (
         <div className="space-y-2">
           <Label htmlFor="ollama-url">Ollama URL</Label>
           <Input
             id="ollama-url"
-            value={settings.ai.ollamaBaseUrl}
-            onChange={(e) => updateAi({ ollamaBaseUrl: e.target.value })}
+            value={draft.ai.ollamaBaseUrl}
+            onChange={(e) =>
+              setAi({ ...draft.ai, ollamaBaseUrl: e.target.value })
+            }
           />
           <p className="text-xs text-muted-foreground">
             Only localhost is allowed by the app's network policy.
@@ -256,11 +287,18 @@ export function AiProviderSection({ settings }: { settings: AppSettings }) {
               Save
             </Button>
             {keyPreview.data && (
-              <Button variant="destructive" onClick={clearKey}>
+              <Button
+                variant="destructive"
+                onClick={() => setConfirmClear(true)}
+              >
                 Clear
               </Button>
             )}
           </div>
+          <p className="text-xs text-muted-foreground">
+            Keys apply immediately and are shared by every feature using this
+            provider.
+          </p>
         </div>
       )}
 
@@ -275,12 +313,60 @@ export function AiProviderSection({ settings }: { settings: AppSettings }) {
           </span>
         )}
         {testResult && !testResult.ok && (
-          <span className="flex items-center gap-1 text-xs text-destructive">
+          <span className="flex min-w-0 items-center gap-1 text-xs text-destructive">
             <XCircleIcon className="size-4 shrink-0" />
             <span className="line-clamp-2">{testResult.message}</span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Copy error message"
+              className="shrink-0"
+              onClick={() => {
+                navigator.clipboard.writeText(testResult.message ?? "");
+                toast.success("Copied");
+              }}
+            >
+              <CopyIcon />
+            </Button>
           </span>
         )}
       </div>
+
+      <div className="space-y-4 border-t pt-4">
+        <div>
+          <h3 className="text-sm font-medium">Review model</h3>
+          <p className="text-xs text-muted-foreground">
+            Used by AI code review on pull requests. Can differ from the
+            generation model above; shares the same per-provider API keys.
+          </p>
+        </div>
+        <ModelPicker
+          idPrefix="review"
+          value={draft.reviewAi}
+          onChange={(reviewAi) => update({ reviewAi })}
+        />
+      </div>
+
+      <Dialog open={confirmClear} onOpenChange={setConfirmClear}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove the saved key?</DialogTitle>
+            <DialogDescription>
+              Deletes the {PROVIDER_LABELS[provider]} API key from the OS
+              keychain. AI features using {PROVIDER_LABELS[provider]} will stop
+              working until a new key is saved. This can't be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmClear(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={clearKey}>
+              Remove key
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

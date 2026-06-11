@@ -1,33 +1,8 @@
-import { useEffect, useState } from "react";
-import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { AppSettings } from "@/lib/settings/api";
-import { useSaveSettings } from "@/lib/settings/queries";
+import type { SectionProps } from "./SettingsScreen";
 
-export function GitSection({ settings }: { settings: AppSettings }) {
-  const saveSettings = useSaveSettings();
-  const [draft, setDraft] = useState(settings.defaultBranch ?? "main");
-
-  useEffect(() => {
-    setDraft(settings.defaultBranch ?? "main");
-  }, [settings.defaultBranch]);
-
-  function save() {
-    const branch = draft.trim() || "main";
-    setDraft(branch);
-    if (branch === settings.defaultBranch) return;
-    if (branch.startsWith("-") || branch.includes(" ")) {
-      toast.error(`"${branch}" is not a valid branch name`);
-      setDraft(settings.defaultBranch);
-      return;
-    }
-    saveSettings.mutate(
-      { ...settings, defaultBranch: branch },
-      { onSuccess: () => toast.success(`Default branch set to ${branch}`) },
-    );
-  }
-
+export function GitSection({ draft, update }: SectionProps) {
   return (
     <section className="space-y-4">
       <div>
@@ -44,12 +19,8 @@ export function GitSection({ settings }: { settings: AppSettings }) {
           id="default-branch"
           className="max-w-60 font-mono"
           placeholder="main"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={save}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") save();
-          }}
+          value={draft.defaultBranch}
+          onChange={(e) => update({ defaultBranch: e.target.value })}
         />
       </div>
     </section>
