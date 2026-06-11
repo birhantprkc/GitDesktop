@@ -6,14 +6,19 @@ customizable AI commit message generation.
 ## Features (Milestone 1)
 
 - Open, clone, or create repositories (README/gitignore-template/license
-  scaffolding, configurable default branch name); recent list persisted
-- Working-tree status with stage/unstage (single file or all at once)
-- Branch menu: switch (prompts to bring or stash in-progress changes),
-  create, rename, delete (auto-switches off the current branch first),
-  discard all changes, stash/pop, update from the default branch, merge,
-  squash-merge (leaves changes staged for your own commit message — AI
-  included), and rebase (auto-aborts on conflicts); right-click any branch
-  for rename/copy/delete
+  scaffolding, configurable default branch name). A repo switcher in the
+  header (and on the welcome screen) lists every repo you've opened, grouped
+  by owner with a Recent shortcut — switch without leaving the current repo
+- Working-tree status with stage/unstage (single file or all at once); filter
+  the changes list by path and by category (included/excluded, new/modified/
+  deleted)
+- Branch menu: switch (prompts to bring or stash in-progress changes; branches
+  show their last-commit time, sorted by recency with the default pinned on
+  top), create (off the current or default branch), rename, delete
+  (auto-switches off the current branch first), discard all changes, stash/pop,
+  update from the default branch, merge, squash-merge (leaves changes staged
+  for your own commit message — AI included), and rebase (auto-aborts on
+  conflicts); right-click any branch for rename/copy/delete
 - Error toasts include a Copy button for long git/provider messages
 - Commit history browser: commit list with per-commit changed files and diffs
 - Compare branches: pick a branch to see what the current one adds (the

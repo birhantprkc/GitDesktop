@@ -44,6 +44,7 @@ import {
   useStashCount,
   useStashPop,
 } from "@/lib/git/queries";
+import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 
 type PickerMode = "merge" | "squash" | "rebase";
@@ -116,6 +117,12 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const allBranches = branches.data ?? [];
   const otherBranches = allBranches.filter((b) => !b.isCurrent);
   const defaultName = defaultBranch.data ?? null;
+  // Default branch pinned on top, then the rest by most recently committed.
+  const sortedBranches = [...allBranches].sort((a, b) => {
+    if (a.name === defaultName) return -1;
+    if (b.name === defaultName) return 1;
+    return b.lastCommitDate.localeCompare(a.lastCommitDate);
+  });
   const stashes = stashCount.data ?? 0;
   // Bases offered when creating a branch: the current branch and/or the
   // default branch (deduped — they're the same when you're on the default).
@@ -278,7 +285,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 Branches
               </p>
               <div className="max-h-60 overflow-y-auto">
-                {allBranches.map((branch) => (
+                {sortedBranches.map((branch) => (
                   <ContextMenu key={branch.name}>
                     <ContextMenuTrigger
                       render={
@@ -291,7 +298,17 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                         >
                           <span className="min-w-0 flex-1 truncate">
                             {branch.name}
+                            {branch.name === defaultName && (
+                              <span className="ml-1.5 text-[10px] text-muted-foreground">
+                                default
+                              </span>
+                            )}
                           </span>
+                          {branch.lastCommitDate && (
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
+                              {formatRelativeTime(branch.lastCommitDate)}
+                            </span>
+                          )}
                           {branch.isCurrent && (
                             <CheckIcon className="size-3.5 shrink-0" />
                           )}

@@ -1,7 +1,7 @@
 import {
   ArrowSquareOutIcon,
-  CaretDownIcon,
   CopyIcon,
+  DotsThreeVerticalIcon,
   FolderOpenIcon,
   PencilSimpleIcon,
   TerminalIcon,
@@ -29,13 +29,7 @@ import { useRemoveRecentRepo, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 
-export function RepositoryMenu({
-  repoPath,
-  repoName,
-}: {
-  repoPath: string;
-  repoName: string;
-}) {
+export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
   const settings = useSettings();
   const removeRecent = useRemoveRecentRepo();
@@ -70,12 +64,15 @@ export function RepositoryMenu({
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button variant="ghost" size="sm" className="gap-1.5">
-            <span className="text-sm font-medium">{repoName}</span>
-            <CaretDownIcon className="text-muted-foreground" />
-          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Repository actions"
+          />
         }
-      />
+      >
+        <DotsThreeVerticalIcon />
+      </DropdownMenuTrigger>
       <DropdownMenuContent className="w-60">
         {canGh && (
           <>

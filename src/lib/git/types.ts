@@ -42,6 +42,13 @@ export interface Branch {
   name: string;
   isCurrent: boolean;
   upstream: string | null;
+  /** ISO-8601 committer date of the branch tip (for recency sorting). */
+  lastCommitDate: string;
+}
+
+export interface RepoOwner {
+  path: string;
+  owner: string | null;
 }
 
 export interface FileDiff {

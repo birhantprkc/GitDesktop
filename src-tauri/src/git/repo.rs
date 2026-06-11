@@ -1,11 +1,60 @@
 use std::path::Path;
 
+use serde::Serialize;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::git::runner::{run_git, run_git_raw, DEFAULT_TIMEOUT, NETWORK_TIMEOUT};
 use crate::git::types::{GitInfo, RepoInfo};
 use crate::state::AppState;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoOwner {
+    pub path: String,
+    /// Owner parsed from the `origin` remote (e.g. "octocat"), or None when
+    /// the repo has no origin remote.
+    pub owner: Option<String>,
+}
+
+/// Owner segment of a git remote URL — handles `https://host/owner/repo(.git)`
+/// and scp-style `git@host:owner/repo(.git)`. None if it can't be parsed.
+fn parse_owner(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    // Drop the scheme+host (or scp `user@host:`) to get the `owner/repo` path.
+    let path = if let Some(idx) = url.find("://") {
+        url[idx + 3..].split_once('/').map(|(_, rest)| rest)?
+    } else if let Some(colon) = url.rfind(':') {
+        &url[colon + 1..]
+    } else {
+        return None;
+    };
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    // owner is the segment immediately before the repo name.
+    (segs.len() >= 2).then(|| segs[segs.len() - 2].to_string())
+}
+
+/// Resolves the owner for each repo path (from its `origin` remote), batched so
+/// the repo list/switcher can group repos by owner in one round-trip.
+#[tauri::command]
+pub async fn git_repo_owners(repo_paths: Vec<String>) -> AppResult<Vec<RepoOwner>> {
+    let mut out = Vec::with_capacity(repo_paths.len());
+    for path in repo_paths {
+        let owner = match run_git_raw(
+            Some(&path),
+            &["remote", "get-url", "origin"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        {
+            Ok(res) if res.code == 0 => parse_owner(res.stdout_lossy().trim()),
+            _ => None,
+        };
+        out.push(RepoOwner { path, owner });
+    }
+    Ok(out)
+}
 
 #[tauri::command]
 pub async fn check_git_installed(state: State<'_, AppState>) -> AppResult<GitInfo> {

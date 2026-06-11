@@ -21,7 +21,7 @@ pub async fn git_branches(repo_path: String) -> AppResult<Vec<Branch>> {
         &[
             "for-each-ref",
             "refs/heads",
-            "--format=%(refname:short)%00%(upstream:short)%00%(HEAD)",
+            "--format=%(refname:short)%00%(upstream:short)%00%(HEAD)%00%(committerdate:iso8601-strict)",
         ],
         DEFAULT_TIMEOUT,
     )
@@ -30,7 +30,12 @@ pub async fn git_branches(repo_path: String) -> AppResult<Vec<Branch>> {
     let mut branches = Vec::new();
     for line in text.lines() {
         let mut parts = line.split('\0');
-        let (Some(name), upstream, head) = (parts.next(), parts.next(), parts.next()) else {
+        let (Some(name), upstream, head, date) = (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ) else {
             continue;
         };
         if name.is_empty() {
@@ -40,6 +45,7 @@ pub async fn git_branches(repo_path: String) -> AppResult<Vec<Branch>> {
             name: name.to_string(),
             is_current: head == Some("*"),
             upstream: upstream.filter(|u| !u.is_empty()).map(str::to_string),
+            last_commit_date: date.unwrap_or("").to_string(),
         });
     }
     Ok(branches)

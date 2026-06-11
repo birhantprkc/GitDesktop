@@ -13,6 +13,7 @@ import type {
   PrInfo,
   PrRef,
   RepoInfo,
+  RepoOwner,
   RepoStatus,
   StagedDiff,
 } from "./types";
@@ -43,6 +44,9 @@ export const gitStatus = (repoPath: string) =>
 
 export const gitBranches = (repoPath: string) =>
   invoke<Branch[]>("git_branches", { repoPath });
+
+export const gitRepoOwners = (repoPaths: string[]) =>
+  invoke<RepoOwner[]>("git_repo_owners", { repoPaths });
 
 export const gitCheckoutBranch = (repoPath: string, name: string) =>
   invoke<void>("git_checkout_branch", { repoPath, name });

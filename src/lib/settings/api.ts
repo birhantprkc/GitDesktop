@@ -50,7 +50,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   diffViewMode: "unified",
 };
 
-const MAX_RECENT_REPOS = 15;
+const MAX_RECENT_REPOS = 200;
 
 let storePromise: Promise<Store> | null = null;
 

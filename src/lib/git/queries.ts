@@ -48,6 +48,17 @@ export function useBranches(repo: string) {
   });
 }
 
+/** Owners (from each repo's origin remote) for grouping the repo list. */
+export function useRepoOwners(paths: string[]) {
+  const sorted = [...paths].sort();
+  return useQuery({
+    queryKey: ["repo-owners", sorted] as const,
+    queryFn: () => api.gitRepoOwners(sorted),
+    enabled: sorted.length > 0,
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
 export function useFileDiff(
   repo: string,
   file: { path: string; staged: boolean; untracked: boolean } | null,

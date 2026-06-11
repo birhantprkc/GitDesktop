@@ -21,6 +21,7 @@ pub fn run() {
             git::repo::validate_repo,
             git::repo::clone_repo,
             git::repo::create_repo,
+            git::repo::git_repo_owners,
             git::status::git_status,
             git::branches::git_branches,
             git::branches::git_checkout_branch,

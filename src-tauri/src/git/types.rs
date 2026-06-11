@@ -60,6 +60,8 @@ pub struct Branch {
     pub name: String,
     pub is_current: bool,
     pub upstream: Option<String>,
+    /// ISO-8601 committer date of the branch tip (for recency sorting).
+    pub last_commit_date: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

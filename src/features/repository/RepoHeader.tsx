@@ -3,11 +3,11 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useUiStore } from "@/lib/stores/ui";
 import { BranchSwitcher } from "./BranchSwitcher";
+import { RepoSwitcher } from "./RepoSwitcher";
 import { RepositoryMenu } from "./RepositoryMenu";
 import { SyncControls } from "./SyncControls";
 
 export function RepoHeader({ repoPath }: { repoPath: string }) {
-  const repoName = useUiStore((s) => s.repoName);
   const closeRepo = useUiStore((s) => s.closeRepo);
   const openSettings = useUiStore((s) => s.openSettings);
 
@@ -21,7 +21,8 @@ export function RepoHeader({ repoPath }: { repoPath: string }) {
       >
         <ArrowLeftIcon />
       </Button>
-      <RepositoryMenu repoPath={repoPath} repoName={repoName ?? "Repository"} />
+      <RepoSwitcher />
+      <RepositoryMenu repoPath={repoPath} />
       <Separator orientation="vertical" className="h-5" />
       <BranchSwitcher repoPath={repoPath} />
       <div className="flex-1" />
