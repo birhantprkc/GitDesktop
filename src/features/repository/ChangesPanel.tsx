@@ -1,5 +1,10 @@
 import { Popover } from "@base-ui/react/popover";
-import { FunnelIcon } from "@phosphor-icons/react";
+import {
+  ClockCounterClockwiseIcon,
+  FunnelIcon,
+  PencilSimpleIcon,
+  TerminalIcon,
+} from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -15,6 +20,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { openInTerminal, openWithProgram } from "@/lib/git/api";
 import {
   useDiscard,
   useRepoStatus,
@@ -22,9 +28,9 @@ import {
   useUnstage,
 } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
+import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
-import { cn } from "@/lib/utils";
 import { FileRow } from "./FileRow";
 
 /**
@@ -66,6 +72,11 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const discard = useDiscard(repoPath);
   const selectedFile = useUiStore((s) => s.selectedFile);
   const selectFile = useUiStore((s) => s.selectFile);
+  const setRepoTab = useUiStore((s) => s.setRepoTab);
+  const settings = useSettings();
+  const editorPath = (settings.data?.externalEditor ?? "").trim();
+  const editorName =
+    (settings.data?.externalEditorName ?? "").trim() || "editor";
   const [discardTarget, setDiscardTarget] = useState<FileEntry | null>(null);
   const [filterText, setFilterText] = useState("");
   const [activeKinds, setActiveKinds] = useState<Set<FilterKind>>(new Set());
@@ -142,144 +153,202 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-1 border-b p-2">
-        <Popover.Root>
-          <Popover.Trigger
-            render={
+      {entries.length === 0 ? (
+        <div className="flex-1 px-4 py-8 text-center">
+          <p className="text-xs font-medium">No local changes</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Your working tree is clean.
+          </p>
+          <div className="mx-auto mt-4 flex max-w-52 flex-col gap-2">
+            {editorPath && (
               <Button
                 variant="outline"
-                size="icon-sm"
-                aria-label="Filter options"
-                className={cn(activeKinds.size > 0 && "text-primary")}
-              />
-            }
-          >
-            <FunnelIcon />
-          </Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Positioner
-              align="start"
-              sideOffset={4}
-              className="isolate z-50"
+                size="sm"
+                onClick={() =>
+                  openWithProgram(editorPath, repoPath).catch(onError)
+                }
+              >
+                <PencilSimpleIcon data-icon="inline-start" />
+                Open in {editorName}
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                openInTerminal(
+                  repoPath,
+                  settings.data?.terminal,
+                  settings.data?.terminalPath,
+                ).catch(onError)
+              }
             >
-              <Popover.Popup className="w-56 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
-                <p className="px-1 pb-1.5 text-xs font-medium">
-                  Filter Options
-                </p>
-                {(Object.keys(FILTER_LABELS) as FilterKind[]).map((kind) => (
-                  <label
-                    key={kind}
-                    className="flex cursor-pointer items-center gap-2 rounded-none px-1 py-1.5 text-xs hover:bg-muted/60"
-                  >
-                    <Checkbox
-                      checked={activeKinds.has(kind)}
-                      onCheckedChange={(v) => toggleKind(kind, v === true)}
-                    />
-                    <span className="flex-1">{FILTER_LABELS[kind]}</span>
-                    <span className="text-muted-foreground">
-                      ({entries.filter(FILTER_PREDICATES[kind]).length})
-                    </span>
-                  </label>
-                ))}
-              </Popover.Popup>
-            </Popover.Positioner>
-          </Popover.Portal>
-        </Popover.Root>
-        <Input
-          value={filterText}
-          onChange={(e) => setFilterText(e.target.value)}
-          placeholder="Filter"
-          className="h-7 flex-1"
-        />
-      </div>
-
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="p-2">
-          {entries.length === 0 && (
-            <p className="px-2 py-8 text-center text-xs text-muted-foreground">
-              No local changes
-            </p>
-          )}
-          {nothingMatches && (
-            <p className="px-2 py-8 text-center text-xs text-muted-foreground">
-              No files match the filter
-            </p>
-          )}
-
-          {stagedEntries.length > 0 && (
-            <section className="mb-3">
-              <div className="flex items-center justify-between pr-1 pl-2">
-                <h3 className="py-1 text-xs font-medium text-muted-foreground">
-                  Staged ({stagedEntries.length})
-                </h3>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground"
-                  disabled={mutating}
-                  onClick={unstageAll}
-                >
-                  Unstage all
-                </Button>
-              </div>
-              {stagedEntries.map((entry) => (
-                <FileRow
-                  key={`staged:${entry.path}`}
-                  entry={entry}
-                  kind={entry.staged ?? "modified"}
-                  staged
-                  disabled={mutating}
-                  repoPath={repoPath}
-                  selected={
-                    selectedFile?.path === entry.path &&
-                    selectedFile.staged === true
-                  }
-                  onSelect={() => select(entry, true)}
-                  onToggle={() =>
-                    unstage.mutate(unstagePaths(entry), { onError })
-                  }
-                />
-              ))}
-            </section>
-          )}
-
-          {unstagedEntries.length > 0 && (
-            <section>
-              <div className="flex items-center justify-between pr-1 pl-2">
-                <h3 className="py-1 text-xs font-medium text-muted-foreground">
-                  Changes ({unstagedEntries.length})
-                </h3>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground"
-                  disabled={mutating}
-                  onClick={stageAll}
-                >
-                  Stage all
-                </Button>
-              </div>
-              {unstagedEntries.map((entry) => (
-                <FileRow
-                  key={`unstaged:${entry.path}`}
-                  entry={entry}
-                  kind={entry.unstaged ?? "modified"}
-                  staged={false}
-                  disabled={mutating}
-                  repoPath={repoPath}
-                  selected={
-                    selectedFile?.path === entry.path &&
-                    selectedFile.staged === false
-                  }
-                  onSelect={() => select(entry, false)}
-                  onToggle={() => stage.mutate([entry.path], { onError })}
-                  onDiscard={() => setDiscardTarget(entry)}
-                />
-              ))}
-            </section>
-          )}
+              <TerminalIcon data-icon="inline-start" />
+              Open in terminal
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRepoTab("history")}
+            >
+              <ClockCounterClockwiseIcon data-icon="inline-start" />
+              View history
+            </Button>
+          </div>
         </div>
-      </ScrollArea>
+      ) : (
+        <>
+          <div className="flex items-center gap-1 border-b p-2">
+            <Popover.Root>
+              <Popover.Trigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label={
+                      activeKinds.size > 0
+                        ? `Filter options (${activeKinds.size} active)`
+                        : "Filter options"
+                    }
+                    className="relative"
+                  />
+                }
+              >
+                <FunnelIcon />
+                {activeKinds.size > 0 && (
+                  <span
+                    aria-hidden
+                    className="absolute -top-1 -right-1 flex size-3.5 items-center justify-center bg-primary text-[9px] font-medium text-primary-foreground tabular-nums"
+                  >
+                    {activeKinds.size}
+                  </span>
+                )}
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Positioner
+                  align="start"
+                  sideOffset={4}
+                  className="isolate z-50"
+                >
+                  <Popover.Popup className="w-56 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
+                    <p className="px-1 pb-1.5 text-xs font-medium">
+                      Filter Options
+                    </p>
+                    {(Object.keys(FILTER_LABELS) as FilterKind[]).map(
+                      (kind) => (
+                        <label
+                          key={kind}
+                          className="flex cursor-pointer items-center gap-2 rounded-none px-1 py-1.5 text-xs hover:bg-muted/60"
+                        >
+                          <Checkbox
+                            checked={activeKinds.has(kind)}
+                            onCheckedChange={(v) =>
+                              toggleKind(kind, v === true)
+                            }
+                          />
+                          <span className="flex-1">{FILTER_LABELS[kind]}</span>
+                          <span className="text-muted-foreground">
+                            ({entries.filter(FILTER_PREDICATES[kind]).length})
+                          </span>
+                        </label>
+                      ),
+                    )}
+                  </Popover.Popup>
+                </Popover.Positioner>
+              </Popover.Portal>
+            </Popover.Root>
+            <Input
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+              placeholder="Filter"
+              className="h-7 flex-1"
+            />
+          </div>
+
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="p-2">
+              {nothingMatches && (
+                <p className="px-2 py-8 text-center text-xs text-muted-foreground">
+                  No files match the filter
+                </p>
+              )}
+
+              {stagedEntries.length > 0 && (
+                <section className="mb-3">
+                  <div className="flex items-center justify-between pr-1 pl-2">
+                    <h3 className="py-1 text-xs font-medium text-muted-foreground">
+                      Staged ({stagedEntries.length})
+                    </h3>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-muted-foreground"
+                      disabled={mutating}
+                      onClick={unstageAll}
+                    >
+                      Unstage all
+                    </Button>
+                  </div>
+                  {stagedEntries.map((entry) => (
+                    <FileRow
+                      key={`staged:${entry.path}`}
+                      entry={entry}
+                      kind={entry.staged ?? "modified"}
+                      staged
+                      disabled={mutating}
+                      repoPath={repoPath}
+                      selected={
+                        selectedFile?.path === entry.path &&
+                        selectedFile.staged === true
+                      }
+                      onSelect={() => select(entry, true)}
+                      onToggle={() =>
+                        unstage.mutate(unstagePaths(entry), { onError })
+                      }
+                    />
+                  ))}
+                </section>
+              )}
+
+              {unstagedEntries.length > 0 && (
+                <section>
+                  <div className="flex items-center justify-between pr-1 pl-2">
+                    <h3 className="py-1 text-xs font-medium text-muted-foreground">
+                      Changes ({unstagedEntries.length})
+                    </h3>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-muted-foreground"
+                      disabled={mutating}
+                      onClick={stageAll}
+                    >
+                      Stage all
+                    </Button>
+                  </div>
+                  {unstagedEntries.map((entry) => (
+                    <FileRow
+                      key={`unstaged:${entry.path}`}
+                      entry={entry}
+                      kind={entry.unstaged ?? "modified"}
+                      staged={false}
+                      disabled={mutating}
+                      repoPath={repoPath}
+                      selected={
+                        selectedFile?.path === entry.path &&
+                        selectedFile.staged === false
+                      }
+                      onSelect={() => select(entry, false)}
+                      onToggle={() => stage.mutate([entry.path], { onError })}
+                      onDiscard={() => setDiscardTarget(entry)}
+                    />
+                  ))}
+                </section>
+              )}
+            </div>
+          </ScrollArea>
+        </>
+      )}
 
       <Dialog
         open={discardTarget !== null}

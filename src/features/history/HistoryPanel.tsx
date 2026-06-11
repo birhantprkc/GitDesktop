@@ -47,6 +47,7 @@ import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { useAmendCommit } from "./useAmendCommit";
 
 export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const log = useLog(repoPath);
@@ -55,7 +56,6 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const selectCommit = useUiStore((s) => s.selectCommit);
   const setCommitDraft = useUiStore((s) => s.setCommitDraft);
-  const setAmending = useUiStore((s) => s.setAmending);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
 
   const resetMutation = useResetToCommit(repoPath);
@@ -85,12 +85,11 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const currentBranch = status.data?.branch?.name ?? null;
   const targetBranches = (branches.data ?? []).filter((b) => !b.isCurrent);
 
+  const amendCommit = useAmendCommit(repoPath);
+
   async function startAmend(hash: string) {
     try {
-      const details = await gitCommitDetails(repoPath, hash);
-      setCommitDraft(details.subject, details.body);
-      setAmending(hash);
-      setRepoTab("changes");
+      await amendCommit(hash);
     } catch (e) {
       onError(e);
     }

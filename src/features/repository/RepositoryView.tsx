@@ -1,3 +1,5 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useEffect } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CommitBox } from "@/features/commit/CommitBox";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
@@ -14,8 +16,11 @@ import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { ChangesPanel } from "./ChangesPanel";
 import { RepoHeader } from "./RepoHeader";
 
+const TAB_ORDER: RepoTab[] = ["changes", "history", "compare", "pulls"];
+
 export function RepositoryView() {
   const repoPath = useUiStore((s) => s.repoPath);
+  const repoName = useUiStore((s) => s.repoName);
   const repoTab = useUiStore((s) => s.repoTab);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
@@ -23,6 +28,36 @@ export function RepositoryView() {
   const selectedPr = useUiStore((s) => s.selectedPr);
   const status = useRepoStatus(repoPath ?? "");
   const currentName = status.data?.branch?.name ?? null;
+
+  // Ctrl/Cmd+1–4 switch tabs, mirroring GitHub Desktop.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const index = Number(e.key) - 1;
+      const tab = TAB_ORDER[index];
+      if (tab) {
+        e.preventDefault();
+        setRepoTab(tab);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [setRepoTab]);
+
+  // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open.
+  useEffect(() => {
+    if (!repoName) return;
+    const title = currentName ? `${repoName} • ${currentName}` : repoName;
+    getCurrentWindow()
+      .setTitle(`${title} — GitDesktop`)
+      .catch(() => undefined);
+    return () => {
+      getCurrentWindow()
+        .setTitle("GitDesktop")
+        .catch(() => undefined);
+    };
+  }, [repoName, currentName]);
+
   if (!repoPath) return null;
 
   function sidebar() {

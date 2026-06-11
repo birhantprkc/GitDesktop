@@ -1,17 +1,32 @@
-import { CopyIcon } from "@phosphor-icons/react";
+import { CopyIcon, DotsThreeVerticalIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffSurface } from "@/features/diff/DiffSurface";
+import { copyText } from "@/lib/clipboard";
 import {
+  useCheckoutCommit,
+  useCherryPick,
   useCommitDetails,
   useCommitFileDiff,
   useCommitFiles,
+  useLog,
+  useRevertCommit,
 } from "@/lib/git/queries";
 import { formatRelativeTime } from "@/lib/time";
+import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { useAmendCommit } from "./useAmendCommit";
 
 export function CommitDetailView({
   repoPath,
@@ -24,6 +39,16 @@ export function CommitDetailView({
   const files = useCommitFiles(repoPath, hash);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const diff = useCommitFileDiff(repoPath, hash, selectedPath);
+
+  // Same actions as the history list's right-click menu (minus the
+  // dialog-driven ones), surfaced behind a visible ⋯ for discoverability.
+  const log = useLog(repoPath);
+  const amendCommit = useAmendCommit(repoPath);
+  const checkoutCommit = useCheckoutCommit(repoPath);
+  const revertCommit = useRevertCommit(repoPath);
+  const cherryPick = useCherryPick(repoPath);
+  const isLatest = log.data?.[0]?.hash === hash;
+  const onError = (e: unknown) => toastError(e);
 
   // Auto-select the first file whenever a different commit is shown.
   useEffect(() => {
@@ -89,6 +114,61 @@ export function CommitDetailView({
           <span className="text-red-600 dark:text-red-400">
             -{totalDeleted}
           </span>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Commit actions"
+                />
+              }
+            >
+              <DotsThreeVerticalIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="min-w-56" align="end">
+              <DropdownMenuItem
+                disabled={!isLatest}
+                onClick={() => amendCommit(hash).catch(onError)}
+              >
+                Amend commit…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => checkoutCommit.mutate(hash, { onError })}
+              >
+                Checkout commit
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => revertCommit.mutate(hash, { onError })}
+              >
+                Revert changes in commit
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
+                  cherryPick.mutate(hash, {
+                    onSuccess: (applied) => {
+                      if (applied) {
+                        toast.success(`Cherry-picked ${hash.slice(0, 7)}`);
+                      } else {
+                        toast.info(
+                          "Nothing to cherry-pick — these changes are already on this branch.",
+                        );
+                      }
+                    },
+                    onError,
+                  })
+                }
+              >
+                Cherry-pick commit
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => copyText(commit.hash, "SHA copied")}
+              >
+                Copy SHA
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 

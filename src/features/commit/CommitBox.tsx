@@ -22,6 +22,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   const { generate, cancel, generating } = useGenerateCommitMessage(repoPath);
 
   const amending = amendingHash !== null;
+  const branchName = status.data?.branch?.name ?? null;
   const stagedCount =
     status.data?.entries.filter((e) => e.staged !== null).length ?? 0;
   // amending without staged changes is valid (message-only edit)
@@ -29,6 +30,15 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
     title.trim().length > 0 &&
     (stagedCount > 0 || amending) &&
     !commit.isPending;
+
+  // Ctrl/Cmd+Enter from either field commits — the category-standard
+  // accelerator for the highest-frequency action in the app.
+  function onCommitKeyDown(e: React.KeyboardEvent) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && canCommit) {
+      e.preventDefault();
+      doCommit();
+    }
+  }
 
   function doCommit() {
     commit.mutate(
@@ -65,6 +75,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
           placeholder="Commit title"
           value={title}
           onChange={(e) => setCommitTitle(e.target.value)}
+          onKeyDown={onCommitKeyDown}
           disabled={generating}
           className="pr-12"
         />
@@ -81,6 +92,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
         placeholder="Description (optional)"
         value={body}
         onChange={(e) => setCommitBody(e.target.value)}
+        onKeyDown={onCommitKeyDown}
         disabled={generating}
         rows={4}
         // cap the content-based auto-grow so a long generated body can't
@@ -111,14 +123,19 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
         )}
         <Button
           size="sm"
-          className="flex-1"
+          className="min-w-0 flex-1"
           disabled={!canCommit || generating}
           onClick={doCommit}
+          title="Ctrl+Enter"
         >
           {commit.isPending && <Spinner data-icon="inline-start" />}
-          {amending
-            ? "Amend"
-            : `Commit${stagedCount > 0 ? ` (${stagedCount})` : ""}`}
+          <span className="truncate">
+            {amending
+              ? "Amend"
+              : `Commit${stagedCount > 0 ? ` (${stagedCount})` : ""}${
+                  branchName ? ` to ${branchName}` : ""
+                }`}
+          </span>
         </Button>
       </div>
     </div>
