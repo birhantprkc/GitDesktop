@@ -327,6 +327,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
               onChange={(e) => setFilterText(e.target.value)}
               placeholder="Filter"
               className="h-7 flex-1"
+              autoComplete="off"
             />
           </div>
 

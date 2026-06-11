@@ -165,6 +165,7 @@ export function CreateLocalPrDialog({
           <Input
             id="lpr-title"
             placeholder="Summarize the change"
+            autoComplete="off"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />

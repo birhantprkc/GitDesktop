@@ -78,6 +78,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
           onKeyDown={onCommitKeyDown}
           disabled={generating}
           className="pr-12"
+          autoComplete="off"
         />
         <span
           className={cn(

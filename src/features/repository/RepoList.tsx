@@ -179,6 +179,7 @@ export function RepoList({
         <Input
           // the filter is the keyboard entry point of this surface
           autoFocus
+          autoComplete="off"
           value={filter}
           onChange={(e) => {
             setFilter(e.target.value);

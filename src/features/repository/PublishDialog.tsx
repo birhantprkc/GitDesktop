@@ -76,6 +76,7 @@ export function PublishDialog({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="my-project"
+            autoComplete="off"
           />
         </div>
         <div className="space-y-2">
@@ -85,6 +86,7 @@ export function PublishDialog({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="What is this project?"
+            autoComplete="off"
           />
         </div>
 

@@ -414,6 +414,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
               placeholder="feature/from-commit"
               value={branchName}
               onChange={(e) => setBranchName(e.target.value)}
+              autoComplete="off"
             />
           </div>
           <DialogFooter>

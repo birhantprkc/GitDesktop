@@ -273,6 +273,7 @@ export function AiProviderSection({ draft, update }: SectionProps) {
             <Input
               id="api-key"
               type="password"
+              autoComplete="off"
               placeholder={
                 keyPreview.data
                   ? "Enter a new key to replace the saved one"

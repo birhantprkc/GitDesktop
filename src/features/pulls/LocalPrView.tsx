@@ -254,6 +254,7 @@ export function LocalPrView({
                           }}
                           placeholder="e.g. bug, refactor"
                           className="h-7 flex-1"
+                          autoComplete="off"
                         />
                         <Button
                           variant="outline"

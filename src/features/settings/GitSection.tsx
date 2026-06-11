@@ -19,6 +19,7 @@ export function GitSection({ draft, update }: SectionProps) {
           id="default-branch"
           className="max-w-60 font-mono"
           placeholder="main"
+          autoComplete="off"
           value={draft.defaultBranch}
           onChange={(e) => update({ defaultBranch: e.target.value })}
         />

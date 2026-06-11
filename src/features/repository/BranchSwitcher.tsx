@@ -472,6 +472,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && newName.trim()) create();
               }}
+              autoComplete="off"
             />
           </div>
           {baseOptions.length > 1 && (
@@ -531,6 +532,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && renameValue.trim()) doRename();
               }}
+              autoComplete="off"
             />
           </div>
           <DialogFooter>

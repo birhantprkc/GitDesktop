@@ -89,6 +89,7 @@ export function CreatePrDialog({
           <Input
             id="pr-title"
             placeholder="Summarize the change"
+            autoComplete="off"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />

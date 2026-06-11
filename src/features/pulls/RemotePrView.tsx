@@ -755,6 +755,7 @@ export function RemotePrView({
                 id="pr-edit-title"
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
+                autoComplete="off"
               />
             </div>
             <div className="space-y-2">
