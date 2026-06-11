@@ -2,6 +2,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -70,7 +71,7 @@ export function CreateRepoDialog({
       const root = await createRepo({
         name: name.trim(),
         description: description.trim(),
-        parentDir,
+        parentDir: parentDir.trim(),
         initReadme,
         gitignore: gitignore === NONE ? null : gitignore,
         license: license === NONE ? null : license,
@@ -90,7 +91,8 @@ export function CreateRepoDialog({
     }
   }
 
-  const canCreate = name.trim().length > 0 && parentDir.length > 0 && !creating;
+  const canCreate =
+    name.trim().length > 0 && parentDir.trim().length > 0 && !creating;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -128,9 +130,10 @@ export function CreateRepoDialog({
             <div className="flex gap-2">
               <Input
                 id="repo-path"
-                placeholder="Choose a folder…"
+                placeholder="Type, paste, or choose a folder…"
                 value={parentDir}
-                readOnly
+                onChange={(e) => setParentDir(e.target.value)}
+                disabled={creating}
                 className="flex-1"
               />
               <Button
@@ -143,11 +146,9 @@ export function CreateRepoDialog({
             </div>
           </div>
           <label className="flex cursor-pointer items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              className="size-3.5 accent-primary"
+            <Checkbox
               checked={initReadme}
-              onChange={(e) => setInitReadme(e.target.checked)}
+              onCheckedChange={(checked) => setInitReadme(checked === true)}
               disabled={creating}
             />
             Initialize this repository with a README

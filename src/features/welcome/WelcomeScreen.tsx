@@ -64,7 +64,7 @@ export function WelcomeScreen() {
               Open a local repository or clone one from a URL.
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex gap-2">
+          <CardContent className="flex flex-wrap gap-2">
             <Button onClick={pickAndOpen}>
               <FolderOpenIcon data-icon="inline-start" />
               Open repository

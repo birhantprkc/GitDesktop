@@ -1,8 +1,9 @@
 import { FolderIcon, XIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import { useRepoOwners } from "@/lib/git/queries";
 import type { RecentRepo } from "@/lib/settings/api";
 import { useRemoveRecentRepo, useSettings } from "@/lib/settings/queries";
@@ -16,6 +17,10 @@ const OTHER_GROUP = "Other";
  * Filterable list of every repo GitDesktop has opened — a "Recent" shortcut
  * section plus all repos grouped by owner (from each repo's origin remote).
  * Used by the welcome screen and the in-app repo switcher.
+ *
+ * Keyboard-first: the filter autofocuses; ArrowUp/Down move a highlight
+ * through the visible rows and Enter opens the highlighted repo (or the
+ * first match when filtering).
  */
 export function RepoList({
   currentPath,
@@ -30,6 +35,9 @@ export function RepoList({
   const open = useOpenRepoByPath();
   const removeRecent = useRemoveRecentRepo();
   const [filter, setFilter] = useState("");
+  const [highlight, setHighlight] = useState(-1);
+  const [openingPath, setOpeningPath] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const ownerByPath = new Map(
     (owners.data ?? []).map((o) => [o.path, o.owner]),
@@ -64,27 +72,73 @@ export function RepoList({
     return a.localeCompare(b);
   });
 
+  // Flattened render order, for arrow-key navigation.
+  const visible = [
+    ...recent,
+    ...groupNames.flatMap((name) => groups.get(name) ?? []),
+  ];
+  const highlightedPath = visible[highlight]?.path ?? null;
+
+  // Keep the keyboard highlight in view as it moves.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scrolls to whichever row carries the current highlight
+  useEffect(() => {
+    listRef.current
+      ?.querySelector('[data-highlighted="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [highlight]);
+
   async function handleOpen(path: string) {
-    await open(path);
-    onOpened?.();
+    setOpeningPath(path);
+    try {
+      await open(path);
+      onOpened?.();
+    } finally {
+      setOpeningPath(null);
+    }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlight((h) => Math.min(h + 1, visible.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight((h) => Math.max(h - 1, 0));
+    } else if (e.key === "Enter") {
+      // Open the highlighted repo, or the first match of a typed filter.
+      // Plain Enter with no highlight and no filter does nothing, so an
+      // accidental keypress never opens a repo.
+      const target = visible[highlight] ?? (q ? visible[0] : undefined);
+      if (target && !openingPath) handleOpen(target.path);
+    }
   }
 
   function Row({ repo }: { repo: RecentRepo }) {
+    const highlighted = repo.path === highlightedPath;
+    const opening = repo.path === openingPath;
     return (
       <div
+        data-highlighted={highlighted || undefined}
         className={cn(
           "group flex items-center",
           currentPath === repo.path
             ? "bg-accent text-accent-foreground"
-            : "hover:bg-muted/60",
+            : highlighted
+              ? "bg-muted"
+              : "hover:bg-muted/60",
         )}
       >
         <button
           type="button"
           className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
           onClick={() => handleOpen(repo.path)}
+          disabled={openingPath !== null}
         >
-          <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          {opening ? (
+            <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
           <span className="min-w-0 flex-1">
             <span className="block truncate text-xs">{repo.name}</span>
             <span className="block truncate text-[11px] text-muted-foreground">
@@ -96,7 +150,7 @@ export function RepoList({
           variant="ghost"
           size="icon-xs"
           aria-label={`Remove ${repo.name} from the list`}
-          className="mr-1 shrink-0 opacity-0 group-hover:opacity-100"
+          className="mr-1 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
           onClick={() => removeRecent.mutate(repo.path)}
         >
           <XIcon />
@@ -123,13 +177,20 @@ export function RepoList({
     <div className="flex min-h-0 flex-col">
       <div className="shrink-0 p-2">
         <Input
+          // the filter is the keyboard entry point of this surface
+          autoFocus
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          onChange={(e) => {
+            setFilter(e.target.value);
+            setHighlight(-1);
+          }}
+          onKeyDown={handleKeyDown}
           placeholder="Filter repositories"
+          aria-label="Filter repositories"
           className="h-7"
         />
       </div>
-      <ScrollArea className="max-h-96 min-h-0 flex-1">
+      <ScrollArea className="max-h-96 min-h-0 flex-1" ref={listRef}>
         {filtered.length === 0 ? (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground">
             {recents.length === 0

@@ -41,7 +41,7 @@ export function CloneRepoDialog({
   async function clone() {
     setCloning(true);
     try {
-      const clonedPath = await cloneRepo(url.trim(), destination);
+      const clonedPath = await cloneRepo(url.trim(), destination.trim());
       const info = await validateRepo(clonedPath);
       addRecent.mutate({ path: info.root, name: info.name });
       onOpenChange(false);
@@ -54,7 +54,8 @@ export function CloneRepoDialog({
     }
   }
 
-  const canClone = url.trim().length > 0 && destination.length > 0 && !cloning;
+  const canClone =
+    url.trim().length > 0 && destination.trim().length > 0 && !cloning;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -81,9 +82,10 @@ export function CloneRepoDialog({
             <div className="flex gap-2">
               <Input
                 id="clone-dest"
-                placeholder="Choose a folder…"
+                placeholder="Type, paste, or choose a folder…"
                 value={destination}
-                readOnly
+                onChange={(e) => setDestination(e.target.value)}
+                disabled={cloning}
                 className="flex-1"
               />
               <Button
@@ -91,7 +93,7 @@ export function CloneRepoDialog({
                 onClick={pickDestination}
                 disabled={cloning}
               >
-                Browse
+                Choose…
               </Button>
             </div>
           </div>

@@ -119,7 +119,7 @@ export function FileRow({
             <Button
               variant="ghost"
               size="icon-xs"
-              className="opacity-0 group-hover:opacity-100"
+              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
               aria-label={
                 staged ? `Unstage ${entry.path}` : `Stage ${entry.path}`
               }
