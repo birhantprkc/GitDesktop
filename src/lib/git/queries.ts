@@ -275,11 +275,16 @@ export function useUnstage(repo: string) {
 }
 
 export function useCommit(repo: string) {
-  return useRepoMutation(
-    repo,
-    (args: { title: string; body?: string; amend?: boolean }) =>
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { title: string; body?: string; amend?: boolean }) =>
       api.gitCommit(repo, args.title, args.body, args.amend ?? false),
-  );
+    // Refetch BEFORE caller onSuccess runs (react-query awaits this), so the
+    // emptied changes list, cleared draft, and success toast land together
+    // instead of the toast firing while the list still shows old entries.
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: repoKeys.all(repo) }),
+  });
 }
 
 export function useCheckoutBranch(repo: string) {

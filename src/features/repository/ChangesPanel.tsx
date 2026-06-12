@@ -134,6 +134,39 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     stagedEntries.length === 0 &&
     unstagedEntries.length === 0;
 
+  // The rows in render order, so ArrowUp/Down can walk the selection
+  // across both sections.
+  const visibleRows = [
+    ...stagedEntries.map((entry) => ({ entry, staged: true })),
+    ...unstagedEntries.map((entry) => ({ entry, staged: false })),
+  ];
+
+  function onListKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (visibleRows.length === 0) return;
+    // Move the selection, not the scrollbar.
+    e.preventDefault();
+    const index = visibleRows.findIndex(
+      (r) =>
+        selectedFile !== null &&
+        r.entry.path === selectedFile.path &&
+        r.staged === selectedFile.staged,
+    );
+    const next =
+      e.key === "ArrowDown"
+        ? Math.min(index + 1, visibleRows.length - 1)
+        : index === -1
+          ? visibleRows.length - 1
+          : Math.max(index - 1, 0);
+    const row = visibleRows[next];
+    select(row.entry, row.staged);
+    // Move focus along with the selection so the focus ring tracks it.
+    const key = `${row.staged ? "staged" : "unstaged"}:${row.entry.path}`;
+    e.currentTarget
+      .querySelector<HTMLElement>(`[data-row="${CSS.escape(key)}"]`)
+      ?.focus();
+  }
+
   // Drop the selection when the selected file leaves its section
   // (e.g. it was staged, committed, or reverted externally).
   useEffect(() => {
@@ -332,7 +365,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
           </div>
 
           <ScrollArea className="min-h-0 flex-1">
-            <div className="p-2">
+            <div className="p-2" onKeyDown={onListKeyDown}>
               {nothingMatches && (
                 <p className="px-2 py-8 text-center text-xs text-muted-foreground">
                   No files match the filter

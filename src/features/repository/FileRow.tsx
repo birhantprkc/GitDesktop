@@ -1,4 +1,5 @@
 import { MinusIcon, PlusIcon } from "@phosphor-icons/react";
+import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -70,6 +71,12 @@ export function FileRow({
 }) {
   const appendIgnore = useAppendToGitignore(repoPath);
   const settings = useSettings();
+  const rowRef = useRef<HTMLDivElement>(null);
+  // Keep the row visible when the selection moves with the arrow keys
+  // (a no-op for clicks — the row is already in view).
+  useEffect(() => {
+    if (selected) rowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
   const externalEditor = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
@@ -97,6 +104,8 @@ export function FileRow({
       <ContextMenuTrigger
         render={
           <div
+            ref={rowRef}
+            data-row={`${staged ? "staged" : "unstaged"}:${entry.path}`}
             className={cn(
               "group flex w-full cursor-pointer items-center gap-2 px-2 py-1 text-left text-xs",
               selected
