@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect } from "react";
+import { useEffect, useEffectEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,11 +47,11 @@ export function PublishDialog({
     },
   });
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reseed on open
+  const seedOnOpen = useEffectEvent(() =>
+    form.reset({ name: defaultName, description: "", isPrivate: true }),
+  );
   useEffect(() => {
-    if (open) {
-      form.reset({ name: defaultName, description: "", isPrivate: true });
-    }
+    if (open) seedOnOpen();
   }, [open]);
 
   return (

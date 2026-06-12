@@ -11,7 +11,7 @@ import {
   XCircleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -256,9 +256,18 @@ export function RemotePrView({
     [prDiff.data],
   );
 
-  useEffect(() => {
-    setSelectedPath(pr?.files[0]?.path ?? null);
-  }, [pr?.files]);
+  // Reset the manual file selection when a different PR is shown — a
+  // render-time state adjustment, not an effect.
+  const [lastNumber, setLastNumber] = useState(number);
+  if (number !== lastNumber) {
+    setLastNumber(number);
+    setSelectedPath(null);
+  }
+  // Default to the first changed file until the user picks one.
+  const effectivePath =
+    selectedPath && pr?.files.some((f) => f.path === selectedPath)
+      ? selectedPath
+      : (pr?.files[0]?.path ?? null);
 
   if (details.isPending) {
     return (
@@ -273,11 +282,11 @@ export function RemotePrView({
     return <DiffPlaceholder message="Could not load this pull request" />;
   }
 
-  const fileDiff = selectedPath
+  const fileDiff = effectivePath
     ? {
-        filePath: selectedPath,
-        text: fileSections.get(selectedPath) ?? "",
-        isBinary: (fileSections.get(selectedPath) ?? "").includes(
+        filePath: effectivePath,
+        text: fileSections.get(effectivePath) ?? "",
+        isBinary: (fileSections.get(effectivePath) ?? "").includes(
           "Binary files ",
         ),
         isTruncated: false,
@@ -621,7 +630,7 @@ export function RemotePrView({
                   key={file.path}
                   className={cn(
                     "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
-                    selectedPath === file.path
+                    effectivePath === file.path
                       ? "bg-accent text-accent-foreground"
                       : "hover:bg-muted/60",
                   )}
@@ -644,9 +653,9 @@ export function RemotePrView({
             </ScrollArea>
           </aside>
           <main className="min-w-0 flex-1">
-            {selectedPath ? (
+            {effectivePath ? (
               <DiffContent
-                filePath={selectedPath}
+                filePath={effectivePath}
                 data={fileDiff}
                 isPending={prDiff.isPending}
                 isError={prDiff.isError}

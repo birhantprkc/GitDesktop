@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
@@ -21,12 +21,21 @@ export function BranchDiffView({
 }) {
   const files = useBranchDiffFiles(repoPath, base, compare);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const diff = useBranchFileDiff(repoPath, base, compare, selectedPath);
-
-  // Reset the selected file when the comparison changes.
-  useEffect(() => {
-    setSelectedPath(files.data?.[0]?.path ?? null);
-  }, [files.data]);
+  // Reset the manual selection when the comparison changes — a render-time
+  // state adjustment, not an effect.
+  // ".." can't appear inside a valid ref name, so the key is unambiguous.
+  const cmpKey = `${base}..${compare}`;
+  const [lastKey, setLastKey] = useState(cmpKey);
+  if (cmpKey !== lastKey) {
+    setLastKey(cmpKey);
+    setSelectedPath(null);
+  }
+  // Default to the first changed file until the user picks one.
+  const effectivePath =
+    selectedPath && files.data?.some((f) => f.path === selectedPath)
+      ? selectedPath
+      : (files.data?.[0]?.path ?? null);
+  const diff = useBranchFileDiff(repoPath, base, compare, effectivePath);
 
   if (files.isPending) {
     return (
@@ -76,7 +85,7 @@ export function BranchDiffView({
                 key={file.path}
                 className={cn(
                   "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
-                  selectedPath === file.path
+                  effectivePath === file.path
                     ? "bg-accent text-accent-foreground"
                     : "hover:bg-muted/60",
                 )}
@@ -103,8 +112,8 @@ export function BranchDiffView({
           </ScrollArea>
         </aside>
         <main className="min-w-0 flex-1">
-          {selectedPath ? (
-            <DiffSurface filePath={selectedPath} diff={diff} />
+          {effectivePath ? (
+            <DiffSurface filePath={effectivePath} diff={diff} />
           ) : (
             <DiffPlaceholder message="Select a file to see its changes" />
           )}

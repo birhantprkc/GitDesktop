@@ -1,6 +1,6 @@
 import { SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect } from "react";
+import { useEffect, useEffectEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -57,13 +57,11 @@ export function CreatePrDialog({
   });
 
   // Seed fields each time the dialog opens (title GitHub-style: the single
-  // commit's subject, else blank). Keyed on `open` only so a background
-  // refresh of the commit list can't clobber what the user is typing.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on open
-  useEffect(() => {
-    if (!open) return;
-    // keepDefaultValues: otherwise the per-render options sync clobbers the
-    // seeded title back to empty (untouched form).
+  // commit's subject, else blank). An effect event so a background refresh
+  // of the commit list can't clobber what the user is typing.
+  // keepDefaultValues: otherwise the per-render options sync clobbers the
+  // seeded title back to empty (untouched form).
+  const seedOnOpen = useEffectEvent(() =>
     form.reset(
       {
         title: commitSubjects.length === 1 ? commitSubjects[0] : "",
@@ -71,7 +69,10 @@ export function CreatePrDialog({
         draft: false,
       },
       { keepDefaultValues: true },
-    );
+    ),
+  );
+  useEffect(() => {
+    if (open) seedOnOpen();
   }, [open]);
 
   return (

@@ -1,6 +1,6 @@
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -105,13 +105,16 @@ export function SettingsScreen() {
 
   // Esc closes settings (guarded). Base UI popups handle their own Esc and
   // mark the event consumed, so this only fires when nothing else claimed it.
+  // An effect event so the listener reads the current dirty state without
+  // re-subscribing on every render.
+  const onEscape = useEffectEvent(() => requestClose());
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && !e.defaultPrevented) requestClose();
+      if (e.key === "Escape" && !e.defaultPrevented) onEscape();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  });
+  }, []);
 
   return (
     <div className="flex h-screen flex-col">

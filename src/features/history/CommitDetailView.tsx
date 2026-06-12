@@ -1,5 +1,5 @@
 import { CopyIcon, DotsThreeVerticalIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,7 +38,20 @@ export function CommitDetailView({
   const details = useCommitDetails(repoPath, hash);
   const files = useCommitFiles(repoPath, hash);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const diff = useCommitFileDiff(repoPath, hash, selectedPath);
+  // Reset the manual selection when a different commit is shown — a render
+  // -time state adjustment, not an effect.
+  const [lastHash, setLastHash] = useState(hash);
+  if (hash !== lastHash) {
+    setLastHash(hash);
+    setSelectedPath(null);
+  }
+  // Default to the first changed file until the user picks one (derived, so
+  // there's no empty-selection frame while an effect catches up).
+  const effectivePath =
+    selectedPath && files.data?.some((f) => f.path === selectedPath)
+      ? selectedPath
+      : (files.data?.[0]?.path ?? null);
+  const diff = useCommitFileDiff(repoPath, hash, effectivePath);
 
   // Same actions as the history list's right-click menu (minus the
   // dialog-driven ones), surfaced behind a visible ⋯ for discoverability.
@@ -49,11 +62,6 @@ export function CommitDetailView({
   const cherryPick = useCherryPick(repoPath);
   const isLatest = log.data?.[0]?.hash === hash;
   const onError = (e: unknown) => toastError(e);
-
-  // Auto-select the first file whenever a different commit is shown.
-  useEffect(() => {
-    setSelectedPath(files.data?.[0]?.path ?? null);
-  }, [files.data]);
 
   if (details.isPending || files.isPending) {
     return (
@@ -184,7 +192,7 @@ export function CommitDetailView({
                 key={file.path}
                 className={cn(
                   "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
-                  selectedPath === file.path
+                  effectivePath === file.path
                     ? "bg-accent text-accent-foreground"
                     : "hover:bg-muted/60",
                 )}
@@ -211,8 +219,8 @@ export function CommitDetailView({
           </ScrollArea>
         </aside>
         <main className="min-w-0 flex-1">
-          {selectedPath ? (
-            <DiffSurface filePath={selectedPath} diff={diff} />
+          {effectivePath ? (
+            <DiffSurface filePath={effectivePath} diff={diff} />
           ) : (
             <DiffPlaceholder message="Select a file to see its changes" />
           )}

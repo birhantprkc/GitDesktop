@@ -1,6 +1,6 @@
 import { SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
-import { useEffect } from "react";
+import { useEffect, useEffectEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -72,16 +72,14 @@ export function CreateLocalPrDialog({
     },
   });
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reseed on open
-  useEffect(() => {
-    if (!open) return;
+  // keepDefaultValues: otherwise the per-render options sync clobbers the
+  // seeded head/base back to empty (untouched form).
+  const seedOnOpen = useEffectEvent(() => {
     const h = defaultHead ?? currentName ?? names[0] ?? "";
     const fallbackBase =
       defaultBranch.data && defaultBranch.data !== h
         ? defaultBranch.data
         : (names.find((n) => n !== h) ?? "");
-    // keepDefaultValues: otherwise the per-render options sync clobbers the
-    // seeded head/base back to empty (untouched form).
     form.reset(
       {
         head: h,
@@ -91,6 +89,9 @@ export function CreateLocalPrDialog({
       },
       { keepDefaultValues: true },
     );
+  });
+  useEffect(() => {
+    if (open) seedOnOpen();
   }, [open]);
 
   // Live head/base drive the "N commits to merge" hint and AI generation.

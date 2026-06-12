@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect } from "react";
+import { Activity, useEffect, useTransition } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CommitBox } from "@/features/commit/CommitBox";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
@@ -28,6 +28,13 @@ export function RepositoryView() {
   const selectedPr = useUiStore((s) => s.selectedPr);
   const status = useRepoStatus(repoPath ?? "");
   const currentName = status.data?.branch?.name ?? null;
+  // Tab switches are transitions: a heavy first render of the target panel
+  // never blocks the click, and hidden Activities pre-render at low priority.
+  const [, startTabTransition] = useTransition();
+
+  function changeTab(tab: RepoTab) {
+    startTabTransition(() => setRepoTab(tab));
+  }
 
   // Ctrl/Cmd+1–4 switch tabs, mirroring GitHub Desktop.
   useEffect(() => {
@@ -37,7 +44,7 @@ export function RepositoryView() {
       const tab = TAB_ORDER[index];
       if (tab) {
         e.preventDefault();
-        setRepoTab(tab);
+        startTabTransition(() => setRepoTab(tab));
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -60,58 +67,10 @@ export function RepositoryView() {
 
   if (!repoPath) return null;
 
-  function sidebar() {
-    if (!repoPath) return null;
-    switch (repoTab) {
-      case "changes":
-        return (
-          <>
-            <ChangesPanel repoPath={repoPath} />
-            <CommitBox repoPath={repoPath} />
-          </>
-        );
-      case "history":
-        return <HistoryPanel repoPath={repoPath} />;
-      case "compare":
-        return <ComparePanel repoPath={repoPath} />;
-      case "pulls":
-        return <PullRequestsPanel repoPath={repoPath} />;
-    }
-  }
-
-  function main() {
-    if (!repoPath) return null;
-    switch (repoTab) {
-      case "changes":
-        return <DiffViewer repoPath={repoPath} />;
-      case "history":
-        return selectedCommitHash ? (
-          <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
-        ) : (
-          <DiffPlaceholder message="Select a commit to see its changes" />
-        );
-      case "compare":
-        return selectedCommitHash ? (
-          <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
-        ) : compareBranch && currentName && compareBranch !== currentName ? (
-          <BranchDiffView
-            repoPath={repoPath}
-            base={compareBranch}
-            compare={currentName}
-          />
-        ) : (
-          <DiffPlaceholder message="Pick a branch to compare against" />
-        );
-      case "pulls":
-        return selectedPr?.kind === "remote" ? (
-          <RemotePrView repoPath={repoPath} number={Number(selectedPr.id)} />
-        ) : selectedPr?.kind === "local" ? (
-          <LocalPrView repoPath={repoPath} id={selectedPr.id} />
-        ) : (
-          <DiffPlaceholder message="Select a pull request" />
-        );
-    }
-  }
+  // Panels live inside <Activity> so switching tabs preserves their state
+  // (filters, selections, scroll) instead of unmounting them. Hidden panels'
+  // effects are deferred, so inactive tabs don't poll or fetch.
+  const mode = (tab: RepoTab) => (repoTab === tab ? "visible" : "hidden");
 
   return (
     <div className="flex h-screen flex-col">
@@ -120,7 +79,7 @@ export function RepositoryView() {
         <aside className="flex w-80 shrink-0 flex-col border-r">
           <Tabs
             value={repoTab}
-            onValueChange={(value) => setRepoTab(value as RepoTab)}
+            onValueChange={(value) => changeTab(value as RepoTab)}
           >
             <TabsList className="w-full">
               <TabsTrigger value="changes" className="flex-1">
@@ -137,9 +96,59 @@ export function RepositoryView() {
               </TabsTrigger>
             </TabsList>
           </Tabs>
-          {sidebar()}
+          <Activity mode={mode("changes")}>
+            <ChangesPanel repoPath={repoPath} />
+            <CommitBox repoPath={repoPath} />
+          </Activity>
+          <Activity mode={mode("history")}>
+            <HistoryPanel repoPath={repoPath} />
+          </Activity>
+          <Activity mode={mode("compare")}>
+            <ComparePanel repoPath={repoPath} />
+          </Activity>
+          <Activity mode={mode("pulls")}>
+            <PullRequestsPanel repoPath={repoPath} />
+          </Activity>
         </aside>
-        <main className="min-w-0 flex-1">{main()}</main>
+        <main className="min-w-0 flex-1">
+          <Activity mode={mode("changes")}>
+            <DiffViewer repoPath={repoPath} />
+          </Activity>
+          <Activity mode={mode("history")}>
+            {selectedCommitHash ? (
+              <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
+            ) : (
+              <DiffPlaceholder message="Select a commit to see its changes" />
+            )}
+          </Activity>
+          <Activity mode={mode("compare")}>
+            {selectedCommitHash ? (
+              <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
+            ) : compareBranch &&
+              currentName &&
+              compareBranch !== currentName ? (
+              <BranchDiffView
+                repoPath={repoPath}
+                base={compareBranch}
+                compare={currentName}
+              />
+            ) : (
+              <DiffPlaceholder message="Pick a branch to compare against" />
+            )}
+          </Activity>
+          <Activity mode={mode("pulls")}>
+            {selectedPr?.kind === "remote" ? (
+              <RemotePrView
+                repoPath={repoPath}
+                number={Number(selectedPr.id)}
+              />
+            ) : selectedPr?.kind === "local" ? (
+              <LocalPrView repoPath={repoPath} id={selectedPr.id} />
+            ) : (
+              <DiffPlaceholder message="Select a pull request" />
+            )}
+          </Activity>
+        </main>
       </div>
     </div>
   );

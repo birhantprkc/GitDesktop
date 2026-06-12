@@ -1,5 +1,5 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useEffect } from "react";
+import { useEffect, useEffectEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -72,9 +72,9 @@ export function CreateRepoDialog({
     },
   });
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reseed on open
+  const seedOnOpen = useEffectEvent(() => form.reset(DEFAULTS));
   useEffect(() => {
-    if (open) form.reset(DEFAULTS);
+    if (open) seedOnOpen();
   }, [open]);
 
   async function pickParentDir() {

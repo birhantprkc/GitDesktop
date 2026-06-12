@@ -113,65 +113,13 @@ export function RepoList({
     }
   }
 
-  function Row({ repo }: { repo: RecentRepo }) {
-    const highlighted = repo.path === highlightedPath;
-    const opening = repo.path === openingPath;
-    return (
-      <div
-        data-highlighted={highlighted || undefined}
-        className={cn(
-          "group flex items-center",
-          currentPath === repo.path
-            ? "bg-accent text-accent-foreground"
-            : highlighted
-              ? "bg-muted"
-              : "hover:bg-muted/60",
-        )}
-      >
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
-          onClick={() => handleOpen(repo.path)}
-          disabled={openingPath !== null}
-        >
-          {opening ? (
-            <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
-          ) : (
-            <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-xs">{repo.name}</span>
-            <span className="block truncate text-[11px] text-muted-foreground">
-              {repo.path}
-            </span>
-          </span>
-        </button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label={`Remove ${repo.name} from the list`}
-          className="mr-1 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-          onClick={() => removeRecent.mutate(repo.path)}
-        >
-          <XIcon />
-        </Button>
-      </div>
-    );
-  }
-
-  function Section({ title, repos }: { title: string; repos: RecentRepo[] }) {
-    if (repos.length === 0) return null;
-    return (
-      <div>
-        <p className="px-3 pt-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-          {title}
-        </p>
-        {repos.map((r) => (
-          <Row key={`${title}:${r.path}`} repo={r} />
-        ))}
-      </div>
-    );
-  }
+  const sectionProps = {
+    currentPath: currentPath ?? null,
+    highlightedPath,
+    openingPath,
+    onOpen: handleOpen,
+    onRemove: (path: string) => removeRecent.mutate(path),
+  };
 
   return (
     <div className="flex min-h-0 flex-col">
@@ -200,13 +148,97 @@ export function RepoList({
           </p>
         ) : (
           <>
-            <Section title="Recent" repos={recent} />
+            <RepoSection title="Recent" repos={recent} {...sectionProps} />
             {groupNames.map((name) => (
-              <Section key={name} title={name} repos={groups.get(name) ?? []} />
+              <RepoSection
+                key={name}
+                title={name}
+                repos={groups.get(name) ?? []}
+                {...sectionProps}
+              />
             ))}
           </>
         )}
       </ScrollArea>
+    </div>
+  );
+}
+
+interface RepoRowsProps {
+  currentPath: string | null;
+  highlightedPath: string | null;
+  openingPath: string | null;
+  onOpen: (path: string) => void;
+  onRemove: (path: string) => void;
+}
+
+function RepoSection({
+  title,
+  repos,
+  ...rowProps
+}: RepoRowsProps & { title: string; repos: RecentRepo[] }) {
+  if (repos.length === 0) return null;
+  return (
+    <div>
+      <p className="px-3 pt-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+        {title}
+      </p>
+      {repos.map((r) => (
+        <RepoRow key={`${title}:${r.path}`} repo={r} {...rowProps} />
+      ))}
+    </div>
+  );
+}
+
+function RepoRow({
+  repo,
+  currentPath,
+  highlightedPath,
+  openingPath,
+  onOpen,
+  onRemove,
+}: RepoRowsProps & { repo: RecentRepo }) {
+  const highlighted = repo.path === highlightedPath;
+  const opening = repo.path === openingPath;
+  return (
+    <div
+      data-highlighted={highlighted || undefined}
+      className={cn(
+        "group flex items-center",
+        currentPath === repo.path
+          ? "bg-accent text-accent-foreground"
+          : highlighted
+            ? "bg-muted"
+            : "hover:bg-muted/60",
+      )}
+    >
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
+        onClick={() => onOpen(repo.path)}
+        disabled={openingPath !== null}
+      >
+        {opening ? (
+          <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs">{repo.name}</span>
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {repo.path}
+          </span>
+        </span>
+      </button>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        aria-label={`Remove ${repo.name} from the list`}
+        className="mr-1 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        onClick={() => onRemove(repo.path)}
+      >
+        <XIcon />
+      </Button>
     </div>
   );
 }

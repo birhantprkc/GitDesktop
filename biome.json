@@ -155,7 +155,12 @@
       "linter": {
         "rules": {
           "correctness": {
-            "useExhaustiveDependencies": "warn",
+            "useExhaustiveDependencies": {
+              "level": "warn",
+              "options": {
+                "hooks": [{ "name": "useEffectEvent", "stableResult": true }]
+              }
+            },
             "useHookAtTopLevel": "error"
           }
         }
