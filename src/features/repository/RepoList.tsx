@@ -1,12 +1,28 @@
 import { FolderIcon, XIcon } from "@phosphor-icons/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
+import { copyText } from "@/lib/clipboard";
+import {
+  ghRepoUrl,
+  openInTerminal,
+  openWithDefault,
+  openWithProgram,
+} from "@/lib/git/api";
 import { useRepoOwners } from "@/lib/git/queries";
-import type { RecentRepo } from "@/lib/settings/api";
-import { useRemoveRecentRepo, useSettings } from "@/lib/settings/queries";
+import { type RecentRepo, repoDisplayName } from "@/lib/settings/api";
+import { useSettings } from "@/lib/settings/queries";
+import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useOpenRepoByPath } from "./useOpenRepoByPath";
 
@@ -16,7 +32,9 @@ const OTHER_GROUP = "Other";
 /**
  * Filterable list of every repo GitDesktop has opened — a "Recent" shortcut
  * section plus all repos grouped by owner (from each repo's origin remote).
- * Used by the welcome screen and the in-app repo switcher.
+ * Used by the welcome screen and the in-app repo switcher; both render the
+ * alias/remove dialogs themselves (the switcher's popover would unmount
+ * dialogs nested in here).
  *
  * Keyboard-first: the filter autofocuses; ArrowUp/Down move a highlight
  * through the visible rows and Enter opens the highlighted repo (or the
@@ -25,15 +43,18 @@ const OTHER_GROUP = "Other";
 export function RepoList({
   currentPath,
   onOpened,
+  onAliasRepo,
+  onRemoveRepo,
 }: {
   currentPath?: string | null;
   onOpened?: () => void;
+  onAliasRepo: (repo: RecentRepo) => void;
+  onRemoveRepo: (repo: RecentRepo) => void;
 }) {
   const settings = useSettings();
   const recents = settings.data?.recentRepos ?? [];
   const owners = useRepoOwners(recents.map((r) => r.path));
   const open = useOpenRepoByPath();
-  const removeRecent = useRemoveRecentRepo();
   const [filter, setFilter] = useState("");
   const [highlight, setHighlight] = useState(-1);
   const [openingPath, setOpeningPath] = useState<string | null>(null);
@@ -48,6 +69,7 @@ export function RepoList({
     (r) =>
       !q ||
       r.name.toLowerCase().includes(q) ||
+      (r.alias ?? "").toLowerCase().includes(q) ||
       r.path.toLowerCase().includes(q) ||
       (ownerByPath.get(r.path) ?? "").toLowerCase().includes(q),
   );
@@ -117,8 +139,10 @@ export function RepoList({
     currentPath: currentPath ?? null,
     highlightedPath,
     openingPath,
+    ownerOf: (path: string) => ownerByPath.get(path) ?? null,
     onOpen: handleOpen,
-    onRemove: (path: string) => removeRecent.mutate(path),
+    onAlias: onAliasRepo,
+    onRemove: onRemoveRepo,
   };
 
   return (
@@ -168,8 +192,10 @@ interface RepoRowsProps {
   currentPath: string | null;
   highlightedPath: string | null;
   openingPath: string | null;
+  ownerOf: (path: string) => string | null;
   onOpen: (path: string) => void;
-  onRemove: (path: string) => void;
+  onAlias: (repo: RecentRepo) => void;
+  onRemove: (repo: RecentRepo) => void;
 }
 
 function RepoSection({
@@ -195,50 +221,124 @@ function RepoRow({
   currentPath,
   highlightedPath,
   openingPath,
+  ownerOf,
   onOpen,
+  onAlias,
   onRemove,
 }: RepoRowsProps & { repo: RecentRepo }) {
+  const settings = useSettings();
   const highlighted = repo.path === highlightedPath;
   const opening = repo.path === openingPath;
+  const owner = ownerOf(repo.path);
+  const editor = (settings.data?.externalEditor ?? "").trim();
+  const editorName =
+    (settings.data?.externalEditorName ?? "").trim() || "editor";
+
+  function openWeb() {
+    ghRepoUrl(repo.path)
+      .then((url) => openUrl(url))
+      .catch(toastError);
+  }
+
   return (
-    <div
-      data-highlighted={highlighted || undefined}
-      className={cn(
-        "group flex items-center",
-        currentPath === repo.path
-          ? "bg-accent text-accent-foreground"
-          : highlighted
-            ? "bg-muted"
-            : "hover:bg-muted/60",
-      )}
-    >
-      <button
-        type="button"
-        className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
-        onClick={() => onOpen(repo.path)}
-        disabled={openingPath !== null}
-      >
-        {opening ? (
-          <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <div
+            data-highlighted={highlighted || undefined}
+            className={cn(
+              "group flex items-center",
+              currentPath === repo.path
+                ? "bg-accent text-accent-foreground"
+                : highlighted
+                  ? "bg-muted"
+                  : "hover:bg-muted/60",
+            )}
+          >
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
+              onClick={() => onOpen(repo.path)}
+              disabled={openingPath !== null}
+            >
+              {opening ? (
+                <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <span className="min-w-0 flex-1">
+                <span
+                  className={cn(
+                    "block truncate text-xs",
+                    repo.alias && "italic",
+                  )}
+                  title={repo.alias ? repo.name : undefined}
+                >
+                  {repoDisplayName(repo)}
+                </span>
+                <span className="block truncate text-[11px] text-muted-foreground">
+                  {repo.path}
+                </span>
+              </span>
+            </button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Remove ${repoDisplayName(repo)}`}
+              className="mr-1 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              onClick={() => onRemove(repo)}
+            >
+              <XIcon />
+            </Button>
+          </div>
+        }
+      />
+      <ContextMenuContent className="min-w-52">
+        <ContextMenuItem onClick={() => onAlias(repo)}>
+          {repo.alias ? "Change alias…" : "Create alias…"}
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => copyText(repo.name, "Repository name copied")}
+        >
+          Copy repo name
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => copyText(repo.path, "Repository path copied")}
+        >
+          Copy repo path
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        {owner && (
+          <ContextMenuItem onClick={openWeb}>View on GitHub</ContextMenuItem>
         )}
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs">{repo.name}</span>
-          <span className="block truncate text-[11px] text-muted-foreground">
-            {repo.path}
-          </span>
-        </span>
-      </button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        aria-label={`Remove ${repo.name} from the list`}
-        className="mr-1 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-        onClick={() => onRemove(repo.path)}
-      >
-        <XIcon />
-      </Button>
-    </div>
+        <ContextMenuItem
+          onClick={() =>
+            openInTerminal(
+              repo.path,
+              settings.data?.terminal,
+              settings.data?.terminalPath,
+            ).catch(toastError)
+          }
+        >
+          Open in terminal
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => openWithDefault(repo.path).catch(toastError)}
+        >
+          Show in Explorer
+        </ContextMenuItem>
+        {editor && (
+          <ContextMenuItem
+            onClick={() => openWithProgram(editor, repo.path).catch(toastError)}
+          >
+            Open in {editorName}
+          </ContextMenuItem>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => onRemove(repo)}>
+          Remove…
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

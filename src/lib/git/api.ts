@@ -232,6 +232,10 @@ export const appendToGitignore = (repoPath: string, pattern: string) =>
 export const revealInExplorer = (path: string) =>
   invoke<void>("reveal_in_explorer", { path });
 
+/** Moves a repository folder to the OS recycle bin. */
+export const deleteRepoFolder = (path: string) =>
+  invoke<void>("delete_repo_folder", { path });
+
 export const openWithDefault = (path: string) =>
   invoke<void>("open_with_default", { path });
 

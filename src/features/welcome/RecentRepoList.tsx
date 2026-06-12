@@ -1,9 +1,17 @@
+import { useState } from "react";
+import {
+  RemoveRepoDialog,
+  RepoAliasDialog,
+} from "@/features/repository/RepoDialogs";
 import { RepoList } from "@/features/repository/RepoList";
+import type { RecentRepo } from "@/lib/settings/api";
 import { useSettings } from "@/lib/settings/queries";
 
 export function RecentRepoList() {
   const settings = useSettings();
   const recents = settings.data?.recentRepos ?? [];
+  const [aliasTarget, setAliasTarget] = useState<RecentRepo | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<RecentRepo | null>(null);
 
   return (
     <div className="space-y-2">
@@ -17,9 +25,21 @@ export function RecentRepoList() {
         </div>
       ) : (
         <div className="rounded-none border">
-          <RepoList />
+          <RepoList
+            onAliasRepo={setAliasTarget}
+            onRemoveRepo={setRemoveTarget}
+          />
         </div>
       )}
+      <RepoAliasDialog
+        key={aliasTarget?.path ?? "none"}
+        repo={aliasTarget}
+        onClose={() => setAliasTarget(null)}
+      />
+      <RemoveRepoDialog
+        repo={removeTarget}
+        onClose={() => setRemoveTarget(null)}
+      />
     </div>
   );
 }

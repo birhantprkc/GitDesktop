@@ -7,6 +7,7 @@ import {
   loadSettings,
   removeRecentRepo,
   saveSettings,
+  setRepoAlias,
 } from "./api";
 
 export const settingsKeys = {
@@ -40,6 +41,16 @@ export function useAddRecentRepo() {
   });
 }
 
+export function useSetRepoAlias() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { path: string; alias: string }) =>
+      setRepoAlias(args.path, args.alias),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: settingsKeys.settings }),
+  });
+}
+
 export function useRemoveRecentRepo() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -47,6 +58,12 @@ export function useRemoveRecentRepo() {
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: settingsKeys.settings }),
   });
+}
+
+/** The display alias for a repo path, when one is set. */
+export function useRepoAlias(path: string | null): string | undefined {
+  const settings = useSettings();
+  return settings.data?.recentRepos.find((r) => r.path === path)?.alias;
 }
 
 export interface SecretPreview {

@@ -5,6 +5,13 @@ export interface RecentRepo {
   path: string;
   name: string;
   lastOpenedAt: string;
+  /** User-chosen display name shown in place of the folder name. */
+  alias?: string;
+}
+
+/** What to call a repo in the UI: its alias when set, else its name. */
+export function repoDisplayName(repo: RecentRepo): string {
+  return repo.alias?.trim() || repo.name;
 }
 
 export interface NotificationSettings {
@@ -106,11 +113,31 @@ export async function addRecentRepo(repo: {
   // Windows paths are case-insensitive; compare them that way to dedupe
   const samePath = (a: string, b: string) =>
     a.toLowerCase() === b.toLowerCase();
+  // Reopening a repo must not wipe the alias on its previous entry.
+  const previous = settings.recentRepos.find((r) =>
+    samePath(r.path, repo.path),
+  );
   const recentRepos = [
-    { ...repo, lastOpenedAt: new Date().toISOString() },
+    {
+      ...repo,
+      alias: previous?.alias,
+      lastOpenedAt: new Date().toISOString(),
+    },
     ...settings.recentRepos.filter((r) => !samePath(r.path, repo.path)),
   ].slice(0, MAX_RECENT_REPOS);
   await saveSettings({ ...settings, recentRepos });
+}
+
+/** Sets (or clears, with an empty string) the display alias for a repo. */
+export async function setRepoAlias(path: string, alias: string): Promise<void> {
+  const settings = await loadSettings();
+  const trimmed = alias.trim();
+  await saveSettings({
+    ...settings,
+    recentRepos: settings.recentRepos.map((r) =>
+      r.path === path ? { ...r, alias: trimmed || undefined } : r,
+    ),
+  });
 }
 
 export async function removeRecentRepo(path: string): Promise<void> {

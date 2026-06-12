@@ -41,6 +41,27 @@ pub async fn append_to_gitignore(repo_path: String, pattern: String) -> AppResul
     tokio::fs::write(&path, content).await.map_err(AppError::Io)
 }
 
+/// Moves a repository folder to the OS recycle bin. Refuses anything that
+/// isn't a git repository root, so a bad path can never trash an unrelated
+/// folder.
+#[tauri::command]
+pub async fn delete_repo_folder(path: String) -> AppResult<()> {
+    let dir = PathBuf::from(&path);
+    if !dir.is_dir() {
+        return Err(AppError::InvalidArgument(format!("not a directory: {path}")));
+    }
+    if !dir.join(".git").exists() {
+        return Err(AppError::InvalidArgument(format!(
+            "not a git repository root: {path}"
+        )));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        trash::delete(&dir).map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))
+    })
+    .await
+    .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?
+}
+
 #[tauri::command]
 pub async fn reveal_in_explorer(path: String) -> AppResult<()> {
     tauri_plugin_opener::reveal_item_in_dir(&path)

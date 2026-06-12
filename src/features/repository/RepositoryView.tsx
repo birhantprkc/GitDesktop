@@ -12,6 +12,7 @@ import { LocalPrView } from "@/features/pulls/LocalPrView";
 import { PullRequestsPanel } from "@/features/pulls/PullRequestsPanel";
 import { RemotePrView } from "@/features/pulls/RemotePrView";
 import { useRepoStatus } from "@/lib/git/queries";
+import { useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { ChangesPanel } from "./ChangesPanel";
 import { RepoHeader } from "./RepoHeader";
@@ -28,6 +29,7 @@ export function RepositoryView() {
   const compareBranch = useUiStore((s) => s.compareBranch);
   const selectedPr = useUiStore((s) => s.selectedPr);
   const status = useRepoStatus(repoPath ?? "");
+  const alias = useRepoAlias(repoPath);
   const currentName = status.data?.branch?.name ?? null;
   // Tab switches are transitions: a heavy first render of the target panel
   // never blocks the click, and hidden Activities pre-render at low priority.
@@ -57,8 +59,9 @@ export function RepositoryView() {
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open.
   useEffect(() => {
-    if (!repoName) return;
-    const title = currentName ? `${repoName} • ${currentName}` : repoName;
+    const display = alias ?? repoName;
+    if (!display) return;
+    const title = currentName ? `${display} • ${currentName}` : display;
     getCurrentWindow()
       .setTitle(`${title} — GitDesktop`)
       .catch(() => undefined);
@@ -67,7 +70,7 @@ export function RepositoryView() {
         .setTitle("GitDesktop")
         .catch(() => undefined);
     };
-  }, [repoName, currentName]);
+  }, [repoName, alias, currentName]);
 
   if (!repoPath) return null;
 

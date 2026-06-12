@@ -100,6 +100,7 @@ pub fn run() {
             github::pr::gh_repo_labels,
             github::pr::gh_pr_edit_labels,
             fsops::append_to_gitignore,
+            fsops::delete_repo_folder,
             fsops::reveal_in_explorer,
             fsops::open_with_default,
             fsops::open_in_terminal,

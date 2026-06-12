@@ -8,6 +8,7 @@ import {
   LightningIcon,
   LinkIcon,
   PencilSimpleIcon,
+  TagSimpleIcon,
   TerminalIcon,
   TrashIcon,
   WarningCircleIcon,
@@ -42,17 +43,18 @@ import {
   openWithProgram,
 } from "@/lib/git/api";
 import { useForkRepo, useGhStatus } from "@/lib/git/queries";
-import { useRemoveRecentRepo, useSettings } from "@/lib/settings/queries";
+import type { RecentRepo } from "@/lib/settings/api";
+import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { RemoteUrlDialog } from "./RemoteUrlDialog";
+import { RemoveRepoDialog, RepoAliasDialog } from "./RepoDialogs";
 import { RepoStatsDialog } from "./RepoStatsDialog";
 
 export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
   const settings = useSettings();
-  const removeRecent = useRemoveRecentRepo();
-  const closeRepo = useUiStore((s) => s.closeRepo);
+  const repoName = useUiStore((s) => s.repoName);
   const fork = useForkRepo(repoPath);
   const [automationsOpen, setAutomationsOpen] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
@@ -61,6 +63,17 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   );
   const [remoteUrlOpen, setRemoteUrlOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [aliasTarget, setAliasTarget] = useState<RecentRepo | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<RecentRepo | null>(null);
+
+  // This repo's recents entry (carries the alias); synthesized if missing.
+  const repoEntry: RecentRepo = settings.data?.recentRepos.find(
+    (r) => r.path === repoPath,
+  ) ?? {
+    path: repoPath,
+    name: repoName ?? repoPath,
+    lastOpenedAt: "",
+  };
 
   const canGh = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
@@ -78,13 +91,6 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     } catch (e) {
       onError(e);
     }
-  }
-
-  function remove() {
-    removeRecent.mutate(repoPath, {
-      onSuccess: () => closeRepo(),
-      onError,
-    });
   }
 
   return (
@@ -157,15 +163,22 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <LinkIcon />
           Change remote URL…
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setAliasTarget(repoEntry)}>
+          <TagSimpleIcon />
+          {repoEntry.alias ? "Change alias…" : "Create alias…"}
+        </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => copyText(repoPath, "Repository path copied")}
         >
           <CopyIcon />
           Copy repository path
         </DropdownMenuItem>
-        <DropdownMenuItem variant="destructive" onClick={remove}>
+        <DropdownMenuItem
+          variant="destructive"
+          onClick={() => setRemoveTarget(repoEntry)}
+        >
           <TrashIcon />
-          Remove from list
+          Remove…
         </DropdownMenuItem>
       </DropdownMenuContent>
       <RepoAutomationsDialog
@@ -182,6 +195,19 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={statsOpen}
         onOpenChange={setStatsOpen}
+      />
+      <RepoAliasDialog
+        key={
+          aliasTarget
+            ? `${aliasTarget.path}:${aliasTarget.alias ?? ""}`
+            : "none"
+        }
+        repo={aliasTarget}
+        onClose={() => setAliasTarget(null)}
+      />
+      <RemoveRepoDialog
+        repo={removeTarget}
+        onClose={() => setRemoveTarget(null)}
       />
       <Dialog open={forkOpen} onOpenChange={setForkOpen}>
         <DialogContent>
