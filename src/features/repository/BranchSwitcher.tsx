@@ -105,6 +105,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [discardAllOpen, setDiscardAllOpen] = useState(false);
+  const [stashAllOpen, setStashAllOpen] = useState(false);
+  const [stashPopOpen, setStashPopOpen] = useState(false);
   const [stashesOpen, setStashesOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
   const [pickerBranch, setPickerBranch] = useState("");
@@ -125,6 +127,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     return b.lastCommitDate.localeCompare(a.lastCommitDate);
   });
   const stashes = stashCount.data ?? 0;
+  const hasChanges = (status.data?.entries.length ?? 0) > 0;
   // Bases offered when creating a branch: the current branch and/or the
   // default branch (deduped — they're the same when you're on the default).
   const baseOptions = [
@@ -138,7 +141,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   function switchTo(name: string) {
     setOpen(false);
     // with work in progress, let the user choose to bring or stash it
-    if ((status.data?.entries.length ?? 0) > 0) {
+    if (hasChanges) {
       setSwitchTarget(name);
       return;
     }
@@ -387,6 +390,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               </div>
               <div className="border-t py-1">
                 <MenuRow
+                  disabled={!hasChanges}
                   onClick={() => {
                     setOpen(false);
                     setDiscardAllOpen(true);
@@ -395,27 +399,22 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   Discard all changes…
                 </MenuRow>
                 <MenuRow
+                  disabled={!hasChanges}
                   onClick={() => {
                     setOpen(false);
-                    stashAll.mutate(undefined, {
-                      onSuccess: () => toast.success("Changes stashed"),
-                      onError,
-                    });
+                    setStashAllOpen(true);
                   }}
                 >
-                  Stash all changes
+                  Stash all changes…
                 </MenuRow>
                 <MenuRow
                   disabled={stashes === 0}
                   onClick={() => {
                     setOpen(false);
-                    stashPop.mutate(undefined, {
-                      onSuccess: () => toast.success("Stash restored"),
-                      onError,
-                    });
+                    setStashPopOpen(true);
                   }}
                 >
-                  Pop latest stash{stashes > 0 ? ` (${stashes})` : ""}
+                  Pop latest stash{stashes > 0 ? ` (${stashes})` : ""}…
                 </MenuRow>
                 <MenuRow
                   disabled={stashes === 0}
@@ -646,6 +645,75 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               }
             >
               Discard all
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={stashAllOpen} onOpenChange={setStashAllOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Stash all changes?</DialogTitle>
+            <DialogDescription>
+              Sets your working tree back to the last commit and saves all
+              uncommitted changes — including untracked files — to the stash.
+              "Pop latest stash" restores them.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStashAllOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={stashAll.isPending}
+              onClick={() =>
+                stashAll.mutate(undefined, {
+                  onSuccess: () => {
+                    toast.success("Changes stashed");
+                    setStashAllOpen(false);
+                  },
+                  onError: (e) => {
+                    onError(e);
+                    setStashAllOpen(false);
+                  },
+                })
+              }
+            >
+              Stash changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={stashPopOpen} onOpenChange={setStashPopOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Pop latest stash?</DialogTitle>
+            <DialogDescription>
+              Applies the most recent stash to your working tree and removes it
+              from the stash list. If applying conflicts, the stash is kept.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStashPopOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={stashPop.isPending}
+              onClick={() =>
+                stashPop.mutate(undefined, {
+                  onSuccess: () => {
+                    toast.success("Stash restored");
+                    setStashPopOpen(false);
+                  },
+                  onError: (e) => {
+                    onError(e);
+                    setStashPopOpen(false);
+                  },
+                })
+              }
+            >
+              Pop stash
             </Button>
           </DialogFooter>
         </DialogContent>
