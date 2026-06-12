@@ -1,5 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import * as api from "./api";
+import type { RepoOp } from "./types";
 
 export const repoKeys = {
   all: (repo: string) => ["repo", repo] as const,
@@ -76,12 +82,20 @@ export function useFileDiff(
   });
 }
 
-const HISTORY_PAGE_SIZE = 200;
+export const HISTORY_PAGE_SIZE = 200;
 
+/** Paged commit log; `data.pages.flat()` is the loaded history. */
 export function useLog(repo: string) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: repoKeys.log(repo),
-    queryFn: () => api.gitLog(repo, HISTORY_PAGE_SIZE, 0),
+    queryFn: ({ pageParam }) => api.gitLog(repo, HISTORY_PAGE_SIZE, pageParam),
+    initialPageParam: 0,
+    // The next page skips everything loaded so far; a short page means
+    // history is exhausted.
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length < HISTORY_PAGE_SIZE
+        ? undefined
+        : allPages.reduce((n, p) => n + p.length, 0),
   });
 }
 
@@ -268,6 +282,56 @@ export function useStage(repo: string) {
   return useRepoMutation(repo, (paths: string[]) => api.gitStage(repo, paths));
 }
 
+export function useRemoteUrl(repo: string, name: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "remote-url", name] as const,
+    queryFn: () => api.gitRemoteUrl(repo, name),
+    enabled,
+  });
+}
+
+export function useSetRemoteUrl(repo: string) {
+  return useRepoMutation(repo, (args: { name: string; url: string }) =>
+    api.gitRemoteSetUrl(repo, args.name, args.url),
+  );
+}
+
+export function useOpState(repo: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "op-state"] as const,
+    queryFn: () => api.gitOpState(repo),
+  });
+}
+
+export function useOpAbort(repo: string) {
+  return useRepoMutation(repo, (op: RepoOp) => api.gitOpAbort(repo, op));
+}
+
+export function useOpContinue(repo: string) {
+  return useRepoMutation(repo, (op: RepoOp) => api.gitOpContinue(repo, op));
+}
+
+export function useFileAtRev(
+  repo: string,
+  rev: string | null,
+  file: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "file-b64", rev ?? "worktree", file] as const,
+    queryFn: () => api.gitFileBase64(repo, rev, file),
+    enabled,
+  });
+}
+
+export function useApplyPatch(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { patch: string; cached: boolean; reverse: boolean }) =>
+      api.gitApplyPatch(repo, args.patch, args.cached, args.reverse),
+  );
+}
+
 export function useUnstage(repo: string) {
   return useRepoMutation(repo, (paths: string[]) =>
     api.gitUnstage(repo, paths),
@@ -403,6 +467,34 @@ export function useStashPop(repo: string) {
   return useRepoMutation(repo, () => api.gitStashPop(repo));
 }
 
+export function useStashList(repo: string, enabled = true) {
+  return useQuery({
+    queryKey: ["repo", repo, "stashes"] as const,
+    queryFn: () => api.gitStashList(repo),
+    enabled,
+  });
+}
+
+export function useStashShow(repo: string, index: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "stash-diff", index ?? -1] as const,
+    queryFn: () => api.gitStashShow(repo, index ?? 0),
+    enabled: index !== null,
+  });
+}
+
+export function useStashApply(repo: string) {
+  return useRepoMutation(repo, (args: { index: number; pop: boolean }) =>
+    api.gitStashApply(repo, args.index, args.pop),
+  );
+}
+
+export function useStashDrop(repo: string) {
+  return useRepoMutation(repo, (index: number) =>
+    api.gitStashDrop(repo, index),
+  );
+}
+
 export function useMergeBranch(repo: string) {
   return useRepoMutation(repo, (args: { branch: string; squash: boolean }) =>
     api.gitMerge(repo, args.branch, args.squash),
@@ -459,6 +551,18 @@ export function useMergePr(repo: string) {
 
 export function useClosePr(repo: string) {
   return useRepoMutation(repo, (number: number) => api.ghPrClose(repo, number));
+}
+
+export function useCheckoutPr(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.ghPrCheckout(repo, number),
+  );
+}
+
+export function useForkRepo(repo: string) {
+  return useRepoMutation(repo, (contributeToParent: boolean) =>
+    api.ghRepoFork(repo, contributeToParent),
+  );
 }
 
 export function useReadyPr(repo: string) {

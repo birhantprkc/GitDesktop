@@ -3,7 +3,9 @@ import {
   CopyIcon,
   DotsThreeVerticalIcon,
   FolderOpenIcon,
+  GitForkIcon,
   LightningIcon,
+  LinkIcon,
   PencilSimpleIcon,
   TerminalIcon,
   TrashIcon,
@@ -11,7 +13,16 @@ import {
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +30,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Radio, RadioGroup } from "@/components/ui/radio-group";
+import { Spinner } from "@/components/ui/spinner";
 import { RepoAutomationsDialog } from "@/features/automations/RepoAutomationsDialog";
 import { copyText } from "@/lib/clipboard";
 import {
@@ -27,17 +40,24 @@ import {
   openWithDefault,
   openWithProgram,
 } from "@/lib/git/api";
-import { useGhStatus } from "@/lib/git/queries";
+import { useForkRepo, useGhStatus } from "@/lib/git/queries";
 import { useRemoveRecentRepo, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { RemoteUrlDialog } from "./RemoteUrlDialog";
 
 export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
   const settings = useSettings();
   const removeRecent = useRemoveRecentRepo();
   const closeRepo = useUiStore((s) => s.closeRepo);
+  const fork = useForkRepo(repoPath);
   const [automationsOpen, setAutomationsOpen] = useState(false);
+  const [forkOpen, setForkOpen] = useState(false);
+  const [forkIntent, setForkIntent] = useState<"contribute" | "own">(
+    "contribute",
+  );
+  const [remoteUrlOpen, setRemoteUrlOpen] = useState(false);
 
   const canGh = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
@@ -88,6 +108,10 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
               <WarningCircleIcon />
               Create issue on GitHub
             </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setForkOpen(true)}>
+              <GitForkIcon />
+              Fork repository…
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
           </>
         )}
@@ -122,6 +146,10 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <LightningIcon />
           Automations…
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setRemoteUrlOpen(true)}>
+          <LinkIcon />
+          Change remote URL…
+        </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => copyText(repoPath, "Repository path copied")}
         >
@@ -138,6 +166,84 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         open={automationsOpen}
         onOpenChange={setAutomationsOpen}
       />
+      <RemoteUrlDialog
+        repoPath={repoPath}
+        open={remoteUrlOpen}
+        onOpenChange={setRemoteUrlOpen}
+      />
+      <Dialog open={forkOpen} onOpenChange={setForkOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Fork this repository?</DialogTitle>
+            <DialogDescription>
+              Creates a fork of {gh.data?.repo ?? "this repository"} under your
+              GitHub account and rewires the remotes: your fork becomes{" "}
+              <span className="font-mono">origin</span> and the original
+              repository becomes <span className="font-mono">upstream</span>.
+              Pushes go to your fork either way.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <p className="text-xs font-medium">I'll be using this fork…</p>
+            <RadioGroup
+              value={forkIntent}
+              onValueChange={(v) => setForkIntent(v as "contribute" | "own")}
+            >
+              <label className="flex cursor-pointer items-start gap-2 text-xs">
+                <Radio value="contribute" className="mt-0.5" />
+                <span>
+                  <span className="font-medium">
+                    To contribute to the parent repository
+                  </span>
+                  <span className="mt-0.5 block text-muted-foreground">
+                    Pull requests, issues, and "View on GitHub" keep targeting{" "}
+                    {gh.data?.repo ?? "the original repository"}.
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 text-xs">
+                <Radio value="own" className="mt-0.5" />
+                <span>
+                  <span className="font-medium">For my own purposes</span>
+                  <span className="mt-0.5 block text-muted-foreground">
+                    Pull requests, issues, and "View on GitHub" target your fork
+                    instead.
+                  </span>
+                </span>
+              </label>
+            </RadioGroup>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setForkOpen(false)}
+              disabled={fork.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={fork.isPending}
+              onClick={() =>
+                fork.mutate(forkIntent === "contribute", {
+                  onSuccess: (url) => {
+                    setForkOpen(false);
+                    toast.success(
+                      url
+                        ? "Forked — your fork is now origin"
+                        : "Fork already existed — remotes updated",
+                      { description: url || undefined },
+                    );
+                  },
+                  onError,
+                })
+              }
+            >
+              {fork.isPending && <Spinner data-icon="inline-start" />}
+              Fork repository
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DropdownMenu>
   );
 }

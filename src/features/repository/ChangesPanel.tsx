@@ -37,6 +37,7 @@ import type { ChangeKind, FileEntry } from "@/lib/git/types";
 import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { ConflictBanner } from "./ConflictBanner";
 import { FileRow } from "./FileRow";
 
 /**
@@ -219,8 +220,13 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     );
   }
 
+  const conflictedCount = entries.filter(
+    (e) => e.unstaged === "conflicted" || e.staged === "conflicted",
+  ).length;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <ConflictBanner repoPath={repoPath} conflictedCount={conflictedCount} />
       {entries.length === 0 ? (
         <div className="flex-1 px-4 py-8 text-center">
           <p className="text-xs font-medium">No local changes</p>

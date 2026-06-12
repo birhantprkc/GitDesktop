@@ -1,6 +1,72 @@
+use tauri::State;
+
 use crate::error::{AppError, AppResult};
-use crate::git::runner::{run_git, run_git_raw, DEFAULT_TIMEOUT};
+use crate::git::runner::{run_git, run_git_mutating_input, run_git_raw, DEFAULT_TIMEOUT};
 use crate::git::types::{DiffStatEntry, FileDiff, StagedDiff};
+use crate::state::AppState;
+
+/// Cap on file bytes shipped for image previews.
+const IMAGE_MAX_BYTES: usize = 20_000_000;
+
+/// Raw file bytes (base64) at a revision, or from the working tree when
+/// `rev` is None. `None` result = the file doesn't exist there (e.g. the
+/// old side of an added file). Drives the image diff view.
+#[tauri::command]
+pub async fn git_file_base64(
+    repo_path: String,
+    rev: Option<String>,
+    file_path: String,
+) -> AppResult<Option<String>> {
+    use base64::Engine;
+    let bytes: Option<Vec<u8>> = match rev {
+        Some(rev) => {
+            if rev.is_empty() || rev.starts_with('-') {
+                return Err(AppError::InvalidArgument(format!("invalid rev: {rev}")));
+            }
+            let spec = format!("{rev}:{file_path}");
+            let out = run_git_raw(Some(&repo_path), &["show", &spec], DEFAULT_TIMEOUT).await?;
+            // Nonzero exit = the path doesn't exist at that revision.
+            (out.code == 0).then_some(out.stdout)
+        }
+        None => tokio::fs::read(std::path::Path::new(&repo_path).join(&file_path))
+            .await
+            .ok(),
+    };
+    if let Some(b) = &bytes {
+        if b.len() > IMAGE_MAX_BYTES {
+            return Err(AppError::InvalidArgument(
+                "file too large to preview".into(),
+            ));
+        }
+    }
+    Ok(bytes.map(|b| base64::engine::general_purpose::STANDARD.encode(b)))
+}
+
+/// Applies a patch — typically a single hunk cut out of a working-tree diff.
+/// stage hunk = `cached`, unstage hunk = `cached + reverse`,
+/// discard hunk = `reverse` (working tree).
+#[tauri::command]
+pub async fn git_apply_patch(
+    state: State<'_, AppState>,
+    repo_path: String,
+    patch: String,
+    cached: bool,
+    reverse: bool,
+) -> AppResult<()> {
+    if patch.trim().is_empty() {
+        return Err(AppError::InvalidArgument("empty patch".into()));
+    }
+    let mut args = vec!["apply", "--whitespace=nowarn"];
+    if cached {
+        args.push("--cached");
+    }
+    if reverse {
+        args.push("--reverse");
+    }
+    args.push("-"); // read the patch from stdin
+    run_git_mutating_input(&state, &repo_path, &args, Some(&patch), DEFAULT_TIMEOUT).await?;
+    Ok(())
+}
 
 /// Cap on diff text shipped to the webview for rendering.
 const VIEWER_MAX_BYTES: usize = 1_000_000;
@@ -232,5 +298,78 @@ mod tests {
         let (out, truncated) = truncate_at_file_boundary("diff --git a/a b/a\n+x\n".into(), 1000);
         assert!(!truncated);
         assert!(out.contains("+x"));
+    }
+
+    /// End-to-end check of the hunk-staging plumbing: a single hunk cut out
+    /// of a two-hunk diff stages via stdin `git apply --cached` and unstages
+    /// via `--reverse`. Requires git on PATH (true for this project's dev
+    /// environment).
+    #[tokio::test]
+    async fn apply_patch_stages_and_unstages_a_single_hunk() {
+        use crate::git::runner::run_git_input;
+
+        let dir = std::env::temp_dir().join(format!(
+            "gd-apply-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.to_string_lossy().into_owned();
+        let git = |args: Vec<&'static str>| {
+            let repo = repo.clone();
+            async move { run_git(Some(&repo), &args, DEFAULT_TIMEOUT).await.unwrap() }
+        };
+
+        git(vec!["init"]).await;
+        git(vec!["config", "user.email", "t@t"]).await;
+        git(vec!["config", "user.name", "t"]).await;
+        // Two edit sites far enough apart (> 6 context lines) to force
+        // two separate hunks.
+        let base: Vec<String> = (1..=30).map(|i| format!("line {i}")).collect();
+        let file = dir.join("file.txt");
+        std::fs::write(&file, base.join("\n") + "\n").unwrap();
+        git(vec!["add", "."]).await;
+        git(vec!["commit", "-m", "base"]).await;
+        let mut edited = base.clone();
+        edited[2] = "line 3 EDITED".into();
+        edited[24] = "line 25 EDITED".into();
+        std::fs::write(&file, edited.join("\n") + "\n").unwrap();
+
+        let diff = git(vec!["diff", "--no-color"]).await.stdout_lossy();
+        let first_hunk_at = diff.find("\n@@").unwrap() + 1;
+        let second_hunk_at = diff[first_hunk_at..].find("\n@@").unwrap() + first_hunk_at + 1;
+        let patch = format!("{}{}", &diff[..first_hunk_at], &diff[first_hunk_at..second_hunk_at]);
+
+        // Stage only the first hunk.
+        run_git_input(
+            Some(&repo),
+            &["apply", "--whitespace=nowarn", "--cached", "-"],
+            Some(&patch),
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        let staged = git(vec!["diff", "--cached", "--no-color"]).await.stdout_lossy();
+        let unstaged = git(vec!["diff", "--no-color"]).await.stdout_lossy();
+        assert!(staged.contains("line 3 EDITED"));
+        assert!(!staged.contains("line 25 EDITED"));
+        assert!(unstaged.contains("line 25 EDITED"));
+
+        // Unstage it again.
+        run_git_input(
+            Some(&repo),
+            &["apply", "--whitespace=nowarn", "--cached", "--reverse", "-"],
+            Some(&patch),
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        let staged = git(vec!["diff", "--cached", "--no-color"]).await.stdout_lossy();
+        assert!(staged.trim().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

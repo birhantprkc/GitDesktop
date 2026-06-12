@@ -113,7 +113,12 @@ export function BranchDiffView({
         </aside>
         <main className="min-w-0 flex-1">
           {effectivePath ? (
-            <DiffSurface filePath={effectivePath} diff={diff} />
+            <DiffSurface
+              filePath={effectivePath}
+              diff={diff}
+              repoPath={repoPath}
+              imageRevs={{ old: base, new: compare }}
+            />
           ) : (
             <DiffPlaceholder message="Select a file to see its changes" />
           )}

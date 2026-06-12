@@ -1,11 +1,19 @@
-import { GitPullRequestIcon, PlusIcon } from "@phosphor-icons/react";
+import { Popover } from "@base-ui/react/popover";
+import {
+  FunnelIcon,
+  GitPullRequestIcon,
+  PlusIcon,
+} from "@phosphor-icons/react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PrStateFilter } from "@/lib/git/api";
 import { useGhStatus, usePrList } from "@/lib/git/queries";
+import type { LocalPr } from "@/lib/pulls/local";
 import { useLocalPrs } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
@@ -23,10 +31,79 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   const selectedPr = useUiStore((s) => s.selectedPr);
   const selectPr = useUiStore((s) => s.selectPr);
   const [createOpen, setCreateOpen] = useState(false);
+  const [filterText, setFilterText] = useState("");
+  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
+  const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set());
 
-  const visibleLocal = (localPrs.data ?? []).filter((p) =>
+  const stateLocal = (localPrs.data ?? []).filter((p) =>
     stateFilter === "open" ? p.status === "open" : p.status !== "open",
   );
+  const stateRemote = prList.data ?? [];
+
+  // Filter options come from everything in the current state tab.
+  const authors = [
+    ...new Set(stateRemote.flatMap((p) => (p.author ? [p.author.login] : []))),
+  ].sort();
+  const labels = [
+    ...new Set([
+      ...stateRemote.flatMap((p) => p.labels.map((l) => l.name)),
+      ...stateLocal.flatMap((p) => p.labels),
+    ]),
+  ].sort();
+
+  const query = filterText.trim().toLowerCase();
+
+  function matchesLocal(pr: LocalPr): boolean {
+    if (
+      query &&
+      !pr.title.toLowerCase().includes(query) &&
+      !pr.labels.some((l) => l.toLowerCase().includes(query))
+    ) {
+      return false;
+    }
+    // Local PRs have no GitHub author — an author filter excludes them.
+    if (authorFilter.size > 0) return false;
+    if (labelFilter.size > 0 && !pr.labels.some((l) => labelFilter.has(l))) {
+      return false;
+    }
+    return true;
+  }
+
+  const visibleLocal = stateLocal.filter(matchesLocal);
+  const visibleRemote = stateRemote.filter((pr) => {
+    const author = pr.author?.login ?? "";
+    if (
+      query &&
+      !pr.title.toLowerCase().includes(query) &&
+      !`#${pr.number}`.includes(query) &&
+      !author.toLowerCase().includes(query) &&
+      !pr.labels.some((l) => l.name.toLowerCase().includes(query))
+    ) {
+      return false;
+    }
+    if (authorFilter.size > 0 && !authorFilter.has(author)) return false;
+    if (
+      labelFilter.size > 0 &&
+      !pr.labels.some((l) => labelFilter.has(l.name))
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  const activeFilterCount = authorFilter.size + labelFilter.size;
+
+  function toggle(
+    set: Set<string>,
+    update: (next: Set<string>) => void,
+    value: string,
+    on: boolean,
+  ) {
+    const next = new Set(set);
+    if (on) next.add(value);
+    else next.delete(value);
+    update(next);
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -42,6 +119,103 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
             {s === "open" ? "Open" : "Closed"}
           </Button>
         ))}
+        <Popover.Root>
+          <Popover.Trigger
+            render={
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label={
+                  activeFilterCount > 0
+                    ? `Filter by author or label (${activeFilterCount} active)`
+                    : "Filter by author or label"
+                }
+                className="relative ml-auto"
+              />
+            }
+          >
+            <FunnelIcon />
+            {activeFilterCount > 0 && (
+              <span
+                aria-hidden
+                className="absolute -top-1 -right-1 flex size-3.5 items-center justify-center bg-primary text-[9px] font-medium text-primary-foreground tabular-nums"
+              >
+                {activeFilterCount}
+              </span>
+            )}
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Positioner
+              align="end"
+              sideOffset={4}
+              className="isolate z-50"
+            >
+              <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
+                <p className="px-1 pb-1.5 text-xs font-medium">Author</p>
+                {authors.length === 0 && (
+                  <p className="px-1 pb-1 text-xs text-muted-foreground">
+                    No authors to filter by.
+                  </p>
+                )}
+                {authors.map((a) => (
+                  <label
+                    key={a}
+                    className="flex cursor-pointer items-center gap-2 rounded-none px-1 py-1.5 text-xs hover:bg-muted/60"
+                  >
+                    <Checkbox
+                      checked={authorFilter.has(a)}
+                      onCheckedChange={(v) =>
+                        toggle(authorFilter, setAuthorFilter, a, v === true)
+                      }
+                    />
+                    <span className="flex-1 truncate">{a}</span>
+                    <span className="text-muted-foreground">
+                      ({stateRemote.filter((p) => p.author?.login === a).length}
+                      )
+                    </span>
+                  </label>
+                ))}
+                <p className="px-1 pt-2 pb-1.5 text-xs font-medium">Label</p>
+                {labels.length === 0 && (
+                  <p className="px-1 pb-1 text-xs text-muted-foreground">
+                    No labels to filter by.
+                  </p>
+                )}
+                {labels.map((l) => (
+                  <label
+                    key={l}
+                    className="flex cursor-pointer items-center gap-2 rounded-none px-1 py-1.5 text-xs hover:bg-muted/60"
+                  >
+                    <Checkbox
+                      checked={labelFilter.has(l)}
+                      onCheckedChange={(v) =>
+                        toggle(labelFilter, setLabelFilter, l, v === true)
+                      }
+                    />
+                    <span className="flex-1 truncate">{l}</span>
+                    <span className="text-muted-foreground">
+                      (
+                      {stateRemote.filter((p) =>
+                        p.labels.some((x) => x.name === l),
+                      ).length +
+                        stateLocal.filter((p) => p.labels.includes(l)).length}
+                      )
+                    </span>
+                  </label>
+                ))}
+              </Popover.Popup>
+            </Popover.Positioner>
+          </Popover.Portal>
+        </Popover.Root>
+      </div>
+      <div className="border-b p-2">
+        <Input
+          value={filterText}
+          onChange={(e) => setFilterText(e.target.value)}
+          placeholder="Search by title, #, author, or label"
+          className="h-7"
+          autoComplete="off"
+        />
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex items-center justify-between px-3 pt-2 pb-1">
@@ -58,7 +232,9 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
         </div>
         {visibleLocal.length === 0 ? (
           <p className="px-3 py-2 text-xs text-muted-foreground">
-            No {stateFilter} local pull requests.
+            {stateLocal.length > 0
+              ? "No local pull requests match the filter."
+              : `No ${stateFilter} local pull requests.`}
           </p>
         ) : (
           visibleLocal.map((pr) => {
@@ -113,12 +289,14 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
             <Skeleton className="h-9 w-full" />
             <Skeleton className="h-9 w-full" />
           </div>
-        ) : (prList.data?.length ?? 0) === 0 ? (
+        ) : visibleRemote.length === 0 ? (
           <p className="px-3 py-4 text-xs text-muted-foreground">
-            No {stateFilter} pull requests.
+            {stateRemote.length > 0
+              ? "No pull requests match the filter."
+              : `No ${stateFilter} pull requests.`}
           </p>
         ) : (
-          prList.data?.map((pr) => {
+          visibleRemote.map((pr) => {
             const active =
               selectedPr?.kind === "remote" &&
               selectedPr.id === String(pr.number);
@@ -147,7 +325,8 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
                   )}
                 </p>
                 <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
-                  #{pr.number} · {pr.headRefName} → {pr.baseRefName}
+                  #{pr.number} · {pr.author ? `${pr.author.login} · ` : ""}
+                  {pr.headRefName} → {pr.baseRefName}
                 </p>
               </button>
             );

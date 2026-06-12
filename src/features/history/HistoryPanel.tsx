@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -27,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import { gitCommitDetails } from "@/lib/git/api";
@@ -78,6 +80,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   // Hashes to copy, oldest-first, and the chosen destination branch.
   const [pickOntoHashes, setPickOntoHashes] = useState<string[] | null>(null);
   const [pickOntoBranch, setPickOntoBranch] = useState("");
+  const [filterText, setFilterText] = useState("");
 
   const onError = (e: unknown) => toastError(e);
 
@@ -131,7 +134,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   // GitHub Desktop-style undo: offered while the latest commit hasn't been
   // pushed anywhere (no upstream, or we're ahead of it).
   const head = status.data?.branch;
-  const lastCommit = log.data?.[0];
+  const lastCommit = log.data?.pages[0]?.[0];
   const canUndo = Boolean(
     lastCommit && head && (head.upstream === null || head.ahead > 0),
   );
@@ -165,7 +168,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     );
   }
 
-  const commits = log.data ?? [];
+  const commits = log.data?.pages.flat() ?? [];
   if (commits.length === 0) {
     return (
       <p className="flex-1 px-2 py-8 text-center text-xs text-muted-foreground">
@@ -174,12 +177,24 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     );
   }
 
+  // Client-side filter over the loaded pages (subject, author, or SHA).
+  const query = filterText.trim().toLowerCase();
+  const visibleCommits = query
+    ? commits.filter(
+        (c) =>
+          c.subject.toLowerCase().includes(query) ||
+          c.author.toLowerCase().includes(query) ||
+          c.hash.toLowerCase().startsWith(query),
+      )
+    : commits;
+
   function onRowClick(e: React.MouseEvent, index: number, hash: string) {
     // Keep the diff panel on the clicked commit regardless of modifiers.
     selectCommit(hash);
     if (e.shiftKey && anchorIndex !== null) {
+      // Indices are positions in the rendered (possibly filtered) list.
       const [a, b] = [anchorIndex, index].sort((x, y) => x - y);
-      setSelected(new Set(commits.slice(a, b + 1).map((c) => c.hash)));
+      setSelected(new Set(visibleCommits.slice(a, b + 1).map((c) => c.hash)));
     } else if (e.ctrlKey || e.metaKey) {
       const next = new Set(selected);
       if (next.has(hash)) {
@@ -262,9 +277,23 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
           </Button>
         </div>
       )}
+      <div className="border-b p-2">
+        <Input
+          value={filterText}
+          onChange={(e) => setFilterText(e.target.value)}
+          placeholder="Filter by subject, author, or SHA"
+          className="h-7"
+          autoComplete="off"
+        />
+      </div>
       <ScrollArea className="min-h-0 flex-1">
         <div>
-          {commits.map((commit, index) => (
+          {visibleCommits.length === 0 && (
+            <p className="px-3 py-8 text-center text-xs text-muted-foreground">
+              No loaded commits match the filter
+            </p>
+          )}
+          {visibleCommits.map((commit, index) => (
             <ContextMenu key={commit.hash}>
               <ContextMenuTrigger
                 render={
@@ -375,10 +404,20 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
               </ContextMenuContent>
             </ContextMenu>
           ))}
-          {commits.length >= 200 && (
-            <p className="px-3 py-2 text-center text-[11px] text-muted-foreground">
-              Showing the latest 200 commits
-            </p>
+          {log.hasNextPage && (
+            <div className="px-3 py-2 text-center">
+              <Button
+                variant="ghost"
+                size="xs"
+                className="text-muted-foreground"
+                disabled={log.isFetchingNextPage}
+                onClick={() => log.fetchNextPage()}
+              >
+                {log.isFetchingNextPage && <Spinner data-icon="inline-start" />}
+                Load more ({commits.length} loaded
+                {query ? " — the filter only searches these" : ""})
+              </Button>
+            </div>
           )}
         </div>
       </ScrollArea>

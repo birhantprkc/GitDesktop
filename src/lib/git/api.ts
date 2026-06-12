@@ -15,9 +15,12 @@ import type {
   PrRef,
   RepoInfo,
   RepoLabel,
+  RepoOp,
+  RepoOpState,
   RepoOwner,
   RepoStatus,
   StagedDiff,
+  StashEntry,
 } from "./types";
 
 export const checkGitInstalled = () => invoke<GitInfo>("check_git_installed");
@@ -103,6 +106,41 @@ export const gitCommit = (
     body: body ?? null,
     amend,
   });
+
+export const gitStashList = (repoPath: string) =>
+  invoke<StashEntry[]>("git_stash_list", { repoPath });
+
+export const gitStashShow = (repoPath: string, index: number) =>
+  invoke<FileDiff>("git_stash_show", { repoPath, index });
+
+export const gitStashApply = (repoPath: string, index: number, pop: boolean) =>
+  invoke<void>("git_stash_apply", { repoPath, index, pop });
+
+export const gitStashDrop = (repoPath: string, index: number) =>
+  invoke<void>("git_stash_drop", { repoPath, index });
+
+export const gitOpState = (repoPath: string) =>
+  invoke<RepoOpState>("git_op_state", { repoPath });
+
+export const gitOpAbort = (repoPath: string, op: RepoOp) =>
+  invoke<void>("git_op_abort", { repoPath, op });
+
+export const gitOpContinue = (repoPath: string, op: RepoOp) =>
+  invoke<void>("git_op_continue", { repoPath, op });
+
+/** Base64 file content at a rev (null rev = working tree; null result = absent). */
+export const gitFileBase64 = (
+  repoPath: string,
+  rev: string | null,
+  filePath: string,
+) => invoke<string | null>("git_file_base64", { repoPath, rev, filePath });
+
+export const gitApplyPatch = (
+  repoPath: string,
+  patch: string,
+  cached: boolean,
+  reverse: boolean,
+) => invoke<void>("git_apply_patch", { repoPath, patch, cached, reverse });
 
 export const gitCommitAuthors = (repoPath: string) =>
   invoke<CommitAuthor[]>("git_commit_authors", { repoPath });
@@ -217,6 +255,12 @@ export const gitPush = (
 
 export const gitRemotes = (repoPath: string) =>
   invoke<string[]>("git_remotes", { repoPath });
+
+export const gitRemoteUrl = (repoPath: string, name: string) =>
+  invoke<string>("git_remote_url", { repoPath, name });
+
+export const gitRemoteSetUrl = (repoPath: string, name: string, url: string) =>
+  invoke<void>("git_remote_set_url", { repoPath, name, url });
 
 export const gitUndoCommit = (repoPath: string) =>
   invoke<void>("git_undo_commit", { repoPath });
@@ -376,6 +420,13 @@ export const ghPrMerge = (
 
 export const ghPrClose = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_close", { repoPath, number });
+
+export const ghPrCheckout = (repoPath: string, number: number) =>
+  invoke<void>("gh_pr_checkout", { repoPath, number });
+
+/** Returns the fork's URL ("" when the fork already existed). */
+export const ghRepoFork = (repoPath: string, contributeToParent: boolean) =>
+  invoke<string>("gh_repo_fork", { repoPath, contributeToParent });
 
 export const ghPrReady = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_ready", { repoPath, number });

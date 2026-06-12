@@ -4,6 +4,7 @@ import {
   CaretDownIcon,
   CheckCircleIcon,
   CircleIcon,
+  GitBranchIcon,
   GitMergeIcon,
   PencilSimpleIcon,
   QuotesIcon,
@@ -41,6 +42,7 @@ import { required, useAppForm } from "@/lib/form";
 import { ghPrDiff, type MergeStrategy, type ReviewAction } from "@/lib/git/api";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
+  useCheckoutPr,
   useClosePr,
   useCommentPr,
   useEditPr,
@@ -50,6 +52,7 @@ import {
   usePrDiff,
   useReadyPr,
   useRepoLabels,
+  useRepoStatus,
   useReviewPr,
 } from "@/lib/git/queries";
 import type { PrThreadOut, RepoLabel } from "@/lib/git/types";
@@ -116,6 +119,8 @@ export function RemotePrView({
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
   const comment = useCommentPr(repoPath);
+  const checkout = useCheckoutPr(repoPath);
+  const repoStatus = useRepoStatus(repoPath);
   const mergePr = useMergePr(repoPath);
   const closePr = useClosePr(repoPath);
   const readyPr = useReadyPr(repoPath);
@@ -312,6 +317,39 @@ export function RemotePrView({
             </span>
           </h2>
           <span className="flex-1" />
+          {isOpen &&
+            (repoStatus.data?.branch?.name === pr.headRefName ? (
+              <Button
+                variant="outline"
+                size="xs"
+                disabled
+                title={`${pr.headRefName} is the current branch`}
+              >
+                <CheckCircleIcon data-icon="inline-start" />
+                Checked out
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={checkout.isPending}
+                onClick={() =>
+                  checkout.mutate(number, {
+                    onSuccess: () =>
+                      toast.success(`Checked out ${pr.headRefName}`),
+                    onError,
+                  })
+                }
+                title={`Check out ${pr.headRefName} locally`}
+              >
+                {checkout.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <GitBranchIcon data-icon="inline-start" />
+                )}
+                Checkout
+              </Button>
+            ))}
           {isOpen && (
             <Button
               variant="outline"

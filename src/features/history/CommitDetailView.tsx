@@ -60,7 +60,7 @@ export function CommitDetailView({
   const checkoutCommit = useCheckoutCommit(repoPath);
   const revertCommit = useRevertCommit(repoPath);
   const cherryPick = useCherryPick(repoPath);
-  const isLatest = log.data?.[0]?.hash === hash;
+  const isLatest = log.data?.pages[0]?.[0]?.hash === hash;
   const onError = (e: unknown) => toastError(e);
 
   if (details.isPending || files.isPending) {
@@ -220,7 +220,12 @@ export function CommitDetailView({
         </aside>
         <main className="min-w-0 flex-1">
           {effectivePath ? (
-            <DiffSurface filePath={effectivePath} diff={diff} />
+            <DiffSurface
+              filePath={effectivePath}
+              diff={diff}
+              repoPath={repoPath}
+              imageRevs={{ old: `${hash}~1`, new: hash }}
+            />
           ) : (
             <DiffPlaceholder message="Select a file to see its changes" />
           )}

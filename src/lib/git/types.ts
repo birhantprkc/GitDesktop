@@ -98,6 +98,20 @@ export interface CommitAuthor {
   email: string;
 }
 
+export interface StashEntry {
+  index: number;
+  message: string;
+  date: string;
+}
+
+export interface RepoOpState {
+  merging: boolean;
+  rebasing: boolean;
+  cherryPicking: boolean;
+}
+
+export type RepoOp = "merge" | "rebase" | "cherry-pick";
+
 export interface BranchComparison {
   /** On `compare` but not `base` — what a PR would introduce. */
   ahead: CommitSummary[];
@@ -125,6 +139,8 @@ export interface PrInfo {
   headRefName: string;
   isDraft: boolean;
   state: string;
+  author: { login: string } | null;
+  labels: { name: string }[];
 }
 
 export interface PrCommitOut {

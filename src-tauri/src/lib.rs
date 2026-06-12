@@ -13,6 +13,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
@@ -31,6 +32,8 @@ pub fn run() {
             git::branches::git_default_branch,
             git::diff::git_diff_file,
             git::diff::git_staged_diff,
+            git::diff::git_apply_patch,
+            git::diff::git_file_base64,
             git::stage::git_stage,
             git::stage::git_unstage,
             git::commit::git_commit,
@@ -54,8 +57,15 @@ pub fn run() {
             git::ops::git_stash_all,
             git::ops::git_stash_pop,
             git::ops::git_stash_count,
+            git::ops::git_stash_list,
+            git::ops::git_stash_show,
+            git::ops::git_stash_apply,
+            git::ops::git_stash_drop,
             git::ops::git_merge,
             git::ops::git_rebase,
+            git::ops::git_op_state,
+            git::ops::git_op_abort,
+            git::ops::git_op_continue,
             git::ops::git_merge_local_pr,
             git::compare::git_compare_branches,
             git::compare::git_branch_diff_files,
@@ -73,6 +83,8 @@ pub fn run() {
             github::pr::gh_pr_comment,
             github::pr::gh_pr_merge,
             github::pr::gh_pr_close,
+            github::pr::gh_pr_checkout,
+            github::pr::gh_repo_fork,
             github::pr::gh_pr_ready,
             github::pr::gh_pr_edit,
             github::pr::gh_repo_labels,
@@ -88,6 +100,8 @@ pub fn run() {
             git::remote::git_pull,
             git::remote::git_push,
             git::remote::git_remotes,
+            git::remote::git_remote_url,
+            git::remote::git_remote_set_url,
             secrets::set_secret,
             secrets::get_secret,
             secrets::delete_secret,

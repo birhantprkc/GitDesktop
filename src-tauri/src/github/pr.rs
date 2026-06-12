@@ -125,6 +125,18 @@ pub struct PrRef {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PrAuthor {
+    pub login: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrListLabel {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PrInfo {
     pub number: u64,
     pub url: String,
@@ -133,6 +145,11 @@ pub struct PrInfo {
     pub head_ref_name: String,
     pub is_draft: bool,
     pub state: String,
+    // Defaults tolerate callers that don't request these fields.
+    #[serde(default)]
+    pub author: Option<PrAuthor>,
+    #[serde(default)]
+    pub labels: Vec<PrListLabel>,
 }
 
 /// Submits a review: `action` is "approve", "comment", or "request_changes".
@@ -216,6 +233,84 @@ pub async fn gh_pr_close(repo_path: String, number: u64) -> AppResult<()> {
     Ok(())
 }
 
+/// Checks out a PR's branch locally (handles fork-sourced PRs too).
+#[tauri::command]
+pub async fn gh_pr_checkout(repo_path: String, number: u64) -> AppResult<()> {
+    let n = number.to_string();
+    run_gh(
+        Some(&repo_path),
+        &["pr", "checkout", &n],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// "owner/repo" from a remote URL — handles https://host/owner/repo(.git)
+/// and git@host:owner/repo(.git).
+fn name_with_owner_from_url(url: &str) -> Option<String> {
+    let cleaned = url.trim().trim_end_matches('/').trim_end_matches(".git");
+    let mut parts = cleaned.rsplitn(3, ['/', ':']);
+    let repo = parts.next()?;
+    let owner = parts.next()?;
+    if repo.is_empty() || owner.is_empty() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+/// Forks the repo on GitHub. Remotes follow gh's default rewiring (the fork
+/// becomes `origin`, the original `upstream`); `contribute_to_parent`
+/// decides which of the two `gh repo set-default` points at — that's what
+/// PR lists/creation, issues, and "View on GitHub" follow afterwards.
+#[tauri::command]
+pub async fn gh_repo_fork(repo_path: String, contribute_to_parent: bool) -> AppResult<String> {
+    // Before forking, origin still points at the parent.
+    let parent = run_gh(
+        Some(&repo_path),
+        &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        GH_TIMEOUT,
+    )
+    .await?
+    .stdout_lossy()
+    .trim()
+    .to_string();
+
+    let out = run_gh(
+        Some(&repo_path),
+        &["repo", "fork", "--remote"],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    // gh prints progress to stderr; stdout carries the fork's URL when
+    // creation succeeds (empty if the fork already existed).
+    let fork_url = out.stdout_lossy().trim().to_string();
+
+    let target = if contribute_to_parent {
+        parent
+    } else {
+        // After --remote, origin points at the fork.
+        let origin = crate::git::runner::run_git(
+            Some(&repo_path),
+            &["remote", "get-url", "origin"],
+            crate::git::runner::DEFAULT_TIMEOUT,
+        )
+        .await?
+        .stdout_lossy()
+        .trim()
+        .to_string();
+        name_with_owner_from_url(&origin)
+            .ok_or_else(|| AppError::Gh(format!("could not parse fork from {origin}")))?
+    };
+    run_gh(
+        Some(&repo_path),
+        &["repo", "set-default", &target],
+        GH_TIMEOUT,
+    )
+    .await?;
+    Ok(fork_url)
+}
+
 /// Marks a draft PR as ready for review.
 #[tauri::command]
 pub async fn gh_pr_ready(repo_path: String, number: u64) -> AppResult<()> {
@@ -224,7 +319,8 @@ pub async fn gh_pr_ready(repo_path: String, number: u64) -> AppResult<()> {
     Ok(())
 }
 
-const PR_LIST_FIELDS: &str = "number,url,title,baseRefName,headRefName,isDraft,state";
+const PR_LIST_FIELDS: &str =
+    "number,url,title,baseRefName,headRefName,isDraft,state,author,labels";
 
 /// PRs for the Pull Requests list. `state` is "open" or "closed"; closed
 /// uses the search qualifier so merged PRs are included, matching the

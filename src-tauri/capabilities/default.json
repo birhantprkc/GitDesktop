@@ -9,6 +9,7 @@
     "opener:default",
     "store:default",
     "dialog:default",
+    "notification:default",
     {
       "identifier": "http:default",
       "allow": [

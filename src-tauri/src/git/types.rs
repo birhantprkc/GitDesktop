@@ -124,3 +124,19 @@ pub struct CommitAuthor {
     pub name: String,
     pub email: String,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    pub index: u32,
+    pub message: String,
+    pub date: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoOpState {
+    pub merging: bool,
+    pub rebasing: bool,
+    pub cherry_picking: bool,
+}

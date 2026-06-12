@@ -48,6 +48,7 @@ import {
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
+import { StashesDialog } from "./StashesDialog";
 
 type PickerMode = "merge" | "squash" | "rebase";
 
@@ -104,6 +105,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [discardAllOpen, setDiscardAllOpen] = useState(false);
+  const [stashesOpen, setStashesOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
   const [pickerBranch, setPickerBranch] = useState("");
   const [switchTarget, setSwitchTarget] = useState<string | null>(null);
@@ -415,6 +417,15 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 >
                   Pop latest stash{stashes > 0 ? ` (${stashes})` : ""}
                 </MenuRow>
+                <MenuRow
+                  disabled={stashes === 0}
+                  onClick={() => {
+                    setOpen(false);
+                    setStashesOpen(true);
+                  }}
+                >
+                  View stashes{stashes > 0 ? ` (${stashes})` : ""}…
+                </MenuRow>
               </div>
               <div className="border-t py-1">
                 <MenuRow
@@ -598,6 +609,12 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <StashesDialog
+        repoPath={repoPath}
+        open={stashesOpen}
+        onOpenChange={setStashesOpen}
+      />
 
       <Dialog open={discardAllOpen} onOpenChange={setDiscardAllOpen}>
         <DialogContent>

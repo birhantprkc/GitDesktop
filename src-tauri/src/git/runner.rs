@@ -28,6 +28,17 @@ pub async fn run_git_raw(
     args: &[&str],
     timeout: Duration,
 ) -> AppResult<GitOutput> {
+    run_git_raw_input(repo_path, args, None, timeout).await
+}
+
+/// Like `run_git_raw`, but optionally feeds `input` to git's stdin
+/// (e.g. a patch for `git apply -`).
+pub async fn run_git_raw_input(
+    repo_path: Option<&str>,
+    args: &[&str],
+    input: Option<&str>,
+    timeout: Duration,
+) -> AppResult<GitOutput> {
     let mut cmd = Command::new("git");
     cmd.args(["-c", "core.quotePath=false", "-c", "color.ui=false"]);
     cmd.args(args);
@@ -37,23 +48,37 @@ pub async fn run_git_raw(
     cmd.env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("LC_ALL", "C");
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.stdin(if input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     cmd.kill_on_drop(true);
 
-    let output = tokio::time::timeout(timeout, cmd.output())
+    let spawn_err = |e: std::io::Error| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            AppError::GitNotFound
+        } else {
+            AppError::Io(e)
+        }
+    };
+    let run = async {
+        let mut child = cmd.spawn().map_err(spawn_err)?;
+        if let Some(text) = input {
+            use tokio::io::AsyncWriteExt;
+            // Dropping the handle closes the pipe so git sees EOF.
+            let mut stdin = child.stdin.take().expect("stdin was piped");
+            stdin.write_all(text.as_bytes()).await.map_err(AppError::Io)?;
+        }
+        child.wait_with_output().await.map_err(AppError::Io)
+    };
+    let output = tokio::time::timeout(timeout, run)
         .await
-        .map_err(|_| AppError::Timeout(timeout.as_secs()))?
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                AppError::GitNotFound
-            } else {
-                AppError::Io(e)
-            }
-        })?;
+        .map_err(|_| AppError::Timeout(timeout.as_secs()))??;
 
     Ok(GitOutput {
         stdout: output.stdout,
@@ -68,7 +93,17 @@ pub async fn run_git(
     args: &[&str],
     timeout: Duration,
 ) -> AppResult<GitOutput> {
-    let out = run_git_raw(repo_path, args, timeout).await?;
+    run_git_input(repo_path, args, None, timeout).await
+}
+
+/// `run_git` with optional stdin input.
+pub async fn run_git_input(
+    repo_path: Option<&str>,
+    args: &[&str],
+    input: Option<&str>,
+    timeout: Duration,
+) -> AppResult<GitOutput> {
+    let out = run_git_raw_input(repo_path, args, input, timeout).await?;
     if out.code != 0 {
         return Err(AppError::Git {
             code: out.code,
@@ -86,12 +121,23 @@ pub async fn run_git_mutating(
     args: &[&str],
     timeout: Duration,
 ) -> AppResult<GitOutput> {
+    run_git_mutating_input(state, repo_path, args, None, timeout).await
+}
+
+/// `run_git_mutating` with optional stdin input.
+pub async fn run_git_mutating_input(
+    state: &AppState,
+    repo_path: &str,
+    args: &[&str],
+    input: Option<&str>,
+    timeout: Duration,
+) -> AppResult<GitOutput> {
     let lock = state.repo_lock(repo_path).await;
     let _guard = lock.lock().await;
-    match run_git(Some(repo_path), args, timeout).await {
+    match run_git_input(Some(repo_path), args, input, timeout).await {
         Err(AppError::Git { ref stderr, .. }) if stderr.contains("index.lock") => {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            run_git(Some(repo_path), args, timeout).await
+            run_git_input(Some(repo_path), args, input, timeout).await
         }
         other => other,
     }

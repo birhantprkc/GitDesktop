@@ -4,8 +4,85 @@ use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::git::history::validate_hash;
-use crate::git::runner::{run_git_mutating, DEFAULT_TIMEOUT};
+use crate::git::runner::{run_git, run_git_mutating, DEFAULT_TIMEOUT};
+use crate::git::types::{FileDiff, RepoOpState, StashEntry};
 use crate::state::AppState;
+
+/// Whether a file/dir inside .git exists (worktree-safe via --git-path).
+async fn git_path_exists(repo: &str, name: &str) -> bool {
+    let Ok(out) = run_git(
+        Some(repo),
+        &["rev-parse", "--git-path", name],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    else {
+        return false;
+    };
+    let raw = out.stdout_lossy();
+    let path = Path::new(raw.trim());
+    if path.is_absolute() {
+        path.exists()
+    } else {
+        Path::new(repo).join(path).exists()
+    }
+}
+
+/// Which multi-step git operation, if any, is mid-flight — drives the
+/// conflict-resolution banner.
+#[tauri::command]
+pub async fn git_op_state(repo_path: String) -> AppResult<RepoOpState> {
+    Ok(RepoOpState {
+        merging: git_path_exists(&repo_path, "MERGE_HEAD").await,
+        rebasing: git_path_exists(&repo_path, "rebase-merge").await
+            || git_path_exists(&repo_path, "rebase-apply").await,
+        cherry_picking: git_path_exists(&repo_path, "CHERRY_PICK_HEAD").await,
+    })
+}
+
+fn validate_op(op: &str) -> AppResult<()> {
+    match op {
+        "merge" | "rebase" | "cherry-pick" => Ok(()),
+        _ => Err(AppError::InvalidArgument(format!("unknown operation: {op}"))),
+    }
+}
+
+/// Abandons an in-progress merge/rebase/cherry-pick, restoring the
+/// pre-operation state.
+#[tauri::command]
+pub async fn git_op_abort(
+    state: State<'_, AppState>,
+    repo_path: String,
+    op: String,
+) -> AppResult<()> {
+    validate_op(&op)?;
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &[op.as_str(), "--abort"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Finishes an in-progress operation once every conflict is resolved and
+/// staged. A merge concludes with its commit; rebase/cherry-pick continue
+/// with `core.editor=true` so git never tries to open an editor.
+#[tauri::command]
+pub async fn git_op_continue(
+    state: State<'_, AppState>,
+    repo_path: String,
+    op: String,
+) -> AppResult<()> {
+    validate_op(&op)?;
+    let args: Vec<&str> = match op.as_str() {
+        "merge" => vec!["commit", "--no-edit"],
+        other => vec!["-c", "core.editor=true", other, "--continue"],
+    };
+    run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    Ok(())
+}
 
 /// Discards working-tree changes for one file. Tracked files are restored
 /// from the index; untracked files go to the OS recycle bin.
@@ -299,6 +376,102 @@ pub async fn git_stash_count(repo_path: String) -> AppResult<u32> {
     Ok(out.stdout_lossy().lines().count() as u32)
 }
 
+#[tauri::command]
+pub async fn git_stash_list(repo_path: String) -> AppResult<Vec<StashEntry>> {
+    let out = run_git(
+        Some(&repo_path),
+        &["stash", "list", "--format=%gd%x00%s%x00%cI"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let text = out.stdout_lossy();
+    let entries = text
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '\0');
+            let (Some(refname), Some(message), Some(date)) =
+                (parts.next(), parts.next(), parts.next())
+            else {
+                return None;
+            };
+            // %gd is "stash@{N}" — the N is the index every other stash
+            // command addresses.
+            let index: u32 = refname
+                .strip_prefix("stash@{")?
+                .strip_suffix('}')?
+                .parse()
+                .ok()?;
+            Some(StashEntry {
+                index,
+                message: message.to_string(),
+                date: date.to_string(),
+            })
+        })
+        .collect();
+    Ok(entries)
+}
+
+/// The combined diff a stash would re-apply, for previewing it.
+#[tauri::command]
+pub async fn git_stash_show(repo_path: String, index: u32) -> AppResult<FileDiff> {
+    let spec = format!("stash@{{{index}}}");
+    let out = run_git(
+        Some(&repo_path),
+        &[
+            "stash",
+            "show",
+            "-p",
+            "--include-untracked",
+            "--no-color",
+            &spec,
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let text = out.stdout_lossy();
+    let is_binary = text
+        .lines()
+        .any(|l| l.starts_with("Binary files ") && l.ends_with(" differ"));
+    let (text, is_truncated) =
+        crate::git::diff::truncate_at_char_boundary(text, 1_000_000);
+    Ok(FileDiff {
+        file_path: spec,
+        is_binary,
+        is_truncated,
+        text,
+    })
+}
+
+#[tauri::command]
+pub async fn git_stash_apply(
+    state: State<'_, AppState>,
+    repo_path: String,
+    index: u32,
+    pop: bool,
+) -> AppResult<()> {
+    let spec = format!("stash@{{{index}}}");
+    let sub = if pop { "pop" } else { "apply" };
+    run_git_mutating(&state, &repo_path, &["stash", sub, &spec], DEFAULT_TIMEOUT).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_stash_drop(
+    state: State<'_, AppState>,
+    repo_path: String,
+    index: u32,
+) -> AppResult<()> {
+    let spec = format!("stash@{{{index}}}");
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["stash", "drop", &spec],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 fn validate_branch_arg(name: &str) -> AppResult<()> {
     if name.is_empty() || name.starts_with('-') {
         return Err(AppError::InvalidArgument(format!(
@@ -328,9 +501,9 @@ pub async fn git_merge(
     Ok(())
 }
 
-/// Rebases the current branch onto another. We have no conflict-resolution
-/// UI for an in-progress rebase, so on failure the rebase is aborted and the
-/// branch left untouched.
+/// Rebases the current branch onto another. Conflicts leave the rebase in
+/// progress — the changes panel's conflict banner takes it from there
+/// (continue or abort).
 #[tauri::command]
 pub async fn git_rebase(
     state: State<'_, AppState>,
@@ -338,23 +511,14 @@ pub async fn git_rebase(
     branch: String,
 ) -> AppResult<()> {
     validate_branch_arg(&branch)?;
-    match run_git_mutating(&state, &repo_path, &["rebase", &branch], DEFAULT_TIMEOUT).await {
-        Ok(_) => Ok(()),
-        Err(AppError::Git { code, stderr }) => {
-            let _ = run_git_mutating(
-                &state,
-                &repo_path,
-                &["rebase", "--abort"],
-                DEFAULT_TIMEOUT,
-            )
-            .await;
-            Err(AppError::Git {
-                code,
-                stderr: format!("Rebase hit conflicts and was aborted; your branch is unchanged.\n{stderr}"),
-            })
-        }
-        Err(e) => Err(e),
-    }
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["-c", "core.editor=true", "rebase", &branch],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
 }
 
 /// Merges `head` into `base` for a local PR using one of three strategies,

@@ -3,6 +3,7 @@ import { createAiClient } from "@/lib/ai/client";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import type { AiSettings, ReviewMode } from "@/lib/ai/types";
 import { ghPrComment, gitBranchDiff, gitCommitDiff } from "@/lib/git/api";
+import { notifyIfUnfocused } from "@/lib/notify";
 import { listLocalPrs, saveLocalPr } from "@/lib/pulls/local";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
@@ -75,6 +76,7 @@ async function run(event: AutomationEvent): Promise<void> {
       toast.error(`AI ${label} failed: ${e instanceof Error ? e.message : e}`, {
         id: toastId,
       });
+      void notifyIfUnfocused(`AI ${label} failed`, `"${event.title}"`);
     }
   }
 }
@@ -150,6 +152,10 @@ async function deliver(
         onClick: () => useAutomationResults.getState().setOpen(result.id),
       },
     });
+    void notifyIfUnfocused(
+      `AI ${label} ready`,
+      `${event.hash.slice(0, 7)} — ${event.title}`,
+    );
     return;
   }
 
@@ -161,6 +167,10 @@ async function deliver(
     toast.success(`AI ${label} posted on #${event.target.number}`, {
       id: toastId,
     });
+    void notifyIfUnfocused(
+      `AI ${label} posted on #${event.target.number}`,
+      event.title,
+    );
     return;
   }
 
@@ -185,4 +195,5 @@ async function deliver(
     queryKey: ["local-prs", event.repoPath],
   });
   toast.success(`AI ${label} added to "${pr.title}"`, { id: toastId });
+  void notifyIfUnfocused(`AI ${label} finished`, `Local PR "${pr.title}"`);
 }

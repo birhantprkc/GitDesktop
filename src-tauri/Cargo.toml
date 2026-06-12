@@ -29,4 +29,6 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "sync-s
 trash = "5"
 tokio = { version = "1", features = ["process", "time", "macros", "sync"] }
 thiserror = "2"
+base64 = "0.22.1"
+tauri-plugin-notification = "2.3.3"
 
