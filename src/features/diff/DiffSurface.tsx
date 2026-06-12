@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { FileDiff } from "@/lib/git/types";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { DiffPlaceholder } from "./DiffPlaceholder";
+import { diffLang } from "./diff-lang";
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -65,12 +66,16 @@ export function DiffContent({
     const text = data?.text;
     if (!text || data?.isBinary) return null;
     try {
+      const lang = diffLang(filePath);
       const file = DiffFile.createInstance({
-        oldFile: { fileName: filePath },
-        newFile: { fileName: filePath },
+        oldFile: { fileName: filePath, fileLang: lang },
+        newFile: { fileName: filePath, fileLang: lang },
         hunks: [text],
       });
       file.initRaw();
+      // Highlight only files whose language we recognize: with no language
+      // the highlighter auto-detects by running every grammar it has.
+      if (lang) file.initSyntax();
       return file;
     } catch {
       return null;
@@ -133,7 +138,7 @@ export function DiffContent({
             viewMode === "split" ? DiffModeEnum.Split : DiffModeEnum.Unified
           }
           diffViewTheme={isDark ? "dark" : "light"}
-          diffViewHighlight={false}
+          diffViewHighlight
           diffViewWrap
           diffViewFontSize={12}
         />
