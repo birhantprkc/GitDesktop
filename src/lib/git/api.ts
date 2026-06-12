@@ -2,6 +2,7 @@ import { invoke } from "@/lib/tauri/invoke";
 import type {
   Branch,
   BranchComparison,
+  BranchStats,
   CommitAuthor,
   CommitDetails,
   CommitResult,
@@ -20,6 +21,7 @@ import type {
   RepoOp,
   RepoOpState,
   RepoOwner,
+  RepoStats,
   RepoStatus,
   RewriteStep,
   StagedDiff,
@@ -335,6 +337,16 @@ export const gitMergeLocalPr = (
     message,
     strategy,
   });
+
+export const gitRepoStats = (repoPath: string) =>
+  invoke<RepoStats>("git_repo_stats", { repoPath });
+
+/** Stats for the commits/diff `branch` has that `base` doesn't. */
+export const gitBranchStats = (
+  repoPath: string,
+  branch: string,
+  base: string,
+) => invoke<BranchStats>("git_branch_stats", { repoPath, branch, base });
 
 export const gitCompareBranches = (
   repoPath: string,

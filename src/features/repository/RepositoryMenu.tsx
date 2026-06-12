@@ -1,5 +1,6 @@
 import {
   ArrowSquareOutIcon,
+  ChartBarIcon,
   CopyIcon,
   DotsThreeVerticalIcon,
   FolderOpenIcon,
@@ -45,6 +46,7 @@ import { useRemoveRecentRepo, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { RemoteUrlDialog } from "./RemoteUrlDialog";
+import { RepoStatsDialog } from "./RepoStatsDialog";
 
 export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
@@ -58,6 +60,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     "contribute",
   );
   const [remoteUrlOpen, setRemoteUrlOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
 
   const canGh = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
@@ -142,6 +145,10 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => setStatsOpen(true)}>
+          <ChartBarIcon />
+          Repository statistics…
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => setAutomationsOpen(true)}>
           <LightningIcon />
           Automations…
@@ -170,6 +177,11 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={remoteUrlOpen}
         onOpenChange={setRemoteUrlOpen}
+      />
+      <RepoStatsDialog
+        repoPath={repoPath}
+        open={statsOpen}
+        onOpenChange={setStatsOpen}
       />
       <Dialog open={forkOpen} onOpenChange={setForkOpen}>
         <DialogContent>

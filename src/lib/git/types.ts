@@ -114,6 +114,44 @@ export interface StashEntry {
   date: string;
 }
 
+export interface LanguageStat {
+  name: string;
+  files: number;
+  lines: number;
+  bytes: number;
+}
+
+export interface ContributorStat {
+  name: string;
+  commits: number;
+}
+
+export interface RepoStats {
+  commitCount: number;
+  branchCount: number;
+  tagCount: number;
+  contributorCount: number;
+  topContributors: ContributorStat[];
+  firstCommitDate: string | null;
+  lastCommitDate: string | null;
+  trackedFiles: number;
+  trackedBytes: number;
+  gitDirBytes: number;
+  totalLines: number;
+  languages: LanguageStat[];
+}
+
+export interface BranchStats {
+  commitCount: number;
+  contributorCount: number;
+  topContributors: ContributorStat[];
+  firstCommitDate: string | null;
+  lastCommitDate: string | null;
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+}
+
 export interface RepoOpState {
   merging: boolean;
   rebasing: boolean;

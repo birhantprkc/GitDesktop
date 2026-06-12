@@ -163,6 +163,30 @@ export function useUserIdentity(repo: string) {
   });
 }
 
+/** Repo-wide stats; the scan is heavy, so only fetch while the dialog is up. */
+export function useRepoStats(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "stats"] as const,
+    queryFn: () => api.gitRepoStats(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useBranchStats(
+  repo: string,
+  branch: string | null,
+  base: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "branch-stats", branch ?? "", base ?? ""] as const,
+    queryFn: () => api.gitBranchStats(repo, branch ?? "", base ?? ""),
+    enabled: enabled && branch !== null && base !== null && branch !== base,
+    staleTime: 60_000,
+  });
+}
+
 export function useCompareBranches(
   repo: string,
   base: string | null,

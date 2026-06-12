@@ -8,5 +8,6 @@ pub mod remote;
 pub mod repo;
 pub mod runner;
 pub mod stage;
+pub mod stats;
 pub mod status;
 pub mod types;

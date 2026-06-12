@@ -72,6 +72,8 @@ pub fn run() {
             git::ops::git_op_abort,
             git::ops::git_op_continue,
             git::ops::git_merge_local_pr,
+            git::stats::git_repo_stats,
+            git::stats::git_branch_stats,
             git::compare::git_compare_branches,
             git::compare::git_branch_diff_files,
             git::compare::git_branch_file_diff,
