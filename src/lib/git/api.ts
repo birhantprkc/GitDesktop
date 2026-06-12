@@ -8,10 +8,12 @@ import type {
   CommitSummary,
   DiffStatEntry,
   FileDiff,
+  GhAccounts,
   GhStatus,
   GitInfo,
   PrDetails,
   PrInfo,
+  PrPollInfo,
   PrRef,
   RepoInfo,
   RepoLabel,
@@ -19,6 +21,7 @@ import type {
   RepoOpState,
   RepoOwner,
   RepoStatus,
+  RewriteStep,
   StagedDiff,
   StashEntry,
 } from "./types";
@@ -148,6 +151,12 @@ export const gitCommitAuthors = (repoPath: string) =>
 export const gitUserIdentity = (repoPath: string) =>
   invoke<CommitAuthor>("git_user_identity", { repoPath });
 
+export const gitGlobalIdentity = () =>
+  invoke<CommitAuthor>("git_global_identity");
+
+export const gitSetGlobalIdentity = (name: string, email: string) =>
+  invoke<void>("git_set_global_identity", { name, email });
+
 export const gitCommitDiff = (
   repoPath: string,
   hash: string,
@@ -199,6 +208,21 @@ export const gitCherryPickOnto = (
 
 export const gitTag = (repoPath: string, name: string, hash: string) =>
   invoke<void>("git_tag", { repoPath, name, hash });
+
+export const gitRewriteCommits = (
+  repoPath: string,
+  base: string,
+  steps: RewriteStep[],
+) => invoke<void>("git_rewrite_commits", { repoPath, base, steps });
+
+export const gitPushTag = (repoPath: string, name: string) =>
+  invoke<void>("git_push_tag", { repoPath, name });
+
+export const gitDeleteTag = (
+  repoPath: string,
+  name: string,
+  onRemote: boolean,
+) => invoke<void>("git_delete_tag", { repoPath, name, onRemote });
 
 export const appendToGitignore = (repoPath: string, pattern: string) =>
   invoke<void>("append_to_gitignore", { repoPath, pattern });
@@ -420,6 +444,14 @@ export const ghPrMerge = (
 
 export const ghPrClose = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_close", { repoPath, number });
+
+export const ghAccounts = () => invoke<GhAccounts>("gh_accounts");
+
+export const ghSwitchAccount = (login: string) =>
+  invoke<void>("gh_switch_account", { login });
+
+export const ghPrPoll = (repoPath: string) =>
+  invoke<PrPollInfo[]>("gh_pr_poll", { repoPath });
 
 export const ghPrCheckout = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_checkout", { repoPath, number });

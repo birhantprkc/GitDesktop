@@ -1,0 +1,58 @@
+import { withForm } from "@/lib/form";
+import { settingsFormOpts } from "./settings-form";
+
+const CHECK_OPTIONS: Record<string, string> = {
+  off: "Off",
+  mine: "My pull requests only",
+  all: "All open pull requests",
+};
+
+export const NotificationsSection = withForm({
+  ...settingsFormOpts,
+  render: function NotificationsSectionRender({ form }) {
+    return (
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-sm font-medium">Notifications</h2>
+          <p className="text-xs text-muted-foreground">
+            OS notifications fire only while GitDesktop is unfocused — in-app
+            toasts cover the rest. Pull request events are polled about once a
+            minute while a GitHub repository is open.
+          </p>
+        </div>
+        <form.AppField name="notifications.prChecks">
+          {(field) => (
+            <field.SelectField
+              label="CI checks finish (pass or fail)"
+              items={CHECK_OPTIONS}
+            />
+          )}
+        </form.AppField>
+        <form.AppField name="notifications.prActivity">
+          {(field) => (
+            <field.CheckboxField
+              label="Pull requests opened, merged, or closed"
+              className="flex cursor-pointer items-center gap-2 text-xs"
+            />
+          )}
+        </form.AppField>
+        <form.AppField name="notifications.prReviews">
+          {(field) => (
+            <field.CheckboxField
+              label="Reviews on my pull requests"
+              className="flex cursor-pointer items-center gap-2 text-xs"
+            />
+          )}
+        </form.AppField>
+        <form.AppField name="notifications.automations">
+          {(field) => (
+            <field.CheckboxField
+              label="Automation results (AI reviews posted or failed)"
+              className="flex cursor-pointer items-center gap-2 text-xs"
+            />
+          )}
+        </form.AppField>
+      </section>
+    );
+  },
+});

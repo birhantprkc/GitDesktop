@@ -40,7 +40,7 @@ pub async fn git_log(
             &limit_arg,
             "--skip",
             &skip_arg,
-            "--format=%H%x00%s%x00%an%x00%cI",
+            "--format=%H%x00%s%x00%an%x00%cI%x00%D%x00%P",
         ],
         DEFAULT_TIMEOUT,
     )
@@ -55,6 +55,16 @@ pub async fn git_log(
                 subject: parts.next()?.to_string(),
                 author: parts.next()?.to_string(),
                 date: parts.next()?.to_string(),
+                // %D: "HEAD -> main, tag: v1.0, origin/main" — keep the tags.
+                tags: parts
+                    .next()
+                    .unwrap_or("")
+                    .split(", ")
+                    .filter_map(|d| d.strip_prefix("tag: "))
+                    .map(str::to_string)
+                    .collect(),
+                // %P: space-separated parent hashes.
+                is_merge: parts.next().unwrap_or("").split_whitespace().count() > 1,
             })
         })
         .collect())

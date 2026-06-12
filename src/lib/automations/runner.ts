@@ -53,6 +53,7 @@ async function run(event: AutomationEvent): Promise<void> {
   if (rules.length === 0) return;
 
   const settings = await loadSettings();
+  const notify = settings.notifications.automations;
   for (const rule of rules) {
     const label = modeLabel(rule.action);
     const toastId = toast.loading(
@@ -71,12 +72,14 @@ async function run(event: AutomationEvent): Promise<void> {
         continue;
       }
       const body = `**AI ${label} (${settings.reviewAi.model})** · automated\n\n${text}`;
-      await deliver(event, rule.action, body, text, toastId);
+      await deliver(event, rule.action, body, text, toastId, notify);
     } catch (e) {
       toast.error(`AI ${label} failed: ${e instanceof Error ? e.message : e}`, {
         id: toastId,
       });
-      void notifyIfUnfocused(`AI ${label} failed`, `"${event.title}"`);
+      if (notify) {
+        void notifyIfUnfocused(`AI ${label} failed`, `"${event.title}"`);
+      }
     }
   }
 }
@@ -129,6 +132,7 @@ async function deliver(
   body: string,
   rawText: string,
   toastId: string | number,
+  notify: boolean,
 ): Promise<void> {
   const label = modeLabel(mode);
 
@@ -152,10 +156,12 @@ async function deliver(
         onClick: () => useAutomationResults.getState().setOpen(result.id),
       },
     });
-    void notifyIfUnfocused(
-      `AI ${label} ready`,
-      `${event.hash.slice(0, 7)} — ${event.title}`,
-    );
+    if (notify) {
+      void notifyIfUnfocused(
+        `AI ${label} ready`,
+        `${event.hash.slice(0, 7)} — ${event.title}`,
+      );
+    }
     return;
   }
 
@@ -167,10 +173,12 @@ async function deliver(
     toast.success(`AI ${label} posted on #${event.target.number}`, {
       id: toastId,
     });
-    void notifyIfUnfocused(
-      `AI ${label} posted on #${event.target.number}`,
-      event.title,
-    );
+    if (notify) {
+      void notifyIfUnfocused(
+        `AI ${label} posted on #${event.target.number}`,
+        event.title,
+      );
+    }
     return;
   }
 
@@ -195,5 +203,7 @@ async function deliver(
     queryKey: ["local-prs", event.repoPath],
   });
   toast.success(`AI ${label} added to "${pr.title}"`, { id: toastId });
-  void notifyIfUnfocused(`AI ${label} finished`, `Local PR "${pr.title}"`);
+  if (notify) {
+    void notifyIfUnfocused(`AI ${label} finished`, `Local PR "${pr.title}"`);
+  }
 }

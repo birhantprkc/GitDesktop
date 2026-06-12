@@ -5,7 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import * as api from "./api";
-import type { RepoOp } from "./types";
+import type { RepoOp, RewriteStep } from "./types";
 
 export const repoKeys = {
   all: (repo: string) => ["repo", repo] as const,
@@ -138,6 +138,23 @@ export function useCommitAuthors(repo: string) {
   });
 }
 
+export function useGlobalIdentity() {
+  return useQuery({
+    queryKey: ["global-identity"] as const,
+    queryFn: api.gitGlobalIdentity,
+  });
+}
+
+export function useSetGlobalIdentity() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { name: string; email: string }) =>
+      api.gitSetGlobalIdentity(args.name, args.email),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: ["global-identity"] }),
+  });
+}
+
 export function useUserIdentity(repo: string) {
   return useQuery({
     queryKey: ["repo", repo, "user-identity"] as const,
@@ -253,6 +270,24 @@ export function usePrDiff(repo: string, number: number | null) {
     queryKey: ["repo", repo, "pr", number ?? 0, "diff"] as const,
     queryFn: () => api.ghPrDiff(repo, number ?? 0),
     enabled: number !== null,
+  });
+}
+
+export function useGhAccounts() {
+  return useQuery({
+    queryKey: ["gh-accounts"] as const,
+    queryFn: api.ghAccounts,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+export function useSwitchAccount() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (login: string) => api.ghSwitchAccount(login),
+    // The active account changes what every gh query returns.
+    onSettled: () => queryClient.invalidateQueries(),
   });
 }
 
@@ -406,6 +441,22 @@ export function useCherryPickOnto(repo: string) {
 export function useCreateTag(repo: string) {
   return useRepoMutation(repo, (args: { name: string; hash: string }) =>
     api.gitTag(repo, args.name, args.hash),
+  );
+}
+
+export function useRewriteCommits(repo: string) {
+  return useRepoMutation(repo, (args: { base: string; steps: RewriteStep[] }) =>
+    api.gitRewriteCommits(repo, args.base, args.steps),
+  );
+}
+
+export function usePushTag(repo: string) {
+  return useRepoMutation(repo, (name: string) => api.gitPushTag(repo, name));
+}
+
+export function useDeleteTag(repo: string) {
+  return useRepoMutation(repo, (args: { name: string; onRemote: boolean }) =>
+    api.gitDeleteTag(repo, args.name, args.onRemote),
   );
 }
 

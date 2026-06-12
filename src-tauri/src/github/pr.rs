@@ -20,6 +20,8 @@ pub struct GhStatus {
     pub authenticated: bool,
     /// "owner/name" when this repo has a GitHub remote gh recognizes.
     pub repo: Option<String>,
+    /// The active account's login, when it can be determined.
+    pub login: Option<String>,
 }
 
 /// Probes the GitHub CLI: present on PATH, logged in, and pointing at a
@@ -32,17 +34,26 @@ pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
                 installed: false,
                 authenticated: false,
                 repo: None,
+                login: None,
             });
         }
         Err(e) => return Err(e),
         Ok(_) => {}
     }
 
-    // `gh auth status` exits 0 only when a host is logged in.
-    let authenticated = run_gh_raw(None, &["auth", "status"], GH_TIMEOUT)
-        .await
-        .map(|o| o.code == 0)
-        .unwrap_or(false);
+    // `gh auth status` exits 0 only when a host is logged in. Its report
+    // (stderr on old gh, stdout on newer) names the account(s).
+    let (authenticated, login) = match run_gh_raw(None, &["auth", "status"], GH_TIMEOUT).await {
+        Ok(out) => {
+            let report = format!("{}\n{}", out.stdout_lossy(), out.stderr);
+            let active = parse_auth_accounts(&report)
+                .into_iter()
+                .find(|(_, active)| *active)
+                .map(|(login, _)| login);
+            (out.code == 0, active)
+        }
+        Err(_) => (false, None),
+    };
 
     let repo = if authenticated {
         run_gh_raw(
@@ -63,7 +74,119 @@ pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
         installed: true,
         authenticated,
         repo,
+        login,
     })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhAccount {
+    pub login: String,
+    pub active: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhAccounts {
+    /// gh's version (e.g. "2.18.1"), "" when gh isn't installed.
+    pub version: String,
+    pub accounts: Vec<GhAccount>,
+}
+
+/// The gh CLI's signed-in accounts and version (account switching needs
+/// gh ≥ 2.40).
+#[tauri::command]
+pub async fn gh_accounts() -> AppResult<GhAccounts> {
+    let version = match run_gh_raw(None, &["--version"], GH_TIMEOUT).await {
+        Err(AppError::GhNotFound) => {
+            return Ok(GhAccounts {
+                version: String::new(),
+                accounts: Vec::new(),
+            });
+        }
+        Err(e) => return Err(e),
+        // "gh version 2.18.1 (2022-10-20)" → "2.18.1"
+        Ok(out) => out
+            .stdout_lossy()
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().nth(2))
+            .unwrap_or("")
+            .to_string(),
+    };
+    let accounts = match run_gh_raw(None, &["auth", "status"], GH_TIMEOUT).await {
+        Ok(out) => {
+            let report = format!("{}\n{}", out.stdout_lossy(), out.stderr);
+            parse_auth_accounts(&report)
+                .into_iter()
+                .map(|(login, active)| GhAccount { login, active })
+                .collect()
+        }
+        Err(_) => Vec::new(),
+    };
+    Ok(GhAccounts { version, accounts })
+}
+
+/// Switches the active gh account (gh ≥ 2.40; older gh errors, which the
+/// UI surfaces with an upgrade hint).
+#[tauri::command]
+pub async fn gh_switch_account(login: String) -> AppResult<()> {
+    if login.is_empty()
+        || !login
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(AppError::InvalidArgument(format!("invalid login: {login}")));
+    }
+    run_gh(
+        None,
+        &[
+            "auth",
+            "switch",
+            "--hostname",
+            "github.com",
+            "--user",
+            &login,
+        ],
+        GH_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Accounts from a `gh auth status` report, with the active one flagged.
+/// Handles both formats: old gh prints "Logged in to <host> as <login>",
+/// gh 2.40+ prints "Logged in to <host> account <login>" with a separate
+/// "Active account: true" line per account.
+fn parse_auth_accounts(report: &str) -> Vec<(String, bool)> {
+    let mut accounts: Vec<(String, bool)> = Vec::new();
+    for line in report.lines() {
+        if let Some(rest) = line
+            .split_once(" as ")
+            .or_else(|| line.split_once(" account "))
+            .filter(|_| line.contains("Logged in to"))
+            .map(|(_, rest)| rest)
+        {
+            let login = rest
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                .to_string();
+            if !login.is_empty() {
+                accounts.push((login, false));
+            }
+        } else if line.contains("Active account: true") {
+            if let Some(last) = accounts.last_mut() {
+                last.1 = true;
+            }
+        }
+    }
+    // Old gh has no active marker — the only account is the active one.
+    if !accounts.is_empty() && !accounts.iter().any(|(_, a)| *a) {
+        accounts[0].1 = true;
+    }
+    accounts
 }
 
 /// Creates a GitHub repository from the local one, wires up `origin`, and
@@ -445,6 +568,76 @@ pub async fn gh_repo_labels(repo_path: String) -> AppResult<Vec<RepoLabel>> {
         .unwrap_or_else(|| serde_json::Value::Array(vec![]));
     serde_json::from_value(nodes)
         .map_err(|e| AppError::Gh(format!("could not parse the label query: {e}")))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrPollInfo {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    pub is_draft: bool,
+    pub author: String,
+    pub review_decision: String,
+    /// Rollup of the head commit's checks: SUCCESS/FAILURE/PENDING/"".
+    pub checks_state: String,
+}
+
+/// Lightweight snapshot of the repo's recently-updated PRs for the
+/// notification poller — one GraphQL round trip including the check rollup
+/// (reliable on old gh, unlike `pr list --json statusCheckRollup`).
+#[tauri::command]
+pub async fn gh_pr_poll(repo_path: String) -> AppResult<Vec<PrPollInfo>> {
+    let out = run_gh(
+        Some(&repo_path),
+        &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let name_with_owner = out.stdout_lossy().trim().to_string();
+    let Some((owner, name)) = name_with_owner.split_once('/') else {
+        return Err(AppError::Gh("could not determine the repository owner".into()));
+    };
+    validate_graphql_embed(owner, "repository owner")?;
+    validate_graphql_embed(name, "repository name")?;
+
+    let query = format!(
+        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ pullRequests(first:30, states:[OPEN, CLOSED, MERGED], orderBy:{{field:UPDATED_AT, direction:DESC}}){{ nodes{{ number title url state isDraft author{{login}} reviewDecision commits(last:1){{ nodes{{ commit{{ statusCheckRollup{{ state }} }} }} }} }} }} }} }}"#
+    );
+    let out = run_gh(
+        Some(&repo_path),
+        &["api", "graphql", "-f", &format!("query={query}")],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the PR poll: {e}")))?;
+    let nodes = value
+        .pointer("/data/repository/pullRequests/nodes")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let str_at = |v: &serde_json::Value, p: &str| {
+        v.pointer(p).and_then(|x| x.as_str()).unwrap_or("").to_string()
+    };
+    Ok(nodes
+        .iter()
+        .map(|n| PrPollInfo {
+            number: n.pointer("/number").and_then(|x| x.as_u64()).unwrap_or(0),
+            title: str_at(n, "/title"),
+            url: str_at(n, "/url"),
+            state: str_at(n, "/state"),
+            is_draft: n
+                .pointer("/isDraft")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false),
+            author: str_at(n, "/author/login"),
+            review_decision: str_at(n, "/reviewDecision"),
+            checks_state: str_at(n, "/commits/nodes/0/commit/statusCheckRollup/state"),
+        })
+        .filter(|p| p.number > 0)
+        .collect())
 }
 
 /// Adds/removes labels on a PR via GraphQL mutations. `labelable_id` is the

@@ -1,7 +1,8 @@
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
+import { ArrowCounterClockwiseIcon, TagIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -39,17 +40,21 @@ import {
   useCherryPickOnto,
   useCreateBranch,
   useCreateTag,
+  useDeleteTag,
   useLog,
+  usePushTag,
   useRepoStatus,
   useResetToCommit,
   useRevertCommit,
   useUndoCommit,
 } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
+import type { RewriteStep } from "@/lib/git/types";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { ReorderDialog, SquashDialog } from "./RewriteDialogs";
 import { useAmendCommit } from "./useAmendCommit";
 
 export function HistoryPanel({ repoPath }: { repoPath: string }) {
@@ -68,6 +73,8 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const cherryPickOnto = useCherryPickOnto(repoPath);
   const createBranch = useCreateBranch(repoPath);
   const createTag = useCreateTag(repoPath);
+  const pushTag = usePushTag(repoPath);
+  const deleteTag = useDeleteTag(repoPath);
   const branches = useBranches(repoPath);
 
   const [resetHash, setResetHash] = useState<string | null>(null);
@@ -81,6 +88,17 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const [pickOntoHashes, setPickOntoHashes] = useState<string[] | null>(null);
   const [pickOntoBranch, setPickOntoBranch] = useState("");
   const [filterText, setFilterText] = useState("");
+  // Tag pending deletion, plus whether to delete it from origin too.
+  const [deleteTagName, setDeleteTagName] = useState<string | null>(null);
+  const [deleteTagRemote, setDeleteTagRemote] = useState(false);
+  // History rewriting (squash / reorder), unpushed commits only.
+  const [squashCtx, setSquashCtx] = useState<{
+    base: string;
+    steps: RewriteStep[];
+    count: number;
+    defaultMessage: string;
+  } | null>(null);
+  const [reorderOpen, setReorderOpen] = useState(false);
 
   const onError = (e: unknown) => toastError(e);
 
@@ -222,6 +240,66 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
       .reverse();
   }
 
+  // Rewriting may only touch commits that aren't on the remote: the top
+  // `ahead` commits, or everything (minus the root) when there's no upstream.
+  const unpushedCount = head
+    ? head.upstream
+      ? head.ahead
+      : commits.length
+    : 0;
+
+  // Squash: the selection must be >1, contiguous in real history (not the
+  // filtered view), entirely unpushed, and have a commit below it as base.
+  const selectedIndices = commits
+    .map((c, i) => (selected.has(c.hash) ? i : -1))
+    .filter((i) => i >= 0);
+  const squashMax = selectedIndices.at(-1) ?? -1;
+  const canSquash =
+    selectedIndices.length > 1 &&
+    squashMax - (selectedIndices[0] ?? 0) + 1 === selectedIndices.length &&
+    squashMax < unpushedCount &&
+    squashMax + 1 < commits.length &&
+    // The replayed range (everything above the base) must be merge-free.
+    commits.slice(0, squashMax + 1).every((c) => !c.isMerge);
+
+  function openSquash() {
+    if (!canSquash) return;
+    const minIdx = selectedIndices[0];
+    const run = commits.slice(minIdx, squashMax + 1);
+    // Steps replay base..HEAD oldest-first with the run collapsed.
+    const steps: RewriteStep[] = [
+      { hashes: [...run].reverse().map((c) => c.hash), message: "" },
+      ...commits
+        .slice(0, minIdx)
+        .reverse()
+        .map((c) => ({ hashes: [c.hash] })),
+    ];
+    setSquashCtx({
+      base: commits[squashMax + 1].hash,
+      steps,
+      count: run.length,
+      defaultMessage: [...run]
+        .reverse()
+        .map((c) => c.subject)
+        .join("\n\n"),
+    });
+  }
+
+  // Reorder: the top unpushed commits (capped), needing a base below them.
+  // Merge commits can't be replayed, so the range stops at the first one.
+  const REORDER_MAX = 15;
+  const firstMerge = commits.findIndex((c) => c.isMerge);
+  let reorderLen = Math.min(
+    unpushedCount,
+    REORDER_MAX,
+    commits.length,
+    firstMerge === -1 ? Number.POSITIVE_INFINITY : firstMerge,
+  );
+  if (reorderLen === commits.length && !log.hasNextPage) reorderLen -= 1;
+  const canReorder = reorderLen >= 2;
+  const reorderCommits = commits.slice(0, Math.max(reorderLen, 0));
+  const reorderBase = commits[Math.max(reorderLen, 0)]?.hash ?? "";
+
   function openCherryPickOnto(hash: string) {
     setPickOntoHashes(effectiveSelection(hash));
     setPickOntoBranch(targetBranches[0]?.name ?? "");
@@ -309,8 +387,26 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                     )}
                     onClick={(e) => onRowClick(e, index, commit.hash)}
                   >
-                    <p className="truncate text-xs font-medium">
-                      {commit.subject}
+                    <p className="flex items-center gap-1.5 text-xs font-medium">
+                      <span className="min-w-0 truncate">{commit.subject}</span>
+                      {commit.tags.slice(0, 2).map((tag) => (
+                        <span
+                          key={tag}
+                          className="flex max-w-24 shrink-0 items-center gap-0.5 border px-1 py-px text-[10px] font-normal text-muted-foreground"
+                          title={`tag: ${tag}`}
+                        >
+                          <TagIcon className="size-2.5 shrink-0" />
+                          <span className="truncate">{tag}</span>
+                        </span>
+                      ))}
+                      {commit.tags.length > 2 && (
+                        <span
+                          className="shrink-0 text-[10px] font-normal text-muted-foreground"
+                          title={commit.tags.join(", ")}
+                        >
+                          +{commit.tags.length - 2}
+                        </span>
+                      )}
                     </p>
                     <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                       <span className="flex size-3.5 items-center justify-center rounded-full bg-muted text-[8px] uppercase">
@@ -395,6 +491,44 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                     ? `Cherry-pick ${selected.size} commits to branch…`
                     : "Cherry-pick to branch…"}
                 </ContextMenuItem>
+                {selected.has(commit.hash) && selected.size > 1 && (
+                  <ContextMenuItem disabled={!canSquash} onClick={openSquash}>
+                    Squash {selected.size} commits…
+                    {!canSquash && " (must be adjacent and unpushed)"}
+                  </ContextMenuItem>
+                )}
+                <ContextMenuItem
+                  disabled={!canReorder || index >= reorderLen}
+                  onClick={() => setReorderOpen(true)}
+                >
+                  Reorder unpushed commits…
+                </ContextMenuItem>
+                {commit.tags.length > 0 && <ContextMenuSeparator />}
+                {commit.tags.map((tag) => (
+                  <ContextMenuItem
+                    key={`push:${tag}`}
+                    onClick={() =>
+                      pushTag.mutate(tag, {
+                        onSuccess: () =>
+                          toast.success(`Pushed tag ${tag} to origin`),
+                        onError,
+                      })
+                    }
+                  >
+                    Push tag {tag} to origin
+                  </ContextMenuItem>
+                ))}
+                {commit.tags.map((tag) => (
+                  <ContextMenuItem
+                    key={`delete:${tag}`}
+                    onClick={() => {
+                      setDeleteTagRemote(false);
+                      setDeleteTagName(tag);
+                    }}
+                  >
+                    Delete tag {tag}…
+                  </ContextMenuItem>
+                ))}
                 <ContextMenuSeparator />
                 <ContextMenuItem
                   onClick={() => copyText(commit.hash, "SHA copied")}
@@ -421,6 +555,84 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
           )}
         </div>
       </ScrollArea>
+
+      {squashCtx && (
+        <SquashDialog
+          repoPath={repoPath}
+          base={squashCtx.base}
+          steps={squashCtx.steps}
+          count={squashCtx.count}
+          defaultMessage={squashCtx.defaultMessage}
+          open
+          onOpenChange={(open) => {
+            if (!open) setSquashCtx(null);
+          }}
+          onDone={() => setSelected(new Set())}
+        />
+      )}
+
+      <ReorderDialog
+        repoPath={repoPath}
+        base={reorderBase}
+        commits={reorderCommits}
+        open={reorderOpen}
+        onOpenChange={setReorderOpen}
+        onDone={() => setSelected(new Set())}
+      />
+
+      <Dialog
+        open={deleteTagName !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTagName(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete tag {deleteTagName}?</DialogTitle>
+            <DialogDescription>
+              Removes the tag from this repository. The commit it points at is
+              not affected.
+            </DialogDescription>
+          </DialogHeader>
+          <label className="flex cursor-pointer items-center gap-2 text-xs">
+            <Checkbox
+              checked={deleteTagRemote}
+              onCheckedChange={(v) => setDeleteTagRemote(v === true)}
+            />
+            Also delete the tag on origin
+          </label>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTagName(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteTag.isPending}
+              onClick={() => {
+                if (!deleteTagName) return;
+                deleteTag.mutate(
+                  { name: deleteTagName, onRemote: deleteTagRemote },
+                  {
+                    onSuccess: () => {
+                      toast.success(
+                        `Deleted tag ${deleteTagName}${deleteTagRemote ? " (local and origin)" : ""}`,
+                      );
+                      setDeleteTagName(null);
+                    },
+                    onError: (e) => {
+                      onError(e);
+                      setDeleteTagName(null);
+                    },
+                  },
+                );
+              }}
+            >
+              {deleteTag.isPending && <Spinner data-icon="inline-start" />}
+              Delete tag
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={resetHash !== null}

@@ -33,6 +33,8 @@ fn parse_log(text: &str) -> Vec<CommitSummary> {
                 subject: parts.next()?.to_string(),
                 author: parts.next()?.to_string(),
                 date: parts.next()?.to_string(),
+                tags: Vec::new(),
+                is_merge: false,
             })
         })
         .collect()

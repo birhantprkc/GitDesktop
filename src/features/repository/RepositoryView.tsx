@@ -15,6 +15,7 @@ import { useRepoStatus } from "@/lib/git/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { ChangesPanel } from "./ChangesPanel";
 import { RepoHeader } from "./RepoHeader";
+import { usePrNotifications } from "./usePrNotifications";
 
 const TAB_ORDER: RepoTab[] = ["changes", "history", "compare", "pulls"];
 
@@ -31,6 +32,9 @@ export function RepositoryView() {
   // Tab switches are transitions: a heavy first render of the target panel
   // never blocks the click, and hidden Activities pre-render at low priority.
   const [, startTabTransition] = useTransition();
+
+  // OS notifications for PR/check events while this repo is open.
+  usePrNotifications(repoPath ?? "");
 
   function changeTab(tab: RepoTab) {
     startTabTransition(() => setRepoTab(tab));

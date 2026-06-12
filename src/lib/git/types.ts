@@ -78,6 +78,10 @@ export interface CommitSummary {
   subject: string;
   author: string;
   date: string;
+  /** Tags pointing at this commit. */
+  tags: string[];
+  /** More than one parent — history rewriting must not cross it. */
+  isMerge: boolean;
 }
 
 export interface CommitDetails {
@@ -96,6 +100,12 @@ export interface CommitResult {
 export interface CommitAuthor {
   name: string;
   email: string;
+}
+
+/** One resulting commit in a history rewrite (multi-hash = squash). */
+export interface RewriteStep {
+  hashes: string[];
+  message?: string;
 }
 
 export interface StashEntry {
@@ -119,9 +129,34 @@ export interface BranchComparison {
   behind: CommitSummary[];
 }
 
+export interface PrPollInfo {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  isDraft: boolean;
+  author: string;
+  reviewDecision: string;
+  /** Check rollup of the head commit: SUCCESS/FAILURE/PENDING/"". */
+  checksState: string;
+}
+
+export interface GhAccount {
+  login: string;
+  active: boolean;
+}
+
+export interface GhAccounts {
+  /** gh's version (e.g. "2.18.1"), "" when gh isn't installed. */
+  version: string;
+  accounts: GhAccount[];
+}
+
 export interface GhStatus {
   installed: boolean;
   authenticated: boolean;
+  /** The active account's login, when it can be determined. */
+  login: string | null;
   /** "owner/name" when this repo has a GitHub remote gh recognizes. */
   repo: string | null;
 }

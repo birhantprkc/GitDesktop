@@ -24,6 +24,46 @@ pub async fn git_user_identity(repo_path: String) -> AppResult<CommitAuthor> {
     })
 }
 
+/// The global git identity (`git config --global`), empty strings when unset.
+#[tauri::command]
+pub async fn git_global_identity() -> AppResult<CommitAuthor> {
+    async fn get(key: &str) -> String {
+        run_git_raw(None, &["config", "--global", "--get", key], DEFAULT_TIMEOUT)
+            .await
+            .ok()
+            .filter(|o| o.code == 0)
+            .map(|o| o.stdout_lossy().trim().to_string())
+            .unwrap_or_default()
+    }
+    Ok(CommitAuthor {
+        name: get("user.name").await,
+        email: get("user.email").await,
+    })
+}
+
+/// Writes the global git identity — the author for new commits in every
+/// repo without a local override.
+#[tauri::command]
+pub async fn git_set_global_identity(name: String, email: String) -> AppResult<()> {
+    let name = name.trim();
+    let email = email.trim();
+    for (value, what) in [(name, "name"), (email, "email")] {
+        if value.is_empty() || value.starts_with('-') {
+            return Err(crate::error::AppError::InvalidArgument(format!(
+                "invalid {what}: {value}"
+            )));
+        }
+    }
+    run_git(None, &["config", "--global", "user.name", name], DEFAULT_TIMEOUT).await?;
+    run_git(
+        None,
+        &["config", "--global", "user.email", email],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Distinct commit authors across all refs, most recent first — co-author
 /// suggestions for the commit box. Capped so huge repos stay fast.
 #[tauri::command]
@@ -141,6 +181,8 @@ pub async fn git_recent_commits(repo_path: String, limit: u32) -> AppResult<Vec<
                 subject: parts.next()?.to_string(),
                 author: parts.next()?.to_string(),
                 date: parts.next()?.to_string(),
+                tags: Vec::new(),
+                is_merge: false,
             })
         })
         .collect();

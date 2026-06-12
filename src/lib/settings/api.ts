@@ -7,10 +7,23 @@ export interface RecentRepo {
   lastOpenedAt: string;
 }
 
+export interface NotificationSettings {
+  /** Automation results (review posted / ready / failed). */
+  automations: boolean;
+  /** CI check completion on open PRs. */
+  prChecks: "off" | "mine" | "all";
+  /** PRs opened / merged / closed in the current repo. */
+  prActivity: boolean;
+  /** Review decisions on PRs you authored. */
+  prReviews: boolean;
+}
+
 export interface AppSettings {
   ai: AiSettings;
   /** Provider/model for AI PR review (independent of the commit model). */
   reviewAi: AiSettings;
+  /** OS notifications (sent only while the window is unfocused). */
+  notifications: NotificationSettings;
   globalInstructions: string;
   /** gitignore-style globs (one per line) excluded from AI context. */
   aiIgnorePatterns: string;
@@ -38,6 +51,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
     provider: "anthropic",
     model: "claude-sonnet-4-6",
     ollamaBaseUrl: "http://localhost:11434",
+  },
+  notifications: {
+    automations: true,
+    prChecks: "all",
+    prActivity: true,
+    prReviews: true,
   },
   globalInstructions: "",
   aiIgnorePatterns: "",
@@ -67,6 +86,10 @@ export async function loadSettings(): Promise<AppSettings> {
     ...saved,
     ai: { ...DEFAULT_SETTINGS.ai, ...saved?.ai },
     reviewAi: { ...DEFAULT_SETTINGS.reviewAi, ...saved?.reviewAi },
+    notifications: {
+      ...DEFAULT_SETTINGS.notifications,
+      ...saved?.notifications,
+    },
   };
 }
 

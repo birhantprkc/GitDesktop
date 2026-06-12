@@ -99,6 +99,10 @@ pub struct CommitSummary {
     pub subject: String,
     pub author: String,
     pub date: String,
+    /// Tags pointing at this commit (from %D decorations).
+    pub tags: Vec<String>,
+    /// More than one parent — history rewriting must not cross it.
+    pub is_merge: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,6 +127,16 @@ pub struct CommitResult {
 pub struct CommitAuthor {
     pub name: String,
     pub email: String,
+}
+
+/// One resulting commit in a history rewrite: a single hash is a plain
+/// pick; several hashes squash into one commit carrying `message`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewriteStep {
+    pub hashes: Vec<String>,
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,11 +1,11 @@
-use std::path::Path;
+﻿use std::path::Path;
 
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::git::history::validate_hash;
 use crate::git::runner::{run_git, run_git_mutating, DEFAULT_TIMEOUT};
-use crate::git::types::{FileDiff, RepoOpState, StashEntry};
+use crate::git::types::{FileDiff, RepoOpState, RewriteStep, StashEntry};
 use crate::state::AppState;
 
 /// Whether a file/dir inside .git exists (worktree-safe via --git-path).
@@ -28,7 +28,7 @@ async fn git_path_exists(repo: &str, name: &str) -> bool {
     }
 }
 
-/// Which multi-step git operation, if any, is mid-flight — drives the
+/// Which multi-step git operation, if any, is mid-flight â€” drives the
 /// conflict-resolution banner.
 #[tauri::command]
 pub async fn git_op_state(repo_path: String) -> AppResult<RepoOpState> {
@@ -145,7 +145,7 @@ pub async fn git_revert(
 
 /// Returns true when a commit was created. Cherry-picking changes that are
 /// already present makes git stop with an in-progress empty pick; that's not
-/// an error worth surfacing raw — clean up with --skip and report false.
+/// an error worth surfacing raw â€” clean up with --skip and report false.
 #[tauri::command]
 pub async fn git_cherry_pick(
     state: State<'_, AppState>,
@@ -181,8 +181,8 @@ pub struct CherryPickRangeResult {
 /// Copies the given commits (oldest-first) onto `target_branch`, then leaves
 /// you on that branch. Commits whose changes already exist there are skipped
 /// rather than erroring. If any commit conflicts, the whole operation is
-/// rolled back — the target branch is reset to its prior tip and you return to
-/// where you started — so the repo is never left mid-conflict.
+/// rolled back â€” the target branch is reset to its prior tip and you return to
+/// where you started â€” so the repo is never left mid-conflict.
 #[tauri::command]
 pub async fn git_cherry_pick_onto(
     state: State<'_, AppState>,
@@ -394,7 +394,7 @@ pub async fn git_stash_list(repo_path: String) -> AppResult<Vec<StashEntry>> {
             else {
                 return None;
             };
-            // %gd is "stash@{N}" — the N is the index every other stash
+            // %gd is "stash@{N}" â€” the N is the index every other stash
             // command addresses.
             let index: u32 = refname
                 .strip_prefix("stash@{")?
@@ -502,7 +502,7 @@ pub async fn git_merge(
 }
 
 /// Rebases the current branch onto another. Conflicts leave the rebase in
-/// progress — the changes panel's conflict banner takes it from there
+/// progress â€” the changes panel's conflict banner takes it from there
 /// (continue or abort).
 #[tauri::command]
 pub async fn git_rebase(
@@ -523,9 +523,9 @@ pub async fn git_rebase(
 
 /// Merges `head` into `base` for a local PR using one of three strategies,
 /// matching GitHub's merge options:
-/// - "merge"  → a `--no-ff` merge commit carrying `message`
-/// - "squash" → squash all of head's commits into one commit with `message`
-/// - "rebase" → replay head's commits onto base (cherry-pick range, no merge
+/// - "merge"  â†’ a `--no-ff` merge commit carrying `message`
+/// - "squash" â†’ squash all of head's commits into one commit with `message`
+/// - "rebase" â†’ replay head's commits onto base (cherry-pick range, no merge
 ///   commit), preserving their individual messages
 ///
 /// Checks out `base` first and leaves you there on success. Any failure
@@ -653,6 +653,152 @@ pub async fn git_merge_local_pr(
     }
 }
 
+/// Rewrites the unpushed tip of the current branch (`base..HEAD`): each step
+/// becomes one commit â€” a single-hash step is a plain cherry-pick, a
+/// multi-hash step squashes those commits into one with `message`. Drives
+/// both "reorder commits" and "squash commits". Refuses on a dirty tree or
+/// merge commits in range; any conflict rolls everything back untouched.
+#[tauri::command]
+pub async fn git_rewrite_commits(
+    state: State<'_, AppState>,
+    repo_path: String,
+    base: String,
+    steps: Vec<RewriteStep>,
+) -> AppResult<()> {
+    rewrite_commits(&state, &repo_path, &base, &steps).await
+}
+
+pub(crate) async fn rewrite_commits(
+    state: &AppState,
+    repo_path: &str,
+    base: &str,
+    steps: &[RewriteStep],
+) -> AppResult<()> {
+    validate_hash(base)?;
+    if steps.is_empty() {
+        return Err(AppError::InvalidArgument("no rewrite steps".into()));
+    }
+    for step in steps {
+        if step.hashes.is_empty() {
+            return Err(AppError::InvalidArgument("empty rewrite step".into()));
+        }
+        for h in &step.hashes {
+            validate_hash(h)?;
+        }
+        let squashing = step.hashes.len() > 1;
+        let message = step.message.as_deref().map(str::trim).unwrap_or("");
+        if squashing && message.is_empty() {
+            return Err(AppError::InvalidArgument(
+                "a squash needs a commit message".into(),
+            ));
+        }
+    }
+
+    // reset --hard would destroy uncommitted work â€” refuse instead.
+    let status = run_git(
+        Some(repo_path),
+        &["status", "--porcelain"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if !status.stdout_lossy().trim().is_empty() {
+        return Err(AppError::InvalidArgument(
+            "the working tree has uncommitted changes â€” commit or stash them first".into(),
+        ));
+    }
+
+    let range = format!("{base}..HEAD");
+    let merges = run_git(
+        Some(repo_path),
+        &["rev-list", "--merges", &range],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if !merges.stdout_lossy().trim().is_empty() {
+        return Err(AppError::InvalidArgument(
+            "the range contains merge commits, which can't be rewritten".into(),
+        ));
+    }
+    let in_range: std::collections::HashSet<String> =
+        run_git(Some(repo_path), &["rev-list", &range], DEFAULT_TIMEOUT)
+            .await?
+            .stdout_lossy()
+            .lines()
+            .map(str::to_string)
+            .collect();
+    for step in steps {
+        for h in &step.hashes {
+            if !in_range.contains(h) {
+                return Err(AppError::InvalidArgument(format!(
+                    "{h} is not an unpushed commit on this branch"
+                )));
+            }
+        }
+    }
+
+    let orig = run_git(Some(repo_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
+        .await?
+        .stdout_lossy()
+        .trim()
+        .to_string();
+
+    run_git_mutating(state, repo_path, &["reset", "--hard", base], DEFAULT_TIMEOUT).await?;
+    let mut failure: Option<AppError> = None;
+    'steps: for step in steps {
+        let single_pick = step.hashes.len() == 1 && step.message.is_none();
+        if single_pick {
+            let args = ["cherry-pick", step.hashes[0].as_str()];
+            if let Err(e) = run_git_mutating(state, repo_path, &args, DEFAULT_TIMEOUT).await {
+                failure = Some(e);
+                break 'steps;
+            }
+        } else {
+            let mut args = vec!["cherry-pick", "-n"];
+            args.extend(step.hashes.iter().map(String::as_str));
+            if let Err(e) = run_git_mutating(state, repo_path, &args, DEFAULT_TIMEOUT).await {
+                failure = Some(e);
+                break 'steps;
+            }
+            let message = step.message.as_deref().map(str::trim).unwrap_or("");
+            let commit_args = ["commit", "-m", message];
+            if let Err(e) =
+                run_git_mutating(state, repo_path, &commit_args, DEFAULT_TIMEOUT).await
+            {
+                failure = Some(e);
+                break 'steps;
+            }
+        }
+    }
+
+    if let Some(err) = failure {
+        let _ = run_git_mutating(state, repo_path,
+            &["cherry-pick", "--abort"],
+            DEFAULT_TIMEOUT,
+        )
+        .await;
+        let _ =
+            run_git_mutating(state, repo_path, &["reset", "--hard", &orig], DEFAULT_TIMEOUT)
+                .await;
+        return Err(match err {
+            AppError::Git { code, stderr } => AppError::Git {
+                code,
+                stderr: format!(
+                    "The rewrite hit conflicts and was rolled back; your branch is unchanged.\n{stderr}"
+                ),
+            },
+            other => other,
+        });
+    }
+    Ok(())
+}
+
+fn validate_tag_name(name: &str) -> AppResult<()> {
+    if name.is_empty() || name.starts_with('-') {
+        return Err(AppError::InvalidArgument(format!("invalid tag name: {name}")));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn git_tag(
     state: State<'_, AppState>,
@@ -661,9 +807,177 @@ pub async fn git_tag(
     hash: String,
 ) -> AppResult<()> {
     validate_hash(&hash)?;
-    if name.is_empty() || name.starts_with('-') {
-        return Err(AppError::InvalidArgument(format!("invalid tag name: {name}")));
-    }
+    validate_tag_name(&name)?;
     run_git_mutating(&state, &repo_path, &["tag", "--", &name, &hash], DEFAULT_TIMEOUT).await?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn git_push_tag(
+    state: State<'_, AppState>,
+    repo_path: String,
+    name: String,
+) -> AppResult<()> {
+    validate_tag_name(&name)?;
+    let spec = format!("refs/tags/{name}");
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["push", "origin", &spec],
+        crate::git::runner::NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Deletes a tag locally, and (optionally) from origin too.
+#[tauri::command]
+pub async fn git_delete_tag(
+    state: State<'_, AppState>,
+    repo_path: String,
+    name: String,
+    on_remote: bool,
+) -> AppResult<()> {
+    validate_tag_name(&name)?;
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["tag", "-d", "--", &name],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if on_remote {
+        let spec = format!(":refs/tags/{name}");
+        run_git_mutating(
+            &state,
+            &repo_path,
+            &["push", "origin", &spec],
+            crate::git::runner::NETWORK_TIMEOUT,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn git(repo: &str, args: &[&str]) -> String {
+        run_git(Some(repo), args, DEFAULT_TIMEOUT)
+            .await
+            .unwrap()
+            .stdout_lossy()
+    }
+
+    async fn commit_file(repo: &str, dir: &std::path::Path, file: &str, content: &str, msg: &str) {
+        std::fs::write(dir.join(file), content).unwrap();
+        git(repo, &["add", "."]).await;
+        git(repo, &["commit", "-m", msg]).await;
+    }
+
+    async fn setup_repo(marker: &str) -> (std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!(
+            "gd-rewrite-{marker}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.to_string_lossy().into_owned();
+        git(&repo, &["init"]).await;
+        git(&repo, &["config", "user.email", "t@t"]).await;
+        git(&repo, &["config", "user.name", "t"]).await;
+        commit_file(&repo, &dir, "a.txt", "v0\n", "base").await;
+        (dir, repo)
+    }
+
+    async fn rev(repo: &str, r: &str) -> String {
+        git(repo, &["rev-parse", r]).await.trim().to_string()
+    }
+
+    async fn subjects(repo: &str) -> Vec<String> {
+        git(repo, &["log", "--format=%s"])
+            .await
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn pick(hash: &str) -> RewriteStep {
+        RewriteStep {
+            hashes: vec![hash.to_string()],
+            message: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn reorder_swaps_independent_commits() {
+        let (dir, repo) = setup_repo("reorder").await;
+        let base = rev(&repo, "HEAD").await;
+        commit_file(&repo, &dir, "b.txt", "b\n", "one").await;
+        let c1 = rev(&repo, "HEAD").await;
+        commit_file(&repo, &dir, "c.txt", "c\n", "two").await;
+        let c2 = rev(&repo, "HEAD").await;
+
+        let state = AppState::default();
+        // Oldest-first steps: "two" lands at the bottom, "one" on top.
+        rewrite_commits(&state, &repo, &base, &[pick(&c2), pick(&c1)])
+            .await
+            .unwrap();
+        assert_eq!(subjects(&repo).await, vec!["one", "two", "base"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn squash_combines_commits() {
+        let (dir, repo) = setup_repo("squash").await;
+        let base = rev(&repo, "HEAD").await;
+        commit_file(&repo, &dir, "b.txt", "b\n", "one").await;
+        let c1 = rev(&repo, "HEAD").await;
+        commit_file(&repo, &dir, "c.txt", "c\n", "two").await;
+        let c2 = rev(&repo, "HEAD").await;
+
+        let state = AppState::default();
+        rewrite_commits(
+            &state,
+            &repo,
+            &base,
+            &[RewriteStep {
+                hashes: vec![c1, c2],
+                message: Some("combined".into()),
+            }],
+        )
+        .await
+        .unwrap();
+        assert_eq!(subjects(&repo).await, vec!["combined", "base"]);
+        assert!(dir.join("b.txt").exists());
+        assert!(dir.join("c.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn conflicting_rewrite_rolls_back() {
+        let (dir, repo) = setup_repo("conflict").await;
+        let base = rev(&repo, "HEAD").await;
+        commit_file(&repo, &dir, "a.txt", "v1\n", "one").await;
+        let c1 = rev(&repo, "HEAD").await;
+        commit_file(&repo, &dir, "a.txt", "v2\n", "two").await;
+        let c2 = rev(&repo, "HEAD").await;
+        let orig = rev(&repo, "HEAD").await;
+
+        let state = AppState::default();
+        // "two"'s patch (v1→v2) can't apply onto v0 — conflict, then rollback.
+        let result = rewrite_commits(&state, &repo, &base, &[pick(&c2), pick(&c1)]).await;
+        assert!(result.is_err());
+        assert_eq!(rev(&repo, "HEAD").await, orig);
+        let status = git(&repo, &["status", "--porcelain"]).await;
+        assert!(status.trim().is_empty(), "tree should be clean: {status}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

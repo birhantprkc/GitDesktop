@@ -19,16 +19,20 @@ import { useAppForm } from "@/lib/form";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
+import { AccountsSection } from "./AccountsSection";
 import { AiProviderSection } from "./AiProviderSection";
 import { EditorSection } from "./EditorSection";
-import { GitSection } from "./GitSection";
+import { GitIdentitySection, GitSection } from "./GitSection";
 import { InstructionsSection } from "./InstructionsSection";
+import { NotificationsSection } from "./NotificationsSection";
 import { settingsFormOpts, toDraft } from "./settings-form";
 import { TerminalSection } from "./TerminalSection";
 
 const PANELS = [
   { id: "ai", label: "AI" },
   { id: "automations", label: "Automations" },
+  { id: "notifications", label: "Notifications" },
+  { id: "accounts", label: "Accounts" },
   { id: "git", label: "Git" },
   { id: "editor", label: "External editor" },
   { id: "terminal", label: "Terminal" },
@@ -169,7 +173,16 @@ export function SettingsScreen() {
                 </>
               )}
               {panel === "automations" && <AutomationsSection />}
-              {panel === "git" && <GitSection form={form} />}
+              {panel === "notifications" && (
+                <NotificationsSection form={form} />
+              )}
+              {panel === "accounts" && <AccountsSection />}
+              {panel === "git" && (
+                <>
+                  <GitSection form={form} />
+                  <GitIdentitySection />
+                </>
+              )}
               {panel === "editor" && <EditorSection form={form} />}
               {panel === "terminal" && <TerminalSection form={form} />}
             </main>
