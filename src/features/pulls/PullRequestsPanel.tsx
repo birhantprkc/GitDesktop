@@ -93,6 +93,39 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
 
   const activeFilterCount = authorFilter.size + labelFilter.size;
 
+  // Arrow keys walk the visible rows, local section first like the list.
+  const navTargets = [
+    ...visibleLocal.map((pr) => ({ kind: "local" as const, id: pr.id })),
+    ...visibleRemote.map((pr) => ({
+      kind: "remote" as const,
+      id: String(pr.number),
+    })),
+  ];
+
+  function onListKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (navTargets.length === 0) return;
+    // Move the selection, not the scrollbar.
+    e.preventDefault();
+    const current = navTargets.findIndex(
+      (t) => t.kind === selectedPr?.kind && t.id === selectedPr.id,
+    );
+    const next =
+      e.key === "ArrowDown"
+        ? Math.min(current + 1, navTargets.length - 1)
+        : current === -1
+          ? navTargets.length - 1
+          : Math.max(current - 1, 0);
+    const target = navTargets[next];
+    selectPr(target);
+    // Move focus along with the selection so the focus ring tracks it.
+    const el = e.currentTarget.querySelector<HTMLElement>(
+      `[data-row="${CSS.escape(`${target.kind}:${target.id}`)}"]`,
+    );
+    el?.focus();
+    el?.scrollIntoView({ block: "nearest" });
+  }
+
   function toggle(
     set: Set<string>,
     update: (next: Set<string>) => void,
@@ -218,120 +251,124 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
         />
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex items-center justify-between px-3 pt-2 pb-1">
-          <p className="text-xs text-muted-foreground">Local</p>
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={() => setCreateOpen(true)}
-            title="Create a local pull request"
-          >
-            <PlusIcon data-icon="inline-start" />
-            New
-          </Button>
-        </div>
-        {visibleLocal.length === 0 ? (
-          <p className="px-3 py-2 text-xs text-muted-foreground">
-            {stateLocal.length > 0
-              ? "No local pull requests match the filter."
-              : `No ${stateFilter} local pull requests.`}
-          </p>
-        ) : (
-          visibleLocal.map((pr) => {
-            const active =
-              selectedPr?.kind === "local" && selectedPr.id === pr.id;
-            return (
-              <button
-                type="button"
-                key={pr.id}
-                className={cn(
-                  "block w-full border-b px-3 py-2 text-left",
-                  active
-                    ? "bg-accent text-accent-foreground"
-                    : "hover:bg-muted/60",
-                )}
-                onClick={() => selectPr({ kind: "local", id: pr.id })}
-              >
-                <p className="flex items-center gap-1.5 text-xs font-medium">
-                  <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
-                  <span className="truncate">{pr.title}</span>
-                  {pr.status !== "open" && (
-                    <Badge variant="secondary" className="capitalize">
-                      {pr.status}
-                    </Badge>
+        <div onKeyDown={onListKeyDown}>
+          <div className="flex items-center justify-between px-3 pt-2 pb-1">
+            <p className="text-xs text-muted-foreground">Local</p>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setCreateOpen(true)}
+              title="Create a local pull request"
+            >
+              <PlusIcon data-icon="inline-start" />
+              New
+            </Button>
+          </div>
+          {visibleLocal.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
+              {stateLocal.length > 0
+                ? "No local pull requests match the filter."
+                : `No ${stateFilter} local pull requests.`}
+            </p>
+          ) : (
+            visibleLocal.map((pr) => {
+              const active =
+                selectedPr?.kind === "local" && selectedPr.id === pr.id;
+              return (
+                <button
+                  type="button"
+                  key={pr.id}
+                  data-row={`local:${pr.id}`}
+                  className={cn(
+                    "block w-full border-b px-3 py-2 text-left",
+                    active
+                      ? "bg-accent text-accent-foreground"
+                      : "hover:bg-muted/60",
                   )}
-                </p>
-                <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
-                  {pr.head} → {pr.base}
-                </p>
-              </button>
-            );
-          })
-        )}
+                  onClick={() => selectPr({ kind: "local", id: pr.id })}
+                >
+                  <p className="flex items-center gap-1.5 text-xs font-medium">
+                    <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{pr.title}</span>
+                    {pr.status !== "open" && (
+                      <Badge variant="secondary" className="capitalize">
+                        {pr.status}
+                      </Badge>
+                    )}
+                  </p>
+                  <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
+                    {pr.head} → {pr.base}
+                  </p>
+                </button>
+              );
+            })
+          )}
 
-        <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">GitHub</p>
-        {gh.isPending ? (
-          <div className="space-y-2 p-3">
-            <Skeleton className="h-9 w-full" />
-          </div>
-        ) : !ghReady ? (
-          <p className="px-3 py-4 text-xs text-muted-foreground">
-            {/* Name the actual blocker — "sign in" is wrong advice when the
+          <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">GitHub</p>
+          {gh.isPending ? (
+            <div className="space-y-2 p-3">
+              <Skeleton className="h-9 w-full" />
+            </div>
+          ) : !ghReady ? (
+            <p className="px-3 py-4 text-xs text-muted-foreground">
+              {/* Name the actual blocker — "sign in" is wrong advice when the
                 repo simply isn't on GitHub. */}
-            {!gh.data?.installed
-              ? "Install the GitHub CLI (gh) to see pull requests."
-              : !gh.data?.authenticated
-                ? "Sign in with the GitHub CLI (gh auth login) to see pull requests."
-                : "This repository isn't on GitHub. Publish it (from the repository header) to use pull requests."}
-          </p>
-        ) : prList.isPending ? (
-          <div className="space-y-2 p-3">
-            <Skeleton className="h-9 w-full" />
-            <Skeleton className="h-9 w-full" />
-          </div>
-        ) : visibleRemote.length === 0 ? (
-          <p className="px-3 py-4 text-xs text-muted-foreground">
-            {stateRemote.length > 0
-              ? "No pull requests match the filter."
-              : `No ${stateFilter} pull requests.`}
-          </p>
-        ) : (
-          visibleRemote.map((pr) => {
-            const active =
-              selectedPr?.kind === "remote" &&
-              selectedPr.id === String(pr.number);
-            return (
-              <button
-                type="button"
-                key={pr.number}
-                className={cn(
-                  "block w-full border-b px-3 py-2 text-left",
-                  active
-                    ? "bg-accent text-accent-foreground"
-                    : "hover:bg-muted/60",
-                )}
-                onClick={() =>
-                  selectPr({ kind: "remote", id: String(pr.number) })
-                }
-              >
-                <p className="flex items-center gap-1.5 text-xs font-medium">
-                  <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
-                  <span className="truncate">{pr.title}</span>
-                  {pr.isDraft && <Badge variant="secondary">draft</Badge>}
-                  {pr.state !== "OPEN" && (
-                    <Badge variant="secondary" className="capitalize">
-                      {pr.state.toLowerCase()}
-                    </Badge>
+              {!gh.data?.installed
+                ? "Install the GitHub CLI (gh) to see pull requests."
+                : !gh.data?.authenticated
+                  ? "Sign in with the GitHub CLI (gh auth login) to see pull requests."
+                  : "This repository isn't on GitHub. Publish it (from the repository header) to use pull requests."}
+            </p>
+          ) : prList.isPending ? (
+            <div className="space-y-2 p-3">
+              <Skeleton className="h-9 w-full" />
+              <Skeleton className="h-9 w-full" />
+            </div>
+          ) : visibleRemote.length === 0 ? (
+            <p className="px-3 py-4 text-xs text-muted-foreground">
+              {stateRemote.length > 0
+                ? "No pull requests match the filter."
+                : `No ${stateFilter} pull requests.`}
+            </p>
+          ) : (
+            visibleRemote.map((pr) => {
+              const active =
+                selectedPr?.kind === "remote" &&
+                selectedPr.id === String(pr.number);
+              return (
+                <button
+                  type="button"
+                  key={pr.number}
+                  data-row={`remote:${pr.number}`}
+                  className={cn(
+                    "block w-full border-b px-3 py-2 text-left",
+                    active
+                      ? "bg-accent text-accent-foreground"
+                      : "hover:bg-muted/60",
                   )}
-                </p>
-                <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
-                  #{pr.number} · {pr.author ? `${pr.author.login} · ` : ""}
-                  {pr.headRefName} → {pr.baseRefName}
-                </p>
-              </button>
-            );
-          })
-        )}
+                  onClick={() =>
+                    selectPr({ kind: "remote", id: String(pr.number) })
+                  }
+                >
+                  <p className="flex items-center gap-1.5 text-xs font-medium">
+                    <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{pr.title}</span>
+                    {pr.isDraft && <Badge variant="secondary">draft</Badge>}
+                    {pr.state !== "OPEN" && (
+                      <Badge variant="secondary" className="capitalize">
+                        {pr.state.toLowerCase()}
+                      </Badge>
+                    )}
+                  </p>
+                  <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
+                    #{pr.number} · {pr.author ? `${pr.author.login} · ` : ""}
+                    {pr.headRefName} → {pr.baseRefName}
+                  </p>
+                </button>
+              );
+            })
+          )}
+        </div>
       </ScrollArea>
 
       <CreateLocalPrDialog

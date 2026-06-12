@@ -89,6 +89,35 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
   const ahead = comparison.data?.ahead ?? [];
   const behind = comparison.data?.behind ?? [];
   const canPr = ghReady;
+
+  // Arrow keys walk "All changes" → ahead → behind, mirroring the list.
+  const navTargets: (string | null)[] = [
+    null,
+    ...ahead.map((c) => c.hash),
+    ...behind.map((c) => c.hash),
+  ];
+
+  function onListKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (navTargets.length === 0) return;
+    // Move the selection, not the scrollbar.
+    e.preventDefault();
+    const current = navTargets.indexOf(selectedCommitHash);
+    const next =
+      e.key === "ArrowDown"
+        ? Math.min(current + 1, navTargets.length - 1)
+        : current === -1
+          ? navTargets.length - 1
+          : Math.max(current - 1, 0);
+    const target = navTargets[next];
+    selectCommit(target);
+    // Move focus along with the selection so the focus ring tracks it.
+    const el = e.currentTarget.querySelector<HTMLElement>(
+      `[data-row="${CSS.escape(target ?? "all")}"]`,
+    );
+    el?.focus();
+    el?.scrollIntoView({ block: "nearest" });
+  }
   // An open PR from the current branch into the compared branch already exists.
   const existingPr = (branchPrs.data ?? []).find(
     (p) => p.baseRefName === compareBranch,
@@ -181,48 +210,51 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
         />
       )}
 
-      <button
-        type="button"
-        className={cn(
-          "flex w-full items-center gap-2 border-b px-3 py-2 text-left text-xs",
-          selectedCommitHash === null
-            ? "bg-accent text-accent-foreground"
-            : "hover:bg-muted/60",
-        )}
-        onClick={() => selectCommit(null)}
-      >
-        <FilesIcon className="size-3.5 shrink-0" />
-        <span className="font-medium">All changes</span>
-      </button>
-
-      {comparison.isPending ? (
-        <div className="space-y-2 p-3">
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-8 w-full" />
-        </div>
-      ) : (
-        <ScrollArea className="min-h-0 flex-1">
-          <CommitSection
-            title={`${ahead.length} ahead`}
-            subtitle={`on ${currentName}, not on ${compareBranch}`}
-            commits={ahead}
-            selectedHash={selectedCommitHash}
-            onSelect={selectCommit}
-          />
-          <CommitSection
-            title={`${behind.length} behind`}
-            subtitle={`on ${compareBranch}, not on ${currentName}`}
-            commits={behind}
-            selectedHash={selectedCommitHash}
-            onSelect={selectCommit}
-          />
-          {ahead.length === 0 && behind.length === 0 && (
-            <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-              These branches are even.
-            </p>
+      <div className="flex min-h-0 flex-1 flex-col" onKeyDown={onListKeyDown}>
+        <button
+          type="button"
+          data-row="all"
+          className={cn(
+            "flex w-full shrink-0 items-center gap-2 border-b px-3 py-2 text-left text-xs",
+            selectedCommitHash === null
+              ? "bg-accent text-accent-foreground"
+              : "hover:bg-muted/60",
           )}
-        </ScrollArea>
-      )}
+          onClick={() => selectCommit(null)}
+        >
+          <FilesIcon className="size-3.5 shrink-0" />
+          <span className="font-medium">All changes</span>
+        </button>
+
+        {comparison.isPending ? (
+          <div className="space-y-2 p-3">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+          </div>
+        ) : (
+          <ScrollArea className="min-h-0 flex-1">
+            <CommitSection
+              title={`${ahead.length} ahead`}
+              subtitle={`on ${currentName}, not on ${compareBranch}`}
+              commits={ahead}
+              selectedHash={selectedCommitHash}
+              onSelect={selectCommit}
+            />
+            <CommitSection
+              title={`${behind.length} behind`}
+              subtitle={`on ${compareBranch}, not on ${currentName}`}
+              commits={behind}
+              selectedHash={selectedCommitHash}
+              onSelect={selectCommit}
+            />
+            {ahead.length === 0 && behind.length === 0 && (
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                These branches are even.
+              </p>
+            )}
+          </ScrollArea>
+        )}
+      </div>
     </div>
   );
 }
@@ -251,6 +283,7 @@ function CommitSection({
         <button
           type="button"
           key={commit.hash}
+          data-row={commit.hash}
           className={cn(
             "block w-full border-b px-3 py-2 text-left",
             selectedHash === commit.hash

@@ -228,6 +228,49 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     }
   }
 
+  // Right-clicking a commit outside the selection collapses the selection
+  // to it (standard desktop behavior) — the context menu then always
+  // describes exactly what it acts on.
+  function onRowContextMenu(index: number, hash: string) {
+    if (!selected.has(hash)) {
+      setSelected(new Set([hash]));
+      setAnchorIndex(index);
+      selectCommit(hash);
+    }
+  }
+
+  // Arrow keys walk the history selection; Shift extends it from the anchor.
+  function onListKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (visibleCommits.length === 0) return;
+    // Move the selection, not the scrollbar.
+    e.preventDefault();
+    const current = visibleCommits.findIndex(
+      (c) => c.hash === selectedCommitHash,
+    );
+    const next =
+      e.key === "ArrowDown"
+        ? Math.min(current + 1, visibleCommits.length - 1)
+        : current === -1
+          ? visibleCommits.length - 1
+          : Math.max(current - 1, 0);
+    const commit = visibleCommits[next];
+    selectCommit(commit.hash);
+    if (e.shiftKey && anchorIndex !== null) {
+      const [a, b] = [anchorIndex, next].sort((x, y) => x - y);
+      setSelected(new Set(visibleCommits.slice(a, b + 1).map((c) => c.hash)));
+    } else {
+      setSelected(new Set([commit.hash]));
+      setAnchorIndex(next);
+    }
+    // Move focus along with the selection so the focus ring tracks it.
+    const el = e.currentTarget.querySelector<HTMLElement>(
+      `[data-hash="${CSS.escape(commit.hash)}"]`,
+    );
+    el?.focus();
+    el?.scrollIntoView({ block: "nearest" });
+  }
+
   // The commits a context-menu action applies to: the multi-selection when the
   // right-clicked commit is part of it, otherwise just that one commit.
   function effectiveSelection(hash: string): string[] {
@@ -365,7 +408,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
         />
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div>
+        <div onKeyDown={onListKeyDown}>
           {visibleCommits.length === 0 && (
             <p className="px-3 py-8 text-center text-xs text-muted-foreground">
               No loaded commits match the filter
@@ -377,6 +420,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                 render={
                   <button
                     type="button"
+                    data-hash={commit.hash}
                     className={cn(
                       "block w-full border-b px-3 py-2 text-left",
                       selected.has(commit.hash) ||
@@ -386,6 +430,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                         : "hover:bg-muted/60",
                     )}
                     onClick={(e) => onRowClick(e, index, commit.hash)}
+                    onContextMenu={() => onRowContextMenu(index, commit.hash)}
                   >
                     <p className="flex items-center gap-1.5 text-xs font-medium">
                       <span className="min-w-0 truncate">{commit.subject}</span>
@@ -421,121 +466,149 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                   </button>
                 }
               />
-              <ContextMenuContent className="min-w-60">
-                <ContextMenuItem
-                  disabled={index !== 0}
-                  onClick={() => startAmend(commit.hash)}
-                >
-                  Amend commit…
-                </ContextMenuItem>
-                <ContextMenuItem
-                  disabled={index === 0}
-                  onClick={() => setResetHash(commit.hash)}
-                >
-                  Reset to commit…
-                </ContextMenuItem>
-                <ContextMenuItem
-                  onClick={() =>
-                    checkoutCommit.mutate(commit.hash, { onError })
-                  }
-                >
-                  Checkout commit
-                </ContextMenuItem>
-                <ContextMenuItem
-                  onClick={() => revertCommit.mutate(commit.hash, { onError })}
-                >
-                  Revert changes in commit
-                </ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem
-                  onClick={() => {
-                    branchForm.reset({ name: "" });
-                    setBranchHash(commit.hash);
-                  }}
-                >
-                  Create branch from commit…
-                </ContextMenuItem>
-                <ContextMenuItem
-                  onClick={() => {
-                    tagForm.reset({ name: "" });
-                    setTagHash(commit.hash);
-                  }}
-                >
-                  Create tag…
-                </ContextMenuItem>
-                <ContextMenuItem
-                  onClick={() =>
-                    cherryPick.mutate(commit.hash, {
-                      onSuccess: (applied) => {
-                        if (applied) {
-                          toast.success(
-                            `Cherry-picked ${commit.hash.slice(0, 7)}`,
-                          );
-                        } else {
-                          toast.info(
-                            "Nothing to cherry-pick — these changes are already on this branch.",
-                          );
-                        }
-                      },
-                      onError,
-                    })
-                  }
-                >
-                  Cherry-pick commit
-                </ContextMenuItem>
-                <ContextMenuItem
-                  disabled={targetBranches.length === 0}
-                  onClick={() => openCherryPickOnto(commit.hash)}
-                >
-                  {selected.has(commit.hash) && selected.size > 1
-                    ? `Cherry-pick ${selected.size} commits to branch…`
-                    : "Cherry-pick to branch…"}
-                </ContextMenuItem>
-                {selected.has(commit.hash) && selected.size > 1 && (
+              {selected.has(commit.hash) && selected.size > 1 ? (
+                /* Multi-selection: only actions that apply to the whole
+                   selection, so nothing silently targets one commit. */
+                <ContextMenuContent className="min-w-60">
+                  <ContextMenuItem
+                    disabled={targetBranches.length === 0}
+                    onClick={() => openCherryPickOnto(commit.hash)}
+                  >
+                    Cherry-pick {selected.size} commits to branch…
+                  </ContextMenuItem>
                   <ContextMenuItem disabled={!canSquash} onClick={openSquash}>
                     Squash {selected.size} commits…
                     {!canSquash && " (must be adjacent and unpushed)"}
                   </ContextMenuItem>
-                )}
-                <ContextMenuItem
-                  disabled={!canReorder || index >= reorderLen}
-                  onClick={() => setReorderOpen(true)}
-                >
-                  Reorder unpushed commits…
-                </ContextMenuItem>
-                {commit.tags.length > 0 && <ContextMenuSeparator />}
-                {commit.tags.map((tag) => (
                   <ContextMenuItem
-                    key={`push:${tag}`}
+                    disabled={!canReorder}
+                    onClick={() => setReorderOpen(true)}
+                  >
+                    Reorder unpushed commits…
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
                     onClick={() =>
-                      pushTag.mutate(tag, {
-                        onSuccess: () =>
-                          toast.success(`Pushed tag ${tag} to origin`),
+                      copyText(
+                        effectiveSelection(commit.hash).reverse().join("\n"),
+                        `${selected.size} SHAs copied`,
+                      )
+                    }
+                  >
+                    Copy {selected.size} SHAs
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              ) : (
+                <ContextMenuContent className="min-w-60">
+                  <ContextMenuItem
+                    disabled={index !== 0}
+                    onClick={() => startAmend(commit.hash)}
+                  >
+                    Amend commit…
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    disabled={index === 0}
+                    onClick={() => setResetHash(commit.hash)}
+                  >
+                    Reset to commit…
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() =>
+                      checkoutCommit.mutate(commit.hash, { onError })
+                    }
+                  >
+                    Checkout commit
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() =>
+                      revertCommit.mutate(commit.hash, { onError })
+                    }
+                  >
+                    Revert changes in commit
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onClick={() => {
+                      branchForm.reset({ name: "" });
+                      setBranchHash(commit.hash);
+                    }}
+                  >
+                    Create branch from commit…
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() => {
+                      tagForm.reset({ name: "" });
+                      setTagHash(commit.hash);
+                    }}
+                  >
+                    Create tag…
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() =>
+                      cherryPick.mutate(commit.hash, {
+                        onSuccess: (applied) => {
+                          if (applied) {
+                            toast.success(
+                              `Cherry-picked ${commit.hash.slice(0, 7)}`,
+                            );
+                          } else {
+                            toast.info(
+                              "Nothing to cherry-pick — these changes are already on this branch.",
+                            );
+                          }
+                        },
                         onError,
                       })
                     }
                   >
-                    Push tag {tag} to origin
+                    Cherry-pick commit
                   </ContextMenuItem>
-                ))}
-                {commit.tags.map((tag) => (
                   <ContextMenuItem
-                    key={`delete:${tag}`}
-                    onClick={() => {
-                      setDeleteTagRemote(false);
-                      setDeleteTagName(tag);
-                    }}
+                    disabled={targetBranches.length === 0}
+                    onClick={() => openCherryPickOnto(commit.hash)}
                   >
-                    Delete tag {tag}…
+                    Cherry-pick to branch…
                   </ContextMenuItem>
-                ))}
-                <ContextMenuSeparator />
-                <ContextMenuItem
-                  onClick={() => copyText(commit.hash, "SHA copied")}
-                >
-                  Copy SHA
-                </ContextMenuItem>
-              </ContextMenuContent>
+                  <ContextMenuItem
+                    disabled={!canReorder || index >= reorderLen}
+                    onClick={() => setReorderOpen(true)}
+                  >
+                    Reorder unpushed commits…
+                  </ContextMenuItem>
+                  {commit.tags.length > 0 && <ContextMenuSeparator />}
+                  {commit.tags.map((tag) => (
+                    <ContextMenuItem
+                      key={`push:${tag}`}
+                      onClick={() =>
+                        pushTag.mutate(tag, {
+                          onSuccess: () =>
+                            toast.success(`Pushed tag ${tag} to origin`),
+                          onError,
+                        })
+                      }
+                    >
+                      Push tag {tag} to origin
+                    </ContextMenuItem>
+                  ))}
+                  {commit.tags.map((tag) => (
+                    <ContextMenuItem
+                      key={`delete:${tag}`}
+                      onClick={() => {
+                        setDeleteTagRemote(false);
+                        setDeleteTagName(tag);
+                      }}
+                    >
+                      Delete tag {tag}…
+                    </ContextMenuItem>
+                  ))}
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onClick={() => copyText(commit.hash, "SHA copied")}
+                  >
+                    Copy SHA
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              )}
             </ContextMenu>
           ))}
           {log.hasNextPage && (
