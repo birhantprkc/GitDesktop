@@ -1,5 +1,5 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useState } from "react";
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,13 +9,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Spinner } from "@/components/ui/spinner";
+import { required, useAppForm } from "@/lib/form";
 import { cloneRepo, validateRepo } from "@/lib/git/api";
 import { useAddRecentRepo } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+
+const DEFAULTS = { url: "", destination: "" };
 
 export function CloneRepoDialog({
   open,
@@ -26,91 +26,102 @@ export function CloneRepoDialog({
 }) {
   const openRepo = useUiStore((s) => s.openRepo);
   const addRecent = useAddRecentRepo();
-  const [url, setUrl] = useState("");
-  const [destination, setDestination] = useState("");
-  const [cloning, setCloning] = useState(false);
+
+  const form = useAppForm({
+    defaultValues: DEFAULTS,
+    onSubmit: async ({ value }) => {
+      try {
+        const clonedPath = await cloneRepo(
+          value.url.trim(),
+          value.destination.trim(),
+        );
+        const info = await validateRepo(clonedPath);
+        addRecent.mutate({ path: info.root, name: info.name });
+        onOpenChange(false);
+        openRepo(info);
+      } catch (e) {
+        toastError(e);
+      }
+    },
+  });
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reseed on open
+  useEffect(() => {
+    if (open) form.reset(DEFAULTS);
+  }, [open]);
 
   async function pickDestination() {
     const path = await openDialog({
       directory: true,
       title: "Clone into folder",
     });
-    if (path) setDestination(path);
+    if (path) form.setFieldValue("destination", path);
   }
-
-  async function clone() {
-    setCloning(true);
-    try {
-      const clonedPath = await cloneRepo(url.trim(), destination.trim());
-      const info = await validateRepo(clonedPath);
-      addRecent.mutate({ path: info.root, name: info.name });
-      onOpenChange(false);
-      setUrl("");
-      openRepo(info);
-    } catch (e) {
-      toastError(e);
-    } finally {
-      setCloning(false);
-    }
-  }
-
-  const canClone =
-    url.trim().length > 0 && destination.trim().length > 0 && !cloning;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Clone repository</DialogTitle>
-          <DialogDescription>
-            Clones over HTTPS or SSH using your system git credentials.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="clone-url">Repository URL</Label>
-            <Input
-              id="clone-url"
-              placeholder="https://github.com/user/repo.git"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              disabled={cloning}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="clone-dest">Clone into</Label>
-            <div className="flex gap-2">
-              <Input
-                id="clone-dest"
-                placeholder="Type, paste, or choose a folder…"
-                value={destination}
-                onChange={(e) => setDestination(e.target.value)}
-                disabled={cloning}
-                className="flex-1"
-              />
-              <Button
-                variant="outline"
-                onClick={pickDestination}
-                disabled={cloning}
-              >
-                Choose…
-              </Button>
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={cloning}
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            form.handleSubmit();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Clone repository</DialogTitle>
+            <DialogDescription>
+              Clones over HTTPS or SSH using your system git credentials.
+            </DialogDescription>
+          </DialogHeader>
+          <form.AppField
+            name="url"
+            validators={{ onChange: ({ value }) => required(value) }}
           >
-            Cancel
-          </Button>
-          <Button onClick={clone} disabled={!canClone}>
-            {cloning && <Spinner data-icon="inline-start" />}
-            {cloning ? "Cloning…" : "Clone"}
-          </Button>
-        </DialogFooter>
+            {(field) => (
+              <field.TextField
+                label="Repository URL"
+                placeholder="https://github.com/user/repo.git"
+              />
+            )}
+          </form.AppField>
+          <form.AppField
+            name="destination"
+            validators={{ onChange: ({ value }) => required(value) }}
+          >
+            {(field) => (
+              <div className="space-y-2">
+                <div className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <field.TextField
+                      label="Clone into"
+                      placeholder="Type, paste, or choose a folder…"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={pickDestination}
+                  >
+                    Choose…
+                  </Button>
+                </div>
+              </div>
+            )}
+          </form.AppField>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <form.AppForm>
+              <form.SubmitButton>Clone</form.SubmitButton>
+            </form.AppForm>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

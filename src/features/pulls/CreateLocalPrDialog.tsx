@@ -1,5 +1,6 @@
 import { SparkleIcon, XIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useSelector } from "@tanstack/react-store";
+import { useEffect } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,16 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
+import { required, useAppForm } from "@/lib/form";
 import {
   useBranches,
   useCompareBranches,
@@ -29,7 +21,6 @@ import {
 import { useCreateLocalPr } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
-import { MarkdownEditor } from "./MarkdownEditor";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 
 export function CreateLocalPrDialog({
@@ -56,10 +47,30 @@ export function CreateLocalPrDialog({
   const currentName = status.data?.branch?.name ?? null;
   const names = (branches.data ?? []).map((b) => b.name);
 
-  const [base, setBase] = useState("");
-  const [head, setHead] = useState("");
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
+  const form = useAppForm({
+    defaultValues: { head: "", base: "", title: "", body: "" },
+    validators: {
+      // Same branch on both sides proposes nothing — gate the submit.
+      onChange: ({ value }) =>
+        value.head === value.base ? "Pick two different branches." : undefined,
+    },
+    onSubmit: async ({ value }) => {
+      try {
+        const pr = await createPr.mutateAsync({
+          title: value.title.trim(),
+          body: value.body,
+          base: value.base,
+          head: value.head,
+        });
+        toast.success(`Created local PR: ${pr.title}`);
+        setRepoTab("pulls");
+        selectPr({ kind: "local", id: pr.id });
+        onOpenChange(false);
+      } catch (e) {
+        toastError(e);
+      }
+    },
+  });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reseed on open
   useEffect(() => {
@@ -69,160 +80,142 @@ export function CreateLocalPrDialog({
       defaultBranch.data && defaultBranch.data !== h
         ? defaultBranch.data
         : (names.find((n) => n !== h) ?? "");
-    setHead(h);
-    setBase(defaultBase ?? fallbackBase);
-    setTitle("");
-    setBody("");
+    // keepDefaultValues: otherwise the per-render options sync clobbers the
+    // seeded head/base back to empty (untouched form).
+    form.reset(
+      {
+        head: h,
+        base: defaultBase ?? fallbackBase,
+        title: "",
+        body: "",
+      },
+      { keepDefaultValues: true },
+    );
   }, [open]);
 
+  // Live head/base drive the "N commits to merge" hint and AI generation.
+  const head = useSelector(form.store, (s) => s.values.head);
+  const base = useSelector(form.store, (s) => s.values.base);
   const comparison = useCompareBranches(repoPath, base || null, head || null);
   const ahead = comparison.data?.ahead ?? [];
   const sameBranch = base === head;
 
-  function submit() {
-    createPr.mutate(
-      { title: title.trim(), body, base, head },
-      {
-        onSuccess: (pr) => {
-          toast.success(`Created local PR: ${pr.title}`);
-          setRepoTab("pulls");
-          selectPr({ kind: "local", id: pr.id });
-          onOpenChange(false);
-        },
-        onError: toastError,
-      },
-    );
-  }
-
   const items = Object.fromEntries(names.map((n) => [n, n]));
-  const busy = createPr.isPending || generating;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>New local pull request</DialogTitle>
-          <DialogDescription>
-            Propose merging one branch into another and review it locally — no
-            GitHub involved. Merge it later with a{" "}
-            <span className="font-mono">--no-ff</span> commit.
-          </DialogDescription>
-        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            form.handleSubmit();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>New local pull request</DialogTitle>
+            <DialogDescription>
+              Propose merging one branch into another and review it locally — no
+              GitHub involved. Merge it later with a{" "}
+              <span className="font-mono">--no-ff</span> commit.
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className="flex items-end gap-2">
-          <div className="flex-1 space-y-1">
-            <Label>Merge</Label>
-            <Select
-              items={items}
-              value={head || null}
-              onValueChange={(v) => v && setHead(v)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {names.map((n) => (
-                  <SelectItem key={n} value={n}>
-                    {n}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="flex items-end gap-2">
+            <div className="flex-1">
+              <form.AppField name="head">
+                {(field) => <field.SelectField label="Merge" items={items} />}
+              </form.AppField>
+            </div>
+            <span className="pb-2 text-xs text-muted-foreground">into</span>
+            <div className="flex-1">
+              <form.AppField name="base">
+                {(field) => <field.SelectField label="Base" items={items} />}
+              </form.AppField>
+            </div>
           </div>
-          <span className="pb-2 text-xs text-muted-foreground">into</span>
-          <div className="flex-1 space-y-1">
-            <Label>Base</Label>
-            <Select
-              items={items}
-              value={base || null}
-              onValueChange={(v) => v && setBase(v)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {names.map((n) => (
-                  <SelectItem key={n} value={n}>
-                    {n}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-        {sameBranch ? (
-          <p className="text-xs text-amber-600 dark:text-amber-400">
-            Pick two different branches.
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            {ahead.length} commit{ahead.length === 1 ? "" : "s"} to merge.
-          </p>
-        )}
+          {sameBranch ? (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              Pick two different branches.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {ahead.length} commit{ahead.length === 1 ? "" : "s"} to merge.
+            </p>
+          )}
 
-        <div className="space-y-2">
-          <Label htmlFor="lpr-title">Title</Label>
-          <Input
-            id="lpr-title"
-            placeholder="Summarize the change"
-            autoComplete="off"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="lpr-body">Description</Label>
-          <MarkdownEditor
-            id="lpr-body"
-            placeholder="Describe what changed and why"
-            value={body}
-            onChange={setBody}
-            rows={7}
-            textareaClassName="max-h-72 min-h-24 resize-y font-mono"
-            actions={
-              generating ? (
-                <Button variant="outline" size="xs" onClick={cancel}>
-                  <XIcon data-icon="inline-start" />
-                  Cancel
-                </Button>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="xs"
-                  disabled={sameBranch || ahead.length === 0}
-                  onClick={() =>
-                    generate(
-                      base,
-                      head,
-                      ahead.map((c) => c.subject),
-                      (d) => {
-                        setTitle(d.title);
-                        setBody(d.body);
-                      },
-                    )
-                  }
-                  title="Generate the title and description with AI"
-                >
-                  <SparkleIcon data-icon="inline-start" />
-                  Generate
-                </Button>
-              )
-            }
-          />
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            disabled={!title.trim() || sameBranch || busy}
-            onClick={submit}
+          <form.AppField
+            name="title"
+            validators={{ onChange: ({ value }) => required(value) }}
           >
-            {createPr.isPending && <Spinner data-icon="inline-start" />}
-            Create local PR
-          </Button>
-        </DialogFooter>
+            {(field) => (
+              <field.TextField
+                label="Title"
+                placeholder="Summarize the change"
+              />
+            )}
+          </form.AppField>
+          <form.AppField name="body">
+            {(field) => (
+              <field.MarkdownField
+                label="Description"
+                placeholder="Describe what changed and why"
+                rows={7}
+                textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+                actions={
+                  generating ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      onClick={cancel}
+                    >
+                      <XIcon data-icon="inline-start" />
+                      Cancel
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      disabled={sameBranch || ahead.length === 0}
+                      onClick={() =>
+                        generate(
+                          base,
+                          head,
+                          ahead.map((c) => c.subject),
+                          (d) => {
+                            form.setFieldValue("title", d.title);
+                            form.setFieldValue("body", d.body);
+                          },
+                        )
+                      }
+                      title="Generate the title and description with AI"
+                    >
+                      <SparkleIcon data-icon="inline-start" />
+                      Generate
+                    </Button>
+                  )
+                }
+              />
+            )}
+          </form.AppField>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <form.AppForm>
+              <form.SubmitButton disabled={generating}>
+                Create local PR
+              </form.SubmitButton>
+            </form.AppForm>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

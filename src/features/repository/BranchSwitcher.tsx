@@ -1,5 +1,6 @@
 import { Popover } from "@base-ui/react/popover";
 import { CaretDownIcon, CheckIcon, GitBranchIcon } from "@phosphor-icons/react";
+import { useSelector } from "@tanstack/react-store";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +20,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { copyText } from "@/lib/clipboard";
+import { required, useAppForm } from "@/lib/form";
 import {
   useBranches,
   useCheckoutBranch,
@@ -44,6 +45,7 @@ import {
   useStashCount,
   useStashPop,
 } from "@/lib/git/queries";
+import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 
@@ -99,10 +101,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [createFrom, setCreateFrom] = useState("");
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [discardAllOpen, setDiscardAllOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
@@ -166,35 +165,47 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     }
   }
 
-  function create() {
-    createBranch.mutate(
-      {
-        name: newName.trim(),
-        checkout: true,
-        startPoint: createFrom || undefined,
-      },
-      {
-        onSuccess: () => {
-          setCreateOpen(false);
-          setNewName("");
-        },
-        onError,
-      },
-    );
-  }
+  const createForm = useAppForm({
+    defaultValues: { name: "", base: "" },
+    onSubmit: async ({ value }) => {
+      try {
+        await createBranch.mutateAsync({
+          name: sanitizeRefName(value.name),
+          checkout: true,
+          startPoint: value.base || undefined,
+        });
+        setCreateOpen(false);
+      } catch (e) {
+        onError(e);
+      }
+    },
+  });
+  // Drives the "Branches from …" copy in the dialog description.
+  const createBase = useSelector(createForm.store, (s) => s.values.base);
 
-  function doRename() {
-    if (!renameTarget) return;
-    renameBranch.mutate(
-      { oldName: renameTarget, newName: renameValue.trim() },
-      {
-        onSuccess: () => {
-          toast.success(`Renamed to ${renameValue.trim()}`);
-          setRenameTarget(null);
-        },
-        onError,
-      },
-    );
+  const renameForm = useAppForm({
+    defaultValues: { name: "" },
+    onSubmit: async ({ value }) => {
+      if (!renameTarget) return;
+      const newName = sanitizeRefName(value.name);
+      try {
+        await renameBranch.mutateAsync({ oldName: renameTarget, newName });
+        toast.success(`Renamed to ${newName}`);
+        setRenameTarget(null);
+      } catch (e) {
+        onError(e);
+      }
+    },
+  });
+
+  // NOTE: seeding resets must pass keepDefaultValues — otherwise reset()
+  // rewrites the form's defaultValues, and react-form's per-render options
+  // sync sees "different defaults + untouched form" and clobbers the seeded
+  // values right back on the next render.
+  function openRename(branch: string) {
+    setOpen(false);
+    renameForm.reset({ name: branch }, { keepDefaultValues: true });
+    setRenameTarget(branch);
   }
 
   async function doDelete() {
@@ -316,13 +327,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                       }
                     />
                     <ContextMenuContent className="min-w-48">
-                      <ContextMenuItem
-                        onClick={() => {
-                          setOpen(false);
-                          setRenameValue(branch.name);
-                          setRenameTarget(branch.name);
-                        }}
-                      >
+                      <ContextMenuItem onClick={() => openRename(branch.name)}>
                         Rename…
                       </ContextMenuItem>
                       <ContextMenuItem
@@ -349,7 +354,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 <MenuRow
                   onClick={() => {
                     setOpen(false);
-                    setCreateFrom(currentName ?? defaultName ?? "");
+                    createForm.reset(
+                      { name: "", base: currentName ?? defaultName ?? "" },
+                      { keepDefaultValues: true },
+                    );
                     setCreateOpen(true);
                   }}
                 >
@@ -359,9 +367,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   disabled={!currentName}
                   onClick={() => {
                     if (!currentName) return;
-                    setOpen(false);
-                    setRenameValue(currentName);
-                    setRenameTarget(currentName);
+                    openRename(currentName);
                   }}
                 >
                   Rename current branch…
@@ -454,61 +460,63 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>New branch</DialogTitle>
-            <DialogDescription>
-              Branches from{" "}
-              <span className="font-mono">{createFrom || "HEAD"}</span> and
-              switches to it.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="branch-name">Branch name</Label>
-            <Input
-              id="branch-name"
-              placeholder="feature/my-change"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && newName.trim()) create();
-              }}
-              autoComplete="off"
-            />
-          </div>
-          {baseOptions.length > 1 && (
-            <div className="space-y-2">
-              <Label>Base it on</Label>
-              <Select
-                items={Object.fromEntries(baseOptions.map((b) => [b, b]))}
-                value={createFrom || null}
-                onValueChange={(v) => v && setCreateFrom(v)}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {baseOptions.map((b) => (
-                    <SelectItem key={b} value={b}>
-                      {b}
-                      {b === currentName ? " (current)" : ""}
-                      {b === defaultName ? " (default)" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={create}
-              disabled={!newName.trim() || createBranch.isPending}
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              createForm.handleSubmit();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>New branch</DialogTitle>
+              <DialogDescription>
+                Branches from{" "}
+                <span className="font-mono">{createBase || "HEAD"}</span> and
+                switches to it.
+              </DialogDescription>
+            </DialogHeader>
+            <createForm.AppField
+              name="name"
+              validators={{ onChange: ({ value }) => required(value) }}
             >
-              Create branch
-            </Button>
-          </DialogFooter>
+              {(field) => (
+                <field.TextField
+                  label="Branch name"
+                  placeholder="feature/my-change"
+                  warning={refNameWarning}
+                />
+              )}
+            </createForm.AppField>
+            {baseOptions.length > 0 && (
+              <createForm.AppField name="base">
+                {(field) => (
+                  <field.SelectField
+                    label="Base it on"
+                    items={Object.fromEntries(
+                      baseOptions.map((b) => [
+                        b,
+                        `${b}${b === currentName ? " (current)" : ""}${
+                          b === defaultName ? " (default)" : ""
+                        }`,
+                      ]),
+                    )}
+                  />
+                )}
+              </createForm.AppField>
+            )}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCreateOpen(false)}
+              >
+                Cancel
+              </Button>
+              <createForm.AppForm>
+                <createForm.SubmitButton>Create branch</createForm.SubmitButton>
+              </createForm.AppForm>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -519,37 +527,44 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         }}
       >
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Rename branch</DialogTitle>
-            <DialogDescription>Renames {renameTarget}.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="rename-branch">New name</Label>
-            <Input
-              id="rename-branch"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && renameValue.trim()) doRename();
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              renameForm.handleSubmit();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Rename branch</DialogTitle>
+              <DialogDescription>Renames {renameTarget}.</DialogDescription>
+            </DialogHeader>
+            <renameForm.AppField
+              name="name"
+              validators={{
+                onChange: ({ value }) =>
+                  required(value) ??
+                  (sanitizeRefName(value) === renameTarget
+                    ? "Unchanged"
+                    : undefined),
               }}
-              autoComplete="off"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRenameTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={doRename}
-              disabled={
-                !renameValue.trim() ||
-                renameValue.trim() === renameTarget ||
-                renameBranch.isPending
-              }
             >
-              Rename
-            </Button>
-          </DialogFooter>
+              {(field) => (
+                <field.TextField label="New name" warning={refNameWarning} />
+              )}
+            </renameForm.AppField>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setRenameTarget(null)}
+              >
+                Cancel
+              </Button>
+              <renameForm.AppForm>
+                <renameForm.SubmitButton>Rename</renameForm.SubmitButton>
+              </renameForm.AppForm>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 

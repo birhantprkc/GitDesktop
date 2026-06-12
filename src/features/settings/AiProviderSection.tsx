@@ -1,5 +1,6 @@
 import { CheckCircleIcon, CopyIcon, XCircleIcon } from "@phosphor-icons/react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useSelector } from "@tanstack/react-store";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -37,11 +38,12 @@ import {
   PROVIDERS_REQUIRING_KEY,
 } from "@/lib/ai/providers";
 import type { AiProviderId, AiSettings } from "@/lib/ai/types";
+import { required, useAppForm, withForm } from "@/lib/form";
 import { deleteSecret, setSecret } from "@/lib/git/api";
 import { settingsKeys, useSecretPreview } from "@/lib/settings/queries";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
-import type { SectionProps } from "./SettingsScreen";
+import { settingsFormOpts } from "./settings-form";
 
 const PROVIDER_IDS = Object.keys(PROVIDER_LABELS) as AiProviderId[];
 
@@ -53,6 +55,14 @@ const KEY_HINTS: Partial<
   anthropic: { prefix: "sk-ant-", minLength: 40 },
   openrouter: { prefix: "sk-or-", minLength: 40 },
 };
+
+function keyShapeWarning(provider: AiProviderId, value: string): string | null {
+  const hint = KEY_HINTS[provider];
+  if (!hint || !value.trim()) return null;
+  const v = value.trim();
+  if (v.startsWith(hint.prefix) && v.length >= hint.minLength) return null;
+  return `Doesn't look like a ${PROVIDER_LABELS[provider]} key (expected "${hint.prefix}…"). You can still save it.`;
+}
 
 /**
  * Provider + model picker pair, shared by the generation and review model
@@ -152,222 +162,232 @@ function ModelPicker({
   );
 }
 
-export function AiProviderSection({ draft, update }: SectionProps) {
-  const queryClient = useQueryClient();
-  const provider = draft.ai.provider;
-  const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
-  const keyPreview = useSecretPreview(provider);
+export const AiProviderSection = withForm({
+  ...settingsFormOpts,
+  render: function AiProviderSectionRender({ form }) {
+    const queryClient = useQueryClient();
+    const ai = useSelector(form.store, (s) => s.values.ai);
+    const reviewAi = useSelector(form.store, (s) => s.values.reviewAi);
+    const provider = ai.provider;
+    const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
+    const keyPreview = useSecretPreview(provider);
 
-  const [keyInput, setKeyInput] = useState("");
-  const [savingKey, setSavingKey] = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{
-    ok: boolean;
-    message?: string;
-  } | null>(null);
+    const [confirmClear, setConfirmClear] = useState(false);
+    const [testing, setTesting] = useState(false);
+    const [testResult, setTestResult] = useState<{
+      ok: boolean;
+      message?: string;
+    } | null>(null);
 
-  function setAi(ai: AiSettings) {
-    setTestResult(null);
-    update({ ai });
-  }
+    // Keys save immediately to the OS keychain (they're not part of the
+    // settings draft), so they get their own little form.
+    const keyForm = useAppForm({
+      defaultValues: { key: "" },
+      onSubmit: async ({ value }) => {
+        try {
+          await setSecret(provider, value.key.trim());
+          keyForm.reset({ key: "" });
+          queryClient.invalidateQueries({
+            queryKey: settingsKeys.secret(provider),
+          });
+          toast.success(
+            `${PROVIDER_LABELS[provider]} key saved to OS keychain`,
+          );
+        } catch (e) {
+          toastError(e);
+        }
+      },
+    });
 
-  async function saveKey() {
-    setSavingKey(true);
-    try {
-      const value = keyInput.trim();
-      await setSecret(provider, value);
-      setKeyInput("");
-      queryClient.invalidateQueries({
-        queryKey: settingsKeys.secret(provider),
-      });
-      const hint = KEY_HINTS[provider];
-      if (
-        hint &&
-        (!value.startsWith(hint.prefix) || value.length < hint.minLength)
-      ) {
-        toast.warning(
-          `Saved, but this doesn't look like a ${PROVIDER_LABELS[provider]} key ` +
-            `(expected to start with "${hint.prefix}" and be longer). ` +
-            "Double-check what you pasted.",
-          { duration: 8000 },
-        );
-      } else {
-        toast.success(`${PROVIDER_LABELS[provider]} key saved to OS keychain`);
+    function setAi(next: AiSettings) {
+      setTestResult(null);
+      form.setFieldValue("ai", next);
+    }
+
+    async function clearKey() {
+      try {
+        await deleteSecret(provider);
+        queryClient.invalidateQueries({
+          queryKey: settingsKeys.secret(provider),
+        });
+        setConfirmClear(false);
+        toast.success("Key removed");
+      } catch (e) {
+        toastError(e);
       }
-    } catch (e) {
-      toastError(e);
-    } finally {
-      setSavingKey(false);
     }
-  }
 
-  async function clearKey() {
-    try {
-      await deleteSecret(provider);
-      queryClient.invalidateQueries({
-        queryKey: settingsKeys.secret(provider),
-      });
-      setConfirmClear(false);
-      toast.success("Key removed");
-    } catch (e) {
-      toastError(e);
+    async function testConnection() {
+      setTesting(true);
+      setTestResult(null);
+      try {
+        const client = await createAiClient(ai);
+        const result = await client.testConnection();
+        setTestResult(
+          result.ok ? { ok: true } : { ok: false, message: result.message },
+        );
+      } catch (e) {
+        setTestResult({ ok: false, message: errorMessage(e) });
+      } finally {
+        setTesting(false);
+      }
     }
-  }
 
-  async function testConnection() {
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const client = await createAiClient(draft.ai);
-      const result = await client.testConnection();
-      setTestResult(
-        result.ok ? { ok: true } : { ok: false, message: result.message },
-      );
-    } catch (e) {
-      setTestResult({ ok: false, message: errorMessage(e) });
-    } finally {
-      setTesting(false);
-    }
-  }
-
-  return (
-    <section className="space-y-4">
-      <div>
-        <h2 className="text-sm font-medium">AI provider</h2>
-        <p className="text-xs text-muted-foreground">
-          Powers commit message and pull request generation. API keys are stored
-          in the OS keychain, never in app files.
-        </p>
-      </div>
-
-      <ModelPicker idPrefix="ai" value={draft.ai} onChange={setAi} />
-
-      {provider === "ollama" && (
-        <div className="space-y-2">
-          <Label htmlFor="ollama-url">Ollama URL</Label>
-          <Input
-            id="ollama-url"
-            value={draft.ai.ollamaBaseUrl}
-            onChange={(e) =>
-              setAi({ ...draft.ai, ollamaBaseUrl: e.target.value })
-            }
-          />
-          <p className="text-xs text-muted-foreground">
-            Only localhost is allowed by the app's network policy.
-          </p>
-        </div>
-      )}
-
-      {needsKey && (
-        <div className="space-y-2">
-          <Label htmlFor="api-key">
-            API key{" "}
-            <span className="font-normal text-muted-foreground">
-              {keyPreview.data
-                ? `(saved: ${keyPreview.data.masked}, ${keyPreview.data.length} chars)`
-                : "(no key saved)"}
-            </span>
-          </Label>
-          <div className="flex gap-2">
-            <Input
-              id="api-key"
-              type="password"
-              autoComplete="off"
-              placeholder={
-                keyPreview.data
-                  ? "Enter a new key to replace the saved one"
-                  : "Paste your API key"
-              }
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              className="flex-1"
-            />
-            <Button onClick={saveKey} disabled={!keyInput.trim() || savingKey}>
-              {savingKey && <Spinner data-icon="inline-start" />}
-              Save
-            </Button>
-            {keyPreview.data && (
-              <Button
-                variant="destructive"
-                onClick={() => setConfirmClear(true)}
-              >
-                Clear
-              </Button>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Keys apply immediately and are shared by every feature using this
-            provider.
-          </p>
-        </div>
-      )}
-
-      <div className="flex items-center gap-3">
-        <Button variant="outline" onClick={testConnection} disabled={testing}>
-          {testing && <Spinner data-icon="inline-start" />}
-          Test connection
-        </Button>
-        {testResult?.ok && (
-          <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
-            <CheckCircleIcon className="size-4" /> Connected
-          </span>
-        )}
-        {testResult && !testResult.ok && (
-          <span className="flex min-w-0 items-center gap-1 text-xs text-destructive">
-            <XCircleIcon className="size-4 shrink-0" />
-            <span className="line-clamp-2">{testResult.message}</span>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Copy error message"
-              className="shrink-0"
-              onClick={() => {
-                navigator.clipboard.writeText(testResult.message ?? "");
-                toast.success("Copied");
-              }}
-            >
-              <CopyIcon />
-            </Button>
-          </span>
-        )}
-      </div>
-
-      <div className="space-y-4 border-t pt-4">
+    return (
+      <section className="space-y-4">
         <div>
-          <h3 className="text-sm font-medium">Review model</h3>
+          <h2 className="text-sm font-medium">AI provider</h2>
           <p className="text-xs text-muted-foreground">
-            Used by AI code review on pull requests. Can differ from the
-            generation model above; shares the same per-provider API keys.
+            Powers commit message and pull request generation. API keys are
+            stored in the OS keychain, never in app files.
           </p>
         </div>
-        <ModelPicker
-          idPrefix="review"
-          value={draft.reviewAi}
-          onChange={(reviewAi) => update({ reviewAi })}
-        />
-      </div>
 
-      <Dialog open={confirmClear} onOpenChange={setConfirmClear}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Remove the saved key?</DialogTitle>
-            <DialogDescription>
-              Deletes the {PROVIDER_LABELS[provider]} API key from the OS
-              keychain. AI features using {PROVIDER_LABELS[provider]} will stop
-              working until a new key is saved. This can't be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmClear(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={clearKey}>
-              Remove key
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </section>
-  );
-}
+        <ModelPicker idPrefix="ai" value={ai} onChange={setAi} />
+
+        {provider === "ollama" && (
+          <div className="space-y-2">
+            <Label htmlFor="ollama-url">Ollama URL</Label>
+            <Input
+              id="ollama-url"
+              autoComplete="off"
+              value={ai.ollamaBaseUrl}
+              onChange={(e) => setAi({ ...ai, ollamaBaseUrl: e.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Only localhost is allowed by the app's network policy.
+            </p>
+          </div>
+        )}
+
+        {needsKey && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              keyForm.handleSubmit();
+            }}
+          >
+            <div className="space-y-2">
+              <Label>
+                API key{" "}
+                <span className="font-normal text-muted-foreground">
+                  {keyPreview.data
+                    ? `(saved: ${keyPreview.data.masked}, ${keyPreview.data.length} chars)`
+                    : "(no key saved)"}
+                </span>
+              </Label>
+              <div className="flex items-start gap-2">
+                <div className="flex-1">
+                  <keyForm.AppField
+                    name="key"
+                    validators={{ onChange: ({ value }) => required(value) }}
+                  >
+                    {(field) => (
+                      <field.TextField
+                        type="password"
+                        placeholder={
+                          keyPreview.data
+                            ? "Enter a new key to replace the saved one"
+                            : "Paste your API key"
+                        }
+                        warning={(value) => keyShapeWarning(provider, value)}
+                      />
+                    )}
+                  </keyForm.AppField>
+                </div>
+                <keyForm.AppForm>
+                  <keyForm.SubmitButton>Save</keyForm.SubmitButton>
+                </keyForm.AppForm>
+                {keyPreview.data && (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    onClick={() => setConfirmClear(true)}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Keys apply immediately and are shared by every feature using
+                this provider.
+              </p>
+            </div>
+          </form>
+        )}
+
+        <div className="flex items-center gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={testConnection}
+            disabled={testing}
+          >
+            {testing && <Spinner data-icon="inline-start" />}
+            Test connection
+          </Button>
+          {testResult?.ok && (
+            <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+              <CheckCircleIcon className="size-4" /> Connected
+            </span>
+          )}
+          {testResult && !testResult.ok && (
+            <span className="flex min-w-0 items-center gap-1 text-xs text-destructive">
+              <XCircleIcon className="size-4 shrink-0" />
+              <span className="line-clamp-2">{testResult.message}</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Copy error message"
+                className="shrink-0"
+                onClick={() => {
+                  navigator.clipboard.writeText(testResult.message ?? "");
+                  toast.success("Copied");
+                }}
+              >
+                <CopyIcon />
+              </Button>
+            </span>
+          )}
+        </div>
+
+        <div className="space-y-4 border-t pt-4">
+          <div>
+            <h3 className="text-sm font-medium">Review model</h3>
+            <p className="text-xs text-muted-foreground">
+              Used by AI code review on pull requests. Can differ from the
+              generation model above; shares the same per-provider API keys.
+            </p>
+          </div>
+          <ModelPicker
+            idPrefix="review"
+            value={reviewAi}
+            onChange={(next) => form.setFieldValue("reviewAi", next)}
+          />
+        </div>
+
+        <Dialog open={confirmClear} onOpenChange={setConfirmClear}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Remove the saved key?</DialogTitle>
+              <DialogDescription>
+                Deletes the {PROVIDER_LABELS[provider]} API key from the OS
+                keychain. AI features using {PROVIDER_LABELS[provider]} will
+                stop working until a new key is saved. This can't be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmClear(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={clearKey}>
+                Remove key
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </section>
+    );
+  },
+});

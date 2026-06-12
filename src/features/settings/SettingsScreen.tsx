@@ -1,5 +1,6 @@
 import { ArrowLeftIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useSelector } from "@tanstack/react-store";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +14,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import type { AppSettings } from "@/lib/settings/api";
+import { useAppForm } from "@/lib/form";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
@@ -21,24 +22,8 @@ import { AiProviderSection } from "./AiProviderSection";
 import { EditorSection } from "./EditorSection";
 import { GitSection } from "./GitSection";
 import { InstructionsSection } from "./InstructionsSection";
+import { settingsFormOpts, toDraft } from "./settings-form";
 import { TerminalSection } from "./TerminalSection";
-
-/**
- * The slice of AppSettings edited on this screen. Drafted locally and written
- * once via the Save bar; recents and diff view mode are app state owned by
- * other surfaces.
- */
-export type SettingsDraft = Omit<AppSettings, "recentRepos" | "diffViewMode">;
-
-export interface SectionProps {
-  draft: SettingsDraft;
-  update: (patch: Partial<SettingsDraft>) => void;
-}
-
-function toDraft(settings: AppSettings): SettingsDraft {
-  const { recentRepos, diffViewMode, ...draft } = settings;
-  return draft;
-}
 
 const PANELS = [
   { id: "ai", label: "AI" },
@@ -53,49 +38,64 @@ export function SettingsScreen() {
   const closeSettings = useUiStore((s) => s.closeSettings);
   const settings = useSettings();
   const saveSettings = useSaveSettings();
-  const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [panel, setPanel] = useState<PanelId>("ai");
   const [confirmClose, setConfirmClose] = useState(false);
+  const closeAfterSave = useRef(false);
 
-  // Seed the draft once settings arrive; afterwards the draft is the source
+  const form = useAppForm({
+    ...settingsFormOpts,
+    onSubmit: async ({ value }) => {
+      const current = settings.data;
+      if (!current) return;
+      const branch = value.defaultBranch.trim() || "main";
+      if (branch.startsWith("-") || branch.includes(" ")) {
+        toast.error(`"${branch}" is not a valid branch name`);
+        setPanel("git");
+        closeAfterSave.current = false;
+        return;
+      }
+      const cleaned = { ...value, defaultBranch: branch };
+      await saveSettings.mutateAsync({ ...current, ...cleaned });
+      // keepDefaultValues everywhere we reset-with-values: otherwise reset
+      // rewrites the form's defaultValues and the per-render options sync
+      // (which still sees settingsFormOpts' static defaults) clobbers the
+      // values right back on the next render.
+      form.reset(cleaned, { keepDefaultValues: true });
+      toast.success("Settings saved");
+      if (closeAfterSave.current) {
+        closeAfterSave.current = false;
+        closeSettings();
+      }
+    },
+  });
+
+  // Seed the form once settings arrive; afterwards the form is the source
   // of truth until Save or Discard.
+  const seeded = useRef(false);
   useEffect(() => {
-    if (settings.data && draft === null) setDraft(toDraft(settings.data));
-  }, [settings.data, draft]);
+    if (settings.data && !seeded.current) {
+      seeded.current = true;
+      form.reset(toDraft(settings.data), { keepDefaultValues: true });
+    }
+  }, [settings.data, form]);
 
+  // Dirty by value-equality against the persisted settings (not "has been
+  // touched"), so typing and undoing leaves the screen clean.
+  const values = useSelector(form.store, (s) => s.values);
+  const isSubmitting = useSelector(form.store, (s) => s.isSubmitting);
   const saved = settings.data ? toDraft(settings.data) : null;
   const dirty =
-    draft !== null &&
+    seeded.current &&
     saved !== null &&
-    JSON.stringify(draft) !== JSON.stringify(saved);
+    JSON.stringify(values) !== JSON.stringify(saved);
 
-  function update(patch: Partial<SettingsDraft>) {
-    setDraft((d) => (d ? { ...d, ...patch } : d));
-  }
-
-  function save(onSaved?: () => void) {
-    if (!settings.data || !draft) return;
-    const branch = draft.defaultBranch.trim() || "main";
-    if (branch.startsWith("-") || branch.includes(" ")) {
-      toast.error(`"${branch}" is not a valid branch name`);
-      setPanel("git");
-      return;
-    }
-    const cleaned = { ...draft, defaultBranch: branch };
-    saveSettings.mutate(
-      { ...settings.data, ...cleaned },
-      {
-        onSuccess: () => {
-          setDraft(cleaned);
-          toast.success("Settings saved");
-          onSaved?.();
-        },
-      },
-    );
+  function save(andClose: boolean) {
+    closeAfterSave.current = andClose;
+    form.handleSubmit();
   }
 
   function discard() {
-    if (saved) setDraft(saved);
+    if (saved) form.reset(saved, { keepDefaultValues: true });
   }
 
   function requestClose() {
@@ -127,7 +127,7 @@ export function SettingsScreen() {
         <span className="text-sm font-medium">Settings</span>
       </header>
 
-      {draft === null ? (
+      {settings.isPending ? (
         <div className="mx-auto w-full max-w-2xl space-y-3 p-6">
           <Skeleton className="h-6 w-40" />
           <Skeleton className="h-24 w-full" />
@@ -159,17 +159,13 @@ export function SettingsScreen() {
             <main className="mx-auto w-full max-w-2xl space-y-8 p-6">
               {panel === "ai" && (
                 <>
-                  <AiProviderSection draft={draft} update={update} />
-                  <InstructionsSection draft={draft} update={update} />
+                  <AiProviderSection form={form} />
+                  <InstructionsSection form={form} />
                 </>
               )}
-              {panel === "git" && <GitSection draft={draft} update={update} />}
-              {panel === "editor" && (
-                <EditorSection draft={draft} update={update} />
-              )}
-              {panel === "terminal" && (
-                <TerminalSection draft={draft} update={update} />
-              )}
+              {panel === "git" && <GitSection form={form} />}
+              {panel === "editor" && <EditorSection form={form} />}
+              {panel === "terminal" && <TerminalSection form={form} />}
             </main>
           </ScrollArea>
         </div>
@@ -189,10 +185,10 @@ export function SettingsScreen() {
             </Button>
             <Button
               size="sm"
-              onClick={() => save()}
-              disabled={saveSettings.isPending}
+              onClick={() => save(false)}
+              disabled={isSubmitting}
             >
-              {saveSettings.isPending && <Spinner data-icon="inline-start" />}
+              {isSubmitting && <Spinner data-icon="inline-start" />}
               Save changes
             </Button>
           </div>
@@ -215,21 +211,20 @@ export function SettingsScreen() {
               variant="outline"
               onClick={() => {
                 setConfirmClose(false);
+                discard();
                 closeSettings();
               }}
             >
               Discard and close
             </Button>
             <Button
-              onClick={() =>
-                save(() => {
-                  setConfirmClose(false);
-                  closeSettings();
-                })
-              }
-              disabled={saveSettings.isPending}
+              onClick={() => {
+                setConfirmClose(false);
+                save(true);
+              }}
+              disabled={isSubmitting}
             >
-              {saveSettings.isPending && <Spinner data-icon="inline-start" />}
+              {isSubmitting && <Spinner data-icon="inline-start" />}
               Save and close
             </Button>
           </DialogFooter>

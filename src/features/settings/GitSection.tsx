@@ -1,29 +1,32 @@
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import type { SectionProps } from "./SettingsScreen";
+import { withForm } from "@/lib/form";
+import { settingsFormOpts } from "./settings-form";
 
-export function GitSection({ draft, update }: SectionProps) {
-  return (
-    <section className="space-y-4">
-      <div>
-        <h2 className="text-sm font-medium">Git</h2>
-        <p className="text-xs text-muted-foreground">
-          Defaults applied when creating new repositories.
-        </p>
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="default-branch">
-          Default branch for new repositories
-        </Label>
-        <Input
-          id="default-branch"
-          className="max-w-60 font-mono"
-          placeholder="main"
-          autoComplete="off"
-          value={draft.defaultBranch}
-          onChange={(e) => update({ defaultBranch: e.target.value })}
-        />
-      </div>
-    </section>
-  );
-}
+export const GitSection = withForm({
+  ...settingsFormOpts,
+  render: function GitSectionRender({ form }) {
+    return (
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-sm font-medium">Git</h2>
+          <p className="text-xs text-muted-foreground">
+            Defaults applied when creating new repositories.
+          </p>
+        </div>
+        <form.AppField name="defaultBranch">
+          {(field) => (
+            <field.TextField
+              label="Default branch for new repositories"
+              placeholder="main"
+              className="max-w-60 font-mono"
+              warning={(value) =>
+                value.startsWith("-") || value.trim().includes(" ")
+                  ? "Branch names can't start with - or contain spaces."
+                  : null
+              }
+            />
+          )}
+        </form.AppField>
+      </section>
+    );
+  },
+});

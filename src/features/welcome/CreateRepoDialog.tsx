@@ -1,8 +1,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useState } from "react";
+import { useEffect } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -11,16 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
+import { required, useAppForm } from "@/lib/form";
 import { createRepo, validateRepo } from "@/lib/git/api";
 import { useAddRecentRepo, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
@@ -34,6 +24,15 @@ function selectItems(values: string[]): Record<string, string> {
   return { [NONE]: "None", ...Object.fromEntries(values.map((v) => [v, v])) };
 }
 
+const DEFAULTS = {
+  name: "",
+  description: "",
+  parentDir: "",
+  initReadme: true,
+  gitignore: NONE,
+  license: NONE,
+};
+
 export function CreateRepoDialog({
   open,
   onOpenChange,
@@ -45,170 +44,132 @@ export function CreateRepoDialog({
   const addRecent = useAddRecentRepo();
   const settings = useSettings();
 
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [parentDir, setParentDir] = useState("");
-  const [initReadme, setInitReadme] = useState(true);
-  const [gitignore, setGitignore] = useState(NONE);
-  const [license, setLicense] = useState(NONE);
-  const [creating, setCreating] = useState(false);
+  // tolerate cached settings predating this field (e.g. right after update)
+  const defaultBranch =
+    (settings.data?.defaultBranch ?? "main").trim() || "main";
+
+  const form = useAppForm({
+    defaultValues: DEFAULTS,
+    onSubmit: async ({ value }) => {
+      try {
+        const root = await createRepo({
+          name: value.name.trim(),
+          description: value.description.trim(),
+          parentDir: value.parentDir.trim(),
+          initReadme: value.initReadme,
+          gitignore: value.gitignore === NONE ? null : value.gitignore,
+          license: value.license === NONE ? null : value.license,
+          defaultBranch,
+        });
+        const info = await validateRepo(root);
+        addRecent.mutate({ path: info.root, name: info.name });
+        onOpenChange(false);
+        openRepo(info);
+        toast.success(`Created ${info.name}`);
+      } catch (e) {
+        toastError(e);
+      }
+    },
+  });
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reseed on open
+  useEffect(() => {
+    if (open) form.reset(DEFAULTS);
+  }, [open]);
 
   async function pickParentDir() {
     const path = await openDialog({
       directory: true,
       title: "Create repository in folder",
     });
-    if (path) setParentDir(path);
+    if (path) form.setFieldValue("parentDir", path);
   }
-
-  // tolerate cached settings predating this field (e.g. right after update)
-  const defaultBranch =
-    (settings.data?.defaultBranch ?? "main").trim() || "main";
-
-  async function create() {
-    setCreating(true);
-    try {
-      const root = await createRepo({
-        name: name.trim(),
-        description: description.trim(),
-        parentDir: parentDir.trim(),
-        initReadme,
-        gitignore: gitignore === NONE ? null : gitignore,
-        license: license === NONE ? null : license,
-        defaultBranch,
-      });
-      const info = await validateRepo(root);
-      addRecent.mutate({ path: info.root, name: info.name });
-      onOpenChange(false);
-      setName("");
-      setDescription("");
-      openRepo(info);
-      toast.success(`Created ${info.name}`);
-    } catch (e) {
-      toastError(e);
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  const canCreate =
-    name.trim().length > 0 && parentDir.trim().length > 0 && !creating;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create a new repository</DialogTitle>
-          <DialogDescription>
-            Initializes a git repository on the "{defaultBranch}" branch (change
-            in Settings).
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="repo-name">Name</Label>
-            <Input
-              id="repo-name"
-              placeholder="repository name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={creating}
-              autoComplete="off"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="repo-description">Description</Label>
-            <Input
-              id="repo-description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              disabled={creating}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="repo-path">Local path</Label>
-            <div className="flex gap-2">
-              <Input
-                id="repo-path"
-                placeholder="Type, paste, or choose a folder…"
-                value={parentDir}
-                onChange={(e) => setParentDir(e.target.value)}
-                disabled={creating}
-                className="flex-1"
-              />
-              <Button
-                variant="outline"
-                onClick={pickParentDir}
-                disabled={creating}
-              >
-                Choose…
-              </Button>
-            </div>
-          </div>
-          <label className="flex cursor-pointer items-center gap-2 text-xs">
-            <Checkbox
-              checked={initReadme}
-              onCheckedChange={(checked) => setInitReadme(checked === true)}
-              disabled={creating}
-            />
-            Initialize this repository with a README
-          </label>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Git ignore</Label>
-              <Select
-                items={selectItems(GITIGNORE_TEMPLATES)}
-                value={gitignore}
-                onValueChange={(v) => v && setGitignore(v)}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NONE}>None</SelectItem>
-                  {GITIGNORE_TEMPLATES.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>License</Label>
-              <Select
-                items={selectItems(LICENSES)}
-                value={license}
-                onValueChange={(v) => v && setLicense(v)}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NONE}>None</SelectItem>
-                  {LICENSES.map((l) => (
-                    <SelectItem key={l} value={l}>
-                      {l}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={creating}
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            form.handleSubmit();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Create a new repository</DialogTitle>
+            <DialogDescription>
+              Initializes a git repository on the "{defaultBranch}" branch
+              (change in Settings).
+            </DialogDescription>
+          </DialogHeader>
+          <form.AppField
+            name="name"
+            validators={{ onChange: ({ value }) => required(value) }}
           >
-            Cancel
-          </Button>
-          <Button onClick={create} disabled={!canCreate}>
-            {creating && <Spinner data-icon="inline-start" />}
-            Create repository
-          </Button>
-        </DialogFooter>
+            {(field) => (
+              <field.TextField label="Name" placeholder="repository name" />
+            )}
+          </form.AppField>
+          <form.AppField name="description">
+            {(field) => <field.TextField label="Description" />}
+          </form.AppField>
+          <form.AppField
+            name="parentDir"
+            validators={{ onChange: ({ value }) => required(value) }}
+          >
+            {(field) => (
+              <div className="flex items-end gap-2">
+                <div className="flex-1">
+                  <field.TextField
+                    label="Local path"
+                    placeholder="Type, paste, or choose a folder…"
+                  />
+                </div>
+                <Button type="button" variant="outline" onClick={pickParentDir}>
+                  Choose…
+                </Button>
+              </div>
+            )}
+          </form.AppField>
+          <form.AppField name="initReadme">
+            {(field) => (
+              <field.CheckboxField
+                label="Initialize this repository with a README"
+                className="flex cursor-pointer items-center gap-2 text-xs"
+              />
+            )}
+          </form.AppField>
+          <div className="grid grid-cols-2 gap-4">
+            <form.AppField name="gitignore">
+              {(field) => (
+                <field.SelectField
+                  label="Git ignore"
+                  items={selectItems(GITIGNORE_TEMPLATES)}
+                />
+              )}
+            </form.AppField>
+            <form.AppField name="license">
+              {(field) => (
+                <field.SelectField
+                  label="License"
+                  items={selectItems(LICENSES)}
+                />
+              )}
+            </form.AppField>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <form.AppForm>
+              <form.SubmitButton>Create repository</form.SubmitButton>
+            </form.AppForm>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

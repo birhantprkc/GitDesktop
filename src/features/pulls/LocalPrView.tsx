@@ -29,12 +29,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
+import { required, useAppForm } from "@/lib/form";
 import { gitBranchDiff, type MergeStrategy } from "@/lib/git/api";
 import {
   useBranchDiffFiles,
@@ -49,7 +49,6 @@ import {
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
-import { MarkdownEditor } from "./MarkdownEditor";
 import { PrReviewPanel } from "./PrReviewPanel";
 
 type Section = "conversation" | "commits" | "files" | "review";
@@ -71,9 +70,23 @@ export function LocalPrView({
   const [comment, setComment] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [titleDraft, setTitleDraft] = useState("");
-  const [bodyDraft, setBodyDraft] = useState("");
   const [labelInput, setLabelInput] = useState("");
+  const editForm = useAppForm({
+    defaultValues: { title: "", body: "" },
+    onSubmit: async ({ value }) => {
+      if (!pr) return;
+      try {
+        await save.mutateAsync({
+          ...pr,
+          title: value.title.trim(),
+          body: value.body,
+        });
+        setEditOpen(false);
+      } catch (e) {
+        toastError(e);
+      }
+    },
+  });
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const comparison = useCompareBranches(
@@ -147,17 +160,13 @@ export function LocalPrView({
 
   function openEdit() {
     if (!pr) return;
-    setTitleDraft(pr.title);
-    setBodyDraft(pr.body);
-    setEditOpen(true);
-  }
-
-  function saveEdit() {
-    if (!pr || !titleDraft.trim()) return;
-    save.mutate(
-      { ...pr, title: titleDraft.trim(), body: bodyDraft },
-      { onSuccess: () => setEditOpen(false) },
+    // keepDefaultValues: otherwise the per-render options sync clobbers the
+    // seeded values back to empty (untouched form).
+    editForm.reset(
+      { title: pr.title, body: pr.body },
+      { keepDefaultValues: true },
     );
+    setEditOpen(true);
   }
 
   function doMerge(strategy: MergeStrategy) {
@@ -557,43 +566,47 @@ export function LocalPrView({
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit pull request</DialogTitle>
-            <DialogDescription>
-              Updates the title and description of this local pull request.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="local-pr-title">Title</Label>
-              <Input
-                id="local-pr-title"
-                value={titleDraft}
-                onChange={(e) => setTitleDraft(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="local-pr-body">Description</Label>
-              <MarkdownEditor
-                id="local-pr-body"
-                value={bodyDraft}
-                onChange={setBodyDraft}
-                rows={8}
-                textareaClassName="max-h-72"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!titleDraft.trim() || save.isPending}
-              onClick={saveEdit}
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              editForm.handleSubmit();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Edit pull request</DialogTitle>
+              <DialogDescription>
+                Updates the title and description of this local pull request.
+              </DialogDescription>
+            </DialogHeader>
+            <editForm.AppField
+              name="title"
+              validators={{ onChange: ({ value }) => required(value) }}
             >
-              Save
-            </Button>
-          </DialogFooter>
+              {(field) => <field.TextField label="Title" />}
+            </editForm.AppField>
+            <editForm.AppField name="body">
+              {(field) => (
+                <field.MarkdownField
+                  label="Description"
+                  rows={8}
+                  textareaClassName="max-h-72"
+                />
+              )}
+            </editForm.AppField>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEditOpen(false)}
+              >
+                Cancel
+              </Button>
+              <editForm.AppForm>
+                <editForm.SubmitButton>Save</editForm.SubmitButton>
+              </editForm.AppForm>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

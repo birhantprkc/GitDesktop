@@ -17,7 +17,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -29,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { copyText } from "@/lib/clipboard";
+import { required, useAppForm } from "@/lib/form";
 import { gitCommitDetails } from "@/lib/git/api";
 import {
   useBranches,
@@ -43,6 +43,7 @@ import {
   useRevertCommit,
   useUndoCommit,
 } from "@/lib/git/queries";
+import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
@@ -69,9 +70,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
 
   const [resetHash, setResetHash] = useState<string | null>(null);
   const [branchHash, setBranchHash] = useState<string | null>(null);
-  const [branchName, setBranchName] = useState("");
   const [tagHash, setTagHash] = useState<string | null>(null);
-  const [tagName, setTagName] = useState("");
   // Multi-/range-selection for "cherry-pick to branch". Kept separate from the
   // ui store's focused commit (which drives the diff panel).
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -84,6 +83,40 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
 
   const currentBranch = status.data?.branch?.name ?? null;
   const targetBranches = (branches.data ?? []).filter((b) => !b.isCurrent);
+
+  const branchForm = useAppForm({
+    defaultValues: { name: "" },
+    onSubmit: async ({ value }) => {
+      if (!branchHash) return;
+      const name = sanitizeRefName(value.name);
+      try {
+        await createBranch.mutateAsync({
+          name,
+          checkout: true,
+          startPoint: branchHash,
+        });
+        toast.success(`Created branch ${name}`);
+        setBranchHash(null);
+      } catch (e) {
+        onError(e);
+      }
+    },
+  });
+
+  const tagForm = useAppForm({
+    defaultValues: { name: "" },
+    onSubmit: async ({ value }) => {
+      if (!tagHash) return;
+      const name = sanitizeRefName(value.name);
+      try {
+        await createTag.mutateAsync({ name, hash: tagHash });
+        toast.success(`Created tag ${name}`);
+        setTagHash(null);
+      } catch (e) {
+        onError(e);
+      }
+    },
+  });
 
   const amendCommit = useAmendCommit(repoPath);
 
@@ -291,7 +324,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                 <ContextMenuSeparator />
                 <ContextMenuItem
                   onClick={() => {
-                    setBranchName("");
+                    branchForm.reset({ name: "" });
                     setBranchHash(commit.hash);
                   }}
                 >
@@ -299,7 +332,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                 </ContextMenuItem>
                 <ContextMenuItem
                   onClick={() => {
-                    setTagName("");
+                    tagForm.reset({ name: "" });
                     setTagHash(commit.hash);
                   }}
                 >
@@ -407,43 +440,38 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
               switches to it.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="commit-branch-name">Branch name</Label>
-            <Input
-              id="commit-branch-name"
-              placeholder="feature/from-commit"
-              value={branchName}
-              onChange={(e) => setBranchName(e.target.value)}
-              autoComplete="off"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setBranchHash(null)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!branchName.trim() || createBranch.isPending}
-              onClick={() => {
-                if (!branchHash) return;
-                createBranch.mutate(
-                  {
-                    name: branchName.trim(),
-                    checkout: true,
-                    startPoint: branchHash,
-                  },
-                  {
-                    onSuccess: () => {
-                      toast.success(`Created branch ${branchName.trim()}`);
-                      setBranchHash(null);
-                    },
-                    onError,
-                  },
-                );
-              }}
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              branchForm.handleSubmit();
+            }}
+          >
+            <branchForm.AppField
+              name="name"
+              validators={{ onChange: ({ value }) => required(value) }}
             >
-              Create branch
-            </Button>
-          </DialogFooter>
+              {(field) => (
+                <field.TextField
+                  label="Branch name"
+                  placeholder="feature/from-commit"
+                  warning={refNameWarning}
+                />
+              )}
+            </branchForm.AppField>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setBranchHash(null)}
+              >
+                Cancel
+              </Button>
+              <branchForm.AppForm>
+                <branchForm.SubmitButton>Create branch</branchForm.SubmitButton>
+              </branchForm.AppForm>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -460,38 +488,38 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
               Tags commit {tagHash?.slice(0, 7)}.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="tag-name">Tag name</Label>
-            <Input
-              id="tag-name"
-              placeholder="v1.0.0"
-              value={tagName}
-              onChange={(e) => setTagName(e.target.value)}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setTagHash(null)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!tagName.trim() || createTag.isPending}
-              onClick={() => {
-                if (!tagHash) return;
-                createTag.mutate(
-                  { name: tagName.trim(), hash: tagHash },
-                  {
-                    onSuccess: () => {
-                      toast.success(`Created tag ${tagName.trim()}`);
-                      setTagHash(null);
-                    },
-                    onError,
-                  },
-                );
-              }}
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              tagForm.handleSubmit();
+            }}
+          >
+            <tagForm.AppField
+              name="name"
+              validators={{ onChange: ({ value }) => required(value) }}
             >
-              Create tag
-            </Button>
-          </DialogFooter>
+              {(field) => (
+                <field.TextField
+                  label="Tag name"
+                  placeholder="v1.0.0"
+                  warning={refNameWarning}
+                />
+              )}
+            </tagForm.AppField>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setTagHash(null)}
+              >
+                Cancel
+              </Button>
+              <tagForm.AppForm>
+                <tagForm.SubmitButton>Create tag</tagForm.SubmitButton>
+              </tagForm.AppForm>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 

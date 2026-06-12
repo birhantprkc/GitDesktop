@@ -30,8 +30,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,6 +37,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffContent } from "@/features/diff/DiffSurface";
+import { required, useAppForm } from "@/lib/form";
 import { ghPrDiff, type MergeStrategy, type ReviewAction } from "@/lib/git/api";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
@@ -57,7 +56,6 @@ import type { PrThreadOut, RepoLabel } from "@/lib/git/types";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import { MarkdownEditor } from "./MarkdownEditor";
 import { PrReviewPanel } from "./PrReviewPanel";
 
 type Section = "conversation" | "commits" | "files" | "review";
@@ -131,8 +129,22 @@ export function RemotePrView({
   const [mergeStrategy, setMergeStrategy] = useState<MergeStrategy>("merge");
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [titleDraft, setTitleDraft] = useState("");
-  const [bodyDraft, setBodyDraft] = useState("");
+  const editForm = useAppForm({
+    defaultValues: { title: "", body: "" },
+    onSubmit: async ({ value }) => {
+      try {
+        await editPr.mutateAsync({
+          number,
+          title: value.title.trim(),
+          body: value.body,
+        });
+        setEditOpen(false);
+        toast.success("Pull request updated");
+      } catch (e) {
+        toastError(e);
+      }
+    },
+  });
   // Label edits are drafted locally while the picker is open and committed
   // as one batched mutation when it closes — instant checkboxes, no popover
   // re-anchoring as chips change, one network call.
@@ -296,8 +308,12 @@ export function RemotePrView({
               variant="outline"
               size="xs"
               onClick={() => {
-                setTitleDraft(pr.title);
-                setBodyDraft(pr.body);
+                // keepDefaultValues: otherwise the per-render options sync
+                // clobbers the seeded values back to empty (untouched form).
+                editForm.reset(
+                  { title: pr.title, body: pr.body },
+                  { keepDefaultValues: true },
+                );
                 setEditOpen(true);
               }}
               title="Edit the title and description"
@@ -742,56 +758,47 @@ export function RemotePrView({
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Edit pull request</DialogTitle>
-            <DialogDescription>
-              Updates the title and description of #{number} on GitHub.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="pr-edit-title">Title</Label>
-              <Input
-                id="pr-edit-title"
-                value={titleDraft}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                autoComplete="off"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="pr-edit-body">Description</Label>
-              <MarkdownEditor
-                id="pr-edit-body"
-                value={bodyDraft}
-                onChange={setBodyDraft}
-                rows={8}
-                textareaClassName="max-h-72 min-h-24 resize-y font-mono"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!titleDraft.trim() || editPr.isPending}
-              onClick={() =>
-                editPr.mutate(
-                  { number, title: titleDraft.trim(), body: bodyDraft },
-                  {
-                    onSuccess: () => {
-                      setEditOpen(false);
-                      toast.success("Pull request updated");
-                    },
-                    onError,
-                  },
-                )
-              }
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              editForm.handleSubmit();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Edit pull request</DialogTitle>
+              <DialogDescription>
+                Updates the title and description of #{number} on GitHub.
+              </DialogDescription>
+            </DialogHeader>
+            <editForm.AppField
+              name="title"
+              validators={{ onChange: ({ value }) => required(value) }}
             >
-              {editPr.isPending && <Spinner data-icon="inline-start" />}
-              Save
-            </Button>
-          </DialogFooter>
+              {(field) => <field.TextField label="Title" />}
+            </editForm.AppField>
+            <editForm.AppField name="body">
+              {(field) => (
+                <field.MarkdownField
+                  label="Description"
+                  rows={8}
+                  textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+                />
+              )}
+            </editForm.AppField>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEditOpen(false)}
+              >
+                Cancel
+              </Button>
+              <editForm.AppForm>
+                <editForm.SubmitButton>Save</editForm.SubmitButton>
+              </editForm.AppForm>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>
