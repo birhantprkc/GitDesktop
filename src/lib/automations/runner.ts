@@ -1,0 +1,188 @@
+import { toast } from "sonner";
+import { createAiClient } from "@/lib/ai/client";
+import { buildReviewPrompt } from "@/lib/ai/prompt";
+import type { AiSettings, ReviewMode } from "@/lib/ai/types";
+import { ghPrComment, gitBranchDiff, gitCommitDiff } from "@/lib/git/api";
+import { listLocalPrs, saveLocalPr } from "@/lib/pulls/local";
+import { queryClient } from "@/lib/query-client";
+import { loadSettings } from "@/lib/settings/api";
+import { useAutomationResults } from "./results";
+import { loadAutomations } from "./store";
+import { effectiveRules } from "./types";
+
+export type AutomationEvent =
+  | {
+      kind: "commit";
+      repoPath: string;
+      hash: string;
+      title: string;
+    }
+  | {
+      kind: "pr-open";
+      repoPath: string;
+      base: string;
+      head: string;
+      title: string;
+      body: string;
+      commitSubjects: string[];
+      target:
+        | { type: "remote"; number: number }
+        | { type: "local"; id: string };
+    };
+
+const DIFF_MAX_BYTES = 200_000;
+
+function modeLabel(mode: ReviewMode): string {
+  return mode === "security" ? "security audit" : "review";
+}
+
+/**
+ * Fire-and-forget entry point: runs every automation rule matching the
+ * event, sequentially (one model stream at a time). Each rule reports its
+ * own progress toast; a failing rule never blocks the action that
+ * triggered it or the remaining rules.
+ */
+export function triggerAutomations(event: AutomationEvent): void {
+  void run(event).catch(() => undefined);
+}
+
+async function run(event: AutomationEvent): Promise<void> {
+  const config = await loadAutomations();
+  const rules = effectiveRules(config, event.repoPath, event.kind);
+  if (rules.length === 0) return;
+
+  const settings = await loadSettings();
+  for (const rule of rules) {
+    const label = modeLabel(rule.action);
+    const toastId = toast.loading(
+      `Running AI ${label} of ${event.kind === "commit" ? event.hash.slice(0, 7) : `"${event.title}"`}…`,
+    );
+    try {
+      const text = await generateReviewText(
+        settings.reviewAi,
+        rule.action,
+        event,
+      );
+      if (text === null) {
+        toast.info(`AI ${label} skipped — no changes to review.`, {
+          id: toastId,
+        });
+        continue;
+      }
+      const body = `**AI ${label} (${settings.reviewAi.model})** · automated\n\n${text}`;
+      await deliver(event, rule.action, body, text, toastId);
+    } catch (e) {
+      toast.error(`AI ${label} failed: ${e instanceof Error ? e.message : e}`, {
+        id: toastId,
+      });
+    }
+  }
+}
+
+/** Resolves the diff, builds the prompt, and runs the model to completion. */
+async function generateReviewText(
+  ai: AiSettings,
+  mode: ReviewMode,
+  event: AutomationEvent,
+): Promise<string | null> {
+  const diff =
+    event.kind === "commit"
+      ? await gitCommitDiff(event.repoPath, event.hash, DIFF_MAX_BYTES)
+      : await gitBranchDiff(
+          event.repoPath,
+          event.base,
+          event.head,
+          DIFF_MAX_BYTES,
+        );
+  if (!diff.text.trim()) return null;
+
+  const { system, prompt } = buildReviewPrompt(
+    {
+      title: event.title,
+      body: event.kind === "pr-open" ? event.body : "",
+      commitSubjects: event.kind === "pr-open" ? event.commitSubjects : [],
+      diffText: diff.text,
+      diffTruncated: diff.truncated,
+      files: diff.files.map((f) => ({
+        path: f.path,
+        added: f.added,
+        deleted: f.deleted,
+        isBinary: f.isBinary,
+      })),
+    },
+    mode,
+  );
+
+  const client = await createAiClient(ai);
+  let buffer = "";
+  for await (const chunk of client.stream({ system, prompt })) {
+    buffer += chunk;
+  }
+  return buffer;
+}
+
+async function deliver(
+  event: AutomationEvent,
+  mode: ReviewMode,
+  body: string,
+  rawText: string,
+  toastId: string | number,
+): Promise<void> {
+  const label = modeLabel(mode);
+
+  if (event.kind === "commit") {
+    // Commits have no comment surface — keep the result in-session and let
+    // the toast open it.
+    const result = {
+      id: crypto.randomUUID(),
+      repoPath: event.repoPath,
+      subject: event.title,
+      mode,
+      text: rawText,
+      createdAt: new Date().toISOString(),
+    };
+    useAutomationResults.getState().add(result);
+    toast.success(`AI ${label} of ${event.hash.slice(0, 7)} ready`, {
+      id: toastId,
+      duration: 15_000,
+      action: {
+        label: "View",
+        onClick: () => useAutomationResults.getState().setOpen(result.id),
+      },
+    });
+    return;
+  }
+
+  if (event.target.type === "remote") {
+    await ghPrComment(event.repoPath, event.target.number, body);
+    await queryClient.invalidateQueries({
+      queryKey: ["repo", event.repoPath],
+    });
+    toast.success(`AI ${label} posted on #${event.target.number}`, {
+      id: toastId,
+    });
+    return;
+  }
+
+  // Hoisted: the narrowing to the local target doesn't flow into closures.
+  const targetId = event.target.id;
+  const prs = await listLocalPrs(event.repoPath);
+  const pr = prs.find((p) => p.id === targetId);
+  if (!pr) {
+    toast.error(`AI ${label} finished, but the local PR no longer exists.`, {
+      id: toastId,
+    });
+    return;
+  }
+  await saveLocalPr(event.repoPath, {
+    ...pr,
+    comments: [
+      ...pr.comments,
+      { id: crypto.randomUUID(), body, createdAt: new Date().toISOString() },
+    ],
+  });
+  await queryClient.invalidateQueries({
+    queryKey: ["local-prs", event.repoPath],
+  });
+  toast.success(`AI ${label} added to "${pr.title}"`, { id: toastId });
+}

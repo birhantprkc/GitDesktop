@@ -1,7 +1,7 @@
 use crate::error::AppResult;
 use crate::git::diff::parse_numstat_z;
 use crate::git::runner::{run_git, run_git_raw, DEFAULT_TIMEOUT};
-use crate::git::types::{CommitDetails, CommitSummary, DiffStatEntry, FileDiff};
+use crate::git::types::{CommitDetails, CommitSummary, DiffStatEntry, FileDiff, StagedDiff};
 
 pub fn validate_hash(hash: &str) -> AppResult<()> {
     if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -124,6 +124,54 @@ pub async fn git_commit_files(repo_path: String, hash: String) -> AppResult<Vec<
     )
     .await?;
     Ok(parse_numstat_z(&out.stdout_lossy()))
+}
+
+/// The combined diff a commit introduced (vs its first parent) plus numstat —
+/// the commit-shaped analogue of `git_branch_diff`, used for AI review.
+#[tauri::command]
+pub async fn git_commit_diff(
+    repo_path: String,
+    hash: String,
+    max_bytes: Option<usize>,
+) -> AppResult<StagedDiff> {
+    validate_hash(&hash)?;
+    let text_out = run_git(
+        Some(&repo_path),
+        &[
+            "show",
+            "-m",
+            "--first-parent",
+            "--no-color",
+            "--format=",
+            &hash,
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let (text, truncated) = super::diff::truncate_at_char_boundary(
+        text_out.stdout_lossy(),
+        max_bytes.unwrap_or(1_000_000),
+    );
+    let files_out = run_git(
+        Some(&repo_path),
+        &[
+            "show",
+            "-m",
+            "--first-parent",
+            "--numstat",
+            "-z",
+            "--format=",
+            &hash,
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(StagedDiff {
+        text,
+        truncated,
+        files: parse_numstat_z(&files_out.stdout_lossy()),
+        excluded_files: 0,
+    })
 }
 
 #[tauri::command]

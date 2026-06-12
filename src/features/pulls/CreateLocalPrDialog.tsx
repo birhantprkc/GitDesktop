@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { triggerAutomations } from "@/lib/automations/runner";
 import { required, useAppForm } from "@/lib/form";
 import {
   useBranches,
@@ -66,6 +67,16 @@ export function CreateLocalPrDialog({
         setRepoTab("pulls");
         selectPr({ kind: "local", id: pr.id });
         onOpenChange(false);
+        triggerAutomations({
+          kind: "pr-open",
+          repoPath,
+          base: value.base,
+          head: value.head,
+          title: value.title.trim(),
+          body: value.body,
+          commitSubjects: ahead.map((c) => c.subject),
+          target: { type: "local", id: pr.id },
+        });
       } catch (e) {
         toastError(e);
       }

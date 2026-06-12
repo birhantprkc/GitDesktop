@@ -3,12 +3,14 @@ import {
   CopyIcon,
   DotsThreeVerticalIcon,
   FolderOpenIcon,
+  LightningIcon,
   PencilSimpleIcon,
   TerminalIcon,
   TrashIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -17,6 +19,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { RepoAutomationsDialog } from "@/features/automations/RepoAutomationsDialog";
 import { copyText } from "@/lib/clipboard";
 import {
   ghRepoUrl,
@@ -34,6 +37,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const settings = useSettings();
   const removeRecent = useRemoveRecentRepo();
   const closeRepo = useUiStore((s) => s.closeRepo);
+  const [automationsOpen, setAutomationsOpen] = useState(false);
 
   const canGh = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
@@ -114,6 +118,10 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => setAutomationsOpen(true)}>
+          <LightningIcon />
+          Automations…
+        </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => copyText(repoPath, "Repository path copied")}
         >
@@ -125,6 +133,11 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           Remove from list
         </DropdownMenuItem>
       </DropdownMenuContent>
+      <RepoAutomationsDialog
+        repoPath={repoPath}
+        open={automationsOpen}
+        onOpenChange={setAutomationsOpen}
+      />
     </DropdownMenu>
   );
 }

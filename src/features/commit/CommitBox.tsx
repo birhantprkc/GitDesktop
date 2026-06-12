@@ -4,10 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { triggerAutomations } from "@/lib/automations/runner";
+import { coAuthorTrailers } from "@/lib/git/co-authors";
 import { useCommit, useRepoStatus } from "@/lib/git/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { CoAuthorPicker } from "./CoAuthorPicker";
 import { useGenerateCommitMessage } from "./useGenerateCommitMessage";
 
 export function CommitBox({ repoPath }: { repoPath: string }) {
@@ -16,8 +19,10 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   const title = useUiStore((s) => s.commitTitle);
   const body = useUiStore((s) => s.commitBody);
   const amendingHash = useUiStore((s) => s.amendingHash);
+  const coAuthors = useUiStore((s) => s.commitCoAuthors);
   const setCommitTitle = useUiStore((s) => s.setCommitTitle);
   const setCommitBody = useUiStore((s) => s.setCommitBody);
+  const setCoAuthors = useUiStore((s) => s.setCommitCoAuthors);
   const clearCommitDraft = useUiStore((s) => s.clearCommitDraft);
   const { generate, cancel, generating } = useGenerateCommitMessage(repoPath);
 
@@ -41,14 +46,29 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   }
 
   function doCommit() {
+    const commitTitle = title.trim();
+    // Trailers must be the final paragraph of the message.
+    const fullBody = [body.trim(), coAuthorTrailers(coAuthors)]
+      .filter(Boolean)
+      .join("\n\n");
     commit.mutate(
-      { title: title.trim(), body: body.trim() || undefined, amend: amending },
+      { title: commitTitle, body: fullBody || undefined, amend: amending },
       {
         onSuccess: (result) => {
           clearCommitDraft();
           toast.success(
             `${amending ? "Amended" : "Committed"} ${result.hash.slice(0, 7)}`,
           );
+          // Amending rewrites an existing commit; only new commits fire
+          // on-commit automations.
+          if (!amending) {
+            triggerAutomations({
+              kind: "commit",
+              repoPath,
+              hash: result.hash,
+              title: commitTitle,
+            });
+          }
         },
         onError: (e) => toastError(e),
       },
@@ -99,6 +119,12 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
         // cap the content-based auto-grow so a long generated body can't
         // swallow the changes list; resize-y lets the user drag it back down
         className="max-h-48 min-h-16 resize-y"
+      />
+      <CoAuthorPicker
+        repoPath={repoPath}
+        value={coAuthors}
+        onChange={setCoAuthors}
+        disabled={generating}
       />
       <div className="flex gap-2">
         {generating ? (

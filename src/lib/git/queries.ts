@@ -116,6 +116,22 @@ export function useCommitFileDiff(
   });
 }
 
+export function useCommitAuthors(repo: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "commit-authors"] as const,
+    queryFn: () => api.gitCommitAuthors(repo),
+    staleTime: 60_000,
+  });
+}
+
+export function useUserIdentity(repo: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "user-identity"] as const,
+    queryFn: () => api.gitUserIdentity(repo),
+    staleTime: 5 * 60_000,
+  });
+}
+
 export function useCompareBranches(
   repo: string,
   base: string | null,

@@ -14,6 +14,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { AutomationsSection } from "@/features/automations/AutomationsSection";
 import { useAppForm } from "@/lib/form";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
@@ -27,6 +28,7 @@ import { TerminalSection } from "./TerminalSection";
 
 const PANELS = [
   { id: "ai", label: "AI" },
+  { id: "automations", label: "Automations" },
   { id: "git", label: "Git" },
   { id: "editor", label: "External editor" },
   { id: "terminal", label: "Terminal" },
@@ -166,6 +168,7 @@ export function SettingsScreen() {
                   <InstructionsSection form={form} />
                 </>
               )}
+              {panel === "automations" && <AutomationsSection />}
               {panel === "git" && <GitSection form={form} />}
               {panel === "editor" && <EditorSection form={form} />}
               {panel === "terminal" && <TerminalSection form={form} />}

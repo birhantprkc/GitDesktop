@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 import { Spinner } from "@/components/ui/spinner";
+import { AutomationResultDialog } from "@/features/automations/AutomationResultDialog";
 import { RepositoryView } from "@/features/repository/RepositoryView";
 import { SettingsScreen } from "@/features/settings/SettingsScreen";
 import { GitMissingScreen } from "@/features/welcome/GitMissingScreen";
@@ -53,14 +54,14 @@ function App() {
     return <GitMissingScreen onRetry={() => gitInstalled.refetch()} />;
   }
 
-  switch (view) {
-    case "welcome":
-      return <WelcomeScreen />;
-    case "repo":
-      return <RepositoryView />;
-    case "settings":
-      return <SettingsScreen />;
-  }
+  return (
+    <>
+      {view === "welcome" && <WelcomeScreen />}
+      {view === "repo" && <RepositoryView />}
+      {view === "settings" && <SettingsScreen />}
+      <AutomationResultDialog />
+    </>
+  );
 }
 
 export default App;

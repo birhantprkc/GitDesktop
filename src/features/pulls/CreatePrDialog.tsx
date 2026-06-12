@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { triggerAutomations } from "@/lib/automations/runner";
 import { required, useAppForm } from "@/lib/form";
 import { useCreatePr } from "@/lib/git/queries";
 import { toastError } from "@/lib/toast";
@@ -50,6 +51,16 @@ export function CreatePrDialog({
           action: { label: "View", onClick: () => openUrl(url) },
         });
         onOpenChange(false);
+        triggerAutomations({
+          kind: "pr-open",
+          repoPath,
+          base,
+          head,
+          title: value.title.trim(),
+          body: value.body,
+          commitSubjects,
+          target: { type: "remote", number },
+        });
       } catch (e) {
         toastError(e);
       }

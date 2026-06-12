@@ -93,6 +93,11 @@ export interface CommitResult {
   hash: string;
 }
 
+export interface CommitAuthor {
+  name: string;
+  email: string;
+}
+
 export interface BranchComparison {
   /** On `compare` but not `base` — what a PR would introduce. */
   ahead: CommitSummary[];

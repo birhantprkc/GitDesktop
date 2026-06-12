@@ -2,6 +2,7 @@ import { invoke } from "@/lib/tauri/invoke";
 import type {
   Branch,
   BranchComparison,
+  CommitAuthor,
   CommitDetails,
   CommitResult,
   CommitSummary,
@@ -101,6 +102,23 @@ export const gitCommit = (
     title,
     body: body ?? null,
     amend,
+  });
+
+export const gitCommitAuthors = (repoPath: string) =>
+  invoke<CommitAuthor[]>("git_commit_authors", { repoPath });
+
+export const gitUserIdentity = (repoPath: string) =>
+  invoke<CommitAuthor>("git_user_identity", { repoPath });
+
+export const gitCommitDiff = (
+  repoPath: string,
+  hash: string,
+  maxBytes?: number,
+) =>
+  invoke<StagedDiff>("git_commit_diff", {
+    repoPath,
+    hash,
+    maxBytes: maxBytes ?? null,
   });
 
 export const gitDiscard = (

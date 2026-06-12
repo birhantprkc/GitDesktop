@@ -3,6 +3,7 @@ import {
   ArrowCounterClockwiseIcon,
   CaretDownIcon,
   CheckCircleIcon,
+  GithubLogoIcon,
   GitMergeIcon,
   PencilSimpleIcon,
   QuotesIcon,
@@ -39,6 +40,7 @@ import { gitBranchDiff, type MergeStrategy } from "@/lib/git/api";
 import {
   useBranchDiffFiles,
   useCompareBranches,
+  useGhStatus,
   useMergeLocalPr,
 } from "@/lib/git/queries";
 import {
@@ -49,6 +51,7 @@ import {
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
+import { PromoteLocalPrDialog } from "./PromoteLocalPrDialog";
 import { PrReviewPanel } from "./PrReviewPanel";
 
 type Section = "conversation" | "commits" | "files" | "review";
@@ -70,6 +73,8 @@ export function LocalPrView({
   const [comment, setComment] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [promoteOpen, setPromoteOpen] = useState(false);
+  const ghStatus = useGhStatus(repoPath);
   const [labelInput, setLabelInput] = useState("");
   const editForm = useAppForm({
     defaultValues: { title: "", body: "" },
@@ -476,6 +481,17 @@ export function LocalPrView({
         <span className="flex-1" />
         {pr.status === "open" && (
           <>
+            {Boolean(ghStatus.data?.repo) && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPromoteOpen(true)}
+                title="Push the branch and open this PR on GitHub"
+              >
+                <GithubLogoIcon data-icon="inline-start" />
+                Publish to GitHub
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -526,6 +542,14 @@ export function LocalPrView({
           </Button>
         )}
       </div>
+
+      <PromoteLocalPrDialog
+        repoPath={repoPath}
+        pr={pr}
+        commitSubjects={ahead.map((c) => c.subject)}
+        open={promoteOpen}
+        onOpenChange={setPromoteOpen}
+      />
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>

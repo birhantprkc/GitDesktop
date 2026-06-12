@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { RepoInfo } from "@/lib/git/types";
+import type { CommitAuthor, RepoInfo } from "@/lib/git/types";
 
 export type AppView = "welcome" | "repo" | "settings";
 export type RepoTab = "changes" | "history" | "compare" | "pulls";
@@ -31,6 +31,8 @@ interface UiState {
   selectedCommitHash: string | null;
   commitTitle: string;
   commitBody: string;
+  /** Co-authors credited on the next commit (Co-authored-by trailers). */
+  commitCoAuthors: CommitAuthor[];
   generating: boolean;
   /** Hash of the commit being amended, or null for a normal commit. */
   amendingHash: string | null;
@@ -47,6 +49,7 @@ interface UiState {
   setCommitDraft: (title: string, body: string) => void;
   setCommitTitle: (title: string) => void;
   setCommitBody: (body: string) => void;
+  setCommitCoAuthors: (coAuthors: CommitAuthor[]) => void;
   clearCommitDraft: () => void;
   setGenerating: (generating: boolean) => void;
   setAmending: (hash: string | null) => void;
@@ -64,6 +67,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
   selectedCommitHash: null,
   commitTitle: "",
   commitBody: "",
+  commitCoAuthors: [],
   generating: false,
   amendingHash: null,
 
@@ -80,6 +84,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
       selectedCommitHash: null,
       commitTitle: "",
       commitBody: "",
+      commitCoAuthors: [],
       amendingHash: null,
     }),
   closeRepo: () =>
@@ -111,8 +116,14 @@ export const useUiStore = create<UiState>()((set, get) => ({
     set({ commitTitle: title, commitBody: body }),
   setCommitTitle: (title) => set({ commitTitle: title }),
   setCommitBody: (body) => set({ commitBody: body }),
+  setCommitCoAuthors: (coAuthors) => set({ commitCoAuthors: coAuthors }),
   clearCommitDraft: () =>
-    set({ commitTitle: "", commitBody: "", amendingHash: null }),
+    set({
+      commitTitle: "",
+      commitBody: "",
+      commitCoAuthors: [],
+      amendingHash: null,
+    }),
   setGenerating: (generating) => set({ generating }),
   setAmending: (hash) => set({ amendingHash: hash }),
 }));
