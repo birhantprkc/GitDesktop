@@ -237,6 +237,12 @@ export const gitDeleteTag = (
 export const appendToGitignore = (repoPath: string, pattern: string) =>
   invoke<void>("append_to_gitignore", { repoPath, pattern });
 
+export const gitUntrack = (
+  repoPath: string,
+  pathspec: string,
+  ignorePattern: string,
+) => invoke<void>("git_untrack", { repoPath, pathspec, ignorePattern });
+
 export const revealInExplorer = (path: string) =>
   invoke<void>("reveal_in_explorer", { path });
 

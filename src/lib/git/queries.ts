@@ -447,6 +447,14 @@ export function useAppendToGitignore(repo: string) {
   );
 }
 
+export function useUntrack(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { pathspec: string; ignorePattern: string }) =>
+      api.gitUntrack(repo, args.pathspec, args.ignorePattern),
+  );
+}
+
 export function useResetToCommit(repo: string) {
   return useRepoMutation(repo, (hash: string) => api.gitReset(repo, hash));
 }

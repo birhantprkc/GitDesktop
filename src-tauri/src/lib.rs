@@ -62,6 +62,7 @@ pub fn run() {
             git::ops::git_discard_paths,
             git::ops::git_stash_all,
             git::ops::git_stash_paths,
+            git::ops::git_untrack,
             git::ops::git_stash_pop,
             git::ops::git_stash_count,
             git::ops::git_stash_list,

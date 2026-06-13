@@ -18,7 +18,7 @@ import {
   openWithProgram,
   revealInExplorer,
 } from "@/lib/git/api";
-import { useAppendToGitignore } from "@/lib/git/queries";
+import { useAppendToGitignore, useUntrack } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
 import { useSettings } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
@@ -83,6 +83,7 @@ export function FileRow({
   onStashSelected?: () => void;
 }) {
   const appendIgnore = useAppendToGitignore(repoPath);
+  const untrack = useUntrack(repoPath);
   const settings = useSettings();
   const rowRef = useRef<HTMLDivElement>(null);
   // Keep the active row visible when the selection moves with the arrow keys
@@ -103,12 +104,31 @@ export function FileRow({
   const dot = entry.path.lastIndexOf(".");
   const extension =
     dot > entry.path.lastIndexOf("/") + 1 ? entry.path.slice(dot + 1) : null;
+  // Untracking only makes sense for files git already tracks — not a fresh
+  // untracked file (nothing to remove) nor a brand-new staged add (that's just
+  // unstaging).
+  const isTracked = entry.unstaged !== "untracked" && entry.staged !== "added";
 
   function ignore(pattern: string) {
     appendIgnore.mutate(pattern, {
       onSuccess: () => toast.success(`Added "${pattern}" to .gitignore`),
       onError: (e) => toastError(e),
     });
+  }
+
+  // `pathspec` is what `git rm --cached` removes; `ignorePattern` is the
+  // matching .gitignore line so the file stays untracked afterwards.
+  function doUntrack(pathspec: string, ignorePattern: string, label: string) {
+    untrack.mutate(
+      { pathspec, ignorePattern },
+      {
+        onSuccess: () =>
+          toast.success(
+            `Untracked ${label} — kept on disk, added to .gitignore`,
+          ),
+        onError: (e) => toastError(e),
+      },
+    );
   }
 
   const onError = (e: unknown) => toastError(e);
@@ -210,6 +230,50 @@ export function FileRow({
               <ContextMenuItem onClick={() => ignore(`*.${extension}`)}>
                 Ignore all .{extension} files (add to .gitignore)
               </ContextMenuItem>
+            )}
+            {isTracked && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  onClick={() =>
+                    doUntrack(entry.path, `/${entry.path}`, `"${entry.path}"`)
+                  }
+                >
+                  Untrack file (keep on disk)
+                </ContextMenuItem>
+                {folders.length > 0 && (
+                  <ContextMenuSub>
+                    <ContextMenuSubTrigger>
+                      Untrack folder (keep on disk)
+                    </ContextMenuSubTrigger>
+                    <ContextMenuSubContent>
+                      {folders.map((folder) => (
+                        <ContextMenuItem
+                          key={folder}
+                          onClick={() =>
+                            doUntrack(folder, `/${folder}/`, `"${folder}/"`)
+                          }
+                        >
+                          <span className="font-mono">{folder}/</span>
+                        </ContextMenuItem>
+                      ))}
+                    </ContextMenuSubContent>
+                  </ContextMenuSub>
+                )}
+                {extension && (
+                  <ContextMenuItem
+                    onClick={() =>
+                      doUntrack(
+                        `*.${extension}`,
+                        `*.${extension}`,
+                        `*.${extension} files`,
+                      )
+                    }
+                  >
+                    Untrack all .{extension} files (keep on disk)
+                  </ContextMenuItem>
+                )}
+              </>
             )}
             <ContextMenuSeparator />
             <ContextMenuItem

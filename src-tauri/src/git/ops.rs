@@ -429,6 +429,29 @@ pub async fn git_stash_paths(
     Ok(())
 }
 
+/// Stops tracking files matching `pathspec` (a file, a folder, or a glob like
+/// "*.log") via `git rm --cached`, so they stay on disk but leave the index,
+/// then appends `ignore_pattern` to .gitignore so they aren't re-added. The
+/// "untrack" counterpart to the per-file ignore menu. `--force` covers files
+/// with staged changes (their content is preserved in the working tree).
+#[tauri::command]
+pub async fn git_untrack(
+    state: State<'_, AppState>,
+    repo_path: String,
+    pathspec: String,
+    ignore_pattern: String,
+) -> AppResult<()> {
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["rm", "--cached", "--force", "-r", "--", &pathspec],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    crate::fsops::append_to_gitignore(repo_path, ignore_pattern).await?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn git_stash_pop(state: State<'_, AppState>, repo_path: String) -> AppResult<()> {
     run_git_mutating(&state, &repo_path, &["stash", "pop"], DEFAULT_TIMEOUT).await?;
