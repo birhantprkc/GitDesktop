@@ -53,30 +53,44 @@ export function FileRow({
   kind,
   staged,
   selected,
+  active,
+  selectionCount,
   disabled,
   repoPath,
   onSelect,
   onToggle,
   onDiscard,
+  onStashFile,
+  onDiscardSelected,
+  onStashSelected,
 }: {
   entry: FileEntry;
   kind: ChangeKind;
   staged: boolean;
+  /** Part of the multi-selection (drives the row highlight). */
   selected: boolean;
+  /** The active row whose diff is shown — keep it scrolled into view. */
+  active: boolean;
+  /** Size of the current multi-selection (drives bulk vs. single menu). */
+  selectionCount: number;
   disabled: boolean;
   repoPath: string;
-  onSelect: () => void;
+  onSelect: (mods: { ctrlOrMeta: boolean; shift: boolean }) => void;
   onToggle: () => void;
   onDiscard?: () => void;
+  onStashFile?: () => void;
+  onDiscardSelected?: () => void;
+  onStashSelected?: () => void;
 }) {
   const appendIgnore = useAppendToGitignore(repoPath);
   const settings = useSettings();
   const rowRef = useRef<HTMLDivElement>(null);
-  // Keep the row visible when the selection moves with the arrow keys
-  // (a no-op for clicks — the row is already in view).
+  // Keep the active row visible when the selection moves with the arrow keys
+  // (a no-op for clicks — the row is already in view). Tracks the active row,
+  // not every multi-selected row, so a range-select doesn't fight to scroll.
   useEffect(() => {
-    if (selected) rowRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selected]);
+    if (active) rowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [active]);
   const externalEditor = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
@@ -112,9 +126,15 @@ export function FileRow({
                 ? "bg-accent text-accent-foreground"
                 : "hover:bg-muted/60",
             )}
-            onClick={onSelect}
+            onClick={(e) =>
+              onSelect({
+                ctrlOrMeta: e.ctrlKey || e.metaKey,
+                shift: e.shiftKey,
+              })
+            }
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") onSelect();
+              if (e.key === "Enter" || e.key === " ")
+                onSelect({ ctrlOrMeta: false, shift: false });
             }}
             role="button"
             tabIndex={0}
@@ -144,68 +164,86 @@ export function FileRow({
         }
       />
       <ContextMenuContent className="min-w-64">
-        {!staged && onDiscard && (
+        {selected && selectionCount > 1 ? (
           <>
-            <ContextMenuItem onClick={onDiscard}>
-              Discard changes…
+            <ContextMenuItem onClick={onDiscardSelected}>
+              Discard {selectionCount} changes…
+            </ContextMenuItem>
+            <ContextMenuItem onClick={onStashSelected}>
+              Stash {selectionCount} changes…
+            </ContextMenuItem>
+          </>
+        ) : (
+          <>
+            {!staged && onDiscard && (
+              <ContextMenuItem onClick={onDiscard}>
+                Discard changes…
+              </ContextMenuItem>
+            )}
+            {onStashFile && (
+              <ContextMenuItem onClick={onStashFile}>
+                Stash change…
+              </ContextMenuItem>
+            )}
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => ignore(`/${entry.path}`)}>
+              Ignore file (add to .gitignore)
+            </ContextMenuItem>
+            {folders.length > 0 && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  Ignore folder (add to .gitignore)
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  {folders.map((folder) => (
+                    <ContextMenuItem
+                      key={folder}
+                      onClick={() => ignore(`/${folder}/`)}
+                    >
+                      <span className="font-mono">{folder}/</span>
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            )}
+            {extension && (
+              <ContextMenuItem onClick={() => ignore(`*.${extension}`)}>
+                Ignore all .{extension} files (add to .gitignore)
+              </ContextMenuItem>
+            )}
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onClick={() => copyText(absolutePath, "Path copied")}
+            >
+              Copy file path
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => copyText(entry.path, "Relative path copied")}
+            >
+              Copy relative file path
             </ContextMenuItem>
             <ContextMenuSeparator />
+            <ContextMenuItem
+              onClick={() => revealInExplorer(absolutePath).catch(onError)}
+            >
+              Show in Explorer
+            </ContextMenuItem>
+            {externalEditor && (
+              <ContextMenuItem
+                onClick={() =>
+                  openWithProgram(externalEditor, absolutePath).catch(onError)
+                }
+              >
+                Open in {editorName}
+              </ContextMenuItem>
+            )}
+            <ContextMenuItem
+              onClick={() => openWithDefault(absolutePath).catch(onError)}
+            >
+              Open with default program
+            </ContextMenuItem>
           </>
         )}
-        <ContextMenuItem onClick={() => ignore(`/${entry.path}`)}>
-          Ignore file (add to .gitignore)
-        </ContextMenuItem>
-        {folders.length > 0 && (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              Ignore folder (add to .gitignore)
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent>
-              {folders.map((folder) => (
-                <ContextMenuItem
-                  key={folder}
-                  onClick={() => ignore(`/${folder}/`)}
-                >
-                  <span className="font-mono">{folder}/</span>
-                </ContextMenuItem>
-              ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        )}
-        {extension && (
-          <ContextMenuItem onClick={() => ignore(`*.${extension}`)}>
-            Ignore all .{extension} files (add to .gitignore)
-          </ContextMenuItem>
-        )}
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => copyText(absolutePath, "Path copied")}>
-          Copy file path
-        </ContextMenuItem>
-        <ContextMenuItem
-          onClick={() => copyText(entry.path, "Relative path copied")}
-        >
-          Copy relative file path
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          onClick={() => revealInExplorer(absolutePath).catch(onError)}
-        >
-          Show in Explorer
-        </ContextMenuItem>
-        {externalEditor && (
-          <ContextMenuItem
-            onClick={() =>
-              openWithProgram(externalEditor, absolutePath).catch(onError)
-            }
-          >
-            Open in {editorName}
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem
-          onClick={() => openWithDefault(absolutePath).catch(onError)}
-        >
-          Open with default program
-        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

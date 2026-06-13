@@ -318,8 +318,16 @@ export const gitDefaultBranch = (repoPath: string) =>
 export const gitDiscardAll = (repoPath: string) =>
   invoke<void>("git_discard_all", { repoPath });
 
+export const gitDiscardPaths = (
+  repoPath: string,
+  paths: { path: string; untracked: boolean }[],
+) => invoke<void>("git_discard_paths", { repoPath, paths });
+
 export const gitStashAll = (repoPath: string) =>
   invoke<void>("git_stash_all", { repoPath });
+
+export const gitStashPaths = (repoPath: string, paths: string[]) =>
+  invoke<void>("git_stash_paths", { repoPath, paths });
 
 export const gitStashPop = (repoPath: string) =>
   invoke<void>("git_stash_pop", { repoPath });

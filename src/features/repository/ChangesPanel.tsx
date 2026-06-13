@@ -5,6 +5,7 @@ import {
   ClockCounterClockwiseIcon,
   FunnelIcon,
   GitPullRequestIcon,
+  InfoIcon,
   PencilSimpleIcon,
   StackIcon,
   TerminalIcon,
@@ -14,6 +15,12 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   Dialog,
   DialogContent,
@@ -29,16 +36,20 @@ import { ghRepoUrl, openInTerminal, openWithProgram } from "@/lib/git/api";
 import {
   useCompareBranches,
   useDefaultBranch,
-  useDiscard,
+  useDiscardAll,
+  useDiscardPaths,
   useGhStatus,
   useRepoStatus,
   useStage,
+  useStashAll,
   useStashCount,
+  useStashPaths,
   useUnstage,
 } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
+import { isMac } from "@/lib/hotkeys/binding";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
-import { useSettings } from "@/lib/settings/queries";
+import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { ConflictBanner } from "./ConflictBanner";
@@ -77,21 +88,67 @@ const FILTER_LABELS: Record<FilterKind, string> = {
   deleted: "Deleted files",
 };
 
+/** Target of a discard/stash confirm dialog: specific files (one row or a
+ *  multi-selection) or the whole working tree. Null = no dialog open. */
+type ChangeActionScope =
+  | { kind: "files"; entries: FileEntry[] }
+  | { kind: "all" }
+  | null;
+
+/** Right-click wrapper for a section header, exposing the whole-tree
+ *  "Discard all" / "Stash all" actions. */
+function SectionHeaderMenu({
+  header,
+  onDiscardAll,
+  onStashAll,
+}: {
+  header: React.ReactElement;
+  onDiscardAll: () => void;
+  onStashAll: () => void;
+}) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger render={header} />
+      <ContextMenuContent className="min-w-56">
+        <ContextMenuItem onClick={onDiscardAll}>
+          Discard all changes…
+        </ContextMenuItem>
+        <ContextMenuItem onClick={onStashAll}>
+          Stash all changes…
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
   const stage = useStage(repoPath);
   const unstage = useUnstage(repoPath);
-  const discard = useDiscard(repoPath);
+  const discardPaths = useDiscardPaths(repoPath);
+  const discardAll = useDiscardAll(repoPath);
+  const stashPaths = useStashPaths(repoPath);
+  const stashAll = useStashAll(repoPath);
   const selectedFile = useUiStore((s) => s.selectedFile);
   const selectFile = useUiStore((s) => s.selectFile);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
   const setCompareBranch = useUiStore((s) => s.setCompareBranch);
   const settings = useSettings();
+  const saveSettings = useSaveSettings();
   const editorPath = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
   const stashCount = useStashCount(repoPath);
-  const [discardTarget, setDiscardTarget] = useState<FileEntry | null>(null);
+  // A confirm dialog is open when its scope is non-null. "files" covers a
+  // single right-clicked row and a multi-selection alike (1+ entries); "all"
+  // is the whole working tree (from the section-header menu).
+  const [discardScope, setDiscardScope] = useState<ChangeActionScope>(null);
+  const [stashScope, setStashScope] = useState<ChangeActionScope>(null);
+  // Multi-selection for bulk stash/discard, keyed like the rendered rows
+  // ("staged:path" / "unstaged:path"). `selectedFile` stays the active row
+  // whose diff is shown; `anchorKey` is the pivot for shift-range selection.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [anchorKey, setAnchorKey] = useState<string | null>(null);
   const [filterText, setFilterText] = useState("");
   const [activeKinds, setActiveKinds] = useState<Set<FilterKind>>(new Set());
   const [stashesOpen, setStashesOpen] = useState(false);
@@ -149,18 +206,26 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     ...stagedEntries.map((entry) => ({ entry, staged: true })),
     ...unstagedEntries.map((entry) => ({ entry, staged: false })),
   ];
+  const keyOf = (path: string, staged: boolean) =>
+    `${staged ? "staged" : "unstaged"}:${path}`;
+  const activeKey = selectedFile
+    ? keyOf(selectedFile.path, selectedFile.staged)
+    : null;
+  // Entries behind the multi-selection (deduped to one per path), driving the
+  // bulk context menu and its confirm dialogs.
+  const selectedPaths = new Set(
+    [...selectedKeys].map((k) => k.slice(k.indexOf(":") + 1)),
+  );
+  const selectedEntries = entries.filter((e) => selectedPaths.has(e.path));
+  const selectionCount = selectedEntries.length;
 
   function onListKeyDown(e: React.KeyboardEvent) {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     if (visibleRows.length === 0) return;
     // Move the selection, not the scrollbar.
     e.preventDefault();
-    const index = visibleRows.findIndex(
-      (r) =>
-        selectedFile !== null &&
-        r.entry.path === selectedFile.path &&
-        r.staged === selectedFile.staged,
-    );
+    const keys = visibleRows.map((r) => keyOf(r.entry.path, r.staged));
+    const index = activeKey ? keys.indexOf(activeKey) : -1;
     const next =
       e.key === "ArrowDown"
         ? Math.min(index + 1, visibleRows.length - 1)
@@ -168,9 +233,21 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
           ? visibleRows.length - 1
           : Math.max(index - 1, 0);
     const row = visibleRows[next];
+    const key = keys[next];
     select(row.entry, row.staged);
-    // Move focus along with the selection so the focus ring tracks it.
-    const key = `${row.staged ? "staged" : "unstaged"}:${row.entry.path}`;
+    // Shift+Arrow extends the selection from the anchor; a plain arrow
+    // collapses it back to the single active row.
+    if (e.shiftKey && anchorKey) {
+      const a = keys.indexOf(anchorKey);
+      if (a !== -1) {
+        const [lo, hi] = a <= next ? [a, next] : [next, a];
+        setSelectedKeys(new Set(keys.slice(lo, hi + 1)));
+      }
+    } else {
+      setSelectedKeys(new Set([key]));
+      setAnchorKey(key);
+    }
+    // Move focus along with the active row so the focus ring tracks it.
     e.currentTarget
       .querySelector<HTMLElement>(`[data-row="${CSS.escape(key)}"]`)
       ?.focus();
@@ -187,6 +264,18 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     );
     if (!stillThere) selectFile(null);
   }, [status.data, selectedFile, selectFile]);
+  // Prune multi-selection keys for files that have left the working tree
+  // (committed, discarded, etc.) so counts and highlights stay accurate.
+  useEffect(() => {
+    if (!status.data) return;
+    const paths = new Set(status.data.entries.map((e) => e.path));
+    setSelectedKeys((prev) => {
+      const next = new Set(
+        [...prev].filter((k) => paths.has(k.slice(k.indexOf(":") + 1))),
+      );
+      return next.size === prev.size ? prev : next;
+    });
+  }, [status.data]);
   const mutating = stage.isPending || unstage.isPending;
   const onError = (e: unknown) => toastError(e);
 
@@ -207,6 +296,40 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     });
   }
 
+  // Click selection with modifier support: plain = single, Ctrl/Cmd = toggle,
+  // Shift = range from the anchor. The clicked row always becomes active so
+  // its diff shows (via `select`).
+  function handleSelect(
+    entry: FileEntry,
+    staged: boolean,
+    mods: { ctrlOrMeta: boolean; shift: boolean },
+  ) {
+    const key = keyOf(entry.path, staged);
+    select(entry, staged);
+    if (mods.shift && anchorKey) {
+      const keys = visibleRows.map((r) => keyOf(r.entry.path, r.staged));
+      const a = keys.indexOf(anchorKey);
+      const b = keys.indexOf(key);
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a <= b ? [a, b] : [b, a];
+        setSelectedKeys(new Set(keys.slice(lo, hi + 1)));
+        return;
+      }
+    }
+    if (mods.ctrlOrMeta) {
+      setSelectedKeys((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+      setAnchorKey(key);
+      return;
+    }
+    setSelectedKeys(new Set([key]));
+    setAnchorKey(key);
+  }
+
   function stageAll() {
     stage.mutate(
       unstagedEntries.map((e) => e.path),
@@ -216,6 +339,91 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
 
   function unstageAll() {
     unstage.mutate(stagedEntries.flatMap(unstagePaths), { onError });
+  }
+
+  function requestDiscardSelected() {
+    if (selectionCount > 0)
+      setDiscardScope({ kind: "files", entries: selectedEntries });
+  }
+
+  function requestStashSelected() {
+    if (selectionCount > 0)
+      setStashScope({ kind: "files", entries: selectedEntries });
+  }
+
+  function confirmDiscard() {
+    if (!discardScope) return;
+    const finish = () => {
+      setDiscardScope(null);
+      setSelectedKeys(new Set());
+    };
+    if (discardScope.kind === "all") {
+      discardAll.mutate(undefined, {
+        onSuccess: () => {
+          toast.success("All changes discarded");
+          finish();
+        },
+        onError: (e) => {
+          onError(e);
+          finish();
+        },
+      });
+      return;
+    }
+    const targets = discardScope.entries.map((e) => ({
+      path: e.path,
+      untracked: e.unstaged === "untracked",
+    }));
+    discardPaths.mutate(targets, {
+      onSuccess: () => {
+        toast.success(
+          targets.length === 1
+            ? `Discarded changes to ${targets[0].path}`
+            : `Discarded changes to ${targets.length} files`,
+        );
+        finish();
+      },
+      onError: (e) => {
+        onError(e);
+        finish();
+      },
+    });
+  }
+
+  function confirmStash() {
+    if (!stashScope) return;
+    const finish = () => {
+      setStashScope(null);
+      setSelectedKeys(new Set());
+    };
+    if (stashScope.kind === "all") {
+      stashAll.mutate(undefined, {
+        onSuccess: () => {
+          toast.success("Changes stashed");
+          finish();
+        },
+        onError: (e) => {
+          onError(e);
+          finish();
+        },
+      });
+      return;
+    }
+    const targets = stashScope.entries.map((e) => e.path);
+    stashPaths.mutate(targets, {
+      onSuccess: () => {
+        toast.success(
+          targets.length === 1
+            ? `Stashed ${targets[0]}`
+            : `Stashed ${targets.length} files`,
+        );
+        finish();
+      },
+      onError: (e) => {
+        onError(e);
+        finish();
+      },
+    });
   }
 
   useHotkeyAction(
@@ -247,6 +455,41 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const conflictedCount = entries.filter(
     (e) => e.unstaged === "conflicted" || e.staged === "conflicted",
   ).length;
+
+  // Confirm-dialog copy, derived from each action's scope (a single file, a
+  // multi-selection, or the whole tree).
+  const discardFiles =
+    discardScope?.kind === "files" ? discardScope.entries : [];
+  const discardOne = discardFiles.length === 1 ? discardFiles[0] : null;
+  const discardTitle =
+    discardScope?.kind === "all"
+      ? "Discard all changes?"
+      : discardOne
+        ? "Discard changes?"
+        : `Discard ${discardFiles.length} changes?`;
+  const discardBody =
+    discardScope?.kind === "all"
+      ? "All uncommitted changes are discarded: tracked files reset to the last commit, untracked files move to the recycle bin."
+      : discardOne
+        ? discardOne.unstaged === "untracked"
+          ? `${discardOne.path} is untracked — it will be moved to the recycle bin.`
+          : `Unstaged changes to ${discardOne.path} will be restored to the last committed version. This cannot be undone.`
+        : `Changes to ${discardFiles.length} files will be discarded — tracked files are restored and untracked files moved to the recycle bin. This cannot be undone.`;
+
+  const stashFiles = stashScope?.kind === "files" ? stashScope.entries : [];
+  const stashOne = stashFiles.length === 1 ? stashFiles[0] : null;
+  const stashTitle =
+    stashScope?.kind === "all"
+      ? "Stash all changes?"
+      : stashOne
+        ? "Stash change?"
+        : `Stash ${stashFiles.length} changes?`;
+  const stashBody =
+    stashScope?.kind === "all"
+      ? 'Sets your working tree back to the last commit and saves all uncommitted changes — including untracked files — to the stash. "Pop latest stash" restores them.'
+      : stashOne
+        ? `${stashOne.path} is saved to the stash and removed from your working tree. "Pop latest stash" restores it.`
+        : `${stashFiles.length} selected files are saved to the stash and removed from your working tree. "Pop latest stash" restores them.`;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -395,6 +638,30 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
             />
           </div>
 
+          {(settings.data?.showSelectionHint ?? true) &&
+            entries.length >= 2 && (
+              <div className="flex items-center gap-2 border-b bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                <InfoIcon className="size-3.5 shrink-0" />
+                <span className="flex-1 leading-snug">
+                  {isMac ? "⌘" : "Ctrl"}-click to select files individually,
+                  Shift-click for a range.
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    settings.data &&
+                    saveSettings.mutate({
+                      ...settings.data,
+                      showSelectionHint: false,
+                    })
+                  }
+                  className="shrink-0 font-medium whitespace-nowrap underline underline-offset-2 hover:no-underline"
+                >
+                  Don't show again
+                </button>
+              </div>
+            )}
+
           <ScrollArea className="min-h-0 flex-1">
             <div className="p-2" onKeyDown={onListKeyDown}>
               {nothingMatches && (
@@ -405,20 +672,26 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
 
               {stagedEntries.length > 0 && (
                 <section className="mb-3">
-                  <div className="flex items-center justify-between pr-1 pl-2">
-                    <h3 className="py-1 text-xs font-medium text-muted-foreground">
-                      Staged ({stagedEntries.length})
-                    </h3>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      className="text-muted-foreground"
-                      disabled={mutating}
-                      onClick={unstageAll}
-                    >
-                      Unstage all
-                    </Button>
-                  </div>
+                  <SectionHeaderMenu
+                    onDiscardAll={() => setDiscardScope({ kind: "all" })}
+                    onStashAll={() => setStashScope({ kind: "all" })}
+                    header={
+                      <div className="flex items-center justify-between pr-1 pl-2">
+                        <h3 className="py-1 text-xs font-medium text-muted-foreground">
+                          Staged ({stagedEntries.length})
+                        </h3>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          className="text-muted-foreground"
+                          disabled={mutating}
+                          onClick={unstageAll}
+                        >
+                          Unstage all
+                        </Button>
+                      </div>
+                    }
+                  />
                   {stagedEntries.map((entry) => (
                     <FileRow
                       key={`staged:${entry.path}`}
@@ -427,14 +700,21 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                       staged
                       disabled={mutating}
                       repoPath={repoPath}
-                      selected={
+                      selected={selectedKeys.has(keyOf(entry.path, true))}
+                      active={
                         selectedFile?.path === entry.path &&
                         selectedFile.staged === true
                       }
-                      onSelect={() => select(entry, true)}
+                      selectionCount={selectionCount}
+                      onSelect={(mods) => handleSelect(entry, true, mods)}
                       onToggle={() =>
                         unstage.mutate(unstagePaths(entry), { onError })
                       }
+                      onStashFile={() =>
+                        setStashScope({ kind: "files", entries: [entry] })
+                      }
+                      onDiscardSelected={requestDiscardSelected}
+                      onStashSelected={requestStashSelected}
                     />
                   ))}
                 </section>
@@ -442,20 +722,26 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
 
               {unstagedEntries.length > 0 && (
                 <section>
-                  <div className="flex items-center justify-between pr-1 pl-2">
-                    <h3 className="py-1 text-xs font-medium text-muted-foreground">
-                      Changes ({unstagedEntries.length})
-                    </h3>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      className="text-muted-foreground"
-                      disabled={mutating}
-                      onClick={stageAll}
-                    >
-                      Stage all
-                    </Button>
-                  </div>
+                  <SectionHeaderMenu
+                    onDiscardAll={() => setDiscardScope({ kind: "all" })}
+                    onStashAll={() => setStashScope({ kind: "all" })}
+                    header={
+                      <div className="flex items-center justify-between pr-1 pl-2">
+                        <h3 className="py-1 text-xs font-medium text-muted-foreground">
+                          Changes ({unstagedEntries.length})
+                        </h3>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          className="text-muted-foreground"
+                          disabled={mutating}
+                          onClick={stageAll}
+                        >
+                          Stage all
+                        </Button>
+                      </div>
+                    }
+                  />
                   {unstagedEntries.map((entry) => (
                     <FileRow
                       key={`unstaged:${entry.path}`}
@@ -464,13 +750,22 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                       staged={false}
                       disabled={mutating}
                       repoPath={repoPath}
-                      selected={
+                      selected={selectedKeys.has(keyOf(entry.path, false))}
+                      active={
                         selectedFile?.path === entry.path &&
                         selectedFile.staged === false
                       }
-                      onSelect={() => select(entry, false)}
+                      selectionCount={selectionCount}
+                      onSelect={(mods) => handleSelect(entry, false, mods)}
                       onToggle={() => stage.mutate([entry.path], { onError })}
-                      onDiscard={() => setDiscardTarget(entry)}
+                      onDiscard={() =>
+                        setDiscardScope({ kind: "files", entries: [entry] })
+                      }
+                      onStashFile={() =>
+                        setStashScope({ kind: "files", entries: [entry] })
+                      }
+                      onDiscardSelected={requestDiscardSelected}
+                      onStashSelected={requestStashSelected}
                     />
                   ))}
                 </section>
@@ -503,50 +798,51 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
       />
 
       <Dialog
-        open={discardTarget !== null}
+        open={discardScope !== null}
         onOpenChange={(open) => {
-          if (!open) setDiscardTarget(null);
+          if (!open) setDiscardScope(null);
         }}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Discard changes?</DialogTitle>
-            <DialogDescription>
-              {discardTarget?.unstaged === "untracked"
-                ? `${discardTarget.path} is untracked — it will be moved to the recycle bin.`
-                : `Unstaged changes to ${discardTarget?.path} will be restored to the last committed version. This cannot be undone.`}
-            </DialogDescription>
+            <DialogTitle>{discardTitle}</DialogTitle>
+            <DialogDescription>{discardBody}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDiscardTarget(null)}>
+            <Button variant="outline" onClick={() => setDiscardScope(null)}>
               Cancel
             </Button>
             <Button
               variant="destructive"
-              disabled={discard.isPending}
-              onClick={() => {
-                if (!discardTarget) return;
-                discard.mutate(
-                  {
-                    path: discardTarget.path,
-                    untracked: discardTarget.unstaged === "untracked",
-                  },
-                  {
-                    onSuccess: () => {
-                      toast.success(
-                        `Discarded changes to ${discardTarget.path}`,
-                      );
-                      setDiscardTarget(null);
-                    },
-                    onError: (e) => {
-                      toastError(e);
-                      setDiscardTarget(null);
-                    },
-                  },
-                );
-              }}
+              disabled={discardPaths.isPending || discardAll.isPending}
+              onClick={confirmDiscard}
             >
-              Discard
+              {discardScope?.kind === "all" ? "Discard all" : "Discard"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={stashScope !== null}
+        onOpenChange={(open) => {
+          if (!open) setStashScope(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{stashTitle}</DialogTitle>
+            <DialogDescription>{stashBody}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStashScope(null)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={stashPaths.isPending || stashAll.isPending}
+              onClick={confirmStash}
+            >
+              {stashScope?.kind === "all" ? "Stash all" : "Stash"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -360,6 +360,75 @@ pub async fn git_stash_all(state: State<'_, AppState>, repo_path: String) -> App
     Ok(())
 }
 
+/// One selected file to discard, paired with whether it's untracked (which
+/// decides recycle-bin vs. `git restore`). Mirrors the per-file `git_discard`.
+#[derive(serde::Deserialize)]
+pub struct DiscardPath {
+    pub path: String,
+    pub untracked: bool,
+}
+
+/// Discards working-tree changes for a selection of files: tracked files are
+/// restored from the index, untracked files go to the OS recycle bin. The
+/// scoped analogue of `git_discard` / `git_discard_all`.
+#[tauri::command]
+pub async fn git_discard_paths(
+    state: State<'_, AppState>,
+    repo_path: String,
+    paths: Vec<DiscardPath>,
+) -> AppResult<()> {
+    let untracked: Vec<String> = paths
+        .iter()
+        .filter(|p| p.untracked)
+        .map(|p| p.path.clone())
+        .collect();
+    let tracked: Vec<String> = paths
+        .iter()
+        .filter(|p| !p.untracked)
+        .map(|p| p.path.clone())
+        .collect();
+
+    if !untracked.is_empty() {
+        let repo = repo_path.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            for path in untracked {
+                let full = Path::new(&repo).join(&path);
+                trash::delete(&full)
+                    .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?;
+            }
+            Ok::<(), AppError>(())
+        })
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))??;
+    }
+
+    // Chunked to stay under the Windows ~32K command-line limit on big selections.
+    for batch in tracked.chunks(100) {
+        let mut args = vec!["restore", "--"];
+        args.extend(batch.iter().map(String::as_str));
+        run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    }
+    Ok(())
+}
+
+/// Stashes only the selected files (their tracked changes plus any untracked
+/// matches), leaving the rest of the working tree in place. Creates a single
+/// stash entry; `git stash push` with a pathspec no-ops cleanly if nothing matches.
+#[tauri::command]
+pub async fn git_stash_paths(
+    state: State<'_, AppState>,
+    repo_path: String,
+    paths: Vec<String>,
+) -> AppResult<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["stash", "push", "--include-untracked", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn git_stash_pop(state: State<'_, AppState>, repo_path: String) -> AppResult<()> {
     run_git_mutating(&state, &repo_path, &["stash", "pop"], DEFAULT_TIMEOUT).await?;

@@ -545,8 +545,22 @@ export function useDiscardAll(repo: string) {
   return useRepoMutation(repo, () => api.gitDiscardAll(repo));
 }
 
+export function useDiscardPaths(repo: string) {
+  return useRepoMutation(
+    repo,
+    (paths: { path: string; untracked: boolean }[]) =>
+      api.gitDiscardPaths(repo, paths),
+  );
+}
+
 export function useStashAll(repo: string) {
   return useRepoMutation(repo, () => api.gitStashAll(repo));
+}
+
+export function useStashPaths(repo: string) {
+  return useRepoMutation(repo, (paths: string[]) =>
+    api.gitStashPaths(repo, paths),
+  );
 }
 
 export function useStashPop(repo: string) {

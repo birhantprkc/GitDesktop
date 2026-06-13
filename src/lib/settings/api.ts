@@ -50,6 +50,9 @@ export interface AppSettings {
   /** Warn before amending a commit that's already on the remote (force push).
    *  Cleared by the dialog's "Don't show this again". */
   confirmAmendForcePush: boolean;
+  /** Show the Ctrl/Shift-click multi-select hint above the changes list.
+   *  Cleared by the hint's "Don't show again". */
+  showSelectionHint: boolean;
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -80,6 +83,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultBranch: "main",
   hotkeys: {},
   confirmAmendForcePush: true,
+  showSelectionHint: true,
   recentRepos: [],
   diffViewMode: "unified",
 };
