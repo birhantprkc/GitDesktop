@@ -20,6 +20,7 @@ import {
   openWithProgram,
 } from "@/lib/git/api";
 import { useRepoOwners } from "@/lib/git/queries";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { type RecentRepo, repoDisplayName } from "@/lib/settings/api";
 import { useSettings } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
@@ -59,6 +60,13 @@ export function RepoList({
   const [highlight, setHighlight] = useState(-1);
   const [openingPath, setOpeningPath] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const filterInputRef = useRef<HTMLInputElement>(null);
+
+  // On the welcome screen "show repositories" means "jump to the filter";
+  // inside the switcher popover this list is only mounted while open, so
+  // its registration simply outranks the trigger's while visible.
+  useHotkeyAction("show-repositories", () => filterInputRef.current?.focus());
+  useHotkeyAction("focus-filter", () => filterInputRef.current?.focus());
 
   const ownerByPath = new Map(
     (owners.data ?? []).map((o) => [o.path, o.owner]),
@@ -151,6 +159,7 @@ export function RepoList({
         <Input
           // the filter is the keyboard entry point of this surface
           autoFocus
+          ref={filterInputRef}
           autoComplete="off"
           value={filter}
           onChange={(e) => {

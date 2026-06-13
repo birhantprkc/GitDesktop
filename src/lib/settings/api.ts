@@ -44,6 +44,9 @@ export interface AppSettings {
   terminalPath: string;
   /** Branch name used by `git init` for newly created repositories. */
   defaultBranch: string;
+  /** Hotkey overrides by action id; null = explicitly unbound. Actions not
+   *  present use their registry default. */
+  hotkeys: Record<string, string | null>;
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -72,6 +75,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminal: "",
   terminalPath: "",
   defaultBranch: "main",
+  hotkeys: {},
   recentRepos: [],
   diffViewMode: "unified",
 };

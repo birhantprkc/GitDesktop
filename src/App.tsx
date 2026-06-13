@@ -1,13 +1,16 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Spinner } from "@/components/ui/spinner";
 import { AutomationResultDialog } from "@/features/automations/AutomationResultDialog";
 import { RepositoryView } from "@/features/repository/RepositoryView";
 import { SettingsScreen } from "@/features/settings/SettingsScreen";
+import { CommandPalette } from "@/features/shortcuts/CommandPalette";
+import { ShortcutsDialog } from "@/features/shortcuts/ShortcutsDialog";
 import { GitMissingScreen } from "@/features/welcome/GitMissingScreen";
 import { WelcomeScreen } from "@/features/welcome/WelcomeScreen";
 import { useGitInstalled } from "@/lib/git/queries";
+import { useHotkeyAction, useHotkeysListener } from "@/lib/hotkeys/hotkeys";
 import { useUiStore } from "@/lib/stores/ui";
 
 function App() {
@@ -15,18 +18,14 @@ function App() {
   const openSettings = useUiStore((s) => s.openSettings);
   const gitInstalled = useGitInstalled();
   const queryClient = useQueryClient();
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
-  // Ctrl+, (Cmd+, on macOS) opens settings — the platform convention.
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key === ",") {
-        e.preventDefault();
-        openSettings();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [openSettings]);
+  // The app-wide hotkey dispatcher plus the always-available actions.
+  useHotkeysListener();
+  useHotkeyAction("open-settings", openSettings);
+  useHotkeyAction("show-shortcuts", () => setShortcutsOpen(true));
+  useHotkeyAction("command-palette", () => setPaletteOpen(true));
 
   // The webview stays "visible" when the window loses focus, so TanStack's
   // own focus refetch never fires in Tauri; bridge the native focus event.
@@ -60,6 +59,8 @@ function App() {
       {view === "repo" && <RepositoryView />}
       {view === "settings" && <SettingsScreen />}
       <AutomationResultDialog />
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </>
   );
 }

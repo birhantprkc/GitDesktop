@@ -1,5 +1,5 @@
 import { ArrowCounterClockwiseIcon, TagIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -50,6 +50,7 @@ import {
 } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import type { RewriteStep } from "@/lib/git/types";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
@@ -88,6 +89,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const [pickOntoHashes, setPickOntoHashes] = useState<string[] | null>(null);
   const [pickOntoBranch, setPickOntoBranch] = useState("");
   const [filterText, setFilterText] = useState("");
+  const filterRef = useRef<HTMLInputElement>(null);
   // Tag pending deletion, plus whether to delete it from origin too.
   const [deleteTagName, setDeleteTagName] = useState<string | null>(null);
   const [deleteTagRemote, setDeleteTagRemote] = useState(false);
@@ -175,6 +177,9 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
       onError(e);
     }
   }
+
+  useHotkeyAction("undo-commit", undoLast, canUndo && !undoCommit.isPending);
+  useHotkeyAction("focus-filter", () => filterRef.current?.focus());
 
   if (log.isPending) {
     return (
@@ -400,6 +405,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
       )}
       <div className="border-b p-2">
         <Input
+          ref={filterRef}
           value={filterText}
           onChange={(e) => setFilterText(e.target.value)}
           placeholder="Filter by subject, author, or SHA"

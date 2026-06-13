@@ -43,6 +43,7 @@ import {
   openWithProgram,
 } from "@/lib/git/api";
 import { useForkRepo, useGhStatus } from "@/lib/git/queries";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import type { RecentRepo } from "@/lib/settings/api";
 import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
@@ -92,6 +93,31 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
       onError(e);
     }
   }
+
+  // Every menu entry doubles as a hotkey/palette action with the same gates.
+  useHotkeyAction("view-on-github", () => openWeb(), canGh);
+  useHotkeyAction("create-issue", () => openWeb("/issues/new"), canGh);
+  useHotkeyAction("fork-repository", () => setForkOpen(true), canGh);
+  useHotkeyAction("open-in-terminal", () =>
+    openInTerminal(
+      repoPath,
+      settings.data?.terminal,
+      settings.data?.terminalPath,
+    ).catch(onError),
+  );
+  useHotkeyAction("show-in-explorer", () =>
+    openWithDefault(repoPath).catch(onError),
+  );
+  useHotkeyAction(
+    "open-in-editor",
+    () => openWithProgram(editor, repoPath).catch(onError),
+    Boolean(editor),
+  );
+  useHotkeyAction("repository-statistics", () => setStatsOpen(true));
+  useHotkeyAction("automations", () => setAutomationsOpen(true));
+  useHotkeyAction("change-remote-url", () => setRemoteUrlOpen(true));
+  useHotkeyAction("repo-alias", () => setAliasTarget(repoEntry));
+  useHotkeyAction("remove-repository", () => setRemoveTarget(repoEntry));
 
   return (
     <DropdownMenu>

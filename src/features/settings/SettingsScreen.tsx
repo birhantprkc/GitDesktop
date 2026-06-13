@@ -24,6 +24,7 @@ import { AiProviderSection } from "./AiProviderSection";
 import { EditorSection } from "./EditorSection";
 import { GitIdentitySection, GitSection } from "./GitSection";
 import { InstructionsSection } from "./InstructionsSection";
+import { KeyboardSection } from "./KeyboardSection";
 import { NotificationsSection } from "./NotificationsSection";
 import { settingsFormOpts, toDraft } from "./settings-form";
 import { TerminalSection } from "./TerminalSection";
@@ -32,6 +33,7 @@ const PANELS = [
   { id: "ai", label: "AI" },
   { id: "automations", label: "Automations" },
   { id: "notifications", label: "Notifications" },
+  { id: "keyboard", label: "Keyboard" },
   { id: "accounts", label: "Accounts" },
   { id: "git", label: "Git" },
   { id: "editor", label: "External editor" },
@@ -176,6 +178,7 @@ export function SettingsScreen() {
               {panel === "notifications" && (
                 <NotificationsSection form={form} />
               )}
+              {panel === "keyboard" && <KeyboardSection form={form} />}
               {panel === "accounts" && <AccountsSection />}
               {panel === "git" && (
                 <>

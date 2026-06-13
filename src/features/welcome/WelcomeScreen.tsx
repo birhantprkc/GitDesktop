@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { validateRepo } from "@/lib/git/api";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useAddRecentRepo } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -38,6 +39,10 @@ export function WelcomeScreen() {
       toastError(e);
     }
   }
+
+  useHotkeyAction("add-local-repository", pickAndOpen);
+  useHotkeyAction("clone-repository", () => setCloneOpen(true));
+  useHotkeyAction("new-repository", () => setCreateOpen(true));
 
   return (
     <div className="flex h-screen flex-col">

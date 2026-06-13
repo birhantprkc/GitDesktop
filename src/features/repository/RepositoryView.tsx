@@ -12,16 +12,16 @@ import { LocalPrView } from "@/features/pulls/LocalPrView";
 import { PullRequestsPanel } from "@/features/pulls/PullRequestsPanel";
 import { RemotePrView } from "@/features/pulls/RemotePrView";
 import { useRepoStatus } from "@/lib/git/queries";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { ChangesPanel } from "./ChangesPanel";
 import { RepoHeader } from "./RepoHeader";
 import { usePrNotifications } from "./usePrNotifications";
 
-const TAB_ORDER: RepoTab[] = ["changes", "history", "compare", "pulls"];
-
 export function RepositoryView() {
   const repoPath = useUiStore((s) => s.repoPath);
+  const closeRepo = useUiStore((s) => s.closeRepo);
   const repoName = useUiStore((s) => s.repoName);
   const repoTab = useUiStore((s) => s.repoTab);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
@@ -42,20 +42,12 @@ export function RepositoryView() {
     startTabTransition(() => setRepoTab(tab));
   }
 
-  // Ctrl/Cmd+1–4 switch tabs, mirroring GitHub Desktop.
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const index = Number(e.key) - 1;
-      const tab = TAB_ORDER[index];
-      if (tab) {
-        e.preventDefault();
-        startTabTransition(() => setRepoTab(tab));
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [setRepoTab]);
+  // Tab switching mirrors GitHub Desktop's Ctrl+1–4 by default.
+  useHotkeyAction("tab-changes", () => changeTab("changes"));
+  useHotkeyAction("tab-history", () => changeTab("history"));
+  useHotkeyAction("tab-compare", () => changeTab("compare"));
+  useHotkeyAction("tab-pulls", () => changeTab("pulls"));
+  useHotkeyAction("back-to-repositories", closeRepo);
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open.
   useEffect(() => {

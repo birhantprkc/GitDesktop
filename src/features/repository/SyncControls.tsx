@@ -27,6 +27,7 @@ import {
   useRemotes,
   useRepoStatus,
 } from "@/lib/git/queries";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { PublishDialog } from "./PublishDialog";
@@ -54,6 +55,23 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   const diverged = Boolean(head && head.ahead > 0 && head.behind > 0);
   const busy = fetchRemote.isPending || pull.isPending || push.isPending;
   const onError = (e: unknown) => toastError(e);
+
+  // Hotkeys mirror the buttons' disabled states exactly.
+  useHotkeyAction(
+    "fetch",
+    () => fetchRemote.mutate(undefined, { onError }),
+    !noOrigin && !busy,
+  );
+  useHotkeyAction(
+    "pull",
+    () => pull.mutate(undefined, { onError }),
+    !noOrigin && !busy && hasUpstream && !diverged,
+  );
+  useHotkeyAction(
+    "push",
+    () => (diverged ? setForceConfirmOpen(true) : doPush(false)),
+    !noOrigin && !busy,
+  );
 
   function doPush(force: boolean) {
     push.mutate(

@@ -2,6 +2,7 @@ import { Popover } from "@base-ui/react/popover";
 import { CaretDownIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import type { RecentRepo } from "@/lib/settings/api";
 import { useRepoAlias } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
@@ -16,6 +17,8 @@ export function RepoSwitcher() {
   // Dialogs live outside the popover: closing it unmounts its contents.
   const [aliasTarget, setAliasTarget] = useState<RecentRepo | null>(null);
   const [removeTarget, setRemoveTarget] = useState<RecentRepo | null>(null);
+
+  useHotkeyAction("show-repositories", () => setOpen(true));
 
   return (
     <>

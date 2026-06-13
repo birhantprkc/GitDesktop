@@ -46,6 +46,7 @@ import {
   useStashPop,
 } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { StashesDialog } from "./StashesDialog";
@@ -270,8 +271,71 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     setPickerMode(mode);
   }
 
+  function openCreate() {
+    setOpen(false);
+    createForm.reset(
+      { name: "", base: currentName ?? defaultName ?? "" },
+      { keepDefaultValues: true },
+    );
+    setCreateOpen(true);
+  }
+
+  function updateFromDefault() {
+    if (!defaultName) return;
+    setOpen(false);
+    mergeBranch.mutate(
+      { branch: defaultName, squash: false },
+      {
+        onSuccess: () => toast.success(`Updated from ${defaultName}`),
+        onError,
+      },
+    );
+  }
+
   const busy =
     checkout.isPending || mergeBranch.isPending || rebaseBranch.isPending;
+
+  // Hotkey handlers reuse the menu's own flows, so every gate (clean tree,
+  // stash count, picker availability) and confirm dialog applies equally.
+  useHotkeyAction("show-branches", () => setOpen(true));
+  useHotkeyAction("new-branch", openCreate);
+  useHotkeyAction(
+    "rename-branch",
+    () => currentName && openRename(currentName),
+    Boolean(currentName),
+  );
+  useHotkeyAction(
+    "delete-branch",
+    () => {
+      setOpen(false);
+      if (currentName) setDeleteTarget(currentName);
+    },
+    Boolean(currentName),
+  );
+  useHotkeyAction(
+    "update-from-default",
+    updateFromDefault,
+    Boolean(defaultName && defaultName !== currentName && !busy),
+  );
+  useHotkeyAction(
+    "merge-into-current",
+    () => openPicker("merge"),
+    otherBranches.length > 0,
+  );
+  useHotkeyAction(
+    "squash-merge-into-current",
+    () => openPicker("squash"),
+    otherBranches.length > 0,
+  );
+  useHotkeyAction(
+    "rebase-current",
+    () => openPicker("rebase"),
+    otherBranches.length > 0,
+  );
+  useHotkeyAction("stash-all", () => setStashAllOpen(true), hasChanges);
+  useHotkeyAction("pop-stash", () => setStashPopOpen(true), stashes > 0);
+  useHotkeyAction("view-stashes", () => setStashesOpen(true), stashes > 0);
+  useHotkeyAction("discard-all", () => setDiscardAllOpen(true), hasChanges);
 
   return (
     <>
@@ -356,18 +420,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 ))}
               </div>
               <div className="border-t py-1">
-                <MenuRow
-                  onClick={() => {
-                    setOpen(false);
-                    createForm.reset(
-                      { name: "", base: currentName ?? defaultName ?? "" },
-                      { keepDefaultValues: true },
-                    );
-                    setCreateOpen(true);
-                  }}
-                >
-                  New branch…
-                </MenuRow>
+                <MenuRow onClick={openCreate}>New branch…</MenuRow>
                 <MenuRow
                   disabled={!currentName}
                   onClick={() => {
@@ -429,18 +482,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               <div className="border-t py-1">
                 <MenuRow
                   disabled={!defaultName || defaultName === currentName || busy}
-                  onClick={() => {
-                    if (!defaultName) return;
-                    setOpen(false);
-                    mergeBranch.mutate(
-                      { branch: defaultName, squash: false },
-                      {
-                        onSuccess: () =>
-                          toast.success(`Updated from ${defaultName}`),
-                        onError,
-                      },
-                    );
-                  }}
+                  onClick={updateFromDefault}
                 >
                   Update from {defaultName ?? "default branch"}
                 </MenuRow>

@@ -8,7 +8,7 @@ import {
   TerminalIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -34,6 +34,7 @@ import {
   useUnstage,
 } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -88,6 +89,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const [discardTarget, setDiscardTarget] = useState<FileEntry | null>(null);
   const [filterText, setFilterText] = useState("");
   const [activeKinds, setActiveKinds] = useState<Set<FilterKind>>(new Set());
+  const filterRef = useRef<HTMLInputElement>(null);
 
   const entries = status.data?.entries ?? [];
 
@@ -209,6 +211,22 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   function unstageAll() {
     unstage.mutate(stagedEntries.flatMap(unstagePaths), { onError });
   }
+
+  useHotkeyAction(
+    "stage-all",
+    stageAll,
+    !mutating && unstagedEntries.length > 0,
+  );
+  useHotkeyAction(
+    "unstage-all",
+    unstageAll,
+    !mutating && stagedEntries.length > 0,
+  );
+  useHotkeyAction(
+    "focus-filter",
+    () => filterRef.current?.focus(),
+    entries.length > 0,
+  );
 
   if (status.isPending) {
     return (
@@ -362,6 +380,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
               </Popover.Portal>
             </Popover.Root>
             <Input
+              ref={filterRef}
               value={filterText}
               onChange={(e) => setFilterText(e.target.value)}
               placeholder="Filter"

@@ -28,6 +28,7 @@ import {
   useRepoStatus,
 } from "@/lib/git/queries";
 import type { CommitSummary } from "@/lib/git/types";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -71,6 +72,25 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
 
   const comparison = useCompareBranches(repoPath, compareBranch, currentName);
 
+  const ahead = comparison.data?.ahead ?? [];
+  const behind = comparison.data?.behind ?? [];
+  const canPr = ghReady;
+  // An open PR from the current branch into the compared branch already exists.
+  const existingPr = (branchPrs.data ?? []).find(
+    (p) => p.baseRefName === compareBranch,
+  );
+
+  useHotkeyAction(
+    "create-pr",
+    () => setPrOpen(true),
+    Boolean(canPr && compareBranch && !existingPr && ahead.length > 0),
+  );
+  useHotkeyAction(
+    "create-local-pr",
+    () => setLocalPrOpen(true),
+    Boolean(compareBranch && compareBranch !== currentName && ahead.length > 0),
+  );
+
   if (detached || !currentName) {
     return (
       <p className="flex-1 px-3 py-8 text-center text-xs text-muted-foreground">
@@ -85,10 +105,6 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
       </p>
     );
   }
-
-  const ahead = comparison.data?.ahead ?? [];
-  const behind = comparison.data?.behind ?? [];
-  const canPr = ghReady;
 
   // Arrow keys walk "All changes" → ahead → behind, mirroring the list.
   const navTargets: (string | null)[] = [
@@ -118,10 +134,6 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
     el?.focus();
     el?.scrollIntoView({ block: "nearest" });
   }
-  // An open PR from the current branch into the compared branch already exists.
-  const existingPr = (branchPrs.data ?? []).find(
-    (p) => p.baseRefName === compareBranch,
-  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

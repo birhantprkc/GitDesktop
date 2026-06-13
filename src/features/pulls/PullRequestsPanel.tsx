@@ -4,7 +4,7 @@ import {
   GitPullRequestIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -13,6 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PrStateFilter } from "@/lib/git/api";
 import { useGhStatus, usePrList } from "@/lib/git/queries";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import type { LocalPr } from "@/lib/pulls/local";
 import { useLocalPrs } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
@@ -34,6 +35,10 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   const [filterText, setFilterText] = useState("");
   const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
   const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set());
+  const filterRef = useRef<HTMLInputElement>(null);
+
+  useHotkeyAction("focus-filter", () => filterRef.current?.focus());
+  useHotkeyAction("create-local-pr", () => setCreateOpen(true));
 
   const stateLocal = (localPrs.data ?? []).filter((p) =>
     stateFilter === "open" ? p.status === "open" : p.status !== "open",
@@ -243,6 +248,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
       </div>
       <div className="border-b p-2">
         <Input
+          ref={filterRef}
           value={filterText}
           onChange={(e) => setFilterText(e.target.value)}
           placeholder="Search by title, #, author, or label"
