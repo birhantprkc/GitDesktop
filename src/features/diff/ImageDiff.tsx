@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useFileAtRev } from "@/lib/git/queries";
 
 const IMAGE_MIME: Record<string, string> = {
@@ -93,12 +92,7 @@ export function ImagePanes({
   const newB64 = newFile.data ?? null;
 
   if (pending) {
-    return (
-      <div className="flex justify-center gap-6 p-6">
-        <Skeleton className="h-40 w-40" />
-        <Skeleton className="h-40 w-40" />
-      </div>
-    );
+    return null;
   }
   return (
     <div className="flex items-start justify-center gap-8 p-6">
@@ -141,9 +135,9 @@ export function ImageDiff({
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-3 py-1.5">
-        <span className="truncate font-mono text-xs text-muted-foreground">
+        <p className="truncate font-mono text-xs text-muted-foreground">
           {filePath}
-        </span>
+        </p>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         <ImagePanes repoPath={repoPath} filePath={filePath} revs={revs} />

@@ -27,6 +27,7 @@ import type {
   RewriteStep,
   StagedDiff,
   StashEntry,
+  StashFile,
 } from "./types";
 
 export const checkGitInstalled = () => invoke<GitInfo>("check_git_installed");
@@ -116,8 +117,14 @@ export const gitCommit = (
 export const gitStashList = (repoPath: string) =>
   invoke<StashEntry[]>("git_stash_list", { repoPath });
 
-export const gitStashShow = (repoPath: string, index: number) =>
-  invoke<FileDiff>("git_stash_show", { repoPath, index });
+export const gitStashFiles = (repoPath: string, index: number) =>
+  invoke<StashFile[]>("git_stash_files", { repoPath, index });
+
+export const gitStashFileDiff = (
+  repoPath: string,
+  index: number,
+  filePath: string,
+) => invoke<FileDiff>("git_stash_file_diff", { repoPath, index, filePath });
 
 export const gitStashApply = (repoPath: string, index: number, pop: boolean) =>
   invoke<void>("git_stash_apply", { repoPath, index, pop });

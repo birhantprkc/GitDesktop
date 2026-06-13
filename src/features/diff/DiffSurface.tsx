@@ -3,7 +3,6 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { useMemo, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { FileDiff } from "@/lib/git/types";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { DiffErrorBoundary } from "./DiffErrorBoundary";
@@ -160,15 +159,10 @@ export function DiffContent({
   repoPath?: string;
   imageRevs?: ImageRevs;
 }) {
-  if (isPending) {
-    return (
-      <div className="space-y-2 p-4">
-        <Skeleton className="h-4 w-1/3" />
-        <Skeleton className="h-4 w-2/3" />
-        <Skeleton className="h-4 w-1/2" />
-      </div>
-    );
-  }
+  // Diffs load near-instantly from local git, so a skeleton only adds a flash
+  // and a layout shift on the way to the real content — render nothing until
+  // it's ready.
+  if (isPending) return null;
   if (isError || !data) {
     return <DiffPlaceholder message="Could not load diff for this file" />;
   }
@@ -192,12 +186,14 @@ export function DiffContent({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b px-3 py-1.5">
-        <span className="truncate font-mono text-xs text-muted-foreground">
+      <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
           {filePath}
           {data.isTruncated && " (truncated — diff too large)"}
         </span>
-        <DiffModeToggle />
+        <span className="shrink-0">
+          <DiffModeToggle />
+        </span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {svgPreview && repoPath && imageRevs && (

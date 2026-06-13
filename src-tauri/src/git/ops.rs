@@ -3,6 +3,7 @@
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::git::diff::parse_numstat_z;
 use crate::git::history::validate_hash;
 use crate::git::runner::{run_git, run_git_mutating, DEFAULT_TIMEOUT};
 use crate::git::types::{FileDiff, RepoOpState, RewriteStep, StashEntry};
@@ -411,31 +412,104 @@ pub async fn git_stash_list(repo_path: String) -> AppResult<Vec<StashEntry>> {
     Ok(entries)
 }
 
-/// The combined diff a stash would re-apply, for previewing it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashFile {
+    pub path: String,
+    pub added: u32,
+    pub deleted: u32,
+    pub is_binary: bool,
+    /// Lives in the stash's untracked-files parent (^3), so its content reads
+    /// from there rather than the stash commit itself.
+    pub untracked: bool,
+}
+
+/// The files a stash holds, including untracked ones, so it can be browsed
+/// file by file instead of as one combined diff (where a single binary file
+/// would mark the whole preview unreadable).
 #[tauri::command]
-pub async fn git_stash_show(repo_path: String, index: u32) -> AppResult<FileDiff> {
+pub async fn git_stash_files(repo_path: String, index: u32) -> AppResult<Vec<StashFile>> {
     let spec = format!("stash@{{{index}}}");
     let out = run_git(
         Some(&repo_path),
         &[
             "stash",
             "show",
-            "-p",
+            "--numstat",
+            "-z",
             "--include-untracked",
-            "--no-color",
             &spec,
         ],
         DEFAULT_TIMEOUT,
     )
     .await?;
-    let text = out.stdout_lossy();
+    let entries = parse_numstat_z(&out.stdout_lossy());
+
+    // Paths in the untracked parent (^3, present only when untracked files
+    // were stashed) need their "new" content read from there.
+    let untracked_ref = format!("stash@{{{index}}}^3");
+    let mut untracked = std::collections::HashSet::new();
+    if let Ok(o) = run_git(
+        Some(&repo_path),
+        &["ls-tree", "-r", "--name-only", "-z", &untracked_ref],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        for p in o.stdout_lossy().split('\0').filter(|s| !s.is_empty()) {
+            untracked.insert(p.to_string());
+        }
+    }
+
+    Ok(entries
+        .into_iter()
+        .map(|e| StashFile {
+            untracked: untracked.contains(&e.path),
+            path: e.path,
+            added: e.added,
+            deleted: e.deleted,
+            is_binary: e.is_binary,
+        })
+        .collect())
+}
+
+/// One file's diff from a stash. Tracked changes diff the stash against its
+/// base; untracked files live in the stash's third parent (`^3`, created by
+/// `--include-untracked`), so an empty tracked diff falls back to that.
+#[tauri::command]
+pub async fn git_stash_file_diff(
+    repo_path: String,
+    index: u32,
+    file_path: String,
+) -> AppResult<FileDiff> {
+    let base = format!("stash@{{{index}}}^1");
+    let stash = format!("stash@{{{index}}}");
+    let out = run_git(
+        Some(&repo_path),
+        &["diff", "--no-color", &base, &stash, "--", &file_path],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let mut text = out.stdout_lossy();
+    if text.trim().is_empty() {
+        // Not a tracked change — try the untracked-files parent if present.
+        let untracked = format!("stash@{{{index}}}^3");
+        if let Ok(o) = run_git(
+            Some(&repo_path),
+            &["diff", "--no-color", &base, &untracked, "--", &file_path],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        {
+            text = o.stdout_lossy();
+        }
+    }
     let is_binary = text
         .lines()
         .any(|l| l.starts_with("Binary files ") && l.ends_with(" differ"));
-    let (text, is_truncated) =
-        crate::git::diff::truncate_at_char_boundary(text, 1_000_000);
+    let (text, is_truncated) = crate::git::diff::truncate_at_char_boundary(text, 1_000_000);
     Ok(FileDiff {
-        file_path: spec,
+        file_path,
         is_binary,
         is_truncated,
         text,

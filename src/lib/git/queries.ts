@@ -561,11 +561,29 @@ export function useStashList(repo: string, enabled = true) {
   });
 }
 
-export function useStashShow(repo: string, index: number | null) {
+export function useStashFiles(repo: string, index: number | null) {
   return useQuery({
-    queryKey: ["repo", repo, "stash-diff", index ?? -1] as const,
-    queryFn: () => api.gitStashShow(repo, index ?? 0),
+    queryKey: ["repo", repo, "stash-files", index ?? -1] as const,
+    queryFn: () => api.gitStashFiles(repo, index ?? 0),
     enabled: index !== null,
+  });
+}
+
+export function useStashFileDiff(
+  repo: string,
+  index: number | null,
+  filePath: string | null,
+) {
+  return useQuery({
+    queryKey: [
+      "repo",
+      repo,
+      "stash-diff",
+      index ?? -1,
+      filePath ?? "",
+    ] as const,
+    queryFn: () => api.gitStashFileDiff(repo, index ?? 0, filePath ?? ""),
+    enabled: index !== null && filePath !== null,
   });
 }
 

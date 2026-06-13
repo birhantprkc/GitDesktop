@@ -12,20 +12,23 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
-import { DiffContent } from "@/features/diff/DiffSurface";
+import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
+import { DiffSurface } from "@/features/diff/DiffSurface";
+import type { ImageRevs } from "@/features/diff/ImageDiff";
 import {
   useStashApply,
   useStashDrop,
+  useStashFileDiff,
+  useStashFiles,
   useStashList,
-  useStashShow,
 } from "@/lib/git/queries";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 /**
- * Browse the stash stack: preview what each stash would re-apply, then
- * apply, pop, or drop it.
+ * Browse the stash stack: pick a stash, see the files it holds, inspect each
+ * one's diff, then apply, pop, or drop it.
  */
 export function StashesDialog({
   repoPath,
@@ -48,7 +51,6 @@ export function StashesDialog({
     selectedIndex !== null && list.some((s) => s.index === selectedIndex)
       ? selectedIndex
       : (list[0]?.index ?? null);
-  const preview = useStashShow(repoPath, open ? effectiveIndex : null);
   const busy = apply.isPending || drop.isPending;
   const onError = (e: unknown) => toastError(e);
 
@@ -63,9 +65,28 @@ export function StashesDialog({
     );
   }
 
+  // Arrow keys walk the stash list, mirroring the app's other lists.
+  function onStashesKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (list.length === 0) return;
+    e.preventDefault();
+    const idx = list.findIndex((s) => s.index === effectiveIndex);
+    const next =
+      e.key === "ArrowDown"
+        ? Math.min(idx + 1, list.length - 1)
+        : Math.max(idx - 1, 0);
+    const stash = list[Math.max(next, 0)];
+    setSelectedIndex(stash.index);
+    const el = e.currentTarget.querySelector<HTMLElement>(
+      `[data-stash="${stash.index}"]`,
+    );
+    el?.focus();
+    el?.scrollIntoView({ block: "nearest" });
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[70vh] flex-col sm:max-w-4xl">
+      <DialogContent className="flex h-[70vh] flex-col sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle>Stashes</DialogTitle>
           <DialogDescription>
@@ -80,30 +101,33 @@ export function StashesDialog({
           </p>
         ) : (
           <div className="flex min-h-0 flex-1 border">
-            <aside className="flex w-64 shrink-0 flex-col border-r">
+            <aside className="flex w-56 shrink-0 flex-col border-r">
               <ScrollArea className="min-h-0 flex-1">
-                {list.map((stash) => (
-                  <button
-                    type="button"
-                    key={stash.index}
-                    className={cn(
-                      "block w-full border-b px-3 py-2 text-left",
-                      effectiveIndex === stash.index
-                        ? "bg-accent text-accent-foreground"
-                        : "hover:bg-muted/60",
-                    )}
-                    onClick={() => setSelectedIndex(stash.index)}
-                  >
-                    <p className="truncate text-xs font-medium">
-                      {stash.message}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      stash@{"{"}
-                      {stash.index}
-                      {"}"} · {formatRelativeTime(stash.date)}
-                    </p>
-                  </button>
-                ))}
+                <div onKeyDown={onStashesKeyDown}>
+                  {list.map((stash) => (
+                    <button
+                      type="button"
+                      key={stash.index}
+                      data-stash={stash.index}
+                      className={cn(
+                        "block w-full border-b px-3 py-2 text-left",
+                        effectiveIndex === stash.index
+                          ? "bg-accent text-accent-foreground"
+                          : "hover:bg-muted/60",
+                      )}
+                      onClick={() => setSelectedIndex(stash.index)}
+                    >
+                      <p className="truncate text-xs font-medium">
+                        {stash.message}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        stash@{"{"}
+                        {stash.index}
+                        {"}"} · {formatRelativeTime(stash.date)}
+                      </p>
+                    </button>
+                  ))}
+                </div>
               </ScrollArea>
               {effectiveIndex !== null && (
                 <div className="flex items-center gap-1.5 border-t p-2">
@@ -138,16 +162,13 @@ export function StashesDialog({
                 </div>
               )}
             </aside>
-            <main className="min-w-0 flex-1">
-              {effectiveIndex !== null && (
-                <DiffContent
-                  filePath={`stash@{${effectiveIndex}}`}
-                  data={preview.data}
-                  isPending={preview.isPending}
-                  isError={preview.isError}
-                />
-              )}
-            </main>
+            {effectiveIndex !== null ? (
+              <StashFiles
+                key={effectiveIndex}
+                repoPath={repoPath}
+                index={effectiveIndex}
+              />
+            ) : null}
           </div>
         )}
 
@@ -195,5 +216,116 @@ export function StashesDialog({
         </Dialog>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** File list + selected file diff for one stash. */
+function StashFiles({ repoPath, index }: { repoPath: string; index: number }) {
+  const files = useStashFiles(repoPath, index);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const effectivePath =
+    selectedPath && files.data?.some((f) => f.path === selectedPath)
+      ? selectedPath
+      : (files.data?.[0]?.path ?? null);
+  const diff = useStashFileDiff(repoPath, index, effectivePath);
+
+  // Image/SVG previews need the file's content on each side. Tracked changes
+  // read from the stash commit; untracked files from its ^3 parent.
+  const effectiveFile = files.data?.find((f) => f.path === effectivePath);
+  const imageRevs: ImageRevs | undefined = effectiveFile
+    ? {
+        old: `stash@{${index}}^1`,
+        new: effectiveFile.untracked
+          ? `stash@{${index}}^3`
+          : `stash@{${index}}`,
+      }
+    : undefined;
+
+  if (files.isPending) {
+    return null;
+  }
+  if (files.isError || !files.data) {
+    return (
+      <div className="flex-1">
+        <DiffPlaceholder message="Could not load this stash" />
+      </div>
+    );
+  }
+
+  const fileList = files.data;
+  // Arrow keys walk the file list, mirroring the app's other lists.
+  function onFilesKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (fileList.length === 0) return;
+    e.preventDefault();
+    const idx = fileList.findIndex((f) => f.path === effectivePath);
+    const next =
+      e.key === "ArrowDown"
+        ? Math.min(idx + 1, fileList.length - 1)
+        : Math.max(idx - 1, 0);
+    const path = fileList[Math.max(next, 0)].path;
+    setSelectedPath(path);
+    const el = e.currentTarget.querySelector<HTMLElement>(
+      `[data-path="${CSS.escape(path)}"]`,
+    );
+    el?.focus();
+    el?.scrollIntoView({ block: "nearest" });
+  }
+
+  return (
+    <>
+      <aside className="flex w-60 shrink-0 flex-col border-r">
+        <p className="border-b px-3 py-1.5 text-xs text-muted-foreground">
+          {fileList.length} changed file{fileList.length === 1 ? "" : "s"}
+        </p>
+        <ScrollArea className="min-h-0 flex-1">
+          <div onKeyDown={onFilesKeyDown}>
+            {fileList.map((file) => (
+              <button
+                type="button"
+                key={file.path}
+                data-path={file.path}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
+                  effectivePath === file.path
+                    ? "bg-accent text-accent-foreground"
+                    : "hover:bg-muted/60",
+                )}
+                onClick={() => setSelectedPath(file.path)}
+                title={file.path}
+              >
+                <span className="min-w-0 flex-1 truncate font-mono">
+                  {file.path}
+                </span>
+                {file.isBinary ? (
+                  <span className="shrink-0 text-muted-foreground">bin</span>
+                ) : (
+                  <span className="shrink-0 tabular-nums">
+                    <span className="text-green-600 dark:text-green-400">
+                      +{file.added}
+                    </span>{" "}
+                    <span className="text-red-600 dark:text-red-400">
+                      -{file.deleted}
+                    </span>
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </ScrollArea>
+      </aside>
+      <main className="min-w-0 flex-1">
+        {effectivePath ? (
+          <DiffSurface
+            filePath={effectivePath}
+            diff={diff}
+            repoPath={repoPath}
+            imageRevs={imageRevs}
+          />
+        ) : (
+          <DiffPlaceholder message="This stash has no files" />
+        )}
+      </main>
+    </>
   );
 }

@@ -1,10 +1,12 @@
 import { Popover } from "@base-ui/react/popover";
 import {
   ArrowSquareOutIcon,
+  CaretRightIcon,
   ClockCounterClockwiseIcon,
   FunnelIcon,
   GitPullRequestIcon,
   PencilSimpleIcon,
+  StackIcon,
   TerminalIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -31,6 +33,7 @@ import {
   useGhStatus,
   useRepoStatus,
   useStage,
+  useStashCount,
   useUnstage,
 } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
@@ -40,6 +43,7 @@ import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { ConflictBanner } from "./ConflictBanner";
 import { FileRow } from "./FileRow";
+import { StashesDialog } from "./StashesDialog";
 
 /**
  * A staged rename is "delete old path + add new path"; restoring only the
@@ -86,9 +90,11 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const editorPath = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
+  const stashCount = useStashCount(repoPath);
   const [discardTarget, setDiscardTarget] = useState<FileEntry | null>(null);
   const [filterText, setFilterText] = useState("");
   const [activeKinds, setActiveKinds] = useState<Set<FilterKind>>(new Set());
+  const [stashesOpen, setStashesOpen] = useState(false);
   const filterRef = useRef<HTMLInputElement>(null);
 
   const entries = status.data?.entries ?? [];
@@ -473,6 +479,28 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
           </ScrollArea>
         </>
       )}
+
+      {(stashCount.data ?? 0) > 0 && (
+        <button
+          type="button"
+          onClick={() => setStashesOpen(true)}
+          className="flex shrink-0 items-center gap-2 border-t px-3 py-2 text-left text-xs hover:bg-muted/60"
+          title="View stashed changes on this branch"
+        >
+          <StackIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="flex-1 font-medium">Stashed Changes</span>
+          <span className="text-muted-foreground tabular-nums">
+            {stashCount.data}
+          </span>
+          <CaretRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        </button>
+      )}
+
+      <StashesDialog
+        repoPath={repoPath}
+        open={stashesOpen}
+        onOpenChange={setStashesOpen}
+      />
 
       <Dialog
         open={discardTarget !== null}

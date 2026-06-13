@@ -89,6 +89,26 @@ export function CommitDetailView({
     }
   }
 
+  // Arrow keys walk the file list, mirroring the app's other lists.
+  function onFilesKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const fileList = files.data;
+    if (!fileList || fileList.length === 0) return;
+    e.preventDefault();
+    const idx = fileList.findIndex((f) => f.path === effectivePath);
+    const next =
+      e.key === "ArrowDown"
+        ? Math.min(idx + 1, fileList.length - 1)
+        : Math.max(idx - 1, 0);
+    const path = fileList[Math.max(next, 0)].path;
+    setSelectedPath(path);
+    const el = e.currentTarget.querySelector<HTMLElement>(
+      `[data-path="${CSS.escape(path)}"]`,
+    );
+    el?.focus();
+    el?.scrollIntoView({ block: "nearest" });
+  }
+
   return (
     <div className="flex h-full flex-col">
       <header className="space-y-1 border-b px-4 py-3">
@@ -186,36 +206,39 @@ export function CommitDetailView({
             {files.data.length} changed file{files.data.length === 1 ? "" : "s"}
           </p>
           <ScrollArea className="min-h-0 flex-1">
-            {files.data.map((file) => (
-              <button
-                type="button"
-                key={file.path}
-                className={cn(
-                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
-                  effectivePath === file.path
-                    ? "bg-accent text-accent-foreground"
-                    : "hover:bg-muted/60",
-                )}
-                onClick={() => setSelectedPath(file.path)}
-                title={file.path}
-              >
-                <span className="min-w-0 flex-1 truncate font-mono">
-                  {file.path}
-                </span>
-                {file.isBinary ? (
-                  <span className="shrink-0 text-muted-foreground">bin</span>
-                ) : (
-                  <span className="shrink-0 tabular-nums">
-                    <span className="text-green-600 dark:text-green-400">
-                      +{file.added}
-                    </span>{" "}
-                    <span className="text-red-600 dark:text-red-400">
-                      -{file.deleted}
-                    </span>
+            <div onKeyDown={onFilesKeyDown}>
+              {files.data.map((file) => (
+                <button
+                  type="button"
+                  key={file.path}
+                  data-path={file.path}
+                  className={cn(
+                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
+                    effectivePath === file.path
+                      ? "bg-accent text-accent-foreground"
+                      : "hover:bg-muted/60",
+                  )}
+                  onClick={() => setSelectedPath(file.path)}
+                  title={file.path}
+                >
+                  <span className="min-w-0 flex-1 truncate font-mono">
+                    {file.path}
                   </span>
-                )}
-              </button>
-            ))}
+                  {file.isBinary ? (
+                    <span className="shrink-0 text-muted-foreground">bin</span>
+                  ) : (
+                    <span className="shrink-0 tabular-nums">
+                      <span className="text-green-600 dark:text-green-400">
+                        +{file.added}
+                      </span>{" "}
+                      <span className="text-red-600 dark:text-red-400">
+                        -{file.deleted}
+                      </span>
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
           </ScrollArea>
         </aside>
         <main className="min-w-0 flex-1">

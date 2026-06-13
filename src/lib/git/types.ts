@@ -114,6 +114,15 @@ export interface StashEntry {
   date: string;
 }
 
+export interface StashFile {
+  path: string;
+  added: number;
+  deleted: number;
+  isBinary: boolean;
+  /** In the stash's untracked-files parent; its content reads from there. */
+  untracked: boolean;
+}
+
 export interface LanguageStat {
   name: string;
   files: number;

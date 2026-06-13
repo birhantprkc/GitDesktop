@@ -97,11 +97,13 @@ function WorkingTreeDiff({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b px-3 py-1.5">
-        <span className="truncate font-mono text-xs text-muted-foreground">
+      <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
           {file.path}
         </span>
-        <DiffModeToggle />
+        <span className="shrink-0">
+          <DiffModeToggle />
+        </span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {file.path.toLowerCase().endsWith(".svg") && (
