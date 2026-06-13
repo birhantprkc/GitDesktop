@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AmendForcePushDialog } from "@/features/commit/AmendForcePushDialog";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffSurface } from "@/features/diff/DiffSurface";
 import { copyText } from "@/lib/clipboard";
@@ -26,7 +27,7 @@ import {
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import { useAmendCommit } from "./useAmendCommit";
+import { useAmendWithConfirm } from "./useAmendCommit";
 
 export function CommitDetailView({
   repoPath,
@@ -56,7 +57,7 @@ export function CommitDetailView({
   // Same actions as the history list's right-click menu (minus the
   // dialog-driven ones), surfaced behind a visible ⋯ for discoverability.
   const log = useLog(repoPath);
-  const amendCommit = useAmendCommit(repoPath);
+  const { requestAmend, forcePushDialog } = useAmendWithConfirm(repoPath);
   const checkoutCommit = useCheckoutCommit(repoPath);
   const revertCommit = useRevertCommit(repoPath);
   const cherryPick = useCherryPick(repoPath);
@@ -157,7 +158,7 @@ export function CommitDetailView({
             <DropdownMenuContent className="min-w-56" align="end">
               <DropdownMenuItem
                 disabled={!isLatest}
-                onClick={() => amendCommit(hash).catch(onError)}
+                onClick={() => requestAmend(hash)}
               >
                 Amend commit…
               </DropdownMenuItem>
@@ -254,6 +255,8 @@ export function CommitDetailView({
           )}
         </main>
       </div>
+
+      <AmendForcePushDialog {...forcePushDialog} />
     </div>
   );
 }

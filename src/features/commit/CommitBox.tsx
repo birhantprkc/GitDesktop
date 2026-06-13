@@ -1,4 +1,4 @@
-import { SparkleIcon, XIcon } from "@phosphor-icons/react";
+import { InfoIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,16 +80,22 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   return (
     <div className="space-y-2 border-t p-3">
       {amending && (
-        <div className="flex items-center justify-between bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-400">
-          <span>Amending {amendingHash?.slice(0, 7)}</span>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Cancel amend"
-            onClick={clearCommitDraft}
-          >
-            <XIcon />
-          </Button>
+        <div className="bg-amber-500/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-400">
+          <p className="flex items-start gap-2">
+            <InfoIcon className="mt-0.5 size-3.5 shrink-0" />
+            <span className="flex-1">
+              Your changes will amend the most recent commit (
+              <span className="font-mono">{amendingHash?.slice(0, 7)}</span>).{" "}
+              <button
+                type="button"
+                className="font-medium underline underline-offset-2 hover:no-underline"
+                onClick={clearCommitDraft}
+              >
+                Stop amending
+              </button>{" "}
+              to commit them separately instead.
+            </span>
+          </p>
         </div>
       )}
       <div className="relative">
@@ -158,7 +164,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
           {commit.isPending && <Spinner data-icon="inline-start" />}
           <span className="truncate">
             {amending
-              ? "Amend"
+              ? "Amend last commit"
               : `Commit${stagedCount > 0 ? ` (${stagedCount})` : ""}${
                   branchName ? ` to ${branchName}` : ""
                 }`}

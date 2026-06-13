@@ -1,6 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { gitCommitDetails } from "@/lib/git/api";
+import { useRepoStatus } from "@/lib/git/queries";
+import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
+import { toastError } from "@/lib/toast";
 
 /**
  * Loads a commit's message into the commit box and switches to the Changes
@@ -17,8 +20,54 @@ export function useAmendCommit(repoPath: string) {
       const details = await gitCommitDetails(repoPath, hash);
       setCommitDraft(details.subject, details.body);
       setAmending(hash);
-      setRepoTab("changes");
+      // Defer the tab switch until the just-clicked context/dropdown menu (or
+      // the force-push dialog) has finished closing. Switching to Changes hides
+      // History via <Activity>, which pauses the closing portal and leaves it
+      // frozen on screen; letting it close first (~100ms) avoids that.
+      setTimeout(() => setRepoTab("changes"), 150);
     },
     [repoPath, setCommitDraft, setAmending, setRepoTab],
   );
+}
+
+/**
+ * Amend, gated by a force-push confirmation when the commit is already on the
+ * remote (an upstream exists and HEAD isn't ahead of it). Returns the request
+ * function plus the state to drive an `<AmendForcePushDialog>`. Pair it with
+ * that dialog at the call site.
+ */
+export function useAmendWithConfirm(repoPath: string) {
+  const status = useRepoStatus(repoPath);
+  const settings = useSettings();
+  const amend = useAmendCommit(repoPath);
+  const [pendingHash, setPendingHash] = useState<string | null>(null);
+
+  const branch = status.data?.branch;
+  const upstream = branch?.upstream ?? null;
+  const needsForcePush = upstream !== null && (branch?.ahead ?? 0) === 0;
+
+  function requestAmend(hash: string) {
+    if (needsForcePush && (settings.data?.confirmAmendForcePush ?? true)) {
+      setPendingHash(hash);
+    } else {
+      amend(hash).catch(toastError);
+    }
+  }
+
+  function confirmAmend() {
+    const hash = pendingHash;
+    setPendingHash(null);
+    if (hash) amend(hash).catch(toastError);
+  }
+
+  return {
+    requestAmend,
+    /** Props for the paired <AmendForcePushDialog>. */
+    forcePushDialog: {
+      open: pendingHash !== null,
+      upstream,
+      onConfirm: confirmAmend,
+      onCancel: () => setPendingHash(null),
+    },
+  };
 }

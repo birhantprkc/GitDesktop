@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { AmendForcePushDialog } from "@/features/commit/AmendForcePushDialog";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import { gitCommitDetails } from "@/lib/git/api";
@@ -56,7 +57,7 @@ import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { ReorderDialog, SquashDialog } from "./RewriteDialogs";
-import { useAmendCommit } from "./useAmendCommit";
+import { useAmendWithConfirm } from "./useAmendCommit";
 
 export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const log = useLog(repoPath);
@@ -141,15 +142,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     },
   });
 
-  const amendCommit = useAmendCommit(repoPath);
-
-  async function startAmend(hash: string) {
-    try {
-      await amendCommit(hash);
-    } catch (e) {
-      onError(e);
-    }
-  }
+  const { requestAmend, forcePushDialog } = useAmendWithConfirm(repoPath);
 
   // GitHub Desktop-style undo: offered while the latest commit hasn't been
   // pushed anywhere (no upstream, or we're ahead of it).
@@ -488,7 +481,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                 <ContextMenuContent className="min-w-60">
                   <ContextMenuItem
                     disabled={index !== 0}
-                    onClick={() => startAmend(commit.hash)}
+                    onClick={() => requestAmend(commit.hash)}
                   >
                     Amend commit…
                   </ContextMenuItem>
@@ -644,6 +637,8 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
         onOpenChange={setReorderOpen}
         onDone={() => setSelected(new Set())}
       />
+
+      <AmendForcePushDialog {...forcePushDialog} />
 
       <Dialog
         open={deleteTagName !== null}

@@ -47,6 +47,9 @@ export interface AppSettings {
   /** Hotkey overrides by action id; null = explicitly unbound. Actions not
    *  present use their registry default. */
   hotkeys: Record<string, string | null>;
+  /** Warn before amending a commit that's already on the remote (force push).
+   *  Cleared by the dialog's "Don't show this again". */
+  confirmAmendForcePush: boolean;
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -76,6 +79,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalPath: "",
   defaultBranch: "main",
   hotkeys: {},
+  confirmAmendForcePush: true,
   recentRepos: [],
   diffViewMode: "unified",
 };

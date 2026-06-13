@@ -47,6 +47,7 @@ import {
 } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { StashesDialog } from "./StashesDialog";
@@ -100,6 +101,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const stashPop = useStashPop(repoPath);
   const mergeBranch = useMergeBranch(repoPath);
   const rebaseBranch = useRebaseBranch(repoPath);
+  const amendingHash = useUiStore((s) => s.amendingHash);
 
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -129,6 +131,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   });
   const stashes = stashCount.data ?? 0;
   const hasChanges = (status.data?.entries.length ?? 0) > 0;
+  // You can't amend across branches: amend mode targets a specific commit on
+  // this branch, so switching would strand the in-progress amend and leave its
+  // banner up. Lock the switcher until the user finishes or stops amending.
+  const amending = amendingHash !== null;
   // Bases offered when creating a branch: the current branch and/or the
   // default branch (deduped — they're the same when you're on the default).
   const baseOptions = [
@@ -140,6 +146,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const onError = (e: unknown) => toastError(e);
 
   function switchTo(name: string) {
+    if (amending) return; // guarded by the disabled trigger; belt-and-suspenders
     setOpen(false);
     // with work in progress, let the user choose to bring or stash it
     if (hasChanges) {
@@ -297,7 +304,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   // Hotkey handlers reuse the menu's own flows, so every gate (clean tree,
   // stash count, picker availability) and confirm dialog applies equally.
-  useHotkeyAction("show-branches", () => setOpen(true));
+  useHotkeyAction("show-branches", () => setOpen(true), !amending);
   useHotkeyAction("new-branch", openCreate);
   useHotkeyAction(
     "rename-branch",
@@ -342,7 +349,16 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       <Popover.Root open={open} onOpenChange={setOpen}>
         <Popover.Trigger
           render={
-            <Button variant="ghost" size="sm" disabled={busy}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy || amending}
+              title={
+                amending
+                  ? "Finish or stop amending to switch branches"
+                  : undefined
+              }
+            >
               <GitBranchIcon data-icon="inline-start" />
               {currentLabel}
               {head?.detached && (
