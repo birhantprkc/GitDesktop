@@ -6,6 +6,7 @@ import { ButtonGroup } from "@/components/ui/button-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { FileDiff } from "@/lib/git/types";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
+import { DiffErrorBoundary } from "./DiffErrorBoundary";
 import { DiffPlaceholder } from "./DiffPlaceholder";
 import { diffLang } from "./diff-lang";
 import { ImageDiff, ImagePanes, type ImageRevs, imageMime } from "./ImageDiff";
@@ -54,8 +55,10 @@ export function DiffModeToggle() {
 }
 
 /**
- * One rendered unified diff (a whole file or a single hunk) using the
- * user's view mode, theme, and syntax highlighting.
+ * One rendered diff (a whole file or a single hunk) using the user's view
+ * mode, theme, and syntax highlighting. Wrapped in a boundary because the
+ * underlying renderer can throw while laying out certain diffs; the fallback
+ * clears when `filePath`/`text` changes.
  */
 export function GitDiffView({
   filePath,
@@ -64,6 +67,14 @@ export function GitDiffView({
   filePath: string;
   text: string;
 }) {
+  return (
+    <DiffErrorBoundary resetKey={`${filePath} ${text.length}`}>
+      <RenderedDiff filePath={filePath} text={text} />
+    </DiffErrorBoundary>
+  );
+}
+
+function RenderedDiff({ filePath, text }: { filePath: string; text: string }) {
   const settings = useSettings();
   const isDark = useIsDark();
   const viewMode = settings.data?.diffViewMode ?? "unified";

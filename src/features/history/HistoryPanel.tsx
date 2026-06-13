@@ -1,4 +1,4 @@
-import { ArrowCounterClockwiseIcon, TagIcon } from "@phosphor-icons/react";
+import { TagIcon } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -383,26 +383,6 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
 
   return (
     <>
-      {canUndo && lastCommit && (
-        <div className="flex items-center justify-between gap-2 border-b bg-muted/50 px-3 py-1.5 text-xs">
-          <span
-            className="truncate text-muted-foreground"
-            title={lastCommit.subject}
-          >
-            Unpushed: {lastCommit.subject}
-          </span>
-          <Button
-            variant="ghost"
-            size="xs"
-            disabled={undoCommit.isPending}
-            onClick={undoLast}
-            title="Undo the last commit, keeping its changes staged"
-          >
-            <ArrowCounterClockwiseIcon data-icon="inline-start" />
-            Undo
-          </Button>
-        </div>
-      )}
       <div className="border-b p-2">
         <Input
           ref={filterRef}
@@ -511,6 +491,12 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                     onClick={() => startAmend(commit.hash)}
                   >
                     Amend commit…
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    disabled={index !== 0 || !canUndo || undoCommit.isPending}
+                    onClick={undoLast}
+                  >
+                    Undo commit (keep changes)
                   </ContextMenuItem>
                   <ContextMenuItem
                     disabled={index === 0}
