@@ -10,6 +10,7 @@ import type {
   DiffStatEntry,
   FileDiff,
   GhAccounts,
+  GhRepoList,
   GhStatus,
   GitInfo,
   PrDetails,
@@ -462,6 +463,9 @@ export const ghPrClose = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_close", { repoPath, number });
 
 export const ghAccounts = () => invoke<GhAccounts>("gh_accounts");
+
+/** Every repo the signed-in user can access (+ viewer login), newest first. */
+export const ghListRepos = () => invoke<GhRepoList>("gh_list_repos");
 
 export const ghSwitchAccount = (login: string) =>
   invoke<void>("gh_switch_account", { login });

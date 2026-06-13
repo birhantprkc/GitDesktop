@@ -324,6 +324,17 @@ export function useGhStatus(repo: string) {
   });
 }
 
+/** Every repo the signed-in user can access (clone dialog). */
+export function useGhRepos(enabled: boolean) {
+  return useQuery({
+    queryKey: ["gh-repos"] as const,
+    queryFn: api.ghListRepos,
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
 /** Builds a mutation that invalidates everything under the repo when done. */
 function useRepoMutation<TArgs, TData>(
   repo: string,

@@ -80,6 +80,99 @@ pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GhRepo {
+    pub name_with_owner: String,
+    pub owner: String,
+    pub name: String,
+    pub private: bool,
+    pub archived: bool,
+    pub fork: bool,
+    pub clone_url: String,
+    pub ssh_url: String,
+    pub description: Option<String>,
+    /// ISO-8601 last-push time, for recency sorting.
+    pub pushed_at: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhRepoList {
+    /// The signed-in user's login, so the UI can list their own repos first.
+    pub viewer: String,
+    pub repos: Vec<GhRepo>,
+}
+
+/// Every repository the signed-in user can access (owned, collaborator, and
+/// org member), newest-push first, plus the viewer's login. Used by the
+/// clone dialog's GitHub.com tab. `--paginate` merges all pages into one
+/// JSON array.
+#[tauri::command]
+pub async fn gh_list_repos() -> AppResult<GhRepoList> {
+    // The viewer's login is cheap and lets the UI group their repos first.
+    let viewer = run_gh(None, &["api", "user", "-q", ".login"], GH_TIMEOUT)
+        .await?
+        .stdout_lossy()
+        .trim()
+        .to_string();
+
+    let out = run_gh(
+        None,
+        &[
+            "api",
+            "--paginate",
+            "-X",
+            "GET",
+            "user/repos",
+            "-f",
+            "per_page=100",
+            "-f",
+            "affiliation=owner,collaborator,organization_member",
+            "-f",
+            "sort=pushed",
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+
+    #[derive(Deserialize)]
+    struct ApiOwner {
+        login: String,
+    }
+    #[derive(Deserialize)]
+    struct ApiRepo {
+        full_name: String,
+        name: String,
+        owner: ApiOwner,
+        private: bool,
+        archived: bool,
+        fork: bool,
+        clone_url: String,
+        ssh_url: String,
+        description: Option<String>,
+        pushed_at: Option<String>,
+    }
+    let parsed: Vec<ApiRepo> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse your repositories: {e}")))?;
+    let repos = parsed
+        .into_iter()
+        .map(|r| GhRepo {
+            name_with_owner: r.full_name,
+            owner: r.owner.login,
+            name: r.name,
+            private: r.private,
+            archived: r.archived,
+            fork: r.fork,
+            clone_url: r.clone_url,
+            ssh_url: r.ssh_url,
+            description: r.description,
+            pushed_at: r.pushed_at,
+        })
+        .collect();
+    Ok(GhRepoList { viewer, repos })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GhAccount {
     pub login: String,
     pub active: bool,

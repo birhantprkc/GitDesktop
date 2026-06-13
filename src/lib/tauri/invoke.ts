@@ -5,6 +5,8 @@ export interface AppError {
     | "git"
     | "notARepo"
     | "gitNotFound"
+    | "ghNotFound"
+    | "gh"
     | "keyring"
     | "invalidArgument"
     | "io"

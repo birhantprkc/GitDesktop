@@ -179,6 +179,25 @@ export interface PrPollInfo {
   checksState: string;
 }
 
+export interface GhRepo {
+  nameWithOwner: string;
+  owner: string;
+  name: string;
+  private: boolean;
+  archived: boolean;
+  fork: boolean;
+  cloneUrl: string;
+  sshUrl: string;
+  description: string | null;
+  pushedAt: string | null;
+}
+
+export interface GhRepoList {
+  /** The signed-in user's login, so the UI can list their repos first. */
+  viewer: string;
+  repos: GhRepo[];
+}
+
 export interface GhAccount {
   login: string;
   active: boolean;

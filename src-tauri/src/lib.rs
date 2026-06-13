@@ -81,6 +81,7 @@ pub fn run() {
             github::pr::gh_status,
             github::pr::gh_accounts,
             github::pr::gh_switch_account,
+            github::pr::gh_list_repos,
             github::pr::gh_pr_create,
             github::pr::gh_repo_url,
             github::pr::gh_publish_repo,
