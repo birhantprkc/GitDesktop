@@ -8,7 +8,7 @@ import type { FileDiff } from "@/lib/git/types";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { DiffPlaceholder } from "./DiffPlaceholder";
 import { diffLang } from "./diff-lang";
-import { ImageDiff, type ImageRevs, imageMime } from "./ImageDiff";
+import { ImageDiff, ImagePanes, type ImageRevs, imageMime } from "./ImageDiff";
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -173,6 +173,12 @@ export function DiffContent({
     return <DiffPlaceholder message="No changes to show" />;
   }
 
+  // SVGs are text, but they're also images: show the rendered old/new
+  // comparison above the code diff when revisions are available.
+  const svgPreview = Boolean(
+    repoPath && imageRevs && filePath.toLowerCase().endsWith(".svg"),
+  );
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-1.5">
@@ -183,6 +189,15 @@ export function DiffContent({
         <DiffModeToggle />
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
+        {svgPreview && repoPath && imageRevs && (
+          <div className="border-b">
+            <ImagePanes
+              repoPath={repoPath}
+              filePath={filePath}
+              revs={imageRevs}
+            />
+          </div>
+        )}
         <GitDiffView filePath={filePath} text={data.text} />
       </div>
     </div>

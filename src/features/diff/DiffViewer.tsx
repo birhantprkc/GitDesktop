@@ -21,6 +21,7 @@ import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { DiffPlaceholder } from "./DiffPlaceholder";
 import { DiffModeToggle, DiffSurface, GitDiffView } from "./DiffSurface";
+import { ImagePanes } from "./ImageDiff";
 
 /** Working-tree diff for the file selected in the changes panel. */
 export function DiffViewer({ repoPath }: { repoPath: string }) {
@@ -103,6 +104,19 @@ function WorkingTreeDiff({
         <DiffModeToggle />
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
+        {file.path.toLowerCase().endsWith(".svg") && (
+          <div className="border-b">
+            <ImagePanes
+              repoPath={repoPath}
+              filePath={file.path}
+              revs={
+                file.staged
+                  ? { old: "HEAD", new: ":0" }
+                  : { old: "HEAD", new: null }
+              }
+            />
+          </div>
+        )}
         {parsed.hunks.map((hunk) => (
           <section key={hunk.header + hunk.text.length} className="border-b">
             <div className="flex items-center gap-2 bg-muted/40 px-3 py-1">

@@ -72,10 +72,10 @@ function ImageSide({
 }
 
 /**
- * Old/new rendering for binary image files, replacing the "binary file"
- * placeholder wherever local revisions are available.
+ * The old/new comparison panes by themselves — also embedded above the text
+ * diff for SVGs, which are text but deserve a rendered preview too.
  */
-export function ImageDiff({
+export function ImagePanes({
   repoPath,
   filePath,
   revs,
@@ -92,6 +92,52 @@ export function ImageDiff({
   const oldB64 = oldFile.data ?? null;
   const newB64 = newFile.data ?? null;
 
+  if (pending) {
+    return (
+      <div className="flex justify-center gap-6 p-6">
+        <Skeleton className="h-40 w-40" />
+        <Skeleton className="h-40 w-40" />
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-start justify-center gap-8 p-6">
+      {oldB64 !== null && (
+        <ImageSide
+          label={newB64 === null ? "Deleted" : "Old"}
+          base64={oldB64}
+          mime={mime}
+        />
+      )}
+      {newB64 !== null && (
+        <ImageSide
+          label={oldB64 === null ? "Added" : "New"}
+          base64={newB64}
+          mime={mime}
+        />
+      )}
+      {oldB64 === null && newB64 === null && (
+        <p className="py-8 text-xs text-muted-foreground">
+          Could not load this image.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Old/new rendering for binary image files, replacing the "binary file"
+ * placeholder wherever local revisions are available.
+ */
+export function ImageDiff({
+  repoPath,
+  filePath,
+  revs,
+}: {
+  repoPath: string;
+  filePath: string;
+  revs: ImageRevs;
+}) {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-3 py-1.5">
@@ -100,34 +146,7 @@ export function ImageDiff({
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {pending ? (
-          <div className="flex justify-center gap-6 p-6">
-            <Skeleton className="h-40 w-40" />
-            <Skeleton className="h-40 w-40" />
-          </div>
-        ) : (
-          <div className="flex items-start justify-center gap-8 p-6">
-            {oldB64 !== null && (
-              <ImageSide
-                label={newB64 === null ? "Deleted" : "Old"}
-                base64={oldB64}
-                mime={mime}
-              />
-            )}
-            {newB64 !== null && (
-              <ImageSide
-                label={oldB64 === null ? "Added" : "New"}
-                base64={newB64}
-                mime={mime}
-              />
-            )}
-            {oldB64 === null && newB64 === null && (
-              <p className="py-8 text-xs text-muted-foreground">
-                Could not load this image.
-              </p>
-            )}
-          </div>
-        )}
+        <ImagePanes repoPath={repoPath} filePath={filePath} revs={revs} />
       </div>
     </div>
   );
