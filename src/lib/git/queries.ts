@@ -631,6 +631,29 @@ export function useRebaseBranch(repo: string) {
   return useRepoMutation(repo, (branch: string) => api.gitRebase(repo, branch));
 }
 
+/**
+ * Ahead/behind of every local branch vs. `base`. Gated on `enabled` so it only
+ * runs while the branch menu is open (it's N rev-list calls), and keyed under
+ * the repo so branch mutations invalidate it.
+ */
+export function useBranchDivergence(
+  repo: string,
+  base: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "divergence", base] as const,
+    queryFn: () => api.gitBranchDivergence(repo, base ?? ""),
+    enabled: enabled && Boolean(base),
+  });
+}
+
+export function useUpdateBranchFrom(repo: string) {
+  return useRepoMutation(repo, (args: { branch: string; base: string }) =>
+    api.gitUpdateBranchFrom(repo, args.branch, args.base),
+  );
+}
+
 export function useMergeLocalPr(repo: string) {
   return useRepoMutation(
     repo,

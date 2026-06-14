@@ -46,6 +46,15 @@ export interface Branch {
   lastCommitDate: string;
 }
 
+/** A local branch's ahead/behind counts vs. the default branch. */
+export interface BranchDivergence {
+  name: string;
+  /** Commits on this branch the default branch doesn't have. */
+  ahead: number;
+  /** Commits on the default branch this branch doesn't have. */
+  behind: number;
+}
+
 export interface RepoOwner {
   path: string;
   owner: string | null;

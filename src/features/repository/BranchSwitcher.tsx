@@ -1,5 +1,11 @@
 import { Popover } from "@base-ui/react/popover";
-import { CaretDownIcon, CheckIcon, GitBranchIcon } from "@phosphor-icons/react";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CaretDownIcon,
+  CheckIcon,
+  GitBranchIcon,
+} from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -31,6 +37,7 @@ import {
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import {
+  useBranchDivergence,
   useBranches,
   useCheckoutBranch,
   useCreateBranch,
@@ -44,6 +51,7 @@ import {
   useStashAll,
   useStashCount,
   useStashPop,
+  useUpdateBranchFrom,
 } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
@@ -101,6 +109,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const stashPop = useStashPop(repoPath);
   const mergeBranch = useMergeBranch(repoPath);
   const rebaseBranch = useRebaseBranch(repoPath);
+  const updateBranchFrom = useUpdateBranchFrom(repoPath);
   const amendingHash = useUiStore((s) => s.amendingHash);
 
   const [open, setOpen] = useState(false);
@@ -123,6 +132,11 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const allBranches = branches.data ?? [];
   const otherBranches = allBranches.filter((b) => !b.isCurrent);
   const defaultName = defaultBranch.data ?? null;
+  // Ahead/behind vs. the default branch, fetched only while the menu is open.
+  const divergence = useBranchDivergence(repoPath, defaultName, open);
+  const divByName = new Map(
+    (divergence.data ?? []).map((d) => [d.name, d] as const),
+  );
   // Default branch pinned on top, then the rest by most recently committed.
   const sortedBranches = [...allBranches].sort((a, b) => {
     if (a.name === defaultName) return -1;
@@ -287,20 +301,32 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     setCreateOpen(true);
   }
 
-  function updateFromDefault() {
-    if (!defaultName) return;
+  // Pull the latest from the default branch into `target` without switching to
+  // it (unless it's already current): fast-forwards when possible, otherwise
+  // merges via a throwaway worktree so the working tree — and its watchers —
+  // stay put. A conflicting merge aborts and reports rather than switching.
+  function doUpdateFromDefault(target: string) {
+    if (!defaultName || target === defaultName) return;
     setOpen(false);
-    mergeBranch.mutate(
-      { branch: defaultName, squash: false },
+    updateBranchFrom.mutate(
+      { branch: target, base: defaultName },
       {
-        onSuccess: () => toast.success(`Updated from ${defaultName}`),
+        onSuccess: (status) =>
+          toast.success(
+            status === "up-to-date"
+              ? `${target} is already up to date with ${defaultName}`
+              : `Updated ${target} from ${defaultName}`,
+          ),
         onError,
       },
     );
   }
 
   const busy =
-    checkout.isPending || mergeBranch.isPending || rebaseBranch.isPending;
+    checkout.isPending ||
+    mergeBranch.isPending ||
+    rebaseBranch.isPending ||
+    updateBranchFrom.isPending;
 
   // Hotkey handlers reuse the menu's own flows, so every gate (clean tree,
   // stash count, picker availability) and confirm dialog applies equally.
@@ -321,7 +347,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   );
   useHotkeyAction(
     "update-from-default",
-    updateFromDefault,
+    () => currentName && doUpdateFromDefault(currentName),
     Boolean(defaultName && defaultName !== currentName && !busy),
   );
   useHotkeyAction(
@@ -381,59 +407,102 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 Branches
               </p>
               <div className="max-h-60 overflow-y-auto">
-                {sortedBranches.map((branch) => (
-                  <ContextMenu key={branch.name}>
-                    <ContextMenuTrigger
-                      render={
-                        <button
-                          type="button"
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground"
-                          onClick={() => {
-                            if (!branch.isCurrent) switchTo(branch.name);
-                          }}
-                        >
-                          <span className="min-w-0 flex-1 truncate">
-                            {branch.name}
-                            {branch.name === defaultName && (
-                              <span className="ml-1.5 text-[10px] text-muted-foreground">
-                                default
+                {sortedBranches.map((branch) => {
+                  const div = divByName.get(branch.name);
+                  const canUpdate =
+                    Boolean(defaultName) && branch.name !== defaultName;
+                  return (
+                    <ContextMenu key={branch.name}>
+                      <ContextMenuTrigger
+                        render={
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground"
+                            onClick={() => {
+                              if (!branch.isCurrent) switchTo(branch.name);
+                            }}
+                          >
+                            <span className="min-w-0 flex-1 truncate">
+                              {branch.name}
+                              {branch.name === defaultName && (
+                                <span className="ml-1.5 text-[10px] text-muted-foreground">
+                                  default
+                                </span>
+                              )}
+                            </span>
+                            {div && (div.ahead > 0 || div.behind > 0) && (
+                              <span
+                                className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground tabular-nums"
+                                title={`${div.ahead} ahead, ${div.behind} behind ${defaultName}`}
+                              >
+                                {div.ahead > 0 && (
+                                  <span className="flex items-center gap-0.5">
+                                    <ArrowUpIcon
+                                      className="size-3"
+                                      weight="bold"
+                                    />
+                                    {div.ahead}
+                                  </span>
+                                )}
+                                {div.behind > 0 && (
+                                  <span className="flex items-center gap-0.5">
+                                    <ArrowDownIcon
+                                      className="size-3"
+                                      weight="bold"
+                                    />
+                                    {div.behind}
+                                  </span>
+                                )}
                               </span>
                             )}
-                          </span>
-                          {branch.lastCommitDate && (
-                            <span className="shrink-0 text-[11px] text-muted-foreground">
-                              {formatRelativeTime(branch.lastCommitDate)}
-                            </span>
-                          )}
-                          {branch.isCurrent && (
-                            <CheckIcon className="size-3.5 shrink-0" />
-                          )}
-                        </button>
-                      }
-                    />
-                    <ContextMenuContent className="min-w-48">
-                      <ContextMenuItem onClick={() => openRename(branch.name)}>
-                        Rename…
-                      </ContextMenuItem>
-                      <ContextMenuItem
-                        onClick={() =>
-                          copyText(branch.name, "Branch name copied")
+                            {branch.lastCommitDate && (
+                              <span className="shrink-0 text-[11px] text-muted-foreground">
+                                {formatRelativeTime(branch.lastCommitDate)}
+                              </span>
+                            )}
+                            {branch.isCurrent && (
+                              <CheckIcon className="size-3.5 shrink-0" />
+                            )}
+                          </button>
                         }
-                      >
-                        Copy branch name
-                      </ContextMenuItem>
-                      <ContextMenuSeparator />
-                      <ContextMenuItem
-                        onClick={() => {
-                          setOpen(false);
-                          setDeleteTarget(branch.name);
-                        }}
-                      >
-                        Delete…
-                      </ContextMenuItem>
-                    </ContextMenuContent>
-                  </ContextMenu>
-                ))}
+                      />
+                      <ContextMenuContent className="min-w-48">
+                        {canUpdate && (
+                          <>
+                            <ContextMenuItem
+                              disabled={busy}
+                              onClick={() => doUpdateFromDefault(branch.name)}
+                            >
+                              Update from {defaultName}
+                            </ContextMenuItem>
+                            <ContextMenuSeparator />
+                          </>
+                        )}
+                        <ContextMenuItem
+                          onClick={() => openRename(branch.name)}
+                        >
+                          Rename…
+                        </ContextMenuItem>
+                        <ContextMenuItem
+                          onClick={() =>
+                            copyText(branch.name, "Branch name copied")
+                          }
+                        >
+                          Copy branch name
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem
+                          onClick={() => {
+                            setOpen(false);
+                            setDeleteTarget(branch.name);
+                          }}
+                        >
+                          Delete…
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
+                  );
+                })}
               </div>
               <div className="border-t py-1">
                 <MenuRow onClick={openCreate}>New branch…</MenuRow>
@@ -497,8 +566,15 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               </div>
               <div className="border-t py-1">
                 <MenuRow
-                  disabled={!defaultName || defaultName === currentName || busy}
-                  onClick={updateFromDefault}
+                  disabled={
+                    !defaultName ||
+                    !currentName ||
+                    defaultName === currentName ||
+                    busy
+                  }
+                  onClick={() =>
+                    currentName && doUpdateFromDefault(currentName)
+                  }
                 >
                   Update from {defaultName ?? "default branch"}
                 </MenuRow>

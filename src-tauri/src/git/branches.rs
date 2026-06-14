@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::git::runner::{run_git, run_git_mutating, run_git_raw, DEFAULT_TIMEOUT};
-use crate::git::types::Branch;
+use crate::git::types::{Branch, BranchDivergence};
 use crate::state::AppState;
 
 fn validate_ref_name(name: &str) -> AppResult<()> {
@@ -161,4 +161,197 @@ pub async fn git_create_branch(
     }
     run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
     Ok(())
+}
+
+/// Ahead/behind counts for every local branch measured against `base` (the
+/// default branch), driving the at-a-glance counts in the branch menu.
+/// Read-only; the base itself reports 0/0.
+#[tauri::command]
+pub async fn git_branch_divergence(
+    repo_path: String,
+    base: String,
+) -> AppResult<Vec<BranchDivergence>> {
+    validate_ref_name(&base)?;
+    let out = run_git(
+        Some(&repo_path),
+        &["for-each-ref", "refs/heads", "--format=%(refname:short)"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let names: Vec<String> = out
+        .stdout_lossy()
+        .lines()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+        .collect();
+
+    let mut result = Vec::with_capacity(names.len());
+    for name in names {
+        if name == base {
+            result.push(BranchDivergence {
+                name,
+                ahead: 0,
+                behind: 0,
+            });
+            continue;
+        }
+        // `base...name` left/right: left = on base only (behind), right = on
+        // name only (ahead). A bad/unrelated ref just yields 0/0.
+        let range = format!("{base}...{name}");
+        let counts = run_git_raw(
+            Some(&repo_path),
+            &["rev-list", "--left-right", "--count", &range],
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+        let (mut behind, mut ahead) = (0u32, 0u32);
+        if counts.code == 0 {
+            let text = counts.stdout_lossy();
+            let mut nums = text.split_whitespace();
+            behind = nums.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            ahead = nums.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        }
+        result.push(BranchDivergence {
+            name,
+            ahead,
+            behind,
+        });
+    }
+    Ok(result)
+}
+
+/// Updates `branch` with the latest commits from `base` (typically the default
+/// branch) WITHOUT switching to it, so the working tree the user is editing —
+/// and any watchers (vite, `tsc --watch`, …) running against it — never change.
+///
+/// - `branch` already contains `base` → no-op, returns `"up-to-date"`.
+/// - `branch` is strictly behind `base` → fast-forward the ref, returns
+///   `"fast-forward"`.
+/// - `branch` has diverged → merge `base` into `branch` inside a throwaway
+///   worktree so the main checkout is untouched, returns `"merge"`. A
+///   conflicting merge is aborted and reported; the branch is left unchanged.
+///
+/// When `branch` IS the current branch there's nothing to avoid switching to,
+/// so it merges in place (conflicts surface in the changes list as usual).
+#[tauri::command]
+pub async fn git_update_branch_from(
+    state: State<'_, AppState>,
+    repo_path: String,
+    branch: String,
+    base: String,
+) -> AppResult<String> {
+    validate_ref_name(&branch)?;
+    validate_ref_name(&base)?;
+    if branch == base {
+        return Err(AppError::InvalidArgument(
+            "a branch can't be updated from itself".to_string(),
+        ));
+    }
+
+    // Mutating refs — serialize against other writes to this repo.
+    let lock = state.repo_lock(&repo_path).await;
+    let _guard = lock.lock().await;
+
+    let current = run_git(
+        Some(&repo_path),
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?
+    .stdout_lossy()
+    .trim()
+    .to_string();
+
+    // The current branch is already checked out, so just merge in place.
+    if branch == current {
+        run_git(
+            Some(&repo_path),
+            &["merge", "--no-edit", &base],
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+        return Ok("merge".to_string());
+    }
+
+    // base already reachable from branch → nothing to bring in.
+    let already = run_git_raw(
+        Some(&repo_path),
+        &["merge-base", "--is-ancestor", &base, &branch],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if already.code == 0 {
+        return Ok("up-to-date".to_string());
+    }
+
+    // branch reachable from base → pure fast-forward; move the ref directly.
+    // `fetch .` refuses to touch a checked-out branch, but we've excluded the
+    // current branch above, so this only ever updates an idle branch.
+    let ff = run_git_raw(
+        Some(&repo_path),
+        &["merge-base", "--is-ancestor", &branch, &base],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if ff.code == 0 {
+        run_git(
+            Some(&repo_path),
+            &["fetch", ".", &format!("{base}:{branch}")],
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+        return Ok("fast-forward".to_string());
+    }
+
+    // Diverged → merge inside a throwaway worktree so the user's checkout (and
+    // its file watchers) is never disturbed.
+    let tmp = std::env::temp_dir().join(format!("gd-update-{}", unique_suffix()));
+    let tmp_str = tmp.to_string_lossy().to_string();
+
+    run_git(
+        Some(&repo_path),
+        &["worktree", "add", "--quiet", &tmp_str, &branch],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+
+    let merged = run_git(
+        Some(&tmp_str),
+        &["merge", "--no-edit", &base],
+        DEFAULT_TIMEOUT,
+    )
+    .await;
+
+    let result = match merged {
+        Ok(_) => Ok("merge".to_string()),
+        Err(_) => {
+            // Undo the half-done merge so the branch ref is left as it was.
+            let _ = run_git_raw(Some(&tmp_str), &["merge", "--abort"], DEFAULT_TIMEOUT).await;
+            Err(AppError::InvalidArgument(format!(
+                "{branch} has changes that conflict with {base}. Switch to {branch} to merge and resolve them."
+            )))
+        }
+    };
+
+    // Always tear the throwaway worktree down, success or failure.
+    let _ = run_git_raw(
+        Some(&repo_path),
+        &["worktree", "remove", "--force", &tmp_str],
+        DEFAULT_TIMEOUT,
+    )
+    .await;
+    let _ = run_git_raw(Some(&repo_path), &["worktree", "prune"], DEFAULT_TIMEOUT).await;
+
+    result
+}
+
+/// A process-unique suffix for the throwaway worktree directory name.
+fn unique_suffix() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{}-{}", std::process::id(), nanos)
 }

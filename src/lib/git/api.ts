@@ -2,6 +2,7 @@ import { invoke } from "@/lib/tauri/invoke";
 import type {
   Branch,
   BranchComparison,
+  BranchDivergence,
   BranchStats,
   CommitAuthor,
   CommitDetails,
@@ -346,6 +347,16 @@ export const gitMerge = (repoPath: string, branch: string, squash: boolean) =>
 
 export const gitRebase = (repoPath: string, branch: string) =>
   invoke<void>("git_rebase", { repoPath, branch });
+
+export const gitBranchDivergence = (repoPath: string, base: string) =>
+  invoke<BranchDivergence[]>("git_branch_divergence", { repoPath, base });
+
+/** Resolves to "up-to-date" | "fast-forward" | "merge". */
+export const gitUpdateBranchFrom = (
+  repoPath: string,
+  branch: string,
+  base: string,
+) => invoke<string>("git_update_branch_from", { repoPath, branch, base });
 
 export type MergeStrategy = "merge" | "squash" | "rebase";
 

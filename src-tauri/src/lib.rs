@@ -30,6 +30,8 @@ pub fn run() {
             git::branches::git_rename_branch,
             git::branches::git_delete_branch,
             git::branches::git_default_branch,
+            git::branches::git_branch_divergence,
+            git::branches::git_update_branch_from,
             git::diff::git_diff_file,
             git::diff::git_staged_diff,
             git::diff::git_apply_patch,

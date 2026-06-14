@@ -64,6 +64,18 @@ pub struct Branch {
     pub last_commit_date: String,
 }
 
+/// How far a local branch sits from a base branch (the default branch), for
+/// the at-a-glance counts in the branch menu.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchDivergence {
+    pub name: String,
+    /// Commits on `name` that the base doesn't have.
+    pub ahead: u32,
+    /// Commits on the base that `name` doesn't have.
+    pub behind: u32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileDiff {
