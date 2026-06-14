@@ -1,19 +1,21 @@
 import { Popover } from "@base-ui/react/popover";
 import {
+  ArrowCounterClockwiseIcon,
   ArrowSquareOutIcon,
   CaretDownIcon,
   CheckCircleIcon,
   CircleIcon,
+  DotsThreeIcon,
   GitBranchIcon,
   GitMergeIcon,
   PencilSimpleIcon,
-  QuotesIcon,
   TagIcon,
   XCircleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,6 +31,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Markdown } from "@/components/ui/markdown";
@@ -38,22 +43,33 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffContent } from "@/features/diff/DiffSurface";
+import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
-import { ghPrDiff, type MergeStrategy, type ReviewAction } from "@/lib/git/api";
+import {
+  ghPrDiff,
+  type MergeStrategy,
+  type MinimizeReason,
+  type ReviewAction,
+} from "@/lib/git/api";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
   useCheckoutPr,
   useClosePr,
   useCommentPr,
+  useDeletePrComment,
   useEditPr,
+  useEditPrComment,
   useEditPrLabels,
   useMergePr,
+  useMinimizeComment,
   usePrDetails,
   usePrDiff,
   useReadyPr,
+  useReopenPr,
   useRepoLabels,
   useRepoStatus,
   useReviewPr,
+  useUnminimizeComment,
 } from "@/lib/git/queries";
 import type { PrThreadOut, RepoLabel } from "@/lib/git/types";
 import { formatRelativeTime } from "@/lib/time";
@@ -123,6 +139,11 @@ export function RemotePrView({
   const repoStatus = useRepoStatus(repoPath);
   const mergePr = useMergePr(repoPath);
   const closePr = useClosePr(repoPath);
+  const reopenPr = useReopenPr(repoPath);
+  const editComment = useEditPrComment(repoPath);
+  const deleteComment = useDeletePrComment(repoPath);
+  const minimizeComment = useMinimizeComment(repoPath);
+  const unminimizeComment = useUnminimizeComment(repoPath);
   const readyPr = useReadyPr(repoPath);
   const editPr = useEditPr(repoPath);
   const editLabels = useEditPrLabels(repoPath);
@@ -130,6 +151,9 @@ export function RemotePrView({
   const [section, setSection] = useState<Section>("conversation");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [composeBody, setComposeBody] = useState("");
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
+    null,
+  );
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeStrategy, setMergeStrategy] = useState<MergeStrategy>("merge");
   const [deleteBranch, setDeleteBranch] = useState(false);
@@ -304,7 +328,32 @@ export function RemotePrView({
     comment.isPending ||
     mergePr.isPending ||
     closePr.isPending ||
+    reopenPr.isPending ||
     readyPr.isPending;
+
+  function saveCommentEdit(commentId: string, body: string) {
+    editComment.mutate(
+      { commentId, body },
+      {
+        onSuccess: () => toast.success("Comment updated"),
+        onError,
+      },
+    );
+  }
+
+  function hideComment(commentId: string, classifier: MinimizeReason) {
+    minimizeComment.mutate(
+      { commentId, classifier },
+      { onSuccess: () => toast.success("Comment hidden"), onError },
+    );
+  }
+
+  function unhideComment(commentId: string) {
+    unminimizeComment.mutate(commentId, {
+      onSuccess: () => toast.success("Comment shown"),
+      onError,
+    });
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -383,6 +432,7 @@ export function RemotePrView({
           <Badge variant={pr.state === "OPEN" ? "default" : "secondary"}>
             {pr.isDraft ? "Draft" : pr.state.toLowerCase()}
           </Badge>
+          <AuthorAvatar login={pr.author} />
           <span>{pr.author}</span>
           <span>•</span>
           <span className="font-mono">{pr.headRefName}</span>
@@ -543,14 +593,58 @@ export function RemotePrView({
         <>
           <ScrollArea className="min-h-0 flex-1">
             <div className="space-y-4 p-4">
-              <div className="border-b pb-3">
-                {pr.body.trim() ? (
-                  <Markdown>{pr.body}</Markdown>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    No description provided.
-                  </p>
-                )}
+              <div className="group flex items-start justify-between gap-2 border-b pb-3">
+                <div className="min-w-0 flex-1">
+                  {pr.body.trim() ? (
+                    <Markdown>{pr.body}</Markdown>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No description provided.
+                    </p>
+                  )}
+                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label="Description actions"
+                        className="shrink-0 text-muted-foreground hover:text-foreground data-popup-open:text-foreground"
+                      />
+                    }
+                  >
+                    <DotsThreeIcon className="size-4" weight="bold" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-44">
+                    <DropdownMenuItem
+                      onClick={() => copyText(pr.url, "Link copied")}
+                    >
+                      Copy link
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => quoteReply(pr.body)}>
+                      Quote reply
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => copyText(pr.body, "Markdown copied")}
+                    >
+                      Copy markdown
+                    </DropdownMenuItem>
+                    {isOpen && (
+                      <DropdownMenuItem
+                        onClick={() => {
+                          editForm.reset(
+                            { title: pr.title, body: pr.body },
+                            { keepDefaultValues: true },
+                          );
+                          setEditOpen(true);
+                        }}
+                      >
+                        Edit
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
               {/* Events with nothing visible to say (empty body, or only an
                   unfilled-template HTML comment) render as a bare author
@@ -562,7 +656,7 @@ export function RemotePrView({
                     key={`r${i}-${r.author}`}
                     thread={r}
                     onQuote={
-                      isOpen && hasVisibleBody(r.body)
+                      hasVisibleBody(r.body)
                         ? () => quoteReply(r.body)
                         : undefined
                     }
@@ -574,7 +668,25 @@ export function RemotePrView({
                   <Thread
                     key={`c${i}-${c.author}`}
                     thread={c}
-                    onQuote={isOpen ? () => quoteReply(c.body) : undefined}
+                    onQuote={() => quoteReply(c.body)}
+                    onSaveEdit={
+                      c.viewerDidAuthor
+                        ? (body) => saveCommentEdit(c.id, body)
+                        : undefined
+                    }
+                    onDelete={
+                      c.viewerDidAuthor
+                        ? () => setDeletingCommentId(c.id)
+                        : undefined
+                    }
+                    onHide={
+                      c.isMinimized
+                        ? undefined
+                        : (classifier) => hideComment(c.id, classifier)
+                    }
+                    onUnhide={
+                      c.isMinimized ? () => unhideComment(c.id) : undefined
+                    }
                   />
                 ))}
               {pr.reviews.length === 0 && pr.comments.length === 0 && (
@@ -584,37 +696,39 @@ export function RemotePrView({
               )}
             </div>
           </ScrollArea>
-          {isOpen && (
-            <div className="space-y-2 border-t p-3">
-              <Textarea
-                ref={composerRef}
-                placeholder="Leave a comment…"
-                value={composeBody}
-                onChange={(e) => setComposeBody(e.target.value)}
-                onKeyDown={(e) => {
-                  if (
-                    (e.ctrlKey || e.metaKey) &&
-                    e.key === "Enter" &&
-                    composeBody.trim() &&
-                    !busy
-                  ) {
-                    e.preventDefault();
-                    submitComment();
-                  }
-                }}
-                rows={2}
-                className="max-h-32 min-h-12 resize-y"
-              />
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!composeBody.trim() || busy}
-                  onClick={submitComment}
-                  title="Ctrl+Enter"
-                >
-                  Comment
-                </Button>
+          {/* Shown for closed/merged PRs too — GitHub lets you comment (and
+              quote-reply) after a PR closes; only reviews are open-only. */}
+          <div className="space-y-2 border-t p-3">
+            <Textarea
+              ref={composerRef}
+              placeholder="Leave a comment…"
+              value={composeBody}
+              onChange={(e) => setComposeBody(e.target.value)}
+              onKeyDown={(e) => {
+                if (
+                  (e.ctrlKey || e.metaKey) &&
+                  e.key === "Enter" &&
+                  composeBody.trim() &&
+                  !busy
+                ) {
+                  e.preventDefault();
+                  submitComment();
+                }
+              }}
+              rows={2}
+              className="max-h-32 min-h-12 resize-y"
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!composeBody.trim() || busy}
+                onClick={submitComment}
+                title="Ctrl+Enter"
+              >
+                Comment
+              </Button>
+              {isOpen && (
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     render={
@@ -638,9 +752,21 @@ export function RemotePrView({
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-              </div>
+              )}
+              {composeBody.trim() && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto"
+                  disabled={busy}
+                  onClick={() => setComposeBody("")}
+                  title="Discard this draft (e.g. a quote reply)"
+                >
+                  Clear
+                </Button>
+              )}
             </div>
-          )}
+          </div>
         </>
       )}
 
@@ -772,6 +898,26 @@ export function RemotePrView({
         </div>
       )}
 
+      {pr.state === "CLOSED" && (
+        <div className="flex items-center gap-2 border-t p-3">
+          <span className="flex-1" />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() =>
+              reopenPr.mutate(number, {
+                onSuccess: () => toast.success(`Reopened #${number}`),
+                onError,
+              })
+            }
+          >
+            <ArrowCounterClockwiseIcon data-icon="inline-start" />
+            Reopen
+          </Button>
+        </div>
+      )}
+
       <Dialog open={mergeOpen} onOpenChange={setMergeOpen}>
         <DialogContent>
           <DialogHeader>
@@ -848,20 +994,121 @@ export function RemotePrView({
           </form>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={deletingCommentId !== null}
+        onOpenChange={(o) => {
+          if (!o) setDeletingCommentId(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete comment?</DialogTitle>
+            <DialogDescription>
+              This permanently deletes the comment on GitHub. This cannot be
+              undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeletingCommentId(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteComment.isPending}
+              onClick={() => {
+                const commentId = deletingCommentId;
+                if (!commentId) return;
+                deleteComment.mutate(commentId, {
+                  onSuccess: () => {
+                    toast.success("Comment deleted");
+                    setDeletingCommentId(null);
+                  },
+                  onError: (e) => {
+                    onError(e);
+                    setDeletingCommentId(null);
+                  },
+                });
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+/** Hide reasons GitHub accepts: menu label → ReportedContentClassifiers value. */
+const HIDE_REASONS: [string, MinimizeReason][] = [
+  ["Off-topic", "OFF_TOPIC"],
+  ["Outdated", "OUTDATED"],
+  ["Resolved", "RESOLVED"],
+  ["Duplicate", "DUPLICATE"],
+  ["Spam", "SPAM"],
+  ["Abuse", "ABUSE"],
+];
+
+/** "OFF_TOPIC" -> "off-topic" for the "hidden · <reason>" label. */
+function formatReason(reason: string): string {
+  return reason.toLowerCase().replace(/_/g, "-");
+}
+
+/** GitHub avatar that links to the author's profile. Avatars are served from
+ *  github.com/<login>.png; CSP is unrestricted so they load directly, and the
+ *  Avatar primitive falls back to the initial if the image can't load. */
+function AuthorAvatar({ login }: { login: string }) {
+  if (!login) return null;
+  return (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      onClick={() => openUrl(`https://github.com/${login}`)}
+      title={`@${login} on GitHub`}
+      className="shrink-0 rounded-full hover:opacity-80 cursor-pointer"
+    >
+      <Avatar size="sm">
+        <AvatarImage
+          src={`https://github.com/${login}.png?size=48`}
+          alt={login}
+        />
+        <AvatarFallback>{login.charAt(0).toUpperCase()}</AvatarFallback>
+      </Avatar>
+    </Button>
   );
 }
 
 function Thread({
   thread,
   onQuote,
+  onSaveEdit,
+  onDelete,
+  onHide,
+  onUnhide,
 }: {
   thread: PrThreadOut;
   onQuote?: () => void;
+  /** Present when the viewer may edit this comment; saves the new body. */
+  onSaveEdit?: (body: string) => void;
+  /** Present when the viewer may delete this comment. */
+  onDelete?: () => void;
+  /** Hide (minimize) the comment with a reason. */
+  onHide?: (classifier: MinimizeReason) => void;
+  /** Unhide a previously hidden comment. */
+  onUnhide?: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const minimized = thread.isMinimized;
   return (
     <div className="group space-y-1">
       <p className="flex items-center gap-2 text-xs">
+        <AuthorAvatar login={thread.author} />
         <span className="font-medium">{thread.author || "unknown"}</span>
         {thread.state && (
           <Badge variant="secondary">{thread.state.toLowerCase()}</Badge>
@@ -869,23 +1116,133 @@ function Thread({
         <span className="text-muted-foreground">
           {thread.date && formatRelativeTime(thread.date)}
         </span>
-        {onQuote && (
+        {minimized && (
+          <span className="text-[11px] text-muted-foreground italic">
+            hidden
+            {thread.minimizedReason
+              ? ` · ${formatReason(thread.minimizedReason)}`
+              : ""}
+          </span>
+        )}
+        {!editing && (
           <>
             <span className="flex-1" />
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Quote reply"
-              title="Quote reply"
-              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-              onClick={onQuote}
-            >
-              <QuotesIcon />
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Comment actions"
+                    className="text-muted-foreground hover:text-foreground data-popup-open:text-foreground"
+                  />
+                }
+              >
+                <DotsThreeIcon className="size-4" weight="bold" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-44">
+                {thread.url && (
+                  <DropdownMenuItem
+                    onClick={() => copyText(thread.url, "Link copied")}
+                  >
+                    Copy link
+                  </DropdownMenuItem>
+                )}
+                {onQuote && (
+                  <DropdownMenuItem onClick={onQuote}>
+                    Quote reply
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  onClick={() => copyText(thread.body, "Markdown copied")}
+                >
+                  Copy markdown
+                </DropdownMenuItem>
+                {onSaveEdit && (
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setDraft(thread.body);
+                      setEditing(true);
+                    }}
+                  >
+                    Edit
+                  </DropdownMenuItem>
+                )}
+                {onUnhide && minimized && (
+                  <DropdownMenuItem onClick={onUnhide}>Unhide</DropdownMenuItem>
+                )}
+                {onHide && !minimized && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>Hide…</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {HIDE_REASONS.map(([label, classifier]) => (
+                        <DropdownMenuItem
+                          key={classifier}
+                          onClick={() => onHide(classifier)}
+                        >
+                          {label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
+                {onDelete && (
+                  <DropdownMenuItem variant="destructive" onClick={onDelete}>
+                    Delete
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </>
         )}
       </p>
-      {thread.body.trim() && <Markdown>{thread.body}</Markdown>}
+      {editing ? (
+        <div className="space-y-2">
+          <Textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={3}
+            className="max-h-48 min-h-16 resize-y font-mono"
+          />
+          <div className="flex items-center gap-2">
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!draft.trim() || draft.trim() === thread.body.trim()}
+              onClick={() => {
+                onSaveEdit?.(draft.trim());
+                setEditing(false);
+              }}
+            >
+              Save
+            </Button>
+            <Button size="xs" variant="ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : minimized && !expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          Show hidden comment
+        </button>
+      ) : (
+        <>
+          {minimized && (
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              Hide comment
+            </button>
+          )}
+          {thread.body.trim() && <Markdown>{thread.body}</Markdown>}
+        </>
+      )}
     </div>
   );
 }

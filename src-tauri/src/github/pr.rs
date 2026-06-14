@@ -449,6 +449,122 @@ pub async fn gh_pr_close(repo_path: String, number: u64) -> AppResult<()> {
     Ok(())
 }
 
+/// Reopens a closed (not merged) pull request.
+#[tauri::command]
+pub async fn gh_pr_reopen(repo_path: String, number: u64) -> AppResult<()> {
+    let n = number.to_string();
+    run_gh(Some(&repo_path), &["pr", "reopen", &n], GH_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+/// Edits the body of an existing PR conversation comment, addressed by its
+/// GraphQL node id (from `gh pr view`). GitHub only lets the comment's author
+/// edit it, so this is offered solely on the viewer's own comments.
+#[tauri::command]
+pub async fn gh_pr_edit_comment(
+    repo_path: String,
+    comment_id: String,
+    body: String,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id:ID!,$body:String!){updateIssueComment(input:{id:$id,body:$body}){issueComment{id}}}",
+            "-f",
+            &format!("id={comment_id}"),
+            "-f",
+            &format!("body={body}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Permanently deletes a PR conversation comment by its GraphQL node id.
+#[tauri::command]
+pub async fn gh_pr_delete_comment(repo_path: String, comment_id: String) -> AppResult<()> {
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id:ID!){deleteIssueComment(input:{id:$id}){clientMutationId}}",
+            "-f",
+            &format!("id={comment_id}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Hides (minimizes) a comment with a reason. `classifier` is a GitHub
+/// `ReportedContentClassifiers` value: SPAM, ABUSE, OFF_TOPIC, OUTDATED,
+/// DUPLICATE, or RESOLVED.
+#[tauri::command]
+pub async fn gh_pr_minimize_comment(
+    repo_path: String,
+    comment_id: String,
+    classifier: String,
+) -> AppResult<()> {
+    const VALID: [&str; 6] = [
+        "SPAM",
+        "ABUSE",
+        "OFF_TOPIC",
+        "OUTDATED",
+        "DUPLICATE",
+        "RESOLVED",
+    ];
+    if !VALID.contains(&classifier.as_str()) {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid classifier: {classifier}"
+        )));
+    }
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id:ID!,$c:ReportedContentClassifiers!){minimizeComment(input:{subjectId:$id,classifier:$c}){minimizedComment{isMinimized}}}",
+            "-f",
+            &format!("id={comment_id}"),
+            "-f",
+            &format!("c={classifier}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Unhides (unminimizes) a previously hidden comment.
+#[tauri::command]
+pub async fn gh_pr_unminimize_comment(repo_path: String, comment_id: String) -> AppResult<()> {
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id:ID!){unminimizeComment(input:{subjectId:$id}){unminimizedComment{isMinimized}}}",
+            "-f",
+            &format!("id={comment_id}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Checks out a PR's branch locally (handles fork-sourced PRs too).
 #[tauri::command]
 pub async fn gh_pr_checkout(repo_path: String, number: u64) -> AppResult<()> {
@@ -833,11 +949,21 @@ struct RawReview {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawComment {
+    #[serde(default)]
+    id: String,
     author: Option<RawLogin>,
     #[serde(default)]
     body: String,
     #[serde(default)]
     created_at: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    is_minimized: bool,
+    #[serde(default)]
+    minimized_reason: String,
+    #[serde(default)]
+    viewer_did_author: bool,
 }
 
 /// statusCheckRollup is a union of CheckRun (name/conclusion) and StatusContext
@@ -922,6 +1048,16 @@ pub struct PrThreadOut {
     pub state: String,
     pub body: String,
     pub date: String,
+    /// GraphQL node id — set for conversation comments, empty for reviews
+    /// (which use a different edit path and aren't editable here).
+    pub id: String,
+    /// Permalink to the comment on GitHub ("" for reviews) — for "Copy link".
+    pub url: String,
+    /// Whether the signed-in user wrote it — drives the edit affordance.
+    pub viewer_did_author: bool,
+    /// Whether the comment is hidden (minimized), and GitHub's reason for it.
+    pub is_minimized: bool,
+    pub minimized_reason: String,
 }
 
 #[derive(Serialize)]
@@ -1018,6 +1154,11 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                 state: r.state,
                 body: r.body,
                 date: r.submitted_at,
+                id: String::new(),
+                url: String::new(),
+                viewer_did_author: false,
+                is_minimized: false,
+                minimized_reason: String::new(),
             })
             .collect(),
         comments: raw
@@ -1028,6 +1169,11 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                 state: String::new(),
                 body: c.body,
                 date: c.created_at,
+                id: c.id,
+                url: c.url,
+                viewer_did_author: c.viewer_did_author,
+                is_minimized: c.is_minimized,
+                minimized_reason: c.minimized_reason,
             })
             .collect(),
         checks: raw

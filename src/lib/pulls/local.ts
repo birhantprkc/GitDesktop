@@ -4,6 +4,8 @@ export interface LocalPrComment {
   id: string;
   body: string;
   createdAt: string;
+  /** Collapsed in the conversation (local equivalent of GitHub's "hide"). */
+  hidden?: boolean;
 }
 
 export type LocalPrStatus = "open" | "merged" | "closed";

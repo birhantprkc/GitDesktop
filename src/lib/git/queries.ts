@@ -679,6 +679,38 @@ export function useClosePr(repo: string) {
   return useRepoMutation(repo, (number: number) => api.ghPrClose(repo, number));
 }
 
+export function useReopenPr(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.ghPrReopen(repo, number),
+  );
+}
+
+export function useEditPrComment(repo: string) {
+  return useRepoMutation(repo, (args: { commentId: string; body: string }) =>
+    api.ghPrEditComment(repo, args.commentId, args.body),
+  );
+}
+
+export function useDeletePrComment(repo: string) {
+  return useRepoMutation(repo, (commentId: string) =>
+    api.ghPrDeleteComment(repo, commentId),
+  );
+}
+
+export function useMinimizeComment(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { commentId: string; classifier: api.MinimizeReason }) =>
+      api.ghPrMinimizeComment(repo, args.commentId, args.classifier),
+  );
+}
+
+export function useUnminimizeComment(repo: string) {
+  return useRepoMutation(repo, (commentId: string) =>
+    api.ghPrUnminimizeComment(repo, commentId),
+  );
+}
+
 export function useCheckoutPr(repo: string) {
   return useRepoMutation(repo, (number: number) =>
     api.ghPrCheckout(repo, number),

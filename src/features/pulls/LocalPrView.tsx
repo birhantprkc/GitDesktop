@@ -3,10 +3,10 @@ import {
   ArrowCounterClockwiseIcon,
   CaretDownIcon,
   CheckCircleIcon,
+  DotsThreeIcon,
   GithubLogoIcon,
   GitMergeIcon,
   PencilSimpleIcon,
-  QuotesIcon,
   TagIcon,
   TrashIcon,
   XIcon,
@@ -35,6 +35,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
+import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import { gitBranchDiff, type MergeStrategy } from "@/lib/git/api";
 import {
@@ -43,6 +44,7 @@ import {
   useGhStatus,
   useMergeLocalPr,
 } from "@/lib/git/queries";
+import type { LocalPrComment } from "@/lib/pulls/local";
 import {
   useDeleteLocalPr,
   useLocalPrs,
@@ -71,6 +73,9 @@ export function LocalPrView({
   const selectPr = useUiStore((s) => s.selectPr);
   const [section, setSection] = useState<Section>("conversation");
   const [comment, setComment] = useState("");
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
+    null,
+  );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
@@ -129,6 +134,34 @@ export function LocalPrView({
       ],
     });
     setComment("");
+  }
+
+  function editComment(commentId: string, body: string) {
+    if (!pr) return;
+    save.mutate({
+      ...pr,
+      comments: pr.comments.map((c) =>
+        c.id === commentId ? { ...c, body } : c,
+      ),
+    });
+  }
+
+  function deleteComment(commentId: string) {
+    if (!pr) return;
+    save.mutate({
+      ...pr,
+      comments: pr.comments.filter((c) => c.id !== commentId),
+    });
+  }
+
+  function setCommentHidden(commentId: string, hidden: boolean) {
+    if (!pr) return;
+    save.mutate({
+      ...pr,
+      comments: pr.comments.map((c) =>
+        c.id === commentId ? { ...c, hidden } : c,
+      ),
+    });
   }
 
   function toggleApprove() {
@@ -360,37 +393,56 @@ export function LocalPrView({
         <>
           <ScrollArea className="min-h-0 flex-1">
             <div className="space-y-4 p-4">
-              <div className="border-b pb-3">
-                {pr.body.trim() ? (
-                  <Markdown>{pr.body}</Markdown>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    No description.
-                  </p>
-                )}
+              <div className="group flex items-start justify-between gap-2 border-b pb-3">
+                <div className="min-w-0 flex-1">
+                  {pr.body.trim() ? (
+                    <Markdown>{pr.body}</Markdown>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No description.
+                    </p>
+                  )}
+                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label="Description actions"
+                        className="shrink-0 text-muted-foreground hover:text-foreground data-popup-open:text-foreground"
+                      />
+                    }
+                  >
+                    <DotsThreeIcon className="size-4" weight="bold" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-44">
+                    <DropdownMenuItem onClick={() => quoteReply(pr.body)}>
+                      Quote reply
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => copyText(pr.body, "Markdown copied")}
+                    >
+                      Copy markdown
+                    </DropdownMenuItem>
+                    {pr.status === "open" && (
+                      <DropdownMenuItem onClick={openEdit}>
+                        Edit
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
               {pr.comments.map((c) => (
-                <div key={c.id} className="group space-y-1">
-                  <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                    {formatRelativeTime(c.createdAt)}
-                    {pr.status === "open" && (
-                      <>
-                        <span className="flex-1" />
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label="Quote reply"
-                          title="Quote reply"
-                          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                          onClick={() => quoteReply(c.body)}
-                        >
-                          <QuotesIcon />
-                        </Button>
-                      </>
-                    )}
-                  </p>
-                  <Markdown>{c.body}</Markdown>
-                </div>
+                <LocalComment
+                  key={c.id}
+                  comment={c}
+                  onQuote={() => quoteReply(c.body)}
+                  onSaveEdit={(body) => editComment(c.id, body)}
+                  onDelete={() => setDeletingCommentId(c.id)}
+                  onHide={() => setCommentHidden(c.id, true)}
+                  onUnhide={() => setCommentHidden(c.id, false)}
+                />
               ))}
               {pr.comments.length === 0 && (
                 <p className="text-xs text-muted-foreground">
@@ -399,32 +451,34 @@ export function LocalPrView({
               )}
             </div>
           </ScrollArea>
-          {pr.status === "open" && (
-            <div className="space-y-2 border-t p-3">
-              <Textarea
-                ref={composerRef}
-                placeholder="Leave a note…"
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                    e.preventDefault();
-                    addComment();
-                  }
-                }}
-                rows={2}
-                className="max-h-32 min-h-12 resize-y"
-              />
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!comment.trim()}
-                  onClick={addComment}
-                  title="Ctrl+Enter"
-                >
-                  Comment
-                </Button>
+          {/* Shown for closed PRs too, so you can comment / quote-reply after
+              closing; approving stays open-only. */}
+          <div className="space-y-2 border-t p-3">
+            <Textarea
+              ref={composerRef}
+              placeholder="Leave a note…"
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  addComment();
+                }
+              }}
+              rows={2}
+              className="max-h-32 min-h-12 resize-y"
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!comment.trim()}
+                onClick={addComment}
+                title="Ctrl+Enter"
+              >
+                Comment
+              </Button>
+              {pr.status === "open" && (
                 <Button
                   variant={pr.approved ? "secondary" : "outline"}
                   size="sm"
@@ -433,9 +487,20 @@ export function LocalPrView({
                   <CheckCircleIcon data-icon="inline-start" />
                   {pr.approved ? "Approved" : "Approve"}
                 </Button>
-              </div>
+              )}
+              {comment.trim() && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto"
+                  onClick={() => setComment("")}
+                  title="Discard this draft (e.g. a quote reply)"
+                >
+                  Clear
+                </Button>
+              )}
             </div>
-          )}
+          </div>
         </>
       )}
 
@@ -633,6 +698,167 @@ export function LocalPrView({
           </form>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={deletingCommentId !== null}
+        onOpenChange={(o) => {
+          if (!o) setDeletingCommentId(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete comment?</DialogTitle>
+            <DialogDescription>
+              Removes this comment from the local pull request. This cannot be
+              undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeletingCommentId(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (deletingCommentId) deleteComment(deletingCommentId);
+                setDeletingCommentId(null);
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function LocalComment({
+  comment,
+  onQuote,
+  onSaveEdit,
+  onDelete,
+  onHide,
+  onUnhide,
+}: {
+  comment: LocalPrComment;
+  onQuote?: () => void;
+  /** Replaces the comment body in local storage. */
+  onSaveEdit: (body: string) => void;
+  /** Removes the comment from local storage. */
+  onDelete: () => void;
+  /** Collapses the comment (sets its hidden flag). */
+  onHide: () => void;
+  /** Un-collapses the comment. */
+  onUnhide: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const hidden = comment.hidden ?? false;
+  return (
+    <div className="group space-y-1">
+      <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        {formatRelativeTime(comment.createdAt)}
+        {hidden && <span className="italic">hidden</span>}
+        {!editing && (
+          <>
+            <span className="flex-1" />
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Comment actions"
+                    className="text-muted-foreground hover:text-foreground data-popup-open:text-foreground"
+                  />
+                }
+              >
+                <DotsThreeIcon className="size-4" weight="bold" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-44">
+                {onQuote && (
+                  <DropdownMenuItem onClick={onQuote}>
+                    Quote reply
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  onClick={() => copyText(comment.body, "Markdown copied")}
+                >
+                  Copy markdown
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setDraft(comment.body);
+                    setEditing(true);
+                  }}
+                >
+                  Edit
+                </DropdownMenuItem>
+                {hidden ? (
+                  <DropdownMenuItem onClick={onUnhide}>Unhide</DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem onClick={onHide}>Hide</DropdownMenuItem>
+                )}
+                <DropdownMenuItem variant="destructive" onClick={onDelete}>
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        )}
+      </p>
+      {editing ? (
+        <div className="space-y-2">
+          <Textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={3}
+            className="max-h-48 min-h-16 resize-y"
+          />
+          <div className="flex items-center gap-2">
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!draft.trim() || draft.trim() === comment.body.trim()}
+              onClick={() => {
+                onSaveEdit(draft.trim());
+                setEditing(false);
+              }}
+            >
+              Save
+            </Button>
+            <Button size="xs" variant="ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : hidden && !expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          Show hidden comment
+        </button>
+      ) : (
+        <>
+          {hidden && (
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              Hide comment
+            </button>
+          )}
+          <Markdown>{comment.body}</Markdown>
+        </>
+      )}
     </div>
   );
 }

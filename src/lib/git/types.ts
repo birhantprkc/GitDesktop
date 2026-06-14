@@ -263,6 +263,15 @@ export interface PrThreadOut {
   state: string;
   body: string;
   date: string;
+  /** GraphQL node id — set for conversation comments, "" for reviews. */
+  id: string;
+  /** Permalink on GitHub ("" for reviews/local) — for "Copy link". */
+  url: string;
+  /** Whether the signed-in user wrote it (only their own comments are editable). */
+  viewerDidAuthor: boolean;
+  /** Whether the comment is hidden (minimized), and GitHub's recorded reason. */
+  isMinimized: boolean;
+  minimizedReason: string;
 }
 
 export interface PrCheckOut {

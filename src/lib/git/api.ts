@@ -473,6 +473,34 @@ export const ghPrReview = (
 export const ghPrComment = (repoPath: string, number: number, body: string) =>
   invoke<void>("gh_pr_comment", { repoPath, number, body });
 
+export const ghPrEditComment = (
+  repoPath: string,
+  commentId: string,
+  body: string,
+) => invoke<void>("gh_pr_edit_comment", { repoPath, commentId, body });
+
+export const ghPrDeleteComment = (repoPath: string, commentId: string) =>
+  invoke<void>("gh_pr_delete_comment", { repoPath, commentId });
+
+/** GitHub `ReportedContentClassifiers` reasons for hiding a comment. */
+export type MinimizeReason =
+  | "OFF_TOPIC"
+  | "OUTDATED"
+  | "RESOLVED"
+  | "DUPLICATE"
+  | "SPAM"
+  | "ABUSE";
+
+export const ghPrMinimizeComment = (
+  repoPath: string,
+  commentId: string,
+  classifier: MinimizeReason,
+) =>
+  invoke<void>("gh_pr_minimize_comment", { repoPath, commentId, classifier });
+
+export const ghPrUnminimizeComment = (repoPath: string, commentId: string) =>
+  invoke<void>("gh_pr_unminimize_comment", { repoPath, commentId });
+
 export const ghPrMerge = (
   repoPath: string,
   number: number,
@@ -482,6 +510,9 @@ export const ghPrMerge = (
 
 export const ghPrClose = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_close", { repoPath, number });
+
+export const ghPrReopen = (repoPath: string, number: number) =>
+  invoke<void>("gh_pr_reopen", { repoPath, number });
 
 export const ghAccounts = () => invoke<GhAccounts>("gh_accounts");
 
