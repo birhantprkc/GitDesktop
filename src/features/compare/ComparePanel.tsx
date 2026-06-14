@@ -205,9 +205,8 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
       {canPr && compareBranch && !existingPr && (
         <CreatePrDialog
           repoPath={repoPath}
-          base={compareBranch}
-          head={currentName}
-          commitSubjects={ahead.map((c) => c.subject)}
+          defaultBase={compareBranch}
+          defaultHead={currentName}
           open={prOpen}
           onOpenChange={setPrOpen}
         />

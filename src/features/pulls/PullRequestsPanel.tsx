@@ -1,5 +1,6 @@
 import { Popover } from "@base-ui/react/popover";
 import {
+  CaretDownIcon,
   FunnelIcon,
   GitPullRequestIcon,
   PlusIcon,
@@ -8,6 +9,12 @@ import { useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,6 +26,7 @@ import { useLocalPrs } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
 import { CreateLocalPrDialog } from "./CreateLocalPrDialog";
+import { CreatePrDialog } from "./CreatePrDialog";
 
 export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
@@ -32,13 +40,23 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   const selectedPr = useUiStore((s) => s.selectedPr);
   const selectPr = useUiStore((s) => s.selectPr);
   const [createOpen, setCreateOpen] = useState(false);
+  const [ghCreateOpen, setGhCreateOpen] = useState(false);
   const [filterText, setFilterText] = useState("");
   const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
   const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set());
   const filterRef = useRef<HTMLInputElement>(null);
 
+  // The dialog picks the head/base branches itself (so main → staging works
+  // just as well as feature → main), so the only requirement here is that the
+  // repo is actually on GitHub.
+  const ghCreateReason = ghReady
+    ? null
+    : "Connect this repository to GitHub to open a pull request here.";
+  const canCreateGhPr = ghReady;
+
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
   useHotkeyAction("create-local-pr", () => setCreateOpen(true));
+  useHotkeyAction("create-pr", () => setGhCreateOpen(true), canCreateGhPr);
 
   const stateLocal = (localPrs.data ?? []).filter((p) =>
     stateFilter === "open" ? p.status === "open" : p.status !== "open",
@@ -157,6 +175,29 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
             {s === "open" ? "Open" : "Closed"}
           </Button>
         ))}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button variant="ghost" size="xs" className="ml-auto">
+                <PlusIcon data-icon="inline-start" />
+                New
+                <CaretDownIcon data-icon="inline-end" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="min-w-56">
+            <DropdownMenuItem
+              disabled={!canCreateGhPr}
+              title={ghCreateReason ?? undefined}
+              onClick={() => setGhCreateOpen(true)}
+            >
+              Pull request on GitHub…
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setCreateOpen(true)}>
+              Local pull request…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Popover.Root>
           <Popover.Trigger
             render={
@@ -168,7 +209,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
                     ? `Filter by author or label (${activeFilterCount} active)`
                     : "Filter by author or label"
                 }
-                className="relative ml-auto"
+                className="relative"
               />
             }
           >
@@ -258,18 +299,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div onKeyDown={onListKeyDown}>
-          <div className="flex items-center justify-between px-3 pt-2 pb-1">
-            <p className="text-xs text-muted-foreground">Local</p>
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={() => setCreateOpen(true)}
-              title="Create a local pull request"
-            >
-              <PlusIcon data-icon="inline-start" />
-              New
-            </Button>
-          </div>
+          <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground">Local</p>
           {visibleLocal.length === 0 ? (
             <p className="px-3 py-2 text-xs text-muted-foreground">
               {stateLocal.length > 0
@@ -381,6 +411,12 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={createOpen}
         onOpenChange={setCreateOpen}
+      />
+
+      <CreatePrDialog
+        repoPath={repoPath}
+        open={ghCreateOpen}
+        onOpenChange={setGhCreateOpen}
       />
     </div>
   );

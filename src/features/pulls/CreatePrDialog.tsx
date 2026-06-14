@@ -1,4 +1,5 @@
 import { SparkleIcon, XIcon } from "@phosphor-icons/react";
+import { useSelector } from "@tanstack/react-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useEffectEvent } from "react";
 import { toast } from "sonner";
@@ -13,35 +14,52 @@ import {
 } from "@/components/ui/dialog";
 import { triggerAutomations } from "@/lib/automations/runner";
 import { required, useAppForm } from "@/lib/form";
-import { useCreatePr } from "@/lib/git/queries";
+import {
+  useBranches,
+  useCompareBranches,
+  useCreatePr,
+  useDefaultBranch,
+  useRepoStatus,
+} from "@/lib/git/queries";
 import { toastError } from "@/lib/toast";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 
 export function CreatePrDialog({
   repoPath,
-  base,
-  head,
-  commitSubjects,
+  defaultBase,
+  defaultHead,
   open,
   onOpenChange,
 }: {
   repoPath: string;
-  base: string;
-  head: string;
-  commitSubjects: string[];
+  /** Seeds the base ("into") branch; defaults to the repo's default branch. */
+  defaultBase?: string;
+  /** Seeds the head ("merge") branch; defaults to the current branch. */
+  defaultHead?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const status = useRepoStatus(repoPath);
+  const branches = useBranches(repoPath);
+  const defaultBranch = useDefaultBranch(repoPath);
   const createPr = useCreatePr(repoPath);
   const { generate, cancel, generating } = useGeneratePrDescription(repoPath);
 
+  const currentName = status.data?.branch?.name ?? null;
+  const names = (branches.data ?? []).map((b) => b.name);
+
   const form = useAppForm({
-    defaultValues: { title: "", body: "", draft: false },
+    defaultValues: { head: "", base: "", title: "", body: "", draft: false },
+    validators: {
+      // Same branch on both sides proposes nothing — gate the submit.
+      onChange: ({ value }) =>
+        value.head === value.base ? "Pick two different branches." : undefined,
+    },
     onSubmit: async ({ value }) => {
       try {
         const { number, url } = await createPr.mutateAsync({
-          base,
-          head,
+          base: value.base,
+          head: value.head,
           title: value.title.trim(),
           body: value.body,
           draft: value.draft,
@@ -54,11 +72,11 @@ export function CreatePrDialog({
         triggerAutomations({
           kind: "pr-open",
           repoPath,
-          base,
-          head,
+          base: value.base,
+          head: value.head,
           title: value.title.trim(),
           body: value.body,
-          commitSubjects,
+          commitSubjects: ahead.map((c) => c.subject),
           target: { type: "remote", number },
         });
       } catch (e) {
@@ -67,24 +85,40 @@ export function CreatePrDialog({
     },
   });
 
-  // Seed fields each time the dialog opens (title GitHub-style: the single
-  // commit's subject, else blank). An effect event so a background refresh
-  // of the commit list can't clobber what the user is typing.
+  // Seed branches each time the dialog opens: head = current branch, base =
+  // the default branch (or, when you're already on it, the first other branch).
   // keepDefaultValues: otherwise the per-render options sync clobbers the
-  // seeded title back to empty (untouched form).
-  const seedOnOpen = useEffectEvent(() =>
+  // seeded values back to empty on an untouched form.
+  const seedOnOpen = useEffectEvent(() => {
+    const h = defaultHead ?? currentName ?? names[0] ?? "";
+    const fallbackBase =
+      defaultBranch.data && defaultBranch.data !== h
+        ? defaultBranch.data
+        : (names.find((n) => n !== h) ?? "");
     form.reset(
       {
-        title: commitSubjects.length === 1 ? commitSubjects[0] : "",
+        head: h,
+        base: defaultBase ?? fallbackBase,
+        title: "",
         body: "",
         draft: false,
       },
       { keepDefaultValues: true },
-    ),
-  );
+    );
+  });
   useEffect(() => {
     if (open) seedOnOpen();
   }, [open]);
+
+  // Live head/base drive the "N commits" hint, AI generation, and submit gate.
+  const head = useSelector(form.store, (s) => s.values.head);
+  const base = useSelector(form.store, (s) => s.values.base);
+  const comparison = useCompareBranches(repoPath, base || null, head || null);
+  const ahead = comparison.data?.ahead ?? [];
+  const sameBranch = base === head;
+  const nothingToMerge = sameBranch || ahead.length === 0;
+
+  const items = Object.fromEntries(names.map((n) => [n, n]));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -99,13 +133,35 @@ export function CreatePrDialog({
           <DialogHeader>
             <DialogTitle>Create pull request</DialogTitle>
             <DialogDescription>
-              Pushes <span className="font-mono">{head}</span> and opens a PR
-              into <span className="font-mono">{base}</span> on GitHub
-              {commitSubjects.length > 0 &&
-                ` — ${commitSubjects.length} commit${commitSubjects.length === 1 ? "" : "s"}`}
-              .
+              Pushes <span className="font-mono">{head || "…"}</span> and opens
+              a PR into <span className="font-mono">{base || "…"}</span> on
+              GitHub.
             </DialogDescription>
           </DialogHeader>
+
+          <div className="flex items-end gap-2">
+            <div className="flex-1">
+              <form.AppField name="head">
+                {(field) => <field.SelectField label="Merge" items={items} />}
+              </form.AppField>
+            </div>
+            <span className="pb-2 text-xs text-muted-foreground">into</span>
+            <div className="flex-1">
+              <form.AppField name="base">
+                {(field) => <field.SelectField label="Base" items={items} />}
+              </form.AppField>
+            </div>
+          </div>
+          {sameBranch ? (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              Pick two different branches.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {ahead.length} commit{ahead.length === 1 ? "" : "s"} to merge.
+            </p>
+          )}
+
           <form.AppField
             name="title"
             validators={{ onChange: ({ value }) => required(value) }}
@@ -122,7 +178,7 @@ export function CreatePrDialog({
               <field.MarkdownField
                 label="Description"
                 placeholder="Describe what changed and why"
-                rows={8}
+                rows={7}
                 textareaClassName="max-h-72 min-h-24 resize-y font-mono"
                 actions={
                   generating ? (
@@ -140,11 +196,17 @@ export function CreatePrDialog({
                       type="button"
                       variant="outline"
                       size="xs"
+                      disabled={nothingToMerge}
                       onClick={() =>
-                        generate(base, head, commitSubjects, (d) => {
-                          form.setFieldValue("title", d.title);
-                          form.setFieldValue("body", d.body);
-                        })
+                        generate(
+                          base,
+                          head,
+                          ahead.map((c) => c.subject),
+                          (d) => {
+                            form.setFieldValue("title", d.title);
+                            form.setFieldValue("body", d.body);
+                          },
+                        )
                       }
                       title="Generate the title and description with AI"
                     >
@@ -156,6 +218,7 @@ export function CreatePrDialog({
               />
             )}
           </form.AppField>
+
           <DialogFooter className="sm:items-center">
             <form.AppField name="draft">
               {(field) => (
@@ -175,7 +238,7 @@ export function CreatePrDialog({
             <form.AppForm>
               <form.Subscribe selector={(s) => s.values.draft}>
                 {(draft) => (
-                  <form.SubmitButton disabled={generating}>
+                  <form.SubmitButton disabled={generating || nothingToMerge}>
                     {draft ? "Create draft" : "Create pull request"}
                   </form.SubmitButton>
                 )}
