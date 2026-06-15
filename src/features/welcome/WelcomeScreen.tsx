@@ -1,6 +1,7 @@
-import { FolderOpenIcon, GearIcon, GitBranchIcon } from "@phosphor-icons/react";
+import { FolderOpenIcon, GearIcon } from "@phosphor-icons/react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
+import { BrandMark } from "@/components/BrandMark";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -48,7 +49,7 @@ export function WelcomeScreen() {
     <div className="flex h-screen flex-col">
       <header className="flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-2">
-          <GitBranchIcon className="size-5" />
+          <BrandMark className="size-5" />
           <span className="text-sm font-medium">GitDesktop</span>
         </div>
         <Button
