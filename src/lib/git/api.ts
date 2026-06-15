@@ -312,6 +312,12 @@ export const gitRemoteSetUrl = (repoPath: string, name: string, url: string) =>
 export const gitUndoCommit = (repoPath: string) =>
   invoke<void>("git_undo_commit", { repoPath });
 
+export const gitSetBranchArchived = (
+  repoPath: string,
+  name: string,
+  archived: boolean,
+) => invoke<void>("git_set_branch_archived", { repoPath, name, archived });
+
 export const gitRenameBranch = (
   repoPath: string,
   oldName: string,

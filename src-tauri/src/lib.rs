@@ -33,6 +33,7 @@ pub fn run() {
             git::branches::git_default_branch,
             git::branches::git_branch_divergence,
             git::branches::git_branch_merge_states,
+            git::branches::git_set_branch_archived,
             git::branches::git_update_branch_from,
             git::diff::git_diff_file,
             git::diff::git_staged_diff,

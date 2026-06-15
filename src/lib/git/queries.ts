@@ -585,6 +585,12 @@ export function useRenameBranch(repo: string) {
   );
 }
 
+export function useSetBranchArchived(repo: string) {
+  return useRepoMutation(repo, (args: { name: string; archived: boolean }) =>
+    api.gitSetBranchArchived(repo, args.name, args.archived),
+  );
+}
+
 export function useDeleteBranch(repo: string) {
   return useRepoMutation(repo, (name: string) =>
     api.gitDeleteBranch(repo, name),

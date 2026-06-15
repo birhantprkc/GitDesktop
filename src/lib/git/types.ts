@@ -44,6 +44,8 @@ export interface Branch {
   upstream: string | null;
   /** ISO-8601 committer date of the branch tip (for recency sorting). */
   lastCommitDate: string;
+  /** Hidden from the branch dropdown (a personal, local-config flag). */
+  archived: boolean;
 }
 
 /** A local branch's ahead/behind counts vs. the default branch. */

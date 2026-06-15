@@ -27,6 +27,7 @@ pub async fn git_branches(repo_path: String) -> AppResult<Vec<Branch>> {
     )
     .await?;
     let text = out.stdout_lossy();
+    let archived = read_archived_set(&repo_path).await?;
     let mut branches = Vec::new();
     for line in text.lines() {
         let mut parts = line.split('\0');
@@ -46,9 +47,73 @@ pub async fn git_branches(repo_path: String) -> AppResult<Vec<Branch>> {
             is_current: head == Some("*"),
             upstream: upstream.filter(|u| !u.is_empty()).map(str::to_string),
             last_commit_date: date.unwrap_or("").to_string(),
+            archived: archived.contains(name),
         });
     }
     Ok(branches)
+}
+
+/// The set of branches the user has archived, from local git config
+/// (`branch.<name>.gitdesktopArchived true`). git keeps these in sync across
+/// renames and removes them on delete, so they never go stale.
+async fn read_archived_set(
+    repo_path: &str,
+) -> AppResult<std::collections::HashSet<String>> {
+    let out = run_git_raw(
+        Some(repo_path),
+        &["config", "--get-regexp", r"^branch\..*\.gitdesktoparchived$"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let mut set = std::collections::HashSet::new();
+    if out.code == 0 {
+        for line in out.stdout_lossy().lines() {
+            // "branch.<name>.gitdesktoparchived true"
+            let Some((key, value)) = line.split_once(' ') else {
+                continue;
+            };
+            if value.trim() != "true" {
+                continue;
+            }
+            if let Some(name) = key
+                .strip_prefix("branch.")
+                .and_then(|k| k.strip_suffix(".gitdesktoparchived"))
+            {
+                set.insert(name.to_string());
+            }
+        }
+    }
+    Ok(set)
+}
+
+/// Archives/unarchives a branch by setting (or unsetting) a personal,
+/// local-config flag, so it's hidden from the dropdown without being deleted.
+#[tauri::command]
+pub async fn git_set_branch_archived(
+    repo_path: String,
+    name: String,
+    archived: bool,
+) -> AppResult<()> {
+    validate_ref_name(&name)?;
+    let key = format!("branch.{name}.gitdesktopArchived");
+    if archived {
+        run_git(Some(&repo_path), &["config", &key, "true"], DEFAULT_TIMEOUT).await?;
+    } else {
+        let out = run_git_raw(
+            Some(&repo_path),
+            &["config", "--unset", &key],
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+        // exit 5 = "key not found" — already unarchived, which is fine.
+        if out.code != 0 && out.code != 5 {
+            return Err(AppError::Git {
+                code: out.code,
+                stderr: out.stderr,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]

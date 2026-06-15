@@ -56,12 +56,14 @@ import {
   useRebaseBranch,
   useRenameBranch,
   useRepoStatus,
+  useSetBranchArchived,
   useStashAll,
   useStashCount,
   useStashPop,
   useUpdateBranchFrom,
 } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
+import type { Branch } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
@@ -118,10 +120,12 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const mergeBranch = useMergeBranch(repoPath);
   const rebaseBranch = useRebaseBranch(repoPath);
   const updateBranchFrom = useUpdateBranchFrom(repoPath);
+  const setBranchArchived = useSetBranchArchived(repoPath);
   const rulesConfig = useEffectiveBranchRules(repoPath);
   const amendingHash = useUiStore((s) => s.amendingHash);
 
   const [open, setOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -139,7 +143,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     ? `detached @ ${head.oid?.slice(0, 7) ?? "?"}`
     : (currentName ?? "…");
   const allBranches = branches.data ?? [];
-  const otherBranches = allBranches.filter((b) => !b.isCurrent);
+  // Archived branches are hidden from the list and the merge picker.
+  const otherBranches = allBranches.filter((b) => !b.isCurrent && !b.archived);
   const defaultName = defaultBranch.data ?? null;
   // Merge-into-current is gated by the current branch's protection: a
   // "require pull request" rule blocks all direct merges, and a merge-method
@@ -168,6 +173,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     if (b.name === defaultName) return 1;
     return b.lastCommitDate.localeCompare(a.lastCommitDate);
   });
+  const visibleBranches = sortedBranches.filter((b) => !b.archived);
+  const archivedBranches = sortedBranches.filter((b) => b.archived);
   const stashes = stashCount.data ?? 0;
   const hasChanges = (status.data?.entries.length ?? 0) > 0;
   // You can't amend across branches: amend mode targets a specific commit on
@@ -183,6 +190,17 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   ];
 
   const onError = (e: unknown) => toastError(e);
+
+  function setArchived(name: string, archived: boolean) {
+    setBranchArchived.mutate(
+      { name, archived },
+      {
+        onSuccess: () =>
+          toast.success(archived ? `Archived ${name}` : `Unarchived ${name}`),
+        onError,
+      },
+    );
+  }
 
   function switchTo(name: string) {
     if (amending) return; // guarded by the disabled trigger; belt-and-suspenders
@@ -404,6 +422,99 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   useHotkeyAction("view-stashes", () => setStashesOpen(true), stashes > 0);
   useHotkeyAction("discard-all", () => setDiscardAllOpen(true), hasChanges);
 
+  // Shared by the visible list and the Archived section.
+  const renderBranchRow = (branch: Branch) => {
+    const div = divByName.get(branch.name);
+    const canUpdate = Boolean(defaultName) && branch.name !== defaultName;
+    const deletionBlocked = isDeletionBlocked(rulesConfig, branch.name);
+    return (
+      <ContextMenu key={branch.name}>
+        <ContextMenuTrigger
+          render={
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground"
+              onClick={() => {
+                if (!branch.isCurrent) switchTo(branch.name);
+              }}
+            >
+              <span className="min-w-0 flex-1 truncate">
+                {branch.name}
+                {branch.name === defaultName && (
+                  <span className="ml-1.5 text-[10px] text-muted-foreground">
+                    default
+                  </span>
+                )}
+              </span>
+              {div && (div.ahead > 0 || div.behind > 0) && (
+                <span
+                  className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground tabular-nums"
+                  title={`${div.ahead} ahead, ${div.behind} behind ${defaultName}`}
+                >
+                  {div.ahead > 0 && (
+                    <span className="flex items-center gap-0.5">
+                      <ArrowUpIcon className="size-3" weight="bold" />
+                      {div.ahead}
+                    </span>
+                  )}
+                  {div.behind > 0 && (
+                    <span className="flex items-center gap-0.5">
+                      <ArrowDownIcon className="size-3" weight="bold" />
+                      {div.behind}
+                    </span>
+                  )}
+                </span>
+              )}
+              {branch.lastCommitDate && (
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  {formatRelativeTime(branch.lastCommitDate)}
+                </span>
+              )}
+              {branch.isCurrent && <CheckIcon className="size-3.5 shrink-0" />}
+            </button>
+          }
+        />
+        <ContextMenuContent className="min-w-48">
+          {canUpdate && (
+            <>
+              <ContextMenuItem
+                disabled={busy}
+                onClick={() => doUpdateFromDefault(branch.name)}
+              >
+                Update from {defaultName}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          )}
+          <ContextMenuItem onClick={() => openRename(branch.name)}>
+            Rename…
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={() => copyText(branch.name, "Branch name copied")}
+          >
+            Copy branch name
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={branch.isCurrent}
+            onClick={() => setArchived(branch.name, !branch.archived)}
+          >
+            {branch.archived ? "Unarchive" : "Archive"}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            disabled={deletionBlocked}
+            onClick={() => {
+              setOpen(false);
+              setDeleteTarget(branch.name);
+            }}
+          >
+            {deletionBlocked ? "Delete… (protected)" : "Delete…"}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  };
+
   return (
     <>
       <Popover.Root open={open} onOpenChange={setOpen}>
@@ -441,107 +552,25 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 Branches
               </p>
               <div className="max-h-60 overflow-y-auto">
-                {sortedBranches.map((branch) => {
-                  const div = divByName.get(branch.name);
-                  const canUpdate =
-                    Boolean(defaultName) && branch.name !== defaultName;
-                  const deletionBlocked = isDeletionBlocked(
-                    rulesConfig,
-                    branch.name,
-                  );
-                  return (
-                    <ContextMenu key={branch.name}>
-                      <ContextMenuTrigger
-                        render={
-                          <button
-                            type="button"
-                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground"
-                            onClick={() => {
-                              if (!branch.isCurrent) switchTo(branch.name);
-                            }}
-                          >
-                            <span className="min-w-0 flex-1 truncate">
-                              {branch.name}
-                              {branch.name === defaultName && (
-                                <span className="ml-1.5 text-[10px] text-muted-foreground">
-                                  default
-                                </span>
-                              )}
-                            </span>
-                            {div && (div.ahead > 0 || div.behind > 0) && (
-                              <span
-                                className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground tabular-nums"
-                                title={`${div.ahead} ahead, ${div.behind} behind ${defaultName}`}
-                              >
-                                {div.ahead > 0 && (
-                                  <span className="flex items-center gap-0.5">
-                                    <ArrowUpIcon
-                                      className="size-3"
-                                      weight="bold"
-                                    />
-                                    {div.ahead}
-                                  </span>
-                                )}
-                                {div.behind > 0 && (
-                                  <span className="flex items-center gap-0.5">
-                                    <ArrowDownIcon
-                                      className="size-3"
-                                      weight="bold"
-                                    />
-                                    {div.behind}
-                                  </span>
-                                )}
-                              </span>
-                            )}
-                            {branch.lastCommitDate && (
-                              <span className="shrink-0 text-[11px] text-muted-foreground">
-                                {formatRelativeTime(branch.lastCommitDate)}
-                              </span>
-                            )}
-                            {branch.isCurrent && (
-                              <CheckIcon className="size-3.5 shrink-0" />
-                            )}
-                          </button>
-                        }
+                {visibleBranches.map(renderBranchRow)}
+                {archivedBranches.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      onClick={() => setShowArchived((v) => !v)}
+                    >
+                      <CaretDownIcon
+                        className={`size-3 transition-transform ${
+                          showArchived ? "" : "-rotate-90"
+                        }`}
+                        weight="bold"
                       />
-                      <ContextMenuContent className="min-w-48">
-                        {canUpdate && (
-                          <>
-                            <ContextMenuItem
-                              disabled={busy}
-                              onClick={() => doUpdateFromDefault(branch.name)}
-                            >
-                              Update from {defaultName}
-                            </ContextMenuItem>
-                            <ContextMenuSeparator />
-                          </>
-                        )}
-                        <ContextMenuItem
-                          onClick={() => openRename(branch.name)}
-                        >
-                          Rename…
-                        </ContextMenuItem>
-                        <ContextMenuItem
-                          onClick={() =>
-                            copyText(branch.name, "Branch name copied")
-                          }
-                        >
-                          Copy branch name
-                        </ContextMenuItem>
-                        <ContextMenuSeparator />
-                        <ContextMenuItem
-                          disabled={deletionBlocked}
-                          onClick={() => {
-                            setOpen(false);
-                            setDeleteTarget(branch.name);
-                          }}
-                        >
-                          {deletionBlocked ? "Delete… (protected)" : "Delete…"}
-                        </ContextMenuItem>
-                      </ContextMenuContent>
-                    </ContextMenu>
-                  );
-                })}
+                      Archived ({archivedBranches.length})
+                    </button>
+                    {showArchived && archivedBranches.map(renderBranchRow)}
+                  </>
+                )}
               </div>
               <div className="border-t py-1">
                 <MenuRow onClick={openCreate}>New branch…</MenuRow>

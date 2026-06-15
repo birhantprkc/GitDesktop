@@ -62,6 +62,8 @@ pub struct Branch {
     pub upstream: Option<String>,
     /// ISO-8601 committer date of the branch tip (for recency sorting).
     pub last_commit_date: String,
+    /// Hidden from the branch dropdown (a personal, local-config flag).
+    pub archived: bool,
 }
 
 /// How far a local branch sits from a base branch (the default branch), for
