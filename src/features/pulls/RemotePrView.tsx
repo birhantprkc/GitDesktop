@@ -44,8 +44,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffContent } from "@/features/diff/DiffSurface";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
-import { useBranchRules } from "@/lib/branch-rules/queries";
-import { EMPTY_BRANCH_RULES } from "@/lib/branch-rules/types";
+import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import {
@@ -154,8 +153,7 @@ export function RemotePrView({
   const repoLabels = useRepoLabels(repoPath, true);
   const [section, setSection] = useState<Section>("conversation");
   const aiEnabled = useAiEnabled();
-  const branchRules = useBranchRules(repoPath);
-  const rulesConfig = branchRules.data ?? EMPTY_BRANCH_RULES;
+  const rulesConfig = useEffectiveBranchRules(repoPath);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [composeBody, setComposeBody] = useState("");
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(

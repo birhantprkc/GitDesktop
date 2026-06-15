@@ -595,6 +595,14 @@ export const readRepoInstructions = (repoPath: string) =>
 export const readRepoAiIgnore = (repoPath: string) =>
   invoke<string[]>("read_repo_ai_ignore", { repoPath });
 
+/** Raw contents of `<repo>/.gitdesktop/branch-rules.json`, or null if absent. */
+export const readRepoBranchRules = (repoPath: string) =>
+  invoke<string | null>("read_repo_branch_rules", { repoPath });
+
+/** Writes `<repo>/.gitdesktop/branch-rules.json` (caller passes serialized JSON). */
+export const writeRepoBranchRules = (repoPath: string, contents: string) =>
+  invoke<void>("write_repo_branch_rules", { repoPath, contents });
+
 export const setSecret = (provider: string, value: string) =>
   invoke<void>("set_secret", { provider, value });
 

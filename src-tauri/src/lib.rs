@@ -131,6 +131,8 @@ pub fn run() {
             secrets::secret_exists,
             instructions::read_repo_instructions,
             instructions::read_repo_ai_ignore,
+            instructions::read_repo_branch_rules,
+            instructions::write_repo_branch_rules,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

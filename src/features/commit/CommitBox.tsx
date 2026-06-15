@@ -6,8 +6,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { triggerAutomations } from "@/lib/automations/runner";
 import { requiresPullRequest } from "@/lib/branch-rules/match";
-import { useBranchRules } from "@/lib/branch-rules/queries";
-import { EMPTY_BRANCH_RULES } from "@/lib/branch-rules/types";
+import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { coAuthorTrailers } from "@/lib/git/co-authors";
 import { useCommit, useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
@@ -31,13 +30,13 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   const clearCommitDraft = useUiStore((s) => s.clearCommitDraft);
   const { generate, cancel, generating } = useGenerateCommitMessage(repoPath);
   const aiEnabled = useAiEnabled();
-  const branchRules = useBranchRules(repoPath);
+  const rulesConfig = useEffectiveBranchRules(repoPath);
 
   const amending = amendingHash !== null;
   const branchName = status.data?.branch?.name ?? null;
   // A "require pull request" rule locks the branch against direct commits.
   const locked = branchName
-    ? requiresPullRequest(branchRules.data ?? EMPTY_BRANCH_RULES, branchName)
+    ? requiresPullRequest(rulesConfig, branchName)
     : false;
   const stagedCount =
     status.data?.entries.filter((e) => e.staged !== null).length ?? 0;

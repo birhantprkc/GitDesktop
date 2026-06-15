@@ -5,6 +5,22 @@ import {
   type MergeMethod,
 } from "./types";
 
+/**
+ * Combines the repo's shared rules with the user's personal rules into the
+ * single config that's actually enforced. Protections are the union of both;
+ * the shared team naming policy wins when present, else the personal one
+ * applies.
+ */
+export function mergeBranchRules(
+  shared: BranchRulesConfig,
+  personal: BranchRulesConfig,
+): BranchRulesConfig {
+  return {
+    naming: shared.naming.enabled ? shared.naming : personal.naming,
+    protections: [...shared.protections, ...personal.protections],
+  };
+}
+
 function escapeLiteral(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -15,7 +15,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { matchesGlob } from "@/lib/branch-rules/match";
-import { useBranchRules, useSaveBranchRules } from "@/lib/branch-rules/queries";
+import {
+  useBranchRules,
+  useSaveBranchRules,
+  useSaveSharedBranchRules,
+  useSharedBranchRules,
+} from "@/lib/branch-rules/queries";
 import {
   ALL_MERGE_METHODS,
   type BranchRulesConfig,
@@ -34,26 +39,35 @@ export function BranchRulesDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const rules = useBranchRules(repoPath);
-  const save = useSaveBranchRules(repoPath);
+  // Which set of rules we're editing: the user's personal (app-data) rules or
+  // the repo's shared, committed `.gitdesktop/branch-rules.json`. Both are
+  // always enforced (merged) — this only chooses what this dialog edits.
+  const [scope, setScope] = useState<"personal" | "shared">("personal");
+  const personal = useBranchRules(repoPath);
+  const shared = useSharedBranchRules(repoPath);
+  const savePersonal = useSaveBranchRules(repoPath);
+  const saveShared = useSaveSharedBranchRules(repoPath);
   const [draft, setDraft] = useState<BranchRulesConfig>(EMPTY_BRANCH_RULES);
   const [testName, setTestName] = useState("");
 
-  // Seed the editable draft once each time the dialog opens (after data loads),
-  // so reopening always starts from the saved rules.
-  const seeded = useRef(false);
+  const active = scope === "shared" ? shared : personal;
+  const saving = scope === "shared" ? saveShared : savePersonal;
+
+  // Seed the editable draft from the active scope when the dialog opens or the
+  // scope changes (switching scopes discards any unsaved edits in the other).
+  const seededScope = useRef<string | null>(null);
   useEffect(() => {
     if (!open) {
-      seeded.current = false;
+      seededScope.current = null;
       return;
     }
-    if (!seeded.current && rules.data) {
-      seeded.current = true;
-      setDraft(rules.data);
+    if (seededScope.current !== scope && active.data) {
+      seededScope.current = scope;
+      setDraft(active.data);
     }
-  }, [open, rules.data]);
+  }, [open, scope, active.data]);
 
-  const dirty = JSON.stringify(draft) !== JSON.stringify(rules.data ?? null);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(active.data ?? null);
 
   function setNaming(patch: Partial<BranchRulesConfig["naming"]>) {
     setDraft((d) => ({ ...d, naming: { ...d.naming, ...patch } }));
@@ -114,9 +128,13 @@ export function BranchRulesDialog({
   }
 
   function doSave() {
-    save.mutate(draft, {
+    saving.mutate(draft, {
       onSuccess: () => {
-        toast.success("Branch rules saved");
+        toast.success(
+          scope === "shared"
+            ? "Saved to .gitdesktop/branch-rules.json — commit it to share with your team"
+            : "Branch rules saved",
+        );
         onOpenChange(false);
       },
       onError: toastError,
@@ -141,7 +159,38 @@ export function BranchRulesDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {rules.isPending ? (
+        <div className="space-y-1.5">
+          <div className="flex gap-1">
+            <Button
+              variant={scope === "personal" ? "secondary" : "ghost"}
+              size="xs"
+              onClick={() => setScope("personal")}
+            >
+              Personal
+            </Button>
+            <Button
+              variant={scope === "shared" ? "secondary" : "ghost"}
+              size="xs"
+              onClick={() => setScope("shared")}
+            >
+              Shared with repository
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {scope === "shared" ? (
+              <>
+                Saved to{" "}
+                <span className="font-mono">.gitdesktop/branch-rules.json</span>{" "}
+                and committed — everyone with the repo gets them. Combines with
+                each person's personal rules.
+              </>
+            ) : (
+              "Stored on this machine only. Your personal rules combine with the repo's shared rules."
+            )}
+          </p>
+        </div>
+
+        {active.isPending ? (
           <Skeleton className="h-24 w-full" />
         ) : (
           <div className="space-y-6">
@@ -274,15 +323,10 @@ export function BranchRulesDialog({
                           Require pull request
                         </label>
                       </div>
-                      <div
-                        className={
-                          p.requirePr
-                            ? "pointer-events-none opacity-50"
-                            : undefined
-                        }
-                      >
+                      <div>
                         <span className="text-[11px] text-muted-foreground">
                           Allowed merges into this branch
+                          {p.requirePr ? " (via pull request)" : ""}
                         </span>
                         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1.5">
                           {ALL_MERGE_METHODS.map((m) => (
@@ -313,8 +357,8 @@ export function BranchRulesDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={doSave} disabled={!dirty || save.isPending}>
-            Save changes
+          <Button onClick={doSave} disabled={!dirty || saving.isPending}>
+            {scope === "shared" ? "Save to repository" : "Save changes"}
           </Button>
         </DialogFooter>
       </DialogContent>

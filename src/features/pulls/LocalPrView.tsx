@@ -36,8 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
-import { useBranchRules } from "@/lib/branch-rules/queries";
-import { EMPTY_BRANCH_RULES } from "@/lib/branch-rules/types";
+import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import { gitBranchDiff, type MergeStrategy } from "@/lib/git/api";
@@ -77,8 +76,7 @@ export function LocalPrView({
   const selectPr = useUiStore((s) => s.selectPr);
   const [section, setSection] = useState<Section>("conversation");
   const aiEnabled = useAiEnabled();
-  const branchRules = useBranchRules(repoPath);
-  const rulesConfig = branchRules.data ?? EMPTY_BRANCH_RULES;
+  const rulesConfig = useEffectiveBranchRules(repoPath);
   const [comment, setComment] = useState("");
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,

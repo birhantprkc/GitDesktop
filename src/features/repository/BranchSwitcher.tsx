@@ -41,8 +41,7 @@ import {
   isMergeMethodAllowed,
   requiresPullRequest,
 } from "@/lib/branch-rules/match";
-import { useBranchRules } from "@/lib/branch-rules/queries";
-import { EMPTY_BRANCH_RULES } from "@/lib/branch-rules/types";
+import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import {
@@ -119,7 +118,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const mergeBranch = useMergeBranch(repoPath);
   const rebaseBranch = useRebaseBranch(repoPath);
   const updateBranchFrom = useUpdateBranchFrom(repoPath);
-  const branchRules = useBranchRules(repoPath);
+  const rulesConfig = useEffectiveBranchRules(repoPath);
   const amendingHash = useUiStore((s) => s.amendingHash);
 
   const [open, setOpen] = useState(false);
@@ -142,7 +141,6 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const allBranches = branches.data ?? [];
   const otherBranches = allBranches.filter((b) => !b.isCurrent);
   const defaultName = defaultBranch.data ?? null;
-  const rulesConfig = branchRules.data ?? EMPTY_BRANCH_RULES;
   // Merge-into-current is gated by the current branch's protection: a
   // "require pull request" rule blocks all direct merges, and a merge-method
   // restriction blocks the disallowed methods.
