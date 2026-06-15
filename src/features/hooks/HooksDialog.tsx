@@ -1,4 +1,4 @@
-import { WarningIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, WarningIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { CodeEditor } from "@/components/code-editor";
@@ -10,6 +10,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -21,6 +27,7 @@ import {
 } from "@/lib/git/queries";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { HOOK_TEMPLATES } from "./templates";
 
 const DEFAULT_HOOK = "#!/bin/sh\n\n";
 
@@ -45,6 +52,7 @@ export function HooksDialog({
 
   const entries = hooks.data?.entries ?? [];
   const entry = entries.find((e) => e.name === selected) ?? null;
+  const templates = HOOK_TEMPLATES.filter((t) => t.hook === selected);
 
   // Seed the editor when a hook is selected and its content resolves (falling
   // back to git's sample, then a bare shebang for a brand-new hook).
@@ -167,9 +175,37 @@ export function HooksDialog({
                 </div>
               ) : (
                 <>
-                  <p className="mb-2 text-xs text-muted-foreground">
-                    {entry.description}
-                  </p>
+                  <div className="mb-2 flex items-center gap-2">
+                    <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                      {entry.description}
+                    </p>
+                    {templates.length > 0 && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button variant="outline" size="xs">
+                              Templates
+                              <CaretDownIcon data-icon="inline-end" />
+                            </Button>
+                          }
+                        />
+                        <DropdownMenuContent align="end" className="w-80">
+                          {templates.map((t) => (
+                            <DropdownMenuItem
+                              key={t.id}
+                              onClick={() => setDraft(t.body)}
+                              className="flex flex-col items-start gap-0.5 whitespace-normal py-2"
+                            >
+                              <span className="font-medium">{t.name}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {t.description}
+                              </span>
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </div>
                   <div className="relative min-h-0 flex-1">
                     <div className="absolute inset-0">
                       <CodeEditor value={draft} onChange={setDraft} />
