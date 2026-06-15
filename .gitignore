@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 /.impeccable/critique/
 /github-desktop.md
+/.claude/skills/logo-creator/
+/design/

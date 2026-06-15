@@ -1,7 +1,9 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <!--
-    GitDesktop favicon — full-bleed app window + git branch. Matches the app
-    icon. Source: design/logos/gitdesktop/final/gitdesktop-icon.svg.
+    GitDesktop app icon — full-bleed "app window" + git branch.
+    Mint #4FE0C4 body + ink #0B2E35 title bar/branch. The window fills the
+    whole icon (no padding) so the branch curve survives small sizes.
+    Source of truth: design/logos/gitdesktop/final/gitdesktop-icon.svg.
   -->
   <rect width="1024" height="1024" rx="212" fill="#4FE0C4"/>
   <path d="M 0 240 V 212 A 212 212 0 0 1 212 0 H 812 A 212 212 0 0 1 1024 212 V 240 Z" fill="#0B2E35"/>
