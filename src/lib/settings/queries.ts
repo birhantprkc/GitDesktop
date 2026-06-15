@@ -23,6 +23,13 @@ export function useSettings() {
   });
 }
 
+/** Whether AI features are shown. False once the user hides them in Settings;
+ *  defaults to true while settings load (AI shown unless explicitly hidden). */
+export function useAiEnabled(): boolean {
+  const settings = useSettings();
+  return !settings.data?.hideAi;
+}
+
 export function useSaveSettings() {
   const queryClient = useQueryClient();
   return useMutation({

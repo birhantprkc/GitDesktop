@@ -8,6 +8,7 @@ import { triggerAutomations } from "@/lib/automations/runner";
 import { coAuthorTrailers } from "@/lib/git/co-authors";
 import { useCommit, useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -26,6 +27,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   const setCoAuthors = useUiStore((s) => s.setCommitCoAuthors);
   const clearCommitDraft = useUiStore((s) => s.clearCommitDraft);
   const { generate, cancel, generating } = useGenerateCommitMessage(repoPath);
+  const aiEnabled = useAiEnabled();
 
   const amending = amendingHash !== null;
   const branchName = status.data?.branch?.name ?? null;
@@ -44,7 +46,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   useHotkeyAction(
     "generate-commit-message",
     generate,
-    stagedCount > 0 && !generating,
+    aiEnabled && stagedCount > 0 && !generating,
   );
 
   function doCommit() {
@@ -133,27 +135,28 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
         disabled={generating}
       />
       <div className="flex gap-2">
-        {generating ? (
-          <Button variant="outline" size="sm" onClick={cancel}>
-            <XIcon data-icon="inline-start" />
-            Cancel
-          </Button>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={stagedCount === 0}
-            onClick={generate}
-            title={
-              stagedCount === 0
-                ? "Stage changes to generate a commit message"
-                : "Generate commit message with AI"
-            }
-          >
-            <SparkleIcon data-icon="inline-start" />
-            Generate
-          </Button>
-        )}
+        {aiEnabled &&
+          (generating ? (
+            <Button variant="outline" size="sm" onClick={cancel}>
+              <XIcon data-icon="inline-start" />
+              Cancel
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={stagedCount === 0}
+              onClick={generate}
+              title={
+                stagedCount === 0
+                  ? "Stage changes to generate a commit message"
+                  : "Generate commit message with AI"
+              }
+            >
+              <SparkleIcon data-icon="inline-start" />
+              Generate
+            </Button>
+          ))}
         <Button
           size="sm"
           className="min-w-0 flex-1"

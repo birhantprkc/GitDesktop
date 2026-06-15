@@ -72,6 +72,7 @@ import {
   useUnminimizeComment,
 } from "@/lib/git/queries";
 import type { PrThreadOut, RepoLabel } from "@/lib/git/types";
+import { useAiEnabled } from "@/lib/settings/queries";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -149,6 +150,7 @@ export function RemotePrView({
   const editLabels = useEditPrLabels(repoPath);
   const repoLabels = useRepoLabels(repoPath, true);
   const [section, setSection] = useState<Section>("conversation");
+  const aiEnabled = useAiEnabled();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [composeBody, setComposeBody] = useState("");
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
@@ -536,29 +538,31 @@ export function RemotePrView({
           </div>
         )}
         <div className="flex gap-1 pt-1">
-          {(["conversation", "commits", "files", "review"] as const).map(
-            (s) => (
-              <Button
-                key={s}
-                variant={section === s ? "secondary" : "ghost"}
-                size="xs"
-                aria-pressed={section === s}
-                onClick={() => setSection(s)}
-              >
-                {s === "conversation"
-                  ? "Conversation"
-                  : s === "commits"
-                    ? `Commits (${pr.commits.length})`
-                    : s === "files"
-                      ? `Files (${pr.files.length})`
-                      : "Review"}
-              </Button>
-            ),
-          )}
+          {(
+            (aiEnabled
+              ? ["conversation", "commits", "files", "review"]
+              : ["conversation", "commits", "files"]) as Section[]
+          ).map((s) => (
+            <Button
+              key={s}
+              variant={section === s ? "secondary" : "ghost"}
+              size="xs"
+              aria-pressed={section === s}
+              onClick={() => setSection(s)}
+            >
+              {s === "conversation"
+                ? "Conversation"
+                : s === "commits"
+                  ? `Commits (${pr.commits.length})`
+                  : s === "files"
+                    ? `Files (${pr.files.length})`
+                    : "Review"}
+            </Button>
+          ))}
         </div>
       </header>
 
-      {section === "review" && (
+      {aiEnabled && section === "review" && (
         <PrReviewPanel
           context={{
             title: pr.title,

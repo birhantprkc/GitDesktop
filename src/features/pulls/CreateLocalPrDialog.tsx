@@ -20,6 +20,7 @@ import {
   useRepoStatus,
 } from "@/lib/git/queries";
 import { useCreateLocalPr } from "@/lib/pulls/queries";
+import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
@@ -42,6 +43,7 @@ export function CreateLocalPrDialog({
   const defaultBranch = useDefaultBranch(repoPath);
   const createPr = useCreateLocalPr(repoPath);
   const { generate, cancel, generating } = useGeneratePrDescription(repoPath);
+  const aiEnabled = useAiEnabled();
   const selectPr = useUiStore((s) => s.selectPr);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
 
@@ -175,7 +177,7 @@ export function CreateLocalPrDialog({
                 rows={7}
                 textareaClassName="max-h-72 min-h-24 resize-y font-mono"
                 actions={
-                  generating ? (
+                  !aiEnabled ? undefined : generating ? (
                     <Button
                       type="button"
                       variant="outline"

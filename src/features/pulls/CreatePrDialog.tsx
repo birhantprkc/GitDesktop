@@ -21,6 +21,7 @@ import {
   useDefaultBranch,
   useRepoStatus,
 } from "@/lib/git/queries";
+import { useAiEnabled } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 
@@ -44,6 +45,7 @@ export function CreatePrDialog({
   const defaultBranch = useDefaultBranch(repoPath);
   const createPr = useCreatePr(repoPath);
   const { generate, cancel, generating } = useGeneratePrDescription(repoPath);
+  const aiEnabled = useAiEnabled();
 
   const currentName = status.data?.branch?.name ?? null;
   const names = (branches.data ?? []).map((b) => b.name);
@@ -181,7 +183,7 @@ export function CreatePrDialog({
                 rows={7}
                 textareaClassName="max-h-72 min-h-24 resize-y font-mono"
                 actions={
-                  generating ? (
+                  !aiEnabled ? undefined : generating ? (
                     <Button
                       type="button"
                       variant="outline"

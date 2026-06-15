@@ -29,6 +29,9 @@ export interface AppSettings {
   ai: AiSettings;
   /** Provider/model for AI PR review (independent of the commit model). */
   reviewAi: AiSettings;
+  /** Hide every AI surface (commit/PR helpers, review panel, AI settings).
+   *  Provider config and API keys are kept, just not shown. */
+  hideAi: boolean;
   /** OS notifications (sent only while the window is unfocused). */
   notifications: NotificationSettings;
   globalInstructions: string;
@@ -68,6 +71,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     model: "claude-sonnet-4-6",
     ollamaBaseUrl: "http://localhost:11434",
   },
+  hideAi: false,
   notifications: {
     automations: true,
     prChecks: "all",

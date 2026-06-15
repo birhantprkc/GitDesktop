@@ -1,4 +1,5 @@
 import { withForm } from "@/lib/form";
+import { useAiEnabled } from "@/lib/settings/queries";
 import { settingsFormOpts } from "./settings-form";
 
 const CHECK_OPTIONS: Record<string, string> = {
@@ -10,6 +11,7 @@ const CHECK_OPTIONS: Record<string, string> = {
 export const NotificationsSection = withForm({
   ...settingsFormOpts,
   render: function NotificationsSectionRender({ form }) {
+    const aiEnabled = useAiEnabled();
     return (
       <section className="space-y-4">
         <div>
@@ -44,14 +46,16 @@ export const NotificationsSection = withForm({
             />
           )}
         </form.AppField>
-        <form.AppField name="notifications.automations">
-          {(field) => (
-            <field.CheckboxField
-              label="Automation results (AI reviews posted or failed)"
-              className="flex cursor-pointer items-center gap-2 text-xs"
-            />
-          )}
-        </form.AppField>
+        {aiEnabled && (
+          <form.AppField name="notifications.automations">
+            {(field) => (
+              <field.CheckboxField
+                label="Automation results (AI reviews posted or failed)"
+                className="flex cursor-pointer items-center gap-2 text-xs"
+              />
+            )}
+          </form.AppField>
+        )}
       </section>
     );
   },

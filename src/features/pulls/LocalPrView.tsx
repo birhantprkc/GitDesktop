@@ -50,6 +50,7 @@ import {
   useLocalPrs,
   useSaveLocalPr,
 } from "@/lib/pulls/queries";
+import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
@@ -72,6 +73,7 @@ export function LocalPrView({
   const merge = useMergeLocalPr(repoPath);
   const selectPr = useUiStore((s) => s.selectPr);
   const [section, setSection] = useState<Section>("conversation");
+  const aiEnabled = useAiEnabled();
   const [comment, setComment] = useState("");
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,
@@ -338,29 +340,31 @@ export function LocalPrView({
           </div>
         )}
         <div className="flex gap-1 pt-1">
-          {(["conversation", "commits", "files", "review"] as const).map(
-            (s) => (
-              <Button
-                key={s}
-                variant={section === s ? "secondary" : "ghost"}
-                size="xs"
-                aria-pressed={section === s}
-                onClick={() => setSection(s)}
-              >
-                {s === "conversation"
-                  ? "Conversation"
-                  : s === "commits"
-                    ? `Commits (${ahead.length})`
-                    : s === "files"
-                      ? `Files${fileCount === undefined ? "" : ` (${fileCount})`}`
-                      : "Review"}
-              </Button>
-            ),
-          )}
+          {(
+            (aiEnabled
+              ? ["conversation", "commits", "files", "review"]
+              : ["conversation", "commits", "files"]) as Section[]
+          ).map((s) => (
+            <Button
+              key={s}
+              variant={section === s ? "secondary" : "ghost"}
+              size="xs"
+              aria-pressed={section === s}
+              onClick={() => setSection(s)}
+            >
+              {s === "conversation"
+                ? "Conversation"
+                : s === "commits"
+                  ? `Commits (${ahead.length})`
+                  : s === "files"
+                    ? `Files${fileCount === undefined ? "" : ` (${fileCount})`}`
+                    : "Review"}
+            </Button>
+          ))}
         </div>
       </header>
 
-      {section === "review" && (
+      {aiEnabled && section === "review" && (
         <PrReviewPanel
           context={{
             title: pr.title,

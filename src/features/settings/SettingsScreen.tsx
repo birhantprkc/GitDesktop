@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { AccountsSection } from "./AccountsSection";
 import { AiProviderSection } from "./AiProviderSection";
 import { EditorSection } from "./EditorSection";
+import { GeneralSection } from "./GeneralSection";
 import { GitIdentitySection, GitSection } from "./GitSection";
 import { InstructionsSection } from "./InstructionsSection";
 import { KeyboardSection } from "./KeyboardSection";
@@ -30,6 +31,7 @@ import { settingsFormOpts, toDraft } from "./settings-form";
 import { TerminalSection } from "./TerminalSection";
 
 const PANELS = [
+  { id: "general", label: "General" },
   { id: "ai", label: "AI" },
   { id: "automations", label: "Automations" },
   { id: "notifications", label: "Notifications" },
@@ -42,13 +44,25 @@ const PANELS = [
 
 type PanelId = (typeof PANELS)[number]["id"];
 
+/** Panels that only make sense when AI features are enabled. */
+const AI_PANELS = new Set<PanelId>(["ai", "automations"]);
+
 export function SettingsScreen() {
   const closeSettings = useUiStore((s) => s.closeSettings);
   const settings = useSettings();
   const saveSettings = useSaveSettings();
-  const [panel, setPanel] = useState<PanelId>("ai");
+  const [panel, setPanel] = useState<PanelId>("general");
   const [confirmClose, setConfirmClose] = useState(false);
   const closeAfterSave = useRef(false);
+
+  // Gating reflects SAVED settings (not the in-progress draft), so panels don't
+  // vanish mid-edit while the user is still toggling "Hide AI features".
+  const aiEnabled = !settings.data?.hideAi;
+  const visiblePanels = PANELS.filter((p) => aiEnabled || !AI_PANELS.has(p.id));
+  // Keep a sensible active panel if the current one got hidden.
+  const activePanel = visiblePanels.some((p) => p.id === panel)
+    ? panel
+    : "general";
 
   const form = useAppForm({
     ...settingsFormOpts,
@@ -149,14 +163,14 @@ export function SettingsScreen() {
             aria-label="Settings sections"
             className="w-44 shrink-0 space-y-0.5 border-r p-2"
           >
-            {PANELS.map((p) => (
+            {visiblePanels.map((p) => (
               <button
                 key={p.id}
                 type="button"
-                aria-current={panel === p.id ? "page" : undefined}
+                aria-current={activePanel === p.id ? "page" : undefined}
                 className={cn(
                   "block w-full px-2 py-1.5 text-left text-xs",
-                  panel === p.id
+                  activePanel === p.id
                     ? "bg-accent font-medium text-accent-foreground"
                     : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                 )}
@@ -168,26 +182,27 @@ export function SettingsScreen() {
           </nav>
           <ScrollArea className="min-h-0 flex-1">
             <main className="mx-auto w-full max-w-2xl space-y-8 p-6">
-              {panel === "ai" && (
+              {activePanel === "general" && <GeneralSection form={form} />}
+              {activePanel === "ai" && (
                 <>
                   <AiProviderSection form={form} />
                   <InstructionsSection form={form} />
                 </>
               )}
-              {panel === "automations" && <AutomationsSection />}
-              {panel === "notifications" && (
+              {activePanel === "automations" && <AutomationsSection />}
+              {activePanel === "notifications" && (
                 <NotificationsSection form={form} />
               )}
-              {panel === "keyboard" && <KeyboardSection form={form} />}
-              {panel === "accounts" && <AccountsSection />}
-              {panel === "git" && (
+              {activePanel === "keyboard" && <KeyboardSection form={form} />}
+              {activePanel === "accounts" && <AccountsSection />}
+              {activePanel === "git" && (
                 <>
                   <GitSection form={form} />
                   <GitIdentitySection />
                 </>
               )}
-              {panel === "editor" && <EditorSection form={form} />}
-              {panel === "terminal" && <TerminalSection form={form} />}
+              {activePanel === "editor" && <EditorSection form={form} />}
+              {activePanel === "terminal" && <TerminalSection form={form} />}
             </main>
           </ScrollArea>
         </div>
