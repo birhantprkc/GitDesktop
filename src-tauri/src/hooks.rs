@@ -47,14 +47,22 @@ const KNOWN_HOOKS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Whether a hook is installed and runs, kept-but-disabled, or absent.
+/// Serializes to the lowercase strings the frontend's union type mirrors.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookState {
+    Active,
+    Disabled,
+    Inactive,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookEntry {
     pub name: String,
     pub description: String,
-    /// "active" (installed + runs), "disabled" (kept but renamed off), or
-    /// "inactive" (not installed).
-    pub state: String,
+    pub state: HookState,
     /// Whether git's stock `<name>.sample` is present (a starting point).
     pub has_sample: bool,
 }
@@ -146,16 +154,16 @@ pub async fn git_hooks_list(repo_path: String) -> AppResult<HooksInfo> {
             let disabled = hooks_dir.join(format!("{name}.disabled")).is_file();
             let has_sample = hooks_dir.join(format!("{name}.sample")).is_file();
             let state = if active {
-                "active"
+                HookState::Active
             } else if disabled {
-                "disabled"
+                HookState::Disabled
             } else {
-                "inactive"
+                HookState::Inactive
             };
             HookEntry {
                 name: (*name).to_string(),
                 description: (*desc).to_string(),
-                state: state.to_string(),
+                state,
                 has_sample,
             }
         })
@@ -265,4 +273,37 @@ pub async fn git_hook_delete(repo_path: String, name: String) -> AppResult<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_known_client_hooks() {
+        for (name, _) in KNOWN_HOOKS {
+            assert!(validate_hook_name(name).is_ok(), "{name} should be allowed");
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_and_unsafe_names() {
+        // Empty, traversal, separators, suffix smuggling, server-side hooks,
+        // and case variants must all be refused (they're not in KNOWN_HOOKS).
+        for name in [
+            "",
+            "..",
+            "../config",
+            "pre-commit/x",
+            "pre-commit.sample",
+            "pre-commit.disabled",
+            "post-update",
+            "Pre-Commit",
+        ] {
+            assert!(
+                validate_hook_name(name).is_err(),
+                "{name} should be rejected"
+            );
+        }
+    }
 }

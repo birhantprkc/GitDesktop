@@ -63,7 +63,10 @@ export function HooksDialog({
 
   const original = content.data ?? DEFAULT_HOOK;
   const dirty = draft !== original;
-  const canSave = entry !== null && (dirty || entry.state === "inactive");
+  const isBlank = draft.trim() === "";
+  const noShebang = !isBlank && !draft.startsWith("#!");
+  const canSave =
+    entry !== null && !isBlank && (dirty || entry.state === "inactive");
 
   function save() {
     if (!entry) return;
@@ -167,9 +170,18 @@ export function HooksDialog({
                   <p className="mb-2 text-xs text-muted-foreground">
                     {entry.description}
                   </p>
-                  <div className="min-h-0 flex-1">
-                    <CodeEditor value={draft} onChange={setDraft} />
+                  <div className="relative min-h-0 flex-1">
+                    <div className="absolute inset-0">
+                      <CodeEditor value={draft} onChange={setDraft} />
+                    </div>
                   </div>
+                  {noShebang && (
+                    <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
+                      No shebang line (e.g.{" "}
+                      <span className="font-mono">#!/bin/sh</span>) — git may
+                      not run this hook.
+                    </p>
+                  )}
                   <div className="mt-2 flex items-center gap-2">
                     <Button
                       size="sm"
