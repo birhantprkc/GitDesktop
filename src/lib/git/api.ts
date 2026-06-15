@@ -596,6 +596,13 @@ export const gitHookSetEnabled = (
 export const gitHookDelete = (repoPath: string, name: string) =>
   invoke<void>("git_hook_delete", { repoPath, name });
 
+/** Runs a hook manager's CLI (pre-commit/lefthook); returns its output. */
+export const gitRunHookManager = (
+  repoPath: string,
+  manager: string,
+  action: "install" | "update",
+) => invoke<string>("git_run_hook_manager", { repoPath, manager, action });
+
 export const ghPrEditLabels = (
   repoPath: string,
   labelableId: string,

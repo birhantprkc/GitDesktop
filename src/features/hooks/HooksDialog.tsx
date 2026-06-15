@@ -1,4 +1,4 @@
-import { CaretDownIcon, WarningIcon } from "@phosphor-icons/react";
+import { CaretDownIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { CodeEditor } from "@/components/code-editor";
@@ -18,10 +18,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { openWithDefault } from "@/lib/git/api";
 import {
   useDeleteHook,
   useHookContent,
   useHooks,
+  useRunHookManager,
   useSetHookEnabled,
   useWriteHook,
 } from "@/lib/git/queries";
@@ -44,15 +46,23 @@ export function HooksDialog({
   const writeHook = useWriteHook(repoPath);
   const setEnabled = useSetHookEnabled(repoPath);
   const deleteHook = useDeleteHook(repoPath);
+  const runHookManager = useRunHookManager(repoPath);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [managerOutput, setManagerOutput] = useState<string | null>(null);
   const content = useHookContent(repoPath, selected);
 
   const entries = hooks.data?.entries ?? [];
   const entry = entries.find((e) => e.name === selected) ?? null;
   const templates = HOOK_TEMPLATES.filter((t) => t.hook === selected);
+  const manager = hooks.data?.manager ?? null;
+  const managerConfig = hooks.data?.managerConfig ?? null;
+  // pre-commit/lefthook define hooks in a config file; husky edits real files.
+  const configManager = manager === "pre-commit" || manager === "lefthook";
+  const configName =
+    managerConfig?.split(/[\\/]/).filter(Boolean).pop() ?? managerConfig;
 
   // Seed the editor when a hook is selected and its content resolves (falling
   // back to git's sample, then a bare shebang for a brand-new hook).
@@ -110,6 +120,24 @@ export function HooksDialog({
     });
   }
 
+  function runManager(action: "install" | "update") {
+    const manager = hooks.data?.manager;
+    if (!manager) return;
+    setManagerOutput(null);
+    runHookManager.mutate(
+      { manager, action },
+      {
+        onSuccess: (out) => {
+          setManagerOutput(out || "Done.");
+          toast.success(
+            `${manager} ${action === "install" ? "installed" : "updated"}`,
+          );
+        },
+        onError: toastError,
+      },
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-4xl">
@@ -123,15 +151,68 @@ export function HooksDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {(hooks.data?.manager || hooks.data?.customHooksPath) && (
-          <div className="flex items-start gap-2 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-            <WarningIcon className="mt-0.5 size-3.5 shrink-0" />
-            <span>
-              {hooks.data?.manager
-                ? `This repository uses ${hooks.data.manager} to manage hooks — editing here may conflict with it.`
-                : `Hooks run from ${hooks.data?.hooksPath} (core.hooksPath).`}
-            </span>
+        {manager ? (
+          <div className="space-y-2 rounded-md border bg-muted/40 px-3 py-2 text-xs">
+            <p>
+              Hooks are managed by{" "}
+              <span className="font-medium">{manager}</span>
+              {configName && (
+                <>
+                  {" via "}
+                  <span className="font-mono">{configName}</span>
+                </>
+              )}
+              {manager === "husky"
+                ? " — these files live in .husky and are committed to the repo, so edits show in your working tree."
+                : " — hooks are defined there, not in the editor below."}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {managerConfig && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() =>
+                    openWithDefault(managerConfig).catch(toastError)
+                  }
+                >
+                  {manager === "husky" ? "Open .husky" : "Open config"}
+                </Button>
+              )}
+              {configManager && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={runHookManager.isPending}
+                  onClick={() => runManager("install")}
+                >
+                  Install hooks
+                </Button>
+              )}
+              {manager === "pre-commit" && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={runHookManager.isPending}
+                  onClick={() => runManager("update")}
+                >
+                  Update
+                </Button>
+              )}
+            </div>
+            {managerOutput && (
+              <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded bg-background p-2 font-mono text-[11px]">
+                {managerOutput}
+              </pre>
+            )}
           </div>
+        ) : (
+          hooks.data?.customHooksPath && (
+            <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              Hooks run from{" "}
+              <span className="font-mono">{hooks.data?.hooksPath}</span>{" "}
+              (core.hooksPath).
+            </p>
+          )
         )}
 
         {hooks.isPending ? (

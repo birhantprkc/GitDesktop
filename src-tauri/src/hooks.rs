@@ -75,8 +75,11 @@ pub struct HooksInfo {
     /// True when `core.hooksPath` redirects hooks away from `.git/hooks`.
     pub custom_hooks_path: bool,
     /// A detected hook manager that owns the hooks ("husky" | "pre-commit" |
-    /// "lefthook"), so the UI can warn before fighting it.
+    /// "lefthook"), so the UI can adapt.
     pub manager: Option<String>,
+    /// Path to the manager's config file/dir (e.g. `.pre-commit-config.yaml`,
+    /// `lefthook.yml`, the `.husky` dir), for an "Open config" affordance.
+    pub manager_config: Option<String>,
     pub entries: Vec<HookEntry>,
 }
 
@@ -123,22 +126,21 @@ async fn resolve_hooks_dir(repo_path: &str) -> AppResult<(PathBuf, bool)> {
     Ok((absolutize(repo_path, out.stdout_lossy().trim()), false))
 }
 
-/// Detects a hook manager that owns this repo's hooks, so we don't stomp on it.
-fn detect_manager(repo_path: &str, hooks_dir: &Path) -> Option<String> {
+/// Detects a hook manager that owns this repo's hooks (and its config path).
+fn detect_manager(repo_path: &str, hooks_dir: &Path) -> Option<(String, PathBuf)> {
     let root = Path::new(repo_path);
     if root.join(".husky").is_dir() || hooks_dir.to_string_lossy().contains(".husky") {
-        return Some("husky".to_string());
+        return Some(("husky".to_string(), root.join(".husky")));
     }
-    if root.join(".pre-commit-config.yaml").is_file()
-        || root.join(".pre-commit-config.yml").is_file()
-    {
-        return Some("pre-commit".to_string());
+    for f in [".pre-commit-config.yaml", ".pre-commit-config.yml"] {
+        if root.join(f).is_file() {
+            return Some(("pre-commit".to_string(), root.join(f)));
+        }
     }
-    if root.join("lefthook.yml").is_file()
-        || root.join(".lefthook.yml").is_file()
-        || root.join("lefthook.toml").is_file()
-    {
-        return Some("lefthook".to_string());
+    for f in ["lefthook.yml", ".lefthook.yml", "lefthook.toml"] {
+        if root.join(f).is_file() {
+            return Some(("lefthook".to_string(), root.join(f)));
+        }
     }
     None
 }
@@ -146,7 +148,11 @@ fn detect_manager(repo_path: &str, hooks_dir: &Path) -> Option<String> {
 #[tauri::command]
 pub async fn git_hooks_list(repo_path: String) -> AppResult<HooksInfo> {
     let (hooks_dir, custom) = resolve_hooks_dir(&repo_path).await?;
-    let manager = detect_manager(&repo_path, &hooks_dir);
+    let detected = detect_manager(&repo_path, &hooks_dir);
+    let manager = detected.as_ref().map(|(m, _)| m.clone());
+    let manager_config = detected
+        .as_ref()
+        .map(|(_, p)| p.to_string_lossy().into_owned());
     let entries = KNOWN_HOOKS
         .iter()
         .map(|(name, desc)| {
@@ -172,8 +178,63 @@ pub async fn git_hooks_list(repo_path: String) -> AppResult<HooksInfo> {
         hooks_path: hooks_dir.to_string_lossy().into_owned(),
         custom_hooks_path: custom,
         manager,
+        manager_config,
         entries,
     })
+}
+
+/// Runs a hook manager's CLI in the repo and returns its combined output.
+/// Inputs are allowlisted (pre-commit install/autoupdate, lefthook install),
+/// so no arbitrary command can be run.
+#[tauri::command]
+pub async fn git_run_hook_manager(
+    repo_path: String,
+    manager: String,
+    action: String,
+) -> AppResult<String> {
+    let args: &[&str] = match (manager.as_str(), action.as_str()) {
+        ("pre-commit", "install") => &["install"],
+        ("pre-commit", "update") => &["autoupdate"],
+        ("lefthook", "install") => &["install"],
+        _ => {
+            return Err(AppError::InvalidArgument(format!(
+                "unsupported hook manager action: {manager} {action}"
+            )));
+        }
+    };
+    let mut cmd = tokio::process::Command::new(&manager);
+    cmd.args(args)
+        .current_dir(&repo_path)
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let run = cmd.output();
+    let timeout = std::time::Duration::from_secs(300);
+    let output = tokio::time::timeout(timeout, run)
+        .await
+        .map_err(|_| AppError::Timeout(timeout.as_secs()))?
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AppError::Command(format!(
+                    "{manager} isn't installed or isn't on your PATH."
+                ))
+            } else {
+                AppError::Io(e)
+            }
+        })?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if output.status.success() {
+        Ok(combined.trim().to_string())
+    } else {
+        Err(AppError::Command(format!(
+            "{manager} {action} failed:\n{}",
+            combined.trim()
+        )))
+    }
 }
 
 /// The hook's script contents — the active file if installed, else the disabled

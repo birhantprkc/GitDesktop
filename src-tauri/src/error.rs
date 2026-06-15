@@ -17,6 +17,8 @@ pub enum AppError {
     Keyring(String),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    #[error("{0}")]
+    Command(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("git operation timed out after {0}s")]
@@ -42,6 +44,7 @@ impl Serialize for AppError {
             AppError::Gh(_) => "gh",
             AppError::Keyring(_) => "keyring",
             AppError::InvalidArgument(_) => "invalidArgument",
+            AppError::Command(_) => "command",
             AppError::Io(_) => "io",
             AppError::Timeout(_) => "timeout",
         };

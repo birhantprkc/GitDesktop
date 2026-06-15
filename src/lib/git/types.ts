@@ -263,6 +263,8 @@ export interface HooksInfo {
   customHooksPath: boolean;
   /** A detected hook manager ("husky" | "pre-commit" | "lefthook"). */
   manager: string | null;
+  /** Path to the manager's config file/dir, for an "Open config" affordance. */
+  managerConfig: string | null;
   entries: HookEntry[];
 }
 

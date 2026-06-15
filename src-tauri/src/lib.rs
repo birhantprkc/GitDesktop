@@ -141,6 +141,7 @@ pub fn run() {
             hooks::git_hook_write,
             hooks::git_hook_set_enabled,
             hooks::git_hook_delete,
+            hooks::git_run_hook_manager,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

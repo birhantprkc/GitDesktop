@@ -358,6 +358,14 @@ export function useDeleteHook(repo: string) {
   return useRepoMutation(repo, (name: string) => api.gitHookDelete(repo, name));
 }
 
+export function useRunHookManager(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { manager: string; action: "install" | "update" }) =>
+      api.gitRunHookManager(repo, args.manager, args.action),
+  );
+}
+
 /** Every repo the signed-in user can access (clone dialog). */
 export function useGhRepos(enabled: boolean) {
   return useQuery({
