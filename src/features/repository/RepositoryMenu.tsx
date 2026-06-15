@@ -1,6 +1,7 @@
 import {
   ArrowSquareOutIcon,
   ChartBarIcon,
+  CodeIcon,
   CopyIcon,
   DotsThreeVerticalIcon,
   FolderOpenIcon,
@@ -37,6 +38,7 @@ import { Radio, RadioGroup } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
 import { RepoAutomationsDialog } from "@/features/automations/RepoAutomationsDialog";
 import { BranchRulesDialog } from "@/features/branch-rules/BranchRulesDialog";
+import { HooksDialog } from "@/features/hooks/HooksDialog";
 import { copyText } from "@/lib/clipboard";
 import {
   ghRepoUrl,
@@ -61,6 +63,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const fork = useForkRepo(repoPath);
   const [automationsOpen, setAutomationsOpen] = useState(false);
   const [branchRulesOpen, setBranchRulesOpen] = useState(false);
+  const [hooksOpen, setHooksOpen] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
   const [forkIntent, setForkIntent] = useState<"contribute" | "own">(
     "contribute",
@@ -192,6 +195,10 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <ShieldCheckIcon />
           Branch rules…
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setHooksOpen(true)}>
+          <CodeIcon />
+          Git hooks…
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => setRemoteUrlOpen(true)}>
           <LinkIcon />
           Change remote URL…
@@ -223,6 +230,11 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={branchRulesOpen}
         onOpenChange={setBranchRulesOpen}
+      />
+      <HooksDialog
+        repoPath={repoPath}
+        open={hooksOpen}
+        onOpenChange={setHooksOpen}
       />
       <RemoteUrlDialog
         repoPath={repoPath}

@@ -15,6 +15,7 @@ import type {
   GhRepoList,
   GhStatus,
   GitInfo,
+  HooksInfo,
   PrDetails,
   PrInfo,
   PrPollInfo,
@@ -560,6 +561,24 @@ export const ghRepoLabels = (repoPath: string) =>
 /** GitHub's (classic) branch protection rules — read-only, for importing. */
 export const ghBranchProtections = (repoPath: string) =>
   invoke<GhBranchProtection[]>("gh_branch_protections", { repoPath });
+
+export const gitHooksList = (repoPath: string) =>
+  invoke<HooksInfo>("git_hooks_list", { repoPath });
+
+export const gitHookRead = (repoPath: string, name: string) =>
+  invoke<string | null>("git_hook_read", { repoPath, name });
+
+export const gitHookWrite = (repoPath: string, name: string, content: string) =>
+  invoke<void>("git_hook_write", { repoPath, name, content });
+
+export const gitHookSetEnabled = (
+  repoPath: string,
+  name: string,
+  enabled: boolean,
+) => invoke<void>("git_hook_set_enabled", { repoPath, name, enabled });
+
+export const gitHookDelete = (repoPath: string, name: string) =>
+  invoke<void>("git_hook_delete", { repoPath, name });
 
 export const ghPrEditLabels = (
   repoPath: string,
