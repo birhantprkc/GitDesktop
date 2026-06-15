@@ -170,22 +170,44 @@ pub struct MergePair {
     pub head: String,
 }
 
-/// For each (base, head) pair, whether `head` is fully contained in `base` —
-/// its tip is an ancestor of base, so there's nothing left to merge. Used to
-/// reconcile local PRs whose branch was merged outside the app. A missing or
-/// invalid ref (e.g. a deleted head) just reports false.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchMergeState {
+    /// `head` is fully contained in `base` — nothing left to merge.
+    pub merged: bool,
+    /// The `head` branch still exists locally.
+    pub head_exists: bool,
+}
+
+/// For each (base, head) pair, whether `head` is merged into `base` and whether
+/// the `head` branch still exists. Reconciles local PRs whose branch was merged
+/// (→ merged) or deleted (→ closed) outside the app.
 #[tauri::command]
-pub async fn git_branches_merged(
+pub async fn git_branch_merge_states(
     repo_path: String,
     pairs: Vec<MergePair>,
-) -> AppResult<Vec<bool>> {
+) -> AppResult<Vec<BranchMergeState>> {
     let mut result = Vec::with_capacity(pairs.len());
     for pair in pairs {
-        let valid = validate_ref_name(&pair.base).is_ok()
-            && validate_ref_name(&pair.head).is_ok();
-        let merged = if !valid {
-            false
+        let valid_head = validate_ref_name(&pair.head).is_ok();
+        let head_exists = if valid_head {
+            run_git_raw(
+                Some(&repo_path),
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{}", pair.head),
+                ],
+                DEFAULT_TIMEOUT,
+            )
+            .await?
+            .code
+                == 0
         } else {
+            false
+        };
+        let merged = if valid_head && validate_ref_name(&pair.base).is_ok() {
             run_git_raw(
                 Some(&repo_path),
                 &["merge-base", "--is-ancestor", &pair.head, &pair.base],
@@ -194,8 +216,13 @@ pub async fn git_branches_merged(
             .await?
             .code
                 == 0
+        } else {
+            false
         };
-        result.push(merged);
+        result.push(BranchMergeState {
+            merged,
+            head_exists,
+        });
     }
     Ok(result)
 }

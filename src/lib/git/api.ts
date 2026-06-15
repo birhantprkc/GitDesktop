@@ -358,9 +358,16 @@ export interface MergePair {
   head: string;
 }
 
-/** Per pair, whether `head` is fully merged into `base` (nothing left to merge). */
-export const gitBranchesMerged = (repoPath: string, pairs: MergePair[]) =>
-  invoke<boolean[]>("git_branches_merged", { repoPath, pairs });
+export interface BranchMergeState {
+  /** `head` is fully merged into `base` (nothing left to merge). */
+  merged: boolean;
+  /** The `head` branch still exists locally. */
+  headExists: boolean;
+}
+
+/** Per pair: whether `head` is merged into `base`, and whether `head` exists. */
+export const gitBranchMergeStates = (repoPath: string, pairs: MergePair[]) =>
+  invoke<BranchMergeState[]>("git_branch_merge_states", { repoPath, pairs });
 
 /** Resolves to "up-to-date" | "fast-forward" | "merge". */
 export const gitUpdateBranchFrom = (
