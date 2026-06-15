@@ -353,6 +353,15 @@ export const gitRebase = (repoPath: string, branch: string) =>
 export const gitBranchDivergence = (repoPath: string, base: string) =>
   invoke<BranchDivergence[]>("git_branch_divergence", { repoPath, base });
 
+export interface MergePair {
+  base: string;
+  head: string;
+}
+
+/** Per pair, whether `head` is fully merged into `base` (nothing left to merge). */
+export const gitBranchesMerged = (repoPath: string, pairs: MergePair[]) =>
+  invoke<boolean[]>("git_branches_merged", { repoPath, pairs });
+
 /** Resolves to "up-to-date" | "fast-forward" | "merge". */
 export const gitUpdateBranchFrom = (
   repoPath: string,
