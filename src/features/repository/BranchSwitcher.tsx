@@ -34,6 +34,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { branchNameError, isDeletionBlocked } from "@/lib/branch-rules/match";
+import { useBranchRules } from "@/lib/branch-rules/queries";
+import { EMPTY_BRANCH_RULES } from "@/lib/branch-rules/types";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import {
@@ -110,6 +113,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const mergeBranch = useMergeBranch(repoPath);
   const rebaseBranch = useRebaseBranch(repoPath);
   const updateBranchFrom = useUpdateBranchFrom(repoPath);
+  const branchRules = useBranchRules(repoPath);
   const amendingHash = useUiStore((s) => s.amendingHash);
 
   const [open, setOpen] = useState(false);
@@ -132,6 +136,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const allBranches = branches.data ?? [];
   const otherBranches = allBranches.filter((b) => !b.isCurrent);
   const defaultName = defaultBranch.data ?? null;
+  const rulesConfig = branchRules.data ?? EMPTY_BRANCH_RULES;
   // Ahead/behind vs. the default branch, fetched only while the menu is open.
   const divergence = useBranchDivergence(repoPath, defaultName, open);
   const divByName = new Map(
@@ -237,6 +242,15 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   async function doDelete() {
     if (!deleteTarget) return;
+    // Belt-and-suspenders: the menu items are already disabled for protected
+    // branches, but guard here too in case a rule changed under an open dialog.
+    if (isDeletionBlocked(rulesConfig, deleteTarget)) {
+      toast.error(
+        `${deleteTarget} is protected from deletion by a branch rule`,
+      );
+      setDeleteTarget(null);
+      return;
+    }
     try {
       // git refuses to delete the checked-out branch: move off it first
       if (deleteTarget === currentName) {
@@ -343,7 +357,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       setOpen(false);
       if (currentName) setDeleteTarget(currentName);
     },
-    Boolean(currentName),
+    Boolean(currentName && !isDeletionBlocked(rulesConfig, currentName)),
   );
   useHotkeyAction(
     "update-from-default",
@@ -411,6 +425,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   const div = divByName.get(branch.name);
                   const canUpdate =
                     Boolean(defaultName) && branch.name !== defaultName;
+                  const deletionBlocked = isDeletionBlocked(
+                    rulesConfig,
+                    branch.name,
+                  );
                   return (
                     <ContextMenu key={branch.name}>
                       <ContextMenuTrigger
@@ -492,12 +510,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                         </ContextMenuItem>
                         <ContextMenuSeparator />
                         <ContextMenuItem
+                          disabled={deletionBlocked}
                           onClick={() => {
                             setOpen(false);
                             setDeleteTarget(branch.name);
                           }}
                         >
-                          Delete…
+                          {deletionBlocked ? "Delete… (protected)" : "Delete…"}
                         </ContextMenuItem>
                       </ContextMenuContent>
                     </ContextMenu>
@@ -516,14 +535,18 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   Rename current branch…
                 </MenuRow>
                 <MenuRow
-                  disabled={!currentName}
+                  disabled={
+                    !currentName || isDeletionBlocked(rulesConfig, currentName)
+                  }
                   onClick={() => {
                     if (!currentName) return;
                     setOpen(false);
                     setDeleteTarget(currentName);
                   }}
                 >
-                  Delete current branch…
+                  {currentName && isDeletionBlocked(rulesConfig, currentName)
+                    ? "Delete current branch… (protected)"
+                    : "Delete current branch…"}
                 </MenuRow>
               </div>
               <div className="border-t py-1">
@@ -621,7 +644,12 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             </DialogHeader>
             <createForm.AppField
               name="name"
-              validators={{ onChange: ({ value }) => required(value) }}
+              validators={{
+                onChange: ({ value }) =>
+                  required(value) ??
+                  branchNameError(rulesConfig, sanitizeRefName(value)) ??
+                  undefined,
+              }}
             >
               {(field) => (
                 <field.TextField

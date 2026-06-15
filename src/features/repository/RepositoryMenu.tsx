@@ -8,6 +8,7 @@ import {
   LightningIcon,
   LinkIcon,
   PencilSimpleIcon,
+  ShieldCheckIcon,
   TagSimpleIcon,
   TerminalIcon,
   TrashIcon,
@@ -35,6 +36,7 @@ import {
 import { Radio, RadioGroup } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
 import { RepoAutomationsDialog } from "@/features/automations/RepoAutomationsDialog";
+import { BranchRulesDialog } from "@/features/branch-rules/BranchRulesDialog";
 import { copyText } from "@/lib/clipboard";
 import {
   ghRepoUrl,
@@ -58,6 +60,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const repoName = useUiStore((s) => s.repoName);
   const fork = useForkRepo(repoPath);
   const [automationsOpen, setAutomationsOpen] = useState(false);
+  const [branchRulesOpen, setBranchRulesOpen] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
   const [forkIntent, setForkIntent] = useState<"contribute" | "own">(
     "contribute",
@@ -185,6 +188,10 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <LightningIcon />
           Automations…
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setBranchRulesOpen(true)}>
+          <ShieldCheckIcon />
+          Branch rules…
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => setRemoteUrlOpen(true)}>
           <LinkIcon />
           Change remote URL…
@@ -211,6 +218,11 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={automationsOpen}
         onOpenChange={setAutomationsOpen}
+      />
+      <BranchRulesDialog
+        repoPath={repoPath}
+        open={branchRulesOpen}
+        onOpenChange={setBranchRulesOpen}
       />
       <RemoteUrlDialog
         repoPath={repoPath}
