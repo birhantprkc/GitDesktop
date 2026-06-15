@@ -9,6 +9,7 @@ export interface AppError {
     | "gh"
     | "keyring"
     | "invalidArgument"
+    | "command"
     | "io"
     | "timeout";
   message: string;

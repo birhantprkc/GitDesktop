@@ -1,5 +1,5 @@
 import { CheckCircleIcon, CopyIcon, XCircleIcon } from "@phosphor-icons/react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "@tanstack/react-store";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
@@ -30,9 +30,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { detectAgentCli, providerKind } from "@/lib/ai/agent";
 import { createAiClient } from "@/lib/ai/client";
 import { useAvailableModels } from "@/lib/ai/models";
 import {
+  ALL_PROVIDER_IDS,
+  GENERATION_PROVIDER_IDS,
+  isCliProvider,
   MODEL_SUGGESTIONS,
   PROVIDER_LABELS,
   PROVIDERS_REQUIRING_KEY,
@@ -44,8 +48,6 @@ import { settingsKeys, useSecretPreview } from "@/lib/settings/queries";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
 import { settingsFormOpts } from "./settings-form";
-
-const PROVIDER_IDS = Object.keys(PROVIDER_LABELS) as AiProviderId[];
 
 /** Typical key shapes per provider; used for a soft warning, never to block. */
 const KEY_HINTS: Partial<
@@ -73,15 +75,18 @@ function ModelPicker({
   idPrefix,
   value,
   onChange,
+  providerIds,
 }: {
   idPrefix: string;
   value: AiSettings;
   onChange: (next: AiSettings) => void;
+  providerIds: AiProviderId[];
 }) {
   const keyPreview = useSecretPreview(value.provider);
   const availableModels = useAvailableModels(value, Boolean(keyPreview.data));
   const models = availableModels.data?.models ?? [];
   const needsKey = PROVIDERS_REQUIRING_KEY.includes(value.provider);
+  const isCli = isCliProvider(value.provider);
   const modelMemory = useRef<Partial<Record<AiProviderId, string>>>({});
 
   function switchProvider(provider: AiProviderId) {
@@ -109,7 +114,7 @@ function ModelPicker({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {PROVIDER_IDS.map((id) => (
+            {providerIds.map((id) => (
               <SelectItem key={id} value={id}>
                 {PROVIDER_LABELS[id]}
               </SelectItem>
@@ -149,15 +154,83 @@ function ModelPicker({
           </ComboboxContent>
         </Combobox>
         <p className="text-xs text-muted-foreground">
-          {availableModels.isPending
-            ? "Loading models…"
-            : availableModels.data?.live
-              ? `${models.length} models from ${PROVIDER_LABELS[value.provider]}`
-              : needsKey
-                ? "Suggestions only — save an API key to load the live list"
-                : "Suggestions only — provider list unavailable"}
+          {isCli
+            ? "Model alias passed to the CLI (e.g. sonnet, opus)"
+            : availableModels.isPending
+              ? "Loading models…"
+              : availableModels.data?.live
+                ? `${models.length} models from ${PROVIDER_LABELS[value.provider]}`
+                : needsKey
+                  ? "Suggestions only — save an API key to load the live list"
+                  : "Suggestions only — provider list unavailable"}
         </p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Detection + optional binary-path override for a CLI review provider. Shows
+ * whether the CLI is installed and signed in, since there's no API key to save.
+ */
+function CliReviewConfig({
+  value,
+  onChange,
+}: {
+  value: AiSettings;
+  onChange: (next: AiSettings) => void;
+}) {
+  const kind = providerKind(value.provider);
+  const detect = useQuery({
+    queryKey: ["agent-detect", value.provider, value.cliPath ?? ""],
+    queryFn: () => detectAgentCli(kind!, value.cliPath),
+    enabled: Boolean(kind),
+    staleTime: 60_000,
+  });
+  const info = detect.data;
+  const version = info?.version ? ` (${info.version})` : "";
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="cli-path">
+        CLI path{" "}
+        <span className="font-normal text-muted-foreground">(optional)</span>
+      </Label>
+      <Input
+        id="cli-path"
+        autoComplete="off"
+        placeholder="Auto-detect on PATH"
+        value={value.cliPath ?? ""}
+        onChange={(e) => onChange({ ...value, cliPath: e.target.value })}
+      />
+      <div className="text-xs">
+        {detect.isPending ? (
+          <span className="text-muted-foreground">
+            Checking for {PROVIDER_LABELS[value.provider]}…
+          </span>
+        ) : info?.found && info.authed === "notAuthed" ? (
+          <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+            <XCircleIcon className="size-4 shrink-0" />
+            Found{version} but not signed in — run{" "}
+            <code className="font-mono">claude login</code>.
+          </span>
+        ) : info?.found ? (
+          <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
+            <CheckCircleIcon className="size-4 shrink-0" />
+            Found{version}
+            {info.authed === "authed" ? " — signed in" : ""}
+          </span>
+        ) : (
+          <span className="flex items-center gap-1 text-destructive">
+            <XCircleIcon className="size-4 shrink-0" />
+            Not found — install it or set the path above.
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Uses the CLI's own subscription login — no API key needed. Reviews run
+        read-only.
+      </p>
     </div>
   );
 }
@@ -243,7 +316,12 @@ export const AiProviderSection = withForm({
           </p>
         </div>
 
-        <ModelPicker idPrefix="ai" value={ai} onChange={setAi} />
+        <ModelPicker
+          idPrefix="ai"
+          value={ai}
+          onChange={setAi}
+          providerIds={GENERATION_PROVIDER_IDS}
+        />
 
         {provider === "ollama" && (
           <div className="space-y-2">
@@ -364,7 +442,14 @@ export const AiProviderSection = withForm({
             idPrefix="review"
             value={reviewAi}
             onChange={(next) => form.setFieldValue("reviewAi", next)}
+            providerIds={ALL_PROVIDER_IDS}
           />
+          {isCliProvider(reviewAi.provider) && (
+            <CliReviewConfig
+              value={reviewAi}
+              onChange={(next) => form.setFieldValue("reviewAi", next)}
+            />
+          )}
         </div>
 
         <Dialog open={confirmClear} onOpenChange={setConfirmClear}>

@@ -554,7 +554,7 @@ export function RemotePrView({
               onClick={() => setSection(s)}
             >
               {s === "conversation"
-                ? "Conversation"
+                ? `Conversation (${pr.comments.length})`
                 : s === "commits"
                   ? `Commits (${pr.commits.length})`
                   : s === "files"
@@ -571,6 +571,7 @@ export function RemotePrView({
             title: pr.title,
             body: pr.body,
             commitSubjects: pr.commits.map((c) => c.headline),
+            repoPath,
             loadDiff: () =>
               ghPrDiff(repoPath, number).then((text) => ({
                 text,
@@ -585,13 +586,10 @@ export function RemotePrView({
           }}
           posting={comment.isPending}
           onPost={(body) =>
-            comment.mutate(
-              { number, body },
-              {
-                onSuccess: () => toast.success("Review posted as a comment"),
-                onError,
-              },
-            )
+            comment.mutateAsync({ number, body }).catch((e) => {
+              onError(e);
+              throw e; // let the panel skip its success toast / text clear
+            })
           }
         />
       )}

@@ -1,5 +1,7 @@
 import { ShieldCheckIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -19,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { detectAgentCli, providerKind } from "@/lib/ai/agent";
 import { useAvailableModels } from "@/lib/ai/models";
 import {
   MODEL_SUGGESTIONS,
@@ -41,18 +44,25 @@ export function PrReviewPanel({
   posting,
 }: {
   context: ReviewContext;
-  onPost?: (body: string) => void;
+  onPost?: (body: string) => void | Promise<void>;
   posting?: boolean;
 }) {
   const settings = useSettings();
   const saveSettings = useSaveSettings();
-  const { generate, cancel, generating, text } = useGenerateReview();
+  const { generate, cancel, reset, generating, text } = useGenerateReview();
   const [lastMode, setLastMode] = useState<ReviewMode>("general");
 
   const reviewAi = settings.data?.reviewAi;
   const provider = reviewAi?.provider ?? "anthropic";
   const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
   const keyPreview = useSecretPreview(provider);
+  const cliKind = providerKind(provider);
+  const cliDetect = useQuery({
+    queryKey: ["agent-detect", provider, reviewAi?.cliPath ?? ""],
+    queryFn: () => detectAgentCli(cliKind!, reviewAi?.cliPath),
+    enabled: Boolean(cliKind),
+    staleTime: 60_000,
+  });
   const available = useAvailableModels(
     reviewAi ?? { provider, model: "", ollamaBaseUrl: "" },
     Boolean(keyPreview.data),
@@ -73,10 +83,17 @@ export function PrReviewPanel({
     generate(reviewAi, mode, context);
   }
 
-  function post() {
-    if (!onPost || !text.trim()) return;
+  async function post() {
+    if (!onPost || !text.trim() || posting) return;
     const label = lastMode === "security" ? "security audit" : "review";
-    onPost(`**AI ${label} (${reviewAi?.model ?? "model"})**\n\n${text}`);
+    const body = `**AI ${label} (${reviewAi?.model ?? "model"})**\n\n${text}`;
+    try {
+      await onPost(body);
+      reset();
+      toast.success("Review posted to the conversation");
+    } catch {
+      // The caller surfaces the error; keep the text so it isn't lost.
+    }
   }
 
   return (
@@ -138,6 +155,20 @@ export function PrReviewPanel({
             to run a review.
           </p>
         )}
+        {cliKind && cliDetect.data && !cliDetect.data.found && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            {PROVIDER_LABELS[provider]} not found — install it or set its path
+            in Settings.
+          </p>
+        )}
+        {cliKind &&
+          cliDetect.data?.found &&
+          cliDetect.data.authed === "notAuthed" && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {PROVIDER_LABELS[provider]} is installed but not signed in — run{" "}
+              <code className="font-mono">claude login</code> in a terminal.
+            </p>
+          )}
         <div className="flex flex-wrap items-center gap-2">
           {generating ? (
             <Button variant="outline" size="sm" onClick={cancel}>

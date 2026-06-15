@@ -1,3 +1,4 @@
+mod agent;
 mod error;
 mod fsops;
 mod git;
@@ -143,6 +144,9 @@ pub fn run() {
             hooks::git_hook_set_enabled,
             hooks::git_hook_delete,
             hooks::git_run_hook_manager,
+            agent::agent_detect,
+            agent::agent_review,
+            agent::agent_review_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

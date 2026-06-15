@@ -128,3 +128,12 @@
     @apply font-mono;
   }
 }
+
+/* Cap a toast with a long message so it can't grow to fill the screen: the
+   text region scrolls while the icon and action button stay put. Long tokens
+   (e.g. file paths in git errors) wrap instead of forcing the toast wide. */
+.cn-toast [data-content] {
+  max-height: 10rem;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}

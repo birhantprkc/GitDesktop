@@ -1,9 +1,17 @@
-export type AiProviderId = "anthropic" | "openai" | "openrouter" | "ollama";
+export type AiProviderId =
+  | "anthropic"
+  | "openai"
+  | "openrouter"
+  | "ollama"
+  | "claude-cli";
 
 export interface AiSettings {
   provider: AiProviderId;
   model: string;
   ollamaBaseUrl: string;
+  /** Explicit path to the agent CLI binary (CLI providers only); empty/omitted
+   *  means auto-detect on PATH and the known install locations. */
+  cliPath?: string;
 }
 
 export interface AiStreamRequest {

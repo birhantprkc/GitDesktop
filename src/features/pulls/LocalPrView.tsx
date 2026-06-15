@@ -356,7 +356,7 @@ export function LocalPrView({
               onClick={() => setSection(s)}
             >
               {s === "conversation"
-                ? "Conversation"
+                ? `Conversation (${pr.comments.length})`
                 : s === "commits"
                   ? `Commits (${ahead.length})`
                   : s === "files"
@@ -373,6 +373,7 @@ export function LocalPrView({
             title: pr.title,
             body: pr.body,
             commitSubjects: ahead.map((c) => c.subject),
+            repoPath,
             loadDiff: () =>
               gitBranchDiff(repoPath, pr.base, pr.head, 200000).then((d) => ({
                 text: d.text,
@@ -380,18 +381,24 @@ export function LocalPrView({
                 files: d.files,
               })),
           }}
+          posting={save.isPending}
           onPost={(body) =>
-            save.mutate({
-              ...pr,
-              comments: [
-                ...pr.comments,
-                {
-                  id: crypto.randomUUID(),
-                  body,
-                  createdAt: new Date().toISOString(),
-                },
-              ],
-            })
+            save
+              .mutateAsync({
+                ...pr,
+                comments: [
+                  ...pr.comments,
+                  {
+                    id: crypto.randomUUID(),
+                    body,
+                    createdAt: new Date().toISOString(),
+                  },
+                ],
+              })
+              .catch((e) => {
+                toastError(e);
+                throw e; // let the panel skip its success toast / text clear
+              })
           }
         />
       )}

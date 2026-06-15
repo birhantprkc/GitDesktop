@@ -82,9 +82,27 @@ pub async fn run_git_raw_input(
 
     Ok(GitOutput {
         stdout: output.stdout,
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        stderr: strip_eol_warnings(&String::from_utf8_lossy(&output.stderr)),
         code: output.status.code().unwrap_or(-1),
     })
+}
+
+/// With core.autocrlf on, git emits a "LF will be replaced by CRLF the next
+/// time Git touches it" advisory for every touched file. It's harmless noise
+/// that bloats error toasts (and rides along when a command genuinely fails),
+/// so drop those lines — and the CRLF→LF variant — from captured stderr.
+fn strip_eol_warnings(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|line| !is_eol_warning(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn is_eol_warning(line: &str) -> bool {
+    line.contains("will be replaced by CRLF")
+        || line.contains("will be replaced by LF")
+        || line.contains("original line endings in your working directory")
 }
 
 /// Runs git, treating any non-zero exit code as an error carrying stderr.
