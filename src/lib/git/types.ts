@@ -236,6 +236,16 @@ export interface GhStatus {
   repo: string | null;
 }
 
+/** A GitHub (classic) branch protection rule, for importing into branch rules. */
+export interface GhBranchProtection {
+  /** fnmatch-style branch name pattern the rule targets. */
+  pattern: string;
+  allowsDeletions: boolean;
+  allowsForcePushes: boolean;
+  requiresLinearHistory: boolean;
+  requiresApprovingReviews: boolean;
+}
+
 export interface PrRef {
   number: number;
   url: string;

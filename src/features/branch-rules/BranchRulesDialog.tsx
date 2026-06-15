@@ -1,4 +1,4 @@
-import { PlusIcon, TrashIcon } from "@phosphor-icons/react";
+import { GithubLogoIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { githubProtectionsToRules } from "@/lib/branch-rules/github";
 import { matchesGlob } from "@/lib/branch-rules/match";
 import {
   useBranchRules,
@@ -28,6 +29,8 @@ import {
   MERGE_METHOD_LABEL,
   type MergeMethod,
 } from "@/lib/branch-rules/types";
+import { ghBranchProtections } from "@/lib/git/api";
+import { useGhStatus } from "@/lib/git/queries";
 import { toastError } from "@/lib/toast";
 
 export function BranchRulesDialog({
@@ -47,6 +50,11 @@ export function BranchRulesDialog({
   const shared = useSharedBranchRules(repoPath);
   const savePersonal = useSaveBranchRules(repoPath);
   const saveShared = useSaveSharedBranchRules(repoPath);
+  const gh = useGhStatus(repoPath);
+  const ghReady = Boolean(
+    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
+  );
+  const [importing, setImporting] = useState(false);
   const [draft, setDraft] = useState<BranchRulesConfig>(EMPTY_BRANCH_RULES);
   const [testName, setTestName] = useState("");
 
@@ -125,6 +133,35 @@ export function BranchRulesDialog({
       ...d,
       protections: d.protections.filter((p) => p.id !== id),
     }));
+  }
+
+  // Pulls GitHub's branch protection rules into the draft (deduped by pattern),
+  // for the user to review and save. Read-only against GitHub.
+  async function importFromGitHub() {
+    setImporting(true);
+    try {
+      const mapped = githubProtectionsToRules(
+        await ghBranchProtections(repoPath),
+      );
+      if (mapped.length === 0) {
+        toast.info(
+          "No branch protection rules found on GitHub (reading them needs repo-admin access).",
+        );
+        return;
+      }
+      setDraft((d) => {
+        const byPattern = new Map(d.protections.map((p) => [p.pattern, p]));
+        for (const m of mapped) byPattern.set(m.pattern, m);
+        return { ...d, protections: [...byPattern.values()] };
+      });
+      toast.success(
+        `Imported ${mapped.length} rule${mapped.length === 1 ? "" : "s"} from GitHub — review and save`,
+      );
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setImporting(false);
+    }
   }
 
   function doSave() {
@@ -253,10 +290,24 @@ export function BranchRulesDialog({
             <section className="space-y-2">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-medium">Protected branches</h3>
-                <Button variant="outline" size="xs" onClick={addProtection}>
-                  <PlusIcon data-icon="inline-start" />
-                  Add
-                </Button>
+                <div className="flex gap-1">
+                  {ghReady && (
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      disabled={importing}
+                      onClick={importFromGitHub}
+                      title="Import GitHub's branch protection rules"
+                    >
+                      <GithubLogoIcon data-icon="inline-start" />
+                      Import from GitHub
+                    </Button>
+                  )}
+                  <Button variant="outline" size="xs" onClick={addProtection}>
+                    <PlusIcon data-icon="inline-start" />
+                    Add
+                  </Button>
+                </div>
               </div>
               {draft.protections.length === 0 ? (
                 <p className="text-xs text-muted-foreground">

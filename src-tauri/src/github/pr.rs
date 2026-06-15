@@ -779,6 +779,54 @@ pub async fn gh_repo_labels(repo_path: String) -> AppResult<Vec<RepoLabel>> {
         .map_err(|e| AppError::Gh(format!("could not parse the label query: {e}")))
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhBranchProtection {
+    pub pattern: String,
+    pub allows_deletions: bool,
+    pub allows_force_pushes: bool,
+    pub requires_linear_history: bool,
+    pub requires_approving_reviews: bool,
+}
+
+/// The repo's GitHub branch protection rules (classic, pattern-based), for
+/// importing into GitDesktop's own branch rules. Read-only — never writes to
+/// GitHub. Reading protection settings needs repo-admin access, so a
+/// non-admin viewer simply gets an empty list.
+#[tauri::command]
+pub async fn gh_branch_protections(repo_path: String) -> AppResult<Vec<GhBranchProtection>> {
+    let out = run_gh(
+        Some(&repo_path),
+        &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let name_with_owner = out.stdout_lossy().trim().to_string();
+    let Some((owner, name)) = name_with_owner.split_once('/') else {
+        return Err(AppError::Gh("could not determine the repository owner".into()));
+    };
+    validate_graphql_embed(owner, "repository owner")?;
+    validate_graphql_embed(name, "repository name")?;
+
+    let query = format!(
+        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ branchProtectionRules(first:100){{ nodes{{ pattern allowsDeletions allowsForcePushes requiresLinearHistory requiresApprovingReviews }} }} }} }}"#
+    );
+    let out = run_gh(
+        Some(&repo_path),
+        &["api", "graphql", "-f", &format!("query={query}")],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the protection query: {e}")))?;
+    let nodes = value
+        .pointer("/data/repository/branchProtectionRules/nodes")
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Array(vec![]));
+    serde_json::from_value(nodes)
+        .map_err(|e| AppError::Gh(format!("could not parse the protection query: {e}")))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrPollInfo {

@@ -110,6 +110,7 @@ pub fn run() {
             github::pr::gh_pr_ready,
             github::pr::gh_pr_edit,
             github::pr::gh_repo_labels,
+            github::pr::gh_branch_protections,
             github::pr::gh_pr_edit_labels,
             fsops::append_to_gitignore,
             fsops::delete_repo_folder,

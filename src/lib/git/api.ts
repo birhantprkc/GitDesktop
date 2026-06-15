@@ -11,6 +11,7 @@ import type {
   DiffStatEntry,
   FileDiff,
   GhAccounts,
+  GhBranchProtection,
   GhRepoList,
   GhStatus,
   GitInfo,
@@ -555,6 +556,10 @@ export const ghPrEdit = (
 
 export const ghRepoLabels = (repoPath: string) =>
   invoke<RepoLabel[]>("gh_repo_labels", { repoPath });
+
+/** GitHub's (classic) branch protection rules — read-only, for importing. */
+export const ghBranchProtections = (repoPath: string) =>
+  invoke<GhBranchProtection[]>("gh_branch_protections", { repoPath });
 
 export const ghPrEditLabels = (
   repoPath: string,
