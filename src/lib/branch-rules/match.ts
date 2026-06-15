@@ -1,4 +1,9 @@
-import type { BranchProtection, BranchRulesConfig } from "./types";
+import {
+  ALL_MERGE_METHODS,
+  type BranchProtection,
+  type BranchRulesConfig,
+  type MergeMethod,
+} from "./types";
 
 function escapeLiteral(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -68,6 +73,61 @@ export function isDeletionBlocked(
   return protectionsFor(config, branch).some((p) => p.blockDeletion);
 }
 
+/** Whether force-pushing `branch` (e.g. amending a pushed commit) is blocked. */
+export function isForcePushBlocked(
+  config: BranchRulesConfig,
+  branch: string,
+): boolean {
+  return protectionsFor(config, branch).some((p) => p.blockForcePush);
+}
+
+/**
+ * Whether `branch` requires a pull request — no direct commits to it and no
+ * direct merges into it. Changes must come through a PR.
+ */
+export function requiresPullRequest(
+  config: BranchRulesConfig,
+  branch: string,
+): boolean {
+  return protectionsFor(config, branch).some((p) => p.requirePr);
+}
+
+/**
+ * The merge methods allowed when integrating INTO `base`, intersected across
+ * every matching protection. `null` means unrestricted (no protection applies).
+ */
+export function allowedMergeMethods(
+  config: BranchRulesConfig,
+  base: string,
+): MergeMethod[] | null {
+  const matched = protectionsFor(config, base);
+  if (matched.length === 0) return null;
+  return ALL_MERGE_METHODS.filter((m) =>
+    matched.every((p) => p.allowedMergeMethods.includes(m)),
+  );
+}
+
+/** Whether `method` may be used to integrate into `base`. */
+export function isMergeMethodAllowed(
+  config: BranchRulesConfig,
+  base: string,
+  method: MergeMethod,
+): boolean {
+  const allowed = allowedMergeMethods(config, base);
+  return allowed === null || allowed.includes(method);
+}
+
+/** The human-readable naming requirement when a policy is active, else null. */
+export function namingRequirement(config: BranchRulesConfig): string | null {
+  const { naming } = config;
+  const pattern = naming.pattern.trim();
+  if (!naming.enabled || pattern === "") return null;
+  const hint = naming.hint.trim();
+  return hint
+    ? `Branch names must match "${pattern}" (e.g. ${hint})`
+    : `Branch names must match "${pattern}"`;
+}
+
 /**
  * An error message if `name` violates the naming policy, otherwise null.
  * Empty names pass (the form's `required` validator owns that case).
@@ -76,12 +136,22 @@ export function branchNameError(
   config: BranchRulesConfig,
   name: string,
 ): string | null {
-  const { naming } = config;
-  const pattern = naming.pattern.trim();
-  if (!naming.enabled || pattern === "" || name === "") return null;
-  if (matchesGlob(pattern, name)) return null;
-  const hint = naming.hint.trim();
-  return hint
-    ? `Branch names must match "${pattern}" (e.g. ${hint})`
-    : `Branch names must match "${pattern}"`;
+  if (name === "") return null;
+  const req = namingRequirement(config);
+  if (req === null) return null;
+  return matchesGlob(config.naming.pattern.trim(), name) ? null : req;
+}
+
+/**
+ * A non-blocking hint for the new-branch field: the naming requirement while
+ * `name` doesn't yet satisfy the policy (shown for an empty field too, so the
+ * convention is visible up front and a disabled Create button is explained).
+ */
+export function branchNameHint(
+  config: BranchRulesConfig,
+  name: string,
+): string | null {
+  const req = namingRequirement(config);
+  if (req === null) return null;
+  return matchesGlob(config.naming.pattern.trim(), name) ? null : req;
 }

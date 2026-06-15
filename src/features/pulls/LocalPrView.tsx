@@ -35,6 +35,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
+import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
+import { useBranchRules } from "@/lib/branch-rules/queries";
+import { EMPTY_BRANCH_RULES } from "@/lib/branch-rules/types";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import { gitBranchDiff, type MergeStrategy } from "@/lib/git/api";
@@ -74,6 +77,8 @@ export function LocalPrView({
   const selectPr = useUiStore((s) => s.selectPr);
   const [section, setSection] = useState<Section>("conversation");
   const aiEnabled = useAiEnabled();
+  const branchRules = useBranchRules(repoPath);
+  const rulesConfig = branchRules.data ?? EMPTY_BRANCH_RULES;
   const [comment, setComment] = useState("");
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,
@@ -587,13 +592,28 @@ export function LocalPrView({
                 }
               />
               <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuItem onClick={() => doMerge("merge")}>
+                <DropdownMenuItem
+                  disabled={
+                    !isMergeMethodAllowed(rulesConfig, pr.base, "merge")
+                  }
+                  onClick={() => doMerge("merge")}
+                >
                   Create a merge commit
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => doMerge("squash")}>
+                <DropdownMenuItem
+                  disabled={
+                    !isMergeMethodAllowed(rulesConfig, pr.base, "squash")
+                  }
+                  onClick={() => doMerge("squash")}
+                >
                   Squash and merge
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => doMerge("rebase")}>
+                <DropdownMenuItem
+                  disabled={
+                    !isMergeMethodAllowed(rulesConfig, pr.base, "rebase")
+                  }
+                  onClick={() => doMerge("rebase")}
+                >
                   Rebase and merge
                 </DropdownMenuItem>
               </DropdownMenuContent>

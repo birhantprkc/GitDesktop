@@ -16,7 +16,24 @@ export interface BranchProtection {
   pattern: string;
   /** Block deleting matching branches from GitDesktop. */
   blockDeletion: boolean;
+  /** Block force-pushing matching branches (amending an already-pushed commit). */
+  blockForcePush: boolean;
+  /** No direct commits or direct merges — changes must arrive via a pull
+   *  request. (GitHub's "lock branch" / "require a pull request".) */
+  requirePr: boolean;
+  /** Merge methods allowed when integrating INTO a matching branch. A method
+   *  absent from this list is blocked; excluding "merge" enforces linear
+   *  history. New protections default to all three. */
+  allowedMergeMethods: MergeMethod[];
 }
+
+export const ALL_MERGE_METHODS: MergeMethod[] = ["merge", "squash", "rebase"];
+
+export const MERGE_METHOD_LABEL: Record<MergeMethod, string> = {
+  merge: "Merge commit",
+  squash: "Squash",
+  rebase: "Rebase",
+};
 
 /** Repo-wide policy for the names of NEW branches. */
 export interface NamingPolicy {

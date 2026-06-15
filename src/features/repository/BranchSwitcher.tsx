@@ -34,7 +34,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { branchNameError, isDeletionBlocked } from "@/lib/branch-rules/match";
+import {
+  branchNameError,
+  branchNameHint,
+  isDeletionBlocked,
+  isMergeMethodAllowed,
+  requiresPullRequest,
+} from "@/lib/branch-rules/match";
 import { useBranchRules } from "@/lib/branch-rules/queries";
 import { EMPTY_BRANCH_RULES } from "@/lib/branch-rules/types";
 import { copyText } from "@/lib/clipboard";
@@ -137,6 +143,22 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const otherBranches = allBranches.filter((b) => !b.isCurrent);
   const defaultName = defaultBranch.data ?? null;
   const rulesConfig = branchRules.data ?? EMPTY_BRANCH_RULES;
+  // Merge-into-current is gated by the current branch's protection: a
+  // "require pull request" rule blocks all direct merges, and a merge-method
+  // restriction blocks the disallowed methods.
+  const lockCurrent = currentName
+    ? requiresPullRequest(rulesConfig, currentName)
+    : false;
+  const canMergeIntoCurrent =
+    !lockCurrent &&
+    (currentName
+      ? isMergeMethodAllowed(rulesConfig, currentName, "merge")
+      : true);
+  const canSquashIntoCurrent =
+    !lockCurrent &&
+    (currentName
+      ? isMergeMethodAllowed(rulesConfig, currentName, "squash")
+      : true);
   // Ahead/behind vs. the default branch, fetched only while the menu is open.
   const divergence = useBranchDivergence(repoPath, defaultName, open);
   const divByName = new Map(
@@ -367,17 +389,17 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   useHotkeyAction(
     "merge-into-current",
     () => openPicker("merge"),
-    otherBranches.length > 0,
+    otherBranches.length > 0 && canMergeIntoCurrent,
   );
   useHotkeyAction(
     "squash-merge-into-current",
     () => openPicker("squash"),
-    otherBranches.length > 0,
+    otherBranches.length > 0 && canSquashIntoCurrent,
   );
   useHotkeyAction(
     "rebase-current",
     () => openPicker("rebase"),
-    otherBranches.length > 0,
+    otherBranches.length > 0 && !lockCurrent,
   );
   useHotkeyAction("stash-all", () => setStashAllOpen(true), hasChanges);
   useHotkeyAction("pop-stash", () => setStashPopOpen(true), stashes > 0);
@@ -602,19 +624,21 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   Update from {defaultName ?? "default branch"}
                 </MenuRow>
                 <MenuRow
-                  disabled={otherBranches.length === 0}
+                  disabled={otherBranches.length === 0 || !canMergeIntoCurrent}
                   onClick={() => openPicker("merge")}
                 >
-                  Merge into current branch…
+                  {lockCurrent
+                    ? "Merge into current branch… (requires PR)"
+                    : "Merge into current branch…"}
                 </MenuRow>
                 <MenuRow
-                  disabled={otherBranches.length === 0}
+                  disabled={otherBranches.length === 0 || !canSquashIntoCurrent}
                   onClick={() => openPicker("squash")}
                 >
                   Squash and merge into current branch…
                 </MenuRow>
                 <MenuRow
-                  disabled={otherBranches.length === 0}
+                  disabled={otherBranches.length === 0 || lockCurrent}
                   onClick={() => openPicker("rebase")}
                 >
                   Rebase current branch…
@@ -655,7 +679,12 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 <field.TextField
                   label="Branch name"
                   placeholder="feature/my-change"
-                  warning={refNameWarning}
+                  // Surface the branch-rules naming requirement (so a disabled
+                  // Create button is explained), else the sanitization hint.
+                  warning={(value) =>
+                    branchNameHint(rulesConfig, sanitizeRefName(value)) ??
+                    refNameWarning(value)
+                  }
                 />
               )}
             </createForm.AppField>

@@ -17,8 +17,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { matchesGlob } from "@/lib/branch-rules/match";
 import { useBranchRules, useSaveBranchRules } from "@/lib/branch-rules/queries";
 import {
+  ALL_MERGE_METHODS,
   type BranchRulesConfig,
   EMPTY_BRANCH_RULES,
+  MERGE_METHOD_LABEL,
+  type MergeMethod,
 } from "@/lib/branch-rules/types";
 import { toastError } from "@/lib/toast";
 
@@ -61,8 +64,33 @@ export function BranchRulesDialog({
       ...d,
       protections: [
         ...d.protections,
-        { id: crypto.randomUUID(), pattern: "", blockDeletion: true },
+        {
+          id: crypto.randomUUID(),
+          pattern: "",
+          blockDeletion: true,
+          blockForcePush: true,
+          requirePr: false,
+          allowedMergeMethods: [...ALL_MERGE_METHODS],
+        },
       ],
+    }));
+  }
+
+  function toggleMergeMethod(id: string, method: MergeMethod, on: boolean) {
+    setDraft((d) => ({
+      ...d,
+      protections: d.protections.map((p) =>
+        p.id === id
+          ? {
+              ...p,
+              allowedMergeMethods: on
+                ? ALL_MERGE_METHODS.filter(
+                    (m) => p.allowedMergeMethods.includes(m) || m === method,
+                  )
+                : p.allowedMergeMethods.filter((m) => m !== method),
+            }
+          : p,
+      ),
     }));
   }
 
@@ -183,41 +211,96 @@ export function BranchRulesDialog({
               </div>
               {draft.protections.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  No protected branches. Add one to block deleting branches that
-                  match a pattern (e.g. <span className="font-mono">main</span>{" "}
-                  or <span className="font-mono">release/*</span>).
+                  No protected branches. Add one to guard branches that match a
+                  pattern (e.g. <span className="font-mono">main</span> or{" "}
+                  <span className="font-mono">release/*</span>) against
+                  deletion, force-pushes, and unwanted merge types.
                 </p>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {draft.protections.map((p) => (
-                    <div key={p.id} className="flex items-center gap-2">
-                      <Input
-                        value={p.pattern}
-                        onChange={(e) =>
-                          updateProtection(p.id, { pattern: e.target.value })
-                        }
-                        placeholder="main"
-                        className="font-mono"
-                      />
-                      <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs">
-                        <Checkbox
-                          checked={p.blockDeletion}
-                          onCheckedChange={(c) =>
-                            updateProtection(p.id, {
-                              blockDeletion: c === true,
-                            })
+                    <div
+                      key={p.id}
+                      className="space-y-2 rounded-md border p-2.5"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={p.pattern}
+                          onChange={(e) =>
+                            updateProtection(p.id, { pattern: e.target.value })
                           }
+                          placeholder="main"
+                          className="font-mono"
                         />
-                        No delete
-                      </label>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label="Remove"
-                        onClick={() => removeProtection(p.id)}
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Remove"
+                          onClick={() => removeProtection(p.id)}
+                        >
+                          <TrashIcon />
+                        </Button>
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                        <label className="flex cursor-pointer items-center gap-1.5 text-xs">
+                          <Checkbox
+                            checked={p.blockDeletion}
+                            onCheckedChange={(c) =>
+                              updateProtection(p.id, {
+                                blockDeletion: c === true,
+                              })
+                            }
+                          />
+                          Block deletion
+                        </label>
+                        <label className="flex cursor-pointer items-center gap-1.5 text-xs">
+                          <Checkbox
+                            checked={p.blockForcePush}
+                            onCheckedChange={(c) =>
+                              updateProtection(p.id, {
+                                blockForcePush: c === true,
+                              })
+                            }
+                          />
+                          Block force-push
+                        </label>
+                        <label className="flex cursor-pointer items-center gap-1.5 text-xs">
+                          <Checkbox
+                            checked={p.requirePr}
+                            onCheckedChange={(c) =>
+                              updateProtection(p.id, { requirePr: c === true })
+                            }
+                          />
+                          Require pull request
+                        </label>
+                      </div>
+                      <div
+                        className={
+                          p.requirePr
+                            ? "pointer-events-none opacity-50"
+                            : undefined
+                        }
                       >
-                        <TrashIcon />
-                      </Button>
+                        <span className="text-[11px] text-muted-foreground">
+                          Allowed merges into this branch
+                        </span>
+                        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1.5">
+                          {ALL_MERGE_METHODS.map((m) => (
+                            <label
+                              key={m}
+                              className="flex cursor-pointer items-center gap-1.5 text-xs"
+                            >
+                              <Checkbox
+                                checked={p.allowedMergeMethods.includes(m)}
+                                onCheckedChange={(c) =>
+                                  toggleMergeMethod(p.id, m, c === true)
+                                }
+                              />
+                              {MERGE_METHOD_LABEL[m]}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>

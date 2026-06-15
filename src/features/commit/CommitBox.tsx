@@ -5,6 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { triggerAutomations } from "@/lib/automations/runner";
+import { requiresPullRequest } from "@/lib/branch-rules/match";
+import { useBranchRules } from "@/lib/branch-rules/queries";
+import { EMPTY_BRANCH_RULES } from "@/lib/branch-rules/types";
 import { coAuthorTrailers } from "@/lib/git/co-authors";
 import { useCommit, useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
@@ -28,16 +31,22 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   const clearCommitDraft = useUiStore((s) => s.clearCommitDraft);
   const { generate, cancel, generating } = useGenerateCommitMessage(repoPath);
   const aiEnabled = useAiEnabled();
+  const branchRules = useBranchRules(repoPath);
 
   const amending = amendingHash !== null;
   const branchName = status.data?.branch?.name ?? null;
+  // A "require pull request" rule locks the branch against direct commits.
+  const locked = branchName
+    ? requiresPullRequest(branchRules.data ?? EMPTY_BRANCH_RULES, branchName)
+    : false;
   const stagedCount =
     status.data?.entries.filter((e) => e.staged !== null).length ?? 0;
   // amending without staged changes is valid (message-only edit)
   const canCommit =
     title.trim().length > 0 &&
     (stagedCount > 0 || amending) &&
-    !commit.isPending;
+    !commit.isPending &&
+    !locked;
 
   // The commit hotkey (Ctrl+Enter by default) fires through the global
   // dispatcher even from the title/body fields — modifier combos are
@@ -81,6 +90,17 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
 
   return (
     <div className="space-y-2 border-t p-3">
+      {locked && (
+        <div className="bg-muted px-2.5 py-2 text-xs text-muted-foreground">
+          <p className="flex items-start gap-2">
+            <InfoIcon className="mt-0.5 size-3.5 shrink-0" />
+            <span className="flex-1">
+              <span className="font-medium">{branchName}</span> requires changes
+              via a pull request — direct commits are blocked by a branch rule.
+            </span>
+          </p>
+        </div>
+      )}
       {amending && (
         <div className="bg-amber-500/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-400">
           <p className="flex items-start gap-2">

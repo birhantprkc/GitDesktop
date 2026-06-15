@@ -43,6 +43,9 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffContent } from "@/features/diff/DiffSurface";
+import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
+import { useBranchRules } from "@/lib/branch-rules/queries";
+import { EMPTY_BRANCH_RULES } from "@/lib/branch-rules/types";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import {
@@ -151,6 +154,8 @@ export function RemotePrView({
   const repoLabels = useRepoLabels(repoPath, true);
   const [section, setSection] = useState<Section>("conversation");
   const aiEnabled = useAiEnabled();
+  const branchRules = useBranchRules(repoPath);
+  const rulesConfig = branchRules.data ?? EMPTY_BRANCH_RULES;
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [composeBody, setComposeBody] = useState("");
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
@@ -885,18 +890,27 @@ export function RemotePrView({
               }
             />
             <DropdownMenuContent align="end" className="w-56">
-              {(["merge", "squash", "rebase"] as const).map((s) => (
-                <DropdownMenuItem
-                  key={s}
-                  onClick={() => {
-                    setMergeStrategy(s);
-                    setDeleteBranch(false);
-                    setMergeOpen(true);
-                  }}
-                >
-                  {MERGE_LABEL[s]}
-                </DropdownMenuItem>
-              ))}
+              {(["merge", "squash", "rebase"] as const).map((s) => {
+                const blocked = !isMergeMethodAllowed(
+                  rulesConfig,
+                  pr.baseRefName,
+                  s,
+                );
+                return (
+                  <DropdownMenuItem
+                    key={s}
+                    disabled={blocked}
+                    onClick={() => {
+                      setMergeStrategy(s);
+                      setDeleteBranch(false);
+                      setMergeOpen(true);
+                    }}
+                  >
+                    {MERGE_LABEL[s]}
+                    {blocked && " — blocked by branch rule"}
+                  </DropdownMenuItem>
+                );
+              })}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

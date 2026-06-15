@@ -1,4 +1,8 @@
 import { useCallback, useState } from "react";
+import { toast } from "sonner";
+import { isForcePushBlocked } from "@/lib/branch-rules/match";
+import { useBranchRules } from "@/lib/branch-rules/queries";
+import { EMPTY_BRANCH_RULES } from "@/lib/branch-rules/types";
 import { gitCommitDetails } from "@/lib/git/api";
 import { useRepoStatus } from "@/lib/git/queries";
 import { useSettings } from "@/lib/settings/queries";
@@ -39,6 +43,7 @@ export function useAmendCommit(repoPath: string) {
 export function useAmendWithConfirm(repoPath: string) {
   const status = useRepoStatus(repoPath);
   const settings = useSettings();
+  const branchRules = useBranchRules(repoPath);
   const amend = useAmendCommit(repoPath);
   const [pendingHash, setPendingHash] = useState<string | null>(null);
 
@@ -47,6 +52,18 @@ export function useAmendWithConfirm(repoPath: string) {
   const needsForcePush = upstream !== null && (branch?.ahead ?? 0) === 0;
 
   function requestAmend(hash: string) {
+    // Amending an already-pushed commit means force-pushing it. If a branch
+    // rule blocks force-pushes here, refuse outright rather than confirm.
+    if (
+      needsForcePush &&
+      branch?.name &&
+      isForcePushBlocked(branchRules.data ?? EMPTY_BRANCH_RULES, branch.name)
+    ) {
+      toast.error(
+        `${branch.name} is protected: force-pushing (amending a pushed commit) is blocked by a branch rule`,
+      );
+      return;
+    }
     if (needsForcePush && (settings.data?.confirmAmendForcePush ?? true)) {
       setPendingHash(hash);
     } else {
