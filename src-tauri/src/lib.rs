@@ -2,6 +2,7 @@ mod error;
 mod fsops;
 mod git;
 mod github;
+mod hooks;
 mod instructions;
 mod secrets;
 mod state;
@@ -31,6 +32,7 @@ pub fn run() {
             git::branches::git_delete_branch,
             git::branches::git_default_branch,
             git::branches::git_branch_divergence,
+            git::branches::git_branches_merged,
             git::branches::git_update_branch_from,
             git::diff::git_diff_file,
             git::diff::git_staged_diff,
@@ -134,6 +136,11 @@ pub fn run() {
             instructions::read_repo_ai_ignore,
             instructions::read_repo_branch_rules,
             instructions::write_repo_branch_rules,
+            hooks::git_hooks_list,
+            hooks::git_hook_read,
+            hooks::git_hook_write,
+            hooks::git_hook_set_enabled,
+            hooks::git_hook_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

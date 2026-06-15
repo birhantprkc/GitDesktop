@@ -163,6 +163,43 @@ pub async fn git_create_branch(
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePair {
+    pub base: String,
+    pub head: String,
+}
+
+/// For each (base, head) pair, whether `head` is fully contained in `base` —
+/// its tip is an ancestor of base, so there's nothing left to merge. Used to
+/// reconcile local PRs whose branch was merged outside the app. A missing or
+/// invalid ref (e.g. a deleted head) just reports false.
+#[tauri::command]
+pub async fn git_branches_merged(
+    repo_path: String,
+    pairs: Vec<MergePair>,
+) -> AppResult<Vec<bool>> {
+    let mut result = Vec::with_capacity(pairs.len());
+    for pair in pairs {
+        let valid = validate_ref_name(&pair.base).is_ok()
+            && validate_ref_name(&pair.head).is_ok();
+        let merged = if !valid {
+            false
+        } else {
+            run_git_raw(
+                Some(&repo_path),
+                &["merge-base", "--is-ancestor", &pair.head, &pair.base],
+                DEFAULT_TIMEOUT,
+            )
+            .await?
+            .code
+                == 0
+        };
+        result.push(merged);
+    }
+    Ok(result)
+}
+
 /// Ahead/behind counts for every local branch measured against `base` (the
 /// default branch), driving the at-a-glance counts in the branch menu.
 /// Read-only; the base itself reports 0/0.

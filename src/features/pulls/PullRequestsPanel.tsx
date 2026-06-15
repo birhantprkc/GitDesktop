@@ -27,6 +27,7 @@ import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
 import { CreateLocalPrDialog } from "./CreateLocalPrDialog";
 import { CreatePrDialog } from "./CreatePrDialog";
+import { useReconcileLocalPrs } from "./useReconcileLocalPrs";
 
 export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
@@ -37,6 +38,8 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
   const prList = usePrList(repoPath, ghReady, stateFilter);
   const localPrs = useLocalPrs(repoPath);
+  // Mark local PRs merged when their branch was merged outside the app.
+  useReconcileLocalPrs(repoPath);
   const selectedPr = useUiStore((s) => s.selectedPr);
   const selectPr = useUiStore((s) => s.selectPr);
   const [createOpen, setCreateOpen] = useState(false);
