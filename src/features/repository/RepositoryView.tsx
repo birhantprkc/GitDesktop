@@ -1,6 +1,9 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Activity, useEffect, useTransition } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ActionsPanel } from "@/features/actions/ActionsPanel";
+import { RunDetailView } from "@/features/actions/RunDetailView";
+import { useRunNotifications } from "@/features/actions/useRunNotifications";
 import { CommitBox } from "@/features/commit/CommitBox";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { ComparePanel } from "@/features/compare/ComparePanel";
@@ -28,6 +31,7 @@ export function RepositoryView() {
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const compareBranch = useUiStore((s) => s.compareBranch);
   const selectedPr = useUiStore((s) => s.selectedPr);
+  const selectedRunId = useUiStore((s) => s.selectedRunId);
   const status = useRepoStatus(repoPath ?? "");
   const alias = useRepoAlias(repoPath);
   const currentName = status.data?.branch?.name ?? null;
@@ -35,8 +39,9 @@ export function RepositoryView() {
   // never blocks the click, and hidden Activities pre-render at low priority.
   const [, startTabTransition] = useTransition();
 
-  // OS notifications for PR/check events while this repo is open.
+  // OS notifications for PR/check and workflow-run events while this repo is open.
   usePrNotifications(repoPath ?? "");
+  useRunNotifications(repoPath ?? "");
 
   function changeTab(tab: RepoTab) {
     startTabTransition(() => setRepoTab(tab));
@@ -47,6 +52,7 @@ export function RepositoryView() {
   useHotkeyAction("tab-history", () => changeTab("history"));
   useHotkeyAction("tab-compare", () => changeTab("compare"));
   useHotkeyAction("tab-pulls", () => changeTab("pulls"));
+  useHotkeyAction("tab-actions", () => changeTab("actions"));
   useHotkeyAction("back-to-repositories", closeRepo);
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open.
@@ -75,7 +81,7 @@ export function RepositoryView() {
     <div className="flex h-screen flex-col">
       <RepoHeader repoPath={repoPath} />
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-80 shrink-0 flex-col border-r">
+        <aside className="flex w-96 shrink-0 flex-col border-r">
           <Tabs
             value={repoTab}
             onValueChange={(value) => changeTab(value as RepoTab)}
@@ -93,6 +99,9 @@ export function RepositoryView() {
               <TabsTrigger value="pulls" className="flex-1">
                 Pull Requests
               </TabsTrigger>
+              <TabsTrigger value="actions" className="flex-1">
+                Actions
+              </TabsTrigger>
             </TabsList>
           </Tabs>
           <Activity mode={mode("changes")}>
@@ -107,6 +116,9 @@ export function RepositoryView() {
           </Activity>
           <Activity mode={mode("pulls")}>
             <PullRequestsPanel repoPath={repoPath} />
+          </Activity>
+          <Activity mode={mode("actions")}>
+            <ActionsPanel repoPath={repoPath} />
           </Activity>
         </aside>
         <main className="min-w-0 flex-1">
@@ -145,6 +157,13 @@ export function RepositoryView() {
               <LocalPrView repoPath={repoPath} id={selectedPr.id} />
             ) : (
               <DiffPlaceholder message="Select a pull request" />
+            )}
+          </Activity>
+          <Activity mode={mode("actions")}>
+            {selectedRunId !== null ? (
+              <RunDetailView repoPath={repoPath} runId={selectedRunId} />
+            ) : (
+              <DiffPlaceholder message="Select a workflow run" />
             )}
           </Activity>
         </main>

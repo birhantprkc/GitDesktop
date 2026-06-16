@@ -61,6 +61,8 @@ export function FileRow({
   onToggle,
   onDiscard,
   onStashFile,
+  onStageSelected,
+  onUnstageSelected,
   onDiscardSelected,
   onStashSelected,
 }: {
@@ -79,6 +81,8 @@ export function FileRow({
   onToggle: () => void;
   onDiscard?: () => void;
   onStashFile?: () => void;
+  onStageSelected?: () => void;
+  onUnstageSelected?: () => void;
   onDiscardSelected?: () => void;
   onStashSelected?: () => void;
 }) {
@@ -186,6 +190,16 @@ export function FileRow({
       <ContextMenuContent className="min-w-64">
         {selected && selectionCount > 1 ? (
           <>
+            {!staged && onStageSelected && (
+              <ContextMenuItem onClick={onStageSelected}>
+                Stage {selectionCount} files
+              </ContextMenuItem>
+            )}
+            {staged && onUnstageSelected && (
+              <ContextMenuItem onClick={onUnstageSelected}>
+                Unstage {selectionCount} files
+              </ContextMenuItem>
+            )}
             <ContextMenuItem onClick={onDiscardSelected}>
               Discard {selectionCount} changes…
             </ContextMenuItem>
@@ -195,6 +209,9 @@ export function FileRow({
           </>
         ) : (
           <>
+            <ContextMenuItem onClick={onToggle}>
+              {staged ? "Unstage file" : "Stage file"}
+            </ContextMenuItem>
             {!staged && onDiscard && (
               <ContextMenuItem onClick={onDiscard}>
                 Discard changes…

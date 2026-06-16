@@ -341,6 +341,25 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     unstage.mutate(stagedEntries.flatMap(unstagePaths), { onError });
   }
 
+  // Bulk stage/unstage of the selection. Direction comes from the section the
+  // row was right-clicked in; re-staging an already-staged path (or vice versa)
+  // is a harmless git no-op, so every selected file ends up in that state.
+  function stageSelected() {
+    if (selectionCount === 0) return;
+    stage.mutate(
+      selectedEntries.map((e) => e.path),
+      { onError, onSuccess: () => setSelectedKeys(new Set()) },
+    );
+  }
+
+  function unstageSelected() {
+    if (selectionCount === 0) return;
+    unstage.mutate(selectedEntries.flatMap(unstagePaths), {
+      onError,
+      onSuccess: () => setSelectedKeys(new Set()),
+    });
+  }
+
   function requestDiscardSelected() {
     if (selectionCount > 0)
       setDiscardScope({ kind: "files", entries: selectedEntries });
@@ -713,6 +732,8 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                       onStashFile={() =>
                         setStashScope({ kind: "files", entries: [entry] })
                       }
+                      onStageSelected={stageSelected}
+                      onUnstageSelected={unstageSelected}
                       onDiscardSelected={requestDiscardSelected}
                       onStashSelected={requestStashSelected}
                     />
@@ -764,6 +785,8 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                       onStashFile={() =>
                         setStashScope({ kind: "files", entries: [entry] })
                       }
+                      onStageSelected={stageSelected}
+                      onUnstageSelected={unstageSelected}
                       onDiscardSelected={requestDiscardSelected}
                       onStashSelected={requestStashSelected}
                     />

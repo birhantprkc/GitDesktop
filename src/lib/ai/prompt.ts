@@ -195,6 +195,61 @@ export function buildReviewPrompt(
   };
 }
 
+const DEBUG_SYSTEM = `You are an expert CI/CD engineer helping debug a failed GitHub Actions job. You are given the failing job's logs (the failed steps only, when available).
+
+Diagnose the failure and explain how to fix it, in GitHub-flavored Markdown:
+- Start with **Root cause** — one or two sentences naming what actually failed.
+- Then **Fix** — concrete, actionable steps. Give exact commands, config, or code in fenced blocks where you can, and name the repo file when the fix lives in one.
+- If useful, add **Why it happened** citing the key evidence line(s) from the logs.
+- If the logs are truncated or don't contain enough to be sure, say what's missing and give your best hypothesis instead of guessing confidently.
+- End with a \`## Agent prompt\` section whose body is a single fenced code block containing a self-contained instruction that a coding agent (e.g. Claude Code or Codex) running in this repository could follow to implement the fix. Write it as a direct task addressed to the agent, name the specific files to change, and include the essential context so it can act without seeing these logs. If you can't be confident in a fix, still give a prompt that tells the agent what to investigate.
+
+Be concise and high-signal. Ground every claim in the logs — do not invent errors, files, or commands you cannot see. Do not wrap the whole answer in a single code fence.`;
+
+export interface DebugPromptInput {
+  workflowName: string;
+  jobName: string;
+  /** The job's conclusion (e.g. "failure", "timed_out"). */
+  conclusion: string;
+  /** Names of the steps that failed, when known. */
+  failedSteps: string[];
+  /** The job logs (already tail-capped by the backend). */
+  logs: string;
+}
+
+export function buildDebugPrompt(input: DebugPromptInput): {
+  system: string;
+  prompt: string;
+} {
+  const parts: string[] = [
+    `Workflow: ${input.workflowName}`,
+    `Job: ${input.jobName}`,
+    `Result: ${input.conclusion || "failure"}`,
+  ];
+  if (input.failedSteps.length > 0) {
+    parts.push(
+      `Failed steps:\n${input.failedSteps.map((s) => `- ${s}`).join("\n")}`,
+    );
+  }
+  parts.push(`## Logs\n\`\`\`\n${input.logs}\n\`\`\``);
+  parts.push("Diagnose this failure and explain how to fix it.");
+  return { system: DEBUG_SYSTEM, prompt: parts.join("\n\n") };
+}
+
+/**
+ * Pulls the ready-to-paste agent prompt out of a debug response — the fenced
+ * code block under the trailing `## Agent prompt` heading. Returns null until
+ * that block has fully streamed in (so a "Copy fix prompt" affordance can wait
+ * for it). Tolerant of the heading level and an optional code-fence language.
+ */
+export function extractAgentPrompt(text: string): string | null {
+  const match = text.match(
+    /^#{1,6}\s*Agent prompt\b[^\n]*\n+```[^\n]*\n([\s\S]*?)```/im,
+  );
+  const body = match?.[1]?.trim();
+  return body ? body : null;
+}
+
 /** Binary file contents never help the model; drop those sections entirely. */
 function stripBinarySections(diffText: string): string {
   return diffText

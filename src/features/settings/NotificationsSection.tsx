@@ -46,6 +46,14 @@ export const NotificationsSection = withForm({
             />
           )}
         </form.AppField>
+        <form.AppField name="notifications.actionRuns">
+          {(field) => (
+            <field.CheckboxField
+              label="Workflow runs finish on the current branch"
+              className="flex cursor-pointer items-center gap-2 text-xs"
+            />
+          )}
+        </form.AppField>
         {aiEnabled && (
           <form.AppField name="notifications.automations">
             {(field) => (

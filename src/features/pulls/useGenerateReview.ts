@@ -1,13 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
-import {
-  cancelAgentReview,
-  providerKind,
-  runAgentReview,
-} from "@/lib/ai/agent";
+import { cancelAgentReview } from "@/lib/ai/agent";
 import { createAiClient } from "@/lib/ai/client";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider } from "@/lib/ai/providers";
+import { runCliStream } from "@/lib/ai/stream";
 import type { AiSettings, ReviewMode } from "@/lib/ai/types";
 import type { DiffStatEntry } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
@@ -80,11 +77,11 @@ export function useGenerateReview() {
         );
 
         if (isCliProvider(ai.provider)) {
-          await runCliReview({
+          await runCliStream({
             ai,
-            context,
             system,
             prompt,
+            repoPath: context.repoPath,
             setText,
             setStatus,
             registerId: (id) => {
@@ -118,68 +115,4 @@ export function useGenerateReview() {
   );
 
   return { generate, cancel, reset, generating, text, status };
-}
-
-/** Drives one streaming agent-CLI review, accumulating deltas into `setText`. */
-async function runCliReview({
-  ai,
-  context,
-  system,
-  prompt,
-  setText,
-  setStatus,
-  registerId,
-}: {
-  ai: AiSettings;
-  context: ReviewContext;
-  system: string;
-  prompt: string;
-  setText: (text: string) => void;
-  setStatus: (status: string) => void;
-  registerId: (id: string) => void;
-}): Promise<void> {
-  const kind = providerKind(ai.provider);
-  if (!kind) throw new Error(`Unsupported CLI provider: ${ai.provider}`);
-
-  const reviewId = crypto.randomUUID();
-  registerId(reviewId);
-
-  let buffer = "";
-  let settled = false;
-  await new Promise<void>((resolve, reject) => {
-    runAgentReview({
-      kind,
-      binPath: ai.cliPath?.trim() || null,
-      model: ai.model,
-      systemPrompt: system,
-      userPrompt: prompt,
-      repoPath: context.repoPath,
-      repoAware: Boolean(ai.cliRepoAware),
-      reviewId,
-      onEvent: (event) => {
-        if (event.kind === "delta") {
-          buffer += event.text;
-          setText(buffer);
-        } else if (event.kind === "status") {
-          setStatus(event.text);
-        } else if (event.kind === "done") {
-          settled = true;
-          // The terminal event carries the authoritative full text; prefer it
-          // if the partial stream fell short (e.g. deltas were coalesced).
-          if (event.text.length > buffer.length) setText(event.text);
-          if (event.isError)
-            reject(new Error("The review ended with an error."));
-          else resolve();
-        } else {
-          settled = true;
-          reject(new Error(event.message));
-        }
-      },
-    })
-      // Backend returned without a terminal event — this is the cancel path.
-      .then(() => {
-        if (!settled) resolve();
-      })
-      .catch(reject);
-  });
 }

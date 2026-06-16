@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { CommitAuthor, RepoInfo } from "@/lib/git/types";
 
 export type AppView = "welcome" | "repo" | "settings";
-export type RepoTab = "changes" | "history" | "compare" | "pulls";
+export type RepoTab = "changes" | "history" | "compare" | "pulls" | "actions";
 
 export interface SelectedPr {
   kind: "local" | "remote";
@@ -27,6 +27,8 @@ interface UiState {
   compareBranch: string | null;
   /** Selected PR on the Pull Requests tab. */
   selectedPr: SelectedPr | null;
+  /** Selected workflow run (databaseId) on the Actions tab. */
+  selectedRunId: number | null;
   selectedFile: SelectedFile | null;
   selectedCommitHash: string | null;
   commitTitle: string;
@@ -44,6 +46,7 @@ interface UiState {
   setRepoTab: (tab: RepoTab) => void;
   setCompareBranch: (branch: string | null) => void;
   selectPr: (pr: SelectedPr | null) => void;
+  selectRun: (id: number | null) => void;
   selectFile: (file: SelectedFile | null) => void;
   selectCommit: (hash: string | null) => void;
   setCommitDraft: (title: string, body: string) => void;
@@ -63,6 +66,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
   repoTab: "changes",
   compareBranch: null,
   selectedPr: null,
+  selectedRunId: null,
   selectedFile: null,
   selectedCommitHash: null,
   commitTitle: "",
@@ -80,6 +84,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
       repoTab: "changes",
       compareBranch: null,
       selectedPr: null,
+      selectedRunId: null,
       selectedFile: null,
       selectedCommitHash: null,
       commitTitle: "",
@@ -96,12 +101,14 @@ export const useUiStore = create<UiState>()((set, get) => ({
       repoTab: "changes",
       compareBranch: null,
       selectedPr: null,
+      selectedRunId: null,
       selectedFile: null,
       selectedCommitHash: null,
     }),
   setRepoTab: (tab) => set({ repoTab: tab }),
   setCompareBranch: (branch) => set({ compareBranch: branch }),
   selectPr: (pr) => set({ selectedPr: pr }),
+  selectRun: (id) => set({ selectedRunId: id }),
   selectCommit: (hash) => set({ selectedCommitHash: hash }),
   openSettings: () => {
     const { view } = get();

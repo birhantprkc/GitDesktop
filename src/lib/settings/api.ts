@@ -23,6 +23,8 @@ export interface NotificationSettings {
   prActivity: boolean;
   /** Review decisions on PRs you authored. */
   prReviews: boolean;
+  /** Workflow runs finishing (success/failure) on the current branch. */
+  actionRuns: boolean;
 }
 
 export interface AppSettings {
@@ -77,6 +79,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     prChecks: "all",
     prActivity: true,
     prReviews: true,
+    actionRuns: true,
   },
   globalInstructions: "",
   aiIgnorePatterns: "",

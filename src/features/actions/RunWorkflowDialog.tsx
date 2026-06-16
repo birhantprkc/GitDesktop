@@ -1,0 +1,243 @@
+import { PlusIcon, XIcon } from "@phosphor-icons/react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useRunWorkflow, useWorkflows } from "@/lib/github/actions";
+import { useUiStore } from "@/lib/stores/ui";
+import { toastError } from "@/lib/toast";
+
+export function RunWorkflowDialog({
+  repoPath,
+  open,
+  onOpenChange,
+  defaultRef,
+}: {
+  repoPath: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  defaultRef: string;
+}) {
+  const workflows = useWorkflows(repoPath, open);
+  const runWorkflow = useRunWorkflow(repoPath);
+  const selectRun = useUiStore((s) => s.selectRun);
+
+  // Only active workflows are dispatchable.
+  const dispatchable = (workflows.data ?? []).filter(
+    (w) => w.state === "active",
+  );
+  // value → label map so the trigger shows the workflow name, not its id.
+  const workflowItems = Object.fromEntries(
+    dispatchable.map((w) => [String(w.id), w.name]),
+  );
+
+  const [workflow, setWorkflow] = useState("");
+  const [gitRef, setGitRef] = useState(defaultRef);
+  // Stable row ids keep input focus/state correct when rows are removed.
+  const nextId = useRef(0);
+  const [inputs, setInputs] = useState<
+    { id: number; key: string; value: string }[]
+  >([]);
+
+  // Reset the form each time the dialog opens, defaulting to the first workflow.
+  useEffect(() => {
+    if (!open) return;
+    setGitRef(defaultRef);
+    setInputs([]);
+  }, [open, defaultRef]);
+  useEffect(() => {
+    if (open && !workflow && dispatchable.length > 0) {
+      setWorkflow(String(dispatchable[0].id));
+    }
+  }, [open, workflow, dispatchable]);
+
+  function submit() {
+    if (!workflow || !gitRef.trim()) return;
+    const record: Record<string, string> = {};
+    for (const { key, value } of inputs) {
+      const k = key.trim();
+      if (k) record[k] = value;
+    }
+    runWorkflow.mutate(
+      { workflow, gitRef: gitRef.trim(), inputs: record },
+      {
+        onSuccess: () => {
+          toast.success("Workflow dispatched", {
+            description:
+              "It may take a few seconds to appear in the runs list.",
+          });
+          // Clear any stale selection so the new run is easy to spot.
+          selectRun(null);
+          onOpenChange(false);
+        },
+        onError: toastError,
+      },
+    );
+  }
+
+  const noneDispatchable = !workflows.isPending && dispatchable.length === 0;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Run workflow</DialogTitle>
+          <DialogDescription>
+            Manually trigger a workflow that has a{" "}
+            <code className="font-mono">workflow_dispatch</code> trigger, on a
+            branch or tag.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="wf-workflow">Workflow</Label>
+            <Select
+              items={workflowItems}
+              value={workflow}
+              onValueChange={(v) => v && setWorkflow(v)}
+              disabled={dispatchable.length === 0}
+            >
+              <SelectTrigger id="wf-workflow" className="w-full">
+                <SelectValue
+                  placeholder={
+                    workflows.isPending ? "Loading…" : "Select a workflow"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {dispatchable.map((w) => (
+                  <SelectItem key={w.id} value={String(w.id)}>
+                    {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {noneDispatchable && (
+              <p className="text-xs text-muted-foreground">
+                No active workflows found. A workflow needs a{" "}
+                <code className="font-mono">workflow_dispatch</code> trigger to
+                be run manually.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="wf-ref">Branch or tag</Label>
+            <Input
+              id="wf-ref"
+              value={gitRef}
+              onChange={(e) => setGitRef(e.target.value)}
+              placeholder="main"
+              autoComplete="off"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>
+                Inputs{" "}
+                <span className="font-normal text-muted-foreground">
+                  (optional)
+                </span>
+              </Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() =>
+                  setInputs((prev) => [
+                    ...prev,
+                    { id: nextId.current++, key: "", value: "" },
+                  ])
+                }
+              >
+                <PlusIcon data-icon="inline-start" />
+                Add input
+              </Button>
+            </div>
+            {inputs.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Add key/value pairs if the workflow defines inputs.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {inputs.map((row) => (
+                  <div key={row.id} className="flex items-center gap-2">
+                    <Input
+                      value={row.key}
+                      onChange={(e) =>
+                        setInputs((prev) =>
+                          prev.map((r) =>
+                            r.id === row.id ? { ...r, key: e.target.value } : r,
+                          ),
+                        )
+                      }
+                      placeholder="name"
+                      className="h-8 flex-1"
+                      autoComplete="off"
+                    />
+                    <Input
+                      value={row.value}
+                      onChange={(e) =>
+                        setInputs((prev) =>
+                          prev.map((r) =>
+                            r.id === row.id
+                              ? { ...r, value: e.target.value }
+                              : r,
+                          ),
+                        )
+                      }
+                      placeholder="value"
+                      className="h-8 flex-1"
+                      autoComplete="off"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="Remove input"
+                      onClick={() =>
+                        setInputs((prev) => prev.filter((r) => r.id !== row.id))
+                      }
+                    >
+                      <XIcon />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            disabled={!workflow || !gitRef.trim() || runWorkflow.isPending}
+            onClick={submit}
+          >
+            Run workflow
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
