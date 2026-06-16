@@ -111,7 +111,19 @@ fn candidate_dirs() -> Vec<PathBuf> {
         dirs.push(home.join(".claude").join("bin"));
         dirs.push(home.join(".codex").join("bin"));
         #[cfg(not(windows))]
-        dirs.push(home.join(".npm-global").join("bin"));
+        {
+            // npm with a custom prefix, plus the package/version managers that
+            // expose a *stable* bin dir. nvm/fnm don't (their PATH is managed by
+            // a shell hook), so those are covered by the login-shell probe.
+            dirs.push(home.join(".npm-global").join("bin"));
+            dirs.push(home.join(".volta").join("bin"));
+            dirs.push(home.join(".asdf").join("shims"));
+            dirs.push(home.join(".bun").join("bin"));
+            dirs.push(home.join(".linuxbrew").join("bin"));
+            // pnpm global bin: ~/Library/pnpm on macOS, ~/.local/share/pnpm on Linux.
+            dirs.push(home.join("Library").join("pnpm"));
+            dirs.push(home.join(".local").join("share").join("pnpm"));
+        }
     }
     #[cfg(windows)]
     if let Some(appdata) = std::env::var_os("APPDATA") {
@@ -120,7 +132,8 @@ fn candidate_dirs() -> Vec<PathBuf> {
     #[cfg(not(windows))]
     {
         dirs.push(PathBuf::from("/usr/local/bin"));
-        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/opt/homebrew/bin")); // Apple Silicon Homebrew
+        dirs.push(PathBuf::from("/home/linuxbrew/.linuxbrew/bin")); // Linuxbrew
         dirs.push(PathBuf::from("/usr/bin"));
     }
     dirs
@@ -184,13 +197,65 @@ fn find_executable(names: &[&str]) -> Option<PathBuf> {
     None
 }
 
-/// Resolves the binary to run: an explicit override if it exists, else search.
-fn resolve(kind: AgentKind, bin_path: Option<&str>) -> Option<PathBuf> {
+/// macOS/Linux fallback: a packaged GUI app inherits launchd's (or a desktop
+/// launcher's) minimal PATH, not the user's shell PATH — so a CLI installed by a
+/// Node version manager (nvm/fnm/asdf) or under a non-standard prefix is neither
+/// on PATH nor in `candidate_dirs`. Ask the user's login+interactive shell to
+/// resolve it the way their terminal would. Assumes a POSIX-ish shell
+/// (bash/zsh/sh, the overwhelming default); fish and others simply fall back to
+/// the explicit-path override in Settings.
+#[cfg(not(windows))]
+async fn resolve_via_login_shell(names: &[&str]) -> Option<PathBuf> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    for name in names {
+        let mut cmd = Command::new(&shell);
+        // -l sources the profile; -i sources the rc files, where zsh/bash users
+        // commonly set PATH (nvm, `brew shellenv`, …). stdin is closed so the
+        // shell runs the one command and exits rather than waiting for input.
+        cmd.arg("-lic")
+            .arg(format!("command -v {name}"))
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let Ok(Ok(out)) = tokio::time::timeout(DETECT_TIMEOUT, cmd.output()).await else {
+            continue;
+        };
+        // rc files may print banners, so scan every line for an absolute path to
+        // a real file named like the binary, rather than trusting the first line.
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let candidate = PathBuf::from(line.trim());
+            if candidate.is_absolute()
+                && candidate.file_name().and_then(|f| f.to_str()) == Some(*name)
+                && candidate.is_file()
+            {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Resolves the binary to run: an explicit override if it exists, else a static
+/// search of PATH + known dirs, else (non-Windows) the user's login shell.
+async fn resolve(kind: AgentKind, bin_path: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = bin_path.map(str::trim).filter(|s| !s.is_empty()) {
         let pb = PathBuf::from(p);
         return pb.is_file().then_some(pb);
     }
-    find_executable(kind.binary_names())
+    let names = kind.binary_names();
+    if let Some(found) = find_executable(names) {
+        return Some(found);
+    }
+    #[cfg(not(windows))]
+    {
+        resolve_via_login_shell(names).await
+    }
+    #[cfg(windows)]
+    {
+        None
+    }
 }
 
 // --- detection -------------------------------------------------------------
@@ -219,7 +284,7 @@ async fn run_capture(program: &Path, args: &[&str], timeout: Duration) -> AppRes
 
 #[tauri::command]
 pub async fn agent_detect(kind: AgentKind, bin_path: Option<String>) -> AppResult<AgentInfo> {
-    let Some(binary) = resolve(kind, bin_path.as_deref()) else {
+    let Some(binary) = resolve(kind, bin_path.as_deref()).await else {
         return Ok(AgentInfo {
             found: false,
             path: None,
@@ -456,7 +521,7 @@ pub async fn agent_review(
     review_id: String,
     on_event: Channel<ReviewEvent>,
 ) -> AppResult<()> {
-    let binary = resolve(kind, bin_path.as_deref()).ok_or_else(|| {
+    let binary = resolve(kind, bin_path.as_deref()).await.ok_or_else(|| {
         AppError::Command(format!(
             "{} CLI not found. Install it or set its path in Settings.",
             kind.label()
