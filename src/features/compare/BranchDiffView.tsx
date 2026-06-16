@@ -4,6 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffSurface } from "@/features/diff/DiffSurface";
 import { useBranchDiffFiles, useBranchFileDiff } from "@/lib/git/queries";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { cn } from "@/lib/utils";
 
 /**
@@ -60,24 +61,13 @@ export function BranchDiffView({
   const totalDeleted = files.data.reduce((sum, f) => sum + f.deleted, 0);
 
   // Arrow keys walk the file list, mirroring the app's other lists.
-  function onFilesKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    const fileList = files.data;
-    if (!fileList || fileList.length === 0) return;
-    e.preventDefault();
-    const idx = fileList.findIndex((f) => f.path === effectivePath);
-    const next =
-      e.key === "ArrowDown"
-        ? Math.min(idx + 1, fileList.length - 1)
-        : Math.max(idx - 1, 0);
-    const path = fileList[Math.max(next, 0)].path;
-    setSelectedPath(path);
-    const el = e.currentTarget.querySelector<HTMLElement>(
-      `[data-path="${CSS.escape(path)}"]`,
-    );
-    el?.focus();
-    el?.scrollIntoView({ block: "nearest" });
-  }
+  const onFilesKeyDown = listKeyboardNav({
+    items: files.data ?? [],
+    activeIndex: (files.data ?? []).findIndex((f) => f.path === effectivePath),
+    onActivate: (file) => setSelectedPath(file.path),
+    rowKey: (file) => file.path,
+    rowAttr: "data-path",
+  });
 
   return (
     <div className="flex h-full flex-col">

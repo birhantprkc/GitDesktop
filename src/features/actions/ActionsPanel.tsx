@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
 import { useWorkflowRuns } from "@/lib/github/actions";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -47,25 +48,12 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
       r.headBranch.toLowerCase().includes(query),
   );
 
-  function onListKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    if (visible.length === 0) return;
-    e.preventDefault();
-    const current = visible.findIndex((r) => r.id === selectedRunId);
-    const next =
-      e.key === "ArrowDown"
-        ? Math.min(current + 1, visible.length - 1)
-        : current === -1
-          ? visible.length - 1
-          : Math.max(current - 1, 0);
-    const target = visible[next];
-    selectRun(target.id);
-    const el = e.currentTarget.querySelector<HTMLElement>(
-      `[data-row="${CSS.escape(String(target.id))}"]`,
-    );
-    el?.focus();
-    el?.scrollIntoView({ block: "nearest" });
-  }
+  const onListKeyDown = listKeyboardNav({
+    items: visible,
+    activeIndex: visible.findIndex((r) => r.id === selectedRunId),
+    onActivate: (run) => selectRun(run.id),
+    rowKey: (run) => String(run.id),
+  });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

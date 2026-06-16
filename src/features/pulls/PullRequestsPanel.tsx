@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { PrStateFilter } from "@/lib/git/api";
 import { useGhStatus, usePrList } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import type { LocalPr } from "@/lib/pulls/local";
 import { useLocalPrs } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
@@ -128,29 +129,14 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
     })),
   ];
 
-  function onListKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    if (navTargets.length === 0) return;
-    // Move the selection, not the scrollbar.
-    e.preventDefault();
-    const current = navTargets.findIndex(
+  const onListKeyDown = listKeyboardNav({
+    items: navTargets,
+    activeIndex: navTargets.findIndex(
       (t) => t.kind === selectedPr?.kind && t.id === selectedPr.id,
-    );
-    const next =
-      e.key === "ArrowDown"
-        ? Math.min(current + 1, navTargets.length - 1)
-        : current === -1
-          ? navTargets.length - 1
-          : Math.max(current - 1, 0);
-    const target = navTargets[next];
-    selectPr(target);
-    // Move focus along with the selection so the focus ring tracks it.
-    const el = e.currentTarget.querySelector<HTMLElement>(
-      `[data-row="${CSS.escape(`${target.kind}:${target.id}`)}"]`,
-    );
-    el?.focus();
-    el?.scrollIntoView({ block: "nearest" });
-  }
+    ),
+    onActivate: (target) => selectPr(target),
+    rowKey: (target) => `${target.kind}:${target.id}`,
+  });
 
   function toggle(
     set: Set<string>,

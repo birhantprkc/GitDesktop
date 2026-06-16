@@ -26,6 +26,7 @@ import { useAppForm } from "@/lib/form";
 import { cloneRepo, validateRepo } from "@/lib/git/api";
 import { useGhRepos } from "@/lib/git/queries";
 import type { GhRepo } from "@/lib/git/types";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useAddRecentRepo, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { errorMessage, isAppError } from "@/lib/tauri/invoke";
@@ -161,19 +162,13 @@ export function CloneRepoDialog({
     }
   }, [repoRows, selected]);
 
-  function onFilterKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    if (repoRows.length === 0) return;
-    e.preventDefault();
-    const idx = repoRows.findIndex(
+  const onFilterKeyDown = listKeyboardNav({
+    items: repoRows,
+    activeIndex: repoRows.findIndex(
       (r) => r.nameWithOwner === selected?.nameWithOwner,
-    );
-    const next =
-      e.key === "ArrowDown"
-        ? Math.min(idx + 1, repoRows.length - 1)
-        : Math.max(idx - 1, 0);
-    setSelected(repoRows[Math.max(next, 0)]);
-  }
+    ),
+    onActivate: (r) => setSelected(r),
+  });
 
   async function pickDestination() {
     const path = await openDialog({ directory: true, title: "Local path" });

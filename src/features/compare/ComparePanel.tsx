@@ -29,6 +29,7 @@ import {
 } from "@/lib/git/queries";
 import type { CommitSummary } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -113,27 +114,12 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
     ...behind.map((c) => c.hash),
   ];
 
-  function onListKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    if (navTargets.length === 0) return;
-    // Move the selection, not the scrollbar.
-    e.preventDefault();
-    const current = navTargets.indexOf(selectedCommitHash);
-    const next =
-      e.key === "ArrowDown"
-        ? Math.min(current + 1, navTargets.length - 1)
-        : current === -1
-          ? navTargets.length - 1
-          : Math.max(current - 1, 0);
-    const target = navTargets[next];
-    selectCommit(target);
-    // Move focus along with the selection so the focus ring tracks it.
-    const el = e.currentTarget.querySelector<HTMLElement>(
-      `[data-row="${CSS.escape(target ?? "all")}"]`,
-    );
-    el?.focus();
-    el?.scrollIntoView({ block: "nearest" });
-  }
+  const onListKeyDown = listKeyboardNav({
+    items: navTargets,
+    activeIndex: navTargets.indexOf(selectedCommitHash),
+    onActivate: (target) => selectCommit(target),
+    rowKey: (target) => target ?? "all",
+  });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

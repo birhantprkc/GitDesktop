@@ -1,23 +1,8 @@
 import { StreamLanguage } from "@codemirror/language";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import CodeMirror, { EditorView } from "@uiw/react-codemirror";
-import { useSyncExternalStore } from "react";
+import { useIsDark } from "@/lib/use-is-dark";
 import { cn } from "@/lib/utils";
-
-// Follow the OS color scheme the same way the rest of the app does (main.tsx /
-// DiffSurface), so the editor's theme matches light/dark without a prop.
-const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
-function subscribeDark(cb: () => void) {
-  darkQuery.addEventListener("change", cb);
-  return () => darkQuery.removeEventListener("change", cb);
-}
-function useIsDark() {
-  return useSyncExternalStore(
-    subscribeDark,
-    () => darkQuery.matches,
-    () => true,
-  );
-}
 
 const shellLanguage = StreamLanguage.define(shell);
 

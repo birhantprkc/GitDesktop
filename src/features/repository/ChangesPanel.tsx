@@ -51,6 +51,7 @@ import {
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
 import { isMac } from "@/lib/hotkeys/binding";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -223,39 +224,32 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const selectedEntries = entries.filter((e) => selectedPaths.has(e.path));
   const selectionCount = selectedEntries.length;
 
-  function onListKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    if (visibleRows.length === 0) return;
-    // Move the selection, not the scrollbar.
-    e.preventDefault();
-    const keys = visibleRows.map((r) => keyOf(r.entry.path, r.staged));
-    const index = activeKey ? keys.indexOf(activeKey) : -1;
-    const next =
-      e.key === "ArrowDown"
-        ? Math.min(index + 1, visibleRows.length - 1)
-        : index === -1
-          ? visibleRows.length - 1
-          : Math.max(index - 1, 0);
-    const row = visibleRows[next];
-    const key = keys[next];
-    select(row.entry, row.staged);
-    // Shift+Arrow extends the selection from the anchor; a plain arrow
-    // collapses it back to the single active row.
-    if (e.shiftKey && anchorKey) {
-      const a = keys.indexOf(anchorKey);
-      if (a !== -1) {
-        const [lo, hi] = a <= next ? [a, next] : [next, a];
-        setSelectedKeys(new Set(keys.slice(lo, hi + 1)));
+  // Arrow keys walk the rows across both sections; Shift extends from the
+  // anchor, a plain arrow collapses to the single active row.
+  const rowKey = (r: { entry: FileEntry; staged: boolean }) =>
+    keyOf(r.entry.path, r.staged);
+  const onListKeyDown = listKeyboardNav({
+    items: visibleRows,
+    activeIndex: activeKey
+      ? visibleRows.findIndex((r) => rowKey(r) === activeKey)
+      : -1,
+    rowKey,
+    onActivate: (row, to, shift) => {
+      const key = rowKey(row);
+      select(row.entry, row.staged);
+      if (shift && anchorKey) {
+        const keys = visibleRows.map(rowKey);
+        const a = keys.indexOf(anchorKey);
+        if (a !== -1) {
+          const [lo, hi] = a <= to ? [a, to] : [to, a];
+          setSelectedKeys(new Set(keys.slice(lo, hi + 1)));
+        }
+      } else {
+        setSelectedKeys(new Set([key]));
+        setAnchorKey(key);
       }
-    } else {
-      setSelectedKeys(new Set([key]));
-      setAnchorKey(key);
-    }
-    // Move focus along with the active row so the focus ring tracks it.
-    e.currentTarget
-      .querySelector<HTMLElement>(`[data-row="${CSS.escape(key)}"]`)
-      ?.focus();
-  }
+    },
+  });
 
   // Drop the selection when the selected file leaves its section
   // (e.g. it was staged, committed, or reverted externally).

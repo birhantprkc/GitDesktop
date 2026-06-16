@@ -1,26 +1,15 @@
 import { DiffFile, DiffModeEnum, DiffView } from "@git-diff-view/react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import type { FileDiff } from "@/lib/git/types";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
+import { useIsDark } from "@/lib/use-is-dark";
 import { DiffErrorBoundary } from "./DiffErrorBoundary";
 import { DiffPlaceholder } from "./DiffPlaceholder";
 import { diffLang } from "./diff-lang";
 import { ImageDiff, ImagePanes, type ImageRevs, imageMime } from "./ImageDiff";
-
-const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
-
-function useIsDark() {
-  return useSyncExternalStore(
-    (notify) => {
-      darkQuery.addEventListener("change", notify);
-      return () => darkQuery.removeEventListener("change", notify);
-    },
-    () => darkQuery.matches,
-  );
-}
 
 /** The persisted Unified/Split preference toggle. */
 export function DiffModeToggle() {

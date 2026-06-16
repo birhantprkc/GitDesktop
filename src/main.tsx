@@ -5,12 +5,12 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { queryClient } from "@/lib/query-client";
+import { darkQuery } from "@/lib/use-is-dark";
 import App from "./App.tsx";
 import "./App.css";
 import "@git-diff-view/react/styles/diff-view.css";
 
 // Follow the OS color scheme; the theme css switches on the .dark class.
-const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const applyTheme = () =>
   document.documentElement.classList.toggle("dark", darkQuery.matches);
 darkQuery.addEventListener("change", applyTheme);

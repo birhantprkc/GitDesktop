@@ -22,6 +22,7 @@ import {
   useStashFiles,
   useStashList,
 } from "@/lib/git/queries";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -66,23 +67,13 @@ export function StashesDialog({
   }
 
   // Arrow keys walk the stash list, mirroring the app's other lists.
-  function onStashesKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    if (list.length === 0) return;
-    e.preventDefault();
-    const idx = list.findIndex((s) => s.index === effectiveIndex);
-    const next =
-      e.key === "ArrowDown"
-        ? Math.min(idx + 1, list.length - 1)
-        : Math.max(idx - 1, 0);
-    const stash = list[Math.max(next, 0)];
-    setSelectedIndex(stash.index);
-    const el = e.currentTarget.querySelector<HTMLElement>(
-      `[data-stash="${stash.index}"]`,
-    );
-    el?.focus();
-    el?.scrollIntoView({ block: "nearest" });
-  }
+  const onStashesKeyDown = listKeyboardNav({
+    items: list,
+    activeIndex: list.findIndex((s) => s.index === effectiveIndex),
+    onActivate: (stash) => setSelectedIndex(stash.index),
+    rowKey: (stash) => String(stash.index),
+    rowAttr: "data-stash",
+  });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -254,23 +245,13 @@ function StashFiles({ repoPath, index }: { repoPath: string; index: number }) {
 
   const fileList = files.data;
   // Arrow keys walk the file list, mirroring the app's other lists.
-  function onFilesKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    if (fileList.length === 0) return;
-    e.preventDefault();
-    const idx = fileList.findIndex((f) => f.path === effectivePath);
-    const next =
-      e.key === "ArrowDown"
-        ? Math.min(idx + 1, fileList.length - 1)
-        : Math.max(idx - 1, 0);
-    const path = fileList[Math.max(next, 0)].path;
-    setSelectedPath(path);
-    const el = e.currentTarget.querySelector<HTMLElement>(
-      `[data-path="${CSS.escape(path)}"]`,
-    );
-    el?.focus();
-    el?.scrollIntoView({ block: "nearest" });
-  }
+  const onFilesKeyDown = listKeyboardNav({
+    items: fileList,
+    activeIndex: fileList.findIndex((f) => f.path === effectivePath),
+    onActivate: (file) => setSelectedPath(file.path),
+    rowKey: (file) => file.path,
+    rowAttr: "data-path",
+  });
 
   return (
     <>

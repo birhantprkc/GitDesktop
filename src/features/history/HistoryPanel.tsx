@@ -53,6 +53,7 @@ import {
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import type { RewriteStep } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
@@ -259,36 +260,22 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   }
 
   // Arrow keys walk the history selection; Shift extends it from the anchor.
-  function onListKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    if (visibleCommits.length === 0) return;
-    // Move the selection, not the scrollbar.
-    e.preventDefault();
-    const current = visibleCommits.findIndex(
-      (c) => c.hash === selectedCommitHash,
-    );
-    const next =
-      e.key === "ArrowDown"
-        ? Math.min(current + 1, visibleCommits.length - 1)
-        : current === -1
-          ? visibleCommits.length - 1
-          : Math.max(current - 1, 0);
-    const commit = visibleCommits[next];
-    selectCommit(commit.hash);
-    if (e.shiftKey && anchorIndex !== null) {
-      const [a, b] = [anchorIndex, next].sort((x, y) => x - y);
-      setSelected(new Set(visibleCommits.slice(a, b + 1).map((c) => c.hash)));
-    } else {
-      setSelected(new Set([commit.hash]));
-      setAnchorIndex(next);
-    }
-    // Move focus along with the selection so the focus ring tracks it.
-    const el = e.currentTarget.querySelector<HTMLElement>(
-      `[data-hash="${CSS.escape(commit.hash)}"]`,
-    );
-    el?.focus();
-    el?.scrollIntoView({ block: "nearest" });
-  }
+  const onListKeyDown = listKeyboardNav({
+    items: visibleCommits,
+    activeIndex: visibleCommits.findIndex((c) => c.hash === selectedCommitHash),
+    rowKey: (c) => c.hash,
+    rowAttr: "data-hash",
+    onActivate: (commit, to, shift) => {
+      selectCommit(commit.hash);
+      if (shift && anchorIndex !== null) {
+        const [a, b] = [anchorIndex, to].sort((x, y) => x - y);
+        setSelected(new Set(visibleCommits.slice(a, b + 1).map((c) => c.hash)));
+      } else {
+        setSelected(new Set([commit.hash]));
+        setAnchorIndex(to);
+      }
+    },
+  });
 
   // The commits a context-menu action applies to: the multi-selection when the
   // right-clicked commit is part of it, otherwise just that one commit.
