@@ -44,6 +44,12 @@ export const ACTIONS = [
     category: "Application",
     defaultBinding: "mod+k",
   },
+  {
+    id: "show-help",
+    label: "Open user guide",
+    category: "Application",
+    defaultBinding: "f1",
+  },
 
   // Navigation
   {

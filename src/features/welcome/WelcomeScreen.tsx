@@ -1,4 +1,9 @@
-import { FolderOpenIcon, GearIcon } from "@phosphor-icons/react";
+import {
+  BookOpenIcon,
+  FolderOpenIcon,
+  GearIcon,
+  QuestionIcon,
+} from "@phosphor-icons/react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
@@ -12,7 +17,11 @@ import {
 } from "@/components/ui/card";
 import { validateRepo } from "@/lib/git/api";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
-import { useAddRecentRepo } from "@/lib/settings/queries";
+import {
+  useAddRecentRepo,
+  useSaveSettings,
+  useSettings,
+} from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { CloneRepoDialog } from "./CloneRepoDialog";
@@ -22,9 +31,22 @@ import { RecentRepoList } from "./RecentRepoList";
 export function WelcomeScreen() {
   const openRepo = useUiStore((s) => s.openRepo);
   const openSettings = useUiStore((s) => s.openSettings);
+  const openHelp = useUiStore((s) => s.openHelp);
   const addRecent = useAddRecentRepo();
+  const settings = useSettings();
+  const saveSettings = useSaveSettings();
   const [cloneOpen, setCloneOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+
+  function dismissNudge() {
+    if (settings.data) {
+      saveSettings.mutate({ ...settings.data, seenGuideNudge: true });
+    }
+  }
+  function openGuide() {
+    dismissNudge();
+    openHelp();
+  }
 
   async function pickAndOpen() {
     const path = await openDialog({
@@ -52,17 +74,53 @@ export function WelcomeScreen() {
           <BrandMark className="size-5" />
           <span className="text-sm font-medium">GitDesktop</span>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Settings"
-          onClick={openSettings}
-        >
-          <GearIcon />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="User guide"
+            title="User guide (F1)"
+            onClick={openHelp}
+          >
+            <QuestionIcon />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Settings"
+            onClick={openSettings}
+          >
+            <GearIcon />
+          </Button>
+        </div>
       </header>
 
       <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center gap-6 p-8">
+        {settings.data && !settings.data.seenGuideNudge && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BookOpenIcon className="size-4 text-primary" />
+                New to GitDesktop?
+              </CardTitle>
+              <CardDescription>
+                The built-in guide walks through everything the app can do —
+                repositories, branches, pull requests, GitHub Actions, AI, and
+                more.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={openGuide}>
+                <BookOpenIcon data-icon="inline-start" />
+                Open the guide
+              </Button>
+              <Button variant="ghost" size="sm" onClick={dismissNudge}>
+                Maybe later
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle>Get started</CardTitle>

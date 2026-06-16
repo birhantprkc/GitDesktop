@@ -60,6 +60,8 @@ export interface AppSettings {
   showSelectionHint: boolean;
   /** Check GitHub Releases for a new version on launch (install stays opt-in). */
   autoCheckUpdates: boolean;
+  /** First-run nudge toward the user guide; set once the user opens or dismisses it. */
+  seenGuideNudge: boolean;
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -94,6 +96,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   confirmAmendForcePush: true,
   showSelectionHint: true,
   autoCheckUpdates: true,
+  seenGuideNudge: false,
   recentRepos: [],
   diffViewMode: "unified",
 };

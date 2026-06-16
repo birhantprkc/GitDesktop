@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 import { Spinner } from "@/components/ui/spinner";
 import { AutomationResultDialog } from "@/features/automations/AutomationResultDialog";
+import { HelpScreen } from "@/features/help/HelpScreen";
 import { RepositoryView } from "@/features/repository/RepositoryView";
 import { SettingsScreen } from "@/features/settings/SettingsScreen";
 import { CommandPalette } from "@/features/shortcuts/CommandPalette";
@@ -17,6 +18,7 @@ import { useUiStore } from "@/lib/stores/ui";
 function App() {
   const view = useUiStore((s) => s.view);
   const openSettings = useUiStore((s) => s.openSettings);
+  const openHelp = useUiStore((s) => s.openHelp);
   const gitInstalled = useGitInstalled();
   const queryClient = useQueryClient();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -25,6 +27,7 @@ function App() {
   // The app-wide hotkey dispatcher plus the always-available actions.
   useHotkeysListener();
   useHotkeyAction("open-settings", openSettings);
+  useHotkeyAction("show-help", openHelp);
   useHotkeyAction("show-shortcuts", () => setShortcutsOpen(true));
   useHotkeyAction("command-palette", () => setPaletteOpen(true));
 
@@ -59,6 +62,7 @@ function App() {
       {view === "welcome" && <WelcomeScreen />}
       {view === "repo" && <RepositoryView />}
       {view === "settings" && <SettingsScreen />}
+      {view === "help" && <HelpScreen />}
       <AutomationResultDialog />
       <UpdateChecker />
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />

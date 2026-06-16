@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { CommitAuthor, RepoInfo } from "@/lib/git/types";
 
-export type AppView = "welcome" | "repo" | "settings";
+export type AppView = "welcome" | "repo" | "settings" | "help";
 export type RepoTab = "changes" | "history" | "compare" | "pulls" | "actions";
 
 export interface SelectedPr {
@@ -18,8 +18,8 @@ export interface SelectedFile {
 
 interface UiState {
   view: AppView;
-  /** View to return to when settings closes. */
-  previousView: Exclude<AppView, "settings">;
+  /** Underlying view to return to when settings or help closes. */
+  previousView: Exclude<AppView, "settings" | "help">;
   repoPath: string | null;
   repoName: string | null;
   repoTab: RepoTab;
@@ -43,6 +43,8 @@ interface UiState {
   closeRepo: () => void;
   openSettings: () => void;
   closeSettings: () => void;
+  openHelp: () => void;
+  closeHelp: () => void;
   setRepoTab: (tab: RepoTab) => void;
   setCompareBranch: (branch: string | null) => void;
   selectPr: (pr: SelectedPr | null) => void;
@@ -114,10 +116,21 @@ export const useUiStore = create<UiState>()((set, get) => ({
     const { view } = get();
     set({
       view: "settings",
-      previousView: view === "settings" ? get().previousView : view,
+      // Keep the underlying view when opening from another overlay.
+      previousView:
+        view === "settings" || view === "help" ? get().previousView : view,
     });
   },
   closeSettings: () => set({ view: get().previousView }),
+  openHelp: () => {
+    const { view } = get();
+    set({
+      view: "help",
+      previousView:
+        view === "settings" || view === "help" ? get().previousView : view,
+    });
+  },
+  closeHelp: () => set({ view: get().previousView }),
   selectFile: (file) => set({ selectedFile: file }),
   setCommitDraft: (title, body) =>
     set({ commitTitle: title, commitBody: body }),
