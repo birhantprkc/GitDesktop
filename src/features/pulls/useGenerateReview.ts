@@ -34,6 +34,7 @@ export interface ReviewContext {
 export function useGenerateReview() {
   const [generating, setGenerating] = useState(false);
   const [text, setText] = useState("");
+  const [status, setStatus] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const cliReviewIdRef = useRef<string | null>(null);
   const cancelledRef = useRef(false);
@@ -54,6 +55,7 @@ export function useGenerateReview() {
       cancelledRef.current = false;
       setGenerating(true);
       setText("");
+      setStatus("");
       try {
         const diff = await context.loadDiff();
         if (!diff.text.trim()) {
@@ -78,8 +80,16 @@ export function useGenerateReview() {
         );
 
         if (isCliProvider(ai.provider)) {
-          await runCliReview(ai, context, system, prompt, setText, (id) => {
-            cliReviewIdRef.current = id;
+          await runCliReview({
+            ai,
+            context,
+            system,
+            prompt,
+            setText,
+            setStatus,
+            registerId: (id) => {
+              cliReviewIdRef.current = id;
+            },
           });
         } else {
           const abort = new AbortController();
@@ -99,6 +109,7 @@ export function useGenerateReview() {
         if (!cancelledRef.current) toastError(e);
       } finally {
         setGenerating(false);
+        setStatus("");
         abortRef.current = null;
         cliReviewIdRef.current = null;
       }
@@ -106,18 +117,27 @@ export function useGenerateReview() {
     [],
   );
 
-  return { generate, cancel, reset, generating, text };
+  return { generate, cancel, reset, generating, text, status };
 }
 
 /** Drives one streaming agent-CLI review, accumulating deltas into `setText`. */
-async function runCliReview(
-  ai: AiSettings,
-  context: ReviewContext,
-  system: string,
-  prompt: string,
-  setText: (text: string) => void,
-  registerId: (id: string) => void,
-): Promise<void> {
+async function runCliReview({
+  ai,
+  context,
+  system,
+  prompt,
+  setText,
+  setStatus,
+  registerId,
+}: {
+  ai: AiSettings;
+  context: ReviewContext;
+  system: string;
+  prompt: string;
+  setText: (text: string) => void;
+  setStatus: (status: string) => void;
+  registerId: (id: string) => void;
+}): Promise<void> {
   const kind = providerKind(ai.provider);
   if (!kind) throw new Error(`Unsupported CLI provider: ${ai.provider}`);
 
@@ -134,11 +154,14 @@ async function runCliReview(
       systemPrompt: system,
       userPrompt: prompt,
       repoPath: context.repoPath,
+      repoAware: Boolean(ai.cliRepoAware),
       reviewId,
       onEvent: (event) => {
         if (event.kind === "delta") {
           buffer += event.text;
           setText(buffer);
+        } else if (event.kind === "status") {
+          setStatus(event.text);
         } else if (event.kind === "done") {
           settled = true;
           // The terminal event carries the authoritative full text; prefer it

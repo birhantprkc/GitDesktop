@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { detectAgentCli, providerKind } from "@/lib/ai/agent";
 import { useAvailableModels } from "@/lib/ai/models";
 import {
@@ -49,7 +50,8 @@ export function PrReviewPanel({
 }) {
   const settings = useSettings();
   const saveSettings = useSaveSettings();
-  const { generate, cancel, reset, generating, text } = useGenerateReview();
+  const { generate, cancel, reset, generating, text, status } =
+    useGenerateReview();
   const [lastMode, setLastMode] = useState<ReviewMode>("general");
 
   const reviewAi = settings.data?.reviewAi;
@@ -198,12 +200,30 @@ export function PrReviewPanel({
             </Button>
           )}
         </div>
+        {cliKind && (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Switch
+              size="sm"
+              checked={Boolean(reviewAi?.cliRepoAware)}
+              onCheckedChange={(checked) =>
+                updateReview({ cliRepoAware: checked })
+              }
+              disabled={generating}
+            />
+            Read repo files for context (slower, deeper)
+          </label>
+        )}
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-4">
           {text.trim() ? (
             <Markdown>{text}</Markdown>
+          ) : generating ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Spinner className="size-3" />
+              {status || "Starting review…"}
+            </p>
           ) : (
             <p className="text-xs text-muted-foreground">
               Run a general review or a security audit of this PR's changes with

@@ -17,6 +17,7 @@ export interface AgentInfo {
 /** Streaming events from `agent_review`, mirroring the Rust `ReviewEvent`. */
 export type ReviewEvent =
   | { kind: "delta"; text: string }
+  | { kind: "status"; text: string }
   | { kind: "done"; text: string; isError: boolean; costUsd: number | null }
   | { kind: "error"; message: string };
 
@@ -41,6 +42,8 @@ export interface AgentReviewArgs {
   /** The diff-bearing prompt, fed to the CLI on stdin. */
   userPrompt: string;
   repoPath: string;
+  /** Tier 2: allow the agent read-only access to the repo for context. */
+  repoAware: boolean;
   /** Caller-generated id used to cancel this run via `cancelAgentReview`. */
   reviewId: string;
   onEvent: (event: ReviewEvent) => void;
@@ -60,6 +63,7 @@ export async function runAgentReview(args: AgentReviewArgs): Promise<void> {
     systemPrompt: args.systemPrompt,
     userPrompt: args.userPrompt,
     repoPath: args.repoPath,
+    repoAware: args.repoAware,
     reviewId: args.reviewId,
     onEvent: channel,
   });

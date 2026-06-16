@@ -21,6 +21,8 @@ use crate::state::AppState;
 
 const DETECT_TIMEOUT: Duration = Duration::from_secs(20);
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(300);
+/// Repo-aware (Tier 2) runs explore the tree with tools and take longer.
+const REVIEW_TIMEOUT_AGENTIC: Duration = Duration::from_secs(600);
 
 /// Which agent CLI to drive. Frontend sends `"claude"` / `"codex"`.
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -77,6 +79,8 @@ pub struct AgentInfo {
 pub enum ReviewEvent {
     /// A chunk of assistant text to append to the rendered review.
     Delta { text: String },
+    /// Transient progress note (Tier 2 tool activity, e.g. "Reading files…").
+    Status { text: String },
     /// Terminal success: the full final review text plus run metadata.
     Done {
         text: String,
@@ -243,9 +247,12 @@ pub async fn agent_detect(kind: AgentKind, bin_path: Option<String>) -> AppResul
 
 // --- review ----------------------------------------------------------------
 
-/// Tier-1 (diff-only, read-only) Claude Code invocation. The diff-bearing user
-/// prompt is fed on stdin; this builds everything else.
-fn claude_review_args(model: &str, system_prompt: &str) -> Vec<String> {
+/// Claude Code review invocation. The diff-bearing user prompt is fed on stdin;
+/// this builds everything else. Read-only either way: Tier 1 (`repo_aware =
+/// false`) exposes no tools at all; Tier 2 exposes only read tools so the agent
+/// can read surrounding code for context but still can't edit, run commands, or
+/// hang waiting on a permission prompt.
+fn claude_review_args(model: &str, system_prompt: &str, repo_aware: bool) -> Vec<String> {
     let mut args = vec![
         "-p".into(),
         "--system-prompt".into(),
@@ -254,11 +261,13 @@ fn claude_review_args(model: &str, system_prompt: &str) -> Vec<String> {
         "stream-json".into(),
         "--include-partial-messages".into(),
         "--verbose".into(), // required alongside stream-json in print mode
-        // Tier 1: no tools at all → read-only by construction, and dropping the
-        // tool/MCP context is the main lever against the per-run token cost.
         "--tools".into(),
-        String::new(),
-        "--strict-mcp-config".into(),
+        if repo_aware {
+            "Read,Grep,Glob".into()
+        } else {
+            String::new()
+        },
+        "--strict-mcp-config".into(), // no MCP servers (also trims token cost)
         "--no-session-persistence".into(),
     ];
     if !model.trim().is_empty() {
@@ -266,6 +275,16 @@ fn claude_review_args(model: &str, system_prompt: &str) -> Vec<String> {
         args.push(model.into());
     }
     args
+}
+
+/// Friendly progress label for a Tier-2 tool call.
+fn tool_status(name: &str) -> String {
+    match name {
+        "Read" => "Reading files…".to_string(),
+        "Grep" => "Searching code…".to_string(),
+        "Glob" => "Finding files…".to_string(),
+        other => format!("Using {other}…"),
+    }
 }
 
 /// Parses one NDJSON line of `--output-format stream-json`. Sets `saw_result`
@@ -279,15 +298,29 @@ fn parse_line(line: &str, saw_result: &mut bool) -> Option<ReviewEvent> {
     match v.get("type")?.as_str()? {
         "stream_event" => {
             let event = v.get("event")?;
-            if event.get("type")?.as_str()? == "content_block_delta" {
-                let delta = event.get("delta")?;
-                if delta.get("type")?.as_str()? == "text_delta" {
-                    return Some(ReviewEvent::Delta {
-                        text: delta.get("text")?.as_str()?.to_string(),
-                    });
+            match event.get("type")?.as_str()? {
+                // A tool call begins — surface it as transient progress.
+                "content_block_start" => {
+                    let block = event.get("content_block")?;
+                    if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                        let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("a tool");
+                        return Some(ReviewEvent::Status {
+                            text: tool_status(name),
+                        });
+                    }
+                    None
                 }
+                "content_block_delta" => {
+                    let delta = event.get("delta")?;
+                    if delta.get("type")?.as_str()? == "text_delta" {
+                        return Some(ReviewEvent::Delta {
+                            text: delta.get("text")?.as_str()?.to_string(),
+                        });
+                    }
+                    None
+                }
+                _ => None,
             }
-            None
         }
         "result" => {
             *saw_result = true;
@@ -314,6 +347,7 @@ pub async fn agent_review(
     system_prompt: String,
     user_prompt: String,
     repo_path: String,
+    repo_aware: bool,
     review_id: String,
     on_event: Channel<ReviewEvent>,
 ) -> AppResult<()> {
@@ -330,7 +364,7 @@ pub async fn agent_review(
     })?;
 
     let mut cmd = Command::new(&binary);
-    cmd.args(claude_review_args(&model, &system_prompt))
+    cmd.args(claude_review_args(&model, &system_prompt, repo_aware))
         .current_dir(&repo_path)
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")
@@ -377,7 +411,12 @@ pub async fn agent_review(
     let mut cancelled = false;
     let mut timed_out = false;
 
-    let deadline = tokio::time::sleep(REVIEW_TIMEOUT);
+    let timeout = if repo_aware {
+        REVIEW_TIMEOUT_AGENTIC
+    } else {
+        REVIEW_TIMEOUT
+    };
+    let deadline = tokio::time::sleep(timeout);
     tokio::pin!(deadline);
 
     loop {
@@ -416,7 +455,7 @@ pub async fn agent_review(
     }
     if timed_out {
         let _ = on_event.send(ReviewEvent::Error {
-            message: format!("Review timed out after {}s.", REVIEW_TIMEOUT.as_secs()),
+            message: format!("Review timed out after {}s.", timeout.as_secs()),
         });
         return Ok(());
     }
