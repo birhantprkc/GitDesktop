@@ -125,7 +125,8 @@ export function WelcomeScreen() {
           <CardHeader>
             <CardTitle>Get started</CardTitle>
             <CardDescription>
-              Open a local repository or clone one from a URL.
+              Open a local repository or clone one from a URL — or drag a repo
+              folder anywhere onto the window.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">

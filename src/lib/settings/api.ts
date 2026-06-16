@@ -62,6 +62,8 @@ export interface AppSettings {
   autoCheckUpdates: boolean;
   /** First-run nudge toward the user guide; set once the user opens or dismisses it. */
   seenGuideNudge: boolean;
+  /** App version last shown to the user, to drive the "What's new" dialog. */
+  lastSeenVersion: string;
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -97,6 +99,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showSelectionHint: true,
   autoCheckUpdates: true,
   seenGuideNudge: false,
+  lastSeenVersion: "",
   recentRepos: [],
   diffViewMode: "unified",
 };

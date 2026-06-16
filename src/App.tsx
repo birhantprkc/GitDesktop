@@ -9,7 +9,9 @@ import { SettingsScreen } from "@/features/settings/SettingsScreen";
 import { CommandPalette } from "@/features/shortcuts/CommandPalette";
 import { ShortcutsDialog } from "@/features/shortcuts/ShortcutsDialog";
 import { UpdateChecker } from "@/features/updates/UpdateChecker";
+import { WhatsNew } from "@/features/updates/WhatsNew";
 import { GitMissingScreen } from "@/features/welcome/GitMissingScreen";
+import { useRepoDrop } from "@/features/welcome/useRepoDrop";
 import { WelcomeScreen } from "@/features/welcome/WelcomeScreen";
 import { useGitInstalled } from "@/lib/git/queries";
 import { useHotkeyAction, useHotkeysListener } from "@/lib/hotkeys/hotkeys";
@@ -23,6 +25,9 @@ function App() {
   const queryClient = useQueryClient();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Drop a repo folder anywhere on the window to open it.
+  useRepoDrop();
 
   // The app-wide hotkey dispatcher plus the always-available actions.
   useHotkeysListener();
@@ -65,6 +70,7 @@ function App() {
       {view === "help" && <HelpScreen />}
       <AutomationResultDialog />
       <UpdateChecker />
+      <WhatsNew />
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </>

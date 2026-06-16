@@ -26,6 +26,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -126,6 +127,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   const [open, setOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [branchFilter, setBranchFilter] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -173,8 +175,14 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     if (b.name === defaultName) return 1;
     return b.lastCommitDate.localeCompare(a.lastCommitDate);
   });
-  const visibleBranches = sortedBranches.filter((b) => !b.archived);
-  const archivedBranches = sortedBranches.filter((b) => b.archived);
+  const bq = branchFilter.trim().toLowerCase();
+  const matchesFilter = (b: Branch) => !bq || b.name.toLowerCase().includes(bq);
+  const visibleBranches = sortedBranches.filter(
+    (b) => !b.archived && matchesFilter(b),
+  );
+  const archivedBranches = sortedBranches.filter(
+    (b) => b.archived && matchesFilter(b),
+  );
   const stashes = stashCount.data ?? 0;
   const hasChanges = (status.data?.entries.length ?? 0) > 0;
   // You can't amend across branches: amend mode targets a specific commit on
@@ -517,7 +525,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   return (
     <>
-      <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Root
+        open={open}
+        onOpenChange={(o) => {
+          setOpen(o);
+          if (!o) setBranchFilter("");
+        }}
+      >
         <Popover.Trigger
           render={
             <Button
@@ -548,10 +562,22 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             className="isolate z-50"
           >
             <Popover.Popup className="w-72 rounded-none bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10">
-              <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground">
-                Branches
-              </p>
+              <div className="border-b p-2">
+                <Input
+                  value={branchFilter}
+                  onChange={(e) => setBranchFilter(e.target.value)}
+                  placeholder="Filter branches"
+                  className="h-7"
+                  autoComplete="off"
+                />
+              </div>
               <div className="max-h-60 overflow-y-auto">
+                {visibleBranches.length === 0 &&
+                  archivedBranches.length === 0 && (
+                    <p className="px-3 py-4 text-center text-xs text-muted-foreground">
+                      No branches match "{branchFilter.trim()}"
+                    </p>
+                  )}
                 {visibleBranches.map(renderBranchRow)}
                 {archivedBranches.length > 0 && (
                   <>
