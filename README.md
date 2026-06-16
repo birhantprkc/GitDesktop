@@ -10,9 +10,10 @@ Built with **Tauri 2 + React 19**. All GitHub access goes through the **GitHub
 CLI (`gh`)** — there's no OAuth app and the app never stores your tokens. Core
 git works against any remote via system `git`.
 
-> Runs on Windows and Linux today (macOS planned). See
+> Runs on Windows and Linux today (macOS planned).
+<!-- See
 > [github-desktop.md](github-desktop.md) for a full, honest feature-by-feature
-> comparison with GitHub Desktop.
+> comparison with GitHub Desktop. -->
 
 ## Highlights
 
@@ -145,5 +146,5 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 - `src/features/` — the screens: repository, changes/diff, commit, history,
   compare, pulls, actions, hooks, branch-rules, settings, and updates.
 
-For the full GitHub Desktop comparison and remaining gaps, see
-[github-desktop.md](github-desktop.md).
+<!-- For the full GitHub Desktop comparison and remaining gaps, see
+[github-desktop.md](github-desktop.md). -->
