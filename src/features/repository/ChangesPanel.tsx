@@ -32,6 +32,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { BlameDialog } from "@/features/history/BlameDialog";
+import { FileHistoryDialog } from "@/features/history/FileHistoryDialog";
 import { ghRepoUrl, openInTerminal, openWithProgram } from "@/lib/git/api";
 import {
   useCompareBranches,
@@ -152,6 +154,8 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const [filterText, setFilterText] = useState("");
   const [activeKinds, setActiveKinds] = useState<Set<FilterKind>>(new Set());
   const [stashesOpen, setStashesOpen] = useState(false);
+  const [historyPath, setHistoryPath] = useState<string | null>(null);
+  const [blamePath, setBlamePath] = useState<string | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
 
   const entries = status.data?.entries ?? [];
@@ -732,6 +736,8 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                       onStashFile={() =>
                         setStashScope({ kind: "files", entries: [entry] })
                       }
+                      onViewHistory={() => setHistoryPath(entry.path)}
+                      onBlame={() => setBlamePath(entry.path)}
                       onStageSelected={stageSelected}
                       onUnstageSelected={unstageSelected}
                       onDiscardSelected={requestDiscardSelected}
@@ -785,6 +791,8 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                       onStashFile={() =>
                         setStashScope({ kind: "files", entries: [entry] })
                       }
+                      onViewHistory={() => setHistoryPath(entry.path)}
+                      onBlame={() => setBlamePath(entry.path)}
                       onStageSelected={stageSelected}
                       onUnstageSelected={unstageSelected}
                       onDiscardSelected={requestDiscardSelected}
@@ -819,6 +827,27 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
         open={stashesOpen}
         onOpenChange={setStashesOpen}
       />
+
+      {historyPath && (
+        <FileHistoryDialog
+          repoPath={repoPath}
+          path={historyPath}
+          open
+          onOpenChange={(o) => {
+            if (!o) setHistoryPath(null);
+          }}
+        />
+      )}
+      {blamePath && (
+        <BlameDialog
+          repoPath={repoPath}
+          path={blamePath}
+          open
+          onOpenChange={(o) => {
+            if (!o) setBlamePath(null);
+          }}
+        />
+      )}
 
       <Dialog
         open={discardScope !== null}

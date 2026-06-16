@@ -1,7 +1,9 @@
 use crate::error::AppResult;
 use crate::git::diff::parse_numstat_z;
 use crate::git::runner::{run_git, run_git_raw, DEFAULT_TIMEOUT};
-use crate::git::types::{CommitDetails, CommitSummary, DiffStatEntry, FileDiff, StagedDiff};
+use crate::git::types::{
+    BlameLine, CommitDetails, CommitSummary, DiffStatEntry, FileDiff, StagedDiff,
+};
 
 pub fn validate_hash(hash: &str) -> AppResult<()> {
     if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -12,11 +14,14 @@ pub fn validate_hash(hash: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Paged commit history. When `search` is set, searches the whole history by
+/// commit message (literal, case-insensitive) instead of paging recent commits.
 #[tauri::command]
 pub async fn git_log(
     repo_path: String,
     limit: u32,
     skip: u32,
+    search: Option<String>,
 ) -> AppResult<Vec<CommitSummary>> {
     let head_exists = run_git_raw(
         Some(&repo_path),
@@ -32,22 +37,32 @@ pub async fn git_log(
 
     let limit_arg = limit.to_string();
     let skip_arg = skip.to_string();
-    let out = run_git(
-        Some(&repo_path),
-        &[
-            "log",
-            "-n",
-            &limit_arg,
-            "--skip",
-            &skip_arg,
-            "--format=%H%x00%s%x00%an%x00%cI%x00%D%x00%P",
-        ],
-        DEFAULT_TIMEOUT,
-    )
-    .await?;
-    let text = out.stdout_lossy();
-    Ok(text
-        .lines()
+    let search = search
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let mut args: Vec<&str> = vec![
+        "log",
+        "-n",
+        &limit_arg,
+        "--skip",
+        &skip_arg,
+        "--format=%H%x00%s%x00%an%x00%cI%x00%D%x00%P",
+    ];
+    if let Some(q) = &search {
+        // Literal, case-insensitive match against the whole commit message.
+        args.extend(["-i", "-F", "--grep", q.as_str()]);
+    }
+    let out = run_git(Some(&repo_path), &args, DEFAULT_TIMEOUT).await?;
+    Ok(parse_commit_log(&out.stdout_lossy()))
+}
+
+/// The `%H%x00%s%x00%an%x00%cI%x00%D%x00%P` log format, one commit per line.
+const LOG_FORMAT: &str = "--format=%H%x00%s%x00%an%x00%cI%x00%D%x00%P";
+
+fn parse_commit_log(text: &str) -> Vec<CommitSummary> {
+    text.lines()
         .filter_map(|line| {
             let mut parts = line.split('\0');
             Some(CommitSummary {
@@ -67,7 +82,113 @@ pub async fn git_log(
                 is_merge: parts.next().unwrap_or("").split_whitespace().count() > 1,
             })
         })
-        .collect())
+        .collect()
+}
+
+fn validate_path(path: &str) -> AppResult<()> {
+    if path.is_empty() {
+        return Err(crate::error::AppError::InvalidArgument(
+            "empty file path".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Commit history for a single file, following renames.
+#[tauri::command]
+pub async fn git_file_log(
+    repo_path: String,
+    path: String,
+    limit: u32,
+    skip: u32,
+) -> AppResult<Vec<CommitSummary>> {
+    validate_path(&path)?;
+    let limit_arg = limit.to_string();
+    let skip_arg = skip.to_string();
+    let out = run_git(
+        Some(&repo_path),
+        &[
+            "log",
+            "--follow",
+            "-n",
+            &limit_arg,
+            "--skip",
+            &skip_arg,
+            LOG_FORMAT,
+            "--",
+            &path,
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(parse_commit_log(&out.stdout_lossy()))
+}
+
+/// `git blame` for a file at HEAD: each line's content + the commit that last
+/// changed it. Parses the `--porcelain` stream (commit metadata is emitted once
+/// per commit, then cached for that commit's later lines).
+#[tauri::command]
+pub async fn git_blame(repo_path: String, path: String) -> AppResult<Vec<BlameLine>> {
+    validate_path(&path)?;
+    let out = run_git(
+        Some(&repo_path),
+        &["blame", "--porcelain", "--", &path],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let text = out.stdout_lossy();
+
+    let mut cache: std::collections::HashMap<String, (String, i64, String)> =
+        std::collections::HashMap::new();
+    let mut lines = Vec::new();
+    let (mut cur_sha, mut author, mut summary) =
+        (String::new(), String::new(), String::new());
+    let mut cur_line = 0u32;
+    let mut time = 0i64;
+
+    for line in text.lines() {
+        // Header: "<40-hex sha> <orig-line> <final-line> [<group-size>]".
+        if let Some((sha, rest)) = line.split_once(' ') {
+            if sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                cur_sha = sha.to_string();
+                cur_line = rest
+                    .split(' ')
+                    .nth(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                if let Some((a, t, s)) = cache.get(sha) {
+                    author = a.clone();
+                    time = *t;
+                    summary = s.clone();
+                } else {
+                    author.clear();
+                    summary.clear();
+                    time = 0;
+                }
+                continue;
+            }
+        }
+        if let Some(a) = line.strip_prefix("author ") {
+            author = a.to_string();
+        } else if let Some(t) = line.strip_prefix("author-time ") {
+            time = t.trim().parse().unwrap_or(0);
+        } else if let Some(s) = line.strip_prefix("summary ") {
+            summary = s.to_string();
+        } else if let Some(content) = line.strip_prefix('\t') {
+            cache
+                .entry(cur_sha.clone())
+                .or_insert((author.clone(), time, summary.clone()));
+            lines.push(BlameLine {
+                line_no: cur_line,
+                hash: cur_sha.clone(),
+                author: author.clone(),
+                time,
+                summary: summary.clone(),
+                content: content.to_string(),
+            });
+        }
+    }
+    Ok(lines)
 }
 
 #[tauri::command]

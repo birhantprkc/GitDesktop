@@ -3,6 +3,7 @@ import {
   ChartBarIcon,
   CodeIcon,
   CopyIcon,
+  CubeIcon,
   DotsThreeVerticalIcon,
   FolderOpenIcon,
   GitForkIcon,
@@ -46,7 +47,7 @@ import {
   openWithDefault,
   openWithProgram,
 } from "@/lib/git/api";
-import { useForkRepo, useGhStatus } from "@/lib/git/queries";
+import { useForkRepo, useGhStatus, useSubmodules } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import type { RecentRepo } from "@/lib/settings/api";
 import { useSettings } from "@/lib/settings/queries";
@@ -55,6 +56,7 @@ import { toastError } from "@/lib/toast";
 import { RemoteUrlDialog } from "./RemoteUrlDialog";
 import { RemoveRepoDialog, RepoAliasDialog } from "./RepoDialogs";
 import { RepoStatsDialog } from "./RepoStatsDialog";
+import { SubmodulesDialog } from "./SubmodulesDialog";
 
 export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
@@ -64,6 +66,10 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const [automationsOpen, setAutomationsOpen] = useState(false);
   const [branchRulesOpen, setBranchRulesOpen] = useState(false);
   const [hooksOpen, setHooksOpen] = useState(false);
+  const [submodulesOpen, setSubmodulesOpen] = useState(false);
+  // Only offer the Submodules menu item when the repo actually has submodules.
+  const submodules = useSubmodules(repoPath);
+  const hasSubmodules = (submodules.data?.length ?? 0) > 0;
   const [forkOpen, setForkOpen] = useState(false);
   const [forkIntent, setForkIntent] = useState<"contribute" | "own">(
     "contribute",
@@ -199,6 +205,12 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <CodeIcon />
           Git hooks…
         </DropdownMenuItem>
+        {hasSubmodules && (
+          <DropdownMenuItem onClick={() => setSubmodulesOpen(true)}>
+            <CubeIcon />
+            Submodules…
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={() => setRemoteUrlOpen(true)}>
           <LinkIcon />
           Change remote URL…
@@ -235,6 +247,11 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={hooksOpen}
         onOpenChange={setHooksOpen}
+      />
+      <SubmodulesDialog
+        repoPath={repoPath}
+        open={submodulesOpen}
+        onOpenChange={setSubmodulesOpen}
       />
       <RemoteUrlDialog
         repoPath={repoPath}

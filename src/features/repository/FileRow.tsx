@@ -61,6 +61,8 @@ export function FileRow({
   onToggle,
   onDiscard,
   onStashFile,
+  onViewHistory,
+  onBlame,
   onStageSelected,
   onUnstageSelected,
   onDiscardSelected,
@@ -81,6 +83,8 @@ export function FileRow({
   onToggle: () => void;
   onDiscard?: () => void;
   onStashFile?: () => void;
+  onViewHistory?: () => void;
+  onBlame?: () => void;
   onStageSelected?: () => void;
   onUnstageSelected?: () => void;
   onDiscardSelected?: () => void;
@@ -221,6 +225,17 @@ export function FileRow({
               <ContextMenuItem onClick={onStashFile}>
                 Stash change…
               </ContextMenuItem>
+            )}
+            {isTracked && onViewHistory && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={onViewHistory}>
+                  View file history…
+                </ContextMenuItem>
+                {onBlame && (
+                  <ContextMenuItem onClick={onBlame}>Blame…</ContextMenuItem>
+                )}
+              </>
             )}
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => ignore(`/${entry.path}`)}>

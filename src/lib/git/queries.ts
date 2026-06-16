@@ -99,6 +99,22 @@ export function useLog(repo: string) {
   });
 }
 
+/** Whole-history search by commit message, paged. Idle until `query` is set. */
+export function useCommitSearch(repo: string, query: string) {
+  const q = query.trim();
+  return useInfiniteQuery({
+    queryKey: ["repo", repo, "log-search", q] as const,
+    queryFn: ({ pageParam }) =>
+      api.gitLog(repo, HISTORY_PAGE_SIZE, pageParam, q),
+    enabled: q.length > 0,
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length < HISTORY_PAGE_SIZE
+        ? undefined
+        : allPages.reduce((n, p) => n + p.length, 0),
+  });
+}
+
 export function useCommitDetails(repo: string, hash: string | null) {
   return useQuery({
     queryKey: repoKeys.commitDetails(repo, hash ?? ""),
@@ -127,6 +143,31 @@ export function useCommitFileDiff(
     queryFn: () => api.gitCommitFileDiff(repo, hash ?? "", file ?? ""),
     enabled: hash !== null && file !== null,
     staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+/** Commit history for a single file (follows renames), paged. */
+export function useFileLog(repo: string, path: string | null) {
+  return useInfiniteQuery({
+    queryKey: ["repo", repo, "file-log", path ?? ""] as const,
+    queryFn: ({ pageParam }) =>
+      api.gitFileLog(repo, path ?? "", HISTORY_PAGE_SIZE, pageParam),
+    enabled: path !== null && path !== "",
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length < HISTORY_PAGE_SIZE
+        ? undefined
+        : allPages.reduce((n, p) => n + p.length, 0),
+  });
+}
+
+/** `git blame` for a file at HEAD. */
+export function useBlame(repo: string, path: string | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "blame", path ?? ""] as const,
+    queryFn: () => api.gitBlame(repo, path ?? ""),
+    enabled: path !== null && path !== "",
+    staleTime: 60_000,
   });
 }
 
@@ -550,7 +591,23 @@ export function useFetchRemote(repo: string) {
 }
 
 export function usePull(repo: string) {
-  return useRepoMutation(repo, () => api.gitPull(repo));
+  return useRepoMutation(repo, (mode: api.PullMode = "ffOnly") =>
+    api.gitPull(repo, mode),
+  );
+}
+
+export function useSubmodules(repo: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "submodules"] as const,
+    queryFn: () => api.gitSubmodules(repo),
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateSubmodule(repo: string) {
+  return useRepoMutation(repo, (path?: string) =>
+    api.gitSubmoduleUpdate(repo, path),
+  );
 }
 
 export function usePush(repo: string) {

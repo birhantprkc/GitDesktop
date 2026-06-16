@@ -1,4 +1,4 @@
-import { TagIcon } from "@phosphor-icons/react";
+import { MagnifyingGlassIcon, TagIcon } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,7 @@ import {
   useCheckoutCommit,
   useCherryPick,
   useCherryPickOnto,
+  useCommitSearch,
   useCreateBranch,
   useCreateTag,
   useDeleteTag,
@@ -90,6 +91,10 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const [pickOntoHashes, setPickOntoHashes] = useState<string[] | null>(null);
   const [pickOntoBranch, setPickOntoBranch] = useState("");
   const [filterText, setFilterText] = useState("");
+  // "Search all history" mode: server-side message grep across every commit,
+  // not just the loaded pages. Kept separate from the operational log so the
+  // rewrite/amend actions still see contiguous recent history.
+  const [searchMode, setSearchMode] = useState(false);
   const filterRef = useRef<HTMLInputElement>(null);
   // Tag pending deletion, plus whether to delete it from origin too.
   const [deleteTagName, setDeleteTagName] = useState<string | null>(null);
@@ -102,6 +107,12 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     defaultMessage: string;
   } | null>(null);
   const [reorderOpen, setReorderOpen] = useState(false);
+
+  const searchActive = searchMode && filterText.trim().length > 0;
+  const search = useCommitSearch(
+    repoPath,
+    searchActive ? filterText.trim() : "",
+  );
 
   const onError = (e: unknown) => toastError(e);
 
@@ -195,7 +206,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
 
   // Client-side filter over the loaded pages (subject, author, or SHA).
   const query = filterText.trim().toLowerCase();
-  const visibleCommits = query
+  const filteredCommits = query
     ? commits.filter(
         (c) =>
           c.subject.toLowerCase().includes(query) ||
@@ -203,10 +214,20 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
           c.hash.toLowerCase().startsWith(query),
       )
     : commits;
+  // In search mode the list is whole-history grep results; otherwise it's the
+  // (client-filtered) loaded pages.
+  const searchCommits = search.data?.pages.flat() ?? [];
+  const visibleCommits = searchActive ? searchCommits : filteredCommits;
 
   function onRowClick(e: React.MouseEvent, index: number, hash: string) {
     // Keep the diff panel on the clicked commit regardless of modifiers.
     selectCommit(hash);
+    // Search results aren't contiguous history — single-select only there.
+    if (searchActive) {
+      setSelected(new Set([hash]));
+      setAnchorIndex(null);
+      return;
+    }
     if (e.shiftKey && anchorIndex !== null) {
       // Indices are positions in the rendered (possibly filtered) list.
       const [a, b] = [anchorIndex, index].sort((x, y) => x - y);
@@ -380,8 +401,12 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
         <Input
           ref={filterRef}
           value={filterText}
-          onChange={(e) => setFilterText(e.target.value)}
-          placeholder="Filter by subject, author, or SHA"
+          onChange={(e) => {
+            setFilterText(e.target.value);
+            // Clearing the box returns to filtering the loaded pages.
+            if (!e.target.value.trim()) setSearchMode(false);
+          }}
+          placeholder="Filter loaded commits, or search all history"
           className="h-7"
           autoComplete="off"
         />
@@ -390,7 +415,11 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
         <div onKeyDown={onListKeyDown}>
           {visibleCommits.length === 0 && (
             <p className="px-3 py-8 text-center text-xs text-muted-foreground">
-              No loaded commits match the filter
+              {searchActive
+                ? search.isFetching
+                  ? "Searching all history…"
+                  : `No commits match "${filterText.trim()}"`
+                : "No loaded commits match the filter"}
             </p>
           )}
           {visibleCommits.map((commit, index) => (
@@ -445,7 +474,67 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                   </button>
                 }
               />
-              {selected.has(commit.hash) && selected.size > 1 ? (
+              {searchActive ? (
+                /* Search results: only position-independent, single-commit
+                   actions (no amend/reset/squash/reorder, which assume
+                   contiguous recent history). */
+                <ContextMenuContent className="min-w-60">
+                  <ContextMenuItem
+                    onClick={() =>
+                      checkoutCommit.mutate(commit.hash, { onError })
+                    }
+                  >
+                    Checkout commit
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() =>
+                      revertCommit.mutate(commit.hash, { onError })
+                    }
+                  >
+                    Revert changes in commit
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() =>
+                      cherryPick.mutate(commit.hash, {
+                        onSuccess: (applied) =>
+                          applied
+                            ? toast.success(
+                                `Cherry-picked ${commit.hash.slice(0, 7)}`,
+                              )
+                            : toast.info(
+                                "Nothing to cherry-pick — already on this branch.",
+                              ),
+                        onError,
+                      })
+                    }
+                  >
+                    Cherry-pick commit
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onClick={() => {
+                      branchForm.reset({ name: "" });
+                      setBranchHash(commit.hash);
+                    }}
+                  >
+                    Create branch from commit…
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() => {
+                      tagForm.reset({ name: "" });
+                      setTagHash(commit.hash);
+                    }}
+                  >
+                    Create tag…
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onClick={() => copyText(commit.hash, "SHA copied")}
+                  >
+                    Copy SHA
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              ) : selected.has(commit.hash) && selected.size > 1 ? (
                 /* Multi-selection: only actions that apply to the whole
                    selection, so nothing silently targets one commit. */
                 <ContextMenuContent className="min-w-60">
@@ -596,20 +685,65 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
               )}
             </ContextMenu>
           ))}
-          {log.hasNextPage && (
-            <div className="px-3 py-2 text-center">
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-muted-foreground"
-                disabled={log.isFetchingNextPage}
-                onClick={() => log.fetchNextPage()}
-              >
-                {log.isFetchingNextPage && <Spinner data-icon="inline-start" />}
-                Load more ({commits.length} loaded
-                {query ? " — the filter only searches these" : ""})
-              </Button>
+          {searchActive ? (
+            <div className="space-y-0.5 px-3 py-2 text-center">
+              {search.hasNextPage && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground"
+                  disabled={search.isFetchingNextPage}
+                  onClick={() => search.fetchNextPage()}
+                >
+                  {search.isFetchingNextPage && (
+                    <Spinner data-icon="inline-start" />
+                  )}
+                  Load more results
+                </Button>
+              )}
+              <div>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground"
+                  onClick={() => setSearchMode(false)}
+                >
+                  Back to recent history
+                </Button>
+              </div>
             </div>
+          ) : (
+            <>
+              {query && (
+                <div className="px-3 py-2 text-center">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-primary"
+                    onClick={() => setSearchMode(true)}
+                  >
+                    <MagnifyingGlassIcon data-icon="inline-start" />
+                    Search all history for "{filterText.trim()}"
+                  </Button>
+                </div>
+              )}
+              {log.hasNextPage && (
+                <div className="px-3 py-2 text-center">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    disabled={log.isFetchingNextPage}
+                    onClick={() => log.fetchNextPage()}
+                  >
+                    {log.isFetchingNextPage && (
+                      <Spinner data-icon="inline-start" />
+                    )}
+                    Load more ({commits.length} loaded)
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </ScrollArea>

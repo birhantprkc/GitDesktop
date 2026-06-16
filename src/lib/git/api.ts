@@ -1,5 +1,6 @@
 import { invoke } from "@/lib/tauri/invoke";
 import type {
+  BlameLine,
   Branch,
   BranchComparison,
   BranchDivergence,
@@ -31,6 +32,7 @@ import type {
   StagedDiff,
   StashEntry,
   StashFile,
+  Submodule,
 } from "./types";
 
 export const checkGitInstalled = () => invoke<GitInfo>("check_git_installed");
@@ -273,11 +275,32 @@ export const ghRepoUrl = (repoPath: string) =>
 export const gitRecentCommits = (repoPath: string, limit: number) =>
   invoke<CommitSummary[]>("git_recent_commits", { repoPath, limit });
 
-export const gitLog = (repoPath: string, limit: number, skip: number) =>
-  invoke<CommitSummary[]>("git_log", { repoPath, limit, skip });
+export const gitLog = (
+  repoPath: string,
+  limit: number,
+  skip: number,
+  /** When set, search the whole history by commit message instead of paging. */
+  search?: string,
+) =>
+  invoke<CommitSummary[]>("git_log", {
+    repoPath,
+    limit,
+    skip,
+    search: search ?? null,
+  });
 
 export const gitCommitDetails = (repoPath: string, hash: string) =>
   invoke<CommitDetails>("git_commit_details", { repoPath, hash });
+
+export const gitFileLog = (
+  repoPath: string,
+  path: string,
+  limit: number,
+  skip: number,
+) => invoke<CommitSummary[]>("git_file_log", { repoPath, path, limit, skip });
+
+export const gitBlame = (repoPath: string, path: string) =>
+  invoke<BlameLine[]>("git_blame", { repoPath, path });
 
 export const gitCommitFiles = (repoPath: string, hash: string) =>
   invoke<DiffStatEntry[]>("git_commit_files", { repoPath, hash });
@@ -291,8 +314,11 @@ export const gitCommitFileDiff = (
 export const gitFetch = (repoPath: string) =>
   invoke<void>("git_fetch", { repoPath });
 
-export const gitPull = (repoPath: string) =>
-  invoke<void>("git_pull", { repoPath });
+/** Pull mode: fast-forward only (default), or reconcile a diverged branch. */
+export type PullMode = "ffOnly" | "rebase" | "merge";
+
+export const gitPull = (repoPath: string, mode: PullMode = "ffOnly") =>
+  invoke<void>("git_pull", { repoPath, mode });
 
 export const gitPush = (
   repoPath: string,
@@ -308,6 +334,13 @@ export const gitRemoteUrl = (repoPath: string, name: string) =>
 
 export const gitRemoteSetUrl = (repoPath: string, name: string, url: string) =>
   invoke<void>("git_remote_set_url", { repoPath, name, url });
+
+export const gitSubmodules = (repoPath: string) =>
+  invoke<Submodule[]>("git_submodules", { repoPath });
+
+/** Init + update submodules to the recorded commit; `path` for one, else all. */
+export const gitSubmoduleUpdate = (repoPath: string, path?: string) =>
+  invoke<void>("git_submodule_update", { repoPath, path: path ?? null });
 
 export const gitUndoCommit = (repoPath: string) =>
   invoke<void>("git_undo_commit", { repoPath });

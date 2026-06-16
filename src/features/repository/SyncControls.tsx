@@ -2,6 +2,7 @@ import {
   ArrowDownIcon,
   ArrowsClockwiseIcon,
   ArrowUpIcon,
+  CaretDownIcon,
   UploadSimpleIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
@@ -18,7 +19,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Spinner } from "@/components/ui/spinner";
+import type { PullMode } from "@/lib/git/api";
 import {
   useFetchRemote,
   useGhStatus,
@@ -64,9 +72,19 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   );
   useHotkeyAction(
     "pull",
-    () => pull.mutate(undefined, { onError }),
+    () => doPull("ffOnly"),
     !noOrigin && !busy && hasUpstream && !diverged,
   );
+
+  function doPull(mode: PullMode) {
+    pull.mutate(mode, {
+      onSuccess: () => {
+        if (mode === "rebase") toast.success("Pulled with rebase");
+        else if (mode === "merge") toast.success("Pulled with merge");
+      },
+      onError,
+    });
+  }
   useHotkeyAction(
     "push",
     () => (diverged ? setForceConfirmOpen(true) : doPush(false)),
@@ -148,7 +166,12 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
           variant="outline"
           size="sm"
           disabled={busy || !hasUpstream || diverged}
-          onClick={() => pull.mutate(undefined, { onError })}
+          title={
+            diverged
+              ? "Branch has diverged — use Pull with rebase or merge from the menu"
+              : undefined
+          }
+          onClick={() => doPull("ffOnly")}
         >
           {pull.isPending ? (
             <Spinner data-icon="inline-start" />
@@ -157,6 +180,29 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
           )}
           Pull
         </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label="Pull options"
+                disabled={busy || !hasUpstream}
+                className="px-1.5"
+              >
+                <CaretDownIcon />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="min-w-48">
+            <DropdownMenuItem onClick={() => doPull("rebase")}>
+              Pull with rebase
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => doPull("merge")}>
+              Pull with merge
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button
           variant="outline"
           size="sm"

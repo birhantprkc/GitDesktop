@@ -61,8 +61,19 @@ pub async fn git_fetch(state: State<'_, AppState>, repo_path: String) -> AppResu
 }
 
 #[tauri::command]
-pub async fn git_pull(state: State<'_, AppState>, repo_path: String) -> AppResult<()> {
-    run_git_mutating(&state, &repo_path, &["pull", "--ff-only"], NETWORK_TIMEOUT).await?;
+pub async fn git_pull(
+    state: State<'_, AppState>,
+    repo_path: String,
+    mode: String,
+) -> AppResult<()> {
+    // "rebase"/"merge" reconcile a diverged branch; the default stays the safe
+    // fast-forward-only. A conflicted rebase/merge surfaces in the conflict UI.
+    let flag = match mode.as_str() {
+        "rebase" => "--rebase",
+        "merge" => "--no-rebase",
+        _ => "--ff-only",
+    };
+    run_git_mutating(&state, &repo_path, &["pull", flag], NETWORK_TIMEOUT).await?;
     Ok(())
 }
 

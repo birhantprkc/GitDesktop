@@ -1,0 +1,98 @@
+/* highlight.js token colors for the blame view, scoped to .blame-hl so they
+   don't leak. GitHub-ish palette; dark variant via the app's OS theme. */
+.blame-hl .hljs-comment,
+.blame-hl .hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+.blame-hl .hljs-keyword,
+.blame-hl .hljs-selector-tag,
+.blame-hl .hljs-doctag,
+.blame-hl .hljs-meta .hljs-keyword {
+  color: #cf222e;
+}
+.blame-hl .hljs-string,
+.blame-hl .hljs-regexp,
+.blame-hl .hljs-meta .hljs-string {
+  color: #0a3069;
+}
+.blame-hl .hljs-number,
+.blame-hl .hljs-literal {
+  color: #0550ae;
+}
+.blame-hl .hljs-title,
+.blame-hl .hljs-title.function_,
+.blame-hl .hljs-section,
+.blame-hl .hljs-built_in {
+  color: #8250df;
+}
+.blame-hl .hljs-type,
+.blame-hl .hljs-class .hljs-title,
+.blame-hl .hljs-title.class_ {
+  color: #953800;
+}
+.blame-hl .hljs-attr,
+.blame-hl .hljs-attribute,
+.blame-hl .hljs-property,
+.blame-hl .hljs-variable,
+.blame-hl .hljs-template-variable {
+  color: #0550ae;
+}
+.blame-hl .hljs-tag,
+.blame-hl .hljs-name,
+.blame-hl .hljs-symbol,
+.blame-hl .hljs-bullet {
+  color: #116329;
+}
+.blame-hl .hljs-meta {
+  color: #6e7781;
+}
+
+@media (prefers-color-scheme: dark) {
+  .blame-hl .hljs-comment,
+  .blame-hl .hljs-quote {
+    color: #8b949e;
+  }
+  .blame-hl .hljs-keyword,
+  .blame-hl .hljs-selector-tag,
+  .blame-hl .hljs-doctag,
+  .blame-hl .hljs-meta .hljs-keyword {
+    color: #ff7b72;
+  }
+  .blame-hl .hljs-string,
+  .blame-hl .hljs-regexp,
+  .blame-hl .hljs-meta .hljs-string {
+    color: #a5d6ff;
+  }
+  .blame-hl .hljs-number,
+  .blame-hl .hljs-literal {
+    color: #79c0ff;
+  }
+  .blame-hl .hljs-title,
+  .blame-hl .hljs-title.function_,
+  .blame-hl .hljs-section,
+  .blame-hl .hljs-built_in {
+    color: #d2a8ff;
+  }
+  .blame-hl .hljs-type,
+  .blame-hl .hljs-class .hljs-title,
+  .blame-hl .hljs-title.class_ {
+    color: #ffa657;
+  }
+  .blame-hl .hljs-attr,
+  .blame-hl .hljs-attribute,
+  .blame-hl .hljs-property,
+  .blame-hl .hljs-variable,
+  .blame-hl .hljs-template-variable {
+    color: #79c0ff;
+  }
+  .blame-hl .hljs-tag,
+  .blame-hl .hljs-name,
+  .blame-hl .hljs-symbol,
+  .blame-hl .hljs-bullet {
+    color: #7ee787;
+  }
+  .blame-hl .hljs-meta {
+    color: #8b949e;
+  }
+}

@@ -119,6 +119,20 @@ pub struct CommitSummary {
     pub is_merge: bool,
 }
 
+/// One line of `git blame` output: the line's content plus the commit that
+/// last touched it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlameLine {
+    pub line_no: u32,
+    pub hash: String,
+    pub author: String,
+    /// Author time as epoch seconds; the frontend formats it.
+    pub time: i64,
+    pub summary: String,
+    pub content: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitDetails {
@@ -159,6 +173,18 @@ pub struct StashEntry {
     pub index: u32,
     pub message: String,
     pub date: String,
+}
+
+/// A git submodule and its working-state vs. the recorded commit.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Submodule {
+    pub path: String,
+    pub sha: String,
+    /// `git describe` of the checked-out commit, when available.
+    pub describe: String,
+    /// "ok" | "uninitialized" | "modified" | "conflict".
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

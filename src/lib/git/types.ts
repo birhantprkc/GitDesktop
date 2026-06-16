@@ -62,6 +62,15 @@ export interface RepoOwner {
   owner: string | null;
 }
 
+/** A git submodule and its state vs. the commit the parent records. */
+export interface Submodule {
+  path: string;
+  sha: string;
+  describe: string;
+  /** "ok" | "uninitialized" | "modified" | "conflict" */
+  status: string;
+}
+
 export interface FileDiff {
   filePath: string;
   isBinary: boolean;
@@ -102,6 +111,17 @@ export interface CommitDetails {
   author: string;
   authorEmail: string;
   date: string;
+}
+
+/** One line of `git blame`: its content plus the commit that last changed it. */
+export interface BlameLine {
+  lineNo: number;
+  hash: string;
+  author: string;
+  /** Author time, epoch seconds. */
+  time: number;
+  summary: string;
+  content: string;
 }
 
 export interface CommitResult {
