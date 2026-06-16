@@ -29,6 +29,7 @@ import { KeyboardSection } from "./KeyboardSection";
 import { NotificationsSection } from "./NotificationsSection";
 import { settingsFormOpts, toDraft } from "./settings-form";
 import { TerminalSection } from "./TerminalSection";
+import { UpdatesSection } from "./UpdatesSection";
 
 const PANELS = [
   { id: "general", label: "General" },
@@ -40,6 +41,7 @@ const PANELS = [
   { id: "git", label: "Git" },
   { id: "editor", label: "External editor" },
   { id: "terminal", label: "Terminal" },
+  { id: "updates", label: "Updates" },
 ] as const;
 
 type PanelId = (typeof PANELS)[number]["id"];
@@ -203,6 +205,7 @@ export function SettingsScreen() {
               )}
               {activePanel === "editor" && <EditorSection form={form} />}
               {activePanel === "terminal" && <TerminalSection form={form} />}
+              {activePanel === "updates" && <UpdatesSection form={form} />}
             </main>
           </ScrollArea>
         </div>

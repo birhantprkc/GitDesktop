@@ -58,6 +58,8 @@ export interface AppSettings {
   /** Show the Ctrl/Shift-click multi-select hint above the changes list.
    *  Cleared by the hint's "Don't show again". */
   showSelectionHint: boolean;
+  /** Check GitHub Releases for a new version on launch (install stays opt-in). */
+  autoCheckUpdates: boolean;
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -91,6 +93,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hotkeys: {},
   confirmAmendForcePush: true,
   showSelectionHint: true,
+  autoCheckUpdates: true,
   recentRepos: [],
   diffViewMode: "unified",
 };

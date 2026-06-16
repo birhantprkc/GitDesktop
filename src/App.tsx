@@ -7,6 +7,7 @@ import { RepositoryView } from "@/features/repository/RepositoryView";
 import { SettingsScreen } from "@/features/settings/SettingsScreen";
 import { CommandPalette } from "@/features/shortcuts/CommandPalette";
 import { ShortcutsDialog } from "@/features/shortcuts/ShortcutsDialog";
+import { UpdateChecker } from "@/features/updates/UpdateChecker";
 import { GitMissingScreen } from "@/features/welcome/GitMissingScreen";
 import { WelcomeScreen } from "@/features/welcome/WelcomeScreen";
 import { useGitInstalled } from "@/lib/git/queries";
@@ -59,6 +60,7 @@ function App() {
       {view === "repo" && <RepositoryView />}
       {view === "settings" && <SettingsScreen />}
       <AutomationResultDialog />
+      <UpdateChecker />
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </>

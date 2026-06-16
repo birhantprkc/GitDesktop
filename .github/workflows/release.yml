@@ -1,0 +1,106 @@
+name: release
+
+# Cut a release by pushing a version tag, e.g.:
+#   pnpm version 0.2.0 && git push --follow-tags
+# CI builds + signs each platform, creates a DRAFT GitHub Release, uploads the
+# installers, and attaches the `latest.json` the installed app polls. Publish the
+# draft once every platform leg is green — that flips the
+# `releases/latest/download/latest.json` redirect over to the new version.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Needed for tauri-action to create the release and upload assets.
+permissions:
+  contents: write
+
+jobs:
+  # Extract this tag's CHANGELOG.md section once, to use as the release body —
+  # which also becomes the auto-updater's "what's new" notes. Falls back to a
+  # pointer if the section is missing (rename "Unreleased" → the version first).
+  notes:
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.extract.outputs.body }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Extract release notes from CHANGELOG
+        id: extract
+        shell: bash
+        run: |
+          {
+            echo 'body<<__NOTES_EOF__'
+            node scripts/changelog-extract.mjs "${{ github.ref_name }}"
+            echo '__NOTES_EOF__'
+          } >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: notes
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: ubuntu-22.04
+            args: ""
+          # macOS deferred: needs an Apple Developer account ($99/yr) to sign +
+          # notarize, or users hit a hard Gatekeeper block. Re-enable here and add
+          # the APPLE_* secrets when ready.
+          # - platform: macos-latest
+          #   args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            libssl-dev \
+            file
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build, sign, and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri updater signing (generate with `pnpm tauri signer generate`):
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "GitDesktop ${{ github.ref_name }}"
+          releaseBody: ${{ needs.notes.outputs.body }}
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+          # uploadUpdaterJson defaults to true → generates & attaches latest.json.
+          updaterJsonPreferNsis: true
