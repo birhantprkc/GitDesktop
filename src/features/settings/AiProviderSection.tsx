@@ -155,7 +155,7 @@ function ModelPicker({
         </Combobox>
         <p className="text-xs text-muted-foreground">
           {isCli
-            ? "Model alias passed to the CLI (e.g. sonnet, opus)"
+            ? "Model passed to the CLI — leave blank for its default"
             : availableModels.isPending
               ? "Loading models…"
               : availableModels.data?.live
@@ -212,7 +212,10 @@ function CliReviewConfig({
           <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
             <XCircleIcon className="size-4 shrink-0" />
             Found{version} but not signed in — run{" "}
-            <code className="font-mono">claude login</code>.
+            <code className="font-mono">
+              {kind === "codex" ? "codex login" : "claude login"}
+            </code>
+            .
           </span>
         ) : info?.found ? (
           <span className="flex items-center gap-1 text-green-600 dark:text-green-400">

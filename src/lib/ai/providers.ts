@@ -12,6 +12,7 @@ export const PROVIDER_LABELS: Record<AiProviderId, string> = {
   openrouter: "OpenRouter",
   ollama: "Ollama (local)",
   "claude-cli": "Claude Code (CLI)",
+  "codex-cli": "Codex (CLI)",
 };
 
 export const PROVIDERS_REQUIRING_KEY: AiProviderId[] = [
@@ -23,7 +24,7 @@ export const PROVIDERS_REQUIRING_KEY: AiProviderId[] = [
 /** Providers backed by a locally-installed coding-agent CLI rather than an
  *  HTTP API — they authenticate via the CLI's own login, not an API key, and
  *  run only on the review path (not commit/PR generation). */
-export const CLI_PROVIDERS: AiProviderId[] = ["claude-cli"];
+export const CLI_PROVIDERS: AiProviderId[] = ["claude-cli", "codex-cli"];
 
 export const isCliProvider = (id: AiProviderId): boolean =>
   CLI_PROVIDERS.includes(id);
@@ -46,6 +47,8 @@ export const MODEL_SUGGESTIONS: Record<AiProviderId, string[]> = {
   ollama: ["llama3.1", "qwen2.5-coder", "mistral"],
   // CLI model aliases passed straight to `claude --model`.
   "claude-cli": ["sonnet", "opus", "haiku", "fable"],
+  // Codex: blank uses the account default (proven to work); user can type one.
+  "codex-cli": [],
 };
 
 // All providers get the Tauri fetch, which proxies through Rust and so
@@ -68,6 +71,7 @@ export function createModel(
         fetch,
       })(settings.model);
     case "claude-cli":
+    case "codex-cli":
       // CLI agents run as a subprocess, not through the AI SDK. Callers must
       // route these through the agent-CLI path before reaching createModel.
       throw new Error("CLI providers do not use the AI SDK model path");

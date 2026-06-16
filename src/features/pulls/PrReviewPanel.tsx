@@ -168,7 +168,10 @@ export function PrReviewPanel({
           cliDetect.data.authed === "notAuthed" && (
             <p className="text-xs text-amber-600 dark:text-amber-400">
               {PROVIDER_LABELS[provider]} is installed but not signed in — run{" "}
-              <code className="font-mono">claude login</code> in a terminal.
+              <code className="font-mono">
+                {cliKind === "codex" ? "codex login" : "claude login"}
+              </code>{" "}
+              in a terminal.
             </p>
           )}
         <div className="flex flex-wrap items-center gap-2">
@@ -200,7 +203,7 @@ export function PrReviewPanel({
             </Button>
           )}
         </div>
-        {cliKind && (
+        {cliKind === "claude" && (
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <Switch
               size="sm"
@@ -212,6 +215,11 @@ export function PrReviewPanel({
             />
             Read repo files for context (slower, deeper)
           </label>
+        )}
+        {cliKind === "codex" && (
+          <p className="text-xs text-muted-foreground">
+            Codex reads repo files for context (read-only sandbox).
+          </p>
         )}
       </div>
 

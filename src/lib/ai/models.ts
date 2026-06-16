@@ -60,6 +60,7 @@ async function fetchProviderModels(settings: AiSettings): Promise<string[]> {
         .sort();
     }
     case "claude-cli":
+    case "codex-cli":
       // No live model list; the static MODEL_SUGGESTIONS aliases are used.
       return [];
   }

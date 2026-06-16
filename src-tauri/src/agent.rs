@@ -146,10 +146,10 @@ fn exe_exts() -> Vec<String> {
 
 fn probe_dir(dir: &Path, names: &[&str], exts: &[String]) -> Option<PathBuf> {
     for name in names {
-        let bare = dir.join(name);
-        if bare.is_file() {
-            return Some(bare);
-        }
+        // Prefer extension variants first. On Windows this picks `codex.cmd`
+        // over the extension-less `codex` (a bash shim CreateProcess can't run);
+        // on Unix `exts` is just [""], so this loop no-ops and we use the bare
+        // name below.
         for ext in exts {
             if ext.is_empty() {
                 continue;
@@ -158,6 +158,10 @@ fn probe_dir(dir: &Path, names: &[&str], exts: &[String]) -> Option<PathBuf> {
             if candidate.is_file() {
                 return Some(candidate);
             }
+        }
+        let bare = dir.join(name);
+        if bare.is_file() {
+            return Some(bare);
         }
     }
     None
@@ -277,7 +281,7 @@ fn claude_review_args(model: &str, system_prompt: &str, repo_aware: bool) -> Vec
     args
 }
 
-/// Friendly progress label for a Tier-2 tool call.
+/// Friendly progress label for a Claude Tier-2 tool call.
 fn tool_status(name: &str) -> String {
     match name {
         "Read" => "Reading files…".to_string(),
@@ -287,9 +291,110 @@ fn tool_status(name: &str) -> String {
     }
 }
 
-/// Parses one NDJSON line of `--output-format stream-json`. Sets `saw_result`
-/// when the terminal `result` event arrives.
-fn parse_line(line: &str, saw_result: &mut bool) -> Option<ReviewEvent> {
+/// Codex `exec` runs as a read-only agent — there is no diff-only mode, it
+/// always explores via shell read commands. Globals (`--cd`/`-a`/`-s`/`-m`)
+/// must precede `exec`; the prompt is read from stdin via the `-` sentinel.
+fn codex_review_args(model: &str, repo_path: &str) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "--cd".into(),
+        repo_path.into(),
+        "--ask-for-approval".into(),
+        "never".into(), // no approval path ⇒ writes/network denied, never prompts
+        "--sandbox".into(),
+        "read-only".into(),
+    ];
+    if !model.trim().is_empty() {
+        args.push("-m".into());
+        args.push(model.into());
+    }
+    args.push("exec".into());
+    args.push("--json".into());
+    args.push("-".into());
+    args
+}
+
+/// Friendly progress label for a Codex shell command (it reads files by running
+/// `Get-Content`/`cat`/`rg`/… in the read-only sandbox).
+fn codex_command_status(cmd: &str) -> String {
+    let lower = cmd.to_lowercase();
+    if lower.contains("get-content") || lower.contains("cat ") || lower.contains("type ") {
+        "Reading files…".to_string()
+    } else if lower.contains("rg ")
+        || lower.contains("grep")
+        || lower.contains("select-string")
+    {
+        "Searching code…".to_string()
+    } else if lower.contains("get-childitem") || lower.contains("ls ") || lower.contains("dir ") {
+        "Listing files…".to_string()
+    } else {
+        "Inspecting the repo…".to_string()
+    }
+}
+
+/// Parses one line of Codex `exec --json` (JSONL). Accumulates the latest
+/// `agent_message` into `last_message` (the final one is the review) and emits
+/// `Done` at the terminal `turn.completed`.
+fn parse_codex_line(
+    line: &str,
+    saw_terminal: &mut bool,
+    last_message: &mut String,
+) -> Option<ReviewEvent> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    match v.get("type")?.as_str()? {
+        "item.started" => {
+            let item = v.get("item")?;
+            if item.get("type")?.as_str()? == "command_execution" {
+                let cmd = item.get("command").and_then(|c| c.as_str()).unwrap_or("");
+                return Some(ReviewEvent::Status {
+                    text: codex_command_status(cmd),
+                });
+            }
+            None
+        }
+        "item.completed" => {
+            let item = v.get("item")?;
+            if item.get("type")?.as_str()? == "agent_message" {
+                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                    *last_message = text.to_string();
+                }
+            }
+            None // codex emits whole messages, not deltas; surface at turn end
+        }
+        "turn.completed" => {
+            *saw_terminal = true;
+            Some(ReviewEvent::Done {
+                text: std::mem::take(last_message),
+                is_error: false,
+                cost_usd: None,
+            })
+        }
+        "turn.failed" => {
+            *saw_terminal = true;
+            Some(ReviewEvent::Error {
+                message: "Codex review failed — see the Codex CLI for details.".to_string(),
+            })
+        }
+        "error" => {
+            *saw_terminal = true;
+            Some(ReviewEvent::Error {
+                message: v
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("Codex reported an error.")
+                    .to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Parses one NDJSON line of Claude `--output-format stream-json`. Sets
+/// `saw_result` when the terminal `result` event arrives.
+fn parse_claude_line(line: &str, saw_result: &mut bool) -> Option<ReviewEvent> {
     let line = line.trim();
     if line.is_empty() {
         return None;
@@ -351,11 +456,6 @@ pub async fn agent_review(
     review_id: String,
     on_event: Channel<ReviewEvent>,
 ) -> AppResult<()> {
-    if !matches!(kind, AgentKind::Claude) {
-        return Err(AppError::Command(
-            "Only the Claude CLI is supported for review so far.".into(),
-        ));
-    }
     let binary = resolve(kind, bin_path.as_deref()).ok_or_else(|| {
         AppError::Command(format!(
             "{} CLI not found. Install it or set its path in Settings.",
@@ -363,8 +463,21 @@ pub async fn agent_review(
         ))
     })?;
 
+    // Per-kind invocation: Claude carries the system prompt as a flag and the
+    // diff on stdin; Codex has no system-prompt flag, so both go on stdin.
+    let (args, stdin_text) = match kind {
+        AgentKind::Claude => (
+            claude_review_args(&model, &system_prompt, repo_aware),
+            user_prompt,
+        ),
+        AgentKind::Codex => (
+            codex_review_args(&model, &repo_path),
+            format!("{system_prompt}\n\n{user_prompt}"),
+        ),
+    };
+
     let mut cmd = Command::new(&binary);
-    cmd.args(claude_review_args(&model, &system_prompt, repo_aware))
+    cmd.args(args)
         .current_dir(&repo_path)
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")
@@ -387,7 +500,7 @@ pub async fn agent_review(
     // against stdout filling its pipe while we're still writing stdin.
     if let Some(mut stdin) = child.stdin.take() {
         tokio::spawn(async move {
-            let _ = stdin.write_all(user_prompt.as_bytes()).await;
+            let _ = stdin.write_all(stdin_text.as_bytes()).await;
             // Dropping `stdin` here closes the pipe so the CLI sees EOF.
         });
     }
@@ -408,10 +521,12 @@ pub async fn agent_review(
     let cancel = state.register_agent_cancel(&review_id).await;
 
     let mut saw_result = false;
+    let mut last_message = String::new(); // codex: accumulates the final review
     let mut cancelled = false;
     let mut timed_out = false;
 
-    let timeout = if repo_aware {
+    // Codex always explores the repo, so it gets the longer agentic budget too.
+    let timeout = if repo_aware || matches!(kind, AgentKind::Codex) {
         REVIEW_TIMEOUT_AGENTIC
     } else {
         REVIEW_TIMEOUT
@@ -434,7 +549,13 @@ pub async fn agent_review(
             line = lines.next_line() => {
                 match line {
                     Ok(Some(l)) => {
-                        if let Some(ev) = parse_line(&l, &mut saw_result) {
+                        let ev = match kind {
+                            AgentKind::Claude => parse_claude_line(&l, &mut saw_result),
+                            AgentKind::Codex => {
+                                parse_codex_line(&l, &mut saw_result, &mut last_message)
+                            }
+                        };
+                        if let Some(ev) = ev {
                             let _ = on_event.send(ev);
                         }
                     }

@@ -23,7 +23,9 @@ export type ReviewEvent =
 
 /** Maps a review provider id to its backend agent kind, or null if not a CLI. */
 export function providerKind(provider: AiProviderId): AgentKind | null {
-  return provider === "claude-cli" ? "claude" : null;
+  if (provider === "claude-cli") return "claude";
+  if (provider === "codex-cli") return "codex";
+  return null;
 }
 
 /** Resolves the CLI binary and reports version + login status for Settings. */
