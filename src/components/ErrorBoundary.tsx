@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { scrubError, track } from "@/lib/analytics";
 
 interface State {
   error: Error | null;
@@ -10,6 +11,14 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
+  }
+
+  componentDidCatch(error: Error): void {
+    const { message, kind } = scrubError(error);
+    track({
+      name: "error_caught",
+      properties: { error_kind: kind, fatal: true, message },
+    });
   }
 
   render() {

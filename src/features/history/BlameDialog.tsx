@@ -55,7 +55,8 @@ export function BlameDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[80vh] flex-col sm:max-w-4xl">
+      {/* ph-no-capture: file name, path, and full file content — block from replay. */}
+      <DialogContent className="ph-no-capture flex h-[80vh] flex-col sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="truncate">Blame: {name}</DialogTitle>
           <DialogDescription className="truncate font-mono">

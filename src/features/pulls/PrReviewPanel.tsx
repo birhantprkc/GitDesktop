@@ -30,6 +30,7 @@ import {
   PROVIDERS_REQUIRING_KEY,
 } from "@/lib/ai/providers";
 import type { AiProviderId, ReviewMode } from "@/lib/ai/types";
+import { track } from "@/lib/analytics";
 import {
   useSaveSettings,
   useSecretPreview,
@@ -83,6 +84,23 @@ export function PrReviewPanel({
     if (!reviewAi) return;
     setLastMode(mode);
     generate(reviewAi, mode, context);
+    const model = reviewAi.model.toLowerCase();
+    const model_tier =
+      model.includes("haiku") ||
+      model.includes("mini") ||
+      model.includes("flash")
+        ? "fast"
+        : model.includes("opus") ||
+            model.includes("gpt-4o") ||
+            model.includes("sonnet-4")
+          ? "powerful"
+          : reviewAi.provider === "ollama"
+            ? "local"
+            : "balanced";
+    track({
+      name: "ai_review_triggered",
+      properties: { provider: reviewAi.provider, model_tier },
+    });
   }
 
   async function post() {
@@ -223,7 +241,8 @@ export function PrReviewPanel({
         )}
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
+      {/* ph-no-capture: AI review output quotes the user's code — block from replay. */}
+      <ScrollArea className="ph-no-capture min-h-0 flex-1">
         <div className="p-4">
           {text.trim() ? (
             <Markdown>{text}</Markdown>

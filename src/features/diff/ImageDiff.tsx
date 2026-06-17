@@ -133,7 +133,8 @@ export function ImageDiff({
   revs: ImageRevs;
 }) {
   return (
-    <div className="flex h-full flex-col">
+    // ph-no-capture: user image content + path — block from session replay.
+    <div className="ph-no-capture flex h-full flex-col">
       <div className="border-b px-3 py-1.5">
         <p className="truncate font-mono text-xs text-muted-foreground">
           {filePath}

@@ -1,6 +1,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback } from "react";
 import { toast } from "sonner";
+import { track } from "@/lib/analytics";
 import { validateRepo } from "@/lib/git/api";
 import { useAddRecentRepo, useRemoveRecentRepo } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
@@ -18,11 +19,12 @@ export function useOpenRepoByPath() {
   const removeRecent = useRemoveRecentRepo();
 
   return useCallback(
-    async (path: string) => {
+    async (path: string, source: "recent" | "picker" = "recent") => {
       try {
         const info = await validateRepo(path);
         addRecent.mutate({ path: info.root, name: info.name });
         openRepo(info);
+        track({ name: "repo_opened", properties: { source } });
       } catch (e) {
         if (isAppError(e) && e.kind === "notARepo") {
           toast.error(`${path} is no longer a git repository.`, {
@@ -52,6 +54,6 @@ export function usePickAndOpenRepo() {
       directory: true,
       title: "Open repository",
     });
-    if (typeof path === "string") await openByPath(path);
+    if (typeof path === "string") await openByPath(path, "picker");
   }, [openByPath]);
 }

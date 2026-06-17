@@ -1,7 +1,7 @@
 import { SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { track } from "@/lib/analytics";
 import { triggerAutomations } from "@/lib/automations/runner";
 import { required, useAppForm } from "@/lib/form";
 import {
@@ -46,6 +47,7 @@ export function CreatePrDialog({
   const createPr = useCreatePr(repoPath);
   const { generate, cancel, generating } = useGeneratePrDescription(repoPath);
   const aiEnabled = useAiEnabled();
+  const aiDescriptionRef = useRef(false);
 
   const currentName = status.data?.branch?.name ?? null;
   const names = (branches.data ?? []).map((b) => b.name);
@@ -65,6 +67,13 @@ export function CreatePrDialog({
           title: value.title.trim(),
           body: value.body,
           draft: value.draft,
+        });
+        track({
+          name: "pull_request_created",
+          properties: {
+            is_draft: value.draft,
+            has_ai_description: aiDescriptionRef.current,
+          },
         });
         toast.success(`Opened pull request #${number}`, {
           description: url,
@@ -92,6 +101,7 @@ export function CreatePrDialog({
   // keepDefaultValues: otherwise the per-render options sync clobbers the
   // seeded values back to empty on an untouched form.
   const seedOnOpen = useEffectEvent(() => {
+    aiDescriptionRef.current = false;
     const h = defaultHead ?? currentName ?? names[0] ?? "";
     const fallbackBase =
       defaultBranch.data && defaultBranch.data !== h
@@ -181,7 +191,7 @@ export function CreatePrDialog({
                 label="Description"
                 placeholder="Describe what changed and why"
                 rows={7}
-                textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+                textareaClassName="ph-no-capture max-h-72 min-h-24 resize-y font-mono"
                 actions={
                   !aiEnabled ? undefined : generating ? (
                     <Button
@@ -199,7 +209,8 @@ export function CreatePrDialog({
                       variant="outline"
                       size="xs"
                       disabled={nothingToMerge}
-                      onClick={() =>
+                      onClick={() => {
+                        aiDescriptionRef.current = true;
                         generate(
                           base,
                           head,
@@ -208,8 +219,8 @@ export function CreatePrDialog({
                             form.setFieldValue("title", d.title);
                             form.setFieldValue("body", d.body);
                           },
-                        )
-                      }
+                        );
+                      }}
                       title="Generate the title and description with AI"
                     >
                       <SparkleIcon data-icon="inline-start" />

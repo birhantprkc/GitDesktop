@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Spinner } from "@/components/ui/spinner";
 import { AutomationResultDialog } from "@/features/automations/AutomationResultDialog";
 import { HelpScreen } from "@/features/help/HelpScreen";
@@ -13,8 +14,10 @@ import { WhatsNew } from "@/features/updates/WhatsNew";
 import { GitMissingScreen } from "@/features/welcome/GitMissingScreen";
 import { useRepoDrop } from "@/features/welcome/useRepoDrop";
 import { WelcomeScreen } from "@/features/welcome/WelcomeScreen";
+import { syncAnalytics, track } from "@/lib/analytics";
 import { useGitInstalled } from "@/lib/git/queries";
 import { useHotkeyAction, useHotkeysListener } from "@/lib/hotkeys/hotkeys";
+import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { COLD_START } from "@/lib/test-mode";
 
@@ -24,8 +27,63 @@ function App() {
   const openHelp = useUiStore((s) => s.openHelp);
   const gitInstalled = useGitInstalled();
   const queryClient = useQueryClient();
+  const settings = useSettings();
+  const saveSettings = useSaveSettings();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Show a one-time passive notice on first launch, letting users opt out.
+  const noticeShown = useRef(false);
+  useEffect(() => {
+    if (
+      !settings.data ||
+      noticeShown.current ||
+      settings.data.seenAnalyticsNotice ||
+      COLD_START
+    )
+      return;
+    noticeShown.current = true;
+    const snap = settings.data;
+    toast("GitDesktop sends anonymous usage data", {
+      description:
+        "No code, paths, or secrets — and no session recordings unless you opt in. Manage in Settings → General.",
+      duration: 10000,
+      action: {
+        label: "Turn off",
+        onClick: () =>
+          saveSettings.mutate({
+            ...snap,
+            analyticsEnabled: false,
+            seenAnalyticsNotice: true,
+          }),
+      },
+      onDismiss: () =>
+        saveSettings.mutate({ ...snap, seenAnalyticsNotice: true }),
+      onAutoClose: () =>
+        saveSettings.mutate({ ...snap, seenAnalyticsNotice: true }),
+    });
+  }, [settings.data, saveSettings]);
+
+  // Reconcile analytics (events) + replay (opt-in) when either setting changes
+  // at runtime. main.tsx already initialized with the persisted values, so skip
+  // the first run to avoid a double-init, then reconcile on later changes.
+  const analyticsSynced = useRef(false);
+  useEffect(() => {
+    if (!settings.data) return;
+    const { analyticsEnabled, recordReplay } = settings.data;
+    if (!analyticsSynced.current) {
+      analyticsSynced.current = true;
+      return;
+    }
+    syncAnalytics(analyticsEnabled, recordReplay).catch(() => {
+      // Best-effort — analytics failures never surface to the user.
+    });
+  }, [settings.data]);
+
+  // Track screen changes.
+  useEffect(() => {
+    track({ name: "screen_viewed", properties: { screen: view } });
+  }, [view]);
 
   // Drop a repo folder anywhere on the window to open it.
   useRepoDrop();

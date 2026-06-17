@@ -229,7 +229,9 @@ export function DiffContent({
   );
 
   return (
-    <div className="flex h-full flex-col">
+    // ph-no-capture: blocks the whole pane (file path + diff body) from session
+    // replay — this is user code/paths. See src/components/Redacted.tsx.
+    <div className="ph-no-capture flex h-full flex-col">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
           {filePath}

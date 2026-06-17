@@ -18,6 +18,7 @@ const RAW_DIFF_MAX_BYTES = 200_000;
 export function useGenerateCommitMessage(repoPath: string) {
   const setCommitDraft = useUiStore((s) => s.setCommitDraft);
   const setGenerating = useUiStore((s) => s.setGenerating);
+  const setCommitAiGenerated = useUiStore((s) => s.setCommitAiGenerated);
   const generating = useUiStore((s) => s.generating);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -73,6 +74,7 @@ export function useGenerateCommitMessage(repoPath: string) {
         const { title, body } = splitCommitMessage(buffer);
         setCommitDraft(title, body);
       }
+      if (!abort.signal.aborted) setCommitAiGenerated(true);
     } catch (e) {
       if (!abort.signal.aborted) {
         // A missing key is a setup gap, not an error to copy — point straight
@@ -93,7 +95,7 @@ export function useGenerateCommitMessage(repoPath: string) {
       setGenerating(false);
       abortRef.current = null;
     }
-  }, [repoPath, setCommitDraft, setGenerating]);
+  }, [repoPath, setCommitDraft, setGenerating, setCommitAiGenerated]);
 
   return { generate, cancel, generating };
 }

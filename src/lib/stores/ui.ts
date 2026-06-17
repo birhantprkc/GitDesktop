@@ -52,6 +52,8 @@ interface UiState {
   /** Co-authors credited on the next commit (Co-authored-by trailers). */
   commitCoAuthors: CommitAuthor[];
   generating: boolean;
+  /** Whether the current commit draft was produced by AI generation. */
+  commitAiGenerated: boolean;
   /** Hash of the commit being amended, or null for a normal commit. */
   amendingHash: string | null;
 
@@ -74,6 +76,7 @@ interface UiState {
   setCommitCoAuthors: (coAuthors: CommitAuthor[]) => void;
   clearCommitDraft: () => void;
   setGenerating: (generating: boolean) => void;
+  setCommitAiGenerated: (generated: boolean) => void;
   setAmending: (hash: string | null) => void;
 }
 
@@ -93,6 +96,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
   commitBody: "",
   commitCoAuthors: [],
   generating: false,
+  commitAiGenerated: false,
   amendingHash: null,
 
   openRepo: (info) =>
@@ -169,8 +173,10 @@ export const useUiStore = create<UiState>()((set, get) => ({
       commitTitle: "",
       commitBody: "",
       commitCoAuthors: [],
+      commitAiGenerated: false,
       amendingHash: null,
     }),
   setGenerating: (generating) => set({ generating }),
+  setCommitAiGenerated: (generated) => set({ commitAiGenerated: generated }),
   setAmending: (hash) => set({ amendingHash: hash }),
 }));

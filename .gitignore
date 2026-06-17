@@ -27,3 +27,5 @@ dist-ssr
 /.claude/skills/logo-creator/
 /design/
 /docs/
+.env
+/PRIVACY.md

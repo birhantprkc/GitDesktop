@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { track } from "@/lib/analytics";
 import { triggerAutomations } from "@/lib/automations/runner";
 import { requiresPullRequest } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
@@ -28,6 +29,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   const setCommitBody = useUiStore((s) => s.setCommitBody);
   const setCoAuthors = useUiStore((s) => s.setCommitCoAuthors);
   const clearCommitDraft = useUiStore((s) => s.clearCommitDraft);
+  const commitAiGenerated = useUiStore((s) => s.commitAiGenerated);
   const { generate, cancel, generating } = useGenerateCommitMessage(repoPath);
   const aiEnabled = useAiEnabled();
   const aiConfigured = useAiConfigured();
@@ -69,6 +71,16 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
       { title: commitTitle, body: fullBody || undefined, amend: amending },
       {
         onSuccess: (result) => {
+          if (!amending) {
+            track({
+              name: "commit_created",
+              properties: {
+                file_count: stagedCount,
+                has_ai_message: commitAiGenerated,
+                has_co_authors: coAuthors.length > 0,
+              },
+            });
+          }
           clearCommitDraft();
           toast.success(
             `${amending ? "Amended" : "Committed"} ${result.hash.slice(0, 7)}`,
@@ -127,7 +139,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
           value={title}
           onChange={(e) => setCommitTitle(e.target.value)}
           disabled={generating}
-          className="pr-12"
+          className="ph-no-capture pr-12"
           autoComplete="off"
         />
         <span
@@ -147,7 +159,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
         rows={4}
         // cap the content-based auto-grow so a long generated body can't
         // swallow the changes list; resize-y lets the user drag it back down
-        className="max-h-48 min-h-16 resize-y"
+        className="ph-no-capture max-h-48 min-h-16 resize-y"
       />
       <CoAuthorPicker
         repoPath={repoPath}

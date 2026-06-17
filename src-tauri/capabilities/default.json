@@ -19,7 +19,9 @@
         { "url": "https://api.openai.com/*" },
         { "url": "https://openrouter.ai/*" },
         { "url": "http://localhost:11434/*" },
-        { "url": "http://127.0.0.1:11434/*" }
+        { "url": "http://127.0.0.1:11434/*" },
+        { "url": "https://eu.i.posthog.com/*" },
+        { "url": "https://eu-assets.i.posthog.com/*" }
       ]
     }
   ]

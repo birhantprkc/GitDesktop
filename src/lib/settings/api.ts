@@ -63,6 +63,12 @@ export interface AppSettings {
   autoCheckUpdates: boolean;
   /** First-run nudge toward the user guide; set once the user opens or dismisses it. */
   seenGuideNudge: boolean;
+  /** Send anonymous usage events to PostHog. Default on (opt-out). */
+  analyticsEnabled: boolean;
+  /** Record masked session replays. Default off (opt-in, for GDPR/ePrivacy). */
+  recordReplay: boolean;
+  /** Set once the first-run analytics notice has been dismissed. */
+  seenAnalyticsNotice: boolean;
   /** App version last shown to the user, to drive the "What's new" dialog. */
   lastSeenVersion: string;
   recentRepos: RecentRepo[];
@@ -100,6 +106,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showSelectionHint: true,
   autoCheckUpdates: true,
   seenGuideNudge: false,
+  analyticsEnabled: true,
+  recordReplay: false,
+  seenAnalyticsNotice: false,
   lastSeenVersion: "",
   recentRepos: [],
   diffViewMode: "unified",
