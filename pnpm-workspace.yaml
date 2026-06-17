@@ -1,2 +1,10 @@
+packages:
+  - "site"
+
+allowBuilds:
+  core-js: true
+  esbuild: true
+  sharp: true
+
 patchedDependencies:
-  '@git-diff-view/core@0.1.5': patches/@git-diff-view__core@0.1.5.patch
+  "@git-diff-view/core@0.1.5": patches/@git-diff-view__core@0.1.5.patch

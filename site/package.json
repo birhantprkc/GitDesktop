@@ -1,0 +1,21 @@
+{
+  "name": "site",
+  "type": "module",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.2.5",
+    "@tailwindcss/vite": "^4.3.0",
+    "astro": "^6.4.7",
+    "tailwindcss": "^4.3.0",
+    "vite": "^7.3.5"
+  },
+  "devDependencies": {
+    "sharp": "^0.35.1"
+  }
+}
