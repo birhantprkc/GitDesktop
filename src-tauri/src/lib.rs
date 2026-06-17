@@ -47,6 +47,7 @@ pub fn run() {
             git::diff::git_diff_file,
             git::diff::git_staged_diff,
             git::diff::git_apply_patch,
+            git::diff::git_apply_partial,
             git::diff::git_file_base64,
             git::stage::git_stage,
             git::stage::git_unstage,

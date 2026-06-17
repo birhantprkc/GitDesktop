@@ -181,6 +181,28 @@ export const gitApplyPatch = (
   reverse: boolean,
 ) => invoke<void>("git_apply_patch", { repoPath, patch, cached, reverse });
 
+/** One selected changed line for partial staging. */
+export interface SelectedLine {
+  side: "old" | "new";
+  line: number;
+}
+
+/** Stage/unstage/discard a selected subset of lines from a file's diff. */
+export const gitApplyPartial = (
+  repoPath: string,
+  diffText: string,
+  selected: SelectedLine[],
+  cached: boolean,
+  reverse: boolean,
+) =>
+  invoke<void>("git_apply_partial", {
+    repoPath,
+    diffText,
+    selected,
+    cached,
+    reverse,
+  });
+
 export const gitCommitAuthors = (repoPath: string) =>
   invoke<CommitAuthor[]>("git_commit_authors", { repoPath });
 

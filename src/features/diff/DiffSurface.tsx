@@ -73,6 +73,42 @@ const HIGHLIGHT_MAX_CHARS = 100_000;
 // the public type.
 const HIGHLIGHT_MAX_LINES = 2000;
 
+/**
+ * Build a parsed `DiffFile` from unified-diff text, with syntax highlighting
+ * when the file is small enough for the renderer to bother. Returns null for
+ * empty/unparseable input. Exposed so callers that need the instance (e.g. the
+ * line-selection manager) can build it directly.
+ */
+export function createDiffFile(
+  filePath: string,
+  text: string,
+): DiffFile | null {
+  if (!text.trim()) return null;
+  try {
+    const lang = diffLang(filePath);
+    const file = DiffFile.createInstance({
+      oldFile: { fileName: filePath, fileLang: lang },
+      newFile: { fileName: filePath, fileLang: lang },
+      hunks: [text],
+    });
+    file.initRaw();
+    // Highlighting is cheap (<10ms even here); the real cost is the DiffView
+    // render, so build the diff in a single pass — skipping highlight for files
+    // too big in chars or lines for the renderer to highlight anyway.
+    const rawLines = (file as { rawLength?: number }).rawLength ?? 0;
+    if (
+      lang &&
+      text.length <= HIGHLIGHT_MAX_CHARS &&
+      rawLines <= HIGHLIGHT_MAX_LINES
+    ) {
+      file.initSyntax();
+    }
+    return file;
+  } catch {
+    return null;
+  }
+}
+
 function RenderedDiff({ filePath, text }: { filePath: string; text: string }) {
   const settings = useSettings();
   const isDark = useIsDark();
@@ -101,32 +137,10 @@ function RenderedDiff({ filePath, text }: { filePath: string; text: string }) {
     return { shown: r.text, hidden: r.hidden };
   }, [deferredText, showFull]);
 
-  const diffFile = useMemo(() => {
-    if (!shown.trim()) return null;
-    try {
-      const lang = diffLang(deferredPath);
-      const file = DiffFile.createInstance({
-        oldFile: { fileName: deferredPath, fileLang: lang },
-        newFile: { fileName: deferredPath, fileLang: lang },
-        hunks: [shown],
-      });
-      file.initRaw();
-      // Highlighting is cheap (<10ms even here); the real cost is the DiffView
-      // render below, so build the diff in a single pass — skipping it for
-      // files too big in chars or lines for the renderer to highlight anyway.
-      const rawLines = (file as { rawLength?: number }).rawLength ?? 0;
-      if (
-        lang &&
-        shown.length <= HIGHLIGHT_MAX_CHARS &&
-        rawLines <= HIGHLIGHT_MAX_LINES
-      ) {
-        file.initSyntax();
-      }
-      return file;
-    } catch {
-      return null;
-    }
-  }, [shown, deferredPath]);
+  const diffFile = useMemo(
+    () => createDiffFile(deferredPath, shown),
+    [shown, deferredPath],
+  );
 
   if (!diffFile) return <DiffPlaceholder message="No changes to show" />;
   return (

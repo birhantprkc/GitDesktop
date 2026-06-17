@@ -157,3 +157,16 @@
     animation: none;
   }
 }
+
+/* The diff line-selection highlight (drag-to-stage individual lines). We paint
+   the `gd-line-selected` class on selected rows ourselves (SelectableHunk), so
+   fill those cells with a clear accent. The inset-shadow trick tints over the
+   cell's own add/del background. */
+.diff-tailwindcss-wrapper tr.gd-line-selected td {
+  box-shadow: inset 0 0 0 9999px rgba(37, 136, 250, 0.3) !important;
+}
+.diff-tailwindcss-wrapper tr.gd-line-selected td:first-child {
+  box-shadow:
+    inset 3px 0 0 0 #2588fa,
+    inset 0 0 0 9999px rgba(37, 136, 250, 0.3) !important;
+}

@@ -59,6 +59,8 @@ export interface AppSettings {
   /** Show the Ctrl/Shift-click multi-select hint above the changes list.
    *  Cleared by the hint's "Don't show again". */
   showSelectionHint: boolean;
+  /** Show the "drag to stage individual lines" hint in the working-tree diff. */
+  showLineStageHint: boolean;
   /** Check GitHub Releases for a new version on launch (install stays opt-in). */
   autoCheckUpdates: boolean;
   /** First-run nudge toward the user guide; set once the user opens or dismisses it. */
@@ -104,6 +106,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hotkeys: {},
   confirmAmendForcePush: true,
   showSelectionHint: true,
+  showLineStageHint: true,
   autoCheckUpdates: true,
   seenGuideNudge: false,
   analyticsEnabled: true,

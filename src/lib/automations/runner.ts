@@ -1,6 +1,8 @@
 import { toast } from "sonner";
 import { createAiClient } from "@/lib/ai/client";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
+import { isCliProvider } from "@/lib/ai/providers";
+import { runCliStream } from "@/lib/ai/stream";
 import type { AiSettings, ReviewMode } from "@/lib/ai/types";
 import { ghPrComment, gitBranchDiff, gitCommitDiff } from "@/lib/git/api";
 import { notifyIfUnfocused } from "@/lib/notify";
@@ -117,6 +119,25 @@ async function generateReviewText(
     },
     mode,
   );
+
+  // CLI providers (claude-cli/codex-cli) run as a subprocess, not the AI SDK —
+  // route them the same way the interactive review does.
+  if (isCliProvider(ai.provider)) {
+    let result = "";
+    await runCliStream({
+      ai,
+      system,
+      prompt,
+      repoPath: event.repoPath,
+      // runCliStream accumulates; the last setText carries the full text.
+      setText: (t) => {
+        result = t;
+      },
+      setStatus: () => undefined,
+      registerId: () => undefined,
+    });
+    return result;
+  }
 
   const client = await createAiClient(ai);
   let buffer = "";

@@ -610,6 +610,25 @@ export function useApplyPatch(repo: string) {
   );
 }
 
+export function useApplyPartial(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      diffText: string;
+      selected: api.SelectedLine[];
+      cached: boolean;
+      reverse: boolean;
+    }) =>
+      api.gitApplyPartial(
+        repo,
+        args.diffText,
+        args.selected,
+        args.cached,
+        args.reverse,
+      ),
+  );
+}
+
 export function useUnstage(repo: string) {
   return useRepoMutation(repo, (paths: string[]) =>
     api.gitUnstage(repo, paths),

@@ -68,6 +68,210 @@ pub async fn git_apply_patch(
     Ok(())
 }
 
+/// One changed line the user selected for partial staging. `side` is which side
+/// of the diff the line belongs to: `old` for a deletion (matched by old-file
+/// line number), `new` for an addition (matched by new-file line number).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    Old,
+    New,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SelectedLine {
+    pub side: Side,
+    pub line: u32,
+}
+
+/// Parse the start line numbers from a `@@ -A[,B] +C[,D] @@ …` header. Only the
+/// first `-`/`+` token counts (a section heading may contain more).
+fn parse_hunk_starts(header: &str) -> (u32, u32) {
+    let mut old = None;
+    let mut new = None;
+    for tok in header.split_whitespace() {
+        if old.is_none() {
+            if let Some(rest) = tok.strip_prefix('-') {
+                old = rest.split(',').next().and_then(|s| s.parse().ok());
+                continue;
+            }
+        }
+        if new.is_none() {
+            if let Some(rest) = tok.strip_prefix('+') {
+                new = rest.split(',').next().and_then(|s| s.parse().ok());
+            }
+        }
+    }
+    (old.unwrap_or(0), new.unwrap_or(0))
+}
+
+/// The optional section heading after the closing `@@` of a hunk header.
+fn hunk_section(header: &str) -> &str {
+    let mut it = header.match_indices("@@");
+    it.next();
+    match it.next() {
+        Some((idx, _)) => &header[idx + 2..],
+        None => "",
+    }
+}
+
+/// Build a patch containing only the user-selected changed lines from a
+/// single-file unified diff, neutralizing the rest so the result still applies
+/// cleanly. `reverse` means the patch will be applied with `--reverse`
+/// (unstage/discard); it flips which unselected changes are dropped vs. turned
+/// into context. Returns an empty string if nothing selected lands in any hunk.
+///
+/// Forward (stage): unselected `+` dropped, unselected `-` → context.
+/// Reverse (unstage/discard): unselected `+` → context, unselected `-` dropped.
+pub fn build_partial_patch(diff_text: &str, selected: &[SelectedLine], reverse: bool) -> String {
+    use std::collections::HashSet;
+    let sel_old: HashSet<u32> = selected
+        .iter()
+        .filter(|s| s.side == Side::Old)
+        .map(|s| s.line)
+        .collect();
+    let sel_new: HashSet<u32> = selected
+        .iter()
+        .filter(|s| s.side == Side::New)
+        .map(|s| s.line)
+        .collect();
+
+    let lines: Vec<&str> = diff_text.split('\n').collect();
+    let Some(first_hunk) = lines.iter().position(|l| l.starts_with("@@")) else {
+        return String::new();
+    };
+    let header = lines[..first_hunk].join("\n");
+
+    let mut out_hunks = String::new();
+    let mut i = first_hunk;
+    while i < lines.len() {
+        if !lines[i].starts_with("@@") {
+            i += 1;
+            continue;
+        }
+        let (old_start, new_start) = parse_hunk_starts(lines[i]);
+        let mut j = i + 1;
+        while j < lines.len() && !lines[j].starts_with("@@") {
+            j += 1;
+        }
+
+        let mut out_body: Vec<String> = Vec::new();
+        let mut old_no = old_start;
+        let mut new_no = new_start;
+        let mut old_count = 0u32;
+        let mut new_count = 0u32;
+        let mut kept_change = false;
+        let mut last_kept = false;
+
+        for &bl in &lines[i + 1..j] {
+            // The final "\n" split leaves a trailing "" — a real context blank
+            // line is " " (a space), so empty strings are just that artifact.
+            if bl.is_empty() {
+                continue;
+            }
+            match bl.as_bytes()[0] {
+                b' ' => {
+                    out_body.push(bl.to_string());
+                    old_no += 1;
+                    new_no += 1;
+                    old_count += 1;
+                    new_count += 1;
+                    last_kept = true;
+                }
+                b'+' => {
+                    let selected = sel_new.contains(&new_no);
+                    new_no += 1;
+                    if selected {
+                        out_body.push(bl.to_string());
+                        new_count += 1;
+                        kept_change = true;
+                        last_kept = true;
+                    } else if reverse {
+                        // Stays in the index/worktree — show it as context.
+                        out_body.push(format!(" {}", &bl[1..]));
+                        old_count += 1;
+                        new_count += 1;
+                        last_kept = true;
+                    } else {
+                        last_kept = false; // forward: drop it
+                    }
+                }
+                b'-' => {
+                    let selected = sel_old.contains(&old_no);
+                    old_no += 1;
+                    if selected {
+                        out_body.push(bl.to_string());
+                        old_count += 1;
+                        kept_change = true;
+                        last_kept = true;
+                    } else if reverse {
+                        last_kept = false; // reverse: drop it
+                    } else {
+                        // Not being removed yet — show it as context.
+                        out_body.push(format!(" {}", &bl[1..]));
+                        old_count += 1;
+                        new_count += 1;
+                        last_kept = true;
+                    }
+                }
+                b'\\' => {
+                    // "\ No newline at end of file" annotates the previous line.
+                    if last_kept {
+                        out_body.push(bl.to_string());
+                    }
+                }
+                _ => out_body.push(bl.to_string()),
+            }
+        }
+
+        if kept_change {
+            out_hunks.push_str(&format!(
+                "@@ -{old_start},{old_count} +{new_start},{new_count} @@{}\n",
+                hunk_section(lines[i])
+            ));
+            for l in &out_body {
+                out_hunks.push_str(l);
+                out_hunks.push('\n');
+            }
+        }
+        i = j;
+    }
+
+    if out_hunks.is_empty() {
+        return String::new();
+    }
+    format!("{header}\n{out_hunks}")
+}
+
+/// Stage/unstage/discard a selected subset of lines (see `build_partial_patch`).
+/// stage = cached; unstage = cached + reverse; discard = reverse.
+#[tauri::command]
+pub async fn git_apply_partial(
+    state: State<'_, AppState>,
+    repo_path: String,
+    diff_text: String,
+    selected: Vec<SelectedLine>,
+    cached: bool,
+    reverse: bool,
+) -> AppResult<()> {
+    let patch = build_partial_patch(&diff_text, &selected, reverse);
+    if patch.trim().is_empty() {
+        return Err(AppError::InvalidArgument("no changes selected".into()));
+    }
+    // --recount lets git fix up hunk line counts from content, a safety net on
+    // top of the exact counts we compute.
+    let mut args = vec!["apply", "--whitespace=nowarn", "--recount"];
+    if cached {
+        args.push("--cached");
+    }
+    if reverse {
+        args.push("--reverse");
+    }
+    args.push("-");
+    run_git_mutating_input(&state, &repo_path, &args, Some(&patch), DEFAULT_TIMEOUT).await?;
+    Ok(())
+}
+
 /// Cap on diff text shipped to the webview for rendering.
 const VIEWER_MAX_BYTES: usize = 1_000_000;
 /// Default cap on staged diff text shipped for AI prompt building.
@@ -307,6 +511,127 @@ mod tests {
         let (out, truncated) = truncate_at_file_boundary("diff --git a/a b/a\n+x\n".into(), 1000);
         assert!(!truncated);
         assert!(out.contains("+x"));
+    }
+
+    const FILE_HEADER: &str = "diff --git a/f.txt b/f.txt\nindex 000..111 100644\n--- a/f.txt\n+++ b/f.txt\n";
+
+    fn sel(side: Side, line: u32) -> SelectedLine {
+        SelectedLine { side, line }
+    }
+
+    #[test]
+    fn stages_one_of_two_added_lines() {
+        let diff = format!("{FILE_HEADER}@@ -1,2 +1,4 @@\n line1\n+added A\n+added B\n line2\n");
+        // Select only "added A" (new-side line 2).
+        let patch = build_partial_patch(&diff, &[sel(Side::New, 2)], false);
+        assert_eq!(
+            patch,
+            format!("{FILE_HEADER}@@ -1,2 +1,3 @@\n line1\n+added A\n line2\n"),
+        );
+    }
+
+    #[test]
+    fn stages_one_of_two_deleted_lines() {
+        // Unselected deletion becomes context so the old side still matches.
+        let diff = format!("{FILE_HEADER}@@ -1,4 +1,2 @@\n line1\n-del A\n-del B\n line4\n");
+        let patch = build_partial_patch(&diff, &[sel(Side::Old, 2)], false);
+        assert_eq!(
+            patch,
+            format!("{FILE_HEADER}@@ -1,4 +1,3 @@\n line1\n-del A\n del B\n line4\n"),
+        );
+    }
+
+    #[test]
+    fn reverse_unselected_addition_becomes_context() {
+        // Unstage only "added A": "added B" must survive as context.
+        let diff = format!("{FILE_HEADER}@@ -1,2 +1,4 @@\n line1\n+added A\n+added B\n line2\n");
+        let patch = build_partial_patch(&diff, &[sel(Side::New, 2)], true);
+        assert_eq!(
+            patch,
+            format!("{FILE_HEADER}@@ -1,3 +1,4 @@\n line1\n+added A\n added B\n line2\n"),
+        );
+    }
+
+    #[test]
+    fn only_hunks_with_a_selected_change_are_emitted() {
+        let diff = format!(
+            "{FILE_HEADER}@@ -1,2 +1,3 @@\n a\n+first\n b\n@@ -10,2 +11,3 @@\n c\n+second\n d\n"
+        );
+        // Select only the addition in the second hunk (new-side line 12).
+        let patch = build_partial_patch(&diff, &[sel(Side::New, 12)], false);
+        assert!(!patch.contains("+first"));
+        assert!(patch.contains("@@ -10,2 +11,3 @@"));
+        assert!(patch.contains("+second"));
+    }
+
+    #[test]
+    fn no_newline_marker_follows_its_line() {
+        let diff = format!(
+            "{FILE_HEADER}@@ -1,2 +1,2 @@\n line1\n-old last\n\\ No newline at end of file\n+new last\n\\ No newline at end of file\n"
+        );
+        let patch = build_partial_patch(&diff, &[sel(Side::Old, 2), sel(Side::New, 2)], false);
+        assert!(patch.contains("-old last\n\\ No newline at end of file\n"));
+        assert!(patch.contains("+new last\n\\ No newline at end of file\n"));
+    }
+
+    #[test]
+    fn nothing_selected_yields_empty() {
+        let diff = format!("{FILE_HEADER}@@ -1,2 +1,3 @@\n line1\n+added\n line2\n");
+        assert!(build_partial_patch(&diff, &[], false).is_empty());
+    }
+
+    /// The built partial patch is accepted by real `git apply --cached`: of two
+    /// added lines, staging one leaves exactly the other unstaged.
+    #[tokio::test]
+    async fn partial_patch_stages_a_single_added_line() {
+        use crate::git::runner::run_git_input;
+
+        let dir = std::env::temp_dir().join(format!(
+            "gd-partial-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.to_string_lossy().into_owned();
+        let git = |args: Vec<&'static str>| {
+            let repo = repo.clone();
+            async move { run_git(Some(&repo), &args, DEFAULT_TIMEOUT).await.unwrap() }
+        };
+
+        git(vec!["init"]).await;
+        git(vec!["config", "user.email", "t@t"]).await;
+        git(vec!["config", "user.name", "t"]).await;
+        let base: Vec<String> = (1..=5).map(|i| format!("line {i}")).collect();
+        let file = dir.join("file.txt");
+        std::fs::write(&file, base.join("\n") + "\n").unwrap();
+        git(vec!["add", "."]).await;
+        git(vec!["commit", "-m", "base"]).await;
+        // Insert two new lines after "line 2".
+        let edited = "line 1\nline 2\nNEW A\nNEW B\nline 3\nline 4\nline 5\n";
+        std::fs::write(&file, edited).unwrap();
+
+        let diff = git(vec!["diff", "--no-color"]).await.stdout_lossy();
+        // "NEW A" is new-side line 3 in the edited file.
+        let patch = build_partial_patch(&diff, &[sel(Side::New, 3)], false);
+        run_git_input(
+            Some(&repo),
+            &["apply", "--whitespace=nowarn", "--recount", "--cached", "-"],
+            Some(&patch),
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+
+        let staged = git(vec!["diff", "--cached", "--no-color"]).await.stdout_lossy();
+        let unstaged = git(vec!["diff", "--no-color"]).await.stdout_lossy();
+        assert!(staged.contains("NEW A"));
+        assert!(!staged.contains("NEW B"));
+        assert!(unstaged.contains("NEW B"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// End-to-end check of the hunk-staging plumbing: a single hunk cut out
