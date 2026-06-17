@@ -54,6 +54,20 @@ export interface PrPromptInput {
   globalInstructions: string;
 }
 
+export interface BranchNamePromptInput {
+  diffText: string;
+  diffTruncated: boolean;
+  files: { path: string; added: number; deleted: number; isBinary: boolean }[];
+  /** Untracked (new) file paths — no diff content, but the names guide naming. */
+  untrackedPaths: string[];
+  /** Changed files hidden from this context by the user's ignore patterns. */
+  excludedFiles: number;
+  /** Existing branch names, as a naming-convention / style reference. */
+  recentBranches: string[];
+  repoInstructions: string | null;
+  globalInstructions: string;
+}
+
 export type ReviewMode = "general" | "security";
 
 export interface ReviewPromptInput {

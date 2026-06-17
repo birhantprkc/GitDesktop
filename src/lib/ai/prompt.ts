@@ -1,5 +1,6 @@
 import { budgetDiff } from "./truncate";
 import type {
+  BranchNamePromptInput,
   CommitPromptInput,
   PrPromptInput,
   ReviewMode,
@@ -53,6 +54,61 @@ export function buildCommitPrompt(input: CommitPromptInput): {
   }
   promptParts.push(diffSection);
   promptParts.push("Write the commit message for these staged changes.");
+
+  return {
+    system: systemParts.join("\n\n"),
+    prompt: promptParts.join("\n\n"),
+  };
+}
+
+const BRANCH_SYSTEM = `You generate a single git branch name for a set of in-progress changes.
+Output ONLY the branch name — one line, nothing else: no quotes, no explanation, no markdown, no trailing period.
+Use lowercase kebab-case, 2-5 words, specific to what the change does (avoid generic names like "updates" or "changes").
+If the existing branch names below show a prefix convention (e.g. "feature/", "fix/", "chore/"), follow it; otherwise pick a fitting type prefix such as "feature/" or "fix/".
+Never use spaces, uppercase, or characters invalid in a git ref name.`;
+
+export function buildBranchNamePrompt(input: BranchNamePromptInput): {
+  system: string;
+  prompt: string;
+} {
+  const systemParts = [BRANCH_SYSTEM];
+  if (input.repoInstructions) {
+    systemParts.push(`## Project instructions\n${input.repoInstructions}`);
+  }
+  if (input.globalInstructions.trim()) {
+    systemParts.push(
+      `## User instructions\n${input.globalInstructions.trim()}`,
+    );
+  }
+
+  const tracked = input.files.map((f) =>
+    f.isBinary ? `${f.path} (binary)` : `${f.path} +${f.added} -${f.deleted}`,
+  );
+  const untracked = input.untrackedPaths.map((p) => `${p} (new file)`);
+  const fileSummary = [...tracked, ...untracked].join("\n");
+
+  const budgeted = budgetDiff(stripBinarySections(input.diffText));
+
+  let filesSection = `## Files changed\n${fileSummary || "(none)"}`;
+  if (input.excludedFiles > 0) {
+    filesSection += `\n[${input.excludedFiles} additional changed file(s) hidden by the user's AI ignore rules]`;
+  }
+  const promptParts = [filesSection];
+  if (input.recentBranches.length > 0) {
+    promptParts.push(
+      `## Existing branch names (convention reference)\n${input.recentBranches.join("\n")}`,
+    );
+  }
+  const diffBody =
+    budgeted.text ||
+    "(no text diff — name the branch from the file list above)";
+  let diffSection = `## Changes diff\n${diffBody}`;
+  if (budgeted.truncated || input.diffTruncated) {
+    diffSection +=
+      "\n[diff truncated — rely on the file summary above for full coverage.]";
+  }
+  promptParts.push(diffSection);
+  promptParts.push("Generate the branch name for these changes.");
 
   return {
     system: systemParts.join("\n\n"),
@@ -278,4 +334,16 @@ export function splitCommitMessage(raw: string): {
     .replace(/^\n+/, "")
     .trimEnd();
   return { title, body };
+}
+
+/** First non-empty line of a branch-name response, with wrapping quotes/fences
+ *  stripped. Still pass the result through sanitizeRefName for git validity. */
+export function extractBranchName(raw: string): string {
+  const line =
+    raw
+      .replace(/```[a-z]*/gi, "")
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) ?? "";
+  return line.replace(/^[`'"]+|[`'"]+$/g, "").trim();
 }

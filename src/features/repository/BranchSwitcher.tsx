@@ -5,6 +5,7 @@ import {
   CaretDownIcon,
   CheckIcon,
   GitBranchIcon,
+  SparkleIcon,
 } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { useState } from "react";
@@ -35,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
 import {
   branchNameError,
   branchNameHint,
@@ -66,10 +68,12 @@ import {
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import type { Branch } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { useAiConfigured, useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { StashesDialog } from "./StashesDialog";
+import { useGenerateBranchName } from "./useGenerateBranchName";
 
 type PickerMode = "merge" | "squash" | "rebase";
 
@@ -124,6 +128,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const setBranchArchived = useSetBranchArchived(repoPath);
   const rulesConfig = useEffectiveBranchRules(repoPath);
   const amendingHash = useUiStore((s) => s.amendingHash);
+  const openSettings = useUiStore((s) => s.openSettings);
+  const aiEnabled = useAiEnabled();
+  const aiConfigured = useAiConfigured();
+  const branchNameGen = useGenerateBranchName(repoPath);
 
   const [open, setOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -185,6 +193,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   );
   const stashes = stashCount.data ?? 0;
   const hasChanges = (status.data?.entries.length ?? 0) > 0;
+  // Naming a branch from changes needs a commit to diff against; an unborn HEAD
+  // (no commits) has nothing to compare the working tree to.
+  const headExists = Boolean(head?.oid);
   // You can't amend across branches: amend mode targets a specific commit on
   // this branch, so switching would strand the in-progress amend and leave its
   // banner up. Lock the switcher until the user finishes or stops amending.
@@ -741,6 +752,65 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 />
               )}
             </createForm.AppField>
+            {aiEnabled && (
+              <div className="flex justify-end">
+                {!aiConfigured ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    title="Connect an AI provider to generate branch names"
+                    onClick={() => {
+                      setCreateOpen(false);
+                      openSettings("ai");
+                    }}
+                  >
+                    <SparkleIcon data-icon="inline-start" />
+                    Set up AI to name branches
+                  </Button>
+                ) : branchNameGen.generating ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    onClick={branchNameGen.cancel}
+                  >
+                    <Spinner data-icon="inline-start" />
+                    Generating…
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    disabled={!hasChanges || !headExists}
+                    title={
+                      !headExists
+                        ? "Make your first commit before branching from changes"
+                        : !hasChanges
+                          ? "No in-progress changes — make some edits to name a branch after them"
+                          : "Suggest a name from your in-progress changes"
+                    }
+                    onClick={() =>
+                      branchNameGen.generate({
+                        entries: status.data?.entries ?? [],
+                        recentBranches: allBranches
+                          .map((b) => b.name)
+                          .slice(0, 20),
+                        onName: (name) =>
+                          createForm.setFieldValue("name", name),
+                      })
+                    }
+                  >
+                    <SparkleIcon data-icon="inline-start" />
+                    Generate from changes
+                  </Button>
+                )}
+              </div>
+            )}
             {baseOptions.length > 0 && (
               <createForm.AppField name="base">
                 {(field) => (

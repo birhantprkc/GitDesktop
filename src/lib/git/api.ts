@@ -106,6 +106,21 @@ export const gitStagedDiff = (
     exclude: exclude ?? null,
   });
 
+/** All in-progress changes (staged + unstaged tracked) vs HEAD, for naming a
+ *  branch off work that may not be staged yet. Untracked files aren't included
+ *  (callers pass their paths from the status entries separately). */
+export const gitWorkingTreeDiff = (
+  repoPath: string,
+  maxBytes?: number,
+  exclude?: string[],
+) =>
+  invoke<StagedDiff>("git_staged_diff", {
+    repoPath,
+    maxBytes: maxBytes ?? null,
+    exclude: exclude ?? null,
+    worktree: true,
+  });
+
 export const gitStage = (repoPath: string, paths: string[]) =>
   invoke<void>("git_stage", { repoPath, paths });
 

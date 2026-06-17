@@ -125,8 +125,17 @@ pub async fn git_staged_diff(
     repo_path: String,
     max_bytes: Option<usize>,
     exclude: Option<Vec<String>>,
+    worktree: Option<bool>,
 ) -> AppResult<StagedDiff> {
     let max_bytes = max_bytes.unwrap_or(AI_DEFAULT_MAX_BYTES);
+    // `--cached` diffs staged changes vs HEAD (commit messages); `HEAD` diffs
+    // the whole working tree vs HEAD (staged + unstaged), for naming a branch
+    // off in-progress work that hasn't been staged yet.
+    let base = if worktree.unwrap_or(false) {
+        "HEAD"
+    } else {
+        "--cached"
+    };
 
     // Translate ignore patterns into git pathspec excludes so matching has
     // exact gitignore-style glob semantics. ":(exclude)" needs at least one
@@ -140,8 +149,8 @@ pub async fn git_staged_diff(
         pathspec.push(format!(":(exclude){pattern}"));
     }
 
-    let mut diff_args: Vec<&str> = vec!["diff", "--cached", "--no-color"];
-    let mut stat_args: Vec<&str> = vec!["diff", "--cached", "--numstat", "-z"];
+    let mut diff_args: Vec<&str> = vec!["diff", base, "--no-color"];
+    let mut stat_args: Vec<&str> = vec!["diff", base, "--numstat", "-z"];
     if !pathspec.is_empty() {
         for args in [&mut diff_args, &mut stat_args] {
             args.push("--");
@@ -164,7 +173,7 @@ pub async fn git_staged_diff(
     } else {
         let all = run_git(
             Some(&repo_path),
-            &["diff", "--cached", "--numstat", "-z"],
+            &["diff", base, "--numstat", "-z"],
             DEFAULT_TIMEOUT,
         )
         .await?;
