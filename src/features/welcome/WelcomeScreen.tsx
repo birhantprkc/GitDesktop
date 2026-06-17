@@ -73,7 +73,7 @@ export function WelcomeScreen() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center gap-6 p-8">
+      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center gap-6 p-8">
         {settings.data && !settings.data.seenGuideNudge && (
           <Card>
             <CardHeader>
@@ -99,29 +99,36 @@ export function WelcomeScreen() {
           </Card>
         )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Get started</CardTitle>
-            <CardDescription>
-              Open a local repository, clone one from a URL, or create a new
-              one. You can also drag a repo folder anywhere onto the window.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            <Button onClick={pickAndOpen}>
-              <FolderOpenIcon data-icon="inline-start" />
-              Open repository
-            </Button>
-            <Button variant="outline" onClick={() => setCloneOpen(true)}>
-              Clone repository
-            </Button>
-            <Button variant="outline" onClick={() => setCreateOpen(true)}>
-              Create repository
-            </Button>
-          </CardContent>
-        </Card>
+        <div className="grid items-center gap-x-10 gap-y-8 md:grid-cols-2">
+          <div className="flex flex-col gap-7">
+            <div className="space-y-4">
+              <BrandMark className="size-9" />
+              <div className="space-y-2">
+                <h1 className="font-heading text-xl font-semibold tracking-tight text-balance">
+                  A calmer way to move work through Git.
+                </h1>
+                <p className="max-w-prose text-xs/relaxed text-muted-foreground">
+                  Open a local repository, clone one from a URL, or create a new
+                  one. You can also drag a repo folder anywhere onto the window.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={pickAndOpen}>
+                <FolderOpenIcon data-icon="inline-start" />
+                Open repository
+              </Button>
+              <Button variant="outline" onClick={() => setCloneOpen(true)}>
+                Clone repository
+              </Button>
+              <Button variant="outline" onClick={() => setCreateOpen(true)}>
+                Create repository
+              </Button>
+            </div>
+          </div>
 
-        <RecentRepoList />
+          <RecentRepoList />
+        </div>
       </main>
 
       <CloneRepoDialog open={cloneOpen} onOpenChange={setCloneOpen} />
