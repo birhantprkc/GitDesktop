@@ -155,7 +155,7 @@ export function PrReviewPanel({
           >
             <ComboboxInput
               className="w-full"
-              placeholder={MODEL_SUGGESTIONS[provider][0]}
+              placeholder={MODEL_SUGGESTIONS[provider][0] ?? "Account default"}
             />
             <ComboboxContent>
               <ComboboxEmpty>Uses the typed id as-is</ComboboxEmpty>

@@ -138,7 +138,9 @@ function ModelPicker({
           <ComboboxInput
             id={`${idPrefix}-model`}
             className="w-full"
-            placeholder={MODEL_SUGGESTIONS[value.provider][0]}
+            placeholder={
+              MODEL_SUGGESTIONS[value.provider][0] ?? "Account default"
+            }
           />
           <ComboboxContent>
             <ComboboxEmpty>

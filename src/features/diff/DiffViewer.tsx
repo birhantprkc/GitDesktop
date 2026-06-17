@@ -376,7 +376,8 @@ const SELECT_CLASS = "gd-line-selected";
  *  `data-line-{new,old}-num`; split mode uses a generic `data-line-num` inside a
  *  cell marked `data-side`. Try both so either view works. */
 function rowForLine(container: HTMLElement, side: "old" | "new", line: number) {
-  const unifiedAttr = side === "new" ? "data-line-new-num" : "data-line-old-num";
+  const unifiedAttr =
+    side === "new" ? "data-line-new-num" : "data-line-old-num";
   const span =
     container.querySelector(`span[${unifiedAttr}="${line}"]`) ??
     container.querySelector(

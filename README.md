@@ -148,3 +148,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 
 <!-- For the full GitHub Desktop comparison and remaining gaps, see
 [github-desktop.md](github-desktop.md). -->
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
