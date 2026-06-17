@@ -1,5 +1,6 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { readRepoBranchRules, writeRepoBranchRules } from "@/lib/git/api";
+import { storeName } from "@/lib/test-mode";
 import {
   ALL_MERGE_METHODS,
   type BranchProtection,
@@ -36,7 +37,10 @@ export function normalizeBranchRules(saved: unknown): BranchRulesConfig {
 
 let storePromise: Promise<Store> | null = null;
 function getStore(): Promise<Store> {
-  storePromise ??= load("branch-rules.json", { autoSave: true, defaults: {} });
+  storePromise ??= load(storeName("branch-rules.json"), {
+    autoSave: true,
+    defaults: {},
+  });
   return storePromise;
 }
 

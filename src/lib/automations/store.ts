@@ -1,4 +1,5 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
+import { storeName } from "@/lib/test-mode";
 import {
   type AutomationsConfig,
   EMPTY_AUTOMATIONS,
@@ -8,7 +9,10 @@ import {
 // Personal app-data — automation rules are the user's, never the repo's.
 let storePromise: Promise<Store> | null = null;
 function getStore(): Promise<Store> {
-  storePromise ??= load("automations.json", { autoSave: true, defaults: {} });
+  storePromise ??= load(storeName("automations.json"), {
+    autoSave: true,
+    defaults: {},
+  });
   return storePromise;
 }
 

@@ -9,6 +9,7 @@
     "lint": "biome check --write ./src/",
     "preview": "vite preview",
     "changelog": "node scripts/changelog-draft.mjs",
+    "cold-start": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/cold-start.ps1",
     "tauri": "tauri"
   },
   "dependencies": {

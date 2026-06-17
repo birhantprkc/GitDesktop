@@ -1,0 +1,26 @@
+<Configuration>
+  <!--
+    Windows Sandbox config for a true bare-machine onboarding walkthrough.
+    Prereqs (see ../../docs/onboarding-testing.md):
+      1. Enable the "Windows Sandbox" feature (admin, one-time, reboot).
+      2. Build the app on the host first: `pnpm tauri build`
+         (produces the installer under src-tauri\target\release\bundle).
+    Then double-click this file. The sandbox is disposable — it resets on close.
+  -->
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>C:\ProjectRepos\Misc\GitDesktop\src-tauri\target\release\bundle</HostFolder>
+      <SandboxFolder>C:\Installer</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>C:\ProjectRepos\Misc\GitDesktop\test\sandbox</HostFolder>
+      <SandboxFolder>C:\Setup</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Setup\setup.ps1</Command>
+  </LogonCommand>
+  <MemoryInMB>4096</MemoryInMB>
+</Configuration>

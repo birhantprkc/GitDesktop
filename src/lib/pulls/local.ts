@@ -1,4 +1,5 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
+import { storeName } from "@/lib/test-mode";
 
 export interface LocalPrComment {
   id: string;
@@ -28,7 +29,10 @@ export interface LocalPr {
 // Personal app-data, keyed by repo path — never written into the repo itself.
 let storePromise: Promise<Store> | null = null;
 function getStore(): Promise<Store> {
-  storePromise ??= load("local-prs.json", { autoSave: true, defaults: {} });
+  storePromise ??= load(storeName("local-prs.json"), {
+    autoSave: true,
+    defaults: {},
+  });
   return storePromise;
 }
 

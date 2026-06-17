@@ -1,4 +1,10 @@
 import { invoke } from "@/lib/tauri/invoke";
+import {
+  COLD_START,
+  coldStartDeleteSecret,
+  coldStartGetSecret,
+  coldStartSetSecret,
+} from "@/lib/test-mode";
 import type {
   BlameLine,
   Branch,
@@ -689,14 +695,24 @@ export const readRepoBranchRules = (repoPath: string) =>
 export const writeRepoBranchRules = (repoPath: string, contents: string) =>
   invoke<void>("write_repo_branch_rules", { repoPath, contents });
 
+// Cold-start test mode keeps API keys in an isolated sessionStorage store so
+// the OS keychain (and the user's real keys) are never touched (no-op normally).
 export const setSecret = (provider: string, value: string) =>
-  invoke<void>("set_secret", { provider, value });
+  COLD_START
+    ? Promise.resolve(coldStartSetSecret(provider, value))
+    : invoke<void>("set_secret", { provider, value });
 
 export const getSecret = (provider: string) =>
-  invoke<string | null>("get_secret", { provider });
+  COLD_START
+    ? Promise.resolve(coldStartGetSecret(provider))
+    : invoke<string | null>("get_secret", { provider });
 
 export const deleteSecret = (provider: string) =>
-  invoke<void>("delete_secret", { provider });
+  COLD_START
+    ? Promise.resolve(coldStartDeleteSecret(provider))
+    : invoke<void>("delete_secret", { provider });
 
 export const secretExists = (provider: string) =>
-  invoke<boolean>("secret_exists", { provider });
+  COLD_START
+    ? Promise.resolve(coldStartGetSecret(provider) !== null)
+    : invoke<boolean>("secret_exists", { provider });

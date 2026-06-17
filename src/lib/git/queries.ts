@@ -4,8 +4,9 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { COLD_START_NO_GH, COLD_START_NO_GIT } from "@/lib/test-mode";
 import * as api from "./api";
-import type { RepoOp, RewriteStep } from "./types";
+import type { GhStatus, RepoOp, RewriteStep } from "./types";
 
 export const repoKeys = {
   all: (repo: string) => ["repo", repo] as const,
@@ -32,7 +33,10 @@ export const repoKeys = {
 export function useGitInstalled() {
   return useQuery({
     queryKey: ["git-installed"],
-    queryFn: api.checkGitInstalled,
+    // Cold-start test mode can pretend git is absent to exercise GitMissingScreen.
+    queryFn: COLD_START_NO_GIT
+      ? () => Promise.reject(new Error("Git not found (cold-start test mode)"))
+      : api.checkGitInstalled,
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,
   });
@@ -359,7 +363,16 @@ export function useSwitchAccount() {
 export function useGhStatus(repo: string) {
   return useQuery({
     queryKey: ["repo", repo, "gh-status"] as const,
-    queryFn: () => api.ghStatus(repo),
+    // Cold-start test mode can force the "GitHub not connected" empty states.
+    queryFn: COLD_START_NO_GH
+      ? (): Promise<GhStatus> =>
+          Promise.resolve({
+            installed: false,
+            authenticated: false,
+            login: null,
+            repo: null,
+          })
+      : () => api.ghStatus(repo),
     staleTime: 60_000,
     retry: false,
   });

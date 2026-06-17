@@ -16,6 +16,7 @@ import { WelcomeScreen } from "@/features/welcome/WelcomeScreen";
 import { useGitInstalled } from "@/lib/git/queries";
 import { useHotkeyAction, useHotkeysListener } from "@/lib/hotkeys/hotkeys";
 import { useUiStore } from "@/lib/stores/ui";
+import { COLD_START } from "@/lib/test-mode";
 
 function App() {
   const view = useUiStore((s) => s.view);
@@ -73,6 +74,12 @@ function App() {
       <WhatsNew />
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      {COLD_START && (
+        <div className="pointer-events-none fixed right-2 bottom-2 z-50 flex items-center gap-1.5 border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+          <span className="size-1.5 rounded-full bg-amber-500" />
+          Cold-start test mode
+        </div>
+      )}
     </>
   );
 }

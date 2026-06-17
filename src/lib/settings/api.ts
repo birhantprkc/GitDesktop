@@ -1,5 +1,6 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import type { AiSettings } from "@/lib/ai/types";
+import { storeName } from "@/lib/test-mode";
 
 export interface RecentRepo {
   path: string;
@@ -109,7 +110,10 @@ const MAX_RECENT_REPOS = 200;
 let storePromise: Promise<Store> | null = null;
 
 function getStore(): Promise<Store> {
-  storePromise ??= load("settings.json", { autoSave: true, defaults: {} });
+  storePromise ??= load(storeName("settings.json"), {
+    autoSave: true,
+    defaults: {},
+  });
   return storePromise;
 }
 
