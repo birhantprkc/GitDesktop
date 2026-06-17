@@ -1,3 +1,4 @@
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { validateRepo } from "@/lib/git/api";
@@ -37,4 +38,20 @@ export function useOpenRepoByPath() {
     },
     [openRepo, addRecent, removeRecent],
   );
+}
+
+/**
+ * Prompts for a local folder, then opens it as a repository (validate, record
+ * in recents, switch to it). Shared by the welcome screen and the in-app repo
+ * switcher so "Open repository…" behaves identically everywhere.
+ */
+export function usePickAndOpenRepo() {
+  const openByPath = useOpenRepoByPath();
+  return useCallback(async () => {
+    const path = await openDialog({
+      directory: true,
+      title: "Open repository",
+    });
+    if (typeof path === "string") await openByPath(path);
+  }, [openByPath]);
 }

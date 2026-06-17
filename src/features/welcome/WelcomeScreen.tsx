@@ -4,7 +4,6 @@ import {
   GearIcon,
   QuestionIcon,
 } from "@phosphor-icons/react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { Button } from "@/components/ui/button";
@@ -15,24 +14,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { validateRepo } from "@/lib/git/api";
+import { usePickAndOpenRepo } from "@/features/repository/useOpenRepoByPath";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
-import {
-  useAddRecentRepo,
-  useSaveSettings,
-  useSettings,
-} from "@/lib/settings/queries";
+import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { toastError } from "@/lib/toast";
 import { CloneRepoDialog } from "./CloneRepoDialog";
 import { CreateRepoDialog } from "./CreateRepoDialog";
 import { RecentRepoList } from "./RecentRepoList";
 
 export function WelcomeScreen() {
-  const openRepo = useUiStore((s) => s.openRepo);
   const openSettings = useUiStore((s) => s.openSettings);
   const openHelp = useUiStore((s) => s.openHelp);
-  const addRecent = useAddRecentRepo();
+  const pickAndOpen = usePickAndOpenRepo();
   const settings = useSettings();
   const saveSettings = useSaveSettings();
   const [cloneOpen, setCloneOpen] = useState(false);
@@ -46,21 +39,6 @@ export function WelcomeScreen() {
   function openGuide() {
     dismissNudge();
     openHelp();
-  }
-
-  async function pickAndOpen() {
-    const path = await openDialog({
-      directory: true,
-      title: "Open repository",
-    });
-    if (!path) return;
-    try {
-      const info = await validateRepo(path);
-      addRecent.mutate({ path: info.root, name: info.name });
-      openRepo(info);
-    } catch (e) {
-      toastError(e);
-    }
   }
 
   useHotkeyAction("add-local-repository", pickAndOpen);

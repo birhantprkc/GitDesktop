@@ -1,24 +1,62 @@
 import { Popover } from "@base-ui/react/popover";
-import { CaretDownIcon } from "@phosphor-icons/react";
+import {
+  CaretDownIcon,
+  DownloadSimpleIcon,
+  FolderOpenIcon,
+  FolderPlusIcon,
+} from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { CloneRepoDialog } from "@/features/welcome/CloneRepoDialog";
+import { CreateRepoDialog } from "@/features/welcome/CreateRepoDialog";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import type { RecentRepo } from "@/lib/settings/api";
 import { useRepoAlias } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { RemoveRepoDialog, RepoAliasDialog } from "./RepoDialogs";
 import { RepoList } from "./RepoList";
+import { usePickAndOpenRepo } from "./useOpenRepoByPath";
+
+/** A repository action row in the switcher footer (open / clone / create). */
+function ActionRow({
+  icon: Icon,
+  onClick,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground"
+    >
+      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+      {children}
+    </button>
+  );
+}
 
 export function RepoSwitcher() {
   const repoName = useUiStore((s) => s.repoName);
   const repoPath = useUiStore((s) => s.repoPath);
   const alias = useRepoAlias(repoPath);
+  const pickAndOpen = usePickAndOpenRepo();
   const [open, setOpen] = useState(false);
   // Dialogs live outside the popover: closing it unmounts its contents.
   const [aliasTarget, setAliasTarget] = useState<RecentRepo | null>(null);
   const [removeTarget, setRemoveTarget] = useState<RecentRepo | null>(null);
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
+  // Open/clone/create are reachable here too, so you don't have to leave the
+  // repository view to get to another repo.
   useHotkeyAction("show-repositories", () => setOpen(true));
+  useHotkeyAction("add-local-repository", pickAndOpen);
+  useHotkeyAction("clone-repository", () => setCloneOpen(true));
+  useHotkeyAction("new-repository", () => setCreateOpen(true));
 
   return (
     <>
@@ -52,6 +90,35 @@ export function RepoSwitcher() {
                   setRemoveTarget(repo);
                 }}
               />
+              <div className="border-t py-1">
+                <ActionRow
+                  icon={FolderOpenIcon}
+                  onClick={() => {
+                    setOpen(false);
+                    pickAndOpen();
+                  }}
+                >
+                  Open repository…
+                </ActionRow>
+                <ActionRow
+                  icon={DownloadSimpleIcon}
+                  onClick={() => {
+                    setOpen(false);
+                    setCloneOpen(true);
+                  }}
+                >
+                  Clone repository…
+                </ActionRow>
+                <ActionRow
+                  icon={FolderPlusIcon}
+                  onClick={() => {
+                    setOpen(false);
+                    setCreateOpen(true);
+                  }}
+                >
+                  Create repository…
+                </ActionRow>
+              </div>
             </Popover.Popup>
           </Popover.Positioner>
         </Popover.Portal>
@@ -65,6 +132,8 @@ export function RepoSwitcher() {
         repo={removeTarget}
         onClose={() => setRemoveTarget(null)}
       />
+      <CloneRepoDialog open={cloneOpen} onOpenChange={setCloneOpen} />
+      <CreateRepoDialog open={createOpen} onOpenChange={setCreateOpen} />
     </>
   );
 }
