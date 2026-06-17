@@ -88,7 +88,7 @@ export function WelcomeScreen() {
             variant="ghost"
             size="icon-sm"
             aria-label="Settings"
-            onClick={openSettings}
+            onClick={() => openSettings()}
           >
             <GearIcon />
           </Button>
@@ -125,8 +125,8 @@ export function WelcomeScreen() {
           <CardHeader>
             <CardTitle>Get started</CardTitle>
             <CardDescription>
-              Open a local repository or clone one from a URL — or drag a repo
-              folder anywhere onto the window.
+              Open a local repository, clone one from a URL, or create a new
+              one. You can also drag a repo folder anywhere onto the window.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">

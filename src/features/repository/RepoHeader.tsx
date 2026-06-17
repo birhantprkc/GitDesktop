@@ -43,7 +43,7 @@ export function RepoHeader({ repoPath }: { repoPath: string }) {
         variant="ghost"
         size="icon-sm"
         aria-label="Settings"
-        onClick={openSettings}
+        onClick={() => openSettings()}
       >
         <GearIcon />
       </Button>

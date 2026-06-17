@@ -1,4 +1,9 @@
-import { MagnifyingGlassIcon, TagIcon } from "@phosphor-icons/react";
+import {
+  ArrowLeftIcon,
+  GitCommitIcon,
+  MagnifyingGlassIcon,
+  TagIcon,
+} from "@phosphor-icons/react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -18,6 +23,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -199,9 +212,28 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const commits = log.data?.pages.flat() ?? [];
   if (commits.length === 0) {
     return (
-      <p className="flex-1 px-2 py-8 text-center text-xs text-muted-foreground">
-        No commits yet
-      </p>
+      <Empty className="flex-1">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <GitCommitIcon />
+          </EmptyMedia>
+          <EmptyTitle>No commits yet</EmptyTitle>
+          <EmptyDescription>
+            Your project's history shows up here. Make a change, then stage and
+            commit it to record your first commit.
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setRepoTab("changes")}
+          >
+            <ArrowLeftIcon data-icon="inline-start" />
+            Go to Changes
+          </Button>
+        </EmptyContent>
+      </Empty>
     );
   }
 

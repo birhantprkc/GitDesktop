@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PROVIDERS_REQUIRING_KEY } from "@/lib/ai/providers";
 import type { AiProviderId } from "@/lib/ai/types";
 import { getSecret } from "@/lib/git/api";
 import {
@@ -28,6 +29,22 @@ export function useSettings() {
 export function useAiEnabled(): boolean {
   const settings = useSettings();
   return !settings.data?.hideAi;
+}
+
+/**
+ * Whether the commit/PR generation provider is actually usable: a saved API
+ * key for key-based providers (Anthropic/OpenAI/OpenRouter), always true for
+ * local ones (Ollama). Optimistic while the keychain read is in flight, so the
+ * "Set up AI" prompt only appears once we've confirmed there's no key — it
+ * never flashes for an already-configured user.
+ */
+export function useAiConfigured(): boolean {
+  const settings = useSettings();
+  const provider = settings.data?.ai.provider ?? "anthropic";
+  const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
+  const secret = useSecretPreview(provider);
+  if (!needsKey) return true;
+  return secret.isSuccess ? secret.data !== null : true;
 }
 
 export function useSaveSettings() {

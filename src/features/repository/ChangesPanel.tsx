@@ -2,8 +2,11 @@ import { Popover } from "@base-ui/react/popover";
 import {
   ArrowSquareOutIcon,
   CaretRightIcon,
+  CheckCircleIcon,
   ClockCounterClockwiseIcon,
+  FolderOpenIcon,
   FunnelIcon,
+  GitCommitIcon,
   GitPullRequestIcon,
   InfoIcon,
   PencilSimpleIcon,
@@ -29,12 +32,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BlameDialog } from "@/features/history/BlameDialog";
 import { FileHistoryDialog } from "@/features/history/FileHistoryDialog";
-import { ghRepoUrl, openInTerminal, openWithProgram } from "@/lib/git/api";
+import {
+  ghRepoUrl,
+  openInTerminal,
+  openWithDefault,
+  openWithProgram,
+} from "@/lib/git/api";
 import {
   useCompareBranches,
   useDefaultBranch,
@@ -174,6 +190,10 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const currentName = branch?.name ?? null;
   const defaultName = defaultBranch.data ?? null;
   const treeClean = !status.isPending && entries.length === 0;
+  // An unborn HEAD (no commits yet, oid null) is a brand-new repo — the empty
+  // Changes view becomes "make your first commit" guidance instead of the
+  // caught-up actions, which assume there's history to act on.
+  const isUnborn = Boolean(branch && !branch.detached && branch.oid === null);
   const canCompareDefault =
     treeClean &&
     !branch?.detached &&
@@ -512,78 +532,103 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <ConflictBanner repoPath={repoPath} conflictedCount={conflictedCount} />
       {entries.length === 0 ? (
-        <div className="flex-1 px-4 py-8 text-center">
-          <p className="text-xs font-medium">No local changes</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Your working tree is clean.
-          </p>
-          <div className="mx-auto mt-4 flex max-w-60 flex-col gap-2">
-            {proposeCount > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setCompareBranch(defaultName);
-                  setRepoTab("compare");
-                }}
-                title={`${currentName} is ${proposeCount} commit${
-                  proposeCount === 1 ? "" : "s"
-                } ahead of ${defaultName}`}
-              >
-                <GitPullRequestIcon data-icon="inline-start" />
-                Open pull request
-              </Button>
-            )}
-            {ghReady && (
+        <Empty className="flex-1">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              {isUnborn ? <GitCommitIcon /> : <CheckCircleIcon />}
+            </EmptyMedia>
+            <EmptyTitle>
+              {isUnborn ? "Make your first commit" : "No local changes"}
+            </EmptyTitle>
+            <EmptyDescription>
+              {isUnborn
+                ? "This repository has no commits yet. Edit a file in your project, then stage it and write a message below to commit."
+                : "Your working tree is clean."}
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <div className="flex w-full max-w-60 flex-col gap-2">
+              {!isUnborn && proposeCount > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setCompareBranch(defaultName);
+                    setRepoTab("compare");
+                  }}
+                  title={`${currentName} is ${proposeCount} commit${
+                    proposeCount === 1 ? "" : "s"
+                  } ahead of ${defaultName}`}
+                >
+                  <GitPullRequestIcon data-icon="inline-start" />
+                  Open pull request
+                </Button>
+              )}
+              {!isUnborn && ghReady && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    ghRepoUrl(repoPath)
+                      .then((url) => openUrl(url))
+                      .catch(onError)
+                  }
+                >
+                  <ArrowSquareOutIcon data-icon="inline-start" />
+                  View on GitHub
+                </Button>
+              )}
+              {editorPath ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    openWithProgram(editorPath, repoPath).catch(onError)
+                  }
+                >
+                  <PencilSimpleIcon data-icon="inline-start" />
+                  Open in {editorName}
+                </Button>
+              ) : (
+                // No editor configured yet — a folder has no "default editor",
+                // so the honest fallback is to reveal the files so they can be
+                // opened/edited however the user likes.
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => openWithDefault(repoPath).catch(onError)}
+                >
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Show in Explorer
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() =>
-                  ghRepoUrl(repoPath)
-                    .then((url) => openUrl(url))
-                    .catch(onError)
+                  openInTerminal(
+                    repoPath,
+                    settings.data?.terminal,
+                    settings.data?.terminalPath,
+                  ).catch(onError)
                 }
               >
-                <ArrowSquareOutIcon data-icon="inline-start" />
-                View on GitHub
+                <TerminalIcon data-icon="inline-start" />
+                Open in terminal
               </Button>
-            )}
-            {editorPath && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  openWithProgram(editorPath, repoPath).catch(onError)
-                }
-              >
-                <PencilSimpleIcon data-icon="inline-start" />
-                Open in {editorName}
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                openInTerminal(
-                  repoPath,
-                  settings.data?.terminal,
-                  settings.data?.terminalPath,
-                ).catch(onError)
-              }
-            >
-              <TerminalIcon data-icon="inline-start" />
-              Open in terminal
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setRepoTab("history")}
-            >
-              <ClockCounterClockwiseIcon data-icon="inline-start" />
-              View history
-            </Button>
-          </div>
-        </div>
+              {!isUnborn && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRepoTab("history")}
+                >
+                  <ClockCounterClockwiseIcon data-icon="inline-start" />
+                  View history
+                </Button>
+              )}
+            </div>
+          </EmptyContent>
+        </Empty>
       ) : (
         <>
           <div className="flex items-center gap-1 border-b p-2">

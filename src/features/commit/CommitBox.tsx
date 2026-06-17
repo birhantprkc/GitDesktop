@@ -10,7 +10,7 @@ import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { coAuthorTrailers } from "@/lib/git/co-authors";
 import { useCommit, useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
-import { useAiEnabled } from "@/lib/settings/queries";
+import { useAiConfigured, useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -30,6 +30,8 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   const clearCommitDraft = useUiStore((s) => s.clearCommitDraft);
   const { generate, cancel, generating } = useGenerateCommitMessage(repoPath);
   const aiEnabled = useAiEnabled();
+  const aiConfigured = useAiConfigured();
+  const openSettings = useUiStore((s) => s.openSettings);
   const rulesConfig = useEffectiveBranchRules(repoPath);
 
   const amending = amendingHash !== null;
@@ -54,7 +56,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   useHotkeyAction(
     "generate-commit-message",
     generate,
-    aiEnabled && stagedCount > 0 && !generating,
+    aiEnabled && aiConfigured && stagedCount > 0 && !generating,
   );
 
   function doCommit() {
@@ -160,7 +162,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
               <XIcon data-icon="inline-start" />
               Cancel
             </Button>
-          ) : (
+          ) : aiConfigured ? (
             <Button
               variant="outline"
               size="sm"
@@ -174,6 +176,18 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
             >
               <SparkleIcon data-icon="inline-start" />
               Generate
+            </Button>
+          ) : (
+            // AI is on but no provider is set up yet — turn the dead-end
+            // Generate click into a one-time path to Settings → AI.
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => openSettings("ai")}
+              title="Connect an AI provider to generate commit messages"
+            >
+              <SparkleIcon data-icon="inline-start" />
+              Set up AI
             </Button>
           ))}
         <Button

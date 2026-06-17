@@ -18,6 +18,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { GhNotReady } from "@/features/repository/GhNotReady";
 import type { PrStateFilter } from "@/lib/git/api";
 import { useGhStatus, usePrList } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
@@ -335,15 +336,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
               <Skeleton className="h-9 w-full" />
             </div>
           ) : !ghReady ? (
-            <p className="px-3 py-4 text-xs text-muted-foreground">
-              {/* Name the actual blocker — "sign in" is wrong advice when the
-                repo simply isn't on GitHub. */}
-              {!gh.data?.installed
-                ? "Install the GitHub CLI (gh) to see pull requests."
-                : !gh.data?.authenticated
-                  ? "Sign in with the GitHub CLI (gh auth login) to see pull requests."
-                  : "This repository isn't on GitHub. Publish it (from the repository header) to use pull requests."}
-            </p>
+            <GhNotReady repoPath={repoPath} feature="pull requests" />
           ) : prList.isPending ? (
             <div className="space-y-2 p-3">
               <Skeleton className="h-9 w-full" />

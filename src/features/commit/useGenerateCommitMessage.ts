@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { createAiClient } from "@/lib/ai/client";
+import { createAiClient, MissingApiKeyError } from "@/lib/ai/client";
 import { buildCommitPrompt, splitCommitMessage } from "@/lib/ai/prompt";
 import {
   gitRecentCommits,
@@ -75,7 +75,19 @@ export function useGenerateCommitMessage(repoPath: string) {
       }
     } catch (e) {
       if (!abort.signal.aborted) {
-        toastError(e);
+        // A missing key is a setup gap, not an error to copy — point straight
+        // at the place that fixes it.
+        if (e instanceof MissingApiKeyError) {
+          toast.error(e.message, {
+            duration: 8000,
+            action: {
+              label: "Open settings",
+              onClick: () => useUiStore.getState().openSettings("ai"),
+            },
+          });
+        } else {
+          toastError(e);
+        }
       }
     } finally {
       setGenerating(false);

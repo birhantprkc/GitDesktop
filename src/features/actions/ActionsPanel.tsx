@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { GhNotReady } from "@/features/repository/GhNotReady";
 import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
 import { useWorkflowRuns } from "@/lib/github/actions";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
@@ -112,13 +113,7 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
             <Skeleton className="h-10 w-full" />
           </div>
         ) : !ghReady ? (
-          <p className="px-3 py-4 text-xs text-muted-foreground">
-            {!gh.data?.installed
-              ? "Install the GitHub CLI (gh) to see workflow runs."
-              : !gh.data?.authenticated
-                ? "Sign in with the GitHub CLI (gh auth login) to see workflow runs."
-                : "This repository isn't on GitHub. Publish it (from the repository header) to use Actions."}
-          </p>
+          <GhNotReady repoPath={repoPath} feature="workflow runs" />
         ) : runs.isPending ? (
           <div className="space-y-2 p-3">
             <Skeleton className="h-10 w-full" />

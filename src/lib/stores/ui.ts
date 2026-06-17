@@ -3,6 +3,18 @@ import type { CommitAuthor, RepoInfo } from "@/lib/git/types";
 
 export type AppView = "welcome" | "repo" | "settings" | "help";
 export type RepoTab = "changes" | "history" | "compare" | "pulls" | "actions";
+/** A Settings section to open directly (matches SettingsScreen's panel ids). */
+export type SettingsTarget =
+  | "general"
+  | "ai"
+  | "automations"
+  | "notifications"
+  | "keyboard"
+  | "accounts"
+  | "git"
+  | "editor"
+  | "terminal"
+  | "updates";
 
 export interface SelectedPr {
   kind: "local" | "remote";
@@ -20,6 +32,9 @@ interface UiState {
   view: AppView;
   /** Underlying view to return to when settings or help closes. */
   previousView: Exclude<AppView, "settings" | "help">;
+  /** Settings section to jump to when opening Settings; null = leave as-is.
+   *  Consumed (and cleared) by SettingsScreen once applied. */
+  settingsTarget: SettingsTarget | null;
   repoPath: string | null;
   repoName: string | null;
   repoTab: RepoTab;
@@ -41,7 +56,8 @@ interface UiState {
 
   openRepo: (info: RepoInfo) => void;
   closeRepo: () => void;
-  openSettings: () => void;
+  openSettings: (target?: SettingsTarget) => void;
+  clearSettingsTarget: () => void;
   closeSettings: () => void;
   openHelp: () => void;
   closeHelp: () => void;
@@ -63,6 +79,7 @@ interface UiState {
 export const useUiStore = create<UiState>()((set, get) => ({
   view: "welcome",
   previousView: "welcome",
+  settingsTarget: null,
   repoPath: null,
   repoName: null,
   repoTab: "changes",
@@ -112,15 +129,17 @@ export const useUiStore = create<UiState>()((set, get) => ({
   selectPr: (pr) => set({ selectedPr: pr }),
   selectRun: (id) => set({ selectedRunId: id }),
   selectCommit: (hash) => set({ selectedCommitHash: hash }),
-  openSettings: () => {
+  openSettings: (target) => {
     const { view } = get();
     set({
       view: "settings",
+      settingsTarget: target ?? null,
       // Keep the underlying view when opening from another overlay.
       previousView:
         view === "settings" || view === "help" ? get().previousView : view,
     });
   },
+  clearSettingsTarget: () => set({ settingsTarget: null }),
   closeSettings: () => set({ view: get().previousView }),
   openHelp: () => {
     const { view } = get();

@@ -51,11 +51,24 @@ const AI_PANELS = new Set<PanelId>(["ai", "automations"]);
 
 export function SettingsScreen() {
   const closeSettings = useUiStore((s) => s.closeSettings);
+  const settingsTarget = useUiStore((s) => s.settingsTarget);
+  const clearSettingsTarget = useUiStore((s) => s.clearSettingsTarget);
   const settings = useSettings();
   const saveSettings = useSaveSettings();
-  const [panel, setPanel] = useState<PanelId>("general");
+  const [panel, setPanel] = useState<PanelId>(
+    // Honor a deep-link target on first render (e.g. "Set up AI" → AI panel).
+    (settingsTarget as PanelId | null) ?? "general",
+  );
   const [confirmClose, setConfirmClose] = useState(false);
   const closeAfterSave = useRef(false);
+
+  // A deep-link fired while Settings is already open (no remount) still routes
+  // to the requested section; consume the target so it doesn't re-fire.
+  useEffect(() => {
+    if (!settingsTarget) return;
+    setPanel(settingsTarget as PanelId);
+    clearSettingsTarget();
+  }, [settingsTarget, clearSettingsTarget]);
 
   // Gating reflects SAVED settings (not the in-progress draft), so panels don't
   // vanish mid-edit while the user is still toggling "Hide AI features".
