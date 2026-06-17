@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -26,15 +26,19 @@ import { ImagePanes } from "./ImageDiff";
 /** Working-tree diff for the file selected in the changes panel. */
 export function DiffViewer({ repoPath }: { repoPath: string }) {
   const selectedFile = useUiStore((s) => s.selectedFile);
+  // Render off a deferred selection so rapidly arrowing the changes list only
+  // mounts + loads the file landed on (the row keeps WorkingTreeDiff keyed, so
+  // it remounts per file). The list highlight still uses the live selection.
+  const deferredFile = useDeferredValue(selectedFile);
 
-  if (!selectedFile) {
+  if (!deferredFile) {
     return <DiffPlaceholder message="Select a file to see its changes" />;
   }
   return (
     <WorkingTreeDiff
-      key={`${selectedFile.staged}:${selectedFile.path}`}
+      key={`${deferredFile.staged}:${deferredFile.path}`}
       repoPath={repoPath}
-      file={selectedFile}
+      file={deferredFile}
     />
   );
 }

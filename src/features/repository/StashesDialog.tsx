@@ -1,5 +1,5 @@
 import { TrashIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useDeferredValue, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -218,11 +218,14 @@ function StashFiles({ repoPath, index }: { repoPath: string; index: number }) {
     selectedPath && files.data?.some((f) => f.path === selectedPath)
       ? selectedPath
       : (files.data?.[0]?.path ?? null);
-  const diff = useStashFileDiff(repoPath, index, effectivePath);
+  // Diff off a deferred path so rapid file arrowing only fetches the landed-on
+  // file; the highlight stays on effectivePath.
+  const deferredPath = useDeferredValue(effectivePath);
+  const diff = useStashFileDiff(repoPath, index, deferredPath);
 
   // Image/SVG previews need the file's content on each side. Tracked changes
   // read from the stash commit; untracked files from its ^3 parent.
-  const effectiveFile = files.data?.find((f) => f.path === effectivePath);
+  const effectiveFile = files.data?.find((f) => f.path === deferredPath);
   const imageRevs: ImageRevs | undefined = effectiveFile
     ? {
         old: `stash@{${index}}^1`,
@@ -296,9 +299,9 @@ function StashFiles({ repoPath, index }: { repoPath: string; index: number }) {
         </ScrollArea>
       </aside>
       <main className="min-w-0 flex-1">
-        {effectivePath ? (
+        {deferredPath ? (
           <DiffSurface
-            filePath={effectivePath}
+            filePath={deferredPath}
             diff={diff}
             repoPath={repoPath}
             imageRevs={imageRevs}

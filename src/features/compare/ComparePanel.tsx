@@ -24,6 +24,8 @@ import {
   useCompareBranches,
   useDefaultBranch,
   useGhStatus,
+  useHoverPrefetch,
+  usePrefetchCommit,
   usePrsForBranch,
   useRepoStatus,
 } from "@/lib/git/queries";
@@ -43,6 +45,10 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
   const setCompareBranch = useUiStore((s) => s.setCompareBranch);
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const selectCommit = useUiStore((s) => s.selectCommit);
+  const prefetchCommit = usePrefetchCommit(repoPath);
+  const hoverPrefetch = useHoverPrefetch();
+  const onHoverCommit = (hash: string) =>
+    hoverPrefetch(() => prefetchCommit(hash));
   const [prOpen, setPrOpen] = useState(false);
   const [localPrOpen, setLocalPrOpen] = useState(false);
 
@@ -236,6 +242,7 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
               commits={ahead}
               selectedHash={selectedCommitHash}
               onSelect={selectCommit}
+              onHover={onHoverCommit}
             />
             <CommitSection
               title={`${behind.length} behind`}
@@ -243,6 +250,7 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
               commits={behind}
               selectedHash={selectedCommitHash}
               onSelect={selectCommit}
+              onHover={onHoverCommit}
             />
             {ahead.length === 0 && behind.length === 0 && (
               <p className="px-3 py-6 text-center text-xs text-muted-foreground">
@@ -262,12 +270,14 @@ function CommitSection({
   commits,
   selectedHash,
   onSelect,
+  onHover,
 }: {
   title: string;
   subtitle: string;
   commits: CommitSummary[];
   selectedHash: string | null;
   onSelect: (hash: string) => void;
+  onHover: (hash: string) => void;
 }) {
   if (commits.length === 0) return null;
   return (
@@ -288,6 +298,7 @@ function CommitSection({
               : "hover:bg-muted/60",
           )}
           onClick={() => onSelect(commit.hash)}
+          onMouseEnter={() => onHover(commit.hash)}
         >
           <p className="flex items-center gap-1.5 text-xs font-medium">
             <GitCommitIcon className="size-3 shrink-0 text-muted-foreground" />

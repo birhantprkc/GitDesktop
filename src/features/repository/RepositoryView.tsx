@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Activity, useEffect, useTransition } from "react";
+import { Activity, useDeferredValue, useEffect, useTransition } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ActionsPanel } from "@/features/actions/ActionsPanel";
 import { RunDetailView } from "@/features/actions/RunDetailView";
@@ -32,6 +32,11 @@ export function RepositoryView() {
   const compareBranch = useUiStore((s) => s.compareBranch);
   const selectedPr = useUiStore((s) => s.selectedPr);
   const selectedRunId = useUiStore((s) => s.selectedRunId);
+  // The detail panes run off deferred selections so rapidly arrowing a list
+  // (commits, PRs) only loads + renders the item landed on, not every one
+  // passed. The lists' own highlights use the live values, so they stay snappy.
+  const deferredCommitHash = useDeferredValue(selectedCommitHash);
+  const deferredPr = useDeferredValue(selectedPr);
   const status = useRepoStatus(repoPath ?? "");
   const alias = useRepoAlias(repoPath);
   const currentName = status.data?.branch?.name ?? null;
@@ -126,15 +131,15 @@ export function RepositoryView() {
             <DiffViewer repoPath={repoPath} />
           </Activity>
           <Activity mode={mode("history")}>
-            {selectedCommitHash ? (
-              <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
+            {deferredCommitHash ? (
+              <CommitDetailView repoPath={repoPath} hash={deferredCommitHash} />
             ) : (
               <DiffPlaceholder message="Select a commit to see its changes" />
             )}
           </Activity>
           <Activity mode={mode("compare")}>
-            {selectedCommitHash ? (
-              <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
+            {deferredCommitHash ? (
+              <CommitDetailView repoPath={repoPath} hash={deferredCommitHash} />
             ) : compareBranch &&
               currentName &&
               compareBranch !== currentName ? (
@@ -148,13 +153,13 @@ export function RepositoryView() {
             )}
           </Activity>
           <Activity mode={mode("pulls")}>
-            {selectedPr?.kind === "remote" ? (
+            {deferredPr?.kind === "remote" ? (
               <RemotePrView
                 repoPath={repoPath}
-                number={Number(selectedPr.id)}
+                number={Number(deferredPr.id)}
               />
-            ) : selectedPr?.kind === "local" ? (
-              <LocalPrView repoPath={repoPath} id={selectedPr.id} />
+            ) : deferredPr?.kind === "local" ? (
+              <LocalPrView repoPath={repoPath} id={deferredPr.id} />
             ) : (
               <DiffPlaceholder message="Select a pull request" />
             )}

@@ -56,7 +56,9 @@ import {
   useCreateBranch,
   useCreateTag,
   useDeleteTag,
+  useHoverPrefetch,
   useLog,
+  usePrefetchCommit,
   usePushTag,
   useRepoStatus,
   useResetToCommit,
@@ -80,6 +82,8 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const undoCommit = useUndoCommit(repoPath);
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const selectCommit = useUiStore((s) => s.selectCommit);
+  const prefetchCommit = usePrefetchCommit(repoPath);
+  const hoverPrefetch = useHoverPrefetch();
   const setCommitDraft = useUiStore((s) => s.setCommitDraft);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
 
@@ -458,6 +462,9 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                     )}
                     onClick={(e) => onRowClick(e, index, commit.hash)}
                     onContextMenu={() => onRowContextMenu(index, commit.hash)}
+                    onMouseEnter={() =>
+                      hoverPrefetch(() => prefetchCommit(commit.hash))
+                    }
                   >
                     <p className="flex items-center gap-1.5 text-xs font-medium">
                       <span className="min-w-0 truncate">{commit.subject}</span>

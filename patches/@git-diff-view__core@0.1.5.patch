@@ -1,5 +1,5 @@
 diff --git a/dist/cjs/index.development.js b/dist/cjs/index.development.js
-index d66ede30dc83520441a67cc11e097c815e6119f1..60128fc8e6d2d22611f3be95ecacde5776f5b23d 100644
+index d66ede30dc83520441a67cc11e097c815e6119f1..6d166ccbc749e585233126a8780ff73b3b196ee9 100644
 --- a/dist/cjs/index.development.js
 +++ b/dist/cjs/index.development.js
 @@ -1586,7 +1586,7 @@ const getUnifiedContentLine = (diffFile) => {
@@ -11,8 +11,21 @@ index d66ede30dc83520441a67cc11e097c815e6119f1..60128fc8e6d2d22611f3be95ecacde57
              unifiedLines.push({ type: exports.DiffFileLineType.content, index, lineNumber: index + 1, unifiedLine: unifiedLine });
          }
      });
+@@ -2975,12 +2975,6 @@ _DiffFile_oldFileResult = new WeakMap(), _DiffFile_newFileResult = new WeakMap()
+                 _newStartIndex: +Number(newNumStartIndex),
+                 _newLength: Number(newNumLength),
+             };
+-            if (typedI.isFirst &&
+-                typedI.hunkInfo.oldStartIndex &&
+-                typedI.hunkInfo.newStartIndex &&
+-                typedI.hunkInfo.oldStartIndex !== typedI.hunkInfo.newStartIndex) {
+-                console.warn("[@git-diff-view/core] The first hunk should start with the same line number.");
+-            }
+             prevHunkLine = typedI;
+         }
+         else if (typedI.type === exports.DiffLineType.Context) {
 diff --git a/dist/cjs/index.production.js b/dist/cjs/index.production.js
-index 02eaaaf3bec6deb5fe34d003cc20b5ed5debc8d7..5082178c6c96720445c27be84965e162e88f6e78 100644
+index 02eaaaf3bec6deb5fe34d003cc20b5ed5debc8d7..7bd4678a89aabc82b8d05ee15ec8c59820ef417a 100644
 --- a/dist/cjs/index.production.js
 +++ b/dist/cjs/index.production.js
 @@ -1539,7 +1539,7 @@ const getUnifiedContentLine = (diffFile) => {
@@ -25,7 +38,7 @@ index 02eaaaf3bec6deb5fe34d003cc20b5ed5debc8d7..5082178c6c96720445c27be84965e162
          }
      });
 diff --git a/dist/esm/index.mjs b/dist/esm/index.mjs
-index 3c556870f2defb9f458f4a5d5561f15e955d6234..aa8e0cbb5c6482e0c297a09ebdf22d43965cf392 100644
+index 3c556870f2defb9f458f4a5d5561f15e955d6234..7efa7f5da80709d4f103f59af8a67257255ed43a 100644
 --- a/dist/esm/index.mjs
 +++ b/dist/esm/index.mjs
 @@ -1585,7 +1585,7 @@ const getUnifiedContentLine = (diffFile) => {
@@ -37,3 +50,17 @@ index 3c556870f2defb9f458f4a5d5561f15e955d6234..aa8e0cbb5c6482e0c297a09ebdf22d43
              unifiedLines.push({ type: DiffFileLineType.content, index, lineNumber: index + 1, unifiedLine: unifiedLine });
          }
      });
+@@ -2974,13 +2974,6 @@ _DiffFile_oldFileResult = new WeakMap(), _DiffFile_newFileResult = new WeakMap()
+                 _newStartIndex: +Number(newNumStartIndex),
+                 _newLength: Number(newNumLength),
+             };
+-            if (process.env.NODE_ENV === "development" &&
+-                typedI.isFirst &&
+-                typedI.hunkInfo.oldStartIndex &&
+-                typedI.hunkInfo.newStartIndex &&
+-                typedI.hunkInfo.oldStartIndex !== typedI.hunkInfo.newStartIndex) {
+-                console.warn("[@git-diff-view/core] The first hunk should start with the same line number.");
+-            }
+             prevHunkLine = typedI;
+         }
+         else if (typedI.type === DiffLineType.Context) {

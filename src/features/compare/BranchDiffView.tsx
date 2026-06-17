@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useDeferredValue, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
@@ -36,7 +36,10 @@ export function BranchDiffView({
     selectedPath && files.data?.some((f) => f.path === selectedPath)
       ? selectedPath
       : (files.data?.[0]?.path ?? null);
-  const diff = useBranchFileDiff(repoPath, base, compare, effectivePath);
+  // Diff off a deferred path so rapidly arrowing the file list only fetches +
+  // renders the landed-on file; the highlight stays on effectivePath.
+  const deferredPath = useDeferredValue(effectivePath);
+  const diff = useBranchFileDiff(repoPath, base, compare, deferredPath);
 
   if (files.isPending) {
     return (
@@ -125,9 +128,9 @@ export function BranchDiffView({
           </ScrollArea>
         </aside>
         <main className="min-w-0 flex-1">
-          {effectivePath ? (
+          {deferredPath ? (
             <DiffSurface
-              filePath={effectivePath}
+              filePath={deferredPath}
               diff={diff}
               repoPath={repoPath}
               imageRevs={{ old: base, new: compare }}

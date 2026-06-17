@@ -20,7 +20,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { GhNotReady } from "@/features/repository/GhNotReady";
 import type { PrStateFilter } from "@/lib/git/api";
-import { useGhStatus, usePrList } from "@/lib/git/queries";
+import {
+  useGhStatus,
+  useHoverPrefetch,
+  usePrefetchPr,
+  usePrList,
+} from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import type { LocalPr } from "@/lib/pulls/local";
@@ -44,6 +49,8 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   useReconcileLocalPrs(repoPath);
   const selectedPr = useUiStore((s) => s.selectedPr);
   const selectPr = useUiStore((s) => s.selectPr);
+  const prefetchPr = usePrefetchPr(repoPath);
+  const hoverPrefetch = useHoverPrefetch();
   const [createOpen, setCreateOpen] = useState(false);
   const [ghCreateOpen, setGhCreateOpen] = useState(false);
   const [filterText, setFilterText] = useState("");
@@ -366,6 +373,9 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
                   )}
                   onClick={() =>
                     selectPr({ kind: "remote", id: String(pr.number) })
+                  }
+                  onMouseEnter={() =>
+                    hoverPrefetch(() => prefetchPr(pr.number))
                   }
                 >
                   <p className="flex items-center gap-1.5 text-xs font-medium">

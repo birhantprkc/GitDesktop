@@ -1,13 +1,15 @@
 import {
   keepPreviousData,
+  queryOptions,
   useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef } from "react";
 import { COLD_START_NO_GH, COLD_START_NO_GIT } from "@/lib/test-mode";
 import * as api from "./api";
-import type { GhStatus, RepoOp, RewriteStep } from "./types";
+import type { DiffStatEntry, GhStatus, RepoOp, RewriteStep } from "./types";
 
 export const repoKeys = {
   all: (repo: string) => ["repo", repo] as const,
@@ -120,12 +122,33 @@ export function useCommitSearch(repo: string, query: string) {
   });
 }
 
+// Shared query definitions so the hook and the prefetch path can't drift.
+// Commits are immutable, so once fetched their data never goes stale.
+const commitDetailsOptions = (repo: string, hash: string) =>
+  queryOptions({
+    queryKey: repoKeys.commitDetails(repo, hash),
+    queryFn: () => api.gitCommitDetails(repo, hash),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+
+const commitFilesOptions = (repo: string, hash: string) =>
+  queryOptions({
+    queryKey: repoKeys.commitFiles(repo, hash),
+    queryFn: () => api.gitCommitFiles(repo, hash),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+
+const commitFileDiffOptions = (repo: string, hash: string, file: string) =>
+  queryOptions({
+    queryKey: repoKeys.commitFileDiff(repo, hash, file),
+    queryFn: () => api.gitCommitFileDiff(repo, hash, file),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+
 export function useCommitDetails(repo: string, hash: string | null) {
   return useQuery({
-    queryKey: repoKeys.commitDetails(repo, hash ?? ""),
-    queryFn: () => api.gitCommitDetails(repo, hash ?? ""),
+    ...commitDetailsOptions(repo, hash ?? ""),
     enabled: hash !== null,
-    staleTime: Number.POSITIVE_INFINITY, // commits are immutable
     // Keep the prior commit's content on screen while the next loads, so
     // arrowing through history doesn't flash a skeleton on every step.
     placeholderData: keepPreviousData,
@@ -134,10 +157,8 @@ export function useCommitDetails(repo: string, hash: string | null) {
 
 export function useCommitFiles(repo: string, hash: string | null) {
   return useQuery({
-    queryKey: repoKeys.commitFiles(repo, hash ?? ""),
-    queryFn: () => api.gitCommitFiles(repo, hash ?? ""),
+    ...commitFilesOptions(repo, hash ?? ""),
     enabled: hash !== null,
-    staleTime: Number.POSITIVE_INFINITY,
     placeholderData: keepPreviousData,
   });
 }
@@ -148,12 +169,62 @@ export function useCommitFileDiff(
   file: string | null,
 ) {
   return useQuery({
-    queryKey: repoKeys.commitFileDiff(repo, hash ?? "", file ?? ""),
-    queryFn: () => api.gitCommitFileDiff(repo, hash ?? "", file ?? ""),
+    ...commitFileDiffOptions(repo, hash ?? "", file ?? ""),
     enabled: hash !== null && file !== null,
-    staleTime: Number.POSITIVE_INFINITY,
     placeholderData: keepPreviousData,
   });
+}
+
+/**
+ * Warms a commit's detail view (header + file list + the first file's diff) so
+ * selecting it is instant. Called on row hover and for the rows adjacent to the
+ * current selection (so keyboard arrowing stays ahead). prefetchQuery is a
+ * no-op once the data is cached, so repeats are free.
+ */
+export function usePrefetchCommit(repo: string) {
+  const queryClient = useQueryClient();
+  return useCallback(
+    async (hash: string) => {
+      queryClient.prefetchQuery(commitDetailsOptions(repo, hash));
+      await queryClient.prefetchQuery(commitFilesOptions(repo, hash));
+      const files = queryClient.getQueryData<DiffStatEntry[]>(
+        repoKeys.commitFiles(repo, hash),
+      );
+      const first = files?.[0]?.path;
+      if (first) {
+        queryClient.prefetchQuery(commitFileDiffOptions(repo, hash, first));
+      }
+    },
+    [queryClient, repo],
+  );
+}
+
+/** Warms a single file's diff within a commit (row hover / adjacent file). */
+export function usePrefetchCommitFileDiff(repo: string) {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (hash: string, file: string) =>
+      queryClient.prefetchQuery(commitFileDiffOptions(repo, hash, file)),
+    [queryClient, repo],
+  );
+}
+
+/**
+ * Debounces hover-triggered prefetches so sweeping the pointer down a long list
+ * doesn't spawn a prefetch (and its git subprocesses) for every row it crosses
+ * — only the row the pointer settles on fires. Keyboard-neighbor prefetch stays
+ * immediate. Returns a trigger you hand the prefetch thunk to.
+ */
+export function useHoverPrefetch(delay = 100) {
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  return useCallback(
+    (run: () => void) => {
+      clearTimeout(timer.current);
+      timer.current = setTimeout(run, delay);
+    },
+    [delay],
+  );
 }
 
 /** Commit history for a single file (follows renames), paged. */
@@ -334,10 +405,26 @@ export function useRepoLabels(repo: string, enabled: boolean) {
   });
 }
 
+// Shared definitions so the hook and the prefetch path stay in sync. A short
+// stale window makes a hover-prefetched PR open with no extra round-trip; the
+// window-focus refetch still keeps an open PR current.
+const prDetailsOptions = (repo: string, number: number) =>
+  queryOptions({
+    queryKey: ["repo", repo, "pr", number] as const,
+    queryFn: () => api.ghPrView(repo, number),
+    staleTime: 30_000,
+  });
+
+const prDiffOptions = (repo: string, number: number) =>
+  queryOptions({
+    queryKey: ["repo", repo, "pr", number, "diff"] as const,
+    queryFn: () => api.ghPrDiff(repo, number),
+    staleTime: 30_000,
+  });
+
 export function usePrDetails(repo: string, number: number | null) {
   return useQuery({
-    queryKey: ["repo", repo, "pr", number ?? 0] as const,
-    queryFn: () => api.ghPrView(repo, number ?? 0),
+    ...prDetailsOptions(repo, number ?? 0),
     enabled: number !== null,
     placeholderData: keepPreviousData,
   });
@@ -345,10 +432,26 @@ export function usePrDetails(repo: string, number: number | null) {
 
 export function usePrDiff(repo: string, number: number | null) {
   return useQuery({
-    queryKey: ["repo", repo, "pr", number ?? 0, "diff"] as const,
-    queryFn: () => api.ghPrDiff(repo, number ?? 0),
+    ...prDiffOptions(repo, number ?? 0),
     enabled: number !== null,
+    placeholderData: keepPreviousData,
   });
+}
+
+/**
+ * Warms a remote PR's view (metadata + diff) so opening it is instant. PR data
+ * comes over the network (the slowest loads in the app), so prefetching on row
+ * hover and for the adjacent rows pays off most here.
+ */
+export function usePrefetchPr(repo: string) {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (number: number) => {
+      queryClient.prefetchQuery(prDetailsOptions(repo, number));
+      queryClient.prefetchQuery(prDiffOptions(repo, number));
+    },
+    [queryClient, repo],
+  );
 }
 
 export function useGhAccounts() {

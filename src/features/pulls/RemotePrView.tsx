@@ -656,9 +656,11 @@ export function RemotePrView({
                   line — drop them. */}
               {pr.reviews
                 .filter((r) => hasVisibleBody(r.body) || r.state)
-                .map((r, i) => (
+                .map((r) => (
                   <Thread
-                    key={`r${i}-${r.author}`}
+                    // Reviews carry no node id (id is "" for reviews), but each
+                    // review submission has a unique author+timestamp.
+                    key={`${r.author}-${r.date}`}
                     thread={r}
                     onQuote={
                       hasVisibleBody(r.body)
@@ -669,9 +671,9 @@ export function RemotePrView({
                 ))}
               {pr.comments
                 .filter((c) => hasVisibleBody(c.body))
-                .map((c, i) => (
+                .map((c) => (
                   <Thread
-                    key={`c${i}-${c.author}`}
+                    key={c.id}
                     thread={c}
                     onQuote={() => quoteReply(c.body)}
                     onSaveEdit={

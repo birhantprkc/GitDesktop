@@ -1,5 +1,5 @@
 import { CopyIcon, DotsThreeVerticalIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useDeferredValue, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,7 +21,9 @@ import {
   useCommitDetails,
   useCommitFileDiff,
   useCommitFiles,
+  useHoverPrefetch,
   useLog,
+  usePrefetchCommitFileDiff,
   useRevertCommit,
 } from "@/lib/git/queries";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
@@ -53,7 +55,12 @@ export function CommitDetailView({
     selectedPath && files.data?.some((f) => f.path === selectedPath)
       ? selectedPath
       : (files.data?.[0]?.path ?? null);
-  const diff = useCommitFileDiff(repoPath, hash, effectivePath);
+  // Drive the diff off a deferred path so rapidly arrowing the file list only
+  // fetches + renders the file you land on, not every one passed (each fetch's
+  // large IPC payload otherwise deserializes on the main thread and stalls
+  // input). The file-list highlight still uses effectivePath, so it stays live.
+  const deferredPath = useDeferredValue(effectivePath);
+  const diff = useCommitFileDiff(repoPath, hash, deferredPath);
 
   // Same actions as the history list's right-click menu (minus the
   // dialog-driven ones), surfaced behind a visible ⋯ for discoverability.
@@ -62,6 +69,8 @@ export function CommitDetailView({
   const checkoutCommit = useCheckoutCommit(repoPath);
   const revertCommit = useRevertCommit(repoPath);
   const cherryPick = useCherryPick(repoPath);
+  const prefetchFileDiff = usePrefetchCommitFileDiff(repoPath);
+  const hoverPrefetch = useHoverPrefetch();
   const isLatest = log.data?.pages[0]?.[0]?.hash === hash;
   const onError = (e: unknown) => toastError(e);
 
@@ -91,10 +100,14 @@ export function CommitDetailView({
     }
   }
 
-  // Arrow keys walk the file list, mirroring the app's other lists.
+  const fileList = files.data;
+  // Arrow keys walk the file list; the diff loads off a deferred path (above),
+  // so rapid arrowing never fetches a diff per file passed — only the one
+  // landed on. No neighbor prefetch on arrow: it fired on every pause and
+  // stalled input. Mouse hover still warms a row's diff.
   const onFilesKeyDown = listKeyboardNav({
-    items: files.data ?? [],
-    activeIndex: (files.data ?? []).findIndex((f) => f.path === effectivePath),
+    items: fileList,
+    activeIndex: fileList.findIndex((f) => f.path === effectivePath),
     onActivate: (file) => setSelectedPath(file.path),
     rowKey: (file) => file.path,
     rowAttr: "data-path",
@@ -210,6 +223,9 @@ export function CommitDetailView({
                       : "hover:bg-muted/60",
                   )}
                   onClick={() => setSelectedPath(file.path)}
+                  onMouseEnter={() =>
+                    hoverPrefetch(() => prefetchFileDiff(hash, file.path))
+                  }
                   title={file.path}
                 >
                   <span className="min-w-0 flex-1 truncate font-mono">
@@ -233,9 +249,9 @@ export function CommitDetailView({
           </ScrollArea>
         </aside>
         <main className="min-w-0 flex-1">
-          {effectivePath ? (
+          {deferredPath ? (
             <DiffSurface
-              filePath={effectivePath}
+              filePath={deferredPath}
               diff={diff}
               repoPath={repoPath}
               imageRevs={{ old: `${hash}~1`, new: hash }}
