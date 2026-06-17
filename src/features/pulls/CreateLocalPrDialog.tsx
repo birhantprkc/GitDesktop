@@ -118,9 +118,9 @@ export function CreateLocalPrDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl">
         <form
-          className="space-y-4"
+          className="min-w-0 space-y-4"
           onSubmit={(e) => {
             e.preventDefault();
             form.handleSubmit();
@@ -136,27 +136,35 @@ export function CreateLocalPrDialog({
           </DialogHeader>
 
           <div className="flex items-end gap-2">
-            <div className="flex-1">
+            <div className="min-w-0 flex-initial">
               <form.AppField name="head">
                 {(field) => <field.SelectField label="Merge" items={items} />}
               </form.AppField>
             </div>
-            <span className="pb-2 text-xs text-muted-foreground">into</span>
-            <div className="flex-1">
+            <span className="shrink-0 pb-2 text-xs text-muted-foreground">
+              into
+            </span>
+            <div className="min-w-0 flex-initial">
               <form.AppField name="base">
                 {(field) => <field.SelectField label="Base" items={items} />}
               </form.AppField>
             </div>
           </div>
-          {sameBranch ? (
-            <p className="text-xs text-amber-600 dark:text-amber-400">
-              Pick two different branches.
+          <div className="space-y-0.5">
+            <p className="font-mono text-xs wrap-break-word text-foreground/80">
+              {head || "…"} <span className="text-muted-foreground">→</span>{" "}
+              {base || "…"}
             </p>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              {ahead.length} commit{ahead.length === 1 ? "" : "s"} to merge.
-            </p>
-          )}
+            {sameBranch ? (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Pick two different branches.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {ahead.length} commit{ahead.length === 1 ? "" : "s"} to merge.
+              </p>
+            )}
+          </div>
 
           <form.AppField
             name="title"
