@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -125,6 +126,9 @@ export function useCommitDetails(repo: string, hash: string | null) {
     queryFn: () => api.gitCommitDetails(repo, hash ?? ""),
     enabled: hash !== null,
     staleTime: Number.POSITIVE_INFINITY, // commits are immutable
+    // Keep the prior commit's content on screen while the next loads, so
+    // arrowing through history doesn't flash a skeleton on every step.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -134,6 +138,7 @@ export function useCommitFiles(repo: string, hash: string | null) {
     queryFn: () => api.gitCommitFiles(repo, hash ?? ""),
     enabled: hash !== null,
     staleTime: Number.POSITIVE_INFINITY,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -147,6 +152,7 @@ export function useCommitFileDiff(
     queryFn: () => api.gitCommitFileDiff(repo, hash ?? "", file ?? ""),
     enabled: hash !== null && file !== null,
     staleTime: Number.POSITIVE_INFINITY,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -253,6 +259,7 @@ export function useBranchDiffFiles(
     queryKey: repoKeys.branchDiffFiles(repo, base ?? "", compare ?? ""),
     queryFn: () => api.gitBranchDiffFiles(repo, base ?? "", compare ?? ""),
     enabled: base !== null && compare !== null && base !== compare,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -273,6 +280,7 @@ export function useBranchFileDiff(
       api.gitBranchFileDiff(repo, base ?? "", compare ?? "", file ?? ""),
     enabled:
       base !== null && compare !== null && base !== compare && file !== null,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -331,6 +339,7 @@ export function usePrDetails(repo: string, number: number | null) {
     queryKey: ["repo", repo, "pr", number ?? 0] as const,
     queryFn: () => api.ghPrView(repo, number ?? 0),
     enabled: number !== null,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -706,6 +715,7 @@ export function useStashFiles(repo: string, index: number | null) {
     queryKey: ["repo", repo, "stash-files", index ?? -1] as const,
     queryFn: () => api.gitStashFiles(repo, index ?? 0),
     enabled: index !== null,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -724,6 +734,7 @@ export function useStashFileDiff(
     ] as const,
     queryFn: () => api.gitStashFileDiff(repo, index ?? 0, filePath ?? ""),
     enabled: index !== null && filePath !== null,
+    placeholderData: keepPreviousData,
   });
 }
 

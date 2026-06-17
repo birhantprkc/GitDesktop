@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { CommitAuthor, RepoInfo } from "@/lib/git/types";
+import { startViewTransition } from "@/lib/view-transition";
 
 export type AppView = "welcome" | "repo" | "settings" | "help";
 export type RepoTab = "changes" | "history" | "compare" | "pulls" | "actions";
@@ -95,61 +96,68 @@ export const useUiStore = create<UiState>()((set, get) => ({
   amendingHash: null,
 
   openRepo: (info) =>
-    set({
-      view: "repo",
-      previousView: "repo",
-      repoPath: info.root,
-      repoName: info.name,
-      repoTab: "changes",
-      compareBranch: null,
-      selectedPr: null,
-      selectedRunId: null,
-      selectedFile: null,
-      selectedCommitHash: null,
-      commitTitle: "",
-      commitBody: "",
-      commitCoAuthors: [],
-      amendingHash: null,
-    }),
+    startViewTransition(() =>
+      set({
+        view: "repo",
+        previousView: "repo",
+        repoPath: info.root,
+        repoName: info.name,
+        repoTab: "changes",
+        compareBranch: null,
+        selectedPr: null,
+        selectedRunId: null,
+        selectedFile: null,
+        selectedCommitHash: null,
+        commitTitle: "",
+        commitBody: "",
+        commitCoAuthors: [],
+        amendingHash: null,
+      }),
+    ),
   closeRepo: () =>
-    set({
-      view: "welcome",
-      previousView: "welcome",
-      repoPath: null,
-      repoName: null,
-      repoTab: "changes",
-      compareBranch: null,
-      selectedPr: null,
-      selectedRunId: null,
-      selectedFile: null,
-      selectedCommitHash: null,
-    }),
+    startViewTransition(() =>
+      set({
+        view: "welcome",
+        previousView: "welcome",
+        repoPath: null,
+        repoName: null,
+        repoTab: "changes",
+        compareBranch: null,
+        selectedPr: null,
+        selectedRunId: null,
+        selectedFile: null,
+        selectedCommitHash: null,
+      }),
+    ),
   setRepoTab: (tab) => set({ repoTab: tab }),
   setCompareBranch: (branch) => set({ compareBranch: branch }),
   selectPr: (pr) => set({ selectedPr: pr }),
   selectRun: (id) => set({ selectedRunId: id }),
   selectCommit: (hash) => set({ selectedCommitHash: hash }),
-  openSettings: (target) => {
-    const { view } = get();
-    set({
-      view: "settings",
-      settingsTarget: target ?? null,
-      // Keep the underlying view when opening from another overlay.
-      previousView:
-        view === "settings" || view === "help" ? get().previousView : view,
-    });
-  },
+  openSettings: (target) =>
+    startViewTransition(() => {
+      const { view } = get();
+      set({
+        view: "settings",
+        settingsTarget: target ?? null,
+        // Keep the underlying view when opening from another overlay.
+        previousView:
+          view === "settings" || view === "help" ? get().previousView : view,
+      });
+    }),
   clearSettingsTarget: () => set({ settingsTarget: null }),
-  closeSettings: () => set({ view: get().previousView }),
-  openHelp: () => {
-    const { view } = get();
-    set({
-      view: "help",
-      previousView:
-        view === "settings" || view === "help" ? get().previousView : view,
-    });
-  },
-  closeHelp: () => set({ view: get().previousView }),
+  closeSettings: () =>
+    startViewTransition(() => set({ view: get().previousView })),
+  openHelp: () =>
+    startViewTransition(() => {
+      const { view } = get();
+      set({
+        view: "help",
+        previousView:
+          view === "settings" || view === "help" ? get().previousView : view,
+      });
+    }),
+  closeHelp: () => startViewTransition(() => set({ view: get().previousView })),
   selectFile: (file) => set({ selectedFile: file }),
   setCommitDraft: (title, body) =>
     set({ commitTitle: title, commitBody: body }),
