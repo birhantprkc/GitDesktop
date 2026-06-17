@@ -1,22 +1,23 @@
 import {
   BookOpenIcon,
   FolderOpenIcon,
+  FolderPlusIcon,
   GearIcon,
+  GitForkIcon,
   QuestionIcon,
 } from "@phosphor-icons/react";
 import { useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { usePickAndOpenRepo } from "@/features/repository/useOpenRepoByPath";
-import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
-import { useSaveSettings, useSettings } from "@/lib/settings/queries";
+import { formatBinding } from "@/lib/hotkeys/binding";
+import { useEffectiveBindings, useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import type { ActionId } from "@/lib/hotkeys/registry";
+import {
+  useAiEnabled,
+  useSaveSettings,
+  useSettings,
+} from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { CloneRepoDialog } from "./CloneRepoDialog";
 import { CreateRepoDialog } from "./CreateRepoDialog";
@@ -28,6 +29,8 @@ export function WelcomeScreen() {
   const pickAndOpen = usePickAndOpenRepo();
   const settings = useSettings();
   const saveSettings = useSaveSettings();
+  const aiEnabled = useAiEnabled();
+  const bindings = useEffectiveBindings();
   const [cloneOpen, setCloneOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -44,6 +47,38 @@ export function WelcomeScreen() {
   useHotkeyAction("add-local-repository", pickAndOpen);
   useHotkeyAction("clone-repository", () => setCloneOpen(true));
   useHotkeyAction("new-repository", () => setCreateOpen(true));
+
+  // The primary entry points, surfaced as a launcher: label on the left, the
+  // live keyboard shortcut on the right (honours user remaps via bindings).
+  const actions: {
+    id: ActionId;
+    label: string;
+    icon: typeof FolderOpenIcon;
+    variant: "default" | "outline";
+    onClick: () => void;
+  }[] = [
+    {
+      id: "add-local-repository",
+      label: "Open repository",
+      icon: FolderOpenIcon,
+      variant: "default",
+      onClick: pickAndOpen,
+    },
+    {
+      id: "clone-repository",
+      label: "Clone repository",
+      icon: GitForkIcon,
+      variant: "outline",
+      onClick: () => setCloneOpen(true),
+    },
+    {
+      id: "new-repository",
+      label: "Create repository",
+      icon: FolderPlusIcon,
+      variant: "outline",
+      onClick: () => setCreateOpen(true),
+    },
+  ];
 
   return (
     <div className="flex h-screen flex-col">
@@ -75,59 +110,68 @@ export function WelcomeScreen() {
 
       <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center gap-6 p-8">
         {settings.data && !settings.data.seenGuideNudge && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <BookOpenIcon className="size-4 text-primary" />
-                New to GitDesktop?
-              </CardTitle>
-              <CardDescription>
-                The built-in guide walks through everything the app can do —
-                repositories, branches, pull requests, GitHub Actions, AI, and
-                more.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={openGuide}>
-                <BookOpenIcon data-icon="inline-start" />
-                Open the guide
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border bg-muted/40 px-3 py-2">
+            <span className="flex items-center gap-2 text-xs text-muted-foreground">
+              <BookOpenIcon className="size-4 shrink-0 text-foreground" />
+              New to GitDesktop? The built-in guide walks through the whole
+              workflow.
+            </span>
+            <span className="flex shrink-0 items-center gap-1">
+              <Button size="xs" variant="ghost" onClick={dismissNudge}>
+                Dismiss
               </Button>
-              <Button variant="ghost" size="sm" onClick={dismissNudge}>
-                Maybe later
+              <Button size="xs" onClick={openGuide}>
+                Open guide
               </Button>
-            </CardContent>
-          </Card>
+            </span>
+          </div>
         )}
 
-        <div className="grid items-center gap-x-10 gap-y-8 md:grid-cols-2">
-          <div className="flex flex-col gap-7">
-            <div className="space-y-4">
-              <BrandMark className="size-9" />
-              <div className="space-y-2">
-                <h1 className="font-heading text-xl font-semibold tracking-tight text-balance">
-                  A calmer way to move work through Git.
-                </h1>
-                <p className="max-w-prose text-xs/relaxed text-muted-foreground">
-                  Open a local repository, clone one from a URL, or create a new
-                  one. You can also drag a repo folder anywhere onto the window.
-                </p>
-              </div>
+        <div className="grid items-center gap-y-8 md:grid-cols-2">
+          <div className="flex flex-col gap-6 md:pr-10">
+            <div className="space-y-2">
+              <h1 className="font-heading text-2xl font-semibold tracking-tight text-balance">
+                A calmer way to move work through Git.
+              </h1>
+              <p className="text-xs/relaxed text-muted-foreground">
+                Open a repository to start reviewing, committing, and shipping
+                {aiEnabled ? " — with AI in the loop when you want it." : "."}
+              </p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={pickAndOpen}>
-                <FolderOpenIcon data-icon="inline-start" />
-                Open repository
-              </Button>
-              <Button variant="outline" onClick={() => setCloneOpen(true)}>
-                Clone repository
-              </Button>
-              <Button variant="outline" onClick={() => setCreateOpen(true)}>
-                Create repository
-              </Button>
+
+            <div className="space-y-2">
+              <div className="flex flex-col gap-2">
+                {actions.map(({ id, label, icon: Icon, variant, onClick }) => {
+                  const binding = bindings.get(id);
+                  return (
+                    <Button
+                      key={id}
+                      variant={variant}
+                      onClick={onClick}
+                      className="w-full justify-between"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Icon className="size-4" />
+                        {label}
+                      </span>
+                      {binding && (
+                        <span className="text-[11px] tabular-nums opacity-60">
+                          {formatBinding(binding)}
+                        </span>
+                      )}
+                    </Button>
+                  );
+                })}
+              </div>
+              <p className="pt-1 text-[11px] text-muted-foreground">
+                …or drag a repo folder anywhere onto the window.
+              </p>
             </div>
           </div>
 
-          <RecentRepoList />
+          <div className="self-stretch md:border-l md:border-border md:pl-10">
+            <RecentRepoList />
+          </div>
         </div>
       </main>
 

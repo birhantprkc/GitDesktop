@@ -154,7 +154,7 @@ export function RepoList({
   };
 
   return (
-    <div className="flex max-h-96 min-h-0 flex-col">
+    <div className="flex min-h-0 flex-col">
       <div className="shrink-0 p-2">
         <Input
           // the filter is the keyboard entry point of this surface
@@ -172,7 +172,10 @@ export function RepoList({
           className="h-7"
         />
       </div>
-      <ScrollArea className="min-h-0 flex-1" ref={listRef}>
+      <ScrollArea
+        className="min-h-0 **:data-[slot=scroll-area-viewport]:max-h-96"
+        ref={listRef}
+      >
         {filtered.length === 0 ? (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground">
             {recents.length === 0
