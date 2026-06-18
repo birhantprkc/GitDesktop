@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & discussion
+    url: https://github.com/theBGuy/GitDesktop/discussions
+    about: Ask how to do something or share ideas. Please keep the issue tracker for bugs and feature requests.
+  - name: Documentation & README
+    url: https://github.com/theBGuy/GitDesktop#readme
+    about: Setup, requirements, and feature overview.
+  - name: Report a security vulnerability
+    url: https://github.com/theBGuy/GitDesktop/security/advisories/new
+    about: Do not open a public issue for security problems — report them privately here.

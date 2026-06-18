@@ -26,10 +26,10 @@ git works against any remote via system `git`.
   failed-step logs — none of which GitHub Desktop does.
 - **Debug failed CI with AI** — turn a failed job's logs into a streamed
   root-cause + fix, ending with a ready-to-paste prompt for a coding agent.
-- **AI where it helps** — commit messages, PR titles/descriptions, and a
-  streaming code review or security audit, from Anthropic, OpenAI, OpenRouter,
-  local **Ollama**, or **keyless CLI agents** (Claude Code / Codex via your
-  existing subscription — no API key).
+- **AI where it helps** — commit messages, branch names, PR and issue
+  titles/descriptions, and a streaming code review or security audit, from
+  Anthropic, OpenAI, OpenRouter, local **Ollama**, or **keyless CLI agents**
+  (Claude Code / Codex via your existing subscription — no API key).
 - **Privacy-first** — API keys live in the OS keychain (never in app files),
   local models keep code on your machine, AI-ignore patterns keep sensitive
   files out of context, and a single switch hides every AI surface.
@@ -45,24 +45,29 @@ git works against any remote via system `git`.
 scaffolding), publish to GitHub, and fork. A header repo switcher groups every
 repo by owner with a Recent section and filter; aliases, repository statistics
 (languages, contributors, sizes, branch-vs-default stats), and recycle-bin-safe
-removal.
+removal. Star or unstar a repo from the menu, and (for admins) manage GitHub
+repo settings — description, topics, merge options, and webhooks with delivery
+history — without leaving the app.
 
 **Changes & commits** — unified/split diff with syntax highlighting and image
-diffing; filter the changes list by path or category; hunk-level staging;
+diffing; filter the changes list by path or category; hunk- and line-level
+(drag-to-stage) staging;
 stage/unstage/discard single files or a multi-selection from the context menu;
 discarding an untracked file goes to the recycle bin. Commit with title + body,
 co-authors suggested from history, amend, undo, reset, and revert.
 
 **Branches** — switch (bring-changes / stash prompt), create, rename, delete,
 and **archive** (hide from the switcher without deleting). Per-branch ahead/behind
-vs. the default branch, update a branch *without* checking it out, a Compare tab
+vs. the default branch and a PR badge in the switcher, update a branch *without*
+checking it out, a Compare tab
 (three-dot diff, commits ahead/behind, merge/rebase, jump to PR), and **local
 branch-protection rules** (naming, merge methods, require-PR, force-push) that
 are shareable via a committed file or importable from GitHub.
 
-**History & advanced** — paged, filterable history; rich commit detail; cherry-pick
-(onto the current or another branch), squash and reorder unpushed commits behind
-an atomic replay engine, a stash browser, and tag management.
+**History & advanced** — paged, filterable history with rich commit detail,
+per-file history and line blame; cherry-pick (onto the current or another branch),
+squash and reorder unpushed commits behind an atomic replay engine, a stash
+browser, tag management, and submodule management.
 
 **Syncing** — fetch / pull / push with ahead/behind indicators; pull is
 `--ff-only`, and divergence routes to a guarded force push with
@@ -72,6 +77,10 @@ with gated Continue / Abort.
 **Pull requests** — full read + write for GitHub PRs and local PRs (see
 Highlights), AI review + security audit on any PR, and Write/Preview markdown
 everywhere you author.
+
+**Issues** — a dedicated tab for GitHub issues: browse and read, create and edit,
+draft with AI from your repo's issue templates, and pin/unpin or lock/unlock —
+all without leaving the app.
 
 **GitHub Actions** — a dedicated tab with live run status, run detail, re-run /
 cancel / manual dispatch, inline failed-step logs, **Debug with AI**, a current-branch
@@ -148,6 +157,22 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 
 <!-- For the full GitHub Desktop comparison and remaining gaps, see
 [github-desktop.md](github-desktop.md). -->
+
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the
+conventions we follow (Conventional Commits, Biome, a `[Unreleased]` changelog
+entry), and how to open a good PR. Please also read the
+[Code of Conduct](CODE_OF_CONDUCT.md). For questions, see
+[SUPPORT.md](.github/SUPPORT.md); to report a vulnerability, follow
+[SECURITY.md](SECURITY.md).
+
+## Privacy
+
+GitDesktop never collects your code, file contents, or repository details.
+Optional anonymous usage analytics can be turned off in Settings → General, and
+masked session replay stays off until you opt in. Full details:
+[PRIVACY.md](PRIVACY.md).
 
 ## License
 

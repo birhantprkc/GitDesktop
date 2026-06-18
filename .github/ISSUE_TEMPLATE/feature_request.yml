@@ -1,0 +1,66 @@
+name: Feature request
+description: Suggest an idea or improvement for GitDesktop.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! GitDesktop aims to be **calm, precise, and dependable** —
+        the repo is the interface, AI is an assistant (not a spectacle), and fast
+        loops beat feature tours. Proposals that fit that intent (see
+        [PRODUCT.md](https://github.com/theBGuy/GitDesktop/blob/master/PRODUCT.md))
+        are the easiest to land.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the friction or use case. What are you trying to do, and where does GitDesktop get in the way today?
+      placeholder: I'm always ... and it takes too many clicks to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like GitDesktop to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, workarounds, or how other tools handle this.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of GitDesktop does this touch?
+      options:
+        - Repositories
+        - Changes & commits
+        - Branches
+        - History & advanced
+        - Pull requests
+        - GitHub Actions
+        - Git hooks
+        - AI features
+        - Automations
+        - Settings / integrations
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true

@@ -1,0 +1,109 @@
+name: Bug report
+description: Report something that is broken or behaving unexpectedly in GitDesktop.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please fill out the fields below
+        so we can reproduce and fix it quickly.
+
+        **Not a bug?** Use the [feature request](?template=feature_request.yml)
+        form for ideas, or [Discussions](https://github.com/theBGuy/GitDesktop/discussions)
+        for questions. **Found a security vulnerability?** Do not file it here —
+        follow [SECURITY.md](https://github.com/theBGuy/GitDesktop/blob/master/SECURITY.md).
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: When I ..., GitDesktop ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Tell us how to make it happen.
+      placeholder: |
+        1. Open repo '...'
+        2. Click '...'
+        3. See the error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. actual behavior
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: GitDesktop version
+      description: Found in Settings → About (or the title bar). Please update to the latest release first.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux
+        - Other (note in description)
+    validations:
+      required: true
+
+  - type: input
+    id: tooling
+    attributes:
+      label: git / gh versions
+      description: Output of `git --version` and `gh --version` (if the issue involves GitHub or Actions features).
+      placeholder: "git 2.45.0 / gh 2.62.0"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: ai-provider
+    attributes:
+      label: AI provider (if relevant)
+      description: Which provider was selected when the issue occurred?
+      options:
+        - Not applicable
+        - Anthropic
+        - OpenAI
+        - OpenRouter
+        - Ollama (local)
+        - Claude Code CLI
+        - Codex CLI
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshots, or screen recording
+      description: Paste any errors or attach media. Please redact tokens, secrets, and private paths.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I am on the latest release of GitDesktop.
+          required: true
+        - label: This is not a security vulnerability (those go through SECURITY.md).
+          required: true
