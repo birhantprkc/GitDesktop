@@ -457,7 +457,15 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 if (!branch.isCurrent) switchTo(branch.name);
               }}
             >
-              <span className="min-w-0 flex-1 truncate">
+              <span
+                className="min-w-0 flex-1 truncate"
+                // Only expose the full name as a tooltip when it's actually
+                // clipped — measured just-in-time on hover, so no per-row refs.
+                onMouseEnter={(e) => {
+                  const el = e.currentTarget;
+                  el.title = el.scrollWidth > el.clientWidth ? branch.name : "";
+                }}
+              >
                 {branch.name}
                 {branch.name === defaultName && (
                   <span className="ml-1.5 text-[10px] text-muted-foreground">
@@ -572,7 +580,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             sideOffset={4}
             className="isolate z-50"
           >
-            <Popover.Popup className="w-72 rounded-none bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10">
+            <Popover.Popup className="w-96 rounded-none bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10">
               <div className="border-b p-2">
                 <Input
                   value={branchFilter}
