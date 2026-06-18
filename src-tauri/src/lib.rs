@@ -135,6 +135,7 @@ pub fn run() {
             github::issue::gh_milestones,
             github::issue::gh_issue_set_assignees,
             github::issue::gh_issue_set_milestone,
+            github::issue::read_issue_templates,
             github::repo_settings::gh_repo_admin,
             github::repo_settings::gh_hooks_list,
             github::repo_settings::gh_hook_create,

@@ -621,6 +621,10 @@ export const ghIssueSetMilestone = (
   milestone: number | null,
 ) => invoke<void>("gh_issue_set_milestone", { repoPath, number, milestone });
 
+/** The repo's issue templates (frontmatter stripped); empty when it has none. */
+export const readIssueTemplates = (repoPath: string) =>
+  invoke<string[]>("read_issue_templates", { repoPath });
+
 export const ghIssueComment = (
   repoPath: string,
   number: number,

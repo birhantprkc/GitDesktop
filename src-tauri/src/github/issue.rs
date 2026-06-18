@@ -1,3 +1,6 @@
+use std::fs;
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
@@ -408,4 +411,68 @@ pub async fn gh_issue_edit(
     )
     .await?;
     Ok(())
+}
+
+/// Strips a leading YAML frontmatter block (`---\n…\n---`) from a template body.
+fn strip_frontmatter(text: &str) -> String {
+    let trimmed = text.trim_start_matches(['\u{feff}', '\n', '\r', ' ']);
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
+            return rest[end + 4..].trim_start().to_string();
+        }
+    }
+    text.to_string()
+}
+
+/// Reads the repository's issue templates so the AI issue drafter can follow the
+/// project's expected structure: the `.github/ISSUE_TEMPLATE/` directory first
+/// (each markdown template, frontmatter stripped), else the legacy single-file
+/// locations. Best-effort — returns an empty list when the repo has none.
+#[tauri::command]
+pub fn read_issue_templates(repo_path: String) -> AppResult<Vec<String>> {
+    let root = Path::new(&repo_path);
+    let mut out: Vec<String> = Vec::new();
+
+    let dir = root.join(".github").join("ISSUE_TEMPLATE");
+    if let Ok(entries) = fs::read_dir(&dir) {
+        let mut paths: Vec<_> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                matches!(
+                    p.extension().and_then(|x| x.to_str()),
+                    Some("md") | Some("markdown")
+                )
+            })
+            .collect();
+        paths.sort();
+        for path in paths {
+            if let Ok(text) = fs::read_to_string(&path) {
+                let body = strip_frontmatter(&text);
+                if !body.trim().is_empty() {
+                    out.push(body);
+                }
+            }
+        }
+    }
+
+    // Fall back to the legacy single-file templates only if the dir had none.
+    if out.is_empty() {
+        for rel in [
+            ".github/ISSUE_TEMPLATE.md",
+            ".github/issue_template.md",
+            "ISSUE_TEMPLATE.md",
+            "docs/ISSUE_TEMPLATE.md",
+        ] {
+            if let Ok(text) = fs::read_to_string(root.join(rel)) {
+                let body = strip_frontmatter(&text);
+                if !body.trim().is_empty() {
+                    out.push(body);
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(out)
 }

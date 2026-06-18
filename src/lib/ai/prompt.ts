@@ -416,3 +416,71 @@ export function extractRepoDetails(raw: string): {
 
   return { description, topics: [...new Set(topics)] };
 }
+
+const ISSUE_DRAFT_SYSTEM = `You turn a user's rough notes into a clear, well-structured GitHub issue.
+Output EXACTLY in this shape and nothing else:
+Title: <one concise line summarizing the issue, no trailing period, no quotes>
+
+<the issue body in GitHub-flavored markdown — organized with the sections appropriate to the notes (e.g. context/summary, steps to reproduce, expected vs. actual, proposed change), using headings and lists where they help>
+
+Expand and clarify the user's notes, but do NOT invent specifics (version numbers, exact error text, file names, stack traces) that the notes don't imply — leave a placeholder or omit instead. Do not wrap the output in code fences.`;
+
+export function buildIssueDraftPrompt(input: {
+  notes: string;
+  templates: string[];
+  repoName: string;
+  repoInstructions: string | null;
+  globalInstructions: string;
+}): { system: string; prompt: string } {
+  const systemParts = [ISSUE_DRAFT_SYSTEM];
+  if (input.templates.length > 0) {
+    const templates = input.templates
+      .map((t) => t.slice(0, 4000))
+      .join("\n\n--- next template ---\n\n");
+    systemParts.push(
+      `## Repository issue template(s)\nThe repository provides the following issue template(s). Follow the structure and section headings of the one most relevant to the user's notes; drop template instructions/HTML comments and any checklist boilerplate that doesn't apply.\n\n${templates}`,
+    );
+  }
+  if (input.repoInstructions) {
+    systemParts.push(`## Project instructions\n${input.repoInstructions}`);
+  }
+  if (input.globalInstructions.trim()) {
+    systemParts.push(
+      `## User instructions\n${input.globalInstructions.trim()}`,
+    );
+  }
+
+  const prompt = [
+    `## Repository\n${input.repoName}`,
+    `## The user's rough notes\n${input.notes.slice(0, 6000)}`,
+    "Write the issue Title and body.",
+  ].join("\n\n");
+
+  return { system: systemParts.join("\n\n"), prompt };
+}
+
+/** Parse the model's "Title:" line + markdown body into a draft issue. */
+export function extractIssueDraft(raw: string): {
+  title: string;
+  body: string;
+} {
+  const cleaned = raw
+    .replace(/^\s*```[a-z]*\n?/i, "")
+    .replace(/```\s*$/g, "")
+    .trim();
+  const lines = cleaned.split("\n");
+  const titleIdx = lines.findIndex((l) => /^title\s*[:-]/i.test(l.trim()));
+  if (titleIdx === -1) {
+    return { title: "", body: cleaned };
+  }
+  const title = lines[titleIdx]
+    .replace(/^\s*title\s*[:-]\s*/i, "")
+    .replace(/^[`'"]+|[`'"]+$/g, "")
+    .trim()
+    .slice(0, 250);
+  const body = lines
+    .slice(titleIdx + 1)
+    .join("\n")
+    .trim();
+  return { title, body };
+}

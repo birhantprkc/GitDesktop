@@ -1,5 +1,6 @@
 import { Popover } from "@base-ui/react/popover";
-import { TagIcon } from "@phosphor-icons/react";
+import { SparkleIcon, TagIcon, XIcon } from "@phosphor-icons/react";
+import { useSelector } from "@tanstack/react-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useEffectEvent, useState } from "react";
 import { toast } from "sonner";
@@ -16,9 +17,11 @@ import {
 import { LabelChip } from "@/features/conversations/Thread";
 import { required, useAppForm } from "@/lib/form";
 import { useCreateIssue, useRepoLabels } from "@/lib/git/queries";
+import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { AssigneesPopover, MilestoneMenu } from "./IssueMetaPickers";
+import { useGenerateIssueDraft } from "./useGenerateIssueDraft";
 
 export function CreateIssueDialog({
   repoPath,
@@ -32,6 +35,9 @@ export function CreateIssueDialog({
   const createIssue = useCreateIssue(repoPath);
   const repoLabels = useRepoLabels(repoPath, open);
   const selectIssue = useUiStore((s) => s.selectIssue);
+  const repoName = useUiStore((s) => s.repoName) ?? "";
+  const aiEnabled = useAiEnabled();
+  const { generate, cancel, generating } = useGenerateIssueDraft(repoPath);
   const [labels, setLabels] = useState<Set<string>>(new Set());
   const [assignees, setAssignees] = useState<string[]>([]);
   const [milestone, setMilestone] = useState<number | null>(null);
@@ -58,6 +64,11 @@ export function CreateIssueDialog({
       }
     },
   });
+
+  // Live title/body drive the AI drafter's input and its enabled state.
+  const titleVal = useSelector(form.store, (s) => s.values.title);
+  const bodyVal = useSelector(form.store, (s) => s.values.body);
+  const notes = [titleVal, bodyVal].filter(Boolean).join("\n\n");
 
   // keepDefaultValues: otherwise the per-render options sync clobbers the
   // reset values back to empty on an untouched form.
@@ -116,9 +127,43 @@ export function CreateIssueDialog({
             {(field) => (
               <field.MarkdownField
                 label="Description"
-                placeholder="Describe the problem or request"
+                placeholder="Jot down rough notes, then draft with AI"
                 rows={8}
                 textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+                actions={
+                  !aiEnabled ? undefined : generating ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      onClick={cancel}
+                    >
+                      <XIcon data-icon="inline-start" />
+                      Cancel
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      disabled={!notes.trim()}
+                      onClick={() =>
+                        generate({
+                          notes,
+                          repoName,
+                          onResult: (d) => {
+                            if (d.title) form.setFieldValue("title", d.title);
+                            form.setFieldValue("body", d.body);
+                          },
+                        })
+                      }
+                      title="Expand your notes into a structured issue with AI"
+                    >
+                      <SparkleIcon data-icon="inline-start" />
+                      Draft with AI
+                    </Button>
+                  )
+                }
               />
             )}
           </form.AppField>
@@ -197,7 +242,9 @@ export function CreateIssueDialog({
               Cancel
             </Button>
             <form.AppForm>
-              <form.SubmitButton>Create issue</form.SubmitButton>
+              <form.SubmitButton disabled={generating}>
+                Create issue
+              </form.SubmitButton>
             </form.AppForm>
           </DialogFooter>
         </form>
