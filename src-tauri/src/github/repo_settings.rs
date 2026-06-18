@@ -259,6 +259,10 @@ pub struct RepoSettings {
     pub description: Option<String>,
     #[serde(default)]
     pub homepage: Option<String>,
+    /// Repo topics — present on the repo object, but written via a separate
+    /// `PUT /topics` endpoint (see `gh_repo_settings_update`).
+    #[serde(default)]
+    pub topics: Vec<String>,
     #[serde(default, alias = "default_branch")]
     pub default_branch: String,
     #[serde(default, alias = "has_issues")]
@@ -267,16 +271,22 @@ pub struct RepoSettings {
     pub has_projects: bool,
     #[serde(default, alias = "has_wiki")]
     pub has_wiki: bool,
+    #[serde(default, alias = "has_discussions")]
+    pub has_discussions: bool,
     #[serde(default, alias = "allow_squash_merge")]
     pub allow_squash_merge: bool,
     #[serde(default, alias = "allow_merge_commit")]
     pub allow_merge_commit: bool,
     #[serde(default, alias = "allow_rebase_merge")]
     pub allow_rebase_merge: bool,
+    #[serde(default, alias = "allow_update_branch")]
+    pub allow_update_branch: bool,
     #[serde(default, alias = "delete_branch_on_merge")]
     pub delete_branch_on_merge: bool,
     #[serde(default, alias = "allow_auto_merge")]
     pub allow_auto_merge: bool,
+    #[serde(default, alias = "web_commit_signoff_required")]
+    pub web_commit_signoff_required: bool,
 }
 
 /// Edited settings from the UI (camelCase from the frontend).
@@ -285,15 +295,19 @@ pub struct RepoSettings {
 pub struct RepoSettingsInput {
     pub description: String,
     pub homepage: String,
+    pub topics: Vec<String>,
     pub default_branch: String,
     pub has_issues: bool,
     pub has_projects: bool,
     pub has_wiki: bool,
+    pub has_discussions: bool,
     pub allow_squash_merge: bool,
     pub allow_merge_commit: bool,
     pub allow_rebase_merge: bool,
+    pub allow_update_branch: bool,
     pub delete_branch_on_merge: bool,
     pub allow_auto_merge: bool,
+    pub web_commit_signoff_required: bool,
 }
 
 #[tauri::command]
@@ -326,11 +340,14 @@ pub async fn gh_repo_settings_update(
         "has_issues": input.has_issues,
         "has_projects": input.has_projects,
         "has_wiki": input.has_wiki,
+        "has_discussions": input.has_discussions,
         "allow_squash_merge": input.allow_squash_merge,
         "allow_merge_commit": input.allow_merge_commit,
         "allow_rebase_merge": input.allow_rebase_merge,
+        "allow_update_branch": input.allow_update_branch,
         "delete_branch_on_merge": input.delete_branch_on_merge,
         "allow_auto_merge": input.allow_auto_merge,
+        "web_commit_signoff_required": input.web_commit_signoff_required,
     });
     let out = run_gh_input(
         Some(&repo_path),
@@ -346,6 +363,45 @@ pub async fn gh_repo_settings_update(
         GH_NETWORK_TIMEOUT,
     )
     .await?;
-    serde_json::from_str(&out.stdout_lossy())
-        .map_err(|e| AppError::Gh(format!("could not parse repo settings: {e}")))
+    let mut settings: RepoSettings = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse repo settings: {e}")))?;
+
+    // Topics aren't part of the repo PATCH — they have their own endpoint.
+    // Lowercase + strip to GitHub's allowed alphabet so a stray character
+    // doesn't 422 the whole save.
+    let names: Vec<String> = input
+        .topics
+        .iter()
+        .map(|t| {
+            t.trim()
+                .to_lowercase()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                .collect::<String>()
+        })
+        .filter(|t| !t.is_empty())
+        .collect();
+    let topics_out = run_gh_input(
+        Some(&repo_path),
+        &[
+            "api",
+            "--method",
+            "PUT",
+            "repos/{owner}/{repo}/topics",
+            "--input",
+            "-",
+        ],
+        &json!({ "names": names }).to_string(),
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    #[derive(Deserialize)]
+    struct TopicsResp {
+        #[serde(default)]
+        names: Vec<String>,
+    }
+    if let Ok(t) = serde_json::from_str::<TopicsResp>(&topics_out.stdout_lossy()) {
+        settings.topics = t.names;
+    }
+    Ok(settings)
 }

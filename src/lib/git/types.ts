@@ -298,30 +298,38 @@ export interface WebhookInput {
 export interface RepoSettings {
   description: string | null;
   homepage: string | null;
+  topics: string[];
   defaultBranch: string;
   hasIssues: boolean;
   hasProjects: boolean;
   hasWiki: boolean;
+  hasDiscussions: boolean;
   allowSquashMerge: boolean;
   allowMergeCommit: boolean;
   allowRebaseMerge: boolean;
+  allowUpdateBranch: boolean;
   deleteBranchOnMerge: boolean;
   allowAutoMerge: boolean;
+  webCommitSignoffRequired: boolean;
 }
 
 /** Edited settings sent to the backend. */
 export interface RepoSettingsInput {
   description: string;
   homepage: string;
+  topics: string[];
   defaultBranch: string;
   hasIssues: boolean;
   hasProjects: boolean;
   hasWiki: boolean;
+  hasDiscussions: boolean;
   allowSquashMerge: boolean;
   allowMergeCommit: boolean;
   allowRebaseMerge: boolean;
+  allowUpdateBranch: boolean;
   deleteBranchOnMerge: boolean;
   allowAutoMerge: boolean;
+  webCommitSignoffRequired: boolean;
 }
 
 /** A GitHub (classic) branch protection rule, for importing into branch rules. */

@@ -70,16 +70,32 @@ function toInput(s: RepoSettings): RepoSettingsInput {
   return {
     description: s.description ?? "",
     homepage: s.homepage ?? "",
+    topics: s.topics,
     defaultBranch: s.defaultBranch,
     hasIssues: s.hasIssues,
     hasProjects: s.hasProjects,
     hasWiki: s.hasWiki,
+    hasDiscussions: s.hasDiscussions,
     allowSquashMerge: s.allowSquashMerge,
     allowMergeCommit: s.allowMergeCommit,
     allowRebaseMerge: s.allowRebaseMerge,
+    allowUpdateBranch: s.allowUpdateBranch,
     deleteBranchOnMerge: s.deleteBranchOnMerge,
     allowAutoMerge: s.allowAutoMerge,
+    webCommitSignoffRequired: s.webCommitSignoffRequired,
   };
+}
+
+/** Space/comma-separated text → GitHub's lowercase, deduped, capped topic list. */
+function parseTopics(text: string): string[] {
+  return [
+    ...new Set(
+      text
+        .split(/[\s,]+/)
+        .map((t) => t.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+        .filter(Boolean),
+    ),
+  ].slice(0, 20);
 }
 
 function GeneralForm({
@@ -94,6 +110,8 @@ function GeneralForm({
   const update = useUpdateRepoSettings(repoPath);
   const base = toInput(settings);
   const [form, setForm] = useState<RepoSettingsInput>(base);
+  // Topics edit as free text (space-separated) but persist as a parsed array.
+  const [topicsText, setTopicsText] = useState(settings.topics.join(" "));
 
   const aiEnabled = useAiEnabled();
   const aiConfigured = useAiConfigured();
@@ -107,6 +125,13 @@ function GeneralForm({
     value: RepoSettingsInput[K],
   ) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  // Keep the raw text (so trailing spaces survive typing) and the parsed array
+  // (used for the dirty check and save) in sync.
+  function applyTopics(text: string) {
+    setTopicsText(text);
+    set("topics", parseTopics(text));
   }
 
   const mergeValid =
@@ -155,7 +180,10 @@ function GeneralForm({
                 onClick={() =>
                   descGen.generate({
                     repoName,
-                    onResult: (text) => set("description", text),
+                    onResult: ({ description, topics }) => {
+                      if (description) set("description", description);
+                      if (topics.length) applyTopics(topics.join(" "));
+                    },
                   })
                 }
               >
@@ -169,6 +197,23 @@ function GeneralForm({
           value={form.description}
           onChange={(e) => set("description", e.target.value)}
           placeholder="Short description of this repository"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="repo-topics">
+          Topics{" "}
+          <span className="font-normal text-muted-foreground">
+            (separate with spaces)
+          </span>
+        </Label>
+        <Input
+          id="repo-topics"
+          value={topicsText}
+          onChange={(e) => applyTopics(e.target.value)}
+          placeholder="react typescript cli"
+          autoComplete="off"
+          spellCheck={false}
         />
       </div>
 
@@ -192,13 +237,22 @@ function GeneralForm({
               if (v) set("defaultBranch", v);
             }}
           >
-            <SelectTrigger id="repo-default-branch">
+            <SelectTrigger id="repo-default-branch" className="w-full">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="max-w-[min(20rem,80vw)]">
               {branchOptions.map((b) => (
                 <SelectItem key={b} value={b}>
-                  {b}
+                  <span
+                    className="block truncate"
+                    // Tooltip only when the branch name is actually clipped.
+                    onMouseEnter={(e) => {
+                      const el = e.currentTarget;
+                      el.title = el.scrollWidth > el.clientWidth ? b : "";
+                    }}
+                  >
+                    {b}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
@@ -208,7 +262,7 @@ function GeneralForm({
 
       <div className="space-y-2">
         <Label>Features</Label>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <label className="flex cursor-pointer items-center gap-2 text-xs">
             <Checkbox
               checked={form.hasIssues}
@@ -229,6 +283,13 @@ function GeneralForm({
               onCheckedChange={(c) => set("hasWiki", c === true)}
             />
             Wiki
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-xs">
+            <Checkbox
+              checked={form.hasDiscussions}
+              onCheckedChange={(c) => set("hasDiscussions", c === true)}
+            />
+            Discussions
           </label>
         </div>
       </div>
@@ -260,10 +321,10 @@ function GeneralForm({
         </div>
         <label className="flex cursor-pointer items-center gap-2 pt-1 text-xs">
           <Switch
-            checked={form.deleteBranchOnMerge}
-            onCheckedChange={(c) => set("deleteBranchOnMerge", c)}
+            checked={form.allowUpdateBranch}
+            onCheckedChange={(c) => set("allowUpdateBranch", c)}
           />
-          Automatically delete head branches after merge
+          Always suggest updating pull request branches
         </label>
         <label className="flex cursor-pointer items-center gap-2 text-xs">
           <Switch
@@ -271,6 +332,24 @@ function GeneralForm({
             onCheckedChange={(c) => set("allowAutoMerge", c)}
           />
           Allow auto-merge
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 text-xs">
+          <Switch
+            checked={form.deleteBranchOnMerge}
+            onCheckedChange={(c) => set("deleteBranchOnMerge", c)}
+          />
+          Automatically delete head branches after merge
+        </label>
+      </div>
+
+      <div className="space-y-2">
+        <Label>Commits</Label>
+        <label className="flex cursor-pointer items-center gap-2 text-xs">
+          <Switch
+            checked={form.webCommitSignoffRequired}
+            onCheckedChange={(c) => set("webCommitSignoffRequired", c)}
+          />
+          Require contributors to sign off on web-based commits
         </label>
       </div>
 

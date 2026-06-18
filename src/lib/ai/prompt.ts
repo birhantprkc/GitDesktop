@@ -348,9 +348,10 @@ export function extractBranchName(raw: string): string {
   return line.replace(/^[`'"]+|[`'"]+$/g, "").trim();
 }
 
-const DESCRIPTION_SYSTEM = `You write GitHub repository "About" descriptions.
-Output ONLY a single description line — at most ~140 characters, no trailing period, no surrounding quotes, no markdown.
-Describe what the project does. Do not begin with "This repository", "A repository for", or the project's own name.`;
+const DESCRIPTION_SYSTEM = `You write a GitHub repository's "About" metadata from its README.
+Output EXACTLY these two lines and nothing else:
+Description: <one concise line, at most ~140 characters, no trailing period, no quotes; describe what the project does — do not begin with "This repository", "A repository for", or the project's own name>
+Topics: <3 to 8 space-separated lowercase tags using only letters, digits, and hyphens, e.g. "react typescript cli git">`;
 
 export function buildRepoDescriptionPrompt(input: {
   repoName: string;
@@ -376,25 +377,42 @@ export function buildRepoDescriptionPrompt(input: {
       "## README\n(none — infer from the repository name alone)",
     );
   }
-  promptParts.push("Write the repository description.");
+  promptParts.push("Write the description and topics.");
   return {
     system: systemParts.join("\n\n"),
     prompt: promptParts.join("\n\n"),
   };
 }
 
-/** First non-empty line, unquoted, trailing period stripped, capped to GitHub's limit. */
-export function extractDescription(raw: string): string {
-  const line =
-    raw
-      .replace(/```[a-z]*/gi, "")
-      .replace(/```/g, "")
-      .split("\n")
-      .map((l) => l.trim())
-      .find((l) => l.length > 0) ?? "";
-  return line
+/** Parse the model's "Description:" / "Topics:" lines into clean values. */
+export function extractRepoDetails(raw: string): {
+  description: string;
+  topics: string[];
+} {
+  const lines = raw
+    .replace(/```[a-z]*/gi, "")
+    .replace(/```/g, "")
+    .split("\n")
+    .map((l) => l.trim());
+
+  const descLine =
+    lines.find((l) => /^description\s*[:-]/i.test(l)) ??
+    lines.find((l) => l.length > 0) ??
+    "";
+  const description = descLine
+    .replace(/^description\s*[:-]\s*/i, "")
     .replace(/^[`'"]+|[`'"]+$/g, "")
     .replace(/\.$/, "")
     .trim()
     .slice(0, 350);
+
+  const topicsLine = lines.find((l) => /^topics\s*[:-]/i.test(l)) ?? "";
+  const topics = topicsLine
+    .replace(/^topics\s*[:-]\s*/i, "")
+    .split(/[\s,]+/)
+    .map((t) => t.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+    .filter(Boolean)
+    .slice(0, 20);
+
+  return { description, topics: [...new Set(topics)] };
 }

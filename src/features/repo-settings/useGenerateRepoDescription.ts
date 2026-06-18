@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { createAiClient, MissingApiKeyError } from "@/lib/ai/client";
 import {
   buildRepoDescriptionPrompt,
-  extractDescription,
+  extractRepoDetails,
 } from "@/lib/ai/prompt";
 import { readRepoInstructions, readTextFile } from "@/lib/git/api";
 import { loadSettings } from "@/lib/settings/api";
@@ -34,7 +34,7 @@ async function readReadme(repoPath: string): Promise<string> {
 }
 
 /**
- * Suggests a one-line GitHub "About" description for the repo, grounded in its
+ * Suggests a GitHub "About" description + topics for the repo, grounded in its
  * README (falling back to the name alone). Mirrors useGenerateBranchName.
  */
 export function useGenerateRepoDescription(repoPath: string) {
@@ -44,7 +44,10 @@ export function useGenerateRepoDescription(repoPath: string) {
   const cancel = useCallback(() => abortRef.current?.abort(), []);
 
   const generate = useCallback(
-    async (opts: { repoName: string; onResult: (text: string) => void }) => {
+    async (opts: {
+      repoName: string;
+      onResult: (result: { description: string; topics: string[] }) => void;
+    }) => {
       const abort = new AbortController();
       abortRef.current = abort;
       setGenerating(true);
@@ -72,8 +75,9 @@ export function useGenerateRepoDescription(repoPath: string) {
           buffer += chunk;
         }
 
-        const description = extractDescription(buffer);
-        if (description) opts.onResult(description);
+        const details = extractRepoDetails(buffer);
+        if (details.description || details.topics.length)
+          opts.onResult(details);
         else toast.error("Couldn't generate a description — try again.");
       } catch (e) {
         if (!abort.signal.aborted) {
