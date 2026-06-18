@@ -27,6 +27,7 @@ import { GitIdentitySection, GitSection } from "./GitSection";
 import { InstructionsSection } from "./InstructionsSection";
 import { KeyboardSection } from "./KeyboardSection";
 import { NotificationsSection } from "./NotificationsSection";
+import { SyntaxSection } from "./SyntaxSection";
 import { settingsFormOpts, toDraft } from "./settings-form";
 import { TerminalSection } from "./TerminalSection";
 import { UpdatesSection } from "./UpdatesSection";
@@ -39,6 +40,7 @@ const PANELS = [
   { id: "keyboard", label: "Keyboard" },
   { id: "accounts", label: "Accounts" },
   { id: "git", label: "Git" },
+  { id: "syntax", label: "Syntax" },
   { id: "editor", label: "External editor" },
   { id: "terminal", label: "Terminal" },
   { id: "updates", label: "Updates" },
@@ -216,6 +218,7 @@ export function SettingsScreen() {
                   <GitIdentitySection />
                 </>
               )}
+              {activePanel === "syntax" && <SyntaxSection form={form} />}
               {activePanel === "editor" && <EditorSection form={form} />}
               {activePanel === "terminal" && <TerminalSection form={form} />}
               {activePanel === "updates" && <UpdatesSection form={form} />}

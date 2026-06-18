@@ -41,6 +41,19 @@ pub async fn append_to_gitignore(repo_path: String, pattern: String) -> AppResul
     tokio::fs::write(&path, content).await.map_err(AppError::Io)
 }
 
+/// Reads a small text file the user picked (e.g. a VSCode
+/// `language-configuration.json` or `*.tmLanguage.json` to import). Capped so a
+/// misfire can't pull a huge file into memory.
+#[tauri::command]
+pub async fn read_text_file(path: String) -> AppResult<String> {
+    const MAX_BYTES: u64 = 4 * 1024 * 1024;
+    let meta = tokio::fs::metadata(&path).await.map_err(AppError::Io)?;
+    if meta.len() > MAX_BYTES {
+        return Err(AppError::InvalidArgument("file is too large".into()));
+    }
+    tokio::fs::read_to_string(&path).await.map_err(AppError::Io)
+}
+
 /// Moves a repository folder to the OS recycle bin. Refuses anything that
 /// isn't a git repository root, so a bad path can never trash an unrelated
 /// folder.

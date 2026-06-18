@@ -4,13 +4,24 @@ import { useDeferredValue, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import type { FileDiff } from "@/lib/git/types";
+import type { CustomLanguage } from "@/lib/settings/api";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
+import { useUiStore } from "@/lib/stores/ui";
+import { useEffectiveSyntax } from "@/lib/syntax/queries";
 import { useIsDark } from "@/lib/use-is-dark";
 import { capDiffText, DIFF_LINE_CAP } from "./cap-diff";
 import { DiffErrorBoundary } from "./DiffErrorBoundary";
+import { DiffLanguagePicker } from "./DiffLanguagePicker";
 import { DiffPlaceholder } from "./DiffPlaceholder";
 import { diffLang } from "./diff-lang";
 import { ImageDiff, ImagePanes, type ImageRevs, imageMime } from "./ImageDiff";
+import { ensureCustomLanguages } from "./syntax";
+
+/** User syntax preferences threaded into diff building. */
+export interface SyntaxPrefs {
+  syntaxMap?: Record<string, string>;
+  customLanguages?: CustomLanguage[];
+}
 
 /** The persisted Unified/Split preference toggle. */
 export function DiffModeToggle() {
@@ -82,10 +93,16 @@ const HIGHLIGHT_MAX_LINES = 2000;
 export function createDiffFile(
   filePath: string,
   text: string,
+  prefs?: SyntaxPrefs,
 ): DiffFile | null {
   if (!text.trim()) return null;
   try {
-    const lang = diffLang(filePath);
+    // Register any custom grammars referenced by the user's map before we look
+    // up the language (idempotent; cheap when unchanged).
+    if (prefs?.customLanguages?.length) {
+      ensureCustomLanguages(prefs.customLanguages);
+    }
+    const lang = diffLang(filePath, prefs?.syntaxMap);
     const file = DiffFile.createInstance({
       oldFile: { fileName: filePath, fileLang: lang },
       newFile: { fileName: filePath, fileLang: lang },
@@ -137,9 +154,11 @@ function RenderedDiff({ filePath, text }: { filePath: string; text: string }) {
     return { shown: r.text, hidden: r.hidden };
   }, [deferredText, showFull]);
 
+  const repoPath = useUiStore((s) => s.repoPath);
+  const { syntaxMap, customLanguages } = useEffectiveSyntax(repoPath);
   const diffFile = useMemo(
-    () => createDiffFile(deferredPath, shown),
-    [shown, deferredPath],
+    () => createDiffFile(deferredPath, shown, { syntaxMap, customLanguages }),
+    [shown, deferredPath, syntaxMap, customLanguages],
   );
 
   if (!diffFile) return <DiffPlaceholder message="No changes to show" />;
@@ -251,7 +270,8 @@ export function DiffContent({
           {filePath}
           {data.isTruncated && " (truncated — diff too large)"}
         </span>
-        <span className="shrink-0">
+        <span className="flex shrink-0 items-center gap-1.5">
+          <DiffLanguagePicker filePath={filePath} />
           <DiffModeToggle />
         </span>
       </div>

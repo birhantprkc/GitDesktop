@@ -82,13 +82,27 @@ const FILE_LANG: Record<string, string> = {
   "cmakelists.txt": "cmake",
 };
 
-export function diffLang(filePath: string): string | undefined {
+export function diffLang(
+  filePath: string,
+  /** User extension→language overrides (no dot, lowercase keys). Win over
+   *  every built-in, so a user can remap a known extension or add a new one. */
+  userMap?: Record<string, string>,
+): string | undefined {
   const slash = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
   const name = filePath.slice(slash + 1).toLowerCase();
-  const byName = FILE_LANG[name];
-  if (byName) return byName;
   const dot = name.lastIndexOf(".");
   // dot <= 0 also rejects dotfiles like ".gitignore" — no extension to map.
-  if (dot <= 0) return undefined;
-  return EXT_LANG[name.slice(dot + 1)];
+  const ext = dot > 0 ? name.slice(dot + 1) : "";
+  if (ext && userMap?.[ext]) return userMap[ext];
+  const byName = FILE_LANG[name];
+  if (byName) return byName;
+  return ext ? EXT_LANG[ext] : undefined;
+}
+
+/** The extension (no dot, lowercase) of a path, or "" when there's none. */
+export function fileExt(filePath: string): string {
+  const slash = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  const name = filePath.slice(slash + 1).toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1) : "";
 }

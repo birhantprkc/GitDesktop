@@ -15,6 +15,30 @@ export function repoDisplayName(repo: RecentRepo): string {
   return repo.alias?.trim() || repo.name;
 }
 
+/**
+ * A user-defined minimal grammar for diff syntax highlighting, referenced from
+ * `syntaxMap` by its `id`. Built into a highlight.js language at runtime — see
+ * features/diff/syntax.ts.
+ */
+export interface CustomLanguage {
+  /** Stable id used as the highlighter language name and the syntaxMap target.
+   *  Lowercase token (letters/digits/hyphen). */
+  id: string;
+  /** Display name shown in pickers. */
+  name: string;
+  /** Keywords, separated by spaces, commas, or newlines. */
+  keywords: string;
+  /** Line-comment prefix (e.g. "//" or "#"); empty = none. */
+  lineComment: string;
+  /** Block-comment delimiters (e.g. "/*" and "*\/"); both empty = none. */
+  blockCommentStart: string;
+  blockCommentEnd: string;
+  /** String delimiter characters (e.g. "\"'`"); empty = none. */
+  stringDelimiters: string;
+  /** Match keywords case-insensitively. */
+  caseInsensitive: boolean;
+}
+
 export interface NotificationSettings {
   /** Automation results (review posted / ready / failed). */
   automations: boolean;
@@ -73,6 +97,11 @@ export interface AppSettings {
   seenAnalyticsNotice: boolean;
   /** App version last shown to the user, to drive the "What's new" dialog. */
   lastSeenVersion: string;
+  /** Diff syntax highlighting: file extension (no dot, lowercase) → a
+   *  highlight.js language name or a CustomLanguage id. Overrides built-ins. */
+  syntaxMap: Record<string, string>;
+  /** User-defined grammars referenced by `syntaxMap`. */
+  customLanguages: CustomLanguage[];
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -113,6 +142,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   recordReplay: false,
   seenAnalyticsNotice: false,
   lastSeenVersion: "",
+  syntaxMap: {},
+  customLanguages: [],
   recentRepos: [],
   diffViewMode: "unified",
 };

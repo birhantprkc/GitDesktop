@@ -732,6 +732,18 @@ export const readRepoBranchRules = (repoPath: string) =>
 export const writeRepoBranchRules = (repoPath: string, contents: string) =>
   invoke<void>("write_repo_branch_rules", { repoPath, contents });
 
+/** Raw contents of `<repo>/.gitdesktop/syntax.json`, or null if absent. */
+export const readRepoSyntax = (repoPath: string) =>
+  invoke<string | null>("read_repo_syntax", { repoPath });
+
+/** Writes `<repo>/.gitdesktop/syntax.json` (caller passes serialized JSON). */
+export const writeRepoSyntax = (repoPath: string, contents: string) =>
+  invoke<void>("write_repo_syntax", { repoPath, contents });
+
+/** Reads a small text file the user picked (for importing a language config). */
+export const readTextFile = (path: string) =>
+  invoke<string>("read_text_file", { path });
+
 // Cold-start test mode keeps API keys in an isolated sessionStorage store so
 // the OS keychain (and the user's real keys) are never touched (no-op normally).
 export const setSecret = (provider: string, value: string) =>

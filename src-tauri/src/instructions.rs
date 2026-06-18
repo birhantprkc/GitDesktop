@@ -58,6 +58,31 @@ pub async fn write_repo_branch_rules(repo_path: String, contents: String) -> App
     tokio::fs::write(&path, contents).await.map_err(AppError::Io)
 }
 
+/// Per-repo SHARED syntax config, read from `<repo>/.gitdesktop/syntax.json`.
+/// Returns the raw file contents (parsed on the frontend, which owns the
+/// schema), or None when the file is absent or empty.
+#[tauri::command]
+pub async fn read_repo_syntax(repo_path: String) -> AppResult<Option<String>> {
+    let path = Path::new(&repo_path).join(".gitdesktop").join("syntax.json");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(text) if text.trim().is_empty() => Ok(None),
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(AppError::Io(e)),
+    }
+}
+
+/// Writes the repo's shared syntax config to `<repo>/.gitdesktop/syntax.json`,
+/// creating `.gitdesktop` if needed. The caller passes already-serialized
+/// (pretty-printed) JSON so the committed file stays diff-friendly.
+#[tauri::command]
+pub async fn write_repo_syntax(repo_path: String, contents: String) -> AppResult<()> {
+    let dir = Path::new(&repo_path).join(".gitdesktop");
+    tokio::fs::create_dir_all(&dir).await.map_err(AppError::Io)?;
+    let path = dir.join("syntax.json");
+    tokio::fs::write(&path, contents).await.map_err(AppError::Io)
+}
+
 pub fn parse_patterns(text: &str) -> Vec<String> {
     text.lines()
         .map(str::trim)

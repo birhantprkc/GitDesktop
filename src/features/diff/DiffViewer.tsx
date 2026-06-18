@@ -34,6 +34,7 @@ import { useApplyPartial, useApplyPatch, useFileDiff } from "@/lib/git/queries";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import type { SelectedFile } from "@/lib/stores/ui";
 import { useUiStore } from "@/lib/stores/ui";
+import { useEffectiveSyntax } from "@/lib/syntax/queries";
 import { toastError } from "@/lib/toast";
 import { useIsDark } from "@/lib/use-is-dark";
 import { DiffPlaceholder } from "./DiffPlaceholder";
@@ -443,9 +444,11 @@ const SelectableHunk = memo(function SelectableHunk({
   selected: SelectedLine[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const hunkRepoPath = useUiStore((s) => s.repoPath);
+  const { syntaxMap, customLanguages } = useEffectiveSyntax(hunkRepoPath);
   const diffFile = useMemo(
-    () => createDiffFile(filePath, hunkText),
-    [filePath, hunkText],
+    () => createDiffFile(filePath, hunkText, { syntaxMap, customLanguages }),
+    [filePath, hunkText, syntaxMap, customLanguages],
   );
   // Keep latest callback/selection without re-creating the manager each render.
   const onSelectRef = useRef(onSelect);
