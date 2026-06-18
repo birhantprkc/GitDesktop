@@ -37,6 +37,10 @@ export interface CustomLanguage {
   stringDelimiters: string;
   /** Match keywords case-insensitively. */
   caseInsensitive: boolean;
+  /** A full VSCode TextMate grammar (parsed `.tmLanguage.json`). When present,
+   *  the diff renders this language with Shiki for VSCode-fidelity highlighting
+   *  and the minimal fields above are ignored. */
+  tmGrammar?: Record<string, unknown>;
 }
 
 export interface NotificationSettings {

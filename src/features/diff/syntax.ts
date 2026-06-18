@@ -1,5 +1,6 @@
 import { highlighter } from "@git-diff-view/react";
 import type { CustomLanguage } from "@/lib/settings/api";
+import { builtinShikiLangs } from "./shiki-highlighter";
 
 /**
  * Diff syntax-highlighting support. The diff renderer (@git-diff-view) uses a
@@ -26,15 +27,22 @@ type Grammar = {
 
 let cachedLangs: string[] | null = null;
 
-/** Every highlight.js language registered in the diff engine, sorted. */
+/**
+ * Every language available for highlighting, sorted: the highlight.js languages
+ * registered in the diff engine plus the built-in Shiki languages (astro &c.)
+ * that highlight.js can't render.
+ */
 export function supportedLanguages(): string[] {
   if (cachedLangs) return cachedLangs;
   try {
     cachedLangs = [
-      ...highlighter.getHighlighterEngine().listLanguages(),
+      ...new Set([
+        ...highlighter.getHighlighterEngine().listLanguages(),
+        ...builtinShikiLangs(),
+      ]),
     ].sort();
   } catch {
-    cachedLangs = [];
+    cachedLangs = [...builtinShikiLangs()].sort();
   }
   return cachedLangs;
 }
@@ -80,6 +88,17 @@ const LABELS: Record<string, string> = {
   graphql: "GraphQL",
   protobuf: "Protocol Buffers",
   vue: "Vue",
+  astro: "Astro",
+  svelte: "Svelte",
+  toml: "TOML",
+  terraform: "Terraform",
+  hcl: "HCL",
+  prisma: "Prisma",
+  solidity: "Solidity",
+  zig: "Zig",
+  wgsl: "WGSL",
+  gdscript: "GDScript",
+  jsonnet: "Jsonnet",
   plaintext: "Plain text",
 };
 
@@ -109,9 +128,12 @@ const COMMON = [
   "bash",
   "powershell",
   "yaml",
+  "toml",
   "ini",
   "markdown",
   "sql",
+  "astro",
+  "svelte",
   "plaintext",
 ];
 
@@ -193,7 +215,8 @@ export function ensureCustomLanguages(langs: readonly CustomLanguage[]): void {
     return;
   }
   for (const lang of langs) {
-    if (!lang.id) continue;
+    // Languages with a full TextMate grammar are rendered by Shiki, not here.
+    if (!lang.id || lang.tmGrammar) continue;
     try {
       register(lang.id, buildGrammar(lang));
     } catch {

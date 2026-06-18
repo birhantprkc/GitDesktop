@@ -39,7 +39,7 @@ const EXT_LANG: Record<string, string> = {
   json: "json",
   yaml: "yaml",
   yml: "yaml",
-  toml: "ini",
+  toml: "toml",
   ini: "ini",
   md: "markdown",
   markdown: "markdown",
@@ -55,7 +55,17 @@ const EXT_LANG: Record<string, string> = {
   graphql: "graphql",
   gql: "graphql",
   vue: "vue",
-  svelte: "xml",
+  // Shiki-only languages — highlight.js ships no grammar for these, so they go
+  // through the Shiki engine (see features/diff/shiki-highlighter.ts) instead
+  // of the approximate fallbacks (toml/tf as ini, svelte as xml) used before.
+  astro: "astro",
+  svelte: "svelte",
+  prisma: "prisma",
+  sol: "solidity",
+  wgsl: "wgsl",
+  gd: "gdscript",
+  jsonnet: "jsonnet",
+  libsonnet: "jsonnet",
   lua: "lua",
   r: "r",
   dart: "dart",
@@ -71,7 +81,9 @@ const EXT_LANG: Record<string, string> = {
   proto: "protobuf",
   cmake: "cmake",
   gradle: "gradle",
-  tf: "ini",
+  tf: "terraform",
+  tfvars: "terraform",
+  hcl: "hcl",
   zig: "zig",
 };
 

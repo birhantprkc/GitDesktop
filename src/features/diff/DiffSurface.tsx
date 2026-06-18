@@ -15,6 +15,12 @@ import { DiffLanguagePicker } from "./DiffLanguagePicker";
 import { DiffPlaceholder } from "./DiffPlaceholder";
 import { diffLang } from "./diff-lang";
 import { ImageDiff, ImagePanes, type ImageRevs, imageMime } from "./ImageDiff";
+import {
+  ensureBuiltinShikiLang,
+  ensureShikiGrammars,
+  isShikiLang,
+  shikiDiffHighlighter,
+} from "./shiki-highlighter";
 import { ensureCustomLanguages } from "./syntax";
 
 /** User syntax preferences threaded into diff building. */
@@ -99,10 +105,21 @@ export function createDiffFile(
   try {
     // Register any custom grammars referenced by the user's map before we look
     // up the language (idempotent; cheap when unchanged).
-    if (prefs?.customLanguages?.length) {
-      ensureCustomLanguages(prefs.customLanguages);
+    const customLanguages = prefs?.customLanguages;
+    if (customLanguages?.length) {
+      ensureCustomLanguages(customLanguages);
     }
     const lang = diffLang(filePath, prefs?.syntaxMap);
+    // Render via Shiki (VSCode-fidelity, TextMate) when the language carries a
+    // full grammar — either a custom language that imported a `.tmLanguage.json`
+    // or a built-in Shiki language like astro that highlight.js can't express.
+    // Everything else uses highlight.js.
+    const tmLang =
+      lang && customLanguages?.find((c) => c.id === lang && c.tmGrammar);
+    if (tmLang) ensureShikiGrammars([tmLang]);
+    const useShiki = lang
+      ? (!!tmLang && isShikiLang(lang)) || ensureBuiltinShikiLang(lang)
+      : false;
     const file = DiffFile.createInstance({
       oldFile: { fileName: filePath, fileLang: lang },
       newFile: { fileName: filePath, fileLang: lang },
@@ -118,7 +135,11 @@ export function createDiffFile(
       text.length <= HIGHLIGHT_MAX_CHARS &&
       rawLines <= HIGHLIGHT_MAX_LINES
     ) {
-      file.initSyntax();
+      if (useShiki) {
+        file.initSyntax({ registerHighlighter: shikiDiffHighlighter() });
+      } else {
+        file.initSyntax();
+      }
     }
     return file;
   } catch {

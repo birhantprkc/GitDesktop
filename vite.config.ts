@@ -20,6 +20,26 @@ export default defineConfig(async () => ({
     },
   },
 
+  // Pre-bundle the Shiki diff highlighter and the grammar bundles it imports by
+  // subpath, so the dev server resolves them up front (a subpath import added
+  // after the server is running otherwise fails until a restart).
+  optimizeDeps: {
+    include: [
+      "@shikijs/langs/astro",
+      "@shikijs/langs/gdscript",
+      "@shikijs/langs/hcl",
+      "@shikijs/langs/jsonnet",
+      "@shikijs/langs/prisma",
+      "@shikijs/langs/solidity",
+      "@shikijs/langs/svelte",
+      "@shikijs/langs/terraform",
+      "@shikijs/langs/toml",
+      "@shikijs/langs/vue",
+      "@shikijs/langs/wgsl",
+      "@shikijs/langs/zig",
+    ],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

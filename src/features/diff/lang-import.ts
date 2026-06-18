@@ -26,6 +26,8 @@ export type ImportedGrammar = Partial<
 export interface ImportResult {
   kind: "tmLanguage" | "languageConfiguration";
   fields: ImportedGrammar;
+  /** The raw parsed TextMate grammar (tmLanguage only), for full Shiki rendering. */
+  grammar?: Record<string, unknown>;
 }
 
 interface TmPattern {
@@ -206,6 +208,15 @@ export function importGrammar(json: string): ImportResult | null {
   const obj = cfg as TmGrammar & LangConfig;
   const isTm = Boolean(obj.patterns || obj.repository || obj.scopeName);
   const fields = isTm ? fromTmLanguage(obj) : fromLanguageConfiguration(obj);
+  if (isTm) {
+    // Keep the whole grammar for full Shiki rendering; the extracted fields are
+    // just a fallback for when Shiki can't load it.
+    return {
+      kind: "tmLanguage",
+      fields,
+      grammar: cfg as Record<string, unknown>,
+    };
+  }
   if (Object.keys(fields).length === 0) return null;
-  return { kind: isTm ? "tmLanguage" : "languageConfiguration", fields };
+  return { kind: "languageConfiguration", fields };
 }

@@ -131,14 +131,22 @@ function CustomLanguageDialog({
         toast.error("Couldn't read a grammar from that file");
         return;
       }
-      setDraft((d) => ({ ...d, ...result.fields }));
+      setDraft((d) => ({
+        ...d,
+        ...result.fields,
+        ...(result.grammar ? { tmGrammar: result.grammar } : {}),
+      }));
       const fileName = picked.split(/[\\/]/).pop() ?? picked;
       const slot = result.kind === "tmLanguage" ? "tm" : "lc";
       setImported((p) => ({ ...p, [slot]: fileName }));
-      const filled: ImportedGrammar = result.fields;
-      toast.success(
-        `Imported ${Object.keys(filled).join(", ")} from ${fileName}`,
-      );
+      if (result.grammar) {
+        toast.success(`Loaded TextMate grammar from ${fileName}`);
+      } else {
+        const filled: ImportedGrammar = result.fields;
+        toast.success(
+          `Imported ${Object.keys(filled).join(", ")} from ${fileName}`,
+        );
+      }
     } catch (e) {
       toastError(e);
     }
@@ -199,7 +207,30 @@ function CustomLanguageDialog({
             </div>
           </div>
 
-          <div className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
+          {draft.tmGrammar && (
+            <div className="flex items-center justify-between gap-3 rounded border border-green-600/30 bg-green-600/10 px-3 py-2 text-xs">
+              <span className="text-green-700 dark:text-green-400">
+                ✓ Full TextMate grammar loaded — rendered with Shiki (VSCode
+                fidelity). The fields below are ignored while it's loaded.
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="shrink-0"
+                onClick={() => set("tmGrammar", undefined)}
+              >
+                Remove grammar
+              </Button>
+            </div>
+          )}
+
+          <div
+            className={cn(
+              "grid gap-x-8 gap-y-5 sm:grid-cols-2",
+              draft.tmGrammar && "opacity-50",
+            )}
+          >
             {/* Left: identity + the long keyword list */}
             <div className="flex flex-col gap-5">
               <div className="space-y-2">

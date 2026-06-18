@@ -48,6 +48,22 @@ const PANELS = [
 
 type PanelId = (typeof PANELS)[number]["id"];
 
+/** JSON with object keys sorted, so the dirty check is insensitive to key
+ *  order. The Tauri store round-trips nested objects (e.g. an imported
+ *  TextMate grammar) with reordered keys, which would otherwise leave the
+ *  Save bar stuck on "unsaved changes" forever. */
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, val) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(
+          Object.keys(val as Record<string, unknown>)
+            .sort()
+            .map((k) => [k, (val as Record<string, unknown>)[k]]),
+        )
+      : val,
+  );
+}
+
 /** Panels that only make sense when AI features are enabled. */
 const AI_PANELS = new Set<PanelId>(["ai", "automations"]);
 
@@ -126,7 +142,7 @@ export function SettingsScreen() {
   const dirty =
     seeded.current &&
     saved !== null &&
-    JSON.stringify(values) !== JSON.stringify(saved);
+    stableStringify(values) !== stableStringify(saved);
 
   function save(andClose: boolean) {
     closeAfterSave.current = andClose;
