@@ -578,6 +578,27 @@ export function useUnlockIssue(repo: string) {
   );
 }
 
+export function useIssueReactions(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "issue", number ?? 0, "reactions"] as const,
+    queryFn: () => api.ghIssueReactions(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+  });
+}
+
+export function useAddReaction(repo: string) {
+  return useRepoMutation(repo, (args: { subjectId: string; content: string }) =>
+    api.ghAddReaction(repo, args.subjectId, args.content),
+  );
+}
+
+export function useRemoveReaction(repo: string) {
+  return useRepoMutation(repo, (args: { subjectId: string; content: string }) =>
+    api.ghRemoveReaction(repo, args.subjectId, args.content),
+  );
+}
+
 export function useCommentIssue(repo: string) {
   return useRepoMutation(repo, (args: { number: number; body: string }) =>
     api.ghIssueComment(repo, args.number, args.body),

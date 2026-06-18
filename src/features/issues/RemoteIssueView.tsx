@@ -35,6 +35,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { ReactionBar } from "@/features/conversations/ReactionBar";
 import {
   AuthorAvatar,
   hasVisibleBody,
@@ -46,6 +47,7 @@ import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import type { LockReason, MinimizeReason } from "@/lib/git/api";
 import {
+  useAddReaction,
   useCloseIssue,
   useCommentIssue,
   useDeletePrComment,
@@ -53,9 +55,11 @@ import {
   useEditPrComment,
   useEditPrLabels,
   useIssueDetails,
+  useIssueReactions,
   useLockIssue,
   useMinimizeComment,
   usePinIssue,
+  useRemoveReaction,
   useReopenIssue,
   useRepoLabels,
   useSetIssueAssignees,
@@ -105,6 +109,9 @@ export function RemoteIssueView({
   const pinIssue = usePinIssue(repoPath);
   const lockIssue = useLockIssue(repoPath);
   const unlockIssue = useUnlockIssue(repoPath);
+  const reactions = useIssueReactions(repoPath, number);
+  const addReaction = useAddReaction(repoPath);
+  const removeReaction = useRemoveReaction(repoPath);
 
   const [composeBody, setComposeBody] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -203,6 +210,11 @@ export function RemoteIssueView({
       onSuccess: () => toast.success("Comment shown"),
       onError,
     });
+  }
+
+  function toggleReaction(subjectId: string, content: string, active: boolean) {
+    const m = active ? removeReaction : addReaction;
+    m.mutate({ subjectId, content }, { onError });
   }
 
   function toggleDraftLabel(name: string, on: boolean) {
@@ -503,6 +515,12 @@ export function RemoteIssueView({
                 No description provided.
               </p>
             )}
+            <ReactionBar
+              reactions={reactions.data?.body ?? []}
+              onToggle={(content, active) =>
+                toggleReaction(issue.id, content, active)
+              }
+            />
           </div>
           {comments.map((c) => (
             <Thread
@@ -523,6 +541,10 @@ export function RemoteIssueView({
                   : (classifier) => hideComment(c.id, classifier)
               }
               onUnhide={c.isMinimized ? () => unhideComment(c.id) : undefined}
+              reactions={reactions.data?.comments[c.id]}
+              onToggleReaction={(content, active) =>
+                toggleReaction(c.id, content, active)
+              }
             />
           ))}
           {comments.length === 0 && (

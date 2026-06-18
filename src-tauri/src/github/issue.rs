@@ -14,6 +14,44 @@ pub struct Milestone {
     pub title: String,
 }
 
+/// One emoji reaction tally on a reactable subject (issue body or comment).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reaction {
+    /// GitHub ReactionContent enum value (THUMBS_UP, HEART, ROCKET, …).
+    pub content: String,
+    pub count: u64,
+    /// Whether the signed-in user has this reaction (drives the toggle).
+    pub viewer_reacted: bool,
+}
+
+fn map_reaction_groups(groups: Option<&serde_json::Value>) -> Vec<Reaction> {
+    groups
+        .and_then(|g| g.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|g| {
+                    let count = g
+                        .pointer("/reactors/totalCount")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    if count == 0 {
+                        return None;
+                    }
+                    Some(Reaction {
+                        content: g.get("content")?.as_str()?.to_string(),
+                        count,
+                        viewer_reacted: g
+                            .get("viewerHasReacted")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 // Issues mirror the Pull Request feature: `gh issue` covers the REST surface
 // 1:1 (and `gh issue list` already excludes PRs), and the comment node ids it
 // returns let the shared GraphQL comment/label mutations work unchanged.
@@ -488,6 +526,151 @@ pub async fn gh_issue_lock(
 pub async fn gh_issue_unlock(repo_path: String, number: u64) -> AppResult<()> {
     let n = number.to_string();
     run_gh(Some(&repo_path), &["issue", "unlock", &n], GH_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+/// Reactions for an issue's body + each comment (keyed by comment node id).
+/// Kept separate from `gh_issue_view` so it loads in parallel and adds no
+/// latency to the conversation — `viewerHasReacted` requires GraphQL, which the
+/// `gh issue view` CLI JSON doesn't expose.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueReactions {
+    pub body: Vec<Reaction>,
+    pub comments: std::collections::HashMap<String, Vec<Reaction>>,
+}
+
+const REACTIONS_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ issue(number:$number){ reactionGroups{ content viewerHasReacted reactors{ totalCount } } comments(first:100){ nodes{ id reactionGroups{ content viewerHasReacted reactors{ totalCount } } } } } } }";
+
+#[tauri::command]
+pub async fn gh_issue_reactions(
+    repo_path: String,
+    number: u64,
+) -> AppResult<IssueReactions> {
+    // GraphQL needs explicit owner/name (no {owner}/{repo} substitution).
+    let owner_out = run_gh(
+        Some(&repo_path),
+        &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let name_with_owner = owner_out.stdout_lossy().trim().to_string();
+    let Some((owner, name)) = name_with_owner.split_once('/') else {
+        return Err(AppError::Gh(
+            "could not determine the repository owner".into(),
+        ));
+    };
+
+    // owner/name/number go in as typed variables (no string interpolation).
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-F",
+            &format!("owner={owner}"),
+            "-F",
+            &format!("name={name}"),
+            "-F",
+            &format!("number={number}"),
+            "-f",
+            &format!("query={REACTIONS_QUERY}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse reactions: {e}")))?;
+    let issue = value.pointer("/data/repository/issue");
+
+    let body = map_reaction_groups(issue.and_then(|i| i.get("reactionGroups")));
+    let mut comments = std::collections::HashMap::new();
+    if let Some(nodes) = issue
+        .and_then(|i| i.pointer("/comments/nodes"))
+        .and_then(|n| n.as_array())
+    {
+        for node in nodes {
+            if let Some(id) = node.get("id").and_then(serde_json::Value::as_str) {
+                let reactions = map_reaction_groups(node.get("reactionGroups"));
+                if !reactions.is_empty() {
+                    comments.insert(id.to_string(), reactions);
+                }
+            }
+        }
+    }
+
+    Ok(IssueReactions { body, comments })
+}
+
+fn validate_reaction_content(content: &str) -> AppResult<()> {
+    if matches!(
+        content,
+        "THUMBS_UP"
+            | "THUMBS_DOWN"
+            | "LAUGH"
+            | "HOORAY"
+            | "CONFUSED"
+            | "HEART"
+            | "ROCKET"
+            | "EYES"
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::InvalidArgument(format!(
+            "unknown reaction: {content}"
+        )))
+    }
+}
+
+/// Adds the viewer's reaction to any reactable subject (issue/PR body or
+/// comment) by its GraphQL node id. Generic — reusable for PRs later.
+#[tauri::command]
+pub async fn gh_add_reaction(
+    repo_path: String,
+    subject_id: String,
+    content: String,
+) -> AppResult<()> {
+    validate_reaction_content(&content)?;
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id:ID!,$content:ReactionContent!){ addReaction(input:{subjectId:$id,content:$content}){ clientMutationId } }",
+            "-f",
+            &format!("id={subject_id}"),
+            "-f",
+            &format!("content={content}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn gh_remove_reaction(
+    repo_path: String,
+    subject_id: String,
+    content: String,
+) -> AppResult<()> {
+    validate_reaction_content(&content)?;
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id:ID!,$content:ReactionContent!){ removeReaction(input:{subjectId:$id,content:$content}){ clientMutationId } }",
+            "-f",
+            &format!("id={subject_id}"),
+            "-f",
+            &format!("content={content}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
     Ok(())
 }
 

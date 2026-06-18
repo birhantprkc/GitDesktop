@@ -482,6 +482,20 @@ export interface Milestone {
   title: string;
 }
 
+export interface Reaction {
+  /** GitHub ReactionContent enum value (THUMBS_UP, HEART, ROCKET, …). */
+  content: string;
+  count: number;
+  /** Whether the signed-in user has this reaction (drives the toggle). */
+  viewerReacted: boolean;
+}
+
+export interface IssueReactions {
+  body: Reaction[];
+  /** Reactions per comment, keyed by the comment's GraphQL node id. */
+  comments: Record<string, Reaction[]>;
+}
+
 export interface IssueDetails {
   /** GraphQL node id, used by the label mutations. */
   id: string;

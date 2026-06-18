@@ -17,8 +17,9 @@ import { Markdown } from "@/components/ui/markdown";
 import { Textarea } from "@/components/ui/textarea";
 import { copyText } from "@/lib/clipboard";
 import type { MinimizeReason } from "@/lib/git/api";
-import type { PrThreadOut, RepoLabel } from "@/lib/git/types";
+import type { PrThreadOut, Reaction, RepoLabel } from "@/lib/git/types";
 import { formatRelativeTime } from "@/lib/time";
+import { ReactionBar } from "./ReactionBar";
 
 /**
  * Shared conversation primitives for any GitHub thread surface (pull requests,
@@ -82,6 +83,8 @@ export function Thread({
   onDelete,
   onHide,
   onUnhide,
+  reactions,
+  onToggleReaction,
 }: {
   thread: PrThreadOut;
   onQuote?: () => void;
@@ -93,6 +96,10 @@ export function Thread({
   onHide?: (classifier: MinimizeReason) => void;
   /** Unhide a previously hidden comment. */
   onUnhide?: () => void;
+  /** Current reactions on this comment (only used when onToggleReaction set). */
+  reactions?: Reaction[];
+  /** Present to enable the reaction bar; toggles the viewer's reaction. */
+  onToggleReaction?: (content: string, active: boolean) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -235,6 +242,9 @@ export function Thread({
           )}
           {thread.body.trim() && <Markdown>{thread.body}</Markdown>}
         </>
+      )}
+      {onToggleReaction && !editing && (
+        <ReactionBar reactions={reactions ?? []} onToggle={onToggleReaction} />
       )}
     </div>
   );

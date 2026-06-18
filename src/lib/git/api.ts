@@ -27,6 +27,7 @@ import type {
   HooksInfo,
   IssueDetails,
   IssueInfo,
+  IssueReactions,
   Milestone,
   PrDetails,
   PrInfo,
@@ -637,6 +638,21 @@ export const ghIssueLock = (
 
 export const ghIssueUnlock = (repoPath: string, number: number) =>
   invoke<void>("gh_issue_unlock", { repoPath, number });
+
+export const ghIssueReactions = (repoPath: string, number: number) =>
+  invoke<IssueReactions>("gh_issue_reactions", { repoPath, number });
+
+export const ghAddReaction = (
+  repoPath: string,
+  subjectId: string,
+  content: string,
+) => invoke<void>("gh_add_reaction", { repoPath, subjectId, content });
+
+export const ghRemoveReaction = (
+  repoPath: string,
+  subjectId: string,
+  content: string,
+) => invoke<void>("gh_remove_reaction", { repoPath, subjectId, content });
 
 /** The repo's issue templates (frontmatter stripped); empty when it has none. */
 export const readIssueTemplates = (repoPath: string) =>
