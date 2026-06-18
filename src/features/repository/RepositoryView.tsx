@@ -19,6 +19,7 @@ import { DiffViewer } from "@/features/diff/DiffViewer";
 import { CommitDetailView } from "@/features/history/CommitDetailView";
 import { HistoryPanel } from "@/features/history/HistoryPanel";
 import { IssuesPanel } from "@/features/issues/IssuesPanel";
+import { LocalIssueView } from "@/features/issues/LocalIssueView";
 import { RemoteIssueView } from "@/features/issues/RemoteIssueView";
 import { LocalPrView } from "@/features/pulls/LocalPrView";
 import { PullRequestsPanel } from "@/features/pulls/PullRequestsPanel";
@@ -223,6 +224,8 @@ export function RepositoryView() {
                 repoPath={repoPath}
                 number={Number(deferredIssue.id)}
               />
+            ) : deferredIssue?.kind === "local" ? (
+              <LocalIssueView repoPath={repoPath} id={deferredIssue.id} />
             ) : (
               <DiffPlaceholder message="Select an issue" />
             )}

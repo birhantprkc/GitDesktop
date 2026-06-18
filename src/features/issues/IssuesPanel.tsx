@@ -1,5 +1,6 @@
 import { Popover } from "@base-ui/react/popover";
 import {
+  CaretDownIcon,
   CheckCircleIcon,
   CircleDashedIcon,
   FunnelIcon,
@@ -8,6 +9,12 @@ import {
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,11 +27,14 @@ import {
   usePrefetchIssue,
 } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import type { LocalIssue } from "@/lib/issues/local";
+import { useLocalIssues } from "@/lib/issues/queries";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { CreateIssueDialog } from "./CreateIssueDialog";
+import { CreateLocalIssueDialog } from "./CreateLocalIssueDialog";
 
 export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
@@ -42,21 +52,46 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set());
   const filterRef = useRef<HTMLInputElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createLocalOpen, setCreateLocalOpen] = useState(false);
+  const localIssues = useLocalIssues(repoPath);
 
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
   useHotkeyAction("create-issue", () => setCreateOpen(true), ghReady);
 
   const issues = issueList.data ?? [];
+  const stateLocal = (localIssues.data ?? []).filter((i) =>
+    stateFilter === "open" ? i.status === "open" : i.status !== "open",
+  );
 
   const authors = [
     ...new Set(issues.flatMap((i) => (i.author ? [i.author.login] : []))),
   ].sort();
   const labels = [
-    ...new Set(issues.flatMap((i) => i.labels.map((l) => l.name))),
+    ...new Set([
+      ...issues.flatMap((i) => i.labels.map((l) => l.name)),
+      ...stateLocal.flatMap((i) => i.labels),
+    ]),
   ].sort();
 
   const query = filterText.trim().toLowerCase();
 
+  function matchesLocal(issue: LocalIssue): boolean {
+    if (
+      query &&
+      !issue.title.toLowerCase().includes(query) &&
+      !issue.labels.some((l) => l.toLowerCase().includes(query))
+    ) {
+      return false;
+    }
+    // Local issues have no GitHub author — an author filter excludes them.
+    if (authorFilter.size > 0) return false;
+    if (labelFilter.size > 0 && !issue.labels.some((l) => labelFilter.has(l))) {
+      return false;
+    }
+    return true;
+  }
+
+  const visibleLocal = stateLocal.filter(matchesLocal);
   const visible = issues.filter((issue) => {
     const author = issue.author?.login ?? "";
     if (
@@ -80,15 +115,16 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
 
   const activeFilterCount = authorFilter.size + labelFilter.size;
 
-  const navTargets = visible.map((i) => ({
-    kind: "remote" as const,
-    id: String(i.number),
-  }));
+  // Arrow keys walk the visible rows, local section first like the list.
+  const navTargets = [
+    ...visibleLocal.map((i) => ({ kind: "local" as const, id: i.id })),
+    ...visible.map((i) => ({ kind: "remote" as const, id: String(i.number) })),
+  ];
 
   const onListKeyDown = listKeyboardNav({
     items: navTargets,
     activeIndex: navTargets.findIndex(
-      (t) => selectedIssue?.kind === "remote" && t.id === selectedIssue.id,
+      (t) => t.kind === selectedIssue?.kind && t.id === selectedIssue.id,
     ),
     onActivate: (target) => selectIssue(target),
     rowKey: (target) => `${target.kind}:${target.id}`,
@@ -122,21 +158,33 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
             {s === "open" ? "Open" : "Closed"}
           </Button>
         ))}
-        <Button
-          variant="ghost"
-          size="xs"
-          className="ml-auto"
-          disabled={!ghReady}
-          title={
-            ghReady
-              ? undefined
-              : "Connect this repository to GitHub to open an issue."
-          }
-          onClick={() => setCreateOpen(true)}
-        >
-          <PlusIcon data-icon="inline-start" />
-          New
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button variant="ghost" size="xs" className="ml-auto">
+                <PlusIcon data-icon="inline-start" />
+                New
+                <CaretDownIcon data-icon="inline-end" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="min-w-56">
+            <DropdownMenuItem
+              disabled={!ghReady}
+              title={
+                ghReady
+                  ? undefined
+                  : "Connect this repository to GitHub to open an issue."
+              }
+              onClick={() => setCreateOpen(true)}
+            >
+              Issue on GitHub…
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setCreateLocalOpen(true)}>
+              Local issue…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Popover.Root>
           <Popover.Trigger
             render={
@@ -237,6 +285,44 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div onKeyDown={onListKeyDown}>
+          <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground">Local</p>
+          {visibleLocal.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
+              {stateLocal.length > 0
+                ? "No local issues match the filter."
+                : `No ${stateFilter} local issues.`}
+            </p>
+          ) : (
+            visibleLocal.map((issue) => {
+              const active =
+                selectedIssue?.kind === "local" &&
+                selectedIssue.id === issue.id;
+              return (
+                <button
+                  type="button"
+                  key={issue.id}
+                  data-row={`local:${issue.id}`}
+                  className={cn(
+                    "block w-full border-b px-3 py-2 text-left",
+                    active
+                      ? "bg-accent text-accent-foreground"
+                      : "hover:bg-muted/60",
+                  )}
+                  onClick={() => selectIssue({ kind: "local", id: issue.id })}
+                >
+                  <p className="flex items-center gap-1.5 text-xs font-medium">
+                    <RowIcon className="size-3 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{issue.title}</span>
+                  </p>
+                  <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
+                    local · {formatRelativeTime(issue.createdAt)}
+                  </p>
+                </button>
+              );
+            })
+          )}
+
+          <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">GitHub</p>
           {gh.isPending ? (
             <div className="space-y-2 p-3">
               <Skeleton className="h-9 w-full" />
@@ -298,6 +384,11 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={createOpen}
         onOpenChange={setCreateOpen}
+      />
+      <CreateLocalIssueDialog
+        repoPath={repoPath}
+        open={createLocalOpen}
+        onOpenChange={setCreateLocalOpen}
       />
     </div>
   );
