@@ -477,6 +477,11 @@ export interface IssueInfo {
   labels: { name: string }[];
 }
 
+export interface Milestone {
+  number: number;
+  title: string;
+}
+
 export interface IssueDetails {
   /** GraphQL node id, used by the label mutations. */
   id: string;
@@ -488,6 +493,7 @@ export interface IssueDetails {
   createdAt: string;
   url: string;
   assignees: string[];
+  milestone: Milestone | null;
   /** Conversation comments (shared shape with PRs). */
   comments: PrThreadOut[];
   labels: RepoLabel[];

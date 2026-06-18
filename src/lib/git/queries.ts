@@ -501,6 +501,87 @@ export function usePrefetchIssue(repo: string) {
   );
 }
 
+export function useCreateIssue(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      title: string;
+      body: string;
+      labels: string[];
+      assignees: string[];
+      milestone: number | null;
+    }) =>
+      api.ghIssueCreate(
+        repo,
+        args.title,
+        args.body,
+        args.labels,
+        args.assignees,
+        args.milestone,
+      ),
+  );
+}
+
+export function useAssignableUsers(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "assignable-users"] as const,
+    queryFn: () => api.ghAssignableUsers(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useMilestones(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "milestones"] as const,
+    queryFn: () => api.ghMilestones(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useSetIssueAssignees(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { number: number; assignees: string[] }) =>
+      api.ghIssueSetAssignees(repo, args.number, args.assignees),
+  );
+}
+
+export function useSetIssueMilestone(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { number: number; milestone: number | null }) =>
+      api.ghIssueSetMilestone(repo, args.number, args.milestone),
+  );
+}
+
+export function useCommentIssue(repo: string) {
+  return useRepoMutation(repo, (args: { number: number; body: string }) =>
+    api.ghIssueComment(repo, args.number, args.body),
+  );
+}
+
+export function useCloseIssue(repo: string) {
+  return useRepoMutation(repo, (args: { number: number; reason: string }) =>
+    api.ghIssueClose(repo, args.number, args.reason),
+  );
+}
+
+export function useReopenIssue(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.ghIssueReopen(repo, number),
+  );
+}
+
+export function useEditIssue(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { number: number; title: string; body: string }) =>
+      api.ghIssueEdit(repo, args.number, args.title, args.body),
+  );
+}
+
 export function useGhAccounts() {
   return useQuery({
     queryKey: ["gh-accounts"] as const,

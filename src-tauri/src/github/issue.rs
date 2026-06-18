@@ -1,8 +1,15 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
-use crate::github::pr::{PrAuthor, PrListLabel, PrThreadOut, RepoLabel};
-use crate::github::runner::{run_gh, GH_TIMEOUT};
+use crate::github::pr::{PrAuthor, PrListLabel, PrRef, PrThreadOut, RepoLabel};
+use crate::github::runner::{run_gh, run_gh_input, GH_NETWORK_TIMEOUT, GH_TIMEOUT};
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Milestone {
+    pub number: u64,
+    pub title: String,
+}
 
 // Issues mirror the Pull Request feature: `gh issue` covers the REST surface
 // 1:1 (and `gh issue list` already excludes PRs), and the comment node ids it
@@ -87,6 +94,8 @@ struct RawIssue {
     #[serde(default)]
     assignees: Vec<PrAuthor>,
     #[serde(default)]
+    milestone: Option<Milestone>,
+    #[serde(default)]
     comments: Vec<RawIssueComment>,
     #[serde(default)]
     labels: Vec<RepoLabel>,
@@ -105,12 +114,13 @@ pub struct IssueDetails {
     pub created_at: String,
     pub url: String,
     pub assignees: Vec<String>,
+    pub milestone: Option<Milestone>,
     pub comments: Vec<PrThreadOut>,
     pub labels: Vec<RepoLabel>,
 }
 
 const ISSUE_VIEW_FIELDS: &str =
-    "id,number,title,body,author,state,createdAt,url,assignees,comments,labels";
+    "id,number,title,body,author,state,createdAt,url,assignees,milestone,comments,labels";
 
 /// Full details for one issue's read view: body, assignees, labels and the
 /// conversation comments (with node ids for editing/hiding).
@@ -135,6 +145,7 @@ pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDet
         created_at: raw.created_at,
         url: raw.url,
         assignees: raw.assignees.into_iter().map(|a| a.login).collect(),
+        milestone: raw.milestone,
         comments: raw
             .comments
             .into_iter()
@@ -152,4 +163,249 @@ pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDet
             .collect(),
         labels: raw.labels,
     })
+}
+
+#[derive(Deserialize)]
+struct CreatedIssue {
+    number: u64,
+    html_url: String,
+}
+
+/// Creates an issue via the REST API so labels/assignees (arrays) and milestone
+/// (by number) go in one call and the response carries the new number + URL
+/// directly. `labels` and `assignees` are applied by name/login (must exist).
+#[tauri::command]
+pub async fn gh_issue_create(
+    repo_path: String,
+    title: String,
+    body: String,
+    labels: Vec<String>,
+    assignees: Vec<String>,
+    milestone: Option<u64>,
+) -> AppResult<PrRef> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "an issue title is required".into(),
+        ));
+    }
+    let mut payload = serde_json::json!({
+        "title": title,
+        "body": body,
+        "labels": labels,
+        "assignees": assignees,
+    });
+    if let Some(m) = milestone {
+        payload["milestone"] = serde_json::json!(m);
+    }
+    let input = serde_json::to_string(&payload)
+        .map_err(|e| AppError::Gh(format!("could not encode issue: {e}")))?;
+    let out = run_gh_input(
+        Some(&repo_path),
+        &[
+            "api",
+            "--method",
+            "POST",
+            "repos/{owner}/{repo}/issues",
+            "--input",
+            "-",
+        ],
+        &input,
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let created: CreatedIssue = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse created issue: {e}")))?;
+    Ok(PrRef {
+        number: created.number,
+        url: created.html_url,
+    })
+}
+
+/// Logins that can be assigned to issues/PRs in this repo (collaborators).
+#[tauri::command]
+pub async fn gh_assignable_users(repo_path: String) -> AppResult<Vec<String>> {
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "repos/{owner}/{repo}/assignees",
+            "--jq",
+            "[.[].login]",
+        ],
+        GH_TIMEOUT,
+    )
+    .await?;
+    serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse assignable users: {e}")))
+}
+
+/// Open milestones for the milestone picker.
+#[tauri::command]
+pub async fn gh_milestones(repo_path: String) -> AppResult<Vec<Milestone>> {
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "repos/{owner}/{repo}/milestones?state=open&per_page=100",
+            "--jq",
+            "[.[] | {number, title}]",
+        ],
+        GH_TIMEOUT,
+    )
+    .await?;
+    serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse milestones: {e}")))
+}
+
+/// Replaces an issue's assignees (REST PATCH sends the full desired set).
+#[tauri::command]
+pub async fn gh_issue_set_assignees(
+    repo_path: String,
+    number: u64,
+    assignees: Vec<String>,
+) -> AppResult<()> {
+    let input = serde_json::to_string(&serde_json::json!({ "assignees": assignees }))
+        .map_err(|e| AppError::Gh(format!("could not encode assignees: {e}")))?;
+    run_gh_input(
+        Some(&repo_path),
+        &[
+            "api",
+            "--method",
+            "PATCH",
+            &format!("repos/{{owner}}/{{repo}}/issues/{number}"),
+            "--input",
+            "-",
+        ],
+        &input,
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Sets (or, with `None`, clears) an issue's milestone by milestone number.
+#[tauri::command]
+pub async fn gh_issue_set_milestone(
+    repo_path: String,
+    number: u64,
+    milestone: Option<u64>,
+) -> AppResult<()> {
+    let milestone_value = match milestone {
+        Some(m) => serde_json::json!(m),
+        None => serde_json::Value::Null,
+    };
+    let input =
+        serde_json::to_string(&serde_json::json!({ "milestone": milestone_value }))
+            .map_err(|e| AppError::Gh(format!("could not encode milestone: {e}")))?;
+    run_gh_input(
+        Some(&repo_path),
+        &[
+            "api",
+            "--method",
+            "PATCH",
+            &format!("repos/{{owner}}/{{repo}}/issues/{number}"),
+            "--input",
+            "-",
+        ],
+        &input,
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Adds a standalone comment to the issue conversation.
+#[tauri::command]
+pub async fn gh_issue_comment(
+    repo_path: String,
+    number: u64,
+    body: String,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    let n = number.to_string();
+    run_gh(
+        Some(&repo_path),
+        &["issue", "comment", &n, "--body", &body],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Closes an issue. `reason` is "completed" or "not_planned" (GitHub's two
+/// close reasons); empty defaults to completed.
+#[tauri::command]
+pub async fn gh_issue_close(
+    repo_path: String,
+    number: u64,
+    reason: String,
+) -> AppResult<()> {
+    let n = number.to_string();
+    let reason = match reason.as_str() {
+        "" | "completed" => "completed",
+        "not_planned" => "not_planned",
+        _ => {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown close reason: {reason}"
+            )));
+        }
+    };
+    run_gh(
+        Some(&repo_path),
+        &["issue", "close", &n, "--reason", reason],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Reopens a closed issue.
+#[tauri::command]
+pub async fn gh_issue_reopen(repo_path: String, number: u64) -> AppResult<()> {
+    let n = number.to_string();
+    run_gh(
+        Some(&repo_path),
+        &["issue", "reopen", &n],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+// `gh issue edit` selects the sunset Projects-classic field on older gh (same
+// bug as `gh pr edit`), so title/body edits go through the REST API instead.
+
+/// Updates an issue's title and body via the REST API.
+#[tauri::command]
+pub async fn gh_issue_edit(
+    repo_path: String,
+    number: u64,
+    title: String,
+    body: String,
+) -> AppResult<()> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "an issue title is required".into(),
+        ));
+    }
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "--method",
+            "PATCH",
+            &format!("repos/{{owner}}/{{repo}}/issues/{number}"),
+            "-f",
+            &format!("title={title}"),
+            "-f",
+            &format!("body={body}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
 }

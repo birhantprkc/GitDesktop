@@ -27,6 +27,7 @@ import type {
   HooksInfo,
   IssueDetails,
   IssueInfo,
+  Milestone,
   PrDetails,
   PrInfo,
   PrPollInfo,
@@ -584,6 +585,63 @@ export const ghIssueList = (repoPath: string, state: IssueStateFilter) =>
 
 export const ghIssueView = (repoPath: string, number: number) =>
   invoke<IssueDetails>("gh_issue_view", { repoPath, number });
+
+export const ghIssueCreate = (
+  repoPath: string,
+  title: string,
+  body: string,
+  labels: string[],
+  assignees: string[],
+  milestone: number | null,
+) =>
+  invoke<PrRef>("gh_issue_create", {
+    repoPath,
+    title,
+    body,
+    labels,
+    assignees,
+    milestone,
+  });
+
+export const ghAssignableUsers = (repoPath: string) =>
+  invoke<string[]>("gh_assignable_users", { repoPath });
+
+export const ghMilestones = (repoPath: string) =>
+  invoke<Milestone[]>("gh_milestones", { repoPath });
+
+export const ghIssueSetAssignees = (
+  repoPath: string,
+  number: number,
+  assignees: string[],
+) => invoke<void>("gh_issue_set_assignees", { repoPath, number, assignees });
+
+export const ghIssueSetMilestone = (
+  repoPath: string,
+  number: number,
+  milestone: number | null,
+) => invoke<void>("gh_issue_set_milestone", { repoPath, number, milestone });
+
+export const ghIssueComment = (
+  repoPath: string,
+  number: number,
+  body: string,
+) => invoke<void>("gh_issue_comment", { repoPath, number, body });
+
+export const ghIssueClose = (
+  repoPath: string,
+  number: number,
+  reason: string,
+) => invoke<void>("gh_issue_close", { repoPath, number, reason });
+
+export const ghIssueReopen = (repoPath: string, number: number) =>
+  invoke<void>("gh_issue_reopen", { repoPath, number });
+
+export const ghIssueEdit = (
+  repoPath: string,
+  number: number,
+  title: string,
+  body: string,
+) => invoke<void>("gh_issue_edit", { repoPath, number, title, body });
 
 export const ghPrDiff = (repoPath: string, number: number) =>
   invoke<string>("gh_pr_diff", { repoPath, number });

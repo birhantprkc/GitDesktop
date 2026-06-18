@@ -3,6 +3,7 @@ import {
   CheckCircleIcon,
   CircleDashedIcon,
   FunnelIcon,
+  PlusIcon,
 } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { CreateIssueDialog } from "./CreateIssueDialog";
 
 export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
@@ -39,8 +41,10 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
   const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set());
   const filterRef = useRef<HTMLInputElement>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
+  useHotkeyAction("create-issue", () => setCreateOpen(true), ghReady);
 
   const issues = issueList.data ?? [];
 
@@ -118,6 +122,21 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
             {s === "open" ? "Open" : "Closed"}
           </Button>
         ))}
+        <Button
+          variant="ghost"
+          size="xs"
+          className="ml-auto"
+          disabled={!ghReady}
+          title={
+            ghReady
+              ? undefined
+              : "Connect this repository to GitHub to open an issue."
+          }
+          onClick={() => setCreateOpen(true)}
+        >
+          <PlusIcon data-icon="inline-start" />
+          New
+        </Button>
         <Popover.Root>
           <Popover.Trigger
             render={
@@ -129,7 +148,7 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
                     ? `Filter by author or label (${activeFilterCount} active)`
                     : "Filter by author or label"
                 }
-                className="relative ml-auto"
+                className="relative"
               />
             }
           >
@@ -274,6 +293,12 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
           )}
         </div>
       </ScrollArea>
+
+      <CreateIssueDialog
+        repoPath={repoPath}
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+      />
     </div>
   );
 }
