@@ -5,10 +5,11 @@ import {
   CaretDownIcon,
   CheckIcon,
   GitBranchIcon,
+  GitPullRequestIcon,
   SparkleIcon,
 } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -55,7 +56,9 @@ import {
   useDefaultBranch,
   useDeleteBranch,
   useDiscardAll,
+  useGhStatus,
   useMergeBranch,
+  usePrList,
   useRebaseBranch,
   useRenameBranch,
   useRepoStatus,
@@ -68,10 +71,12 @@ import {
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import type { Branch } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { useLocalPrs } from "@/lib/pulls/queries";
 import { useAiConfigured, useAiEnabled } from "@/lib/settings/queries";
-import { useUiStore } from "@/lib/stores/ui";
+import { type SelectedPr, useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 import { StashesDialog } from "./StashesDialog";
 import { useGenerateBranchName } from "./useGenerateBranchName";
 
@@ -87,6 +92,38 @@ const PICKER_COPY: Record<
     action: "Squash and merge",
   },
   rebase: { title: (c) => `Rebase ${c} onto`, action: "Rebase" },
+};
+
+type PrState = "open" | "draft" | "merged" | "closed";
+
+interface BranchPr {
+  state: PrState;
+  /** "#123" for a remote PR, "local" for a local-only one. */
+  label: string;
+  select: SelectedPr;
+}
+
+// When a branch has several PRs, the most actionable state wins.
+const PR_RANK: Record<PrState, number> = {
+  open: 3,
+  draft: 3,
+  merged: 2,
+  closed: 1,
+};
+
+// GitHub's PR-state palette, in the app's `text-…-600 dark:text-…-400` idiom.
+const PR_TONE: Record<PrState, string> = {
+  open: "text-green-600 dark:text-green-400",
+  draft: "text-muted-foreground",
+  merged: "text-purple-600 dark:text-purple-400",
+  closed: "text-red-600 dark:text-red-400",
+};
+
+const PR_STATE_LABEL: Record<PrState, string> = {
+  open: "Open",
+  draft: "Draft",
+  merged: "Merged",
+  closed: "Closed",
 };
 
 function MenuRow({
@@ -177,6 +214,65 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const divByName = new Map(
     (divergence.data ?? []).map((d) => [d.name, d] as const),
   );
+
+  // Per-branch PR badge. Remote PRs (open + closed, the latter carrying merged)
+  // and local PRs, fetched only while the menu is open and the repo has a
+  // GitHub remote — mirrors the divergence gate above.
+  const gh = useGhStatus(repoPath);
+  const canGh = Boolean(
+    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
+  );
+  const openPrs = usePrList(repoPath, canGh && open, "open");
+  const closedPrs = usePrList(repoPath, canGh && open, "closed");
+  const localPrs = useLocalPrs(repoPath);
+  const selectPr = useUiStore((s) => s.selectPr);
+  const setRepoTab = useUiStore((s) => s.setRepoTab);
+
+  const prByBranch = useMemo(() => {
+    const map = new Map<string, BranchPr>();
+    const consider = (branchName: string, cand: BranchPr) => {
+      const cur = map.get(branchName);
+      if (!cur || PR_RANK[cand.state] > PR_RANK[cur.state]) {
+        map.set(branchName, cand);
+      }
+    };
+    // Remote PRs first, so they win ties against a local PR of equal state.
+    for (const pr of [...(openPrs.data ?? []), ...(closedPrs.data ?? [])]) {
+      const state: PrState =
+        pr.isDraft && pr.state === "OPEN"
+          ? "draft"
+          : pr.state === "MERGED"
+            ? "merged"
+            : pr.state === "CLOSED"
+              ? "closed"
+              : "open";
+      consider(pr.headRefName, {
+        state,
+        label: `#${pr.number}`,
+        select: { kind: "remote", id: String(pr.number) },
+      });
+    }
+    for (const pr of localPrs.data ?? []) {
+      const state: PrState =
+        pr.status === "merged"
+          ? "merged"
+          : pr.status === "closed"
+            ? "closed"
+            : "open";
+      consider(pr.head, {
+        state,
+        label: "local",
+        select: { kind: "local", id: pr.id },
+      });
+    }
+    return map;
+  }, [openPrs.data, closedPrs.data, localPrs.data]);
+
+  const openPr = (select: SelectedPr) => {
+    selectPr(select);
+    setRepoTab("pulls");
+    setOpen(false);
+  };
   // Default branch pinned on top, then the rest by most recently committed.
   const sortedBranches = [...allBranches].sort((a, b) => {
     if (a.name === defaultName) return -1;
@@ -473,6 +569,40 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   </span>
                 )}
               </span>
+              {(() => {
+                const pr = prByBranch.get(branch.name);
+                if (!pr) return null;
+                const isLocal = pr.select.kind === "local";
+                return (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    title={
+                      isLocal
+                        ? `${PR_STATE_LABEL[pr.state]} local pull request — open in Pull Requests`
+                        : `${PR_STATE_LABEL[pr.state]} pull request ${pr.label} — open in Pull Requests`
+                    }
+                    className={cn(
+                      "flex shrink-0 items-center gap-0.5 text-[11px] tabular-nums hover:underline",
+                      PR_TONE[pr.state],
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openPr(pr.select);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openPr(pr.select);
+                      }
+                    }}
+                  >
+                    <GitPullRequestIcon className="size-3" weight="bold" />
+                    {pr.label}
+                  </span>
+                );
+              })()}
               {div && (div.ahead > 0 || div.behind > 0) && (
                 <span
                   className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground tabular-nums"
@@ -580,7 +710,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             sideOffset={4}
             className="isolate z-50"
           >
-            <Popover.Popup className="w-96 rounded-none bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10">
+            <Popover.Popup className="w-108 rounded-none bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10">
               <div className="border-b p-2">
                 <Input
                   value={branchFilter}
