@@ -6,6 +6,7 @@ import {
   CubeIcon,
   DotsThreeVerticalIcon,
   FolderOpenIcon,
+  GearSixIcon,
   GitForkIcon,
   LightningIcon,
   LinkIcon,
@@ -41,6 +42,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { RepoAutomationsDialog } from "@/features/automations/RepoAutomationsDialog";
 import { BranchRulesDialog } from "@/features/branch-rules/BranchRulesDialog";
 import { HooksDialog } from "@/features/hooks/HooksDialog";
+import { RepoSettingsDialog } from "@/features/repo-settings/RepoSettingsDialog";
 import { copyText } from "@/lib/clipboard";
 import {
   ghRepoUrl,
@@ -51,6 +53,7 @@ import {
 import {
   useForkRepo,
   useGhStatus,
+  useRepoAdmin,
   useRepoStarStatus,
   useSetRepoStar,
   useSubmodules,
@@ -71,6 +74,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const repoName = useUiStore((s) => s.repoName);
   const fork = useForkRepo(repoPath);
   const [automationsOpen, setAutomationsOpen] = useState(false);
+  const [repoSettingsOpen, setRepoSettingsOpen] = useState(false);
   const [branchRulesOpen, setBranchRulesOpen] = useState(false);
   const [hooksOpen, setHooksOpen] = useState(false);
   const [submodulesOpen, setSubmodulesOpen] = useState(false);
@@ -101,6 +105,8 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const starStatus = useRepoStarStatus(repoPath, canGh);
   const setStar = useSetRepoStar(repoPath);
   const starred = starStatus.data ?? false;
+  // Repo settings (webhooks) are admin-only; the menu item hides for everyone else.
+  const admin = useRepoAdmin(repoPath, canGh);
   const editor = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
@@ -224,6 +230,12 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <LightningIcon />
           Automations…
         </DropdownMenuItem>
+        {canGh && admin.data && (
+          <DropdownMenuItem onClick={() => setRepoSettingsOpen(true)}>
+            <GearSixIcon />
+            Repository settings…
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={() => setBranchRulesOpen(true)}>
           <ShieldCheckIcon />
           Branch rules…
@@ -264,6 +276,11 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={automationsOpen}
         onOpenChange={setAutomationsOpen}
+      />
+      <RepoSettingsDialog
+        repoPath={repoPath}
+        open={repoSettingsOpen}
+        onOpenChange={setRepoSettingsOpen}
       />
       <BranchRulesDialog
         repoPath={repoPath}

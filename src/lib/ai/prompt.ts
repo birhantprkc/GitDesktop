@@ -347,3 +347,54 @@ export function extractBranchName(raw: string): string {
       .find((l) => l.length > 0) ?? "";
   return line.replace(/^[`'"]+|[`'"]+$/g, "").trim();
 }
+
+const DESCRIPTION_SYSTEM = `You write GitHub repository "About" descriptions.
+Output ONLY a single description line — at most ~140 characters, no trailing period, no surrounding quotes, no markdown.
+Describe what the project does. Do not begin with "This repository", "A repository for", or the project's own name.`;
+
+export function buildRepoDescriptionPrompt(input: {
+  repoName: string;
+  readme: string;
+  repoInstructions: string | null;
+  globalInstructions: string;
+}): { system: string; prompt: string } {
+  const systemParts = [DESCRIPTION_SYSTEM];
+  if (input.repoInstructions) {
+    systemParts.push(`## Project instructions\n${input.repoInstructions}`);
+  }
+  if (input.globalInstructions.trim()) {
+    systemParts.push(
+      `## User instructions\n${input.globalInstructions.trim()}`,
+    );
+  }
+
+  const promptParts = [`## Repository name\n${input.repoName}`];
+  if (input.readme.trim()) {
+    promptParts.push(`## README (truncated)\n${input.readme.slice(0, 6000)}`);
+  } else {
+    promptParts.push(
+      "## README\n(none — infer from the repository name alone)",
+    );
+  }
+  promptParts.push("Write the repository description.");
+  return {
+    system: systemParts.join("\n\n"),
+    prompt: promptParts.join("\n\n"),
+  };
+}
+
+/** First non-empty line, unquoted, trailing period stripped, capped to GitHub's limit. */
+export function extractDescription(raw: string): string {
+  const line =
+    raw
+      .replace(/```[a-z]*/gi, "")
+      .replace(/```/g, "")
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) ?? "";
+  return line
+    .replace(/^[`'"]+|[`'"]+$/g, "")
+    .replace(/\.$/, "")
+    .trim()
+    .slice(0, 350);
+}

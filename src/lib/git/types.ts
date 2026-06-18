@@ -258,6 +258,72 @@ export interface GhStatus {
   repo: string | null;
 }
 
+export interface WebhookConfig {
+  url: string;
+  /** "json" or "form". */
+  contentType: string;
+  /** "0" (verify SSL) or "1" (skip verification). */
+  insecureSsl: string;
+  /** Masked ("********") when a secret is set; absent otherwise. */
+  secret: string | null;
+}
+
+export interface WebhookLastResponse {
+  code: number | null;
+  status: string;
+  message: string | null;
+}
+
+export interface Webhook {
+  id: number;
+  active: boolean;
+  events: string[];
+  config: WebhookConfig;
+  updatedAt: string;
+  lastResponse: WebhookLastResponse;
+}
+
+/** New/edited webhook values sent to the backend (camelCase). */
+export interface WebhookInput {
+  url: string;
+  contentType: "json" | "form";
+  /** A new secret; null/empty leaves an existing one unchanged. */
+  secret: string | null;
+  insecureSsl: boolean;
+  events: string[];
+  active: boolean;
+}
+
+/** Curated subset of a repo's GitHub settings (read). */
+export interface RepoSettings {
+  description: string | null;
+  homepage: string | null;
+  defaultBranch: string;
+  hasIssues: boolean;
+  hasProjects: boolean;
+  hasWiki: boolean;
+  allowSquashMerge: boolean;
+  allowMergeCommit: boolean;
+  allowRebaseMerge: boolean;
+  deleteBranchOnMerge: boolean;
+  allowAutoMerge: boolean;
+}
+
+/** Edited settings sent to the backend. */
+export interface RepoSettingsInput {
+  description: string;
+  homepage: string;
+  defaultBranch: string;
+  hasIssues: boolean;
+  hasProjects: boolean;
+  hasWiki: boolean;
+  allowSquashMerge: boolean;
+  allowMergeCommit: boolean;
+  allowRebaseMerge: boolean;
+  deleteBranchOnMerge: boolean;
+  allowAutoMerge: boolean;
+}
+
 /** A GitHub (classic) branch protection rule, for importing into branch rules. */
 export interface GhBranchProtection {
   /** fnmatch-style branch name pattern the rule targets. */

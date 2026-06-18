@@ -9,7 +9,14 @@ import {
 import { useCallback, useEffect, useRef } from "react";
 import { COLD_START_NO_GH, COLD_START_NO_GIT } from "@/lib/test-mode";
 import * as api from "./api";
-import type { DiffStatEntry, GhStatus, RepoOp, RewriteStep } from "./types";
+import type {
+  DiffStatEntry,
+  GhStatus,
+  RepoOp,
+  RepoSettingsInput,
+  RewriteStep,
+  WebhookInput,
+} from "./types";
 
 export const repoKeys = {
   all: (repo: string) => ["repo", repo] as const,
@@ -1023,6 +1030,91 @@ export function useSetRepoStar(repo: string) {
       if (ctx) queryClient.setQueryData(key, ctx.previous);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
+  });
+}
+
+export function useRepoAdmin(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "admin"] as const,
+    queryFn: () => api.ghRepoAdmin(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+const webhooksKey = (repo: string) => ["repo", repo, "webhooks"] as const;
+
+export function useWebhooks(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: webhooksKey(repo),
+    queryFn: () => api.ghHooksList(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+function useWebhookMutation<TArgs, TData>(
+  repo: string,
+  mutationFn: (args: TArgs) => Promise<TData>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    // Refetch the list so created/edited hooks and ping/test delivery results
+    // (last response) show immediately.
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: webhooksKey(repo) }),
+  });
+}
+
+export function useCreateWebhook(repo: string) {
+  return useWebhookMutation(repo, (input: WebhookInput) =>
+    api.ghHookCreate(repo, input),
+  );
+}
+
+export function useUpdateWebhook(repo: string) {
+  return useWebhookMutation(repo, (args: { id: number; input: WebhookInput }) =>
+    api.ghHookUpdate(repo, args.id, args.input),
+  );
+}
+
+export function useDeleteWebhook(repo: string) {
+  return useWebhookMutation(repo, (id: number) => api.ghHookDelete(repo, id));
+}
+
+export function usePingWebhook(repo: string) {
+  return useWebhookMutation(repo, (id: number) => api.ghHookPing(repo, id));
+}
+
+export function useTestWebhook(repo: string) {
+  return useWebhookMutation(repo, (id: number) => api.ghHookTest(repo, id));
+}
+
+const repoSettingsKey = (repo: string) =>
+  ["repo", repo, "repo-settings"] as const;
+
+export function useRepoSettings(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: repoSettingsKey(repo),
+    queryFn: () => api.ghRepoSettingsGet(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useUpdateRepoSettings(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RepoSettingsInput) =>
+      api.ghRepoSettingsUpdate(repo, input),
+    // The PATCH returns the fresh settings — seed the cache, then refetch.
+    onSuccess: (data) => queryClient.setQueryData(repoSettingsKey(repo), data),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: repoSettingsKey(repo) }),
   });
 }
 

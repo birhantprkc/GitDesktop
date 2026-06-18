@@ -32,6 +32,8 @@ import type {
   RepoOp,
   RepoOpState,
   RepoOwner,
+  RepoSettings,
+  RepoSettingsInput,
   RepoStats,
   RepoStatus,
   RewriteStep,
@@ -39,6 +41,8 @@ import type {
   StashEntry,
   StashFile,
   Submodule,
+  Webhook,
+  WebhookInput,
 } from "./types";
 
 export const checkGitInstalled = () => invoke<GitInfo>("check_git_installed");
@@ -650,6 +654,39 @@ export const ghRepoStarStatus = (repoPath: string) =>
 /** Stars (true) or unstars (false) this repo for the signed-in user. */
 export const ghRepoSetStar = (repoPath: string, starred: boolean) =>
   invoke<void>("gh_repo_set_star", { repoPath, starred });
+
+/** Whether the signed-in user is an admin on this repo (gates settings UI). */
+export const ghRepoAdmin = (repoPath: string) =>
+  invoke<boolean>("gh_repo_admin", { repoPath });
+
+export const ghHooksList = (repoPath: string) =>
+  invoke<Webhook[]>("gh_hooks_list", { repoPath });
+
+export const ghHookCreate = (repoPath: string, input: WebhookInput) =>
+  invoke<Webhook>("gh_hook_create", { repoPath, input });
+
+export const ghHookUpdate = (
+  repoPath: string,
+  id: number,
+  input: WebhookInput,
+) => invoke<Webhook>("gh_hook_update", { repoPath, id, input });
+
+export const ghHookDelete = (repoPath: string, id: number) =>
+  invoke<void>("gh_hook_delete", { repoPath, id });
+
+export const ghHookPing = (repoPath: string, id: number) =>
+  invoke<void>("gh_hook_ping", { repoPath, id });
+
+export const ghHookTest = (repoPath: string, id: number) =>
+  invoke<void>("gh_hook_test", { repoPath, id });
+
+export const ghRepoSettingsGet = (repoPath: string) =>
+  invoke<RepoSettings>("gh_repo_settings_get", { repoPath });
+
+export const ghRepoSettingsUpdate = (
+  repoPath: string,
+  input: RepoSettingsInput,
+) => invoke<RepoSettings>("gh_repo_settings_update", { repoPath, input });
 
 export const ghPrReady = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_ready", { repoPath, number });

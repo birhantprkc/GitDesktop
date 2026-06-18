@@ -80,3 +80,65 @@ pub async fn run_gh(
     }
     Ok(out)
 }
+
+/// Like `run_gh`, but pipes `input` to gh's stdin — for `gh api --input -` with
+/// a JSON body (webhook create/update), where nested `config`/`events` don't
+/// fit the flat `-f key=value` form. Non-zero exit is an error carrying stderr.
+pub async fn run_gh_input(
+    repo_path: Option<&str>,
+    args: &[&str],
+    input: &str,
+    timeout: Duration,
+) -> AppResult<GhOutput> {
+    use tokio::io::AsyncWriteExt;
+
+    let mut cmd = Command::new("gh");
+    cmd.args(args);
+    if let Some(repo) = repo_path {
+        cmd.current_dir(repo);
+    }
+    cmd.env("GH_PAGER", "")
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_NO_UPDATE_NOTIFIER", "1")
+        .env("CLICOLOR", "0")
+        .env("NO_COLOR", "1");
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd.kill_on_drop(true);
+
+    let mut child = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            AppError::GhNotFound
+        } else {
+            AppError::Io(e)
+        }
+    })?;
+    // Write the body and close stdin so gh reads EOF (body is small — no
+    // deadlock risk from not draining stdout concurrently).
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(input.as_bytes()).await.map_err(AppError::Io)?;
+        stdin.shutdown().await.ok();
+    }
+    let output = tokio::time::timeout(timeout, child.wait_with_output())
+        .await
+        .map_err(|_| AppError::Timeout(timeout.as_secs()))?
+        .map_err(AppError::Io)?;
+
+    let out = GhOutput {
+        stdout: output.stdout,
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        code: output.status.code().unwrap_or(-1),
+    };
+    if out.code != 0 {
+        let msg = out.stderr.trim();
+        return Err(AppError::Gh(if msg.is_empty() {
+            format!("gh exited with code {}", out.code)
+        } else {
+            msg.to_string()
+        }));
+    }
+    Ok(out)
+}
