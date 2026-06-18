@@ -25,6 +25,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Markdown } from "@/components/ui/markdown";
@@ -41,7 +44,7 @@ import {
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
-import type { MinimizeReason } from "@/lib/git/api";
+import type { LockReason, MinimizeReason } from "@/lib/git/api";
 import {
   useCloseIssue,
   useCommentIssue,
@@ -50,16 +53,28 @@ import {
   useEditPrComment,
   useEditPrLabels,
   useIssueDetails,
+  useLockIssue,
   useMinimizeComment,
+  usePinIssue,
   useReopenIssue,
   useRepoLabels,
   useSetIssueAssignees,
   useSetIssueMilestone,
+  useUnlockIssue,
   useUnminimizeComment,
 } from "@/lib/git/queries";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { AssigneesPopover, MilestoneMenu } from "./IssueMetaPickers";
+
+/** GitHub's lock reasons (menu label → API value); null locks with no reason. */
+const LOCK_REASONS: [string, LockReason | null][] = [
+  ["No reason", null],
+  ["Off-topic", "off_topic"],
+  ["Resolved", "resolved"],
+  ["Spam", "spam"],
+  ["Too heated", "too_heated"],
+];
 
 /**
  * Full read+write view for a GitHub issue: header, description, threaded
@@ -87,6 +102,9 @@ export function RemoteIssueView({
   const repoLabels = useRepoLabels(repoPath, true);
   const setAssignees = useSetIssueAssignees(repoPath);
   const setMilestone = useSetIssueMilestone(repoPath);
+  const pinIssue = usePinIssue(repoPath);
+  const lockIssue = useLockIssue(repoPath);
+  const unlockIssue = useUnlockIssue(repoPath);
 
   const [composeBody, setComposeBody] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -261,11 +279,82 @@ export function RemoteIssueView({
             <ArrowSquareOutIcon data-icon="inline-start" />
             GitHub
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="outline" size="xs" aria-label="More actions" />
+              }
+            >
+              <DotsThreeIcon className="size-4" weight="bold" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-52">
+              <DropdownMenuItem
+                onClick={() =>
+                  pinIssue.mutate(
+                    { number, pinned: !issue.isPinned },
+                    {
+                      onSuccess: () =>
+                        toast.success(issue.isPinned ? "Unpinned" : "Pinned"),
+                      onError,
+                    },
+                  )
+                }
+              >
+                {issue.isPinned ? "Unpin issue" : "Pin issue"}
+              </DropdownMenuItem>
+              {issue.locked ? (
+                <DropdownMenuItem
+                  onClick={() =>
+                    unlockIssue.mutate(number, {
+                      onSuccess: () => toast.success("Conversation unlocked"),
+                      onError,
+                    })
+                  }
+                >
+                  Unlock conversation
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    Lock conversation…
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {LOCK_REASONS.map(([label, reason]) => (
+                      <DropdownMenuItem
+                        key={reason ?? "none"}
+                        onClick={() =>
+                          lockIssue.mutate(
+                            { number, reason },
+                            {
+                              onSuccess: () =>
+                                toast.success("Conversation locked"),
+                              onError,
+                            },
+                          )
+                        }
+                      >
+                        {label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Badge variant={isOpen ? "default" : "secondary"}>
             {issue.state.toLowerCase()}
           </Badge>
+          {issue.isPinned && <Badge variant="secondary">pinned</Badge>}
+          {issue.locked && (
+            <Badge variant="secondary">
+              locked
+              {issue.activeLockReason
+                ? ` · ${issue.activeLockReason.replace(/_/g, "-")}`
+                : ""}
+            </Badge>
+          )}
           <AuthorAvatar login={issue.author} />
           <span>{issue.author || "unknown"}</span>
           <span>•</span>

@@ -621,6 +621,23 @@ export const ghIssueSetMilestone = (
   milestone: number | null,
 ) => invoke<void>("gh_issue_set_milestone", { repoPath, number, milestone });
 
+export const ghIssuePin = (repoPath: string, number: number) =>
+  invoke<void>("gh_issue_pin", { repoPath, number });
+
+export const ghIssueUnpin = (repoPath: string, number: number) =>
+  invoke<void>("gh_issue_unpin", { repoPath, number });
+
+export type LockReason = "off_topic" | "resolved" | "spam" | "too_heated";
+
+export const ghIssueLock = (
+  repoPath: string,
+  number: number,
+  reason: LockReason | null,
+) => invoke<void>("gh_issue_lock", { repoPath, number, reason });
+
+export const ghIssueUnlock = (repoPath: string, number: number) =>
+  invoke<void>("gh_issue_unlock", { repoPath, number });
+
 /** The repo's issue templates (frontmatter stripped); empty when it has none. */
 export const readIssueTemplates = (repoPath: string) =>
   invoke<string[]>("read_issue_templates", { repoPath });

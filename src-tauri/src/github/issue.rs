@@ -99,9 +99,21 @@ struct RawIssue {
     #[serde(default)]
     milestone: Option<Milestone>,
     #[serde(default)]
+    is_pinned: bool,
+    #[serde(default)]
     comments: Vec<RawIssueComment>,
     #[serde(default)]
     labels: Vec<RepoLabel>,
+}
+
+/// Lock state isn't exposed by `gh issue view --json`, so it's fetched from the
+/// REST issue object in parallel.
+#[derive(Deserialize, Default)]
+struct LockState {
+    #[serde(default)]
+    locked: bool,
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -118,25 +130,43 @@ pub struct IssueDetails {
     pub url: String,
     pub assignees: Vec<String>,
     pub milestone: Option<Milestone>,
+    pub is_pinned: bool,
+    pub locked: bool,
+    pub active_lock_reason: Option<String>,
     pub comments: Vec<PrThreadOut>,
     pub labels: Vec<RepoLabel>,
 }
 
 const ISSUE_VIEW_FIELDS: &str =
-    "id,number,title,body,author,state,createdAt,url,assignees,milestone,comments,labels";
+    "id,number,title,body,author,state,createdAt,url,assignees,milestone,isPinned,comments,labels";
 
 /// Full details for one issue's read view: body, assignees, labels and the
 /// conversation comments (with node ids for editing/hiding).
 #[tauri::command]
 pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDetails> {
-    let out = run_gh(
-        Some(&repo_path),
-        &["issue", "view", &number.to_string(), "--json", ISSUE_VIEW_FIELDS],
-        GH_TIMEOUT,
-    )
-    .await?;
+    // The conversation view and the (REST-only) lock state are fetched
+    // concurrently so the lock state adds no extra round-trip latency.
+    let n = number.to_string();
+    let issue_path = format!("repos/{{owner}}/{{repo}}/issues/{number}");
+    let view_args = ["issue", "view", &n, "--json", ISSUE_VIEW_FIELDS];
+    let lock_args = [
+        "api",
+        &issue_path,
+        "--jq",
+        "{locked: .locked, reason: .active_lock_reason}",
+    ];
+    let (view_res, lock_res) = tokio::join!(
+        run_gh(Some(&repo_path), &view_args, GH_TIMEOUT),
+        run_gh(Some(&repo_path), &lock_args, GH_TIMEOUT),
+    );
+    let out = view_res?;
     let raw: RawIssue = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Gh(format!("could not parse gh issue view: {e}")))?;
+    // Best-effort: a failed lock lookup just leaves the issue shown as unlocked.
+    let lock: LockState = lock_res
+        .ok()
+        .and_then(|o| serde_json::from_str(&o.stdout_lossy()).ok())
+        .unwrap_or_default();
 
     Ok(IssueDetails {
         id: raw.id,
@@ -149,6 +179,9 @@ pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDet
         url: raw.url,
         assignees: raw.assignees.into_iter().map(|a| a.login).collect(),
         milestone: raw.milestone,
+        is_pinned: raw.is_pinned,
+        locked: lock.locked,
+        active_lock_reason: lock.reason,
         comments: raw
             .comments
             .into_iter()
@@ -410,6 +443,51 @@ pub async fn gh_issue_edit(
         GH_NETWORK_TIMEOUT,
     )
     .await?;
+    Ok(())
+}
+
+/// Pins an issue (GitHub allows at most 3 pinned issues; gh surfaces the error).
+#[tauri::command]
+pub async fn gh_issue_pin(repo_path: String, number: u64) -> AppResult<()> {
+    let n = number.to_string();
+    run_gh(Some(&repo_path), &["issue", "pin", &n], GH_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn gh_issue_unpin(repo_path: String, number: u64) -> AppResult<()> {
+    let n = number.to_string();
+    run_gh(Some(&repo_path), &["issue", "unpin", &n], GH_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+/// Locks an issue's conversation. `reason`, if given, is one of GitHub's four:
+/// off_topic, resolved, spam, too_heated.
+#[tauri::command]
+pub async fn gh_issue_lock(
+    repo_path: String,
+    number: u64,
+    reason: Option<String>,
+) -> AppResult<()> {
+    let n = number.to_string();
+    let mut args = vec!["issue", "lock", &n];
+    if let Some(r) = reason.as_deref() {
+        if !matches!(r, "off_topic" | "resolved" | "spam" | "too_heated") {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown lock reason: {r}"
+            )));
+        }
+        args.push("--reason");
+        args.push(r);
+    }
+    run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn gh_issue_unlock(repo_path: String, number: u64) -> AppResult<()> {
+    let n = number.to_string();
+    run_gh(Some(&repo_path), &["issue", "unlock", &n], GH_NETWORK_TIMEOUT).await?;
     Ok(())
 }
 

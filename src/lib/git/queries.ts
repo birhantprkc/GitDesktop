@@ -556,6 +556,28 @@ export function useSetIssueMilestone(repo: string) {
   );
 }
 
+export function usePinIssue(repo: string) {
+  return useRepoMutation(repo, (args: { number: number; pinned: boolean }) =>
+    args.pinned
+      ? api.ghIssuePin(repo, args.number)
+      : api.ghIssueUnpin(repo, args.number),
+  );
+}
+
+export function useLockIssue(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { number: number; reason: api.LockReason | null }) =>
+      api.ghIssueLock(repo, args.number, args.reason),
+  );
+}
+
+export function useUnlockIssue(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.ghIssueUnlock(repo, number),
+  );
+}
+
 export function useCommentIssue(repo: string) {
   return useRepoMutation(repo, (args: { number: number; body: string }) =>
     api.ghIssueComment(repo, args.number, args.body),

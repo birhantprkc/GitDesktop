@@ -494,6 +494,10 @@ export interface IssueDetails {
   url: string;
   assignees: string[];
   milestone: Milestone | null;
+  isPinned: boolean;
+  locked: boolean;
+  /** GitHub's lock reason (off_topic/resolved/spam/too_heated) or null. */
+  activeLockReason: string | null;
   /** Conversation comments (shared shape with PRs). */
   comments: PrThreadOut[];
   labels: RepoLabel[];
