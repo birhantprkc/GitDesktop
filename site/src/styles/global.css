@@ -99,6 +99,13 @@
   }
 }
 
+/* --- View modes: AI-native (default) vs "Just Git" (AI hidden) ------------
+   Mirrors the app's "hide AI features" setting. The initial class is set
+   pre-paint by an inline head script, so there's no flash of the wrong view. */
+[data-view="git"] { display: none; }
+.mode-git [data-view="ai"] { display: none; }
+.mode-git [data-view="git"] { display: block; }
+
 /* --- Product-window frame: present each real screenshot as a native window -- */
 .window {
   position: relative;
