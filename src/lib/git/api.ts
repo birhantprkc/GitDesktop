@@ -25,6 +25,8 @@ import type {
   HookDelivery,
   HookDeliveryDetail,
   HooksInfo,
+  IssueDetails,
+  IssueInfo,
   PrDetails,
   PrInfo,
   PrPollInfo,
@@ -574,6 +576,14 @@ export const ghPrList = (repoPath: string, state: PrStateFilter) =>
 
 export const ghPrView = (repoPath: string, number: number) =>
   invoke<PrDetails>("gh_pr_view", { repoPath, number });
+
+export type IssueStateFilter = "open" | "closed";
+
+export const ghIssueList = (repoPath: string, state: IssueStateFilter) =>
+  invoke<IssueInfo[]>("gh_issue_list", { repoPath, state });
+
+export const ghIssueView = (repoPath: string, number: number) =>
+  invoke<IssueDetails>("gh_issue_view", { repoPath, number });
 
 export const ghPrDiff = (repoPath: string, number: number) =>
   invoke<string>("gh_pr_diff", { repoPath, number });

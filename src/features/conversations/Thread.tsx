@@ -1,0 +1,254 @@
+import { DotsThreeIcon } from "@phosphor-icons/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useState } from "react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Markdown } from "@/components/ui/markdown";
+import { Textarea } from "@/components/ui/textarea";
+import { copyText } from "@/lib/clipboard";
+import type { MinimizeReason } from "@/lib/git/api";
+import type { PrThreadOut, RepoLabel } from "@/lib/git/types";
+import { formatRelativeTime } from "@/lib/time";
+
+/**
+ * Shared conversation primitives for any GitHub thread surface (pull requests,
+ * issues, discussions). The comment shape (`PrThreadOut`) and the GraphQL
+ * comment mutations are PR-agnostic — they key off node ids — so issues and
+ * discussions render and edit comments through these same components.
+ */
+
+/**
+ * Whether a thread body renders any visible content. Raw HTML is disabled in
+ * our Markdown component, so a body that is only HTML comments (e.g. an
+ * unfilled PR/issue template) displays as nothing.
+ */
+export function hasVisibleBody(body: string): boolean {
+  return body.replace(/<!--[\s\S]*?-->/g, "").trim().length > 0;
+}
+
+/** Hide reasons GitHub accepts: menu label → ReportedContentClassifiers value. */
+export const HIDE_REASONS: [string, MinimizeReason][] = [
+  ["Off-topic", "OFF_TOPIC"],
+  ["Outdated", "OUTDATED"],
+  ["Resolved", "RESOLVED"],
+  ["Duplicate", "DUPLICATE"],
+  ["Spam", "SPAM"],
+  ["Abuse", "ABUSE"],
+];
+
+/** "OFF_TOPIC" -> "off-topic" for the "hidden · <reason>" label. */
+export function formatReason(reason: string): string {
+  return reason.toLowerCase().replace(/_/g, "-");
+}
+
+/** GitHub avatar that links to the author's profile. Avatars are served from
+ *  github.com/<login>.png; CSP is unrestricted so they load directly, and the
+ *  Avatar primitive falls back to the initial if the image can't load. */
+export function AuthorAvatar({ login }: { login: string }) {
+  if (!login) return null;
+  return (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      onClick={() => openUrl(`https://github.com/${login}`)}
+      title={`@${login} on GitHub`}
+      className="shrink-0 rounded-full hover:opacity-80 cursor-pointer"
+    >
+      <Avatar size="sm">
+        <AvatarImage
+          src={`https://github.com/${login}.png?size=48`}
+          alt={login}
+        />
+        <AvatarFallback>{login.charAt(0).toUpperCase()}</AvatarFallback>
+      </Avatar>
+    </Button>
+  );
+}
+
+export function Thread({
+  thread,
+  onQuote,
+  onSaveEdit,
+  onDelete,
+  onHide,
+  onUnhide,
+}: {
+  thread: PrThreadOut;
+  onQuote?: () => void;
+  /** Present when the viewer may edit this comment; saves the new body. */
+  onSaveEdit?: (body: string) => void;
+  /** Present when the viewer may delete this comment. */
+  onDelete?: () => void;
+  /** Hide (minimize) the comment with a reason. */
+  onHide?: (classifier: MinimizeReason) => void;
+  /** Unhide a previously hidden comment. */
+  onUnhide?: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const minimized = thread.isMinimized;
+  return (
+    <div className="group space-y-1">
+      <p className="flex items-center gap-2 text-xs">
+        <AuthorAvatar login={thread.author} />
+        <span className="font-medium">{thread.author || "unknown"}</span>
+        {thread.state && (
+          <Badge variant="secondary">{thread.state.toLowerCase()}</Badge>
+        )}
+        <span className="text-muted-foreground">
+          {thread.date && formatRelativeTime(thread.date)}
+        </span>
+        {minimized && (
+          <span className="text-[11px] text-muted-foreground italic">
+            hidden
+            {thread.minimizedReason
+              ? ` · ${formatReason(thread.minimizedReason)}`
+              : ""}
+          </span>
+        )}
+        {!editing && (
+          <>
+            <span className="flex-1" />
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Comment actions"
+                    className="text-muted-foreground hover:text-foreground data-popup-open:text-foreground"
+                  />
+                }
+              >
+                <DotsThreeIcon className="size-4" weight="bold" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-44">
+                {thread.url && (
+                  <DropdownMenuItem
+                    onClick={() => copyText(thread.url, "Link copied")}
+                  >
+                    Copy link
+                  </DropdownMenuItem>
+                )}
+                {onQuote && (
+                  <DropdownMenuItem onClick={onQuote}>
+                    Quote reply
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  onClick={() => copyText(thread.body, "Markdown copied")}
+                >
+                  Copy markdown
+                </DropdownMenuItem>
+                {onSaveEdit && (
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setDraft(thread.body);
+                      setEditing(true);
+                    }}
+                  >
+                    Edit
+                  </DropdownMenuItem>
+                )}
+                {onUnhide && minimized && (
+                  <DropdownMenuItem onClick={onUnhide}>Unhide</DropdownMenuItem>
+                )}
+                {onHide && !minimized && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>Hide…</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {HIDE_REASONS.map(([label, classifier]) => (
+                        <DropdownMenuItem
+                          key={classifier}
+                          onClick={() => onHide(classifier)}
+                        >
+                          {label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
+                {onDelete && (
+                  <DropdownMenuItem variant="destructive" onClick={onDelete}>
+                    Delete
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        )}
+      </p>
+      {editing ? (
+        <div className="space-y-2">
+          <Textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={3}
+            className="max-h-48 min-h-16 resize-y font-mono"
+          />
+          <div className="flex items-center gap-2">
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!draft.trim() || draft.trim() === thread.body.trim()}
+              onClick={() => {
+                onSaveEdit?.(draft.trim());
+                setEditing(false);
+              }}
+            >
+              Save
+            </Button>
+            <Button size="xs" variant="ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : minimized && !expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          Show hidden comment
+        </button>
+      ) : (
+        <>
+          {minimized && (
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              Hide comment
+            </button>
+          )}
+          {thread.body.trim() && <Markdown>{thread.body}</Markdown>}
+        </>
+      )}
+    </div>
+  );
+}
+
+export function LabelChip({ label }: { label: RepoLabel }) {
+  return (
+    <span className="flex items-center gap-1 border px-1.5 py-0.5 text-[11px]">
+      <span
+        aria-hidden
+        className="size-2 shrink-0 rounded-full"
+        style={{ backgroundColor: `#${label.color}` }}
+      />
+      {label.name}
+    </span>
+  );
+}

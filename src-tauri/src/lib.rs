@@ -124,6 +124,8 @@ pub fn run() {
             github::pr::gh_repo_fork,
             github::pr::gh_repo_star_status,
             github::pr::gh_repo_set_star,
+            github::issue::gh_issue_list,
+            github::issue::gh_issue_view,
             github::repo_settings::gh_repo_admin,
             github::repo_settings::gh_hooks_list,
             github::repo_settings::gh_hook_create,

@@ -1,5 +1,12 @@
+import { CaretDownIcon } from "@phosphor-icons/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Activity, useDeferredValue, useEffect, useTransition } from "react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ActionsPanel } from "@/features/actions/ActionsPanel";
 import { RunDetailView } from "@/features/actions/RunDetailView";
@@ -11,6 +18,8 @@ import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffViewer } from "@/features/diff/DiffViewer";
 import { CommitDetailView } from "@/features/history/CommitDetailView";
 import { HistoryPanel } from "@/features/history/HistoryPanel";
+import { IssuesPanel } from "@/features/issues/IssuesPanel";
+import { RemoteIssueView } from "@/features/issues/RemoteIssueView";
 import { LocalPrView } from "@/features/pulls/LocalPrView";
 import { PullRequestsPanel } from "@/features/pulls/PullRequestsPanel";
 import { RemotePrView } from "@/features/pulls/RemotePrView";
@@ -18,9 +27,18 @@ import { useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
+import { cn } from "@/lib/utils";
 import { ChangesPanel } from "./ChangesPanel";
 import { RepoHeader } from "./RepoHeader";
 import { usePrNotifications } from "./usePrNotifications";
+
+// Secondary surfaces live behind a "More ▾" overflow so the four primary tabs
+// keep their full labels in the fixed-width rail. The trigger shows the active
+// secondary tab's name (e.g. "Issues ▾") so the rail still says where you are.
+const SECONDARY_TABS: { tab: RepoTab; label: string }[] = [
+  { tab: "issues", label: "Issues" },
+  { tab: "actions", label: "Actions" },
+];
 
 export function RepositoryView() {
   const repoPath = useUiStore((s) => s.repoPath);
@@ -31,12 +49,14 @@ export function RepositoryView() {
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const compareBranch = useUiStore((s) => s.compareBranch);
   const selectedPr = useUiStore((s) => s.selectedPr);
+  const selectedIssue = useUiStore((s) => s.selectedIssue);
   const selectedRunId = useUiStore((s) => s.selectedRunId);
   // The detail panes run off deferred selections so rapidly arrowing a list
   // (commits, PRs) only loads + renders the item landed on, not every one
   // passed. The lists' own highlights use the live values, so they stay snappy.
   const deferredCommitHash = useDeferredValue(selectedCommitHash);
   const deferredPr = useDeferredValue(selectedPr);
+  const deferredIssue = useDeferredValue(selectedIssue);
   const status = useRepoStatus(repoPath ?? "");
   const alias = useRepoAlias(repoPath);
   const currentName = status.data?.branch?.name ?? null;
@@ -57,6 +77,7 @@ export function RepositoryView() {
   useHotkeyAction("tab-history", () => changeTab("history"));
   useHotkeyAction("tab-compare", () => changeTab("compare"));
   useHotkeyAction("tab-pulls", () => changeTab("pulls"));
+  useHotkeyAction("tab-issues", () => changeTab("issues"));
   useHotkeyAction("tab-actions", () => changeTab("actions"));
   useHotkeyAction("back-to-repositories", closeRepo);
 
@@ -81,6 +102,7 @@ export function RepositoryView() {
   // (filters, selections, scroll) instead of unmounting them. Hidden panels'
   // effects are deferred, so inactive tabs don't poll or fetch.
   const mode = (tab: RepoTab) => (repoTab === tab ? "visible" : "hidden");
+  const activeSecondary = SECONDARY_TABS.find((t) => t.tab === repoTab);
 
   return (
     <div className="flex h-screen flex-col">
@@ -104,9 +126,37 @@ export function RepositoryView() {
               <TabsTrigger value="pulls" className="flex-1">
                 Pull Requests
               </TabsTrigger>
-              <TabsTrigger value="actions" className="flex-1">
-                Actions
-              </TabsTrigger>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="More tabs"
+                      className={cn(
+                        "relative inline-flex h-[calc(100%-1px)] items-center justify-center gap-1 rounded-none border border-transparent px-2 text-xs font-medium whitespace-nowrap text-foreground/60 transition-all hover:text-foreground data-popup-open:text-foreground dark:text-muted-foreground dark:hover:text-foreground [&_svg]:size-4 [&_svg]:shrink-0",
+                        activeSecondary &&
+                          "bg-background text-foreground dark:border-input dark:bg-input/30 dark:text-foreground",
+                      )}
+                    />
+                  }
+                >
+                  {activeSecondary?.label ?? "More"}
+                  <CaretDownIcon data-icon="inline-end" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-44">
+                  {SECONDARY_TABS.map(({ tab, label }) => (
+                    <DropdownMenuItem
+                      key={tab}
+                      onClick={() => changeTab(tab)}
+                      className={cn(
+                        repoTab === tab && "bg-accent text-accent-foreground",
+                      )}
+                    >
+                      {label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </TabsList>
           </Tabs>
           <Activity mode={mode("changes")}>
@@ -121,6 +171,9 @@ export function RepositoryView() {
           </Activity>
           <Activity mode={mode("pulls")}>
             <PullRequestsPanel repoPath={repoPath} />
+          </Activity>
+          <Activity mode={mode("issues")}>
+            <IssuesPanel repoPath={repoPath} />
           </Activity>
           <Activity mode={mode("actions")}>
             <ActionsPanel repoPath={repoPath} />
@@ -162,6 +215,16 @@ export function RepositoryView() {
               <LocalPrView repoPath={repoPath} id={deferredPr.id} />
             ) : (
               <DiffPlaceholder message="Select a pull request" />
+            )}
+          </Activity>
+          <Activity mode={mode("issues")}>
+            {deferredIssue?.kind === "remote" ? (
+              <RemoteIssueView
+                repoPath={repoPath}
+                number={Number(deferredIssue.id)}
+              />
+            ) : (
+              <DiffPlaceholder message="Select an issue" />
             )}
           </Activity>
           <Activity mode={mode("actions")}>

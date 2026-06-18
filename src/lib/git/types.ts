@@ -464,3 +464,31 @@ export interface PrDetails {
   checks: PrCheckOut[];
   labels: RepoLabel[];
 }
+
+export interface IssueInfo {
+  number: number;
+  url: string;
+  title: string;
+  /** "OPEN" or "CLOSED". */
+  state: string;
+  createdAt: string;
+  updatedAt: string;
+  author: { login: string } | null;
+  labels: { name: string }[];
+}
+
+export interface IssueDetails {
+  /** GraphQL node id, used by the label mutations. */
+  id: string;
+  number: number;
+  title: string;
+  body: string;
+  author: string;
+  state: string;
+  createdAt: string;
+  url: string;
+  assignees: string[];
+  /** Conversation comments (shared shape with PRs). */
+  comments: PrThreadOut[];
+  labels: RepoLabel[];
+}

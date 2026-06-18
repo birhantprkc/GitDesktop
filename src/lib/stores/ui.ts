@@ -3,7 +3,14 @@ import type { CommitAuthor, RepoInfo } from "@/lib/git/types";
 import { startViewTransition } from "@/lib/view-transition";
 
 export type AppView = "welcome" | "repo" | "settings" | "help";
-export type RepoTab = "changes" | "history" | "compare" | "pulls" | "actions";
+export type RepoTab =
+  | "changes"
+  | "history"
+  | "compare"
+  | "pulls"
+  | "issues"
+  | "discussions"
+  | "actions";
 /** A Settings section to open directly (matches SettingsScreen's panel ids). */
 export type SettingsTarget =
   | "general"
@@ -20,6 +27,12 @@ export type SettingsTarget =
 export interface SelectedPr {
   kind: "local" | "remote";
   /** Local PR id, or the remote PR number as a string. */
+  id: string;
+}
+
+export interface SelectedIssue {
+  kind: "local" | "remote";
+  /** Local issue id, or the remote issue number as a string. */
   id: string;
 }
 
@@ -43,6 +56,10 @@ interface UiState {
   compareBranch: string | null;
   /** Selected PR on the Pull Requests tab. */
   selectedPr: SelectedPr | null;
+  /** Selected issue on the Issues tab. */
+  selectedIssue: SelectedIssue | null;
+  /** Selected discussion (by number) on the Discussions tab. */
+  selectedDiscussion: { number: number } | null;
   /** Selected workflow run (databaseId) on the Actions tab. */
   selectedRunId: number | null;
   selectedFile: SelectedFile | null;
@@ -67,6 +84,8 @@ interface UiState {
   setRepoTab: (tab: RepoTab) => void;
   setCompareBranch: (branch: string | null) => void;
   selectPr: (pr: SelectedPr | null) => void;
+  selectIssue: (issue: SelectedIssue | null) => void;
+  selectDiscussion: (discussion: { number: number } | null) => void;
   selectRun: (id: number | null) => void;
   selectFile: (file: SelectedFile | null) => void;
   selectCommit: (hash: string | null) => void;
@@ -89,6 +108,8 @@ export const useUiStore = create<UiState>()((set, get) => ({
   repoTab: "changes",
   compareBranch: null,
   selectedPr: null,
+  selectedIssue: null,
+  selectedDiscussion: null,
   selectedRunId: null,
   selectedFile: null,
   selectedCommitHash: null,
@@ -109,6 +130,8 @@ export const useUiStore = create<UiState>()((set, get) => ({
         repoTab: "changes",
         compareBranch: null,
         selectedPr: null,
+        selectedIssue: null,
+        selectedDiscussion: null,
         selectedRunId: null,
         selectedFile: null,
         selectedCommitHash: null,
@@ -128,6 +151,8 @@ export const useUiStore = create<UiState>()((set, get) => ({
         repoTab: "changes",
         compareBranch: null,
         selectedPr: null,
+        selectedIssue: null,
+        selectedDiscussion: null,
         selectedRunId: null,
         selectedFile: null,
         selectedCommitHash: null,
@@ -136,6 +161,8 @@ export const useUiStore = create<UiState>()((set, get) => ({
   setRepoTab: (tab) => set({ repoTab: tab }),
   setCompareBranch: (branch) => set({ compareBranch: branch }),
   selectPr: (pr) => set({ selectedPr: pr }),
+  selectIssue: (issue) => set({ selectedIssue: issue }),
+  selectDiscussion: (discussion) => set({ selectedDiscussion: discussion }),
   selectRun: (id) => set({ selectedRunId: id }),
   selectCommit: (hash) => set({ selectedCommitHash: hash }),
   openSettings: (target) =>

@@ -461,6 +461,46 @@ export function usePrefetchPr(repo: string) {
   );
 }
 
+export function useIssueList(
+  repo: string,
+  enabled: boolean,
+  state: api.IssueStateFilter,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "issue-list", state] as const,
+    queryFn: () => api.ghIssueList(repo, state),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+const issueDetailsOptions = (repo: string, number: number) =>
+  queryOptions({
+    queryKey: ["repo", repo, "issue", number] as const,
+    queryFn: () => api.ghIssueView(repo, number),
+    staleTime: 30_000,
+  });
+
+export function useIssueDetails(repo: string, number: number | null) {
+  return useQuery({
+    ...issueDetailsOptions(repo, number ?? 0),
+    enabled: number !== null,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** Warms an issue's view so opening it from the list is instant (hover/adjacent
+ *  rows), mirroring {@link usePrefetchPr}. */
+export function usePrefetchIssue(repo: string) {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (number: number) => {
+      queryClient.prefetchQuery(issueDetailsOptions(repo, number));
+    },
+    [queryClient, repo],
+  );
+}
+
 export function useGhAccounts() {
   return useQuery({
     queryKey: ["gh-accounts"] as const,
