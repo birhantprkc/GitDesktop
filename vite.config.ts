@@ -28,6 +28,7 @@ export default defineConfig(async () => ({
       "@shikijs/langs/astro",
       "@shikijs/langs/gdscript",
       "@shikijs/langs/hcl",
+      "@shikijs/langs/json",
       "@shikijs/langs/jsonnet",
       "@shikijs/langs/jsx",
       "@shikijs/langs/prisma",

@@ -245,6 +245,133 @@ pub async fn gh_hook_test(repo_path: String, id: u64) -> AppResult<()> {
     Ok(())
 }
 
+// ── Webhook deliveries ───────────────────────────────────────────────────────
+
+// Delivery ids are 19-digit snowflakes that exceed JS's safe integer range, so
+// the frontend handles them as strings — serialize the u64 as a string here.
+fn id_to_string<S>(id: &u64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&id.to_string())
+}
+
+fn validate_delivery_id(id: &str) -> AppResult<()> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid delivery id: {id}"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookDelivery {
+    #[serde(serialize_with = "id_to_string")]
+    pub id: u64,
+    #[serde(default, alias = "delivered_at")]
+    pub delivered_at: String,
+    #[serde(default)]
+    pub redelivery: bool,
+    #[serde(default)]
+    pub duration: f64,
+    /// "OK", "Fail", "Pending", or the failure reason.
+    #[serde(default)]
+    pub status: String,
+    #[serde(default, alias = "status_code")]
+    pub status_code: u32,
+    #[serde(default)]
+    pub event: String,
+    #[serde(default)]
+    pub action: Option<String>,
+}
+
+/// A webhook's recent deliveries (GitHub returns the latest ~30, newest first).
+#[tauri::command]
+pub async fn gh_hook_deliveries(
+    repo_path: String,
+    hook_id: u64,
+) -> AppResult<Vec<HookDelivery>> {
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            &format!("repos/{{owner}}/{{repo}}/hooks/{hook_id}/deliveries"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse deliveries: {e}")))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookDeliveryDetail {
+    /// The event payload GitHub sent, pretty-printed.
+    pub request_payload: String,
+    /// The receiver's response body (verbatim).
+    pub response_payload: String,
+}
+
+/// One delivery's request payload + response body, for debugging a failure.
+#[tauri::command]
+pub async fn gh_hook_delivery(
+    repo_path: String,
+    hook_id: u64,
+    delivery_id: String,
+) -> AppResult<HookDeliveryDetail> {
+    validate_delivery_id(&delivery_id)?;
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            &format!(
+                "repos/{{owner}}/{{repo}}/hooks/{hook_id}/deliveries/{delivery_id}"
+            ),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let v: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the delivery: {e}")))?;
+    // request.payload is a JSON object; response.payload is a body string.
+    let render = |val: Option<&serde_json::Value>| match val {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(other) => serde_json::to_string_pretty(other).unwrap_or_default(),
+        None => String::new(),
+    };
+    Ok(HookDeliveryDetail {
+        request_payload: render(v.pointer("/request/payload")),
+        response_payload: render(v.pointer("/response/payload")),
+    })
+}
+
+/// Re-sends a past delivery (GitHub queues a fresh attempt).
+#[tauri::command]
+pub async fn gh_hook_redeliver(
+    repo_path: String,
+    hook_id: u64,
+    delivery_id: String,
+) -> AppResult<()> {
+    validate_delivery_id(&delivery_id)?;
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "--method",
+            "POST",
+            &format!(
+                "repos/{{owner}}/{{repo}}/hooks/{hook_id}/deliveries/{delivery_id}/attempts"
+            ),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 // ── General settings ─────────────────────────────────────────────────────────
 //
 // A curated subset of `GET`/`PATCH /repos/{owner}/{repo}` — the safe, common

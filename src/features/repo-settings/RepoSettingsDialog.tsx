@@ -1,12 +1,14 @@
 import {
   ArrowClockwiseIcon,
   BroadcastIcon,
+  CaretLeftIcon,
+  ClockCounterClockwiseIcon,
   CopyIcon,
   PencilSimpleIcon,
   PlusIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,16 +33,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { highlightJson } from "@/features/diff/shiki-highlighter";
 import { copyText } from "@/lib/clipboard";
 import {
   useCreateWebhook,
   useDeleteWebhook,
   usePingWebhook,
+  useRedeliverWebhook,
   useTestWebhook,
   useUpdateWebhook,
+  useWebhookDeliveries,
+  useWebhookDelivery,
   useWebhooks,
 } from "@/lib/git/queries";
-import type { Webhook, WebhookInput } from "@/lib/git/types";
+import type { HookDelivery, Webhook, WebhookInput } from "@/lib/git/types";
+import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
@@ -83,7 +90,10 @@ export function RepoSettingsDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      {/* flex + max-h caps the dialog to the viewport; the active tab body
+          scrolls (overflow-y-auto) so many webhooks / the long form don't push
+          it off-screen. */}
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Repository settings</DialogTitle>
           <DialogDescription>
@@ -91,15 +101,21 @@ export function RepoSettingsDialog({
             on GitHub immediately.
           </DialogDescription>
         </DialogHeader>
-        <Tabs defaultValue="general" className="min-w-0">
+        <Tabs defaultValue="general" className="flex min-h-0 min-w-0 flex-col">
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
           </TabsList>
-          <TabsContent value="general" className="min-w-0">
+          <TabsContent
+            value="general"
+            className="min-h-0 min-w-0 overflow-y-auto pr-1"
+          >
             <GeneralSettingsSection repoPath={repoPath} open={open} />
           </TabsContent>
-          <TabsContent value="webhooks" className="min-w-0">
+          <TabsContent
+            value="webhooks"
+            className="min-h-0 min-w-0 overflow-y-auto pr-1"
+          >
             <WebhooksSection repoPath={repoPath} open={open} />
           </TabsContent>
         </Tabs>
@@ -118,6 +134,17 @@ function WebhooksSection({
   const hooks = useWebhooks(repoPath, open);
   // null = list view; a Webhook = editing it; "new" = the create form.
   const [editing, setEditing] = useState<Webhook | "new" | null>(null);
+  const [deliveriesFor, setDeliveriesFor] = useState<Webhook | null>(null);
+
+  if (deliveriesFor) {
+    return (
+      <DeliveriesView
+        repoPath={repoPath}
+        hook={deliveriesFor}
+        onBack={() => setDeliveriesFor(null)}
+      />
+    );
+  }
 
   if (editing) {
     return (
@@ -183,6 +210,7 @@ function WebhooksSection({
           repoPath={repoPath}
           hook={hook}
           onEdit={() => setEditing(hook)}
+          onDeliveries={() => setDeliveriesFor(hook)}
         />
       ))}
     </div>
@@ -193,10 +221,12 @@ function WebhookRow({
   repoPath,
   hook,
   onEdit,
+  onDeliveries,
 }: {
   repoPath: string;
   hook: Webhook;
   onEdit: () => void;
+  onDeliveries: () => void;
 }) {
   const ping = usePingWebhook(repoPath);
   const test = useTestWebhook(repoPath);
@@ -308,6 +338,15 @@ function WebhookRow({
                 Test
               </Button>
             )}
+            <Button
+              size="sm"
+              variant="ghost"
+              title="Recent deliveries"
+              onClick={onDeliveries}
+            >
+              <ClockCounterClockwiseIcon data-icon="inline-start" />
+              Deliveries
+            </Button>
             <Button size="sm" variant="ghost" onClick={onEdit}>
               <PencilSimpleIcon data-icon="inline-start" />
               Edit
@@ -324,6 +363,221 @@ function WebhookRow({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function DeliveriesView({
+  repoPath,
+  hook,
+  onBack,
+}: {
+  repoPath: string;
+  hook: Webhook;
+  onBack: () => void;
+}) {
+  const deliveries = useWebhookDeliveries(repoPath, hook.id, true);
+
+  return (
+    <div className="min-w-0 space-y-3">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <CaretLeftIcon />
+          Back
+        </button>
+        <p
+          className="min-w-0 flex-1 truncate text-right font-mono text-[11px] text-muted-foreground"
+          title={hook.config.url}
+        >
+          {hook.config.url}
+        </p>
+      </div>
+
+      {deliveries.isLoading && (
+        <div className="space-y-2">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      )}
+      {deliveries.isError && (
+        <p className="text-xs text-destructive">
+          {deliveries.error instanceof Error
+            ? deliveries.error.message
+            : "Couldn't load deliveries."}
+        </p>
+      )}
+      {deliveries.data?.length === 0 && (
+        <p className="rounded-md border border-dashed py-8 text-center text-xs text-muted-foreground">
+          No deliveries yet.
+        </p>
+      )}
+
+      <div className="space-y-2">
+        {deliveries.data?.map((d) => (
+          <DeliveryRow
+            key={d.id}
+            repoPath={repoPath}
+            hookId={hook.id}
+            delivery={d}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DeliveryRow({
+  repoPath,
+  hookId,
+  delivery,
+}: {
+  repoPath: string;
+  hookId: number;
+  delivery: HookDelivery;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const detail = useWebhookDelivery(
+    repoPath,
+    hookId,
+    expanded ? delivery.id : null,
+  );
+  const redeliver = useRedeliverWebhook(repoPath, hookId);
+
+  const ok = delivery.statusCode >= 200 && delivery.statusCode < 300;
+  const eventLabel = delivery.action
+    ? `${delivery.event}.${delivery.action}`
+    : delivery.event;
+
+  return (
+    <div className="rounded-md border text-xs">
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        className="flex w-full items-center gap-2 p-2 text-left hover:bg-muted/40"
+      >
+        <span
+          className={cn(
+            "shrink-0 font-mono tabular-nums",
+            ok
+              ? "text-green-600 dark:text-green-400"
+              : "text-red-600 dark:text-red-400",
+          )}
+        >
+          {delivery.statusCode || "—"}
+        </span>
+        <span className="truncate font-medium">{eventLabel}</span>
+        {delivery.redelivery && (
+          <Badge variant="secondary" className="shrink-0">
+            redelivered
+          </Badge>
+        )}
+        <span className="ml-auto shrink-0 text-muted-foreground">
+          {delivery.deliveredAt ? formatRelativeTime(delivery.deliveredAt) : ""}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="space-y-2 border-t p-2">
+          <div className="flex justify-end">
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={redeliver.isPending}
+              onClick={() =>
+                redeliver.mutate(delivery.id, {
+                  onSuccess: () => toast.success("Redelivery queued"),
+                  onError: toastError,
+                })
+              }
+            >
+              {redeliver.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <ArrowClockwiseIcon data-icon="inline-start" />
+              )}
+              Redeliver
+            </Button>
+          </div>
+          {detail.isLoading && <Skeleton className="h-16 w-full" />}
+          {detail.isError && (
+            <p className="text-[11px] text-destructive">
+              {detail.error instanceof Error
+                ? detail.error.message
+                : "Couldn't load the payload."}
+            </p>
+          )}
+          {detail.data && (
+            <>
+              <DeliveryPayload
+                label="Request payload"
+                body={detail.data.requestPayload}
+              />
+              <DeliveryPayload
+                label="Response body"
+                body={detail.data.responsePayload}
+              />
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeliveryPayload({ label, body }: { label: string; body: string }) {
+  const trimmed = body.trim();
+  // Highlight as JSON when it looks like JSON and isn't huge (tokenizing a big
+  // blob would block); otherwise render it plain.
+  const lines = useMemo(
+    () =>
+      trimmed.length > 0 &&
+      trimmed.length < 50_000 &&
+      (trimmed.startsWith("{") || trimmed.startsWith("["))
+        ? highlightJson(body)
+        : null,
+    [body, trimmed],
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
+        {trimmed.length > 0 && (
+          <button
+            type="button"
+            className="text-muted-foreground transition-colors hover:text-foreground"
+            title={`Copy ${label.toLowerCase()}`}
+            onClick={() => copyText(body, `${label} copied`)}
+          >
+            <CopyIcon className="size-3.5" />
+          </button>
+        )}
+      </div>
+      {trimmed.length > 0 ? (
+        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px]">
+          {lines
+            ? lines.map((line, i) => (
+                <Fragment key={i}>
+                  {i > 0 && "\n"}
+                  {line.map((t, j) => (
+                    <span
+                      key={j}
+                      style={t.color ? { color: t.color } : undefined}
+                    >
+                      {t.content}
+                    </span>
+                  ))}
+                </Fragment>
+              ))
+            : body}
+        </pre>
+      ) : (
+        <p className="mt-1 text-[11px] text-muted-foreground">(empty)</p>
+      )}
     </div>
   );
 }

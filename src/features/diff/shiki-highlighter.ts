@@ -12,6 +12,7 @@ import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import astroGrammar from "@shikijs/langs/astro";
 import gdscriptGrammar from "@shikijs/langs/gdscript";
 import hclGrammar from "@shikijs/langs/hcl";
+import jsonGrammar from "@shikijs/langs/json";
 import jsonnetGrammar from "@shikijs/langs/jsonnet";
 import jsxGrammar from "@shikijs/langs/jsx";
 import prismaGrammar from "@shikijs/langs/prisma";
@@ -124,6 +125,42 @@ export function ensureBuiltinShikiLang(id: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+export interface CodeToken {
+  content: string;
+  color: string;
+}
+
+let jsonLoaded = false;
+
+/**
+ * Tokenizes a JSON snippet for inline-styled display (webhook delivery
+ * payloads). Reuses the diff's Shiki core + theme, but loads `json` outside
+ * `BUILTIN_LANGS` so it never re-routes `.json` diffs (those stay highlight.js).
+ * Returns lines of `{content, color}` tokens, or null if it can't tokenize.
+ */
+export function highlightJson(code: string): CodeToken[][] | null {
+  if (!jsonLoaded) {
+    try {
+      getCore().loadLanguageSync(jsonGrammar);
+      jsonLoaded = true;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return getCore()
+      .codeToTokensBase(code, {
+        lang: "json",
+        theme: isDarkMode() ? "gd-diff-dark" : "gd-diff-light",
+      })
+      .map((line) =>
+        line.map((t) => ({ content: t.content, color: t.color ?? "" })),
+      );
+  } catch {
+    return null;
   }
 }
 

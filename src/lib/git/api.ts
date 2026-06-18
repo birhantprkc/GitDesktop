@@ -22,6 +22,8 @@ import type {
   GhRepoList,
   GhStatus,
   GitInfo,
+  HookDelivery,
+  HookDeliveryDetail,
   HooksInfo,
   PrDetails,
   PrInfo,
@@ -679,6 +681,26 @@ export const ghHookPing = (repoPath: string, id: number) =>
 
 export const ghHookTest = (repoPath: string, id: number) =>
   invoke<void>("gh_hook_test", { repoPath, id });
+
+export const ghHookDeliveries = (repoPath: string, hookId: number) =>
+  invoke<HookDelivery[]>("gh_hook_deliveries", { repoPath, hookId });
+
+export const ghHookDelivery = (
+  repoPath: string,
+  hookId: number,
+  deliveryId: string,
+) =>
+  invoke<HookDeliveryDetail>("gh_hook_delivery", {
+    repoPath,
+    hookId,
+    deliveryId,
+  });
+
+export const ghHookRedeliver = (
+  repoPath: string,
+  hookId: number,
+  deliveryId: string,
+) => invoke<void>("gh_hook_redeliver", { repoPath, hookId, deliveryId });
 
 export const ghRepoSettingsGet = (repoPath: string) =>
   invoke<RepoSettings>("gh_repo_settings_get", { repoPath });

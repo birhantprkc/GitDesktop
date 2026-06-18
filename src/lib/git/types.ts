@@ -294,6 +294,25 @@ export interface WebhookInput {
   active: boolean;
 }
 
+/** A past webhook delivery (summary). */
+export interface HookDelivery {
+  /** A 19-digit snowflake — string, since it exceeds JS's safe integer range. */
+  id: string;
+  deliveredAt: string;
+  redelivery: boolean;
+  duration: number;
+  status: string;
+  statusCode: number;
+  event: string;
+  action: string | null;
+}
+
+/** One delivery's request payload + response body. */
+export interface HookDeliveryDetail {
+  requestPayload: string;
+  responsePayload: string;
+}
+
 /** Curated subset of a repo's GitHub settings (read). */
 export interface RepoSettings {
   description: string | null;

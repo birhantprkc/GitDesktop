@@ -1093,6 +1093,48 @@ export function useTestWebhook(repo: string) {
   return useWebhookMutation(repo, (id: number) => api.ghHookTest(repo, id));
 }
 
+const deliveriesKey = (repo: string, hookId: number) =>
+  ["repo", repo, "webhook-deliveries", hookId] as const;
+
+export function useWebhookDeliveries(
+  repo: string,
+  hookId: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: deliveriesKey(repo, hookId),
+    queryFn: () => api.ghHookDeliveries(repo, hookId),
+    enabled,
+    staleTime: 15_000,
+    retry: false,
+  });
+}
+
+export function useWebhookDelivery(
+  repo: string,
+  hookId: number,
+  deliveryId: string | null,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "webhook-delivery", hookId, deliveryId] as const,
+    queryFn: () => api.ghHookDelivery(repo, hookId, deliveryId as string),
+    // A past delivery is immutable, so it never goes stale once fetched.
+    enabled: deliveryId != null,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+}
+
+export function useRedeliverWebhook(repo: string, hookId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (deliveryId: string) =>
+      api.ghHookRedeliver(repo, hookId, deliveryId),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: deliveriesKey(repo, hookId) }),
+  });
+}
+
 const repoSettingsKey = (repo: string) =>
   ["repo", repo, "repo-settings"] as const;
 
