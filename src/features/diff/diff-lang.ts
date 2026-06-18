@@ -6,11 +6,12 @@
  */
 const EXT_LANG: Record<string, string> = {
   ts: "typescript",
-  tsx: "typescript",
+  // tsx/jsx → Shiki (highlight.js's typescript/javascript don't highlight JSX).
+  tsx: "tsx",
   mts: "typescript",
   cts: "typescript",
   js: "javascript",
-  jsx: "javascript",
+  jsx: "jsx",
   mjs: "javascript",
   cjs: "javascript",
   rs: "rust",

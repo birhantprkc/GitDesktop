@@ -13,11 +13,13 @@ import astroGrammar from "@shikijs/langs/astro";
 import gdscriptGrammar from "@shikijs/langs/gdscript";
 import hclGrammar from "@shikijs/langs/hcl";
 import jsonnetGrammar from "@shikijs/langs/jsonnet";
+import jsxGrammar from "@shikijs/langs/jsx";
 import prismaGrammar from "@shikijs/langs/prisma";
 import solidityGrammar from "@shikijs/langs/solidity";
 import svelteGrammar from "@shikijs/langs/svelte";
 import terraformGrammar from "@shikijs/langs/terraform";
 import tomlGrammar from "@shikijs/langs/toml";
+import tsxGrammar from "@shikijs/langs/tsx";
 import vueGrammar from "@shikijs/langs/vue";
 import wgslGrammar from "@shikijs/langs/wgsl";
 import zigGrammar from "@shikijs/langs/zig";
@@ -86,11 +88,15 @@ const BUILTIN_LANGS: Record<string, LanguageRegistration[]> = {
   gdscript: gdscriptGrammar,
   hcl: hclGrammar,
   jsonnet: jsonnetGrammar,
+  // tsx/jsx render via Shiki because highlight.js's typescript/javascript
+  // grammars don't tokenize JSX (the markup stayed plain).
+  jsx: jsxGrammar,
   prisma: prismaGrammar,
   solidity: solidityGrammar,
   svelte: svelteGrammar,
   terraform: terraformGrammar,
   toml: tomlGrammar,
+  tsx: tsxGrammar,
   vue: vueGrammar,
   wgsl: wgslGrammar,
   zig: zigGrammar,
