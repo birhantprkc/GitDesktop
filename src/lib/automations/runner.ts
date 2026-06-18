@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { cancelAgentReview } from "@/lib/ai/agent";
 import { createAiClient } from "@/lib/ai/client";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider } from "@/lib/ai/providers";
@@ -58,15 +59,45 @@ async function run(event: AutomationEvent): Promise<void> {
   const notify = settings.notifications.automations;
   for (const rule of rules) {
     const label = modeLabel(rule.action);
+    // Per-rule cancellation: HTTP providers stop via the AbortSignal; CLI
+    // providers stop by killing the subprocess (`cancelAgentReview` once we
+    // know its id). `cancelled` lets the run guards below skip delivery and the
+    // failure toast — an abort surfaces as a thrown error or an early return.
+    const controller = new AbortController();
+    const cli: { id: string | null } = { id: null };
+    let cancelled = false;
+
     const toastId = toast.loading(
       `Running AI ${label} of ${event.kind === "commit" ? event.hash.slice(0, 7) : `"${event.title}"`}…`,
+      {
+        action: {
+          label: "Cancel",
+          onClick: (e) => {
+            // Keep the toast mounted so we can update it in place.
+            e.preventDefault();
+            if (cancelled) return;
+            cancelled = true;
+            controller.abort();
+            if (cli.id) cancelAgentReview(cli.id).catch(() => undefined);
+            toast.info(`AI ${label} cancelled.`, {
+              id: toastId,
+              duration: 4000,
+            });
+          },
+        },
+      },
     );
     try {
       const text = await generateReviewText(
         settings.reviewAi,
         rule.action,
         event,
+        controller.signal,
+        (id) => {
+          cli.id = id;
+        },
       );
+      if (cancelled) continue;
       if (text === null) {
         toast.info(`AI ${label} skipped — no changes to review.`, {
           id: toastId,
@@ -76,6 +107,7 @@ async function run(event: AutomationEvent): Promise<void> {
       const body = `**AI ${label} (${settings.reviewAi.model})** · automated\n\n${text}`;
       await deliver(event, rule.action, body, text, toastId, notify);
     } catch (e) {
+      if (cancelled) continue;
       toast.error(`AI ${label} failed: ${e instanceof Error ? e.message : e}`, {
         id: toastId,
       });
@@ -86,11 +118,17 @@ async function run(event: AutomationEvent): Promise<void> {
   }
 }
 
-/** Resolves the diff, builds the prompt, and runs the model to completion. */
+/**
+ * Resolves the diff, builds the prompt, and runs the model to completion.
+ * `signal` aborts the HTTP stream; `onCliId` reports the CLI run's id so the
+ * caller can kill the subprocess (CLI providers don't take an AbortSignal).
+ */
 async function generateReviewText(
   ai: AiSettings,
   mode: ReviewMode,
   event: AutomationEvent,
+  signal: AbortSignal,
+  onCliId: (id: string) => void,
 ): Promise<string | null> {
   const diff =
     event.kind === "commit"
@@ -102,6 +140,8 @@ async function generateReviewText(
           DIFF_MAX_BYTES,
         );
   if (!diff.text.trim()) return null;
+  // Cancelled while the diff loaded — don't start the model.
+  if (signal.aborted) return null;
 
   const { system, prompt } = buildReviewPrompt(
     {
@@ -134,14 +174,18 @@ async function generateReviewText(
         result = t;
       },
       setStatus: () => undefined,
-      registerId: () => undefined,
+      registerId: onCliId,
     });
     return result;
   }
 
   const client = await createAiClient(ai);
   let buffer = "";
-  for await (const chunk of client.stream({ system, prompt })) {
+  for await (const chunk of client.stream({
+    system,
+    prompt,
+    abortSignal: signal,
+  })) {
     buffer += chunk;
   }
   return buffer;
