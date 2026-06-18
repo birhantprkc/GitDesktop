@@ -332,6 +332,36 @@ pub async fn gh_repo_url(repo_path: String) -> AppResult<String> {
     Ok(url)
 }
 
+/// Whether the signed-in user has starred this repo.
+/// `GET /user/starred/{owner}/{repo}` answers 204 (starred) or 404 (not),
+/// which gh surfaces as exit 0 / non-zero — hence `run_gh_raw`, so a 404 reads
+/// as "not starred" rather than erroring. gh resolves `{owner}/{repo}` from the
+/// repo at `repo_path`.
+#[tauri::command]
+pub async fn gh_repo_star_status(repo_path: String) -> AppResult<bool> {
+    let out = run_gh_raw(
+        Some(&repo_path),
+        &["api", "--method", "GET", "user/starred/{owner}/{repo}"],
+        GH_TIMEOUT,
+    )
+    .await?;
+    Ok(out.code == 0)
+}
+
+/// Stars (PUT) or unstars (DELETE) this repo for the signed-in user via
+/// `/user/starred/{owner}/{repo}`. Both are idempotent on GitHub's side.
+#[tauri::command]
+pub async fn gh_repo_set_star(repo_path: String, starred: bool) -> AppResult<()> {
+    let method = if starred { "PUT" } else { "DELETE" };
+    run_gh(
+        Some(&repo_path),
+        &["api", "--method", method, "user/starred/{owner}/{repo}"],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrRef {

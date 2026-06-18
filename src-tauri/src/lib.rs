@@ -122,6 +122,8 @@ pub fn run() {
             github::pr::gh_pr_reopen,
             github::pr::gh_pr_checkout,
             github::pr::gh_repo_fork,
+            github::pr::gh_repo_star_status,
+            github::pr::gh_repo_set_star,
             github::pr::gh_pr_ready,
             github::pr::gh_pr_edit,
             github::pr::gh_repo_labels,

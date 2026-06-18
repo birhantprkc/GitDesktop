@@ -643,6 +643,14 @@ export const ghPrCheckout = (repoPath: string, number: number) =>
 export const ghRepoFork = (repoPath: string, contributeToParent: boolean) =>
   invoke<string>("gh_repo_fork", { repoPath, contributeToParent });
 
+/** Whether the signed-in user has starred this repo. */
+export const ghRepoStarStatus = (repoPath: string) =>
+  invoke<boolean>("gh_repo_star_status", { repoPath });
+
+/** Stars (true) or unstars (false) this repo for the signed-in user. */
+export const ghRepoSetStar = (repoPath: string, starred: boolean) =>
+  invoke<void>("gh_repo_set_star", { repoPath, starred });
+
 export const ghPrReady = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_ready", { repoPath, number });
 

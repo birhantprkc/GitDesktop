@@ -11,6 +11,7 @@ import {
   LinkIcon,
   PencilSimpleIcon,
   ShieldCheckIcon,
+  StarIcon,
   TagSimpleIcon,
   TerminalIcon,
   TrashIcon,
@@ -47,7 +48,13 @@ import {
   openWithDefault,
   openWithProgram,
 } from "@/lib/git/api";
-import { useForkRepo, useGhStatus, useSubmodules } from "@/lib/git/queries";
+import {
+  useForkRepo,
+  useGhStatus,
+  useRepoStarStatus,
+  useSetRepoStar,
+  useSubmodules,
+} from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import type { RecentRepo } from "@/lib/settings/api";
 import { useSettings } from "@/lib/settings/queries";
@@ -91,6 +98,9 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const canGh = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );
+  const starStatus = useRepoStarStatus(repoPath, canGh);
+  const setStar = useSetRepoStar(repoPath);
+  const starred = starStatus.data ?? false;
   const editor = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
@@ -150,6 +160,23 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
             <DropdownMenuItem onClick={() => openWeb()}>
               <ArrowSquareOutIcon />
               View on GitHub
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={setStar.isPending}
+              onClick={() =>
+                setStar.mutate(!starred, {
+                  onSuccess: () =>
+                    toast.success(
+                      starred
+                        ? "Star removed"
+                        : `Starred ${gh.data?.repo ?? "repository"}`,
+                    ),
+                  onError,
+                })
+              }
+            >
+              <StarIcon weight={starred ? "fill" : "regular"} />
+              {starred ? "Unstar repository" : "Star repository"}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => openWeb("/issues/new")}>
               <WarningCircleIcon />

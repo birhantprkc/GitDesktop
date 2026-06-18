@@ -997,6 +997,35 @@ export function useForkRepo(repo: string) {
   );
 }
 
+export function useRepoStarStatus(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "star-status"] as const,
+    queryFn: () => api.ghRepoStarStatus(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+export function useSetRepoStar(repo: string) {
+  const queryClient = useQueryClient();
+  const key = ["repo", repo, "star-status"] as const;
+  return useMutation({
+    mutationFn: (starred: boolean) => api.ghRepoSetStar(repo, starred),
+    // Optimistic: flip the cached star state at once, roll back on failure.
+    onMutate: async (starred: boolean) => {
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<boolean>(key);
+      queryClient.setQueryData<boolean>(key, starred);
+      return { previous };
+    },
+    onError: (_e, _starred, ctx) => {
+      if (ctx) queryClient.setQueryData(key, ctx.previous);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
+  });
+}
+
 export function useReadyPr(repo: string) {
   return useRepoMutation(repo, (number: number) => api.ghPrReady(repo, number));
 }
