@@ -69,6 +69,10 @@ pub struct RunStep {
     pub conclusion: String,
     #[serde(default)]
     pub number: i64,
+    #[serde(default, deserialize_with = "de_null_string")]
+    pub started_at: String,
+    #[serde(default, deserialize_with = "de_null_string")]
+    pub completed_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

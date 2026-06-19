@@ -25,6 +25,8 @@ export interface RunStep {
   status: string;
   conclusion: string;
   number: number;
+  startedAt: string;
+  completedAt: string;
 }
 
 export interface RunJob {
@@ -178,6 +180,20 @@ export function useRunFailedLogs(
     queryKey: ["repo", repo, "actions", "run", runId ?? 0, "logs"] as const,
     queryFn: () => ghRunFailedLogs(repo, runId ?? 0),
     enabled: enabled && runId !== null,
+    staleTime: 30_000,
+  });
+}
+
+/** One job's logs (failed steps, or the full log), fetched only when expanded. */
+export function useJobLogs(
+  repo: string,
+  jobId: number | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "actions", "job", jobId ?? 0, "logs"] as const,
+    queryFn: () => ghJobLogs(repo, jobId ?? 0),
+    enabled: enabled && jobId !== null,
     staleTime: 30_000,
   });
 }

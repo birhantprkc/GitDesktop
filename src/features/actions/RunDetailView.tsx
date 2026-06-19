@@ -17,6 +17,7 @@ import type { RunJob } from "@/lib/github/actions";
 import {
   isRunActive,
   useCancelRun,
+  useJobLogs,
   useRerunRun,
   useRunDetail,
   useRunFailedLogs,
@@ -43,11 +44,21 @@ function duration(start: string, end: string): string {
   return `${h}h ${m % 60}m`;
 }
 
-function JobRow({ job, onDebug }: { job: RunJob; onDebug?: () => void }) {
+function JobRow({
+  repoPath,
+  job,
+  onDebug,
+}: {
+  repoPath: string;
+  job: RunJob;
+  onDebug?: () => void;
+}) {
   // Failed and in-progress jobs are the interesting ones — open them by default.
   const [open, setOpen] = useState(
     isRunActive(job.status) || isFailureConclusion(job.conclusion),
   );
+  const [showLogs, setShowLogs] = useState(false);
+  const logs = useJobLogs(repoPath, job.id, open && showLogs);
   const elapsed = duration(job.startedAt, job.completedAt);
 
   return (
@@ -87,21 +98,49 @@ function JobRow({ job, onDebug }: { job: RunJob; onDebug?: () => void }) {
       </div>
       {open && job.steps.length > 0 && (
         <ul className="pb-1">
-          {job.steps.map((step) => (
-            <li
-              key={`${step.number}:${step.name}`}
-              className="flex items-center gap-2 py-1 pr-3 pl-10 text-xs"
-            >
-              <StatusIcon
-                status={step.status}
-                conclusion={step.conclusion}
-                className="size-3.5"
-              />
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                {step.name}
-              </span>
-            </li>
-          ))}
+          {job.steps.map((step) => {
+            const stepElapsed = duration(step.startedAt, step.completedAt);
+            // Deep-link to the step's log section on GitHub (its own steps UI).
+            const href = job.url ? `${job.url}#step:${step.number}:1` : null;
+            const inner = (
+              <>
+                <StatusIcon
+                  status={step.status}
+                  conclusion={step.conclusion}
+                  className="size-3.5"
+                />
+                <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                  {step.name}
+                </span>
+                {stepElapsed && (
+                  <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                    {stepElapsed}
+                  </span>
+                )}
+                {href && (
+                  <ArrowSquareOutIcon className="size-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
+                )}
+              </>
+            );
+            return (
+              <li key={`${step.number}:${step.name}`}>
+                {href ? (
+                  <button
+                    type="button"
+                    onClick={() => openUrl(href)}
+                    title="Open this step's logs on GitHub"
+                    className="group flex w-full items-center gap-2 py-1 pr-3 pl-10 text-left text-xs hover:bg-muted/40"
+                  >
+                    {inner}
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2 py-1 pr-3 pl-10 text-xs">
+                    {inner}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       {open && job.steps.length === 0 && (
@@ -110,6 +149,34 @@ function JobRow({ job, onDebug }: { job: RunJob; onDebug?: () => void }) {
             ? "Waiting for steps…"
             : "No step details available."}
         </p>
+      )}
+      {open && (
+        <div className="pr-3 pb-2 pl-10">
+          <button
+            type="button"
+            onClick={() => setShowLogs((v) => !v)}
+            className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            {showLogs ? "Hide logs" : "Show logs"}
+          </button>
+          {showLogs && (
+            <div className="mt-1.5">
+              {logs.isPending ? (
+                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <Spinner /> Loading logs…
+                </div>
+              ) : logs.isError ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Couldn't load logs.
+                </p>
+              ) : (
+                <pre className="max-h-80 overflow-auto border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                  {logs.data?.trim() || "No logs available."}
+                </pre>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -264,6 +331,7 @@ export function RunDetailView({
               {run.jobs.map((job) => (
                 <JobRow
                   key={job.id}
+                  repoPath={repoPath}
                   job={job}
                   onDebug={
                     aiEnabled && isFailureConclusion(job.conclusion)
