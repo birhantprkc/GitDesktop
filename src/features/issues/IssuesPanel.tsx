@@ -329,7 +329,9 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
                 >
                   <p className="flex items-center gap-1.5 text-xs font-medium">
                     <RowIcon className="size-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{issue.title}</span>
+                    <span className="truncate" title={issue.title}>
+                      {issue.title}
+                    </span>
                   </p>
                   <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
                     local · {formatRelativeTime(issue.createdAt)}
@@ -395,7 +397,9 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
                 >
                   <p className="flex items-center gap-1.5 text-xs font-medium">
                     <RowIcon className="size-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{issue.title}</span>
+                    <span className="truncate" title={issue.title}>
+                      {issue.title}
+                    </span>
                   </p>
                   <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
                     #{issue.number} ·{" "}

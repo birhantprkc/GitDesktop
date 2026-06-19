@@ -467,7 +467,9 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                     }
                   >
                     <p className="flex items-center gap-1.5 text-xs font-medium">
-                      <span className="min-w-0 truncate">{commit.subject}</span>
+                      <span className="min-w-0 truncate" title={commit.subject}>
+                        {commit.subject}
+                      </span>
                       {commit.tags.slice(0, 2).map((tag) => (
                         <span
                           key={tag}

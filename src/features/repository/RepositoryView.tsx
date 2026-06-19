@@ -1,4 +1,12 @@
-import { CaretDownIcon } from "@phosphor-icons/react";
+import {
+  CaretDownIcon,
+  ChatCircleIcon,
+  CircleDashedIcon,
+  GitBranchIcon,
+  GitCommitIcon,
+  GitPullRequestIcon,
+  PlayIcon,
+} from "@phosphor-icons/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Activity, useDeferredValue, useEffect, useTransition } from "react";
 import {
@@ -197,7 +205,10 @@ export function RepositoryView() {
             {deferredCommitHash ? (
               <CommitDetailView repoPath={repoPath} hash={deferredCommitHash} />
             ) : (
-              <DiffPlaceholder message="Select a commit to see its changes" />
+              <DiffPlaceholder
+                icon={GitCommitIcon}
+                message="Select a commit to see its changes"
+              />
             )}
           </Activity>
           <Activity mode={mode("compare")}>
@@ -212,7 +223,10 @@ export function RepositoryView() {
                 compare={currentName}
               />
             ) : (
-              <DiffPlaceholder message="Pick a branch to compare against" />
+              <DiffPlaceholder
+                icon={GitBranchIcon}
+                message="Pick a branch to compare against"
+              />
             )}
           </Activity>
           <Activity mode={mode("pulls")}>
@@ -224,7 +238,10 @@ export function RepositoryView() {
             ) : deferredPr?.kind === "local" ? (
               <LocalPrView repoPath={repoPath} id={deferredPr.id} />
             ) : (
-              <DiffPlaceholder message="Select a pull request" />
+              <DiffPlaceholder
+                icon={GitPullRequestIcon}
+                message="Select a pull request"
+              />
             )}
           </Activity>
           <Activity mode={mode("issues")}>
@@ -236,7 +253,10 @@ export function RepositoryView() {
             ) : deferredIssue?.kind === "local" ? (
               <LocalIssueView repoPath={repoPath} id={deferredIssue.id} />
             ) : (
-              <DiffPlaceholder message="Select an issue" />
+              <DiffPlaceholder
+                icon={CircleDashedIcon}
+                message="Select an issue"
+              />
             )}
           </Activity>
           <Activity mode={mode("discussions")}>
@@ -246,14 +266,20 @@ export function RepositoryView() {
                 number={deferredDiscussion.number}
               />
             ) : (
-              <DiffPlaceholder message="Select a discussion" />
+              <DiffPlaceholder
+                icon={ChatCircleIcon}
+                message="Select a discussion"
+              />
             )}
           </Activity>
           <Activity mode={mode("actions")}>
             {selectedRunId !== null ? (
               <RunDetailView repoPath={repoPath} runId={selectedRunId} />
             ) : (
-              <DiffPlaceholder message="Select a workflow run" />
+              <DiffPlaceholder
+                icon={PlayIcon}
+                message="Select a workflow run"
+              />
             )}
           </Activity>
         </main>

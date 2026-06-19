@@ -193,7 +193,9 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
                       <span aria-hidden className="shrink-0">
                         {d.categoryEmoji || "💬"}
                       </span>
-                      <span className="truncate">{d.title}</span>
+                      <span className="truncate" title={d.title}>
+                        {d.title}
+                      </span>
                       {d.isAnswered && (
                         <Badge variant="secondary">answered</Badge>
                       )}

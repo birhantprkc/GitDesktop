@@ -325,7 +325,9 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
                 >
                   <p className="flex items-center gap-1.5 text-xs font-medium">
                     <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{pr.title}</span>
+                    <span className="truncate" title={pr.title}>
+                      {pr.title}
+                    </span>
                     {pr.status !== "open" && (
                       <Badge variant="secondary" className="capitalize">
                         {pr.status}
@@ -395,7 +397,9 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
                 >
                   <p className="flex items-center gap-1.5 text-xs font-medium">
                     <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{pr.title}</span>
+                    <span className="truncate" title={pr.title}>
+                      {pr.title}
+                    </span>
                     {pr.isDraft && <Badge variant="secondary">draft</Badge>}
                     {pr.state !== "OPEN" && (
                       <Badge variant="secondary" className="capitalize">
