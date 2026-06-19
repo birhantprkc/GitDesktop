@@ -43,6 +43,39 @@ export interface SelectedFile {
   untracked: boolean;
 }
 
+/** An in-progress commit message, persisted per repo + branch. */
+export interface CommitDraft {
+  title: string;
+  body: string;
+  coAuthors: CommitAuthor[];
+  aiGenerated: boolean;
+  amendingHash: string | null;
+}
+
+const EMPTY_COMMIT_DRAFT: CommitDraft = {
+  title: "",
+  body: "",
+  coAuthors: [],
+  aiGenerated: false,
+  amendingHash: null,
+};
+
+/** Key a commit draft so each repo + branch keeps its own message. A git branch
+ *  name can't contain a colon, so the key stays unambiguous. */
+export function commitDraftKey(repoPath: string, branch: string): string {
+  return `${repoPath}:${branch}`;
+}
+
+function isEmptyDraft(d: CommitDraft): boolean {
+  return (
+    !d.title &&
+    !d.body &&
+    d.coAuthors.length === 0 &&
+    d.amendingHash === null &&
+    !d.aiGenerated
+  );
+}
+
 interface UiState {
   view: AppView;
   /** Underlying view to return to when settings or help closes. */
@@ -84,6 +117,10 @@ interface UiState {
   commitAiGenerated: boolean;
   /** Hash of the commit being amended, or null for a normal commit. */
   amendingHash: string | null;
+  /** Saved commit drafts keyed by repo+branch; survives repo/branch switches.
+   *  The live commit fields above mirror the entry for `activeDraftKey`. */
+  commitDrafts: Record<string, CommitDraft>;
+  activeDraftKey: string | null;
 
   openRepo: (info: RepoInfo) => void;
   closeRepo: () => void;
@@ -112,121 +149,200 @@ interface UiState {
   setGenerating: (generating: boolean) => void;
   setCommitAiGenerated: (generated: boolean) => void;
   setAmending: (hash: string | null) => void;
+  /** Point the live commit fields at `key`'s saved draft (load on repo/branch
+   *  switch). The previous draft is already mirrored in `commitDrafts`. */
+  loadCommitDraft: (key: string) => void;
 }
 
-export const useUiStore = create<UiState>()((set, get) => ({
-  view: "welcome",
-  previousView: "welcome",
-  settingsTarget: null,
-  repoPath: null,
-  repoName: null,
-  repoTab: "changes",
-  compareBranch: null,
-  selectedPr: null,
-  selectedIssue: null,
-  selectedDiscussion: null,
-  pendingIssueDraft: null,
-  selectedRunId: null,
-  selectedTag: null,
-  selectedFile: null,
-  selectedCommitHash: null,
-  commitTitle: "",
-  commitBody: "",
-  commitCoAuthors: [],
-  generating: false,
-  commitAiGenerated: false,
-  amendingHash: null,
+export const useUiStore = create<UiState>()((set, get) => {
+  // Mirror the live commit-draft fields into commitDrafts[activeDraftKey] on
+  // every edit so a draft survives repo/branch switches; empty drafts are
+  // pruned so the map doesn't accumulate blanks.
+  const setDraftFields = (
+    patch: Partial<{
+      commitTitle: string;
+      commitBody: string;
+      commitCoAuthors: CommitAuthor[];
+      commitAiGenerated: boolean;
+      amendingHash: string | null;
+    }>,
+  ) =>
+    set((s) => {
+      const next = {
+        commitTitle: s.commitTitle,
+        commitBody: s.commitBody,
+        commitCoAuthors: s.commitCoAuthors,
+        commitAiGenerated: s.commitAiGenerated,
+        amendingHash: s.amendingHash,
+        ...patch,
+      };
+      const result: Partial<UiState> = { ...patch };
+      if (s.activeDraftKey) {
+        const draft: CommitDraft = {
+          title: next.commitTitle,
+          body: next.commitBody,
+          coAuthors: next.commitCoAuthors,
+          aiGenerated: next.commitAiGenerated,
+          amendingHash: next.amendingHash,
+        };
+        const drafts = { ...s.commitDrafts };
+        if (isEmptyDraft(draft)) delete drafts[s.activeDraftKey];
+        else drafts[s.activeDraftKey] = draft;
+        result.commitDrafts = drafts;
+      }
+      return result;
+    });
 
-  openRepo: (info) =>
-    startViewTransition(() =>
-      set({
-        view: "repo",
-        previousView: "repo",
-        repoPath: info.root,
-        repoName: info.name,
-        repoTab: "changes",
-        compareBranch: null,
-        selectedPr: null,
-        selectedIssue: null,
-        selectedDiscussion: null,
-        pendingIssueDraft: null,
-        selectedRunId: null,
-        selectedTag: null,
-        selectedFile: null,
-        selectedCommitHash: null,
-        commitTitle: "",
-        commitBody: "",
-        commitCoAuthors: [],
-        amendingHash: null,
+  return {
+    view: "welcome",
+    previousView: "welcome",
+    settingsTarget: null,
+    repoPath: null,
+    repoName: null,
+    repoTab: "changes",
+    compareBranch: null,
+    selectedPr: null,
+    selectedIssue: null,
+    selectedDiscussion: null,
+    pendingIssueDraft: null,
+    selectedRunId: null,
+    selectedTag: null,
+    selectedFile: null,
+    selectedCommitHash: null,
+    commitTitle: "",
+    commitBody: "",
+    commitCoAuthors: [],
+    generating: false,
+    commitAiGenerated: false,
+    amendingHash: null,
+    commitDrafts: {},
+    activeDraftKey: null,
+
+    openRepo: (info) =>
+      startViewTransition(() =>
+        set({
+          view: "repo",
+          previousView: "repo",
+          repoPath: info.root,
+          repoName: info.name,
+          repoTab: "changes",
+          compareBranch: null,
+          selectedPr: null,
+          selectedIssue: null,
+          selectedDiscussion: null,
+          pendingIssueDraft: null,
+          selectedRunId: null,
+          selectedTag: null,
+          selectedFile: null,
+          selectedCommitHash: null,
+          // Clear the live fields; the previous repo's draft stays in
+          // commitDrafts (keyed by repo+branch) and CommitBox reloads the new
+          // repo's draft once its branch is known.
+          commitTitle: "",
+          commitBody: "",
+          commitCoAuthors: [],
+          commitAiGenerated: false,
+          amendingHash: null,
+          activeDraftKey: null,
+        }),
+      ),
+    closeRepo: () =>
+      startViewTransition(() =>
+        set({
+          view: "welcome",
+          previousView: "welcome",
+          repoPath: null,
+          repoName: null,
+          repoTab: "changes",
+          compareBranch: null,
+          selectedPr: null,
+          selectedIssue: null,
+          selectedDiscussion: null,
+          pendingIssueDraft: null,
+          selectedRunId: null,
+          selectedTag: null,
+          selectedFile: null,
+          selectedCommitHash: null,
+          commitTitle: "",
+          commitBody: "",
+          commitCoAuthors: [],
+          commitAiGenerated: false,
+          amendingHash: null,
+          activeDraftKey: null,
+        }),
+      ),
+    setRepoTab: (tab) => set({ repoTab: tab }),
+    setCompareBranch: (branch) => set({ compareBranch: branch }),
+    selectPr: (pr) => set({ selectedPr: pr }),
+    selectIssue: (issue) => set({ selectedIssue: issue }),
+    selectDiscussion: (discussion) => set({ selectedDiscussion: discussion }),
+    setPendingIssueDraft: (draft) => set({ pendingIssueDraft: draft }),
+    selectRun: (id) => set({ selectedRunId: id }),
+    selectTag: (tag) => set({ selectedTag: tag }),
+    selectCommit: (hash) => set({ selectedCommitHash: hash }),
+    openSettings: (target) =>
+      startViewTransition(() => {
+        const { view } = get();
+        set({
+          view: "settings",
+          settingsTarget: target ?? null,
+          // Keep the underlying view when opening from another overlay.
+          previousView:
+            view === "settings" || view === "help" ? get().previousView : view,
+        });
       }),
-    ),
-  closeRepo: () =>
-    startViewTransition(() =>
-      set({
-        view: "welcome",
-        previousView: "welcome",
-        repoPath: null,
-        repoName: null,
-        repoTab: "changes",
-        compareBranch: null,
-        selectedPr: null,
-        selectedIssue: null,
-        selectedDiscussion: null,
-        pendingIssueDraft: null,
-        selectedRunId: null,
-        selectedTag: null,
-        selectedFile: null,
-        selectedCommitHash: null,
+    clearSettingsTarget: () => set({ settingsTarget: null }),
+    closeSettings: () =>
+      startViewTransition(() => set({ view: get().previousView })),
+    openHelp: () =>
+      startViewTransition(() => {
+        const { view } = get();
+        set({
+          view: "help",
+          previousView:
+            view === "settings" || view === "help" ? get().previousView : view,
+        });
       }),
-    ),
-  setRepoTab: (tab) => set({ repoTab: tab }),
-  setCompareBranch: (branch) => set({ compareBranch: branch }),
-  selectPr: (pr) => set({ selectedPr: pr }),
-  selectIssue: (issue) => set({ selectedIssue: issue }),
-  selectDiscussion: (discussion) => set({ selectedDiscussion: discussion }),
-  setPendingIssueDraft: (draft) => set({ pendingIssueDraft: draft }),
-  selectRun: (id) => set({ selectedRunId: id }),
-  selectTag: (tag) => set({ selectedTag: tag }),
-  selectCommit: (hash) => set({ selectedCommitHash: hash }),
-  openSettings: (target) =>
-    startViewTransition(() => {
-      const { view } = get();
-      set({
-        view: "settings",
-        settingsTarget: target ?? null,
-        // Keep the underlying view when opening from another overlay.
-        previousView:
-          view === "settings" || view === "help" ? get().previousView : view,
-      });
-    }),
-  clearSettingsTarget: () => set({ settingsTarget: null }),
-  closeSettings: () =>
-    startViewTransition(() => set({ view: get().previousView })),
-  openHelp: () =>
-    startViewTransition(() => {
-      const { view } = get();
-      set({
-        view: "help",
-        previousView:
-          view === "settings" || view === "help" ? get().previousView : view,
-      });
-    }),
-  closeHelp: () => startViewTransition(() => set({ view: get().previousView })),
-  selectFile: (file) => set({ selectedFile: file }),
-  setCommitDraft: (title, body) =>
-    set({ commitTitle: title, commitBody: body }),
-  setCommitTitle: (title) => set({ commitTitle: title }),
-  setCommitBody: (body) => set({ commitBody: body }),
-  setCommitCoAuthors: (coAuthors) => set({ commitCoAuthors: coAuthors }),
-  clearCommitDraft: () =>
-    set({
-      commitTitle: "",
-      commitBody: "",
-      commitCoAuthors: [],
-      commitAiGenerated: false,
-      amendingHash: null,
-    }),
-  setGenerating: (generating) => set({ generating }),
-  setCommitAiGenerated: (generated) => set({ commitAiGenerated: generated }),
-  setAmending: (hash) => set({ amendingHash: hash }),
-}));
+    closeHelp: () =>
+      startViewTransition(() => set({ view: get().previousView })),
+    selectFile: (file) => set({ selectedFile: file }),
+    setCommitDraft: (title, body) =>
+      setDraftFields({ commitTitle: title, commitBody: body }),
+    setCommitTitle: (title) => setDraftFields({ commitTitle: title }),
+    setCommitBody: (body) => setDraftFields({ commitBody: body }),
+    setCommitCoAuthors: (coAuthors) =>
+      setDraftFields({ commitCoAuthors: coAuthors }),
+    clearCommitDraft: () =>
+      set((s) => {
+        const drafts = { ...s.commitDrafts };
+        if (s.activeDraftKey) delete drafts[s.activeDraftKey];
+        return {
+          commitTitle: "",
+          commitBody: "",
+          commitCoAuthors: [],
+          commitAiGenerated: false,
+          amendingHash: null,
+          commitDrafts: drafts,
+        };
+      }),
+    setGenerating: (generating) => set({ generating }),
+    setCommitAiGenerated: (generated) =>
+      setDraftFields({ commitAiGenerated: generated }),
+    setAmending: (hash) => setDraftFields({ amendingHash: hash }),
+    loadCommitDraft: (key) =>
+      set((s) => {
+        // The outgoing draft is already mirrored in commitDrafts, so just point
+        // the live fields at the requested key's draft (or a blank one).
+        if (key === s.activeDraftKey) return {};
+        const d = s.commitDrafts[key] ?? EMPTY_COMMIT_DRAFT;
+        return {
+          activeDraftKey: key,
+          commitTitle: d.title,
+          commitBody: d.body,
+          commitCoAuthors: d.coAuthors,
+          commitAiGenerated: d.aiGenerated,
+          amendingHash: d.amendingHash,
+        };
+      }),
+  };
+});

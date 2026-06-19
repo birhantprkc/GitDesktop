@@ -1,4 +1,5 @@
 import { InfoIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
+import { useEffect } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +13,7 @@ import { coAuthorTrailers } from "@/lib/git/co-authors";
 import { useCommit, useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useAiConfigured, useAiEnabled } from "@/lib/settings/queries";
-import { useUiStore } from "@/lib/stores/ui";
+import { commitDraftKey, useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { CoAuthorPicker } from "./CoAuthorPicker";
@@ -29,6 +30,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   const setCommitBody = useUiStore((s) => s.setCommitBody);
   const setCoAuthors = useUiStore((s) => s.setCommitCoAuthors);
   const clearCommitDraft = useUiStore((s) => s.clearCommitDraft);
+  const loadCommitDraft = useUiStore((s) => s.loadCommitDraft);
   const commitAiGenerated = useUiStore((s) => s.commitAiGenerated);
   const { generate, cancel, generating } = useGenerateCommitMessage(repoPath);
   const aiEnabled = useAiEnabled();
@@ -38,6 +40,13 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
 
   const amending = amendingHash !== null;
   const branchName = status.data?.branch?.name ?? null;
+
+  // Point the commit box at this repo+branch's saved draft. Drafts are kept
+  // per repo+branch, so switching repos/branches preserves each in-progress
+  // message instead of clearing it.
+  useEffect(() => {
+    if (branchName) loadCommitDraft(commitDraftKey(repoPath, branchName));
+  }, [repoPath, branchName, loadCommitDraft]);
   // A "require pull request" rule locks the branch against direct commits.
   const locked = branchName
     ? requiresPullRequest(rulesConfig, branchName)
