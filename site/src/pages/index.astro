@@ -4,11 +4,14 @@ import appActions from "../assets/app-actions.png";
 import appCommit from "../assets/app-commit.png";
 import appCompare from "../assets/app-compare.png";
 import appDiff from "../assets/app-diff.png";
+import appDiscussions from "../assets/app-discussions.png";
 import appHistory from "../assets/app-history-detail.png";
+import appIssues from "../assets/app-issues.png";
 import appPrDialog from "../assets/app-pr-dialog.png";
 import appPrFiles from "../assets/app-pr-files.png";
 import appReview from "../assets/app-review.png";
 import appStaging from "../assets/app-staging.png";
+import appStagingNoai from "../assets/app-staging-noai.png";
 import FeatureRow from "../components/FeatureRow.astro";
 import "../styles/global.css";
 
@@ -309,6 +312,42 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
           </p>
         </FeatureRow>
 
+        <!-- Issues + Discussions (collaboration; shown in both views) -->
+        <FeatureRow
+          title="Issues and to-dos, triaged in place."
+          image={appIssues}
+          alt="An issue in GitDesktop: a bug report with labels, an assignee, a linked pull request in the Development panel, and a comment thread"
+          side="left"
+        >
+          <p>
+            Browse, open, and edit GitHub issues without the tab-switch. Labels,
+            assignees, milestones, issue type, sub-issues, dependencies, and the
+            pull requests and branches that close them all sit in one panel.
+          </p>
+          <p class="text-muted">
+            Working privately? Keep <span class="text-ink">local to-dos</span>
+            that need no remote, then publish them to GitHub when the work goes
+            public.
+          </p>
+        </FeatureRow>
+
+        <FeatureRow
+          title="Discussions, where the thread lives."
+          image={appDiscussions}
+          alt="A GitHub Discussion in GitDesktop: a roadmap thread with a category, an upvote count, reactions, and a threaded reply"
+          side="right"
+          surface={true}
+        >
+          <p>
+            Read and join your repository's GitHub Discussions in the same
+            window: categories, upvotes, reactions, and threaded replies, with
+            the Write/Preview markdown you author everywhere else.
+          </p>
+          <p class="text-muted">
+            Announcements, Q&amp;A, and roadmap threads, no browser tab required.
+          </p>
+        </FeatureRow>
+
         <!-- Daily loop -->
         <section class="border-b border-line">
           <div class="mx-auto max-w-6xl px-5 py-20 md:py-28">
@@ -437,7 +476,7 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
             <div data-reveal style="transition-delay:220ms" class="mint-glow relative min-w-0">
               <figure class="window">
                 <Image
-                  src={appStaging}
+                  src={appStagingNoai}
                   alt="GitDesktop showing a split diff with per-hunk stage controls — staging changes line by line"
                   widths={[600, 900, 1296]}
                   sizes="(min-width: 1024px) 620px, 92vw"
@@ -465,6 +504,42 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
           <p class="text-muted">
             The full review loop on a repo that isn't on GitHub at all — no browser
             tab, no account required.
+          </p>
+        </FeatureRow>
+
+        <!-- Issues + Discussions (collaboration; shown in both views) -->
+        <FeatureRow
+          title="Issues and to-dos, triaged in place."
+          image={appIssues}
+          alt="An issue in GitDesktop: a bug report with labels, an assignee, a linked pull request in the Development panel, and a comment thread"
+          side="right"
+          surface={true}
+        >
+          <p>
+            Browse, open, and edit GitHub issues without the tab-switch. Labels,
+            assignees, milestones, issue type, sub-issues, dependencies, and the
+            pull requests and branches that close them all sit in one panel.
+          </p>
+          <p class="text-muted">
+            Working privately? Keep <span class="text-ink">local to-dos</span>
+            that need no remote, then publish them to GitHub when the work goes
+            public.
+          </p>
+        </FeatureRow>
+
+        <FeatureRow
+          title="Discussions, where the thread lives."
+          image={appDiscussions}
+          alt="A GitHub Discussion in GitDesktop: a roadmap thread with a category, an upvote count, reactions, and a threaded reply"
+          side="left"
+        >
+          <p>
+            Read and join your repository's GitHub Discussions in the same
+            window: categories, upvotes, reactions, and threaded replies, with
+            the Write/Preview markdown you author everywhere else.
+          </p>
+          <p class="text-muted">
+            Announcements, Q&amp;A, and roadmap threads, no browser tab required.
           </p>
         </FeatureRow>
 
