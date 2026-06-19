@@ -53,6 +53,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   const hoverPrefetch = useHoverPrefetch();
   const [createOpen, setCreateOpen] = useState(false);
   const [ghCreateOpen, setGhCreateOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [filterText, setFilterText] = useState("");
   const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
   const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set());
@@ -104,7 +105,9 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
     return true;
   }
 
-  const visibleLocal = stateLocal.filter(matchesLocal);
+  const matchingLocal = stateLocal.filter(matchesLocal);
+  const visibleLocal = matchingLocal.filter((p) => showArchived || !p.archived);
+  const archivedLocalCount = matchingLocal.filter((p) => p.archived).length;
   const visibleRemote = stateRemote.filter((pr) => {
     const author = pr.author?.login ?? "";
     if (
@@ -331,10 +334,22 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
                   </p>
                   <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
                     {pr.head} → {pr.base}
+                    {pr.archived ? " · archived" : ""}
                   </p>
                 </button>
               );
             })
+          )}
+          {archivedLocalCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowArchived((v) => !v)}
+              className="px-3 py-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              {showArchived
+                ? "Hide archived"
+                : `Show archived (${archivedLocalCount})`}
+            </button>
           )}
 
           <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">GitHub</p>

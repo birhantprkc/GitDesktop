@@ -1,5 +1,6 @@
 import { Popover } from "@base-ui/react/popover";
 import {
+  ArchiveIcon,
   ArrowCounterClockwiseIcon,
   CaretDownIcon,
   CheckCircleIcon,
@@ -263,6 +264,7 @@ export function LocalPrView({
           {pr.approved && pr.status === "open" && (
             <Badge variant="secondary">approved</Badge>
           )}
+          {pr.archived && <Badge variant="secondary">archived</Badge>}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span className="font-mono">{pr.head}</span>
@@ -556,6 +558,21 @@ export function LocalPrView({
         >
           <TrashIcon data-icon="inline-start" />
           Delete
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            if (pr.archived) {
+              save.mutate({ ...pr, archived: false });
+            } else {
+              save.mutate({ ...pr, archived: true });
+              selectPr(null);
+            }
+          }}
+        >
+          <ArchiveIcon data-icon="inline-start" />
+          {pr.archived ? "Unarchive" : "Archive"}
         </Button>
         <span className="flex-1" />
         {pr.status === "open" && (

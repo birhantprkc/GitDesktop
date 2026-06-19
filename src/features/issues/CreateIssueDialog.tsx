@@ -27,10 +27,13 @@ export function CreateIssueDialog({
   repoPath,
   open,
   onOpenChange,
+  initialDraft,
 }: {
   repoPath: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Seeds title/body when opened (e.g. "Reference in new issue"). */
+  initialDraft?: { title: string; body: string };
 }) {
   const createIssue = useCreateIssue(repoPath);
   const repoLabels = useRepoLabels(repoPath, open);
@@ -73,7 +76,10 @@ export function CreateIssueDialog({
   // keepDefaultValues: otherwise the per-render options sync clobbers the
   // reset values back to empty on an untouched form.
   const seedOnOpen = useEffectEvent(() => {
-    form.reset({ title: "", body: "" }, { keepDefaultValues: true });
+    form.reset(
+      { title: initialDraft?.title ?? "", body: initialDraft?.body ?? "" },
+      { keepDefaultValues: true },
+    );
     setLabels(new Set());
     setAssignees([]);
     setMilestone(null);

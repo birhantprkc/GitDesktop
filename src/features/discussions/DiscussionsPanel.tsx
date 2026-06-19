@@ -1,5 +1,6 @@
-import { CaretDownIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, PlusIcon } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LabelChip } from "@/features/conversations/Thread";
 import { GhNotReady } from "@/features/repository/GhNotReady";
 import {
   useDiscussionList,
@@ -22,7 +24,9 @@ import {
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
+import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { CreateDiscussionDialog } from "./CreateDiscussionDialog";
 
 export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
@@ -40,6 +44,7 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
   const hoverPrefetch = useHoverPrefetch();
   const [filterText, setFilterText] = useState("");
   const filterRef = useRef<HTMLInputElement>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
 
@@ -104,6 +109,16 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        <Button
+          variant="ghost"
+          size="xs"
+          className="ml-auto"
+          disabled={!listEnabled}
+          onClick={() => setCreateOpen(true)}
+        >
+          <PlusIcon data-icon="inline-start" />
+          New
+        </Button>
       </div>
       <div className="border-b p-2">
         <Input
@@ -156,7 +171,7 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
                   key={d.number}
                   data-row={String(d.number)}
                   className={cn(
-                    "block w-full border-b px-3 py-2 text-left",
+                    "flex w-full items-start gap-2 border-b px-3 py-2 text-left",
                     active
                       ? "bg-accent text-accent-foreground"
                       : "hover:bg-muted/60",
@@ -164,26 +179,54 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
                   onClick={() => selectDiscussion({ number: d.number })}
                   onMouseEnter={() => hoverPrefetch(() => prefetch(d.number))}
                 >
-                  <p className="flex items-center gap-1.5 text-xs font-medium">
-                    <span aria-hidden className="shrink-0">
-                      {d.categoryEmoji || "💬"}
-                    </span>
-                    <span className="truncate">{d.title}</span>
-                    {d.isAnswered && (
-                      <Badge variant="secondary">answered</Badge>
+                  <Avatar size="sm" className="mt-0.5 shrink-0">
+                    <AvatarImage
+                      src={`https://github.com/${d.author}.png?size=48`}
+                      alt={d.author}
+                    />
+                    <AvatarFallback>
+                      {(d.author || "?").charAt(0).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <p className="flex items-center gap-1.5 text-xs font-medium">
+                      <span aria-hidden className="shrink-0">
+                        {d.categoryEmoji || "💬"}
+                      </span>
+                      <span className="truncate">{d.title}</span>
+                      {d.isAnswered && (
+                        <Badge variant="secondary">answered</Badge>
+                      )}
+                    </p>
+                    {d.labels.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {d.labels.map((l) => (
+                          <LabelChip key={l.name} label={l} />
+                        ))}
+                      </div>
                     )}
-                  </p>
-                  <p className="mt-0.5 truncate pl-5 text-[11px] text-muted-foreground">
-                    #{d.number} · {d.author ? `${d.author} · ` : ""}
-                    {d.categoryName} · {d.commentCount}{" "}
-                    {d.commentCount === 1 ? "comment" : "comments"}
-                  </p>
+                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      #{d.number} · {d.author || "unknown"} · {d.categoryName}
+                    </p>
+                    <p className="truncate text-[11px] text-muted-foreground">
+                      {d.commentCount}{" "}
+                      {d.commentCount === 1 ? "comment" : "comments"} ·{" "}
+                      {formatRelativeTime(d.createdAt)}
+                      {d.upvoteCount > 0 ? ` · ▲ ${d.upvoteCount}` : ""}
+                    </p>
+                  </div>
                 </button>
               );
             })
           )}
         </div>
       </ScrollArea>
+
+      <CreateDiscussionDialog
+        repoPath={repoPath}
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+      />
     </div>
   );
 }

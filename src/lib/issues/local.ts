@@ -21,6 +21,8 @@ export interface LocalIssue {
   comments: LocalIssueComment[];
   createdAt: string;
   closedAt?: string;
+  /** Hidden from the list unless "Show archived" — a soft alternative to delete. */
+  archived?: boolean;
 }
 
 // Personal app-data, keyed by repo path — never written into the repo itself.

@@ -6,7 +6,7 @@ import {
   FunnelIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -53,10 +53,25 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const filterRef = useRef<HTMLInputElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createLocalOpen, setCreateLocalOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const localIssues = useLocalIssues(repoPath);
+  const pendingIssueDraft = useUiStore((s) => s.pendingIssueDraft);
+  const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
+  const [issueDraft, setIssueDraft] = useState<
+    { title: string; body: string } | undefined
+  >();
 
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
   useHotkeyAction("create-issue", () => setCreateOpen(true), ghReady);
+
+  // "Reference in new issue" (from a discussion) seeds + opens the GitHub create.
+  useEffect(() => {
+    if (pendingIssueDraft) {
+      setIssueDraft(pendingIssueDraft);
+      setCreateOpen(true);
+      setPendingIssueDraft(null);
+    }
+  }, [pendingIssueDraft, setPendingIssueDraft]);
 
   const issues = issueList.data ?? [];
   const stateLocal = (localIssues.data ?? []).filter((i) =>
@@ -91,7 +106,9 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
     return true;
   }
 
-  const visibleLocal = stateLocal.filter(matchesLocal);
+  const matchingLocal = stateLocal.filter(matchesLocal);
+  const visibleLocal = matchingLocal.filter((i) => showArchived || !i.archived);
+  const archivedLocalCount = matchingLocal.filter((i) => i.archived).length;
   const visible = issues.filter((issue) => {
     const author = issue.author?.login ?? "";
     if (
@@ -316,10 +333,22 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
                   </p>
                   <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
                     local · {formatRelativeTime(issue.createdAt)}
+                    {issue.archived ? " · archived" : ""}
                   </p>
                 </button>
               );
             })
+          )}
+          {archivedLocalCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowArchived((v) => !v)}
+              className="px-3 py-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              {showArchived
+                ? "Hide archived"
+                : `Show archived (${archivedLocalCount})`}
+            </button>
           )}
 
           <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">GitHub</p>
@@ -383,7 +412,11 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
       <CreateIssueDialog
         repoPath={repoPath}
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={(o) => {
+          setCreateOpen(o);
+          if (!o) setIssueDraft(undefined);
+        }}
+        initialDraft={issueDraft}
       />
       <CreateLocalIssueDialog
         repoPath={repoPath}

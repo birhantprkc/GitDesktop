@@ -60,6 +60,9 @@ interface UiState {
   selectedIssue: SelectedIssue | null;
   /** Selected discussion (by number) on the Discussions tab. */
   selectedDiscussion: { number: number } | null;
+  /** A draft to seed the next GitHub-issue create dialog (e.g. "Reference in
+   *  new issue" from a discussion); consumed and cleared by IssuesPanel. */
+  pendingIssueDraft: { title: string; body: string } | null;
   /** Selected workflow run (databaseId) on the Actions tab. */
   selectedRunId: number | null;
   selectedFile: SelectedFile | null;
@@ -86,6 +89,7 @@ interface UiState {
   selectPr: (pr: SelectedPr | null) => void;
   selectIssue: (issue: SelectedIssue | null) => void;
   selectDiscussion: (discussion: { number: number } | null) => void;
+  setPendingIssueDraft: (draft: { title: string; body: string } | null) => void;
   selectRun: (id: number | null) => void;
   selectFile: (file: SelectedFile | null) => void;
   selectCommit: (hash: string | null) => void;
@@ -110,6 +114,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
   selectedPr: null,
   selectedIssue: null,
   selectedDiscussion: null,
+  pendingIssueDraft: null,
   selectedRunId: null,
   selectedFile: null,
   selectedCommitHash: null,
@@ -132,6 +137,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
         selectedPr: null,
         selectedIssue: null,
         selectedDiscussion: null,
+        pendingIssueDraft: null,
         selectedRunId: null,
         selectedFile: null,
         selectedCommitHash: null,
@@ -153,6 +159,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
         selectedPr: null,
         selectedIssue: null,
         selectedDiscussion: null,
+        pendingIssueDraft: null,
         selectedRunId: null,
         selectedFile: null,
         selectedCommitHash: null,
@@ -163,6 +170,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
   selectPr: (pr) => set({ selectedPr: pr }),
   selectIssue: (issue) => set({ selectedIssue: issue }),
   selectDiscussion: (discussion) => set({ selectedDiscussion: discussion }),
+  setPendingIssueDraft: (draft) => set({ pendingIssueDraft: draft }),
   selectRun: (id) => set({ selectedRunId: id }),
   selectCommit: (hash) => set({ selectedCommitHash: hash }),
   openSettings: (target) =>

@@ -47,7 +47,6 @@ import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import type { LockReason, MinimizeReason } from "@/lib/git/api";
 import {
-  useAddReaction,
   useCloseIssue,
   useCommentIssue,
   useDeletePrComment,
@@ -59,11 +58,11 @@ import {
   useLockIssue,
   useMinimizeComment,
   usePinIssue,
-  useRemoveReaction,
   useReopenIssue,
   useRepoLabels,
   useSetIssueAssignees,
   useSetIssueMilestone,
+  useToggleReaction,
   useUnlockIssue,
   useUnminimizeComment,
 } from "@/lib/git/queries";
@@ -110,8 +109,11 @@ export function RemoteIssueView({
   const lockIssue = useLockIssue(repoPath);
   const unlockIssue = useUnlockIssue(repoPath);
   const reactions = useIssueReactions(repoPath, number);
-  const addReaction = useAddReaction(repoPath);
-  const removeReaction = useRemoveReaction(repoPath);
+  const toggleReactionMutation = useToggleReaction(
+    repoPath,
+    ["repo", repoPath, "issue", number, "reactions"] as const,
+    details.data?.id ?? "",
+  );
 
   const [composeBody, setComposeBody] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -213,8 +215,7 @@ export function RemoteIssueView({
   }
 
   function toggleReaction(subjectId: string, content: string, active: boolean) {
-    const m = active ? removeReaction : addReaction;
-    m.mutate({ subjectId, content }, { onError });
+    toggleReactionMutation.mutate({ subjectId, content, active }, { onError });
   }
 
   function toggleDraftLabel(name: string, on: boolean) {

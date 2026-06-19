@@ -1,5 +1,6 @@
 import { Popover } from "@base-ui/react/popover";
 import {
+  ArchiveIcon,
   ArrowCounterClockwiseIcon,
   DotsThreeIcon,
   GithubLogoIcon,
@@ -192,6 +193,7 @@ export function LocalIssueView({
           >
             {issue.status}
           </Badge>
+          {issue.archived && <Badge variant="secondary">archived</Badge>}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span>local · opened {formatRelativeTime(issue.createdAt)}</span>
@@ -372,6 +374,21 @@ export function LocalIssueView({
         >
           <TrashIcon data-icon="inline-start" />
           Delete
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            if (issue.archived) {
+              save.mutate({ ...issue, archived: false });
+            } else {
+              save.mutate({ ...issue, archived: true });
+              selectIssue(null);
+            }
+          }}
+        >
+          <ArchiveIcon data-icon="inline-start" />
+          {issue.archived ? "Unarchive" : "Archive"}
         </Button>
         <span className="flex-1" />
         {isOpen && (

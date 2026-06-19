@@ -1,5 +1,6 @@
 import {
   keepPreviousData,
+  type QueryKey,
   queryOptions,
   useInfiniteQuery,
   useMutation,
@@ -11,7 +12,10 @@ import { COLD_START_NO_GH, COLD_START_NO_GIT } from "@/lib/test-mode";
 import * as api from "./api";
 import type {
   DiffStatEntry,
+  DiscussionDetails,
   GhStatus,
+  IssueReactions,
+  Reaction,
   RepoOp,
   RepoSettingsInput,
   RewriteStep,
@@ -587,16 +591,86 @@ export function useIssueReactions(repo: string, number: number | null) {
   });
 }
 
-export function useAddReaction(repo: string) {
-  return useRepoMutation(repo, (args: { subjectId: string; content: string }) =>
-    api.ghAddReaction(repo, args.subjectId, args.content),
-  );
+function patchReactionList(
+  list: Reaction[],
+  content: string,
+  active: boolean,
+): Reaction[] {
+  const existing = list.find((r) => r.content === content);
+  if (active) {
+    // Removing the viewer's reaction.
+    if (!existing) return list;
+    const count = existing.count - 1;
+    return count <= 0
+      ? list.filter((r) => r.content !== content)
+      : list.map((r) =>
+          r.content === content ? { ...r, count, viewerReacted: false } : r,
+        );
+  }
+  // Adding the viewer's reaction.
+  if (existing) {
+    return list.map((r) =>
+      r.content === content
+        ? { ...r, count: r.count + 1, viewerReacted: true }
+        : r,
+    );
+  }
+  return [...list, { content, count: 1, viewerReacted: true }];
 }
 
-export function useRemoveReaction(repo: string) {
-  return useRepoMutation(repo, (args: { subjectId: string; content: string }) =>
-    api.ghRemoveReaction(repo, args.subjectId, args.content),
-  );
+/**
+ * Toggles the viewer's reaction with an optimistic cache update + rollback, so
+ * the chip responds instantly instead of waiting on a refetch. `reactionsKey`
+ * is the issue/discussion reactions query; `bodyId` is the issue/discussion
+ * node id (anything else is a comment id). Works for issues and discussions.
+ */
+export function useToggleReaction(
+  repo: string,
+  reactionsKey: QueryKey,
+  bodyId: string,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      subjectId: string;
+      content: string;
+      active: boolean;
+    }) =>
+      args.active
+        ? api.ghRemoveReaction(repo, args.subjectId, args.content)
+        : api.ghAddReaction(repo, args.subjectId, args.content),
+    onMutate: async (args) => {
+      await queryClient.cancelQueries({ queryKey: reactionsKey });
+      const prev = queryClient.getQueryData<IssueReactions>(reactionsKey);
+      queryClient.setQueryData<IssueReactions>(reactionsKey, (data) => {
+        const base: IssueReactions = data ?? { body: [], comments: {} };
+        if (args.subjectId === bodyId) {
+          return {
+            ...base,
+            body: patchReactionList(base.body, args.content, args.active),
+          };
+        }
+        return {
+          ...base,
+          comments: {
+            ...base.comments,
+            [args.subjectId]: patchReactionList(
+              base.comments[args.subjectId] ?? [],
+              args.content,
+              args.active,
+            ),
+          },
+        };
+      });
+      return { prev };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) {
+        queryClient.setQueryData(reactionsKey, ctx.prev);
+      }
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: reactionsKey }),
+  });
 }
 
 export function useDiscussionMeta(repo: string, enabled: boolean) {
@@ -645,6 +719,151 @@ export function usePrefetchDiscussion(repo: string) {
     },
     [queryClient, repo],
   );
+}
+
+export function useCreateDiscussion(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      repoId: string;
+      categoryId: string;
+      title: string;
+      body: string;
+    }) =>
+      api.ghDiscussionCreate(
+        repo,
+        args.repoId,
+        args.categoryId,
+        args.title,
+        args.body,
+      ),
+  );
+}
+
+export function useAddDiscussionComment(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { discussionId: string; body: string; replyToId?: string | null }) =>
+      api.ghDiscussionAddComment(
+        repo,
+        args.discussionId,
+        args.body,
+        args.replyToId ?? null,
+      ),
+  );
+}
+
+export function useMarkDiscussionAnswer(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { commentId: string; answer: boolean }) =>
+      args.answer
+        ? api.ghDiscussionMarkAnswer(repo, args.commentId)
+        : api.ghDiscussionUnmarkAnswer(repo, args.commentId),
+  );
+}
+
+export function useUpdateDiscussionComment(repo: string) {
+  return useRepoMutation(repo, (args: { commentId: string; body: string }) =>
+    api.ghDiscussionUpdateComment(repo, args.commentId, args.body),
+  );
+}
+
+export function useDeleteDiscussionComment(repo: string) {
+  return useRepoMutation(repo, (commentId: string) =>
+    api.ghDiscussionDeleteComment(repo, commentId),
+  );
+}
+
+/** Optimistic upvote toggle on a discussion or its comments, with rollback. */
+export function useToggleDiscussionUpvote(repo: string, number: number) {
+  const queryClient = useQueryClient();
+  const key = ["repo", repo, "discussion", number] as const;
+  return useMutation({
+    mutationFn: (args: { subjectId: string; up: boolean }) =>
+      api.ghDiscussionSetUpvote(repo, args.subjectId, args.up),
+    onMutate: async (args) => {
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<DiscussionDetails>(key);
+      const delta = args.up ? 1 : -1;
+      queryClient.setQueryData<DiscussionDetails>(key, (d) =>
+        !d
+          ? d
+          : args.subjectId === d.id
+            ? {
+                ...d,
+                upvoteCount: d.upvoteCount + delta,
+                viewerHasUpvoted: args.up,
+              }
+            : {
+                ...d,
+                comments: d.comments.map((c) =>
+                  c.id === args.subjectId
+                    ? {
+                        ...c,
+                        upvoteCount: c.upvoteCount + delta,
+                        viewerHasUpvoted: args.up,
+                      }
+                    : c,
+                ),
+              },
+      );
+      return { prev };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(key, ctx.prev);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: key });
+      // The discussion list shows upvote counts too.
+      queryClient.invalidateQueries({
+        queryKey: ["repo", repo, "discussion-list"],
+      });
+    },
+  });
+}
+
+export function useLockDiscussion(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { discussionId: string; reason: api.DiscussionLockReason | null }) =>
+      api.ghDiscussionLock(repo, args.discussionId, args.reason),
+  );
+}
+
+export function useUnlockDiscussion(repo: string) {
+  return useRepoMutation(repo, (discussionId: string) =>
+    api.ghDiscussionUnlock(repo, discussionId),
+  );
+}
+
+export function useCloseDiscussion(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { discussionId: string; reason: api.DiscussionCloseReason }) =>
+      api.ghDiscussionClose(repo, args.discussionId, args.reason),
+  );
+}
+
+export function useReopenDiscussion(repo: string) {
+  return useRepoMutation(repo, (discussionId: string) =>
+    api.ghDiscussionReopen(repo, discussionId),
+  );
+}
+
+export function useDeleteDiscussion(repo: string) {
+  return useRepoMutation(repo, (discussionId: string) =>
+    api.ghDiscussionDelete(repo, discussionId),
+  );
+}
+
+export function useDiscussionReactions(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "discussion", number ?? 0, "reactions"] as const,
+    queryFn: () => api.ghDiscussionReactions(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+  });
 }
 
 export function useCommentIssue(repo: string) {

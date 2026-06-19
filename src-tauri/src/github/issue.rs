@@ -25,7 +25,7 @@ pub struct Reaction {
     pub viewer_reacted: bool,
 }
 
-fn map_reaction_groups(groups: Option<&serde_json::Value>) -> Vec<Reaction> {
+pub fn map_reaction_groups(groups: Option<&serde_json::Value>) -> Vec<Reaction> {
     groups
         .and_then(|g| g.as_array())
         .map(|arr| {
