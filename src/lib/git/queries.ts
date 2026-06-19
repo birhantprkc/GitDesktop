@@ -599,6 +599,54 @@ export function useRemoveReaction(repo: string) {
   );
 }
 
+export function useDiscussionMeta(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "discussion-meta"] as const,
+    queryFn: () => api.ghDiscussionCategories(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+export function useDiscussionList(
+  repo: string,
+  enabled: boolean,
+  category: string | null,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "discussion-list", category ?? "all"] as const,
+    queryFn: () => api.ghDiscussionList(repo, category),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+const discussionDetailsOptions = (repo: string, number: number) =>
+  queryOptions({
+    queryKey: ["repo", repo, "discussion", number] as const,
+    queryFn: () => api.ghDiscussionView(repo, number),
+    staleTime: 30_000,
+  });
+
+export function useDiscussionDetails(repo: string, number: number | null) {
+  return useQuery({
+    ...discussionDetailsOptions(repo, number ?? 0),
+    enabled: number !== null,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function usePrefetchDiscussion(repo: string) {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (number: number) => {
+      queryClient.prefetchQuery(discussionDetailsOptions(repo, number));
+    },
+    [queryClient, repo],
+  );
+}
+
 export function useCommentIssue(repo: string) {
   return useRepoMutation(repo, (args: { number: number; body: string }) =>
     api.ghIssueComment(repo, args.number, args.body),

@@ -89,6 +89,12 @@ export const ACTIONS = [
     defaultBinding: "mod+6",
   },
   {
+    id: "tab-discussions",
+    label: "Discussions tab",
+    category: "Navigation",
+    defaultBinding: "mod+7",
+  },
+  {
     id: "show-repositories",
     label: "Show repositories",
     category: "Navigation",

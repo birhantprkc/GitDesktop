@@ -16,6 +16,8 @@ import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { ComparePanel } from "@/features/compare/ComparePanel";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffViewer } from "@/features/diff/DiffViewer";
+import { DiscussionsPanel } from "@/features/discussions/DiscussionsPanel";
+import { DiscussionView } from "@/features/discussions/DiscussionView";
 import { CommitDetailView } from "@/features/history/CommitDetailView";
 import { HistoryPanel } from "@/features/history/HistoryPanel";
 import { IssuesPanel } from "@/features/issues/IssuesPanel";
@@ -38,6 +40,7 @@ import { usePrNotifications } from "./usePrNotifications";
 // secondary tab's name (e.g. "Issues ▾") so the rail still says where you are.
 const SECONDARY_TABS: { tab: RepoTab; label: string }[] = [
   { tab: "issues", label: "Issues" },
+  { tab: "discussions", label: "Discussions" },
   { tab: "actions", label: "Actions" },
 ];
 
@@ -51,6 +54,7 @@ export function RepositoryView() {
   const compareBranch = useUiStore((s) => s.compareBranch);
   const selectedPr = useUiStore((s) => s.selectedPr);
   const selectedIssue = useUiStore((s) => s.selectedIssue);
+  const selectedDiscussion = useUiStore((s) => s.selectedDiscussion);
   const selectedRunId = useUiStore((s) => s.selectedRunId);
   // The detail panes run off deferred selections so rapidly arrowing a list
   // (commits, PRs) only loads + renders the item landed on, not every one
@@ -58,6 +62,7 @@ export function RepositoryView() {
   const deferredCommitHash = useDeferredValue(selectedCommitHash);
   const deferredPr = useDeferredValue(selectedPr);
   const deferredIssue = useDeferredValue(selectedIssue);
+  const deferredDiscussion = useDeferredValue(selectedDiscussion);
   const status = useRepoStatus(repoPath ?? "");
   const alias = useRepoAlias(repoPath);
   const currentName = status.data?.branch?.name ?? null;
@@ -79,6 +84,7 @@ export function RepositoryView() {
   useHotkeyAction("tab-compare", () => changeTab("compare"));
   useHotkeyAction("tab-pulls", () => changeTab("pulls"));
   useHotkeyAction("tab-issues", () => changeTab("issues"));
+  useHotkeyAction("tab-discussions", () => changeTab("discussions"));
   useHotkeyAction("tab-actions", () => changeTab("actions"));
   useHotkeyAction("back-to-repositories", closeRepo);
 
@@ -115,17 +121,17 @@ export function RepositoryView() {
             onValueChange={(value) => changeTab(value as RepoTab)}
           >
             <TabsList className="w-full">
-              <TabsTrigger value="changes" className="flex-1">
+              <TabsTrigger value="changes" className="min-w-0 flex-1">
                 Changes
               </TabsTrigger>
-              <TabsTrigger value="history" className="flex-1">
+              <TabsTrigger value="history" className="min-w-0 flex-1">
                 History
               </TabsTrigger>
-              <TabsTrigger value="compare" className="flex-1">
+              <TabsTrigger value="compare" className="min-w-0 flex-1">
                 Compare
               </TabsTrigger>
-              <TabsTrigger value="pulls" className="flex-1">
-                Pull Requests
+              <TabsTrigger value="pulls" className="min-w-0 flex-1">
+                Pulls
               </TabsTrigger>
               <DropdownMenu>
                 <DropdownMenuTrigger
@@ -134,7 +140,7 @@ export function RepositoryView() {
                       type="button"
                       aria-label="More tabs"
                       className={cn(
-                        "relative inline-flex h-[calc(100%-1px)] items-center justify-center gap-1 rounded-none border border-transparent px-2 text-xs font-medium whitespace-nowrap text-foreground/60 transition-all hover:text-foreground data-popup-open:text-foreground dark:text-muted-foreground dark:hover:text-foreground [&_svg]:size-4 [&_svg]:shrink-0",
+                        "relative inline-flex h-[calc(100%-1px)] shrink-0 items-center justify-center gap-1 rounded-none border border-transparent px-2 text-xs font-medium whitespace-nowrap text-foreground/60 transition-all hover:text-foreground data-popup-open:text-foreground dark:text-muted-foreground dark:hover:text-foreground [&_svg]:size-4 [&_svg]:shrink-0",
                         activeSecondary &&
                           "bg-background text-foreground dark:border-input dark:bg-input/30 dark:text-foreground",
                       )}
@@ -175,6 +181,9 @@ export function RepositoryView() {
           </Activity>
           <Activity mode={mode("issues")}>
             <IssuesPanel repoPath={repoPath} />
+          </Activity>
+          <Activity mode={mode("discussions")}>
+            <DiscussionsPanel repoPath={repoPath} />
           </Activity>
           <Activity mode={mode("actions")}>
             <ActionsPanel repoPath={repoPath} />
@@ -228,6 +237,16 @@ export function RepositoryView() {
               <LocalIssueView repoPath={repoPath} id={deferredIssue.id} />
             ) : (
               <DiffPlaceholder message="Select an issue" />
+            )}
+          </Activity>
+          <Activity mode={mode("discussions")}>
+            {deferredDiscussion ? (
+              <DiscussionView
+                repoPath={repoPath}
+                number={deferredDiscussion.number}
+              />
+            ) : (
+              <DiffPlaceholder message="Select a discussion" />
             )}
           </Activity>
           <Activity mode={mode("actions")}>

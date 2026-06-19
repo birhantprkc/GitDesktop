@@ -16,6 +16,9 @@ import type {
   CommitResult,
   CommitSummary,
   DiffStatEntry,
+  DiscussionDetails,
+  DiscussionInfo,
+  DiscussionMeta,
   FileDiff,
   GhAccounts,
   GhBranchProtection,
@@ -657,6 +660,15 @@ export const ghRemoveReaction = (
 /** The repo's issue templates (frontmatter stripped); empty when it has none. */
 export const readIssueTemplates = (repoPath: string) =>
   invoke<string[]>("read_issue_templates", { repoPath });
+
+export const ghDiscussionCategories = (repoPath: string) =>
+  invoke<DiscussionMeta>("gh_discussion_categories", { repoPath });
+
+export const ghDiscussionList = (repoPath: string, category: string | null) =>
+  invoke<DiscussionInfo[]>("gh_discussion_list", { repoPath, category });
+
+export const ghDiscussionView = (repoPath: string, number: number) =>
+  invoke<DiscussionDetails>("gh_discussion_view", { repoPath, number });
 
 export const ghIssueComment = (
   repoPath: string,
