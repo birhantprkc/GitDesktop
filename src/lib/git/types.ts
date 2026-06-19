@@ -579,6 +579,25 @@ export interface DiscussionDetails {
   comments: DiscussionComment[];
 }
 
+/** One issue in a parent/sub-issue relationship. */
+export interface RelatedIssue {
+  /** GraphQL node id (used to remove the relationship). */
+  id: string;
+  number: number;
+  title: string;
+  /** "OPEN" or "CLOSED". */
+  state: string;
+  url: string;
+}
+
+/** An issue's parent and sub-issues, with the completion summary. */
+export interface IssueRelations {
+  parent: RelatedIssue | null;
+  subIssues: RelatedIssue[];
+  completed: number;
+  total: number;
+}
+
 export interface IssueDetails {
   /** GraphQL node id, used by the label mutations. */
   id: string;

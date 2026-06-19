@@ -31,6 +31,7 @@ import type {
   IssueDetails,
   IssueInfo,
   IssueReactions,
+  IssueRelations,
   Milestone,
   PrDetails,
   PrInfo,
@@ -776,6 +777,32 @@ export const ghIssueEdit = (
   body: string,
 ) => invoke<void>("gh_issue_edit", { repoPath, number, title, body });
 
+/** Transfers an issue to `destination` ("OWNER/REPO"); returns the new URL. */
+export const ghIssueTransfer = (
+  repoPath: string,
+  number: number,
+  destination: string,
+) => invoke<string>("gh_issue_transfer", { repoPath, number, destination });
+
+export const ghIssueDelete = (repoPath: string, number: number) =>
+  invoke<void>("gh_issue_delete", { repoPath, number });
+
+export const ghIssueRelations = (repoPath: string, number: number) =>
+  invoke<IssueRelations>("gh_issue_relations", { repoPath, number });
+
+/** Adds issue `subNumber` (this repo) as a sub-issue of `parentId` (node id). */
+export const ghIssueAddSubIssue = (
+  repoPath: string,
+  parentId: string,
+  subNumber: number,
+) => invoke<void>("gh_issue_add_sub_issue", { repoPath, parentId, subNumber });
+
+export const ghIssueRemoveSubIssue = (
+  repoPath: string,
+  parentId: string,
+  subId: string,
+) => invoke<void>("gh_issue_remove_sub_issue", { repoPath, parentId, subId });
+
 export const ghPrDiff = (repoPath: string, number: number) =>
   invoke<string>("gh_pr_diff", { repoPath, number });
 
@@ -845,6 +872,10 @@ export const ghPrPoll = (repoPath: string) =>
 
 export const ghPrCheckout = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_checkout", { repoPath, number });
+
+/** Reactions for a PR's body + each comment (keyed by comment node id). */
+export const ghPrReactions = (repoPath: string, number: number) =>
+  invoke<IssueReactions>("gh_pr_reactions", { repoPath, number });
 
 /** Returns the fork's URL ("" when the fork already existed). */
 export const ghRepoFork = (repoPath: string, contributeToParent: boolean) =>

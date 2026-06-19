@@ -61,8 +61,13 @@ interface UiState {
   /** Selected discussion (by number) on the Discussions tab. */
   selectedDiscussion: { number: number } | null;
   /** A draft to seed the next GitHub-issue create dialog (e.g. "Reference in
-   *  new issue" from a discussion); consumed and cleared by IssuesPanel. */
-  pendingIssueDraft: { title: string; body: string } | null;
+   *  new issue" from a discussion, or "Duplicate issue"); consumed and cleared
+   *  by IssuesPanel. `labels` (names) carry over when duplicating. */
+  pendingIssueDraft: {
+    title: string;
+    body: string;
+    labels?: string[];
+  } | null;
   /** Selected workflow run (databaseId) on the Actions tab. */
   selectedRunId: number | null;
   selectedFile: SelectedFile | null;
@@ -89,7 +94,9 @@ interface UiState {
   selectPr: (pr: SelectedPr | null) => void;
   selectIssue: (issue: SelectedIssue | null) => void;
   selectDiscussion: (discussion: { number: number } | null) => void;
-  setPendingIssueDraft: (draft: { title: string; body: string } | null) => void;
+  setPendingIssueDraft: (
+    draft: { title: string; body: string; labels?: string[] } | null,
+  ) => void;
   selectRun: (id: number | null) => void;
   selectFile: (file: SelectedFile | null) => void;
   selectCommit: (hash: string | null) => void;

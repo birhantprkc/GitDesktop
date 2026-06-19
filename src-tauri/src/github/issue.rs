@@ -52,6 +52,22 @@ pub fn map_reaction_groups(groups: Option<&serde_json::Value>) -> Vec<Reaction> 
         .unwrap_or_default()
 }
 
+/// Resolves the repo's GraphQL `owner` and `name`. GraphQL (unlike REST) has no
+/// `{owner}/{repo}` substitution, so callers must pass them explicitly.
+pub(crate) async fn repo_owner_name(repo_path: &str) -> AppResult<(String, String)> {
+    let out = run_gh(
+        Some(repo_path),
+        &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let name_with_owner = out.stdout_lossy().trim().to_string();
+    name_with_owner
+        .split_once('/')
+        .map(|(o, n)| (o.to_string(), n.to_string()))
+        .ok_or_else(|| AppError::Gh("could not determine the repository owner".into()))
+}
+
 // Issues mirror the Pull Request feature: `gh issue` covers the REST surface
 // 1:1 (and `gh issue list` already excludes PRs), and the comment node ids it
 // returns let the shared GraphQL comment/label mutations work unchanged.
@@ -547,19 +563,7 @@ pub async fn gh_issue_reactions(
     repo_path: String,
     number: u64,
 ) -> AppResult<IssueReactions> {
-    // GraphQL needs explicit owner/name (no {owner}/{repo} substitution).
-    let owner_out = run_gh(
-        Some(&repo_path),
-        &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-        GH_TIMEOUT,
-    )
-    .await?;
-    let name_with_owner = owner_out.stdout_lossy().trim().to_string();
-    let Some((owner, name)) = name_with_owner.split_once('/') else {
-        return Err(AppError::Gh(
-            "could not determine the repository owner".into(),
-        ));
-    };
+    let (owner, name) = repo_owner_name(&repo_path).await?;
 
     // owner/name/number go in as typed variables (no string interpolation).
     let out = run_gh(
@@ -667,6 +671,198 @@ pub async fn gh_remove_reaction(
             &format!("id={subject_id}"),
             "-f",
             &format!("content={content}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Transfers an issue to another repository. `destination` is the target
+/// "OWNER/REPO" (or its URL). Returns the transferred issue's new URL.
+#[tauri::command]
+pub async fn gh_issue_transfer(
+    repo_path: String,
+    number: u64,
+    destination: String,
+) -> AppResult<String> {
+    let destination = destination.trim();
+    if destination.is_empty() || destination.starts_with('-') {
+        return Err(AppError::InvalidArgument(
+            "a destination repository is required".into(),
+        ));
+    }
+    let n = number.to_string();
+    let out = run_gh(
+        Some(&repo_path),
+        &["issue", "transfer", &n, destination],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    // gh prints the transferred issue's URL on success.
+    Ok(out.stdout_lossy().trim().to_string())
+}
+
+/// Permanently deletes an issue (requires admin/triage; gh confirms the error
+/// when the user lacks permission). `--yes` skips gh's interactive prompt.
+#[tauri::command]
+pub async fn gh_issue_delete(repo_path: String, number: u64) -> AppResult<()> {
+    let n = number.to_string();
+    run_gh(
+        Some(&repo_path),
+        &["issue", "delete", &n, "--yes"],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// One issue in a parent/sub-issue relationship.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedIssue {
+    /// GraphQL node id (used to remove the relationship).
+    pub id: String,
+    pub number: u64,
+    pub title: String,
+    /// "OPEN" or "CLOSED".
+    pub state: String,
+    pub url: String,
+}
+
+/// An issue's parent and its sub-issues, with the completion summary.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueRelations {
+    pub parent: Option<RelatedIssue>,
+    pub sub_issues: Vec<RelatedIssue>,
+    pub completed: u64,
+    pub total: u64,
+}
+
+const RELATIONS_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ issue(number:$number){ parent { id number title state url } subIssuesSummary { total completed } subIssues(first:100){ nodes { id number title state url } } } } }";
+
+/// Reads an issue's parent + sub-issues (GraphQL — sub-issues aren't in the
+/// `gh issue view` CLI JSON). Kept separate from `gh_issue_view` so it loads in
+/// parallel and adds no latency to the conversation.
+#[tauri::command]
+pub async fn gh_issue_relations(
+    repo_path: String,
+    number: u64,
+) -> AppResult<IssueRelations> {
+    let (owner, name) = repo_owner_name(&repo_path).await?;
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-F",
+            &format!("owner={owner}"),
+            "-F",
+            &format!("name={name}"),
+            "-F",
+            &format!("number={number}"),
+            "-f",
+            &format!("query={RELATIONS_QUERY}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse relations: {e}")))?;
+    let issue = value.pointer("/data/repository/issue");
+
+    // `parent` is nullable; only deserialize when present (see graphql nullable
+    // rules) and propagate a real parse error instead of swallowing it.
+    let parent = issue
+        .and_then(|i| i.get("parent"))
+        .filter(|p| !p.is_null())
+        .cloned()
+        .map(serde_json::from_value::<RelatedIssue>)
+        .transpose()
+        .map_err(|e| AppError::Gh(format!("could not parse parent issue: {e}")))?;
+    let sub_issues: Vec<RelatedIssue> = issue
+        .and_then(|i| i.pointer("/subIssues/nodes"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| AppError::Gh(format!("could not parse sub-issues: {e}")))?
+        .unwrap_or_default();
+    let total = issue
+        .and_then(|i| i.pointer("/subIssuesSummary/total"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let completed = issue
+        .and_then(|i| i.pointer("/subIssuesSummary/completed"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+
+    Ok(IssueRelations {
+        parent,
+        sub_issues,
+        completed,
+        total,
+    })
+}
+
+/// Adds issue `sub_number` (in this repo) as a sub-issue of `parent_id` (the
+/// parent's node id). `replaceParent: true` reparents a child that already has a
+/// parent rather than erroring.
+#[tauri::command]
+pub async fn gh_issue_add_sub_issue(
+    repo_path: String,
+    parent_id: String,
+    sub_number: u64,
+) -> AppResult<()> {
+    // Resolve the child's node id (this also rejects PRs / missing numbers).
+    let n = sub_number.to_string();
+    let id_out = run_gh(
+        Some(&repo_path),
+        &["issue", "view", &n, "--json", "id", "-q", ".id"],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let sub_id = id_out.stdout_lossy().trim().to_string();
+    if sub_id.is_empty() {
+        return Err(AppError::Gh(format!("could not find issue #{sub_number}")));
+    }
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($parent:ID!,$child:ID!){ addSubIssue(input:{issueId:$parent,subIssueId:$child,replaceParent:true}){ clientMutationId } }",
+            "-f",
+            &format!("parent={parent_id}"),
+            "-f",
+            &format!("child={sub_id}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Removes the sub-issue `sub_id` (node id, from the relations read) from its
+/// parent `parent_id`.
+#[tauri::command]
+pub async fn gh_issue_remove_sub_issue(
+    repo_path: String,
+    parent_id: String,
+    sub_id: String,
+) -> AppResult<()> {
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($parent:ID!,$child:ID!){ removeSubIssue(input:{issueId:$parent,subIssueId:$child}){ clientMutationId } }",
+            "-f",
+            &format!("parent={parent_id}"),
+            "-f",
+            &format!("child={sub_id}"),
         ],
         GH_NETWORK_TIMEOUT,
     )

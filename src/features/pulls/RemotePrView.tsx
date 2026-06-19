@@ -37,6 +37,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { ReactionBar } from "@/features/conversations/ReactionBar";
 import {
   AuthorAvatar,
   hasVisibleBody,
@@ -68,11 +69,13 @@ import {
   useMinimizeComment,
   usePrDetails,
   usePrDiff,
+  usePrReactions,
   useReadyPr,
   useReopenPr,
   useRepoLabels,
   useRepoStatus,
   useReviewPr,
+  useToggleReaction,
   useUnminimizeComment,
 } from "@/lib/git/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
@@ -143,6 +146,12 @@ export function RemotePrView({
   const editPr = useEditPr(repoPath);
   const editLabels = useEditPrLabels(repoPath);
   const repoLabels = useRepoLabels(repoPath, true);
+  const reactions = usePrReactions(repoPath, number);
+  const toggleReactionMutation = useToggleReaction(
+    repoPath,
+    ["repo", repoPath, "pr", number, "reactions"] as const,
+    details.data?.id ?? "",
+  );
   const [section, setSection] = useState<Section>("conversation");
   const aiEnabled = useAiEnabled();
   const rulesConfig = useEffectiveBranchRules(repoPath);
@@ -336,6 +345,10 @@ export function RemotePrView({
         onError,
       },
     );
+  }
+
+  function toggleReaction(subjectId: string, content: string, active: boolean) {
+    toggleReactionMutation.mutate({ subjectId, content, active }, { onError });
   }
 
   function hideComment(commentId: string, classifier: MinimizeReason) {
@@ -590,58 +603,66 @@ export function RemotePrView({
         <>
           <ScrollArea className="min-h-0 flex-1">
             <div className="space-y-4 p-4">
-              <div className="group flex items-start justify-between gap-2 border-b pb-3">
-                <div className="min-w-0 flex-1">
-                  {pr.body.trim() ? (
-                    <Markdown>{pr.body}</Markdown>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      No description provided.
-                    </p>
-                  )}
-                </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label="Description actions"
-                        className="shrink-0 text-muted-foreground hover:text-foreground data-popup-open:text-foreground"
-                      />
-                    }
-                  >
-                    <DotsThreeIcon className="size-4" weight="bold" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="min-w-44">
-                    <DropdownMenuItem
-                      onClick={() => copyText(pr.url, "Link copied")}
-                    >
-                      Copy link
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => quoteReply(pr.body)}>
-                      Quote reply
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => copyText(pr.body, "Markdown copied")}
-                    >
-                      Copy markdown
-                    </DropdownMenuItem>
-                    {isOpen && (
-                      <DropdownMenuItem
-                        onClick={() => {
-                          editForm.reset(
-                            { title: pr.title, body: pr.body },
-                            { keepDefaultValues: true },
-                          );
-                          setEditOpen(true);
-                        }}
-                      >
-                        Edit
-                      </DropdownMenuItem>
+              <div className="group space-y-1 border-b pb-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    {pr.body.trim() ? (
+                      <Markdown>{pr.body}</Markdown>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No description provided.
+                      </p>
                     )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Description actions"
+                          className="shrink-0 text-muted-foreground hover:text-foreground data-popup-open:text-foreground"
+                        />
+                      }
+                    >
+                      <DotsThreeIcon className="size-4" weight="bold" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-44">
+                      <DropdownMenuItem
+                        onClick={() => copyText(pr.url, "Link copied")}
+                      >
+                        Copy link
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => quoteReply(pr.body)}>
+                        Quote reply
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => copyText(pr.body, "Markdown copied")}
+                      >
+                        Copy markdown
+                      </DropdownMenuItem>
+                      {isOpen && (
+                        <DropdownMenuItem
+                          onClick={() => {
+                            editForm.reset(
+                              { title: pr.title, body: pr.body },
+                              { keepDefaultValues: true },
+                            );
+                            setEditOpen(true);
+                          }}
+                        >
+                          Edit
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                <ReactionBar
+                  reactions={reactions.data?.body ?? []}
+                  onToggle={(content, active) =>
+                    toggleReaction(pr.id, content, active)
+                  }
+                />
               </div>
               {/* Events with nothing visible to say (empty body, or only an
                   unfilled-template HTML comment) render as a bare author
@@ -685,6 +706,10 @@ export function RemotePrView({
                     }
                     onUnhide={
                       c.isMinimized ? () => unhideComment(c.id) : undefined
+                    }
+                    reactions={reactions.data?.comments[c.id]}
+                    onToggleReaction={(content, active) =>
+                      toggleReaction(c.id, content, active)
                     }
                   />
                 ))}

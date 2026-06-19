@@ -465,6 +465,17 @@ export function usePrefetchPr(repo: string) {
   );
 }
 
+/** Reactions for a PR's body + comments — decoupled from the PR view so it
+ *  loads in parallel and leaves the (untouched) PR query alone. */
+export function usePrReactions(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr", number ?? 0, "reactions"] as const,
+    queryFn: () => api.ghPrReactions(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+  });
+}
+
 export function useIssueList(
   repo: string,
   enabled: boolean,
@@ -889,6 +900,44 @@ export function useEditIssue(repo: string) {
     repo,
     (args: { number: number; title: string; body: string }) =>
       api.ghIssueEdit(repo, args.number, args.title, args.body),
+  );
+}
+
+export function useTransferIssue(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { number: number; destination: string }) =>
+      api.ghIssueTransfer(repo, args.number, args.destination),
+  );
+}
+
+export function useDeleteIssue(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.ghIssueDelete(repo, number),
+  );
+}
+
+/** An issue's parent + sub-issues, loaded alongside the conversation. */
+export function useIssueRelations(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "issue", number ?? 0, "relations"] as const,
+    queryFn: () => api.ghIssueRelations(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+  });
+}
+
+export function useAddSubIssue(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { parentId: string; subNumber: number }) =>
+      api.ghIssueAddSubIssue(repo, args.parentId, args.subNumber),
+  );
+}
+
+export function useRemoveSubIssue(repo: string) {
+  return useRepoMutation(repo, (args: { parentId: string; subId: string }) =>
+    api.ghIssueRemoveSubIssue(repo, args.parentId, args.subId),
   );
 }
 

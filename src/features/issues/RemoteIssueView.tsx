@@ -25,11 +25,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -49,10 +51,12 @@ import type { LockReason, MinimizeReason } from "@/lib/git/api";
 import {
   useCloseIssue,
   useCommentIssue,
+  useDeleteIssue,
   useDeletePrComment,
   useEditIssue,
   useEditPrComment,
   useEditPrLabels,
+  useGhRepos,
   useIssueDetails,
   useIssueReactions,
   useLockIssue,
@@ -63,12 +67,15 @@ import {
   useSetIssueAssignees,
   useSetIssueMilestone,
   useToggleReaction,
+  useTransferIssue,
   useUnlockIssue,
   useUnminimizeComment,
 } from "@/lib/git/queries";
+import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { AssigneesPopover, MilestoneMenu } from "./IssueMetaPickers";
+import { IssueRelations } from "./IssueRelations";
 
 /** GitHub's lock reasons (menu label → API value); null locks with no reason. */
 const LOCK_REASONS: [string, LockReason | null][] = [
@@ -108,6 +115,10 @@ export function RemoteIssueView({
   const pinIssue = usePinIssue(repoPath);
   const lockIssue = useLockIssue(repoPath);
   const unlockIssue = useUnlockIssue(repoPath);
+  const transferIssue = useTransferIssue(repoPath);
+  const deleteIssue = useDeleteIssue(repoPath);
+  const selectIssue = useUiStore((s) => s.selectIssue);
+  const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
   const reactions = useIssueReactions(repoPath, number);
   const toggleReactionMutation = useToggleReaction(
     repoPath,
@@ -123,6 +134,10 @@ export function RemoteIssueView({
   );
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [draftLabels, setDraftLabels] = useState<Set<string>>(new Set());
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferDest, setTransferDest] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const transferRepos = useGhRepos(transferOpen);
 
   const onError = (e: unknown) => toastError(e);
 
@@ -217,6 +232,65 @@ export function RemoteIssueView({
   function toggleReaction(subjectId: string, content: string, active: boolean) {
     toggleReactionMutation.mutate({ subjectId, content, active }, { onError });
   }
+
+  // Seeds + opens the GitHub create dialog (IssuesPanel consumes the draft).
+  // Labels carry over since they're from this same repo.
+  function duplicateIssue() {
+    if (!issue) return;
+    setPendingIssueDraft({
+      title: issue.title,
+      body: issue.body,
+      labels: issue.labels.map((l) => l.name),
+    });
+  }
+
+  function submitTransfer() {
+    const destination = transferDest.trim();
+    if (!destination) return;
+    transferIssue.mutate(
+      { number, destination },
+      {
+        onSuccess: (url) => {
+          toast.success(
+            `Transferred #${number}`,
+            url
+              ? {
+                  description: url,
+                  action: { label: "View", onClick: () => openUrl(url) },
+                }
+              : undefined,
+          );
+          setTransferOpen(false);
+          // The issue no longer lives in this repo; clear the now-stale view.
+          selectIssue(null);
+        },
+        onError,
+      },
+    );
+  }
+
+  function confirmDelete() {
+    deleteIssue.mutate(number, {
+      onSuccess: () => {
+        toast.success(`Deleted #${number}`);
+        setDeleteOpen(false);
+        selectIssue(null);
+      },
+      onError: (e) => {
+        onError(e);
+        setDeleteOpen(false);
+      },
+    });
+  }
+
+  // Repo suggestions for the transfer destination (excludes archived repos,
+  // which can't receive transfers); only loaded while the dialog is open.
+  const repoQuery = transferDest.trim().toLowerCase();
+  const repoSuggestions = (transferRepos.data?.repos ?? [])
+    .filter((r) => !r.archived)
+    .map((r) => r.nameWithOwner)
+    .filter((n) => !repoQuery || n.toLowerCase().includes(repoQuery))
+    .slice(0, 6);
 
   function toggleDraftLabel(name: string, on: boolean) {
     setDraftLabels((prev) => {
@@ -352,6 +426,24 @@ export function RemoteIssueView({
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
               )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={duplicateIssue}>
+                Duplicate issue
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  setTransferDest("");
+                  setTransferOpen(true);
+                }}
+              >
+                Transfer issue…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => setDeleteOpen(true)}
+              >
+                Delete issue…
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -523,6 +615,11 @@ export function RemoteIssueView({
               }
             />
           </div>
+          <IssueRelations
+            repoPath={repoPath}
+            issueId={issue.id}
+            number={number}
+          />
           {comments.map((c) => (
             <Thread
               key={c.id}
@@ -734,6 +831,92 @@ export function RemoteIssueView({
               }}
             >
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
+        <DialogContent>
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitTransfer();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Transfer issue #{number}</DialogTitle>
+              <DialogDescription>
+                Moves this issue to another repository you can push to. Its
+                comments, labels, and assignees move with it.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-1.5">
+              <Input
+                autoFocus
+                value={transferDest}
+                onChange={(e) => setTransferDest(e.target.value)}
+                placeholder="owner/repo"
+                autoComplete="off"
+              />
+              {repoSuggestions.length > 0 && (
+                <div className="max-h-40 overflow-auto border">
+                  {repoSuggestions.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className="block w-full truncate px-2 py-1.5 text-left text-xs hover:bg-muted/60"
+                      onClick={() => setTransferDest(name)}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setTransferOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={!transferDest.trim() || transferIssue.isPending}
+              >
+                {transferIssue.isPending && (
+                  <Spinner data-icon="inline-start" />
+                )}
+                Transfer
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete issue #{number}?</DialogTitle>
+            <DialogDescription>
+              This permanently deletes “{issue.title}” on GitHub. This cannot be
+              undone, and requires admin or triage access.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteIssue.isPending}
+              onClick={confirmDelete}
+            >
+              {deleteIssue.isPending && <Spinner data-icon="inline-start" />}
+              Delete issue
             </Button>
           </DialogFooter>
         </DialogContent>

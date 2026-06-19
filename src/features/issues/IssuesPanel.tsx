@@ -58,7 +58,7 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const pendingIssueDraft = useUiStore((s) => s.pendingIssueDraft);
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
   const [issueDraft, setIssueDraft] = useState<
-    { title: string; body: string } | undefined
+    { title: string; body: string; labels?: string[] } | undefined
   >();
 
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());

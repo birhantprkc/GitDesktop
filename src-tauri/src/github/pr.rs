@@ -3,6 +3,7 @@ use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::git::runner::{run_git_mutating, NETWORK_TIMEOUT};
+use crate::github::issue::{map_reaction_groups, repo_owner_name, IssueReactions};
 use crate::github::runner::{run_gh, run_gh_raw, GH_NETWORK_TIMEOUT, GH_TIMEOUT};
 use crate::state::AppState;
 
@@ -1268,6 +1269,55 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
             .collect(),
         labels: raw.labels,
     })
+}
+
+const PR_REACTIONS_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ reactionGroups{ content viewerHasReacted reactors{ totalCount } } comments(first:100){ nodes{ id reactionGroups{ content viewerHasReacted reactors{ totalCount } } } } } } }";
+
+/// Reactions for a PR's body + each conversation comment (keyed by comment node
+/// id). Same decoupled design as `gh_issue_reactions`: `viewerHasReacted` is
+/// GraphQL-only, so this loads in parallel with the PR view and leaves
+/// `gh_pr_view` untouched. Reuses the issue reaction types + mapper.
+#[tauri::command]
+pub async fn gh_pr_reactions(repo_path: String, number: u64) -> AppResult<IssueReactions> {
+    let (owner, name) = repo_owner_name(&repo_path).await?;
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-F",
+            &format!("owner={owner}"),
+            "-F",
+            &format!("name={name}"),
+            "-F",
+            &format!("number={number}"),
+            "-f",
+            &format!("query={PR_REACTIONS_QUERY}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse reactions: {e}")))?;
+    let pr = value.pointer("/data/repository/pullRequest");
+
+    let body = map_reaction_groups(pr.and_then(|p| p.get("reactionGroups")));
+    let mut comments = std::collections::HashMap::new();
+    if let Some(nodes) = pr
+        .and_then(|p| p.pointer("/comments/nodes"))
+        .and_then(|n| n.as_array())
+    {
+        for node in nodes {
+            if let Some(id) = node.get("id").and_then(serde_json::Value::as_str) {
+                let reactions = map_reaction_groups(node.get("reactionGroups"));
+                if !reactions.is_empty() {
+                    comments.insert(id.to_string(), reactions);
+                }
+            }
+        }
+    }
+
+    Ok(IssueReactions { body, comments })
 }
 
 /// The PR's full unified diff (`gh pr diff`), capped for the webview. The

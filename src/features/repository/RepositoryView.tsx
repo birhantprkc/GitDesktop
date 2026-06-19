@@ -131,7 +131,7 @@ export function RepositoryView() {
                 Compare
               </TabsTrigger>
               <TabsTrigger value="pulls" className="min-w-0 flex-1">
-                Pulls
+                PRs
               </TabsTrigger>
               <DropdownMenu>
                 <DropdownMenuTrigger

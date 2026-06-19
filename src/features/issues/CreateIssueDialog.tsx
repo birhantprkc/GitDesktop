@@ -16,7 +16,11 @@ import {
 } from "@/components/ui/dialog";
 import { LabelChip } from "@/features/conversations/Thread";
 import { required, useAppForm } from "@/lib/form";
-import { useCreateIssue, useRepoLabels } from "@/lib/git/queries";
+import {
+  useAddSubIssue,
+  useCreateIssue,
+  useRepoLabels,
+} from "@/lib/git/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -28,14 +32,20 @@ export function CreateIssueDialog({
   open,
   onOpenChange,
   initialDraft,
+  subIssueParentId,
 }: {
   repoPath: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Seeds title/body when opened (e.g. "Reference in new issue"). */
-  initialDraft?: { title: string; body: string };
+  /** Seeds title/body (and labels, when duplicating) when opened — e.g.
+   *  "Reference in new issue" or "Duplicate issue". */
+  initialDraft?: { title: string; body: string; labels?: string[] };
+  /** When set, the created issue is linked as a sub-issue of this node id
+   *  (parent), and the view stays on the parent instead of navigating away. */
+  subIssueParentId?: string;
 }) {
   const createIssue = useCreateIssue(repoPath);
+  const addSubIssue = useAddSubIssue(repoPath);
   const repoLabels = useRepoLabels(repoPath, open);
   const selectIssue = useUiStore((s) => s.selectIssue);
   const repoName = useUiStore((s) => s.repoName) ?? "";
@@ -56,10 +66,22 @@ export function CreateIssueDialog({
           assignees,
           milestone,
         });
-        toast.success(`Opened issue #${number}`, {
-          description: url,
-          action: { label: "View", onClick: () => openUrl(url) },
-        });
+        const action = { label: "View", onClick: () => openUrl(url) };
+        if (subIssueParentId && number > 0) {
+          // Link the new issue to its parent, then stay on the parent so it
+          // appears in the sub-issue list (GitHub's behavior).
+          await addSubIssue.mutateAsync({
+            parentId: subIssueParentId,
+            subNumber: number,
+          });
+          toast.success(`Created sub-issue #${number}`, {
+            description: url,
+            action,
+          });
+          onOpenChange(false);
+          return;
+        }
+        toast.success(`Opened issue #${number}`, { description: url, action });
         onOpenChange(false);
         if (number > 0) selectIssue({ kind: "remote", id: String(number) });
       } catch (e) {
@@ -80,7 +102,7 @@ export function CreateIssueDialog({
       { title: initialDraft?.title ?? "", body: initialDraft?.body ?? "" },
       { keepDefaultValues: true },
     );
-    setLabels(new Set());
+    setLabels(new Set(initialDraft?.labels ?? []));
     setAssignees([]);
     setMilestone(null);
   });
@@ -112,9 +134,13 @@ export function CreateIssueDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Create issue</DialogTitle>
+            <DialogTitle>
+              {subIssueParentId ? "Create sub-issue" : "Create issue"}
+            </DialogTitle>
             <DialogDescription>
-              Opens a new issue on GitHub for this repository.
+              {subIssueParentId
+                ? "Opens a new issue on GitHub and links it as a sub-issue."
+                : "Opens a new issue on GitHub for this repository."}
             </DialogDescription>
           </DialogHeader>
 
@@ -249,7 +275,7 @@ export function CreateIssueDialog({
             </Button>
             <form.AppForm>
               <form.SubmitButton disabled={generating}>
-                Create issue
+                {subIssueParentId ? "Create sub-issue" : "Create issue"}
               </form.SubmitButton>
             </form.AppForm>
           </DialogFooter>
