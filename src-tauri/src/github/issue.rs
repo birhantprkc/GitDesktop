@@ -289,6 +289,7 @@ pub async fn gh_issue_create(
     labels: Vec<String>,
     assignees: Vec<String>,
     milestone: Option<u64>,
+    issue_type: Option<String>,
 ) -> AppResult<PrRef> {
     let title = title.trim();
     if title.is_empty() {
@@ -304,6 +305,10 @@ pub async fn gh_issue_create(
     });
     if let Some(m) = milestone {
         payload["milestone"] = serde_json::json!(m);
+    }
+    // Org-defined issue type, by name (REST POST issues accepts `type`).
+    if let Some(t) = issue_type.filter(|t| !t.trim().is_empty()) {
+        payload["type"] = serde_json::json!(t);
     }
     let input = serde_json::to_string(&payload)
         .map_err(|e| AppError::Gh(format!("could not encode issue: {e}")))?;

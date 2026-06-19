@@ -21,10 +21,15 @@ import {
   useCreateIssue,
   useRepoLabels,
 } from "@/lib/git/queries";
+import type { IssueType } from "@/lib/git/types";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
-import { AssigneesPopover, MilestoneMenu } from "./IssueMetaPickers";
+import {
+  AssigneesPopover,
+  IssueTypeMenu,
+  MilestoneMenu,
+} from "./IssueMetaPickers";
 import { useGenerateIssueDraft } from "./useGenerateIssueDraft";
 
 export function CreateIssueDialog({
@@ -54,6 +59,7 @@ export function CreateIssueDialog({
   const [labels, setLabels] = useState<Set<string>>(new Set());
   const [assignees, setAssignees] = useState<string[]>([]);
   const [milestone, setMilestone] = useState<number | null>(null);
+  const [issueType, setIssueType] = useState<IssueType | null>(null);
 
   const form = useAppForm({
     defaultValues: { title: "", body: "" },
@@ -65,6 +71,7 @@ export function CreateIssueDialog({
           labels: [...labels],
           assignees,
           milestone,
+          type: issueType?.name ?? null,
         });
         const action = { label: "View", onClick: () => openUrl(url) };
         if (subIssueParentId && number > 0) {
@@ -105,6 +112,7 @@ export function CreateIssueDialog({
     setLabels(new Set(initialDraft?.labels ?? []));
     setAssignees([]);
     setMilestone(null);
+    setIssueType(null);
   });
   useEffect(() => {
     if (open) seedOnOpen();
@@ -263,6 +271,12 @@ export function CreateIssueDialog({
             enabled={open}
             value={milestone}
             onChange={setMilestone}
+          />
+          <IssueTypeMenu
+            repoPath={repoPath}
+            enabled={open}
+            value={issueType}
+            onChange={setIssueType}
           />
 
           <DialogFooter>

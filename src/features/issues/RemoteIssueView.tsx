@@ -34,6 +34,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { LabelsPopover } from "@/features/conversations/LabelsPopover";
 import { ReactionBar } from "@/features/conversations/ReactionBar";
 import {
   AuthorAvatar,
@@ -73,7 +74,6 @@ import { IssueDevelopment } from "./IssueDevelopment";
 import {
   AssigneesPopover,
   IssueTypeMenu,
-  LabelsPopover,
   MilestoneMenu,
 } from "./IssueMetaPickers";
 import { IssueRelationships, IssueSubIssues } from "./IssueRelations";

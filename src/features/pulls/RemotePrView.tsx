@@ -1,4 +1,3 @@
-import { Popover } from "@base-ui/react/popover";
 import {
   ArrowCounterClockwiseIcon,
   ArrowSquareOutIcon,
@@ -9,7 +8,6 @@ import {
   GitBranchIcon,
   GitMergeIcon,
   PencilSimpleIcon,
-  TagIcon,
   XCircleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -37,6 +35,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { LabelsPopover } from "@/features/conversations/LabelsPopover";
 import { ReactionBar } from "@/features/conversations/ReactionBar";
 import {
   AuthorAvatar,
@@ -64,7 +63,6 @@ import {
   useDeletePrComment,
   useEditPr,
   useEditPrComment,
-  useEditPrLabels,
   useMergePr,
   useMinimizeComment,
   usePrDetails,
@@ -72,7 +70,6 @@ import {
   usePrReactions,
   useReadyPr,
   useReopenPr,
-  useRepoLabels,
   useRepoStatus,
   useReviewPr,
   useToggleReaction,
@@ -144,8 +141,6 @@ export function RemotePrView({
   const unminimizeComment = useUnminimizeComment(repoPath);
   const readyPr = useReadyPr(repoPath);
   const editPr = useEditPr(repoPath);
-  const editLabels = useEditPrLabels(repoPath);
-  const repoLabels = useRepoLabels(repoPath, true);
   const reactions = usePrReactions(repoPath, number);
   const toggleReactionMutation = useToggleReaction(
     repoPath,
@@ -180,48 +175,9 @@ export function RemotePrView({
       }
     },
   });
-  // Label edits are drafted locally while the picker is open and committed
-  // as one batched mutation when it closes — instant checkboxes, no popover
-  // re-anchoring as chips change, one network call.
-  const [labelsOpen, setLabelsOpen] = useState(false);
-  const [draftLabels, setDraftLabels] = useState<Set<string>>(new Set());
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const onError = (e: unknown) => toastError(e);
-
-  function toggleDraftLabel(name: string, on: boolean) {
-    setDraftLabels((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(name);
-      else next.delete(name);
-      return next;
-    });
-  }
-
-  function handleLabelsOpenChange(open: boolean) {
-    const current = details.data;
-    if (!current) return;
-    if (open) {
-      setDraftLabels(new Set(current.labels.map((l) => l.name)));
-      setLabelsOpen(true);
-      return;
-    }
-    setLabelsOpen(false);
-    const applied = new Set(current.labels.map((l) => l.name));
-    const idByName = new Map(
-      (repoLabels.data ?? []).map((l) => [l.name, l.id]),
-    );
-    const ids = (names: string[]) =>
-      names.map((n) => idByName.get(n)).filter((id): id is string => !!id);
-    const addIds = ids([...draftLabels].filter((n) => !applied.has(n)));
-    const removeIds = ids([...applied].filter((n) => !draftLabels.has(n)));
-    if (addIds.length > 0 || removeIds.length > 0) {
-      editLabels.mutate(
-        { labelableId: current.id, addIds, removeIds },
-        { onError },
-      );
-    }
-  }
 
   /** GitHub-style quote reply: prefixes each line with "> " in the composer. */
   function quoteReply(body: string) {
@@ -455,78 +411,21 @@ export function RemotePrView({
             -{pr.deletions}
           </span>
         </div>
-        {(pr.labels.length > 0 || isOpen) && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {/* Trigger first, so it never shifts as chips come and go. */}
-            {isOpen && (
-              <Popover.Root
-                open={labelsOpen}
-                onOpenChange={handleLabelsOpenChange}
-              >
-                <Popover.Trigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      aria-label="Edit labels"
-                    />
-                  }
-                >
-                  {editLabels.isPending ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <TagIcon data-icon="inline-start" />
-                  )}
-                  Labels
-                </Popover.Trigger>
-                <Popover.Portal>
-                  <Popover.Positioner
-                    align="start"
-                    sideOffset={4}
-                    className="isolate z-50"
-                  >
-                    <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
-                      <p className="px-1 pb-1.5 text-xs font-medium">Labels</p>
-                      {(repoLabels.data ?? []).length === 0 && (
-                        <p className="px-1 py-1 text-xs text-muted-foreground">
-                          {repoLabels.isPending
-                            ? "Loading labels…"
-                            : "This repository has no labels."}
-                        </p>
-                      )}
-                      {(repoLabels.data ?? []).map((label) => (
-                        <label
-                          key={label.name}
-                          className="flex cursor-pointer items-center gap-2 px-1 py-1.5 text-xs hover:bg-muted/60"
-                        >
-                          <Checkbox
-                            checked={draftLabels.has(label.name)}
-                            onCheckedChange={(v) =>
-                              toggleDraftLabel(label.name, v === true)
-                            }
-                          />
-                          <span
-                            aria-hidden
-                            className="size-2 shrink-0 rounded-full"
-                            style={{ backgroundColor: `#${label.color}` }}
-                          />
-                          <span className="flex-1 truncate">{label.name}</span>
-                        </label>
-                      ))}
-                      {(repoLabels.data ?? []).length > 0 && (
-                        <p className="mt-1 border-t px-1 pt-1.5 text-[11px] text-muted-foreground">
-                          Changes apply when this closes.
-                        </p>
-                      )}
-                    </Popover.Popup>
-                  </Popover.Positioner>
-                </Popover.Portal>
-              </Popover.Root>
-            )}
-            {pr.labels.map((label) => (
-              <LabelChip key={label.name} label={label} />
-            ))}
-          </div>
+        {isOpen ? (
+          <LabelsPopover
+            repoPath={repoPath}
+            enabled
+            labelableId={pr.id}
+            labels={pr.labels}
+          />
+        ) : (
+          pr.labels.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {pr.labels.map((label) => (
+                <LabelChip key={label.name} label={label} />
+              ))}
+            </div>
+          )
         )}
         {pr.checks.length > 0 && (
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">

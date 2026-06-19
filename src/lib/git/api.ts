@@ -606,6 +606,7 @@ export const ghIssueCreate = (
   labels: string[],
   assignees: string[],
   milestone: number | null,
+  issueType: string | null,
 ) =>
   invoke<PrRef>("gh_issue_create", {
     repoPath,
@@ -614,6 +615,7 @@ export const ghIssueCreate = (
     labels,
     assignees,
     milestone,
+    issueType,
   });
 
 export const ghAssignableUsers = (repoPath: string) =>

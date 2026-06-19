@@ -541,6 +541,7 @@ export function useCreateIssue(repo: string) {
       labels: string[];
       assignees: string[];
       milestone: number | null;
+      type: string | null;
     }) =>
       api.ghIssueCreate(
         repo,
@@ -549,6 +550,7 @@ export function useCreateIssue(repo: string) {
         args.labels,
         args.assignees,
         args.milestone,
+        args.type,
       ),
   );
 }

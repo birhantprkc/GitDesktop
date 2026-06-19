@@ -52,6 +52,7 @@ export function PromoteLocalIssueDialog({
         labels: [],
         assignees: [],
         milestone: null,
+        type: null,
       });
       // Carry the local comments over, in order, so none are lost.
       for (const c of carried) {
