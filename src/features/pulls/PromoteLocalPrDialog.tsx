@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { triggerAutomations } from "@/lib/automations/runner";
+import { ghPrComment } from "@/lib/git/api";
 import { useCreatePr } from "@/lib/git/queries";
 import type { LocalPr } from "@/lib/pulls/local";
 import { useSaveLocalPr } from "@/lib/pulls/queries";
@@ -21,19 +21,19 @@ import { toastError } from "@/lib/toast";
 
 /**
  * Publishes a local PR to GitHub: pushes the head branch, opens a real PR
- * with the same title/description, then closes the local PR with a comment
- * linking its successor.
+ * with the same title/description, **re-posts its comments** (so nothing is
+ * lost), then closes the local PR with a link to its successor. Fires no
+ * automations — the local PR's creation was the pr-open trigger point (see
+ * CreateLocalPrDialog), so promoting it would double-run them.
  */
 export function PromoteLocalPrDialog({
   repoPath,
   pr,
-  commitSubjects,
   open,
   onOpenChange,
 }: {
   repoPath: string;
   pr: LocalPr;
-  commitSubjects: string[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -41,7 +41,11 @@ export function PromoteLocalPrDialog({
   const save = useSaveLocalPr(repoPath);
   const selectPr = useUiStore((s) => s.selectPr);
   const [draft, setDraft] = useState(false);
-  const pending = createPr.isPending || save.isPending;
+  const [posting, setPosting] = useState(false);
+  const pending = createPr.isPending || save.isPending || posting;
+
+  // Visible comments, in order — skip empty + hidden (collapsed) ones.
+  const carried = pr.comments.filter((c) => c.body.trim() && !c.hidden);
 
   async function promote() {
     try {
@@ -52,6 +56,15 @@ export function PromoteLocalPrDialog({
         body: pr.body,
         draft,
       });
+      // Carry the local comments over, in order, so none are lost.
+      setPosting(true);
+      try {
+        for (const c of carried) {
+          await ghPrComment(repoPath, number, c.body);
+        }
+      } finally {
+        setPosting(false);
+      }
       await save.mutateAsync({
         ...pr,
         status: "closed",
@@ -70,16 +83,6 @@ export function PromoteLocalPrDialog({
       });
       onOpenChange(false);
       selectPr({ kind: "remote", id: String(number) });
-      triggerAutomations({
-        kind: "pr-open",
-        repoPath,
-        base: pr.base,
-        head: pr.head,
-        title: pr.title,
-        body: pr.body,
-        commitSubjects,
-        target: { type: "remote", number },
-      });
     } catch (e) {
       toastError(e);
     }
@@ -94,8 +97,13 @@ export function PromoteLocalPrDialog({
             Pushes <span className="font-mono">{pr.head}</span> to origin and
             opens a pull request into{" "}
             <span className="font-mono">{pr.base}</span> with this title and
-            description. The local PR is then closed with a link to its
-            replacement; its comments stay here.
+            description
+            {carried.length > 0
+              ? `, and re-posts its ${carried.length} comment${
+                  carried.length === 1 ? "" : "s"
+                }`
+              : ""}
+            . The local PR is then closed with a link to its replacement.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="sm:items-center">

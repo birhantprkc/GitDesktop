@@ -657,7 +657,6 @@ export function LocalPrView({
       <PromoteLocalPrDialog
         repoPath={repoPath}
         pr={pr}
-        commitSubjects={ahead.map((c) => c.subject)}
         open={promoteOpen}
         onOpenChange={setPromoteOpen}
       />
