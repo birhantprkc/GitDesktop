@@ -384,6 +384,23 @@ export const SyntaxSection = withForm({
         : { syntaxMap: globalMap ?? {}, customLanguages: globalLangs ?? [] };
     const { syntaxMap, customLanguages } = config;
 
+    // The mapping picker can reference a language from EITHER scope — the diff
+    // renderer already merges both at highlight time (useEffectiveSyntax), so a
+    // language defined under "Just me" should still be pickable in the repo
+    // scope (and vice-versa). Edit/delete stays scope-aware (the list below only
+    // shows the active scope's own languages).
+    const otherLangs =
+      activeScope === "repo"
+        ? (globalLangs ?? [])
+        : (sharedSyntax.data?.customLanguages ?? []);
+    const allLangs = (() => {
+      const byId = new Map<string, CustomLanguage>();
+      for (const l of otherLangs) byId.set(l.id, l);
+      for (const l of customLanguages) byId.set(l.id, l); // active scope wins
+      return [...byId.values()];
+    })();
+    const ownIds = new Set(customLanguages.map((c) => c.id));
+
     function update(next: SyntaxConfig) {
       if (activeScope === "repo") {
         if (repoPath) saveShared.mutate(next);
@@ -397,6 +414,23 @@ export const SyntaxSection = withForm({
     const setCustom = (c: CustomLanguage[]) =>
       update({ ...config, customLanguages: c });
 
+    // Setting a mapping to a language borrowed from the OTHER scope copies that
+    // language's definition into the active scope, so the mapping is self-
+    // contained: the repo's .gitdesktop/syntax.json then carries every language
+    // its mappings reference (teammates can resolve them), and personal mappings
+    // stay portable across repos.
+    function applyMapping(ext: string, langId: string) {
+      const borrowed = allLangs.find(
+        (c) => c.id === langId && !ownIds.has(c.id),
+      );
+      update({
+        syntaxMap: { ...syntaxMap, [ext]: langId },
+        customLanguages: borrowed
+          ? [...customLanguages, borrowed]
+          : customLanguages,
+      });
+    }
+
     const entries = Object.entries(syntaxMap).sort(([a], [b]) =>
       a.localeCompare(b),
     );
@@ -404,7 +438,7 @@ export const SyntaxSection = withForm({
     function addMapping() {
       const ext = newExt.trim().toLowerCase().replace(/^\.+/, "");
       if (!ext || !newLang) return;
-      setMap({ ...syntaxMap, [ext]: newLang });
+      applyMapping(ext, newLang);
       setNewExt("");
       setNewLang("");
     }
@@ -503,8 +537,8 @@ export const SyntaxSection = withForm({
                 <span className="text-muted-foreground">→</span>
                 <LanguagePicker
                   value={lang}
-                  onValueChange={(l) => setMap({ ...syntaxMap, [ext]: l })}
-                  customLanguages={customLanguages}
+                  onValueChange={(l) => applyMapping(ext, l)}
+                  customLanguages={allLangs}
                   triggerClassName="w-44"
                 />
                 <Button
@@ -538,7 +572,7 @@ export const SyntaxSection = withForm({
             <LanguagePicker
               value={newLang}
               onValueChange={setNewLang}
-              customLanguages={customLanguages}
+              customLanguages={allLangs}
               autoLabel="Pick a language"
               onClear={() => setNewLang("")}
               triggerClassName="w-44"
