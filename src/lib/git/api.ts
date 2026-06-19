@@ -28,10 +28,14 @@ import type {
   HookDelivery,
   HookDeliveryDetail,
   HooksInfo,
+  IssueDependencies,
   IssueDetails,
+  IssueDevelopment,
   IssueInfo,
   IssueReactions,
+  IssueRelation,
   IssueRelations,
+  IssueType,
   Milestone,
   PrDetails,
   PrInfo,
@@ -564,12 +568,16 @@ export const ghPublishRepo = (
   name: string,
   isPrivate: boolean,
   description: string,
+  homepage: string,
+  topics: string[],
 ) =>
   invoke<string>("gh_publish_repo", {
     repoPath,
     name,
     private: isPrivate,
     description,
+    homepage,
+    topics,
   });
 
 export const ghPrsForBranch = (repoPath: string, head: string) =>
@@ -625,6 +633,16 @@ export const ghIssueSetMilestone = (
   number: number,
   milestone: number | null,
 ) => invoke<void>("gh_issue_set_milestone", { repoPath, number, milestone });
+
+/** The repo's enabled issue types (empty when the owner defines none). */
+export const ghIssueTypes = (repoPath: string) =>
+  invoke<IssueType[]>("gh_issue_types", { repoPath });
+
+export const ghIssueSetType = (
+  repoPath: string,
+  number: number,
+  typeName: string | null,
+) => invoke<void>("gh_issue_set_type", { repoPath, number, typeName });
 
 export const ghIssuePin = (repoPath: string, number: number) =>
   invoke<void>("gh_issue_pin", { repoPath, number });
@@ -789,6 +807,28 @@ export const ghIssueDelete = (repoPath: string, number: number) =>
 
 export const ghIssueRelations = (repoPath: string, number: number) =>
   invoke<IssueRelations>("gh_issue_relations", { repoPath, number });
+
+export const ghIssueDependencies = (repoPath: string, number: number) =>
+  invoke<IssueDependencies>("gh_issue_dependencies", { repoPath, number });
+
+export const ghIssueDevelopment = (repoPath: string, number: number) =>
+  invoke<IssueDevelopment>("gh_issue_development", { repoPath, number });
+
+/** Adds/removes a blocked-by or blocking dependency by target issue number. */
+export const ghIssueSetDependency = (
+  repoPath: string,
+  number: number,
+  relation: IssueRelation,
+  target: number,
+  add: boolean,
+) =>
+  invoke<void>("gh_issue_set_dependency", {
+    repoPath,
+    number,
+    relation,
+    target,
+    add,
+  });
 
 /** Adds issue `subNumber` (this repo) as a sub-issue of `parentId` (node id). */
 export const ghIssueAddSubIssue = (

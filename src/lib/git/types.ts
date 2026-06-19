@@ -482,6 +482,14 @@ export interface Milestone {
   title: string;
 }
 
+/** An org-defined issue type (Bug/Feature/Task/…). */
+export interface IssueType {
+  id: string;
+  name: string;
+  /** GitHub color NAME (GRAY/BLUE/GREEN/YELLOW/ORANGE/RED/PINK/PURPLE). */
+  color: string;
+}
+
 export interface Reaction {
   /** GitHub ReactionContent enum value (THUMBS_UP, HEART, ROCKET, …). */
   content: string;
@@ -598,6 +606,30 @@ export interface IssueRelations {
   total: number;
 }
 
+/** An issue's dependencies: issues blocking it, and issues it blocks. */
+export interface IssueDependencies {
+  blockedBy: RelatedIssue[];
+  blocking: RelatedIssue[];
+}
+
+/** Which dependency direction to edit. */
+export type IssueRelation = "blocked_by" | "blocking";
+
+/** A pull request linked to an issue (it closes / references it). */
+export interface LinkedPr {
+  number: number;
+  title: string;
+  /** "OPEN", "CLOSED", or "MERGED". */
+  state: string;
+  url: string;
+}
+
+/** An issue's "Development" links: closing PRs + linked branches. */
+export interface IssueDevelopment {
+  prs: LinkedPr[];
+  branches: string[];
+}
+
 export interface IssueDetails {
   /** GraphQL node id, used by the label mutations. */
   id: string;
@@ -610,6 +642,7 @@ export interface IssueDetails {
   url: string;
   assignees: string[];
   milestone: Milestone | null;
+  issueType: IssueType | null;
   isPinned: boolean;
   locked: boolean;
   /** GitHub's lock reason (off_topic/resolved/spam/too_heated) or null. */

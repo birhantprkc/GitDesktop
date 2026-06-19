@@ -1,6 +1,11 @@
 import { Popover } from "@base-ui/react/popover";
-import { CaretDownIcon, FlagIcon, UserPlusIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import {
+  CaretDownIcon,
+  FlagIcon,
+  ShapesIcon,
+  UserPlusIcon,
+} from "@phosphor-icons/react";
+import { type ComponentProps, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -9,8 +14,43 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useAssignableUsers, useMilestones } from "@/lib/git/queries";
+import {
+  useAssignableUsers,
+  useIssueTypes,
+  useMilestones,
+} from "@/lib/git/queries";
+import type { IssueType } from "@/lib/git/types";
 import { cn } from "@/lib/utils";
+
+/** GitHub issue-type color NAMES → a swatch hex (matches GitHub's palette). */
+const ISSUE_TYPE_COLORS: Record<string, string> = {
+  GRAY: "#6b7280",
+  BLUE: "#3b82f6",
+  GREEN: "#22c55e",
+  YELLOW: "#eab308",
+  ORANGE: "#f97316",
+  RED: "#ef4444",
+  PINK: "#ec4899",
+  PURPLE: "#a855f7",
+};
+
+function typeColor(color: string): string {
+  return ISSUE_TYPE_COLORS[color?.toUpperCase()] ?? ISSUE_TYPE_COLORS.GRAY;
+}
+
+function TypeDot({
+  color,
+  ...rest
+}: { color: string } & ComponentProps<"span">) {
+  return (
+    <span
+      aria-hidden
+      className="size-2 shrink-0 rounded-full"
+      style={{ backgroundColor: typeColor(color) }}
+      {...rest}
+    />
+  );
+}
 
 /**
  * Assignee multi-select shared by the create dialog and the issue view.
@@ -174,6 +214,68 @@ export function MilestoneMenu({
               {milestones.isPending ? "Loading…" : "No open milestones"}
             </DropdownMenuItem>
           )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+/**
+ * Single-select issue-type menu (org-defined Bug/Feature/Task/…). Renders
+ * nothing when the repo's owner defines no types, so personal repos show no
+ * empty control. `onChange` receives the type NAME (or null to clear).
+ */
+export function IssueTypeMenu({
+  repoPath,
+  enabled,
+  value,
+  onChange,
+}: {
+  repoPath: string;
+  enabled: boolean;
+  value: IssueType | null;
+  onChange: (typeName: string | null) => void;
+}) {
+  const types = useIssueTypes(repoPath, enabled);
+  const list = types.data ?? [];
+  // No types defined for this owner → hide the control entirely.
+  if (list.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="ghost" size="xs" aria-label="Set issue type" />
+          }
+        >
+          {value ? (
+            <TypeDot color={value.color} data-icon="inline-start" />
+          ) : (
+            <ShapesIcon data-icon="inline-start" />
+          )}
+          {value?.name ?? "Type"}
+          <CaretDownIcon data-icon="inline-end" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-52">
+          <DropdownMenuItem
+            onClick={() => onChange(null)}
+            className={cn(!value && "bg-accent text-accent-foreground")}
+          >
+            No type
+          </DropdownMenuItem>
+          {list.map((t) => (
+            <DropdownMenuItem
+              key={t.id}
+              onClick={() => onChange(t.name)}
+              className={cn(
+                value?.name === t.name && "bg-accent text-accent-foreground",
+              )}
+            >
+              <TypeDot color={t.color} />
+              {t.name}
+            </DropdownMenuItem>
+          ))}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

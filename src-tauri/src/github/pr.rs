@@ -292,6 +292,8 @@ pub async fn gh_publish_repo(
     name: String,
     private: bool,
     description: String,
+    homepage: String,
+    topics: Vec<String>,
 ) -> AppResult<String> {
     let name = name.trim();
     if name.is_empty() || name.starts_with('-') {
@@ -300,15 +302,37 @@ pub async fn gh_publish_repo(
         ));
     }
     let visibility = if private { "--private" } else { "--public" };
+    let description = description.trim();
+    let homepage = homepage.trim();
     let mut args: Vec<&str> = vec![
         "repo", "create", name, "--source", ".", "--remote", "origin", "--push", visibility,
     ];
-    let description = description.trim();
     if !description.is_empty() {
         args.push("--description");
         args.push(description);
     }
+    if !homepage.is_empty() {
+        args.push("--homepage");
+        args.push(homepage);
+    }
     run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT).await?;
+
+    // `gh repo create` can't set topics, so apply them with a follow-up edit.
+    // Best-effort: the repo + push already succeeded, so a topic hiccup must not
+    // fail the publish. The new repo is `origin`, so no repo arg is needed.
+    let topics: Vec<String> = topics
+        .into_iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !topics.is_empty() {
+        let mut edit_args: Vec<&str> = vec!["repo", "edit"];
+        for t in &topics {
+            edit_args.push("--add-topic");
+            edit_args.push(t);
+        }
+        let _ = run_gh(Some(&repo_path), &edit_args, GH_NETWORK_TIMEOUT).await;
+    }
 
     // gh's create output is human-prose on stderr; read back the canonical URL.
     gh_repo_url(repo_path).await

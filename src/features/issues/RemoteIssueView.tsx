@@ -66,6 +66,7 @@ import {
   useRepoLabels,
   useSetIssueAssignees,
   useSetIssueMilestone,
+  useSetIssueType,
   useToggleReaction,
   useTransferIssue,
   useUnlockIssue,
@@ -74,7 +75,12 @@ import {
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
-import { AssigneesPopover, MilestoneMenu } from "./IssueMetaPickers";
+import { IssueDevelopment } from "./IssueDevelopment";
+import {
+  AssigneesPopover,
+  IssueTypeMenu,
+  MilestoneMenu,
+} from "./IssueMetaPickers";
 import { IssueRelations } from "./IssueRelations";
 
 /** GitHub's lock reasons (menu label → API value); null locks with no reason. */
@@ -112,6 +118,7 @@ export function RemoteIssueView({
   const repoLabels = useRepoLabels(repoPath, true);
   const setAssignees = useSetIssueAssignees(repoPath);
   const setMilestone = useSetIssueMilestone(repoPath);
+  const setType = useSetIssueType(repoPath);
   const pinIssue = usePinIssue(repoPath);
   const lockIssue = useLockIssue(repoPath);
   const unlockIssue = useUnlockIssue(repoPath);
@@ -545,6 +552,14 @@ export function RemoteIssueView({
             setMilestone.mutate({ number, milestone: m }, { onError })
           }
         />
+        <IssueTypeMenu
+          repoPath={repoPath}
+          enabled
+          value={issue.issueType}
+          onChange={(typeName) =>
+            setType.mutate({ number, typeName }, { onError })
+          }
+        />
       </header>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-4 p-4">
@@ -620,6 +635,7 @@ export function RemoteIssueView({
             issueId={issue.id}
             number={number}
           />
+          <IssueDevelopment repoPath={repoPath} number={number} />
           {comments.map((c) => (
             <Thread
               key={c.id}

@@ -14,6 +14,19 @@ pub struct Milestone {
     pub title: String,
 }
 
+/// An org-defined issue type (Bug/Feature/Task/…). `color` is a GitHub color
+/// NAME (GRAY/BLUE/GREEN/…), mapped to a swatch on the frontend.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueType {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub color: String,
+}
+
 /// One emoji reaction tally on a reactable subject (issue body or comment).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -153,6 +166,8 @@ struct RawIssue {
     #[serde(default)]
     milestone: Option<Milestone>,
     #[serde(default)]
+    issue_type: Option<IssueType>,
+    #[serde(default)]
     is_pinned: bool,
     #[serde(default)]
     comments: Vec<RawIssueComment>,
@@ -184,6 +199,7 @@ pub struct IssueDetails {
     pub url: String,
     pub assignees: Vec<String>,
     pub milestone: Option<Milestone>,
+    pub issue_type: Option<IssueType>,
     pub is_pinned: bool,
     pub locked: bool,
     pub active_lock_reason: Option<String>,
@@ -192,7 +208,7 @@ pub struct IssueDetails {
 }
 
 const ISSUE_VIEW_FIELDS: &str =
-    "id,number,title,body,author,state,createdAt,url,assignees,milestone,isPinned,comments,labels";
+    "id,number,title,body,author,state,createdAt,url,assignees,milestone,issueType,isPinned,comments,labels";
 
 /// Full details for one issue's read view: body, assignees, labels and the
 /// conversation comments (with node ids for editing/hiding).
@@ -233,6 +249,7 @@ pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDet
         url: raw.url,
         assignees: raw.assignees.into_iter().map(|a| a.login).collect(),
         milestone: raw.milestone,
+        issue_type: raw.issue_type,
         is_pinned: raw.is_pinned,
         locked: lock.locked,
         active_lock_reason: lock.reason,
@@ -402,6 +419,73 @@ pub async fn gh_issue_set_milestone(
         GH_NETWORK_TIMEOUT,
     )
     .await?;
+    Ok(())
+}
+
+/// The repo's enabled issue types (org-defined). Empty when the owner defines
+/// none (e.g. a personal repo), which hides the picker on the frontend.
+#[tauri::command]
+pub async fn gh_issue_types(repo_path: String) -> AppResult<Vec<IssueType>> {
+    let (owner, name) = repo_owner_name(&repo_path).await?;
+    let query = "query($owner:String!,$name:String!){ repository(owner:$owner,name:$name){ issueTypes(first:25){ nodes{ id name color isEnabled } } } }";
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-F",
+            &format!("owner={owner}"),
+            "-F",
+            &format!("name={name}"),
+            "-f",
+            &format!("query={query}"),
+        ],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse issue types: {e}")))?;
+    let types = value
+        .pointer("/data/repository/issueTypes/nodes")
+        .and_then(|n| n.as_array())
+        .map(|arr| {
+            arr.iter()
+                // Skip types an admin has disabled.
+                .filter(|n| {
+                    n.get("isEnabled")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(true)
+                })
+                .filter_map(|n| {
+                    Some(IssueType {
+                        id: n.get("id")?.as_str()?.to_string(),
+                        name: n.get("name")?.as_str()?.to_string(),
+                        color: n
+                            .get("color")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(types)
+}
+
+/// Sets (or, with `None`, clears) an issue's type by name (`gh issue edit`).
+#[tauri::command]
+pub async fn gh_issue_set_type(
+    repo_path: String,
+    number: u64,
+    type_name: Option<String>,
+) -> AppResult<()> {
+    let n = number.to_string();
+    let args: Vec<&str> = match type_name.as_deref() {
+        Some(t) if !t.trim().is_empty() => vec!["issue", "edit", &n, "--type", t],
+        _ => vec!["issue", "edit", &n, "--remove-type"],
+    };
+    run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT).await?;
     Ok(())
 }
 
@@ -868,6 +952,163 @@ pub async fn gh_issue_remove_sub_issue(
     )
     .await?;
     Ok(())
+}
+
+/// An issue's dependencies: the issues blocking it, and the issues it blocks.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDependencies {
+    pub blocked_by: Vec<RelatedIssue>,
+    pub blocking: Vec<RelatedIssue>,
+}
+
+const DEPENDENCIES_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ issue(number:$number){ blockedBy(first:50){ nodes{ id number title state url } } blocking(first:50){ nodes{ id number title state url } } } } }";
+
+/// Reads an issue's blocked-by / blocking dependencies (GraphQL — not in the
+/// `gh issue view` CLI JSON). Loads in parallel with the conversation.
+#[tauri::command]
+pub async fn gh_issue_dependencies(
+    repo_path: String,
+    number: u64,
+) -> AppResult<IssueDependencies> {
+    let (owner, name) = repo_owner_name(&repo_path).await?;
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-F",
+            &format!("owner={owner}"),
+            "-F",
+            &format!("name={name}"),
+            "-F",
+            &format!("number={number}"),
+            "-f",
+            &format!("query={DEPENDENCIES_QUERY}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse dependencies: {e}")))?;
+    let issue = value.pointer("/data/repository/issue");
+    let parse = |key: &str| -> AppResult<Vec<RelatedIssue>> {
+        Ok(issue
+            .and_then(|i| i.pointer(&format!("/{key}/nodes")))
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| AppError::Gh(format!("could not parse {key}: {e}")))?
+            .unwrap_or_default())
+    };
+    Ok(IssueDependencies {
+        blocked_by: parse("blockedBy")?,
+        blocking: parse("blocking")?,
+    })
+}
+
+/// Adds or removes a blocked-by / blocking dependency on an issue by the target
+/// issue's number. `relation` is "blocked_by" or "blocking".
+#[tauri::command]
+pub async fn gh_issue_set_dependency(
+    repo_path: String,
+    number: u64,
+    relation: String,
+    target: u64,
+    add: bool,
+) -> AppResult<()> {
+    let flag = match (relation.as_str(), add) {
+        ("blocked_by", true) => "--add-blocked-by",
+        ("blocked_by", false) => "--remove-blocked-by",
+        ("blocking", true) => "--add-blocking",
+        ("blocking", false) => "--remove-blocking",
+        _ => {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown relation: {relation}"
+            )));
+        }
+    };
+    let n = number.to_string();
+    let t = target.to_string();
+    run_gh(
+        Some(&repo_path),
+        &["issue", "edit", &n, flag, &t],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// A pull request linked to an issue (it closes / references it).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedPr {
+    pub number: u64,
+    pub title: String,
+    /// "OPEN", "CLOSED", or "MERGED".
+    pub state: String,
+    pub url: String,
+}
+
+/// An issue's "Development" links: the PRs that close it + branches linked to it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDevelopment {
+    pub prs: Vec<LinkedPr>,
+    pub branches: Vec<String>,
+}
+
+const DEVELOPMENT_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ issue(number:$number){ closedByPullRequestsReferences(first:20,includeClosedPrs:true){ nodes{ number title url state } } linkedBranches(first:20){ nodes{ ref{ name } } } } } }";
+
+/// Reads an issue's linked/closing PRs + linked branches (GitHub's "Development"
+/// section). GraphQL-only; loads in parallel with the conversation.
+#[tauri::command]
+pub async fn gh_issue_development(
+    repo_path: String,
+    number: u64,
+) -> AppResult<IssueDevelopment> {
+    let (owner, name) = repo_owner_name(&repo_path).await?;
+    let out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-F",
+            &format!("owner={owner}"),
+            "-F",
+            &format!("name={name}"),
+            "-F",
+            &format!("number={number}"),
+            "-f",
+            &format!("query={DEVELOPMENT_QUERY}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse development: {e}")))?;
+    let issue = value.pointer("/data/repository/issue");
+    let prs: Vec<LinkedPr> = issue
+        .and_then(|i| i.pointer("/closedByPullRequestsReferences/nodes"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| AppError::Gh(format!("could not parse linked PRs: {e}")))?
+        .unwrap_or_default();
+    let branches = issue
+        .and_then(|i| i.pointer("/linkedBranches/nodes"))
+        .and_then(|n| n.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|n| {
+                    n.pointer("/ref/name")
+                        .and_then(|x| x.as_str())
+                        .map(String::from)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(IssueDevelopment { prs, branches })
 }
 
 /// Strips a leading YAML frontmatter block (`---\n…\n---`) from a template body.

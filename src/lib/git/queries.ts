@@ -15,6 +15,7 @@ import type {
   DiscussionDetails,
   GhStatus,
   IssueReactions,
+  IssueRelation,
   Reaction,
   RepoOp,
   RepoSettingsInput,
@@ -376,8 +377,21 @@ export function useRemotes(repo: string) {
 export function usePublishRepo(repo: string) {
   return useRepoMutation(
     repo,
-    (args: { name: string; isPrivate: boolean; description: string }) =>
-      api.ghPublishRepo(repo, args.name, args.isPrivate, args.description),
+    (args: {
+      name: string;
+      isPrivate: boolean;
+      description: string;
+      homepage: string;
+      topics: string[];
+    }) =>
+      api.ghPublishRepo(
+        repo,
+        args.name,
+        args.isPrivate,
+        args.description,
+        args.homepage,
+        args.topics,
+      ),
   );
 }
 
@@ -568,6 +582,24 @@ export function useSetIssueMilestone(repo: string) {
     repo,
     (args: { number: number; milestone: number | null }) =>
       api.ghIssueSetMilestone(repo, args.number, args.milestone),
+  );
+}
+
+export function useIssueTypes(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "issue-types"] as const,
+    queryFn: () => api.ghIssueTypes(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+export function useSetIssueType(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { number: number; typeName: string | null }) =>
+      api.ghIssueSetType(repo, args.number, args.typeName),
   );
 }
 
@@ -932,6 +964,45 @@ export function useAddSubIssue(repo: string) {
     repo,
     (args: { parentId: string; subNumber: number }) =>
       api.ghIssueAddSubIssue(repo, args.parentId, args.subNumber),
+  );
+}
+
+/** An issue's blocked-by / blocking dependencies. */
+export function useIssueDependencies(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "issue", number ?? 0, "dependencies"] as const,
+    queryFn: () => api.ghIssueDependencies(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+  });
+}
+
+/** An issue's "Development" links: closing PRs + linked branches. */
+export function useIssueDevelopment(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "issue", number ?? 0, "development"] as const,
+    queryFn: () => api.ghIssueDevelopment(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+  });
+}
+
+export function useSetIssueDependency(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      number: number;
+      relation: IssueRelation;
+      target: number;
+      add: boolean;
+    }) =>
+      api.ghIssueSetDependency(
+        repo,
+        args.number,
+        args.relation,
+        args.target,
+        args.add,
+      ),
   );
 }
 

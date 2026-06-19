@@ -24,11 +24,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   useAddSubIssue,
+  useIssueDependencies,
   useIssueList,
   useIssueRelations,
   useRemoveSubIssue,
+  useSetIssueDependency,
 } from "@/lib/git/queries";
-import type { IssueInfo } from "@/lib/git/types";
+import type { IssueInfo, IssueRelation, RelatedIssue } from "@/lib/git/types";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { CreateIssueDialog } from "./CreateIssueDialog";
@@ -42,12 +44,74 @@ function StateIcon({ state }: { state: string }) {
   );
 }
 
+/** A clickable related-issue row with a hover remove button. */
+function RelatedRow({
+  issue,
+  onOpen,
+  onRemove,
+}: {
+  issue: RelatedIssue;
+  onOpen: (n: number) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="group flex items-center gap-1.5 text-xs">
+      <StateIcon state={issue.state} />
+      <button
+        type="button"
+        onClick={() => onOpen(issue.number)}
+        className="min-w-0 flex-1 truncate text-left hover:underline"
+        title={`#${issue.number} ${issue.title}`}
+      >
+        <span className="text-muted-foreground">#{issue.number}</span>{" "}
+        {issue.title}
+      </button>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        aria-label={`Remove #${issue.number}`}
+        className="text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        onClick={onRemove}
+      >
+        <XIcon />
+      </Button>
+    </div>
+  );
+}
+
+/** A labelled dependency list (Blocked by / Blocking). */
+function RelationList({
+  label,
+  items,
+  onOpen,
+  onRemove,
+}: {
+  label: string;
+  items: RelatedIssue[];
+  onOpen: (n: number) => void;
+  onRemove: (target: number) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
+      {items.map((it) => (
+        <RelatedRow
+          key={it.id}
+          issue={it}
+          onOpen={onOpen}
+          onRemove={() => onRemove(it.number)}
+        />
+      ))}
+    </div>
+  );
+}
+
 /**
  * Autocomplete over the repo's existing issues (open + closed), excluding the
- * ones that can't be added (self, parent, current sub-issues). Picking one fires
+ * ones that can't be added (self, parent, already-linked). Picking one fires
  * `onPick`. The lists only load while this is mounted (the picker is open).
  */
-function AddExistingSubIssue({
+function IssuePicker({
   repoPath,
   exclude,
   pending,
@@ -110,11 +174,14 @@ export function IssueRelations({
   number: number;
 }) {
   const relations = useIssueRelations(repoPath, number);
+  const dependencies = useIssueDependencies(repoPath, number);
   const addSub = useAddSubIssue(repoPath);
   const removeSub = useRemoveSubIssue(repoPath);
+  const setDep = useSetIssueDependency(repoPath);
   const selectIssue = useUiStore((s) => s.selectIssue);
   const [mode, setMode] = useState<null | "existing">(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [addRelation, setAddRelation] = useState<IssueRelation | null>(null);
 
   const onError = (e: unknown) => toastError(e);
   const data = relations.data;
@@ -128,6 +195,18 @@ export function IssueRelations({
     number,
     ...(parent ? [parent.number] : []),
     ...subIssues.map((s) => s.number),
+  ]);
+
+  const depsLoaded = dependencies.data !== undefined;
+  const blockedBy = dependencies.data?.blockedBy ?? [];
+  const blocking = dependencies.data?.blocking ?? [];
+  const excludeBlockedBy = new Set<number>([
+    number,
+    ...blockedBy.map((i) => i.number),
+  ]);
+  const excludeBlocking = new Set<number>([
+    number,
+    ...blocking.map((i) => i.number),
   ]);
 
   function open(n: number) {
@@ -203,32 +282,14 @@ export function IssueRelations({
         )}
 
         {subIssues.map((s) => (
-          <div key={s.id} className="group flex items-center gap-1.5 text-xs">
-            <StateIcon state={s.state} />
-            <button
-              type="button"
-              onClick={() => open(s.number)}
-              className="min-w-0 flex-1 truncate text-left hover:underline"
-              title={`#${s.number} ${s.title}`}
-            >
-              <span className="text-muted-foreground">#{s.number}</span>{" "}
-              {s.title}
-            </button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Remove sub-issue #${s.number}`}
-              className="text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-              onClick={() =>
-                removeSub.mutate(
-                  { parentId: issueId, subId: s.id },
-                  { onError },
-                )
-              }
-            >
-              <XIcon />
-            </Button>
-          </div>
+          <RelatedRow
+            key={s.id}
+            issue={s}
+            onOpen={open}
+            onRemove={() =>
+              removeSub.mutate({ parentId: issueId, subId: s.id }, { onError })
+            }
+          />
         ))}
 
         {subIssues.length === 0 && mode === null && (
@@ -240,7 +301,7 @@ export function IssueRelations({
         {mode === "existing" && (
           <div className="flex items-center gap-1.5">
             <div className="min-w-0 flex-1">
-              <AddExistingSubIssue
+              <IssuePicker
                 repoPath={repoPath}
                 exclude={exclude}
                 pending={addSub.isPending}
@@ -250,6 +311,109 @@ export function IssueRelations({
             <Button variant="ghost" size="xs" onClick={() => setMode(null)}>
               Cancel
             </Button>
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium">Relationships</span>
+          <span className="flex-1" />
+          {addRelation === null && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    aria-label="Add a relationship"
+                  />
+                }
+              >
+                <PlusIcon data-icon="inline-start" />
+                Add
+                <CaretDownIcon data-icon="inline-end" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-44">
+                <DropdownMenuItem onClick={() => setAddRelation("blocked_by")}>
+                  Blocked by…
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setAddRelation("blocking")}>
+                  Blocking…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+
+        {blockedBy.length > 0 && (
+          <RelationList
+            label="Blocked by"
+            items={blockedBy}
+            onOpen={open}
+            onRemove={(t) =>
+              setDep.mutate(
+                { number, relation: "blocked_by", target: t, add: false },
+                { onError },
+              )
+            }
+          />
+        )}
+        {blocking.length > 0 && (
+          <RelationList
+            label="Blocking"
+            items={blocking}
+            onOpen={open}
+            onRemove={(t) =>
+              setDep.mutate(
+                { number, relation: "blocking", target: t, add: false },
+                { onError },
+              )
+            }
+          />
+        )}
+        {depsLoaded &&
+          blockedBy.length === 0 &&
+          blocking.length === 0 &&
+          addRelation === null && (
+            <p className="text-[11px] text-muted-foreground">
+              No linked issues.
+            </p>
+          )}
+
+        {addRelation !== null && (
+          <div className="space-y-1">
+            <p className="text-[11px] text-muted-foreground">
+              {addRelation === "blocked_by"
+                ? "Add an issue that blocks this one"
+                : "Add an issue this one blocks"}
+            </p>
+            <div className="flex items-center gap-1.5">
+              <div className="min-w-0 flex-1">
+                <IssuePicker
+                  repoPath={repoPath}
+                  exclude={
+                    addRelation === "blocked_by"
+                      ? excludeBlockedBy
+                      : excludeBlocking
+                  }
+                  pending={setDep.isPending}
+                  onPick={(t) =>
+                    setDep.mutate(
+                      { number, relation: addRelation, target: t, add: true },
+                      { onSuccess: () => setAddRelation(null), onError },
+                    )
+                  }
+                />
+              </div>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => setAddRelation(null)}
+              >
+                Cancel
+              </Button>
+            </div>
           </div>
         )}
       </div>
