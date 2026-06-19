@@ -156,7 +156,9 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
                       conclusion={run.conclusion}
                       className="size-3.5"
                     />
-                    <span className="truncate">{run.displayTitle}</span>
+                    <span className="truncate" title={run.displayTitle}>
+                      {run.displayTitle}
+                    </span>
                   </p>
                   <p className="mt-0.5 truncate pl-5 text-[11px] text-muted-foreground">
                     {run.workflowName} · {run.headBranch} ·{" "}

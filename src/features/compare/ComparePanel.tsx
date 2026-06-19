@@ -302,7 +302,9 @@ function CommitSection({
         >
           <p className="flex items-center gap-1.5 text-xs font-medium">
             <GitCommitIcon className="size-3 shrink-0 text-muted-foreground" />
-            <span className="truncate">{commit.subject}</span>
+            <span className="truncate" title={commit.subject}>
+              {commit.subject}
+            </span>
           </p>
           <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
             {commit.author} • {formatRelativeTime(commit.date)}

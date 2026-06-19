@@ -66,9 +66,9 @@ export function CreateLocalIssueDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
         <form
-          className="min-w-0 space-y-4"
+          className="flex min-h-0 min-w-0 flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
             form.handleSubmit();
@@ -82,61 +82,64 @@ export function CreateLocalIssueDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <form.AppField
-            name="title"
-            validators={{ onChange: ({ value }) => required(value) }}
-          >
-            {(field) => (
-              <field.TextField
-                label="Title"
-                placeholder="Summarize the issue"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="body">
-            {(field) => (
-              <field.MarkdownField
-                label="Description"
-                placeholder="Jot down rough notes, then draft with AI"
-                rows={8}
-                textareaClassName="max-h-72 min-h-24 resize-y font-mono"
-                actions={
-                  !aiEnabled ? undefined : generating ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      onClick={cancel}
-                    >
-                      <XIcon data-icon="inline-start" />
-                      Cancel
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      disabled={!notes.trim()}
-                      onClick={() =>
-                        generate({
-                          notes,
-                          repoName,
-                          onResult: (d) => {
-                            if (d.title) form.setFieldValue("title", d.title);
-                            form.setFieldValue("body", d.body);
-                          },
-                        })
-                      }
-                      title="Expand your notes into a structured issue with AI"
-                    >
-                      <SparkleIcon data-icon="inline-start" />
-                      Draft with AI
-                    </Button>
-                  )
-                }
-              />
-            )}
-          </form.AppField>
+          {/* Fields scroll; header and submit footer stay pinned. */}
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+            <form.AppField
+              name="title"
+              validators={{ onChange: ({ value }) => required(value) }}
+            >
+              {(field) => (
+                <field.TextField
+                  label="Title"
+                  placeholder="Summarize the issue"
+                />
+              )}
+            </form.AppField>
+            <form.AppField name="body">
+              {(field) => (
+                <field.MarkdownField
+                  label="Description"
+                  placeholder="Jot down rough notes, then draft with AI"
+                  rows={8}
+                  textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+                  actions={
+                    !aiEnabled ? undefined : generating ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        onClick={cancel}
+                      >
+                        <XIcon data-icon="inline-start" />
+                        Cancel
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        disabled={!notes.trim()}
+                        onClick={() =>
+                          generate({
+                            notes,
+                            repoName,
+                            onResult: (d) => {
+                              if (d.title) form.setFieldValue("title", d.title);
+                              form.setFieldValue("body", d.body);
+                            },
+                          })
+                        }
+                        title="Expand your notes into a structured issue with AI"
+                      >
+                        <SparkleIcon data-icon="inline-start" />
+                        Draft with AI
+                      </Button>
+                    )
+                  }
+                />
+              )}
+            </form.AppField>
+          </div>
 
           <DialogFooter>
             <Button

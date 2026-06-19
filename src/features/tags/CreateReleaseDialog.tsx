@@ -235,9 +235,9 @@ export function CreateReleaseDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
         <form
-          className="space-y-4"
+          className="flex min-h-0 flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
             form.handleSubmit();
@@ -253,111 +253,42 @@ export function CreateReleaseDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="rel-tag">Tag</Label>
-              {initialTag ? (
-                <Input
-                  id="rel-tag"
-                  value={tag}
-                  disabled
-                  className="font-mono"
-                />
-              ) : (
-                <Combobox
-                  items={tagItems}
-                  itemToStringLabel={(t: { name: string }) => t.name}
-                  inputValue={tag}
-                  onInputValueChange={(v: string) =>
-                    form.setFieldValue("tag", v)
-                  }
-                  value={tagItems.find((t) => t.name === tagTrimmed) ?? null}
-                  onValueChange={(t: { name: string } | null) =>
-                    t && form.setFieldValue("tag", t.name)
-                  }
-                  open={tagOpen}
-                  onOpenChange={setTagOpen}
-                  openOnInputClick
-                >
-                  <ComboboxInput
-                    className="w-full font-mono"
-                    placeholder="v1.2.0"
-                  />
-                  <ComboboxContent>
-                    <ComboboxEmpty>
-                      {canCreate ? null : "No matching tags."}
-                    </ComboboxEmpty>
-                    <ComboboxList>
-                      {(t: { name: string }) => (
-                        <ComboboxItem key={t.name} value={t}>
-                          <span className="truncate font-mono">{t.name}</span>
-                        </ComboboxItem>
-                      )}
-                    </ComboboxList>
-                    {canCreate && (
-                      <button
-                        type="button"
-                        onClick={() => createNewTag(tagTrimmed)}
-                        className="flex w-full items-center gap-1.5 border-t px-2 py-2 text-left text-xs hover:bg-accent"
-                      >
-                        <PlusIcon className="size-3.5 shrink-0" />
-                        Create new tag{" "}
-                        <span className="font-mono">{tagTrimmed}</span> on
-                        release
-                      </button>
-                    )}
-                  </ComboboxContent>
-                </Combobox>
-              )}
-            </div>
-            {showTarget && (
+          {/* Fields scroll; header and submit footer stay pinned. */}
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Target</Label>
-                <TargetPicker
-                  branches={(branches.data ?? []).map((b) => b.name)}
-                  commits={recent.data ?? []}
-                  value={target}
-                  onChange={(v) => form.setFieldValue("target", v)}
-                />
-              </div>
-            )}
-          </div>
-
-          <form.AppField name="title">
-            {(field) => (
-              <field.TextField
-                label="Title (optional)"
-                placeholder={tagTrimmed || "Release title"}
-              />
-            )}
-          </form.AppField>
-
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <Label>Release notes</Label>
-              {existingTags.length > 0 && (
-                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <span className="shrink-0">Previous tag</span>
+                <Label htmlFor="rel-tag">Tag</Label>
+                {initialTag ? (
+                  <Input
+                    id="rel-tag"
+                    value={tag}
+                    disabled
+                    className="font-mono"
+                  />
+                ) : (
                   <Combobox
-                    items={tagNames.map((name) => ({ name }))}
+                    items={tagItems}
                     itemToStringLabel={(t: { name: string }) => t.name}
-                    inputValue={previousTag}
-                    onInputValueChange={setPreviousTagOverride}
-                    value={
-                      existingTags.find((t) => t.name === previousTag.trim()) ??
-                      null
+                    inputValue={tag}
+                    onInputValueChange={(v: string) =>
+                      form.setFieldValue("tag", v)
                     }
+                    value={tagItems.find((t) => t.name === tagTrimmed) ?? null}
                     onValueChange={(t: { name: string } | null) =>
-                      setPreviousTagOverride(t ? t.name : "")
+                      t && form.setFieldValue("tag", t.name)
                     }
+                    open={tagOpen}
+                    onOpenChange={setTagOpen}
                     openOnInputClick
                   >
                     <ComboboxInput
-                      className="h-7 w-64 font-mono text-xs"
-                      placeholder="Automatic"
+                      className="w-full font-mono"
+                      placeholder="v1.2.0"
                     />
                     <ComboboxContent>
-                      <ComboboxEmpty>No matching tags.</ComboboxEmpty>
+                      <ComboboxEmpty>
+                        {canCreate ? null : "No matching tags."}
+                      </ComboboxEmpty>
                       <ComboboxList>
                         {(t: { name: string }) => (
                           <ComboboxItem key={t.name} value={t}>
@@ -365,116 +296,195 @@ export function CreateReleaseDialog({
                           </ComboboxItem>
                         )}
                       </ComboboxList>
+                      {canCreate && (
+                        <button
+                          type="button"
+                          onClick={() => createNewTag(tagTrimmed)}
+                          className="flex w-full items-center gap-1.5 border-t px-2 py-2 text-left text-xs hover:bg-accent"
+                        >
+                          <PlusIcon className="size-3.5 shrink-0" />
+                          Create new tag{" "}
+                          <span className="font-mono">{tagTrimmed}</span> on
+                          release
+                        </button>
+                      )}
                     </ComboboxContent>
                   </Combobox>
+                )}
+              </div>
+              {showTarget && (
+                <div className="space-y-1.5">
+                  <Label>Target</Label>
+                  <TargetPicker
+                    branches={(branches.data ?? []).map((b) => b.name)}
+                    commits={recent.data ?? []}
+                    value={target}
+                    onChange={(v) => form.setFieldValue("target", v)}
+                  />
                 </div>
               )}
             </div>
-            <Tabs
-              value={notesTab}
-              onValueChange={(v) => setNotesTab(v as "write" | "preview")}
-            >
-              <div className="flex items-center gap-2">
-                <TabsList variant="line">
-                  <TabsTrigger value="write">Write</TabsTrigger>
-                  <TabsTrigger value="preview">Preview</TabsTrigger>
-                </TabsList>
-                <span className="flex-1" />
-                {busyGenerating ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => aiNotes.cancel()}
-                  >
-                    {githubNotes.isPending ? (
-                      <Spinner data-icon="inline-start" />
-                    ) : (
-                      <XIcon data-icon="inline-start" />
-                    )}
-                    {githubNotes.isPending ? "Generating…" : "Cancel"}
-                  </Button>
-                ) : (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="xs"
-                          disabled={!tagTrimmed}
-                        />
+
+            <form.AppField name="title">
+              {(field) => (
+                <field.TextField
+                  label="Title (optional)"
+                  placeholder={tagTrimmed || "Release title"}
+                />
+              )}
+            </form.AppField>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <Label>Release notes</Label>
+                {existingTags.length > 0 && (
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <span className="shrink-0">Previous tag</span>
+                    <Combobox
+                      items={tagNames.map((name) => ({ name }))}
+                      itemToStringLabel={(t: { name: string }) => t.name}
+                      inputValue={previousTag}
+                      onInputValueChange={setPreviousTagOverride}
+                      value={
+                        existingTags.find(
+                          (t) => t.name === previousTag.trim(),
+                        ) ?? null
                       }
+                      onValueChange={(t: { name: string } | null) =>
+                        setPreviousTagOverride(t ? t.name : "")
+                      }
+                      openOnInputClick
                     >
-                      <SparkleIcon data-icon="inline-start" />
-                      Generate notes
-                      <CaretDownIcon data-icon="inline-end" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="min-w-56">
-                      <DropdownMenuItem onClick={generateFromGithub}>
-                        From GitHub (commits & PRs)
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        disabled={!aiEnabled}
-                        title={
-                          aiEnabled ? undefined : "Enable AI in Settings first."
-                        }
-                        onClick={generateWithAi}
-                      >
-                        Summarize with AI
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                      <ComboboxInput
+                        className="h-7 w-64 font-mono text-xs"
+                        placeholder="Automatic"
+                      />
+                      <ComboboxContent>
+                        <ComboboxEmpty>No matching tags.</ComboboxEmpty>
+                        <ComboboxList>
+                          {(t: { name: string }) => (
+                            <ComboboxItem key={t.name} value={t}>
+                              <span className="truncate font-mono">
+                                {t.name}
+                              </span>
+                            </ComboboxItem>
+                          )}
+                        </ComboboxList>
+                      </ComboboxContent>
+                    </Combobox>
+                  </div>
                 )}
               </div>
-              <TabsContent value="write">
-                <Textarea
-                  value={notes}
-                  onChange={(e) => form.setFieldValue("notes", e.target.value)}
-                  placeholder="What's changed… (or generate notes above)"
-                  rows={8}
-                  className="max-h-72 min-h-32 resize-y font-mono"
-                />
-              </TabsContent>
-              <TabsContent value="preview">
-                <div className="max-h-72 min-h-32 overflow-auto rounded-none border p-3">
-                  {notes.trim() ? (
-                    <Markdown>{notes}</Markdown>
+              <Tabs
+                value={notesTab}
+                onValueChange={(v) => setNotesTab(v as "write" | "preview")}
+              >
+                <div className="flex items-center gap-2">
+                  <TabsList variant="line">
+                    <TabsTrigger value="write">Write</TabsTrigger>
+                    <TabsTrigger value="preview">Preview</TabsTrigger>
+                  </TabsList>
+                  <span className="flex-1" />
+                  {busyGenerating ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => aiNotes.cancel()}
+                    >
+                      {githubNotes.isPending ? (
+                        <Spinner data-icon="inline-start" />
+                      ) : (
+                        <XIcon data-icon="inline-start" />
+                      )}
+                      {githubNotes.isPending ? "Generating…" : "Cancel"}
+                    </Button>
                   ) : (
-                    <p className="text-xs text-muted-foreground italic">
-                      Nothing to preview yet.
-                    </p>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="xs"
+                            disabled={!tagTrimmed}
+                          />
+                        }
+                      >
+                        <SparkleIcon data-icon="inline-start" />
+                        Generate notes
+                        <CaretDownIcon data-icon="inline-end" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-56">
+                        <DropdownMenuItem onClick={generateFromGithub}>
+                          From GitHub (commits & PRs)
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={!aiEnabled}
+                          title={
+                            aiEnabled
+                              ? undefined
+                              : "Enable AI in Settings first."
+                          }
+                          onClick={generateWithAi}
+                        >
+                          Summarize with AI
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   )}
                 </div>
-              </TabsContent>
-            </Tabs>
-          </div>
+                <TabsContent value="write">
+                  <Textarea
+                    value={notes}
+                    onChange={(e) =>
+                      form.setFieldValue("notes", e.target.value)
+                    }
+                    placeholder="What's changed… (or generate notes above)"
+                    rows={8}
+                    className="max-h-72 min-h-32 resize-y font-mono"
+                  />
+                </TabsContent>
+                <TabsContent value="preview">
+                  <div className="max-h-72 min-h-32 overflow-auto rounded-none border p-3">
+                    {notes.trim() ? (
+                      <Markdown>{notes}</Markdown>
+                    ) : (
+                      <p className="text-xs text-muted-foreground italic">
+                        Nothing to preview yet.
+                      </p>
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </div>
 
-          <div className="flex flex-wrap gap-x-6 gap-y-2">
-            <form.AppField name="latest">
-              {(field) => (
-                <field.CheckboxField
-                  label="Set as the latest release"
-                  className="flex cursor-pointer items-center gap-2 text-xs"
-                />
-              )}
-            </form.AppField>
-            <form.AppField name="prerelease">
-              {(field) => (
-                <field.CheckboxField
-                  label="Pre-release"
-                  className="flex cursor-pointer items-center gap-2 text-xs"
-                />
-              )}
-            </form.AppField>
-            <form.AppField name="draft">
-              {(field) => (
-                <field.CheckboxField
-                  label="Save as draft"
-                  className="flex cursor-pointer items-center gap-2 text-xs"
-                />
-              )}
-            </form.AppField>
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              <form.AppField name="latest">
+                {(field) => (
+                  <field.CheckboxField
+                    label="Set as the latest release"
+                    className="flex cursor-pointer items-center gap-2 text-xs"
+                  />
+                )}
+              </form.AppField>
+              <form.AppField name="prerelease">
+                {(field) => (
+                  <field.CheckboxField
+                    label="Pre-release"
+                    className="flex cursor-pointer items-center gap-2 text-xs"
+                  />
+                )}
+              </form.AppField>
+              <form.AppField name="draft">
+                {(field) => (
+                  <field.CheckboxField
+                    label="Save as draft"
+                    className="flex cursor-pointer items-center gap-2 text-xs"
+                  />
+                )}
+              </form.AppField>
+            </div>
           </div>
 
           <DialogFooter>

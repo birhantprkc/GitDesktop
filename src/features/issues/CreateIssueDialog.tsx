@@ -133,9 +133,9 @@ export function CreateIssueDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
         <form
-          className="min-w-0 space-y-4"
+          className="flex min-h-0 min-w-0 flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
             form.handleSubmit();
@@ -152,132 +152,140 @@ export function CreateIssueDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <form.AppField
-            name="title"
-            validators={{ onChange: ({ value }) => required(value) }}
-          >
-            {(field) => (
-              <field.TextField
-                label="Title"
-                placeholder="Summarize the issue"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="body">
-            {(field) => (
-              <field.MarkdownField
-                label="Description"
-                placeholder="Jot down rough notes, then draft with AI"
-                rows={8}
-                textareaClassName="max-h-72 min-h-24 resize-y font-mono"
-                actions={
-                  !aiEnabled ? undefined : generating ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      onClick={cancel}
-                    >
-                      <XIcon data-icon="inline-start" />
-                      Cancel
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      disabled={!notes.trim()}
-                      onClick={() =>
-                        generate({
-                          notes,
-                          repoName,
-                          onResult: (d) => {
-                            if (d.title) form.setFieldValue("title", d.title);
-                            form.setFieldValue("body", d.body);
-                          },
-                        })
-                      }
-                      title="Expand your notes into a structured issue with AI"
-                    >
-                      <SparkleIcon data-icon="inline-start" />
-                      Draft with AI
-                    </Button>
-                  )
-                }
-              />
-            )}
-          </form.AppField>
-
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Popover.Root>
-              <Popover.Trigger
-                render={
-                  <Button variant="outline" size="xs" aria-label="Add labels" />
-                }
-              >
-                <TagIcon data-icon="inline-start" />
-                Labels
-              </Popover.Trigger>
-              <Popover.Portal>
-                <Popover.Positioner
-                  align="start"
-                  sideOffset={4}
-                  className="isolate z-50"
-                >
-                  <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
-                    <p className="px-1 pb-1.5 text-xs font-medium">Labels</p>
-                    {(repoLabels.data ?? []).length === 0 && (
-                      <p className="px-1 py-1 text-xs text-muted-foreground">
-                        {repoLabels.isPending
-                          ? "Loading labels…"
-                          : "This repository has no labels."}
-                      </p>
-                    )}
-                    {(repoLabels.data ?? []).map((label) => (
-                      <label
-                        key={label.name}
-                        className="flex cursor-pointer items-center gap-2 px-1 py-1.5 text-xs hover:bg-muted/60"
+          {/* Fields scroll; the header and submit footer stay pinned so a long
+              body or many metadata pickers can't push the dialog off-screen. */}
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+            <form.AppField
+              name="title"
+              validators={{ onChange: ({ value }) => required(value) }}
+            >
+              {(field) => (
+                <field.TextField
+                  label="Title"
+                  placeholder="Summarize the issue"
+                />
+              )}
+            </form.AppField>
+            <form.AppField name="body">
+              {(field) => (
+                <field.MarkdownField
+                  label="Description"
+                  placeholder="Jot down rough notes, then draft with AI"
+                  rows={8}
+                  textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+                  actions={
+                    !aiEnabled ? undefined : generating ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        onClick={cancel}
                       >
-                        <Checkbox
-                          checked={labels.has(label.name)}
-                          onCheckedChange={(v) =>
-                            toggleLabel(label.name, v === true)
-                          }
-                        />
-                        <span
-                          aria-hidden
-                          className="size-2 shrink-0 rounded-full"
-                          style={{ backgroundColor: `#${label.color}` }}
-                        />
-                        <span className="flex-1 truncate">{label.name}</span>
-                      </label>
-                    ))}
-                  </Popover.Popup>
-                </Popover.Positioner>
-              </Popover.Portal>
-            </Popover.Root>
-            {selectedChips.map((label) => (
-              <LabelChip key={label.name} label={label} />
-            ))}
+                        <XIcon data-icon="inline-start" />
+                        Cancel
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        disabled={!notes.trim()}
+                        onClick={() =>
+                          generate({
+                            notes,
+                            repoName,
+                            onResult: (d) => {
+                              if (d.title) form.setFieldValue("title", d.title);
+                              form.setFieldValue("body", d.body);
+                            },
+                          })
+                        }
+                        title="Expand your notes into a structured issue with AI"
+                      >
+                        <SparkleIcon data-icon="inline-start" />
+                        Draft with AI
+                      </Button>
+                    )
+                  }
+                />
+              )}
+            </form.AppField>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Popover.Root>
+                <Popover.Trigger
+                  render={
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      aria-label="Add labels"
+                    />
+                  }
+                >
+                  <TagIcon data-icon="inline-start" />
+                  Labels
+                </Popover.Trigger>
+                <Popover.Portal>
+                  <Popover.Positioner
+                    align="start"
+                    sideOffset={4}
+                    className="isolate z-50"
+                  >
+                    <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
+                      <p className="px-1 pb-1.5 text-xs font-medium">Labels</p>
+                      {(repoLabels.data ?? []).length === 0 && (
+                        <p className="px-1 py-1 text-xs text-muted-foreground">
+                          {repoLabels.isPending
+                            ? "Loading labels…"
+                            : "This repository has no labels."}
+                        </p>
+                      )}
+                      {(repoLabels.data ?? []).map((label) => (
+                        <label
+                          key={label.name}
+                          className="flex cursor-pointer items-center gap-2 px-1 py-1.5 text-xs hover:bg-muted/60"
+                        >
+                          <Checkbox
+                            checked={labels.has(label.name)}
+                            onCheckedChange={(v) =>
+                              toggleLabel(label.name, v === true)
+                            }
+                          />
+                          <span
+                            aria-hidden
+                            className="size-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: `#${label.color}` }}
+                          />
+                          <span className="flex-1 truncate">{label.name}</span>
+                        </label>
+                      ))}
+                    </Popover.Popup>
+                  </Popover.Positioner>
+                </Popover.Portal>
+              </Popover.Root>
+              {selectedChips.map((label) => (
+                <LabelChip key={label.name} label={label} />
+              ))}
+            </div>
+            <AssigneesPopover
+              repoPath={repoPath}
+              enabled={open}
+              value={assignees}
+              onChange={setAssignees}
+            />
+            <MilestoneMenu
+              repoPath={repoPath}
+              enabled={open}
+              value={milestone}
+              onChange={setMilestone}
+            />
+            <IssueTypeMenu
+              repoPath={repoPath}
+              enabled={open}
+              value={issueType}
+              onChange={setIssueType}
+            />
           </div>
-          <AssigneesPopover
-            repoPath={repoPath}
-            enabled={open}
-            value={assignees}
-            onChange={setAssignees}
-          />
-          <MilestoneMenu
-            repoPath={repoPath}
-            enabled={open}
-            value={milestone}
-            onChange={setMilestone}
-          />
-          <IssueTypeMenu
-            repoPath={repoPath}
-            enabled={open}
-            value={issueType}
-            onChange={setIssueType}
-          />
 
           <DialogFooter>
             <Button

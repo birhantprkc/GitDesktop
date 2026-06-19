@@ -239,7 +239,10 @@ export function TagDetailView({
                     key={a.name}
                     className="group flex items-center gap-2 text-xs"
                   >
-                    <span className="min-w-0 flex-1 truncate font-mono">
+                    <span
+                      className="min-w-0 flex-1 truncate font-mono"
+                      title={a.name}
+                    >
                       {a.name}
                     </span>
                     <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
@@ -278,9 +281,9 @@ export function TagDetailView({
         </ScrollArea>
 
         <Dialog open={editOpen} onOpenChange={setEditOpen}>
-          <DialogContent className="sm:max-w-lg">
+          <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-lg">
             <form
-              className="space-y-4"
+              className="flex min-h-0 flex-col gap-4"
               onSubmit={(e) => {
                 e.preventDefault();
                 editRelease.mutate(
@@ -308,33 +311,36 @@ export function TagDetailView({
                   Updates {rel.tagName} on GitHub.
                 </DialogDescription>
               </DialogHeader>
-              <Input
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                placeholder="Title"
-              />
-              <Textarea
-                value={editNotes}
-                onChange={(e) => setEditNotes(e.target.value)}
-                placeholder="Notes…"
-                rows={8}
-                className="max-h-72 min-h-24 resize-y font-mono"
-              />
-              <div className="flex flex-wrap gap-x-6 gap-y-2">
-                <label className="flex cursor-pointer items-center gap-2 text-xs">
-                  <Switch
-                    checked={editPrerelease}
-                    onCheckedChange={setEditPrerelease}
-                  />
-                  Pre-release
-                </label>
-                <label className="flex cursor-pointer items-center gap-2 text-xs">
-                  <Switch
-                    checked={editLatest}
-                    onCheckedChange={setEditLatest}
-                  />
-                  Latest release
-                </label>
+              {/* Fields scroll; header and submit footer stay pinned. */}
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+                <Input
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  placeholder="Title"
+                />
+                <Textarea
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  placeholder="Notes…"
+                  rows={8}
+                  className="max-h-72 min-h-24 resize-y font-mono"
+                />
+                <div className="flex flex-wrap gap-x-6 gap-y-2">
+                  <label className="flex cursor-pointer items-center gap-2 text-xs">
+                    <Switch
+                      checked={editPrerelease}
+                      onCheckedChange={setEditPrerelease}
+                    />
+                    Pre-release
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs">
+                    <Switch
+                      checked={editLatest}
+                      onCheckedChange={setEditLatest}
+                    />
+                    Latest release
+                  </label>
+                </div>
               </div>
               <DialogFooter>
                 <Button

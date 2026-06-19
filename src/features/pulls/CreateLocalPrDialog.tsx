@@ -118,9 +118,9 @@ export function CreateLocalPrDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
         <form
-          className="min-w-0 space-y-4"
+          className="flex min-h-0 min-w-0 flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
             form.handleSubmit();
@@ -135,93 +135,96 @@ export function CreateLocalPrDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex items-end gap-2">
-            <div className="min-w-0 flex-initial">
-              <form.AppField name="head">
-                {(field) => <field.SelectField label="Merge" items={items} />}
-              </form.AppField>
+          {/* Fields scroll; header and submit footer stay pinned. */}
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+            <div className="flex items-end gap-2">
+              <div className="min-w-0 flex-initial">
+                <form.AppField name="head">
+                  {(field) => <field.SelectField label="Merge" items={items} />}
+                </form.AppField>
+              </div>
+              <span className="shrink-0 pb-2 text-xs text-muted-foreground">
+                into
+              </span>
+              <div className="min-w-0 flex-initial">
+                <form.AppField name="base">
+                  {(field) => <field.SelectField label="Base" items={items} />}
+                </form.AppField>
+              </div>
             </div>
-            <span className="shrink-0 pb-2 text-xs text-muted-foreground">
-              into
-            </span>
-            <div className="min-w-0 flex-initial">
-              <form.AppField name="base">
-                {(field) => <field.SelectField label="Base" items={items} />}
-              </form.AppField>
+            <div className="space-y-0.5">
+              <p className="font-mono text-xs wrap-break-word text-foreground/80">
+                {head || "…"} <span className="text-muted-foreground">→</span>{" "}
+                {base || "…"}
+              </p>
+              {sameBranch ? (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  Pick two different branches.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {ahead.length} commit{ahead.length === 1 ? "" : "s"} to merge.
+                </p>
+              )}
             </div>
-          </div>
-          <div className="space-y-0.5">
-            <p className="font-mono text-xs wrap-break-word text-foreground/80">
-              {head || "…"} <span className="text-muted-foreground">→</span>{" "}
-              {base || "…"}
-            </p>
-            {sameBranch ? (
-              <p className="text-xs text-amber-600 dark:text-amber-400">
-                Pick two different branches.
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                {ahead.length} commit{ahead.length === 1 ? "" : "s"} to merge.
-              </p>
-            )}
-          </div>
 
-          <form.AppField
-            name="title"
-            validators={{ onChange: ({ value }) => required(value) }}
-          >
-            {(field) => (
-              <field.TextField
-                label="Title"
-                placeholder="Summarize the change"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="body">
-            {(field) => (
-              <field.MarkdownField
-                label="Description"
-                placeholder="Describe what changed and why"
-                rows={7}
-                textareaClassName="max-h-72 min-h-24 resize-y font-mono"
-                actions={
-                  !aiEnabled ? undefined : generating ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      onClick={cancel}
-                    >
-                      <XIcon data-icon="inline-start" />
-                      Cancel
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      disabled={sameBranch || ahead.length === 0}
-                      onClick={() =>
-                        generate(
-                          base,
-                          head,
-                          ahead.map((c) => c.subject),
-                          (d) => {
-                            form.setFieldValue("title", d.title);
-                            form.setFieldValue("body", d.body);
-                          },
-                        )
-                      }
-                      title="Generate the title and description with AI"
-                    >
-                      <SparkleIcon data-icon="inline-start" />
-                      Generate
-                    </Button>
-                  )
-                }
-              />
-            )}
-          </form.AppField>
+            <form.AppField
+              name="title"
+              validators={{ onChange: ({ value }) => required(value) }}
+            >
+              {(field) => (
+                <field.TextField
+                  label="Title"
+                  placeholder="Summarize the change"
+                />
+              )}
+            </form.AppField>
+            <form.AppField name="body">
+              {(field) => (
+                <field.MarkdownField
+                  label="Description"
+                  placeholder="Describe what changed and why"
+                  rows={7}
+                  textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+                  actions={
+                    !aiEnabled ? undefined : generating ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        onClick={cancel}
+                      >
+                        <XIcon data-icon="inline-start" />
+                        Cancel
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        disabled={sameBranch || ahead.length === 0}
+                        onClick={() =>
+                          generate(
+                            base,
+                            head,
+                            ahead.map((c) => c.subject),
+                            (d) => {
+                              form.setFieldValue("title", d.title);
+                              form.setFieldValue("body", d.body);
+                            },
+                          )
+                        }
+                        title="Generate the title and description with AI"
+                      >
+                        <SparkleIcon data-icon="inline-start" />
+                        Generate
+                      </Button>
+                    )
+                  }
+                />
+              )}
+            </form.AppField>
+          </div>
 
           <DialogFooter>
             <Button

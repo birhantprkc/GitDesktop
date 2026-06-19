@@ -93,9 +93,9 @@ export function PublishDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="flex max-h-[85vh] flex-col">
         <form
-          className="space-y-4"
+          className="flex min-h-0 flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
             form.handleSubmit();
@@ -110,79 +110,82 @@ export function PublishDialog({
               publish under an organization.
             </DialogDescription>
           </DialogHeader>
-          <form.AppField
-            name="name"
-            validators={{ onChange: ({ value }) => required(value) }}
-          >
-            {(field) => (
-              <field.TextField label="Name" placeholder="my-project" />
-            )}
-          </form.AppField>
-
-          {aiEnabled && (
-            <div className="flex justify-end">
-              {descGen.generating ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground"
-                  onClick={descGen.cancel}
-                >
-                  <Spinner data-icon="inline-start" />
-                  Cancel
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  onClick={() =>
-                    descGen.generate({
-                      repoName: nameVal.trim() || defaultName,
-                      onResult: ({ description, topics }) => {
-                        if (description) {
-                          form.setFieldValue("description", description);
-                        }
-                        if (topics.length) {
-                          form.setFieldValue("topics", topics.join(" "));
-                        }
-                      },
-                    })
-                  }
-                  title="Suggest a description + topics from the README with AI"
-                >
-                  <SparkleIcon data-icon="inline-start" />
-                  Generate description &amp; topics
-                </Button>
+          {/* Fields scroll; header and submit footer stay pinned. */}
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+            <form.AppField
+              name="name"
+              validators={{ onChange: ({ value }) => required(value) }}
+            >
+              {(field) => (
+                <field.TextField label="Name" placeholder="my-project" />
               )}
-            </div>
-          )}
+            </form.AppField>
 
-          <form.AppField name="description">
-            {(field) => (
-              <field.TextField
-                label="Description (optional)"
-                placeholder="What is this project?"
-              />
+            {aiEnabled && (
+              <div className="flex justify-end">
+                {descGen.generating ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    onClick={descGen.cancel}
+                  >
+                    <Spinner data-icon="inline-start" />
+                    Cancel
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    onClick={() =>
+                      descGen.generate({
+                        repoName: nameVal.trim() || defaultName,
+                        onResult: ({ description, topics }) => {
+                          if (description) {
+                            form.setFieldValue("description", description);
+                          }
+                          if (topics.length) {
+                            form.setFieldValue("topics", topics.join(" "));
+                          }
+                        },
+                      })
+                    }
+                    title="Suggest a description + topics from the README with AI"
+                  >
+                    <SparkleIcon data-icon="inline-start" />
+                    Generate description &amp; topics
+                  </Button>
+                )}
+              </div>
             )}
-          </form.AppField>
-          <form.AppField name="topics">
-            {(field) => (
-              <field.TextField
-                label="Topics (optional, separate with spaces)"
-                placeholder="react typescript cli"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="homepage">
-            {(field) => (
-              <field.TextField
-                label="Homepage (optional)"
-                placeholder="https://…"
-              />
-            )}
-          </form.AppField>
+
+            <form.AppField name="description">
+              {(field) => (
+                <field.TextField
+                  label="Description (optional)"
+                  placeholder="What is this project?"
+                />
+              )}
+            </form.AppField>
+            <form.AppField name="topics">
+              {(field) => (
+                <field.TextField
+                  label="Topics (optional, separate with spaces)"
+                  placeholder="react typescript cli"
+                />
+              )}
+            </form.AppField>
+            <form.AppField name="homepage">
+              {(field) => (
+                <field.TextField
+                  label="Homepage (optional)"
+                  placeholder="https://…"
+                />
+              )}
+            </form.AppField>
+          </div>
 
           <DialogFooter className="sm:items-center">
             <form.AppField name="isPrivate">

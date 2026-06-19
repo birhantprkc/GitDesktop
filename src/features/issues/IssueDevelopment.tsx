@@ -170,6 +170,7 @@ export function IssueDevelopment({
         <div
           key={b}
           className="flex items-center gap-1.5 text-xs text-muted-foreground"
+          title={b}
         >
           <GitBranchIcon className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate font-mono">{b}</span>

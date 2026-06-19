@@ -80,9 +80,9 @@ export function CreateDiscussionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
         <form
-          className="min-w-0 space-y-4"
+          className="flex min-h-0 min-w-0 flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
             form.handleSubmit();
@@ -95,34 +95,37 @@ export function CreateDiscussionDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="min-w-0">
-            <form.AppField name="categoryId">
+          {/* Fields scroll; header and submit footer stay pinned. */}
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+            <div className="min-w-0">
+              <form.AppField name="categoryId">
+                {(field) => (
+                  <field.SelectField label="Category" items={categoryItems} />
+                )}
+              </form.AppField>
+            </div>
+            <form.AppField
+              name="title"
+              validators={{ onChange: ({ value }) => required(value) }}
+            >
               {(field) => (
-                <field.SelectField label="Category" items={categoryItems} />
+                <field.TextField
+                  label="Title"
+                  placeholder="Summarize the discussion"
+                />
+              )}
+            </form.AppField>
+            <form.AppField name="body">
+              {(field) => (
+                <field.MarkdownField
+                  label="Body"
+                  placeholder="What would you like to discuss?"
+                  rows={8}
+                  textareaClassName="max-h-72 min-h-24 resize-y font-mono"
+                />
               )}
             </form.AppField>
           </div>
-          <form.AppField
-            name="title"
-            validators={{ onChange: ({ value }) => required(value) }}
-          >
-            {(field) => (
-              <field.TextField
-                label="Title"
-                placeholder="Summarize the discussion"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="body">
-            {(field) => (
-              <field.MarkdownField
-                label="Body"
-                placeholder="What would you like to discuss?"
-                rows={8}
-                textareaClassName="max-h-72 min-h-24 resize-y font-mono"
-              />
-            )}
-          </form.AppField>
 
           <DialogFooter>
             <Button

@@ -202,7 +202,9 @@ export function TagsPanel({ repoPath }: { repoPath: string }) {
                 >
                   <p className="flex items-center gap-1.5 text-xs font-medium">
                     <TagIcon className="size-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{row.name}</span>
+                    <span className="truncate" title={row.name}>
+                      {row.name}
+                    </span>
                     {row.release && <ReleaseBadges release={row.release} />}
                   </p>
                   <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
