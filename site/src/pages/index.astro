@@ -12,6 +12,7 @@ import appPrFiles from "../assets/app-pr-files.png";
 import appReview from "../assets/app-review.png";
 import appStaging from "../assets/app-staging.png";
 import appStagingNoai from "../assets/app-staging-noai.png";
+import appTags from "../assets/app-tags.png";
 import FeatureRow from "../components/FeatureRow.astro";
 import "../styles/global.css";
 
@@ -29,6 +30,7 @@ const capabilities = [
   { label: "AI code & security review", ai: true },
   { label: "File history & line blame" },
   { label: "GitHub Actions — runs, jobs & re-run" },
+  { label: "Tags, releases & assets" },
   { label: "Stash browser" },
   { label: "Cherry-pick, squash & reorder" },
   { label: "Submodule status & update" },
@@ -397,6 +399,24 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
           </div>
         </section>
 
+        <!-- Ship: tags & releases (no AI; shown in both views) -->
+        <FeatureRow
+          title="Cut a release without the dashboard."
+          image={appTags}
+          alt="The Tags panel beside a release in GitDesktop: version tags marked release or Latest, the release's changelog notes, and its attached macOS, Linux, and Windows binaries with sizes"
+          side="left"
+        >
+          <p>
+            Every tag and release in one panel. Cut a new one without the
+            browser: write the notes, mark it <span class="text-ink">latest</span>,
+            pre-release, or draft, and attach the cross-platform binaries.
+          </p>
+          <p class="text-muted">
+            Lightweight tags for a quick checkpoint; full GitHub releases when
+            you ship — push, edit, delete, or download any asset, in the app.
+          </p>
+        </FeatureRow>
+
         <!-- Capability index (AI) -->
         <section class="border-b border-line bg-surface/30">
           <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
@@ -590,6 +610,24 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
           <p class="text-muted">
             Then cherry-pick, squash, reorder, or stash — with a command palette and
             full keyboard control, and discards you can always undo.
+          </p>
+        </FeatureRow>
+
+        <FeatureRow
+          title="Cut a release without the dashboard."
+          image={appTags}
+          alt="The Tags panel beside a release in GitDesktop: version tags marked release or Latest, the release's changelog notes, and its attached macOS, Linux, and Windows binaries with sizes"
+          side="left"
+          surface={true}
+        >
+          <p>
+            Every tag and release in one panel. Cut a new one without the
+            browser: write the notes, mark it <span class="text-ink">latest</span>,
+            pre-release, or draft, and attach the cross-platform binaries.
+          </p>
+          <p class="text-muted">
+            Lightweight tags for a quick checkpoint; full GitHub releases when
+            you ship — push, edit, delete, or download any asset, in the app.
           </p>
         </FeatureRow>
 
