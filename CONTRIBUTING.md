@@ -97,6 +97,21 @@ For any **user-facing** change, add an entry under `## [Unreleased]` in
 a clear sentence about what changed for the user, not a copy of your commit
 subject. (`pnpm changelog` can draft a starting point from the git history.)
 
+### Docs and the marketing site
+
+For any **user-facing feature**, keep the docs in step in the same change:
+
+- **README.md** — add or extend the relevant bullet under *Highlights* / *Features*.
+- **`site/`** — add the feature to the `capabilities` list in
+  `site/src/pages/index.astro` (and a feature section when it warrants one), in both
+  the **AI-native** and **Just Git** views as applicable; non-AI features belong in
+  both, AI features in the AI view only. `cd site && pnpm build` to verify.
+- Marketing-site screenshots for the **Just Git** view should be captured with the
+  app's *Hide AI features* setting on, so they match the AI-hidden experience.
+
+A truly minor feature can settle for just the capability line + changelog — but make
+that call on purpose.
+
 ### UI changes
 
 GitDesktop is keyboard-first and aims for WCAG AA. When you add or change UI:
