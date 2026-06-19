@@ -1,6 +1,11 @@
 packages:
   - "site"
 
+# Don't install versions published less than 7 days ago (10080 minutes),
+# a supply-chain safety delay mirrored by Dependabot's cooldown in
+# .github/dependabot.yml.
+minimumReleaseAge: 10080
+
 allowBuilds:
   core-js: true
   esbuild: true

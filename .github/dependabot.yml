@@ -8,6 +8,13 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    # Hold off on freshly-published releases (supply-chain safety),
+    # mirroring pnpm's minimumReleaseAge in pnpm-workspace.yaml.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
@@ -24,6 +31,11 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     commit-message:
       prefix: "chore(deps)"
     groups:
@@ -37,5 +49,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(ci)"
