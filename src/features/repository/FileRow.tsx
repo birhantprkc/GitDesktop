@@ -176,7 +176,13 @@ export function FileRow({
             <Button
               variant="ghost"
               size="icon-xs"
-              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              className={cn(
+                // Hover reveals the toggle; keep it visible on the active row
+                // (the one whose diff is shown) and any selected row so keyboard
+                // navigation and the current selection always expose the action.
+                "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+                (active || selected) && "opacity-100",
+              )}
               aria-label={
                 staged ? `Unstage ${entry.path}` : `Stage ${entry.path}`
               }

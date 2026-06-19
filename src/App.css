@@ -158,6 +158,14 @@
   }
 }
 
+/* Working-tree hunk cards (SelectableHunk) carry their own app-styled header
+   bar with the hunk range + stage/discard actions, so the renderer's own `@@`
+   hunk-header row would just repeat it. Hide that row — scoped to the cards, so
+   the whole-file diff keeps the `@@` rows that separate its multiple hunks. */
+.gd-hunk-card tr.diff-line-hunk {
+  display: none;
+}
+
 /* The diff line-selection highlight (drag-to-stage individual lines). We paint
    the `gd-line-selected` class on selected rows ourselves (SelectableHunk), so
    fill those cells with a clear accent. The inset-shadow trick tints over the

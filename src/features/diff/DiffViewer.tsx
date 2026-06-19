@@ -30,13 +30,19 @@ import {
   type ParsedDiff,
   parseHunks,
 } from "@/lib/git/hunks";
-import { useApplyPartial, useApplyPatch, useFileDiff } from "@/lib/git/queries";
+import {
+  useApplyPartial,
+  useApplyPatch,
+  useFileDiff,
+  useRepoStatus,
+} from "@/lib/git/queries";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import type { SelectedFile } from "@/lib/stores/ui";
 import { useUiStore } from "@/lib/stores/ui";
 import { useEffectiveSyntax } from "@/lib/syntax/queries";
 import { toastError } from "@/lib/toast";
 import { useIsDark } from "@/lib/use-is-dark";
+import { DiffLanguagePicker } from "./DiffLanguagePicker";
 import { DiffPlaceholder } from "./DiffPlaceholder";
 import { createDiffFile, DiffModeToggle, DiffSurface } from "./DiffSurface";
 import { ImagePanes } from "./ImageDiff";
@@ -44,13 +50,26 @@ import { ImagePanes } from "./ImageDiff";
 /** Working-tree diff for the file selected in the changes panel. */
 export function DiffViewer({ repoPath }: { repoPath: string }) {
   const selectedFile = useUiStore((s) => s.selectedFile);
+  // Shared cache with the changes list — used only to tell "clean tree" apart
+  // from "files exist but none picked yet" so the empty pane reads honestly.
+  const status = useRepoStatus(repoPath);
   // Render off a deferred selection so rapidly arrowing the changes list only
   // mounts + loads the file landed on (the row keeps WorkingTreeDiff keyed, so
   // it remounts per file). The list highlight still uses the live selection.
   const deferredFile = useDeferredValue(selectedFile);
 
   if (!deferredFile) {
-    return <DiffPlaceholder message="Select a file to see its changes" />;
+    const treeClean =
+      !status.isPending && (status.data?.entries.length ?? 0) === 0;
+    return (
+      <DiffPlaceholder
+        message={
+          treeClean
+            ? "No changes to review"
+            : "Select a file to see its changes"
+        }
+      />
+    );
   }
   return (
     <WorkingTreeDiff
@@ -164,7 +183,8 @@ function WorkingTreeDiff({
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
           {file.path}
         </span>
-        <span className="shrink-0">
+        <span className="flex shrink-0 items-center gap-1.5">
+          <DiffLanguagePicker filePath={file.path} />
           <DiffModeToggle />
         </span>
       </div>
@@ -486,7 +506,11 @@ const SelectableHunk = memo(function SelectableHunk({
 
   if (!diffFile) return <DiffPlaceholder message="No changes to show" />;
   return (
-    <div ref={containerRef}>
+    // gd-hunk-card: each card renders exactly one hunk and carries its own
+    // app-styled header bar above, so the renderer's duplicate `@@` row is
+    // suppressed here (see App.css). The whole-file diff keeps its `@@` rows
+    // since they separate multiple hunks.
+    <div ref={containerRef} className="gd-hunk-card">
       <DiffView
         diffFile={diffFile}
         diffViewMode={
