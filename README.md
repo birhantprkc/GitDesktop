@@ -20,15 +20,19 @@ git works against any remote via system `git`.
 - **The whole PR lifecycle, in-app** — review, comment, label, approve, edit,
   and merge (merge/squash/rebase) GitHub PRs without the browser. Plus **local
   PRs**: the same workflow against any two branches with no remote at all,
-  promotable to a real GitHub PR in one click.
+  promotable to a real GitHub PR — comments and all — in one click.
+- **Issues & Discussions, in-app** — triage GitHub issues (types, sub-issues,
+  dependencies, linked PRs and branches) and Discussions without the browser,
+  plus private **local to-dos** that need no remote.
 - **GitHub Actions cockpit** — browse workflow runs, drill into jobs and steps,
   re-run (all or failed), cancel, manually dispatch a workflow, and read
   failed-step logs — none of which GitHub Desktop does.
 - **Debug failed CI with AI** — turn a failed job's logs into a streamed
   root-cause + fix, ending with a ready-to-paste prompt for a coding agent.
 - **AI where it helps** — commit messages, branch names, PR and issue
-  titles/descriptions, and a streaming code review or security audit, from
-  Anthropic, OpenAI, OpenRouter, local **Ollama**, or **keyless CLI agents**
+  titles/descriptions, repository descriptions and topics, and a streaming code
+  review or security audit, from Anthropic, OpenAI, OpenRouter, local
+  **Ollama**, or **keyless CLI agents**
   (Claude Code / Codex via your existing subscription — no API key).
 - **Privacy-first** — API keys live in the OS keychain (never in app files),
   local models keep code on your machine, AI-ignore patterns keep sensitive
@@ -46,8 +50,8 @@ scaffolding), publish to GitHub, and fork. A header repo switcher groups every
 repo by owner with a Recent section and filter; aliases, repository statistics
 (languages, contributors, sizes, branch-vs-default stats), and recycle-bin-safe
 removal. Star or unstar a repo from the menu, and (for admins) manage GitHub
-repo settings — description, topics, merge options, and webhooks with delivery
-history — without leaving the app.
+repo settings — description and topics (with AI suggestions), merge options, and
+webhooks with delivery history — without leaving the app.
 
 **Changes & commits** — unified/split diff with syntax highlighting and image
 diffing; filter the changes list by path or category; hunk- and line-level
@@ -78,9 +82,16 @@ with gated Continue / Abort.
 Highlights), AI review + security audit on any PR, and Write/Preview markdown
 everywhere you author.
 
-**Issues** — a dedicated tab for GitHub issues: browse and read, create and edit,
-draft with AI from your repo's issue templates, and pin/unpin or lock/unlock —
-all without leaving the app.
+**Issues & to-dos** — a dedicated tab for GitHub issues and private **local
+to-dos** (no remote needed; publishable to GitHub in one click). Browse, create,
+and edit — drafting with AI from your repo's issue templates — react with emoji,
+and manage the full metadata: labels, assignees, milestones, issue type,
+sub-issues, dependencies (blocked-by / blocking), and development links (linked
+and closing PRs and branches, plus create-a-branch). Duplicate, transfer,
+pin/unpin, lock/unlock, or delete.
+
+**Discussions** — browse and read a repository's GitHub Discussions, create and
+edit them, and react or upvote, with Write/Preview markdown throughout.
 
 **GitHub Actions** — a dedicated tab with live run status, run detail, re-run /
 cancel / manual dispatch, inline failed-step logs, **Debug with AI**, a current-branch

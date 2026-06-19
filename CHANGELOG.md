@@ -19,29 +19,35 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
   `.gitignore` template, and license scaffolding), publish to GitHub, and fork.
   A header repo switcher groups every repo by owner with a Recent section and a
   filter; repositories support aliases, repository and branch statistics, and
-  recycle-bin-safe removal.
+  recycle-bin-safe removal. Star or unstar a repo, and — as an admin — edit
+  GitHub repo settings (description and topics with AI suggestions, merge options,
+  and webhooks with delivery history) from the app.
 - **Changes & commits** — a unified/split diff viewer with syntax highlighting
-  and image diffing; filter the changes list by path or category; hunk-level
-  staging; stage, unstage, or discard single files or a multi-selection from the
+  and image diffing; filter the changes list by path or category; hunk- and
+  line-level (drag-to-stage) staging; stage, unstage, or discard single files or
+  a multi-selection from the
   context menu; untrack tracked files; and recycle-bin-safe discard. Commit with
   a 72-character title budget, co-authors suggested from history, amend, undo,
   reset, and revert.
-- **AI assistance** — streamed commit messages and pull-request
-  titles/descriptions, plus a code review or focused security audit on any PR.
+- **AI assistance** — streamed commit messages, branch names, pull-request and
+  issue titles/descriptions (drafted from your issue templates), repository
+  descriptions and topics, plus a code review or focused security audit on any PR.
   Bring your own provider: Anthropic, OpenAI, OpenRouter, local **Ollama**, or
   **keyless Claude Code / Codex CLI agents**. Global and per-repo instructions,
   gitignore-style AI-ignore patterns, and a single switch to hide every AI
   surface. API keys are stored in the OS keychain.
 - **Branches** — create, switch (with a bring-changes / stash prompt), rename,
   delete, and **archive** (hide from the switcher without deleting). Per-branch
-  ahead/behind counts, updating a branch without checking it out, a Compare tab
+  ahead/behind counts and a PR badge in the switcher, updating a branch without
+  checking it out, a Compare tab
   (three-dot diff, commits ahead/behind, merge/rebase), and local
   branch-protection rules (naming, merge methods, require-PR, force-push) that
   can be shared via a committed file or imported from GitHub.
 - **History & advanced git** — paged, filterable history; a rich commit detail
-  view; cherry-pick onto the current or another branch (including a
-  multi-selection); squash and reorder unpushed commits through an atomic replay
-  engine; a stash browser; and tag management.
+  view; per-file history and line blame; cherry-pick onto the current or another
+  branch (including a multi-selection); squash and reorder unpushed commits
+  through an atomic replay engine; a stash browser; tag management; and submodule
+  management.
 - **Syncing** — fetch, pull, and push with ahead/behind indicators. Pull is
   `--ff-only`, and divergence routes to a guarded force push with
   `--force-with-lease`; an in-progress merge/rebase/cherry-pick shows a conflict
@@ -49,7 +55,14 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - **Pull requests** — the full lifecycle in-app for GitHub PRs (comment, review,
   edit title/body, manage labels, merge with merge/squash/rebase, draft → ready,
   close) and for **local PRs** — the same workflow against any two branches with
-  no remote, promotable to a real GitHub PR in one click.
+  no remote, promotable to a real GitHub PR (comments included) in one click.
+- **Issues & Discussions** — a tab for GitHub issues and private **local to-dos**
+  (no remote needed; publishable to GitHub): browse, create, edit, and react;
+  manage labels, assignees, milestones, issue type, sub-issues, dependencies
+  (blocked-by / blocking), and development links (linked and closing PRs and
+  branches, plus create-a-branch); and duplicate, transfer, pin, lock, or delete.
+  A separate Discussions tab reads, creates, edits, reacts to, and upvotes a
+  repository's GitHub Discussions.
 - **GitHub Actions** — a dedicated tab listing workflow runs with live status; a
   run detail view with jobs and steps; re-run (all or failed), cancel, and
   manual workflow dispatch; inline failed-step logs; **Debug with AI**, which
@@ -74,4 +87,4 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/commits/main
+[Unreleased]: https://github.com/theBGuy/GitDesktop/commits/master

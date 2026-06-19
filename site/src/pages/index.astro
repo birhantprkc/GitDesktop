@@ -34,7 +34,13 @@ const capabilities = [
   { label: "--force-with-lease by default" },
   { label: "Branch-protection rules, locally" },
   { label: "Git hooks manager" },
+  { label: "GitHub issues & private local to-dos" },
+  { label: "Issue types, sub-issues & dependencies" },
+  { label: "GitHub Discussions — read, post & react" },
+  { label: "Repo settings & webhooks (admin)" },
   { label: "Generated commits & PR descriptions", ai: true },
+  { label: "AI issue drafting from templates", ai: true },
+  { label: "AI repo descriptions & topics", ai: true },
 ];
 const gitCapabilities = capabilities.filter((c) => !c.ai);
 ---
@@ -581,7 +587,7 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
         <div class="flex items-center gap-6">
           <a href={repo} class="transition-colors hover:text-ink">GitHub</a>
           <a href={download} class="transition-colors hover:text-ink">Releases</a>
-          <a href={`${repo}/blob/main/PRIVACY.md`} class="transition-colors hover:text-ink">Privacy</a>
+          <a href={`${repo}/blob/master/PRIVACY.md`} class="transition-colors hover:text-ink">Privacy</a>
         </div>
       </div>
     </footer>
