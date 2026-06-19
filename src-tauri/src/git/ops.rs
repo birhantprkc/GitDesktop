@@ -6,7 +6,7 @@ use crate::error::{AppError, AppResult};
 use crate::git::diff::parse_numstat_z;
 use crate::git::history::validate_hash;
 use crate::git::runner::{run_git, run_git_mutating, DEFAULT_TIMEOUT};
-use crate::git::types::{FileDiff, RepoOpState, RewriteStep, StashEntry};
+use crate::git::types::{FileDiff, RepoOpState, RewriteStep, StashEntry, TagInfo};
 use crate::state::AppState;
 
 /// Whether a file/dir inside .git exists (worktree-safe via --git-path).
@@ -1023,6 +1023,53 @@ pub async fn git_delete_tag(
         .await?;
     }
     Ok(())
+}
+
+/// Every tag in the repo, newest first. Annotated tags carry their own message
+/// + date; lightweight tags fall back to the commit they point at.
+#[tauri::command]
+pub async fn git_list_tags(repo_path: String) -> AppResult<Vec<TagInfo>> {
+    // %(*objectname) is the dereferenced commit for annotated tags (empty for
+    // lightweight, where %(objectname) already IS the commit).
+    let out = run_git(
+        Some(&repo_path),
+        &[
+            "for-each-ref",
+            "--sort=-creatordate",
+            "refs/tags",
+            "--format=%(refname:short)%00%(objecttype)%00%(objectname)%00%(*objectname)%00%(creatordate:iso-strict)%00%(contents:subject)",
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let tags = out
+        .stdout_lossy()
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\0');
+            let name = parts.next()?.to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let object_type = parts.next().unwrap_or("");
+            let object_name = parts.next().unwrap_or("");
+            let deref = parts.next().unwrap_or("");
+            let date = parts.next().unwrap_or("").to_string();
+            let subject = parts.next().unwrap_or("").to_string();
+            Some(TagInfo {
+                name,
+                target: if deref.is_empty() {
+                    object_name.to_string()
+                } else {
+                    deref.to_string()
+                },
+                date,
+                annotated: object_type == "tag",
+                subject,
+            })
+        })
+        .collect();
+    Ok(tags)
 }
 
 #[cfg(test)]

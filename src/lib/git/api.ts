@@ -20,6 +20,7 @@ import type {
   DiscussionInfo,
   DiscussionMeta,
   FileDiff,
+  GeneratedNotes,
   GhAccounts,
   GhBranchProtection,
   GhRepoList,
@@ -41,6 +42,8 @@ import type {
   PrInfo,
   PrPollInfo,
   PrRef,
+  ReleaseDetails,
+  ReleaseInfo,
   RepoInfo,
   RepoLabel,
   RepoOp,
@@ -55,6 +58,7 @@ import type {
   StashEntry,
   StashFile,
   Submodule,
+  TagInfo,
   Webhook,
   WebhookInput,
 } from "./types";
@@ -299,6 +303,98 @@ export const gitDeleteTag = (
   name: string,
   onRemote: boolean,
 ) => invoke<void>("git_delete_tag", { repoPath, name, onRemote });
+
+/** Every tag in the repo, newest first (for the Tags list). */
+export const gitListTags = (repoPath: string) =>
+  invoke<TagInfo[]>("git_list_tags", { repoPath });
+
+// ── GitHub releases (gh release …) ──────────────────────────────────────────
+
+export const ghReleaseList = (repoPath: string) =>
+  invoke<ReleaseInfo[]>("gh_release_list", { repoPath });
+
+export const ghReleaseView = (repoPath: string, tag: string) =>
+  invoke<ReleaseDetails>("gh_release_view", { repoPath, tag });
+
+export const ghReleaseCreate = (
+  repoPath: string,
+  tag: string,
+  title: string,
+  notes: string,
+  target: string,
+  prerelease: boolean,
+  draft: boolean,
+  latest: boolean,
+) =>
+  invoke<string>("gh_release_create", {
+    repoPath,
+    tag,
+    title,
+    notes,
+    target,
+    prerelease,
+    draft,
+    latest,
+  });
+
+export const ghReleaseEdit = (
+  repoPath: string,
+  tag: string,
+  title: string,
+  notes: string,
+  prerelease: boolean,
+  draft: boolean,
+  latest: boolean,
+) =>
+  invoke<void>("gh_release_edit", {
+    repoPath,
+    tag,
+    title,
+    notes,
+    prerelease,
+    draft,
+    latest,
+  });
+
+/** GitHub's auto-generated release notes (suggested title + body), for preview. */
+export const ghReleaseGenerateNotes = (
+  repoPath: string,
+  tag: string,
+  target: string,
+  previousTag: string,
+) =>
+  invoke<GeneratedNotes>("gh_release_generate_notes", {
+    repoPath,
+    tag,
+    target,
+    previousTag,
+  });
+
+export const ghReleaseDelete = (
+  repoPath: string,
+  tag: string,
+  cleanupTag: boolean,
+) => invoke<void>("gh_release_delete", { repoPath, tag, cleanupTag });
+
+export const ghReleaseUploadAsset = (
+  repoPath: string,
+  tag: string,
+  filePath: string,
+) => invoke<void>("gh_release_upload_asset", { repoPath, tag, filePath });
+
+export const ghReleaseDeleteAsset = (
+  repoPath: string,
+  tag: string,
+  assetName: string,
+) => invoke<void>("gh_release_delete_asset", { repoPath, tag, assetName });
+
+export const ghReleaseDownloadAsset = (
+  repoPath: string,
+  tag: string,
+  assetName: string,
+  dir: string,
+) =>
+  invoke<void>("gh_release_download_asset", { repoPath, tag, assetName, dir });
 
 export const appendToGitignore = (repoPath: string, pattern: string) =>
   invoke<void>("append_to_gitignore", { repoPath, pattern });

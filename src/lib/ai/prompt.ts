@@ -484,3 +484,53 @@ export function extractIssueDraft(raw: string): {
     .trim();
   return { title, body };
 }
+
+const RELEASE_NOTES_SYSTEM = `You write polished GitHub release notes as GitHub-flavored markdown
+only — no preamble, no title line, no code fences.
+
+You are given either GitHub's auto-generated changelog (a "What's Changed" list of merged pull
+requests, each line like "* Title by @author in <pr-url>") or, when that isn't available, a raw
+list of commit subjects.
+
+When given the pull-request changelog (preferred):
+- Reorganize every entry under short, meaningful headings (e.g. ## Features, ## Fixes,
+  ## Maintenance). Never drop, collapse away, or invent entries — every PR must appear once.
+- PRESERVE each entry's author credit and pull-request link verbatim — keep the
+  "by @author in <pr-url>" tail exactly. You may tidy the human-facing title (strip prefixes like
+  "[Patch]"/"[Hotfix]", fix casing) but never remove the attribution or the link.
+- If a "**Full Changelog**: <url>" line is present, keep it verbatim as the very last line.
+- You may open with a brief "## Highlights" of one or two sentences naming the most notable changes.
+
+When given only commit subjects:
+- Group them under short headings with concise past-tense bullets. Merge trivial/duplicate commits
+  and drop noise (merge commits, "wip", formatting-only, version bumps). Do NOT invent changes.
+
+Keep it concise and scannable. If there are very few entries, a short flat list is fine.`;
+
+export function buildReleaseNotesPrompt(input: {
+  repoName: string;
+  version: string;
+  commits: string[];
+  /** GitHub's auto-generated changelog (PR titles, authors, links). Preferred source. */
+  changelog?: string;
+  globalInstructions: string;
+}): { system: string; prompt: string } {
+  const systemParts = [RELEASE_NOTES_SYSTEM];
+  if (input.globalInstructions.trim()) {
+    systemParts.push(
+      `## User instructions\n${input.globalInstructions.trim()}`,
+    );
+  }
+  const source = input.changelog?.trim()
+    ? `## GitHub changelog — reorganize and enrich this; keep every PR link and author credit\n${input.changelog.trim()}`
+    : `## Commits in this release\n${input.commits.slice(0, 300).join("\n")}`;
+  const prompt = [
+    `## Repository\n${input.repoName}`,
+    input.version ? `## Version\n${input.version}` : "",
+    source,
+    "Write the release notes.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return { system: systemParts.join("\n\n"), prompt };
+}

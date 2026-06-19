@@ -6,6 +6,7 @@ import {
   GitCommitIcon,
   GitPullRequestIcon,
   PlayIcon,
+  TagIcon,
 } from "@phosphor-icons/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Activity, useDeferredValue, useEffect, useTransition } from "react";
@@ -34,6 +35,8 @@ import { RemoteIssueView } from "@/features/issues/RemoteIssueView";
 import { LocalPrView } from "@/features/pulls/LocalPrView";
 import { PullRequestsPanel } from "@/features/pulls/PullRequestsPanel";
 import { RemotePrView } from "@/features/pulls/RemotePrView";
+import { TagDetailView } from "@/features/tags/TagDetailView";
+import { TagsPanel } from "@/features/tags/TagsPanel";
 import { useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useRepoAlias } from "@/lib/settings/queries";
@@ -50,6 +53,7 @@ const SECONDARY_TABS: { tab: RepoTab; label: string }[] = [
   { tab: "issues", label: "Issues" },
   { tab: "discussions", label: "Discussions" },
   { tab: "actions", label: "Actions" },
+  { tab: "tags", label: "Tags" },
 ];
 
 export function RepositoryView() {
@@ -64,6 +68,7 @@ export function RepositoryView() {
   const selectedIssue = useUiStore((s) => s.selectedIssue);
   const selectedDiscussion = useUiStore((s) => s.selectedDiscussion);
   const selectedRunId = useUiStore((s) => s.selectedRunId);
+  const selectedTag = useUiStore((s) => s.selectedTag);
   // The detail panes run off deferred selections so rapidly arrowing a list
   // (commits, PRs) only loads + renders the item landed on, not every one
   // passed. The lists' own highlights use the live values, so they stay snappy.
@@ -71,6 +76,7 @@ export function RepositoryView() {
   const deferredPr = useDeferredValue(selectedPr);
   const deferredIssue = useDeferredValue(selectedIssue);
   const deferredDiscussion = useDeferredValue(selectedDiscussion);
+  const deferredTag = useDeferredValue(selectedTag);
   const status = useRepoStatus(repoPath ?? "");
   const alias = useRepoAlias(repoPath);
   const currentName = status.data?.branch?.name ?? null;
@@ -94,6 +100,7 @@ export function RepositoryView() {
   useHotkeyAction("tab-issues", () => changeTab("issues"));
   useHotkeyAction("tab-discussions", () => changeTab("discussions"));
   useHotkeyAction("tab-actions", () => changeTab("actions"));
+  useHotkeyAction("tab-tags", () => changeTab("tags"));
   useHotkeyAction("back-to-repositories", closeRepo);
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open.
@@ -196,6 +203,9 @@ export function RepositoryView() {
           <Activity mode={mode("actions")}>
             <ActionsPanel repoPath={repoPath} />
           </Activity>
+          <Activity mode={mode("tags")}>
+            <TagsPanel repoPath={repoPath} />
+          </Activity>
         </aside>
         <main className="min-w-0 flex-1">
           <Activity mode={mode("changes")}>
@@ -280,6 +290,13 @@ export function RepositoryView() {
                 icon={PlayIcon}
                 message="Select a workflow run"
               />
+            )}
+          </Activity>
+          <Activity mode={mode("tags")}>
+            {deferredTag ? (
+              <TagDetailView repoPath={repoPath} tag={deferredTag.tag} />
+            ) : (
+              <DiffPlaceholder icon={TagIcon} message="Select a tag" />
             )}
           </Activity>
         </main>

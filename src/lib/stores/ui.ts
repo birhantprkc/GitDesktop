@@ -10,7 +10,8 @@ export type RepoTab =
   | "pulls"
   | "issues"
   | "discussions"
-  | "actions";
+  | "actions"
+  | "tags";
 /** A Settings section to open directly (matches SettingsScreen's panel ids). */
 export type SettingsTarget =
   | "general"
@@ -70,6 +71,8 @@ interface UiState {
   } | null;
   /** Selected workflow run (databaseId) on the Actions tab. */
   selectedRunId: number | null;
+  /** Selected tag (by name) on the Tags tab. */
+  selectedTag: { tag: string } | null;
   selectedFile: SelectedFile | null;
   selectedCommitHash: string | null;
   commitTitle: string;
@@ -98,6 +101,7 @@ interface UiState {
     draft: { title: string; body: string; labels?: string[] } | null,
   ) => void;
   selectRun: (id: number | null) => void;
+  selectTag: (tag: { tag: string } | null) => void;
   selectFile: (file: SelectedFile | null) => void;
   selectCommit: (hash: string | null) => void;
   setCommitDraft: (title: string, body: string) => void;
@@ -123,6 +127,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
   selectedDiscussion: null,
   pendingIssueDraft: null,
   selectedRunId: null,
+  selectedTag: null,
   selectedFile: null,
   selectedCommitHash: null,
   commitTitle: "",
@@ -146,6 +151,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
         selectedDiscussion: null,
         pendingIssueDraft: null,
         selectedRunId: null,
+        selectedTag: null,
         selectedFile: null,
         selectedCommitHash: null,
         commitTitle: "",
@@ -168,6 +174,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
         selectedDiscussion: null,
         pendingIssueDraft: null,
         selectedRunId: null,
+        selectedTag: null,
         selectedFile: null,
         selectedCommitHash: null,
       }),
@@ -179,6 +186,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
   selectDiscussion: (discussion) => set({ selectedDiscussion: discussion }),
   setPendingIssueDraft: (draft) => set({ pendingIssueDraft: draft }),
   selectRun: (id) => set({ selectedRunId: id }),
+  selectTag: (tag) => set({ selectedTag: tag }),
   selectCommit: (hash) => set({ selectedCommitHash: hash }),
   openSettings: (target) =>
     startViewTransition(() => {

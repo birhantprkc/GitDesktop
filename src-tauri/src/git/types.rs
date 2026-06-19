@@ -119,6 +119,21 @@ pub struct CommitSummary {
     pub is_merge: bool,
 }
 
+/// One git tag, for the Tags list.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagInfo {
+    pub name: String,
+    /// The commit the tag points to (dereferenced for annotated tags).
+    pub target: String,
+    /// ISO date the tag was created (annotated) or the commit's date.
+    pub date: String,
+    /// Annotated tag (has its own object + message) vs a lightweight ref.
+    pub annotated: bool,
+    /// Tag annotation subject (annotated) or the commit subject (lightweight).
+    pub subject: String,
+}
+
 /// One line of `git blame` output: the line's content plus the commit that
 /// last touched it.
 #[derive(Debug, Clone, Serialize)]
