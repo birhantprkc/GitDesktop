@@ -1,18 +1,15 @@
-import { Popover } from "@base-ui/react/popover";
 import {
   ArrowCounterClockwiseIcon,
   ArrowSquareOutIcon,
   CaretDownIcon,
   DotsThreeIcon,
   PencilSimpleIcon,
-  TagIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -41,7 +38,6 @@ import { ReactionBar } from "@/features/conversations/ReactionBar";
 import {
   AuthorAvatar,
   hasVisibleBody,
-  LabelChip,
   Thread,
 } from "@/features/conversations/Thread";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
@@ -55,7 +51,6 @@ import {
   useDeletePrComment,
   useEditIssue,
   useEditPrComment,
-  useEditPrLabels,
   useGhRepos,
   useIssueDetails,
   useIssueReactions,
@@ -63,7 +58,6 @@ import {
   useMinimizeComment,
   usePinIssue,
   useReopenIssue,
-  useRepoLabels,
   useSetIssueAssignees,
   useSetIssueMilestone,
   useSetIssueType,
@@ -79,9 +73,10 @@ import { IssueDevelopment } from "./IssueDevelopment";
 import {
   AssigneesPopover,
   IssueTypeMenu,
+  LabelsPopover,
   MilestoneMenu,
 } from "./IssueMetaPickers";
-import { IssueRelations } from "./IssueRelations";
+import { IssueRelationships, IssueSubIssues } from "./IssueRelations";
 
 /** GitHub's lock reasons (menu label → API value); null locks with no reason. */
 const LOCK_REASONS: [string, LockReason | null][] = [
@@ -114,8 +109,6 @@ export function RemoteIssueView({
   const deleteComment = useDeletePrComment(repoPath);
   const minimizeComment = useMinimizeComment(repoPath);
   const unminimizeComment = useUnminimizeComment(repoPath);
-  const editLabels = useEditPrLabels(repoPath);
-  const repoLabels = useRepoLabels(repoPath, true);
   const setAssignees = useSetIssueAssignees(repoPath);
   const setMilestone = useSetIssueMilestone(repoPath);
   const setType = useSetIssueType(repoPath);
@@ -139,8 +132,6 @@ export function RemoteIssueView({
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,
   );
-  const [labelsOpen, setLabelsOpen] = useState(false);
-  const [draftLabels, setDraftLabels] = useState<Set<string>>(new Set());
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferDest, setTransferDest] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -299,41 +290,6 @@ export function RemoteIssueView({
     .filter((n) => !repoQuery || n.toLowerCase().includes(repoQuery))
     .slice(0, 6);
 
-  function toggleDraftLabel(name: string, on: boolean) {
-    setDraftLabels((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(name);
-      else next.delete(name);
-      return next;
-    });
-  }
-
-  // Label edits are drafted while the picker is open and committed as one
-  // batched mutation when it closes — instant checkboxes, one network call.
-  function handleLabelsOpenChange(open: boolean) {
-    if (!issue) return;
-    if (open) {
-      setDraftLabels(new Set(issue.labels.map((l) => l.name)));
-      setLabelsOpen(true);
-      return;
-    }
-    setLabelsOpen(false);
-    const applied = new Set(issue.labels.map((l) => l.name));
-    const idByName = new Map(
-      (repoLabels.data ?? []).map((l) => [l.name, l.id]),
-    );
-    const ids = (names: string[]) =>
-      names.map((n) => idByName.get(n)).filter((id): id is string => !!id);
-    const addIds = ids([...draftLabels].filter((n) => !applied.has(n)));
-    const removeIds = ids([...applied].filter((n) => !draftLabels.has(n)));
-    if (addIds.length > 0 || removeIds.length > 0) {
-      editLabels.mutate(
-        { labelableId: issue.id, addIds, removeIds },
-        { onError },
-      );
-    }
-  }
-
   return (
     <div className="flex h-full flex-col">
       <header className="space-y-2 border-b px-4 py-3">
@@ -472,293 +428,289 @@ export function RemoteIssueView({
           <span>•</span>
           <span>opened {formatRelativeTime(issue.createdAt)}</span>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {/* Trigger first, so it never shifts as chips come and go. */}
-          <Popover.Root open={labelsOpen} onOpenChange={handleLabelsOpenChange}>
-            <Popover.Trigger
-              render={
-                <Button variant="ghost" size="xs" aria-label="Edit labels" />
-              }
-            >
-              {editLabels.isPending ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <TagIcon data-icon="inline-start" />
-              )}
-              Labels
-            </Popover.Trigger>
-            <Popover.Portal>
-              <Popover.Positioner
-                align="start"
-                sideOffset={4}
-                className="isolate z-50"
-              >
-                <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
-                  <p className="px-1 pb-1.5 text-xs font-medium">Labels</p>
-                  {(repoLabels.data ?? []).length === 0 && (
-                    <p className="px-1 py-1 text-xs text-muted-foreground">
-                      {repoLabels.isPending
-                        ? "Loading labels…"
-                        : "This repository has no labels."}
-                    </p>
-                  )}
-                  {(repoLabels.data ?? []).map((label) => (
-                    <label
-                      key={label.name}
-                      className="flex cursor-pointer items-center gap-2 px-1 py-1.5 text-xs hover:bg-muted/60"
-                    >
-                      <Checkbox
-                        checked={draftLabels.has(label.name)}
-                        onCheckedChange={(v) =>
-                          toggleDraftLabel(label.name, v === true)
-                        }
-                      />
-                      <span
-                        aria-hidden
-                        className="size-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: `#${label.color}` }}
-                      />
-                      <span className="flex-1 truncate">{label.name}</span>
-                    </label>
-                  ))}
-                  {(repoLabels.data ?? []).length > 0 && (
-                    <p className="mt-1 border-t px-1 pt-1.5 text-[11px] text-muted-foreground">
-                      Changes apply when this closes.
-                    </p>
-                  )}
-                </Popover.Popup>
-              </Popover.Positioner>
-            </Popover.Portal>
-          </Popover.Root>
-          {issue.labels.map((label) => (
-            <LabelChip key={label.name} label={label} />
-          ))}
-        </div>
-        <AssigneesPopover
-          repoPath={repoPath}
-          enabled
-          value={issue.assignees}
-          commitOnClose
-          onChange={(next) =>
-            setAssignees.mutate({ number, assignees: next }, { onError })
-          }
-        />
-        <MilestoneMenu
-          repoPath={repoPath}
-          enabled
-          value={issue.milestone?.number ?? null}
-          valueLabel={issue.milestone?.title}
-          onChange={(m) =>
-            setMilestone.mutate({ number, milestone: m }, { onError })
-          }
-        />
-        <IssueTypeMenu
-          repoPath={repoPath}
-          enabled
-          value={issue.issueType}
-          onChange={(typeName) =>
-            setType.mutate({ number, typeName }, { onError })
-          }
-        />
       </header>
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-4 p-4">
-          <div className="group space-y-1">
-            <p className="flex items-center gap-2 text-xs">
-              <AuthorAvatar login={issue.author} />
-              <span className="font-medium">{issue.author || "unknown"}</span>
-              <span className="text-muted-foreground">
-                opened {formatRelativeTime(issue.createdAt)}
-              </span>
-              <span className="flex-1" />
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label="Description actions"
-                      className="text-muted-foreground hover:text-foreground data-popup-open:text-foreground"
-                    />
-                  }
-                >
-                  <DotsThreeIcon className="size-4" weight="bold" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-44">
-                  <DropdownMenuItem
-                    onClick={() => copyText(issue.url, "Link copied")}
-                  >
-                    Copy link
-                  </DropdownMenuItem>
-                  {hasVisibleBody(issue.body) && (
-                    <DropdownMenuItem onClick={() => quoteReply(issue.body)}>
-                      Quote reply
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem
-                    onClick={() => copyText(issue.body, "Markdown copied")}
-                  >
-                    Copy markdown
-                  </DropdownMenuItem>
-                  {isOpen && (
-                    <DropdownMenuItem
-                      onClick={() => {
-                        editForm.reset(
-                          { title: issue.title, body: issue.body },
-                          { keepDefaultValues: true },
-                        );
-                        setEditOpen(true);
-                      }}
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="space-y-4 p-4">
+              <div className="group space-y-1">
+                <p className="flex items-center gap-2 text-xs">
+                  <AuthorAvatar login={issue.author} />
+                  <span className="font-medium">
+                    {issue.author || "unknown"}
+                  </span>
+                  <span className="text-muted-foreground">
+                    opened {formatRelativeTime(issue.createdAt)}
+                  </span>
+                  <span className="flex-1" />
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Description actions"
+                          className="text-muted-foreground hover:text-foreground data-popup-open:text-foreground"
+                        />
+                      }
                     >
-                      Edit
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </p>
-            {hasVisibleBody(issue.body) ? (
-              <Markdown>{issue.body}</Markdown>
-            ) : (
-              <p className="text-xs text-muted-foreground italic">
-                No description provided.
-              </p>
-            )}
-            <ReactionBar
-              reactions={reactions.data?.body ?? []}
-              onToggle={(content, active) =>
-                toggleReaction(issue.id, content, active)
-              }
+                      <DotsThreeIcon className="size-4" weight="bold" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-44">
+                      <DropdownMenuItem
+                        onClick={() => copyText(issue.url, "Link copied")}
+                      >
+                        Copy link
+                      </DropdownMenuItem>
+                      {hasVisibleBody(issue.body) && (
+                        <DropdownMenuItem
+                          onClick={() => quoteReply(issue.body)}
+                        >
+                          Quote reply
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem
+                        onClick={() => copyText(issue.body, "Markdown copied")}
+                      >
+                        Copy markdown
+                      </DropdownMenuItem>
+                      {isOpen && (
+                        <DropdownMenuItem
+                          onClick={() => {
+                            editForm.reset(
+                              { title: issue.title, body: issue.body },
+                              { keepDefaultValues: true },
+                            );
+                            setEditOpen(true);
+                          }}
+                        >
+                          Edit
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </p>
+                {hasVisibleBody(issue.body) ? (
+                  <Markdown>{issue.body}</Markdown>
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">
+                    No description provided.
+                  </p>
+                )}
+                <ReactionBar
+                  reactions={reactions.data?.body ?? []}
+                  onToggle={(content, active) =>
+                    toggleReaction(issue.id, content, active)
+                  }
+                />
+              </div>
+              <IssueSubIssues
+                repoPath={repoPath}
+                issueId={issue.id}
+                number={number}
+              />
+              {comments.map((c) => (
+                <Thread
+                  key={c.id}
+                  thread={c}
+                  onQuote={() => quoteReply(c.body)}
+                  onSaveEdit={
+                    c.viewerDidAuthor
+                      ? (body) => saveCommentEdit(c.id, body)
+                      : undefined
+                  }
+                  onDelete={
+                    c.viewerDidAuthor
+                      ? () => setDeletingCommentId(c.id)
+                      : undefined
+                  }
+                  onHide={
+                    c.isMinimized
+                      ? undefined
+                      : (classifier) => hideComment(c.id, classifier)
+                  }
+                  onUnhide={
+                    c.isMinimized ? () => unhideComment(c.id) : undefined
+                  }
+                  reactions={reactions.data?.comments[c.id]}
+                  onToggleReaction={(content, active) =>
+                    toggleReaction(c.id, content, active)
+                  }
+                />
+              ))}
+              {comments.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No comments yet.
+                </p>
+              )}
+            </div>
+          </ScrollArea>
+          {/* Comment is allowed after the issue closes too, matching GitHub. */}
+          <div className="space-y-2 border-t p-3">
+            <Textarea
+              ref={composerRef}
+              placeholder="Leave a comment…"
+              value={composeBody}
+              onChange={(e) => setComposeBody(e.target.value)}
+              onKeyDown={(e) => {
+                if (
+                  (e.ctrlKey || e.metaKey) &&
+                  e.key === "Enter" &&
+                  composeBody.trim() &&
+                  !busy
+                ) {
+                  e.preventDefault();
+                  submitComment();
+                }
+              }}
+              rows={2}
+              className="max-h-32 min-h-12 resize-y"
             />
-          </div>
-          <IssueRelations
-            repoPath={repoPath}
-            issueId={issue.id}
-            number={number}
-          />
-          <IssueDevelopment repoPath={repoPath} number={number} />
-          {comments.map((c) => (
-            <Thread
-              key={c.id}
-              thread={c}
-              onQuote={() => quoteReply(c.body)}
-              onSaveEdit={
-                c.viewerDidAuthor
-                  ? (body) => saveCommentEdit(c.id, body)
-                  : undefined
-              }
-              onDelete={
-                c.viewerDidAuthor ? () => setDeletingCommentId(c.id) : undefined
-              }
-              onHide={
-                c.isMinimized
-                  ? undefined
-                  : (classifier) => hideComment(c.id, classifier)
-              }
-              onUnhide={c.isMinimized ? () => unhideComment(c.id) : undefined}
-              reactions={reactions.data?.comments[c.id]}
-              onToggleReaction={(content, active) =>
-                toggleReaction(c.id, content, active)
-              }
-            />
-          ))}
-          {comments.length === 0 && (
-            <p className="text-xs text-muted-foreground">No comments yet.</p>
-          )}
-        </div>
-      </ScrollArea>
-      {/* Comment is allowed after the issue closes too, matching GitHub. */}
-      <div className="space-y-2 border-t p-3">
-        <Textarea
-          ref={composerRef}
-          placeholder="Leave a comment…"
-          value={composeBody}
-          onChange={(e) => setComposeBody(e.target.value)}
-          onKeyDown={(e) => {
-            if (
-              (e.ctrlKey || e.metaKey) &&
-              e.key === "Enter" &&
-              composeBody.trim() &&
-              !busy
-            ) {
-              e.preventDefault();
-              submitComment();
-            }
-          }}
-          rows={2}
-          className="max-h-32 min-h-12 resize-y"
-        />
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!composeBody.trim() || busy}
-            onClick={submitComment}
-            title="Ctrl+Enter"
-          >
-            Comment
-          </Button>
-          {composeBody.trim() && (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={busy}
-              onClick={() => setComposeBody("")}
-              title="Discard this draft (e.g. a quote reply)"
-            >
-              Clear
-            </Button>
-          )}
-          <span className="flex-1" />
-          {isOpen ? (
-            <>
+            <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                disabled={busy}
-                onClick={() => doClose("completed")}
+                disabled={!composeBody.trim() || busy}
+                onClick={submitComment}
+                title="Ctrl+Enter"
               >
-                Close issue
+                Comment
               </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={
-                    <Button
-                      variant="outline"
-                      size="icon-sm"
-                      aria-label="Other close options"
-                      disabled={busy}
-                    />
+              {composeBody.trim() && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => setComposeBody("")}
+                  title="Discard this draft (e.g. a quote reply)"
+                >
+                  Clear
+                </Button>
+              )}
+              <span className="flex-1" />
+              {isOpen ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => doClose("completed")}
+                  >
+                    Close issue
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="outline"
+                          size="icon-sm"
+                          aria-label="Other close options"
+                          disabled={busy}
+                        />
+                      }
+                    >
+                      <CaretDownIcon />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-52">
+                      <DropdownMenuItem onClick={() => doClose("completed")}>
+                        Close as completed
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => doClose("not_planned")}>
+                        Close as not planned
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() =>
+                    reopenIssue.mutate(number, {
+                      onSuccess: () => toast.success(`Reopened #${number}`),
+                      onError,
+                    })
                   }
                 >
-                  <CaretDownIcon />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-52">
-                  <DropdownMenuItem onClick={() => doClose("completed")}>
-                    Close as completed
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => doClose("not_planned")}>
-                    Close as not planned
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() =>
-                reopenIssue.mutate(number, {
-                  onSuccess: () => toast.success(`Reopened #${number}`),
-                  onError,
-                })
-              }
-            >
-              <ArrowCounterClockwiseIcon data-icon="inline-start" />
-              Reopen
-            </Button>
-          )}
+                  <ArrowCounterClockwiseIcon data-icon="inline-start" />
+                  Reopen
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
+        <aside className="w-64 shrink-0 space-y-4 overflow-y-auto border-l p-4">
+          <IssueTypeMenu
+            repoPath={repoPath}
+            enabled
+            value={issue.issueType}
+            onChange={(type) =>
+              setType.mutate(
+                { number, typeName: type?.name ?? null, type },
+                { onError },
+              )
+            }
+          />
+          <AssigneesPopover
+            repoPath={repoPath}
+            enabled
+            value={issue.assignees}
+            commitOnClose
+            onChange={(next) =>
+              setAssignees.mutate({ number, assignees: next }, { onError })
+            }
+          />
+          <LabelsPopover
+            repoPath={repoPath}
+            enabled
+            labelableId={issue.id}
+            labels={issue.labels}
+          />
+          <MilestoneMenu
+            repoPath={repoPath}
+            enabled
+            value={issue.milestone?.number ?? null}
+            valueLabel={issue.milestone?.title}
+            onChange={(m, title) =>
+              setMilestone.mutate({ number, milestone: m, title }, { onError })
+            }
+          />
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">
+              Projects
+            </p>
+            <button
+              type="button"
+              onClick={() => openUrl(issue.url)}
+              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+            >
+              <ArrowSquareOutIcon className="size-3" />
+              Manage on GitHub
+            </button>
+          </div>
+          <IssueRelationships repoPath={repoPath} number={number} />
+          <IssueDevelopment
+            repoPath={repoPath}
+            number={number}
+            issueId={issue.id}
+            issueTitle={issue.title}
+            issueUrl={issue.url}
+          />
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">
+              Notifications
+            </p>
+            <button
+              type="button"
+              onClick={() => openUrl(issue.url)}
+              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+            >
+              <ArrowSquareOutIcon className="size-3" />
+              Subscribe on GitHub
+            </button>
+          </div>
+        </aside>
       </div>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>

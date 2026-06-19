@@ -153,6 +153,7 @@ pub fn run() {
             github::issue::gh_issue_dependencies,
             github::issue::gh_issue_set_dependency,
             github::issue::gh_issue_development,
+            github::issue::gh_issue_create_linked_branch,
             github::issue::read_issue_templates,
             github::discussion::gh_discussion_categories,
             github::discussion::gh_discussion_list,

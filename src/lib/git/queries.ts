@@ -14,8 +14,10 @@ import type {
   DiffStatEntry,
   DiscussionDetails,
   GhStatus,
+  IssueDetails,
   IssueReactions,
   IssueRelation,
+  IssueType,
   Reaction,
   RepoOp,
   RepoSettingsInput,
@@ -569,19 +571,65 @@ export function useMilestones(repo: string, enabled: boolean) {
   });
 }
 
+/**
+ * An issue meta mutation (assignee/milestone/type) with an optimistic patch of
+ * the issue-details cache + rollback, so the sidebar updates instantly instead
+ * of waiting on the PATCH + refetch. `patch` applies the new value locally; the
+ * extra display fields callers pass (milestone title, the full type) are only
+ * for this patch — the backend takes just the id/name.
+ */
+function useOptimisticIssueMutation<TArgs extends { number: number }, TData>(
+  repo: string,
+  mutationFn: (args: TArgs) => Promise<TData>,
+  patch: (issue: IssueDetails, args: TArgs) => IssueDetails,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onMutate: async (args: TArgs) => {
+      const key = ["repo", repo, "issue", args.number] as const;
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<IssueDetails>(key);
+      queryClient.setQueryData<IssueDetails>(key, (d) =>
+        d ? patch(d, args) : d,
+      );
+      return { prev, key };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: (_d, _e, args) =>
+      queryClient.invalidateQueries({
+        queryKey: ["repo", repo, "issue", args.number],
+      }),
+  });
+}
+
 export function useSetIssueAssignees(repo: string) {
-  return useRepoMutation(
+  return useOptimisticIssueMutation(
     repo,
     (args: { number: number; assignees: string[] }) =>
       api.ghIssueSetAssignees(repo, args.number, args.assignees),
+    (issue, args) => ({ ...issue, assignees: args.assignees }),
   );
 }
 
 export function useSetIssueMilestone(repo: string) {
-  return useRepoMutation(
+  return useOptimisticIssueMutation(
     repo,
-    (args: { number: number; milestone: number | null }) =>
-      api.ghIssueSetMilestone(repo, args.number, args.milestone),
+    (args: {
+      number: number;
+      milestone: number | null;
+      /** Title for the optimistic chip (backend takes only the number). */
+      title?: string | null;
+    }) => api.ghIssueSetMilestone(repo, args.number, args.milestone),
+    (issue, args) => ({
+      ...issue,
+      milestone:
+        args.milestone === null
+          ? null
+          : { number: args.milestone, title: args.title ?? "" },
+    }),
   );
 }
 
@@ -596,10 +644,15 @@ export function useIssueTypes(repo: string, enabled: boolean) {
 }
 
 export function useSetIssueType(repo: string) {
-  return useRepoMutation(
+  return useOptimisticIssueMutation(
     repo,
-    (args: { number: number; typeName: string | null }) =>
-      api.ghIssueSetType(repo, args.number, args.typeName),
+    (args: {
+      number: number;
+      typeName: string | null;
+      /** The full type for the optimistic patch (backend takes only the name). */
+      type?: IssueType | null;
+    }) => api.ghIssueSetType(repo, args.number, args.typeName),
+    (issue, args) => ({ ...issue, issueType: args.type ?? null }),
   );
 }
 
@@ -985,6 +1038,12 @@ export function useIssueDevelopment(repo: string, number: number | null) {
     enabled: number !== null,
     staleTime: 30_000,
   });
+}
+
+export function useCreateLinkedBranch(repo: string) {
+  return useRepoMutation(repo, (args: { issueId: string; name: string }) =>
+    api.ghIssueCreateLinkedBranch(repo, args.issueId, args.name),
+  );
 }
 
 export function useSetIssueDependency(repo: string) {

@@ -814,6 +814,13 @@ export const ghIssueDependencies = (repoPath: string, number: number) =>
 export const ghIssueDevelopment = (repoPath: string, number: number) =>
   invoke<IssueDevelopment>("gh_issue_development", { repoPath, number });
 
+/** Creates a new branch off the default branch, linked to the issue. */
+export const ghIssueCreateLinkedBranch = (
+  repoPath: string,
+  issueId: string,
+  name: string,
+) => invoke<void>("gh_issue_create_linked_branch", { repoPath, issueId, name });
+
 /** Adds/removes a blocked-by or blocking dependency by target issue number. */
 export const ghIssueSetDependency = (
   repoPath: string,

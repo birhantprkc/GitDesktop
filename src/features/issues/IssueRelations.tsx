@@ -159,12 +159,10 @@ function IssuePicker({
 
 /**
  * An issue's parent + sub-issues: a clickable parent breadcrumb, the sub-issue
- * checklist with its completion bar, and an "Add sub-issue" menu offering either
- * creating a new linked issue or attaching an existing one (autocomplete).
- * Sub-issues live only in GitHub's GraphQL API, so this loads independently of
- * the conversation view (mirrors the decoupled reactions query).
+ * checklist with its completion bar, and an "Add sub-issue" menu (create a new
+ * linked issue or attach an existing one). A conversation-column body section.
  */
-export function IssueRelations({
+export function IssueSubIssues({
   repoPath,
   issueId,
   number,
@@ -174,20 +172,17 @@ export function IssueRelations({
   number: number;
 }) {
   const relations = useIssueRelations(repoPath, number);
-  const dependencies = useIssueDependencies(repoPath, number);
   const addSub = useAddSubIssue(repoPath);
   const removeSub = useRemoveSubIssue(repoPath);
-  const setDep = useSetIssueDependency(repoPath);
   const selectIssue = useUiStore((s) => s.selectIssue);
   const [mode, setMode] = useState<null | "existing">(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [addRelation, setAddRelation] = useState<IssueRelation | null>(null);
 
   const onError = (e: unknown) => toastError(e);
   const data = relations.data;
 
-  // Wait for the first load so issues with no relationships don't flash an
-  // empty section before it resolves.
+  // Wait for the first load so issues with no sub-issues don't flash an empty
+  // section before it resolves.
   if (!data) return null;
 
   const { parent, subIssues, completed, total } = data;
@@ -195,18 +190,6 @@ export function IssueRelations({
     number,
     ...(parent ? [parent.number] : []),
     ...subIssues.map((s) => s.number),
-  ]);
-
-  const depsLoaded = dependencies.data !== undefined;
-  const blockedBy = dependencies.data?.blockedBy ?? [];
-  const blocking = dependencies.data?.blocking ?? [];
-  const excludeBlockedBy = new Set<number>([
-    number,
-    ...blockedBy.map((i) => i.number),
-  ]);
-  const excludeBlocking = new Set<number>([
-    number,
-    ...blocking.map((i) => i.number),
   ]);
 
   function open(n: number) {
@@ -219,28 +202,6 @@ export function IssueRelations({
       { onSuccess: () => setMode(null), onError },
     );
   }
-
-  const addMenu = (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <Button variant="ghost" size="xs" aria-label="Add a sub-issue" />
-        }
-      >
-        <PlusIcon data-icon="inline-start" />
-        Add sub-issue
-        <CaretDownIcon data-icon="inline-end" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-52">
-        <DropdownMenuItem onClick={() => setCreateOpen(true)}>
-          Create new sub-issue…
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setMode("existing")}>
-          Add existing issue…
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
 
   return (
     <div className="space-y-2 border-y py-3">
@@ -269,7 +230,31 @@ export function IssueRelations({
             </span>
           )}
           <span className="flex-1" />
-          {mode === null && addMenu}
+          {mode === null && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    aria-label="Add a sub-issue"
+                  />
+                }
+              >
+                <PlusIcon data-icon="inline-start" />
+                Add sub-issue
+                <CaretDownIcon data-icon="inline-end" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-52">
+                <DropdownMenuItem onClick={() => setCreateOpen(true)}>
+                  Create new sub-issue…
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setMode("existing")}>
+                  Add existing issue…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
 
         {total > 0 && (
@@ -315,115 +300,151 @@ export function IssueRelations({
         )}
       </div>
 
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium">Relationships</span>
-          <span className="flex-1" />
-          {addRelation === null && (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    aria-label="Add a relationship"
-                  />
-                }
-              >
-                <PlusIcon data-icon="inline-start" />
-                Add
-                <CaretDownIcon data-icon="inline-end" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-44">
-                <DropdownMenuItem onClick={() => setAddRelation("blocked_by")}>
-                  Blocked by…
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setAddRelation("blocking")}>
-                  Blocking…
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
-
-        {blockedBy.length > 0 && (
-          <RelationList
-            label="Blocked by"
-            items={blockedBy}
-            onOpen={open}
-            onRemove={(t) =>
-              setDep.mutate(
-                { number, relation: "blocked_by", target: t, add: false },
-                { onError },
-              )
-            }
-          />
-        )}
-        {blocking.length > 0 && (
-          <RelationList
-            label="Blocking"
-            items={blocking}
-            onOpen={open}
-            onRemove={(t) =>
-              setDep.mutate(
-                { number, relation: "blocking", target: t, add: false },
-                { onError },
-              )
-            }
-          />
-        )}
-        {depsLoaded &&
-          blockedBy.length === 0 &&
-          blocking.length === 0 &&
-          addRelation === null && (
-            <p className="text-[11px] text-muted-foreground">
-              No linked issues.
-            </p>
-          )}
-
-        {addRelation !== null && (
-          <div className="space-y-1">
-            <p className="text-[11px] text-muted-foreground">
-              {addRelation === "blocked_by"
-                ? "Add an issue that blocks this one"
-                : "Add an issue this one blocks"}
-            </p>
-            <div className="flex items-center gap-1.5">
-              <div className="min-w-0 flex-1">
-                <IssuePicker
-                  repoPath={repoPath}
-                  exclude={
-                    addRelation === "blocked_by"
-                      ? excludeBlockedBy
-                      : excludeBlocking
-                  }
-                  pending={setDep.isPending}
-                  onPick={(t) =>
-                    setDep.mutate(
-                      { number, relation: addRelation, target: t, add: true },
-                      { onSuccess: () => setAddRelation(null), onError },
-                    )
-                  }
-                />
-              </div>
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => setAddRelation(null)}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-
       <CreateIssueDialog
         repoPath={repoPath}
         open={createOpen}
         onOpenChange={setCreateOpen}
         subIssueParentId={issueId}
       />
+    </div>
+  );
+}
+
+/**
+ * An issue's blocked-by / blocking dependencies — a meta-sidebar section with an
+ * "Add ▾" menu, the two dependency lists, and an inline issue-picker.
+ */
+export function IssueRelationships({
+  repoPath,
+  number,
+}: {
+  repoPath: string;
+  number: number;
+}) {
+  const dependencies = useIssueDependencies(repoPath, number);
+  const setDep = useSetIssueDependency(repoPath);
+  const selectIssue = useUiStore((s) => s.selectIssue);
+  const [addRelation, setAddRelation] = useState<IssueRelation | null>(null);
+
+  const onError = (e: unknown) => toastError(e);
+  const depsLoaded = dependencies.data !== undefined;
+  const blockedBy = dependencies.data?.blockedBy ?? [];
+  const blocking = dependencies.data?.blocking ?? [];
+  const excludeBlockedBy = new Set<number>([
+    number,
+    ...blockedBy.map((i) => i.number),
+  ]);
+  const excludeBlocking = new Set<number>([
+    number,
+    ...blocking.map((i) => i.number),
+  ]);
+
+  function open(n: number) {
+    selectIssue({ kind: "remote", id: String(n) });
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-medium text-muted-foreground">
+          Relationships
+        </span>
+        <span className="flex-1" />
+        {addRelation === null && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  aria-label="Add a relationship"
+                />
+              }
+            >
+              <PlusIcon data-icon="inline-start" />
+              Add
+              <CaretDownIcon data-icon="inline-end" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-44">
+              <DropdownMenuItem onClick={() => setAddRelation("blocked_by")}>
+                Blocked by…
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setAddRelation("blocking")}>
+                Blocking…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+
+      {blockedBy.length > 0 && (
+        <RelationList
+          label="Blocked by"
+          items={blockedBy}
+          onOpen={open}
+          onRemove={(t) =>
+            setDep.mutate(
+              { number, relation: "blocked_by", target: t, add: false },
+              { onError },
+            )
+          }
+        />
+      )}
+      {blocking.length > 0 && (
+        <RelationList
+          label="Blocking"
+          items={blocking}
+          onOpen={open}
+          onRemove={(t) =>
+            setDep.mutate(
+              { number, relation: "blocking", target: t, add: false },
+              { onError },
+            )
+          }
+        />
+      )}
+      {depsLoaded &&
+        blockedBy.length === 0 &&
+        blocking.length === 0 &&
+        addRelation === null && (
+          <p className="text-[11px] text-muted-foreground">No linked issues.</p>
+        )}
+
+      {addRelation !== null && (
+        <div className="space-y-1">
+          <p className="text-[11px] text-muted-foreground">
+            {addRelation === "blocked_by"
+              ? "Add an issue that blocks this one"
+              : "Add an issue this one blocks"}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <div className="min-w-0 flex-1">
+              <IssuePicker
+                repoPath={repoPath}
+                exclude={
+                  addRelation === "blocked_by"
+                    ? excludeBlockedBy
+                    : excludeBlocking
+                }
+                pending={setDep.isPending}
+                onPick={(t) =>
+                  setDep.mutate(
+                    { number, relation: addRelation, target: t, add: true },
+                    { onSuccess: () => setAddRelation(null), onError },
+                  )
+                }
+              />
+            </div>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setAddRelation(null)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

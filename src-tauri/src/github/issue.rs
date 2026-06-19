@@ -1111,6 +1111,69 @@ pub async fn gh_issue_development(
     Ok(IssueDevelopment { prs, branches })
 }
 
+/// Creates a new branch off the default branch's HEAD, linked to the issue
+/// (GitHub's "Create a branch" in the Development section). The branch is made
+/// on the remote; the user can then fetch + check it out.
+#[tauri::command]
+pub async fn gh_issue_create_linked_branch(
+    repo_path: String,
+    issue_id: String,
+    name: String,
+) -> AppResult<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "a branch name is required".into(),
+        ));
+    }
+    let (owner, repo_name) = repo_owner_name(&repo_path).await?;
+
+    // The new branch points at the default branch's current HEAD.
+    let oid_query = "query($owner:String!,$name:String!){ repository(owner:$owner,name:$name){ defaultBranchRef{ target{ oid } } } }";
+    let oid_out = run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-F",
+            &format!("owner={owner}"),
+            "-F",
+            &format!("name={repo_name}"),
+            "-f",
+            &format!("query={oid_query}"),
+        ],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let oid_val: serde_json::Value = serde_json::from_str(&oid_out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not read the default branch: {e}")))?;
+    let oid = oid_val
+        .pointer("/data/repository/defaultBranchRef/target/oid")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            AppError::Gh("could not determine the default branch commit".into())
+        })?;
+
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id:ID!,$oid:GitObjectID!,$name:String!){ createLinkedBranch(input:{issueId:$id,oid:$oid,name:$name}){ linkedBranch{ id } } }",
+            "-f",
+            &format!("id={issue_id}"),
+            "-f",
+            &format!("oid={oid}"),
+            "-f",
+            &format!("name={name}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Strips a leading YAML frontmatter block (`---\n…\n---`) from a template body.
 fn strip_frontmatter(text: &str) -> String {
     let trimmed = text.trim_start_matches(['\u{feff}', '\n', '\r', ' ']);
