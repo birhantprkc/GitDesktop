@@ -46,11 +46,11 @@ jobs:
             args: ""
           - platform: ubuntu-22.04
             args: ""
-          # macOS deferred: needs an Apple Developer account ($99/yr) to sign +
-          # notarize, or users hit a hard Gatekeeper block. Re-enable here and add
-          # the APPLE_* secrets when ready.
-          # - platform: macos-latest
-          #   args: "--target universal-apple-darwin"
+          # macOS: a universal binary (Intel + Apple Silicon), signed with a
+          # Developer ID cert and notarized via the APPLE_* secrets below.
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
@@ -66,6 +66,10 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # Empty on Windows/Linux; the macOS leg adds both arches for the
+          # universal build.
+          targets: ${{ matrix.rust-targets }}
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -100,6 +104,14 @@ jobs:
           # analytics is silently disabled (the app logs a one-line note).
           VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
           VITE_POSTHOG_HOST: https://eu.i.posthog.com
+          # macOS code signing + notarization (Developer ID Application). Only
+          # consumed on the macOS leg; unused/empty on Windows + Linux.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "GitDesktop ${{ github.ref_name }}"
