@@ -232,6 +232,8 @@ export interface PrPollInfo {
   reviewDecision: string;
   /** Check rollup of the head commit: SUCCESS/FAILURE/PENDING/"". */
   checksState: string;
+  /** Head commit SHA — drives pr-sync detection for remote PRs. */
+  headSha: string;
 }
 
 export interface GhRepo {

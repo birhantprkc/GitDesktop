@@ -1,5 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useRef } from "react";
+import { useAutomations } from "@/lib/automations/queries";
+import { maybeFireSync } from "@/lib/automations/sync";
+import { effectiveRules } from "@/lib/automations/types";
 import { ghPrPoll } from "@/lib/git/api";
 import { useGhStatus } from "@/lib/git/queries";
 import type { PrPollInfo } from "@/lib/git/types";
@@ -17,11 +20,19 @@ import { useSettings } from "@/lib/settings/queries";
 export function usePrNotifications(repoPath: string) {
   const settings = useSettings();
   const gh = useGhStatus(repoPath);
+  const automations = useAutomations();
   const prefs = settings.data?.notifications;
-  const anyEnabled = Boolean(
+  const anyNotif = Boolean(
     prefs && (prefs.prChecks !== "off" || prefs.prActivity || prefs.prReviews),
   );
-  const enabled = repoPath !== "" && Boolean(gh.data?.repo) && anyEnabled;
+  // A pr-sync rule needs this head-OID poll to spot new commits on remote PRs;
+  // otherwise the poll only earns its keep when a PR notification is enabled, so
+  // the default (no notifications, no pr-sync rule) makes no background call.
+  const hasPrSync = automations.data
+    ? effectiveRules(automations.data, repoPath, "pr-sync").length > 0
+    : false;
+  const enabled =
+    repoPath !== "" && Boolean(gh.data?.repo) && (anyNotif || hasPrSync);
 
   const poll = useQuery({
     queryKey: ["repo", repoPath, "pr-poll"] as const,
@@ -46,6 +57,31 @@ export function usePrNotifications(repoPath: string) {
     const snapshot = new Map(data.map((p) => [p.number, p]));
     const before = prev.current;
     prev.current = snapshot;
+
+    // pr-sync: auto re-review open remote PRs whose head advanced — the path
+    // that covers PRs whose head branch isn't local (forks / pushed elsewhere).
+    // Only when a pr-sync rule exists (so no fan-out for notification-only
+    // users); deduped by head in `maybeFireSync`, and the runner gates whether
+    // to actually review (opt-in per PR + per-mode watermark). Body/commit
+    // subjects aren't in the poll payload — the PR diff is the source of truth.
+    if (hasPrSync) {
+      for (const pr of snapshot.values()) {
+        if (pr.state === "OPEN" && pr.headSha) {
+          maybeFireSync({
+            repoPath,
+            kind: "remote",
+            ref: String(pr.number),
+            currentHeadSha: pr.headSha,
+            base: "",
+            head: "",
+            title: pr.title,
+            body: "",
+            commitSubjects: [],
+          });
+        }
+      }
+    }
+
     if (!before || !prefs) return;
     const login = gh.data?.login ?? null;
 

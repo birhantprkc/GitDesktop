@@ -2,41 +2,26 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { maybeFireSync } from "@/lib/automations/sync";
 import { gitBranchTips } from "@/lib/git/api";
-import { useGhStatus, usePrList } from "@/lib/git/queries";
 import { useLocalPrs } from "@/lib/pulls/queries";
 
 /**
- * Watches each OPEN PR's head branch for new commits and fires a `pr-sync`
- * automation event when a head advances. Covers BOTH local PRs and remote
- * GitHub PRs whose head branch exists locally (i.e. your own PRs — the iterate
- * case), by polling the local branch tips in one `git_branch_tips` call. This
- * is more responsive than a GitHub poll (it fires the moment you commit, before
- * pushing) and needs no remote round-trip; PRs whose head branch isn't local
- * (forks / others') are simply not watched. `maybeFireSync` debounces by head,
- * and the runner gates whether to actually re-review (opt-in per PR + per-mode
- * watermark). Mount once per open repo.
+ * Watches each OPEN LOCAL PR's head branch for new commits and fires a `pr-sync`
+ * automation event when a head advances. Polls all open local PRs' head tips in
+ * one `git_branch_tips` call — fast (10 s) and fires the moment you commit. (For
+ * remote PRs, `usePrNotifications` watches the GitHub head OID, which also covers
+ * heads that aren't local — forks / pushed elsewhere.) `maybeFireSync` debounces
+ * by head; the runner gates whether to actually re-review. Mount once per repo.
  */
 export function useWatchPrHeads(repoPath: string) {
-  const local = useLocalPrs(repoPath);
-  const gh = useGhStatus(repoPath);
-  const canGh = Boolean(gh.data?.repo);
-  const remote = usePrList(repoPath, canGh, "open");
-
-  const openLocal = useMemo(
-    () => (local.data ?? []).filter((p) => p.status === "open"),
-    [local.data],
+  const prs = useLocalPrs(repoPath);
+  const openPrs = useMemo(
+    () => (prs.data ?? []).filter((p) => p.status === "open"),
+    [prs.data],
   );
-  const openRemote = useMemo(
-    () => (canGh ? (remote.data ?? []) : []).filter((p) => p.state === "OPEN"),
-    [canGh, remote.data],
+  const headBranches = useMemo(
+    () => [...new Set(openPrs.map((p) => p.head))].sort(),
+    [openPrs],
   );
-
-  const headBranches = useMemo(() => {
-    const branches = new Set<string>();
-    for (const p of openLocal) branches.add(p.head);
-    for (const p of openRemote) branches.add(p.headRefName);
-    return [...branches].sort();
-  }, [openLocal, openRemote]);
 
   const tips = useQuery({
     queryKey: ["branch-tips", repoPath, headBranches],
@@ -49,7 +34,7 @@ export function useWatchPrHeads(repoPath: string) {
   useEffect(() => {
     const data = tips.data;
     if (!data) return;
-    for (const pr of openLocal) {
+    for (const pr of openPrs) {
       const head = data[pr.head];
       if (!head) continue;
       maybeFireSync({
@@ -64,20 +49,5 @@ export function useWatchPrHeads(repoPath: string) {
         commitSubjects: [],
       });
     }
-    for (const pr of openRemote) {
-      const head = data[pr.headRefName];
-      if (!head) continue;
-      maybeFireSync({
-        repoPath,
-        kind: "remote",
-        ref: String(pr.number),
-        currentHeadSha: head,
-        base: pr.baseRefName,
-        head: pr.headRefName,
-        title: pr.title,
-        body: "",
-        commitSubjects: [],
-      });
-    }
-  }, [tips.data, openLocal, openRemote, repoPath]);
+  }, [tips.data, openPrs, repoPath]);
 }

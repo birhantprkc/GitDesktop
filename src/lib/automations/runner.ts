@@ -6,7 +6,13 @@ import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider } from "@/lib/ai/providers";
 import { runCliStream } from "@/lib/ai/stream";
 import type { AiSettings, ReviewMode } from "@/lib/ai/types";
-import { ghPrComment, gitBranchDiff, gitCommitDiff } from "@/lib/git/api";
+import {
+  ghPrComment,
+  ghPrDiff,
+  gitBranchDiff,
+  gitCommitDiff,
+} from "@/lib/git/api";
+import type { DiffStatEntry } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { listLocalPrs, saveLocalPr } from "@/lib/pulls/local";
 import { getLatestReview, saveReview } from "@/lib/pulls/reviews-history";
@@ -72,6 +78,30 @@ function targetRef(event: PrAutomationEvent): string {
 
 function modeLabel(mode: ReviewMode): string {
   return mode === "security" ? "security audit" : "review";
+}
+
+/** Derives a per-file +/- summary from unified diff text — for `gh pr diff`,
+ *  which (unlike `git diff --numstat`) returns no file counts. */
+function filesFromDiff(text: string): DiffStatEntry[] {
+  return text
+    .split(/^(?=diff --git )/m)
+    .filter((s) => s.trim())
+    .map((section) => {
+      const header = section.slice(0, section.indexOf("\n"));
+      const path = header.match(/ b\/(.+)$/)?.[1] ?? header;
+      let added = 0;
+      let deleted = 0;
+      for (const line of section.split("\n")) {
+        if (line.startsWith("+") && !line.startsWith("+++")) added++;
+        else if (line.startsWith("-") && !line.startsWith("---")) deleted++;
+      }
+      return {
+        path,
+        added,
+        deleted,
+        isBinary: section.includes("\nBinary files "),
+      };
+    });
 }
 
 /**
@@ -190,15 +220,25 @@ async function generateReviewText(
   signal: AbortSignal,
   onCliId: (id: string) => void,
 ): Promise<string | null> {
-  const diff =
-    event.kind === "commit"
-      ? await gitCommitDiff(event.repoPath, event.hash, DIFF_MAX_BYTES)
-      : await gitBranchDiff(
-          event.repoPath,
-          event.base,
-          event.head,
-          DIFF_MAX_BYTES,
-        );
+  let diff: { text: string; truncated: boolean; files: DiffStatEntry[] };
+  if (event.kind === "commit") {
+    diff = await gitCommitDiff(event.repoPath, event.hash, DIFF_MAX_BYTES);
+  } else if (event.kind === "pr-sync" && event.target.type === "remote") {
+    // Remote pr-sync is detected via the GitHub head-OID poll, which carries no
+    // local base/head branch and whose head may not be local (fork / pushed
+    // elsewhere). Use GitHub's authoritative PR diff; gh has no numstat, so
+    // derive the file summary from the diff text. (pr-open and local pr-sync
+    // keep the local branch diff below, which already includes file counts.)
+    const text = await ghPrDiff(event.repoPath, event.target.number);
+    diff = { text, truncated: false, files: filesFromDiff(text) };
+  } else {
+    diff = await gitBranchDiff(
+      event.repoPath,
+      event.base,
+      event.head,
+      DIFF_MAX_BYTES,
+    );
+  }
   if (!diff.text.trim()) return null;
   // Cancelled while the diff loaded — don't start the model.
   if (signal.aborted) return null;

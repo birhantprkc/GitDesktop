@@ -894,6 +894,9 @@ pub struct PrPollInfo {
     pub review_decision: String,
     /// Rollup of the head commit's checks: SUCCESS/FAILURE/PENDING/"".
     pub checks_state: String,
+    /// Head commit SHA — lets the poll detect when a PR receives new commits
+    /// (drives pr-sync auto re-review for remote PRs, incl. non-local heads).
+    pub head_sha: String,
 }
 
 /// Lightweight snapshot of the repo's recently-updated PRs for the
@@ -915,7 +918,7 @@ pub async fn gh_pr_poll(repo_path: String) -> AppResult<Vec<PrPollInfo>> {
     validate_graphql_embed(name, "repository name")?;
 
     let query = format!(
-        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ pullRequests(first:30, states:[OPEN, CLOSED, MERGED], orderBy:{{field:UPDATED_AT, direction:DESC}}){{ nodes{{ number title url state isDraft author{{login}} reviewDecision commits(last:1){{ nodes{{ commit{{ statusCheckRollup{{ state }} }} }} }} }} }} }} }}"#
+        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ pullRequests(first:30, states:[OPEN, CLOSED, MERGED], orderBy:{{field:UPDATED_AT, direction:DESC}}){{ nodes{{ number title url state isDraft author{{login}} reviewDecision commits(last:1){{ nodes{{ commit{{ oid statusCheckRollup{{ state }} }} }} }} }} }} }} }}"#
     );
     let out = run_gh(
         Some(&repo_path),
@@ -947,6 +950,7 @@ pub async fn gh_pr_poll(repo_path: String) -> AppResult<Vec<PrPollInfo>> {
             author: str_at(n, "/author/login"),
             review_decision: str_at(n, "/reviewDecision"),
             checks_state: str_at(n, "/commits/nodes/0/commit/statusCheckRollup/state"),
+            head_sha: str_at(n, "/commits/nodes/0/commit/oid"),
         })
         .filter(|p| p.number > 0)
         .collect())

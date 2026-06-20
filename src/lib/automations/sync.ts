@@ -5,6 +5,10 @@ import { triggerAutomations } from "./runner";
  * change fires at most once — not on every poll tick — so the watchers can call
  * `maybeFireSync` freely. The runner does the real work (per-mode watermark gate
  * + build-on-prior); this just debounces the trigger by head.
+ *
+ * Intentionally never reclaimed (the dedup must survive a repo view unmounting),
+ * so it holds one small entry per distinct PR observed this session — a bounded,
+ * negligible footprint that resets on restart.
  */
 const lastFiredHead = new Map<string, string>();
 

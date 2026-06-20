@@ -1,5 +1,9 @@
 import { useCallback, useRef, useState } from "react";
-import { gitRemoveWorktree, gitReviewWorktree } from "@/lib/git/api";
+import {
+  gitFetchObjects,
+  gitRemoveWorktree,
+  gitReviewWorktree,
+} from "@/lib/git/api";
 import { toastError } from "@/lib/toast";
 import { cancelAgentReview, providerKind, runAgentReview } from "./agent";
 import { createAiClient } from "./client";
@@ -48,6 +52,10 @@ export async function runCliStream({
   let worktree: string | null = null;
   if (ai.cliRepoAware && headSha) {
     setStatus("Preparing review workspace…");
+    // A remote PR head (fork / pushed elsewhere) may not be a local object, so
+    // best-effort fetch it first — otherwise the worktree can't pin it and the
+    // agent silently falls back to the user's checked-out branch.
+    await gitFetchObjects(repoPath, [headSha]).catch(() => undefined);
     worktree = await gitReviewWorktree(repoPath, headSha).catch(() => null);
     if (worktree) cwd = worktree;
   }
