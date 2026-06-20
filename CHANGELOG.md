@@ -12,6 +12,13 @@ commit list.
 
 ### Added
 
+- **Syntax-highlighted code blocks in rendered markdown.** Fenced code blocks —
+  in PR / issue / discussion descriptions and comments, AI review output, and
+  release notes — are now syntax-highlighted with the GitHub color palette
+  (light and dark), across ~190 languages. Language tags and common aliases
+  (`ts`, `js`, `py`, `sh`, `yml`, `rs`…) are recognized; untagged or unknown
+  blocks render as plain text, same as before.
+
 - **Write/Preview markdown everywhere, with a formatting toolbar.** Every place
   you write markdown now has GitHub-style **Write / Preview** tabs and a
   formatting toolbar — pull request, issue and discussion comments and replies,

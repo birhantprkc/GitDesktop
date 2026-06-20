@@ -1,16 +1,56 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import hljs from "highlight.js";
+import { Marked } from "marked";
 import { useMemo } from "react";
+import { diffLang } from "@/features/diff/diff-lang";
 import { cn } from "@/lib/utils";
+import "./markdown-highlight.css";
+
+/**
+ * Resolve a fenced code block's info string to a highlight.js language id, or
+ * null to render it as plain text. highlight.js resolves its own aliases
+ * (`js`, `ts`, `py`, `sh`, `yml`…); if that misses, we treat the tag as a file
+ * extension and reuse the diff's extension→language map (so `rs` → rust etc.).
+ */
+function resolveCodeLang(info: string | undefined): string | null {
+  if (!info) return null;
+  const tag = info.trim().toLowerCase().split(/\s+/)[0];
+  if (!tag) return null;
+  if (hljs.getLanguage(tag)) return tag;
+  const mapped = diffLang(`f.${tag}`);
+  return mapped && hljs.getLanguage(mapped) ? mapped : null;
+}
+
+/**
+ * A marked instance whose code renderer syntax-highlights fenced blocks with
+ * highlight.js (the full ~190-language build). Tokens are emitted as
+ * `hljs-*`-classed spans, colored by the GitHub palette in
+ * `markdown-highlight.css` (scoped to `.markdown-body`). Untagged or unknown
+ * languages return `false` so marked falls back to its default escaped block.
+ */
+const md = new Marked({ gfm: true });
+md.use({
+  renderer: {
+    code({ text, lang }) {
+      const language = resolveCodeLang(lang);
+      if (!language) return false;
+      const { value } = hljs.highlight(text, {
+        language,
+        ignoreIllegals: true,
+      });
+      return `<pre><code class="hljs language-${language}">${value}</code></pre>`;
+    },
+  },
+});
 
 /**
  * Renders GitHub-flavored Markdown (PR descriptions, comments, AI output).
  *
  * GitHub comments routinely embed raw HTML — Dependabot and netlify use
  * <details>/<summary>, tables, and <img> badges — so we render through marked
- * (markdown → HTML) and sanitize with DOMPurify before injecting. Both are
- * zero-dependency, which avoids pulling a separate HTML parser just for this.
+ * (markdown → HTML) and sanitize with DOMPurify before injecting. Fenced code
+ * blocks are syntax-highlighted with highlight.js (see `md` above).
  *
  * Links open in the system browser instead of navigating the webview.
  */
@@ -22,7 +62,7 @@ export function Markdown({
   className?: string;
 }) {
   const html = useMemo(() => {
-    const raw = marked.parse(children, { gfm: true, async: false }) as string;
+    const raw = md.parse(children, { async: false }) as string;
     return DOMPurify.sanitize(raw);
   }, [children]);
 
@@ -40,7 +80,7 @@ export function Markdown({
     <div
       onClick={onClick}
       className={cn(
-        "text-xs/relaxed break-words",
+        "markdown-body text-xs/relaxed break-words",
         // Margins collapse at the edges so previews/comments have no leading or
         // trailing gap (matches GitHub's rendered-markdown reset).
         "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",

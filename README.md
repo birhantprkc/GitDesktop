@@ -28,7 +28,7 @@ git works against any remote via system `git`.
   toolbar (bold, italic, headings, quote, code, links, and bulleted / numbered /
   task lists, with Ctrl+B / I / K) on every comment, reply, and release-notes
   field — and rendered markdown that mirrors GitHub's heading hierarchy, spacing,
-  and task lists.
+  task lists, and syntax-highlighted code blocks (~190 languages, light + dark).
 - **GitHub Actions cockpit** — browse workflow runs, drill into jobs and steps,
   re-run (all or failed), cancel, manually dispatch a workflow, and read
   failed-step logs — none of which GitHub Desktop does.
