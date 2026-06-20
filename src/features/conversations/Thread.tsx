@@ -1,6 +1,7 @@
 import { DotsThreeIcon } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
+import { MarkdownEditor } from "@/components/markdown-editor";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Markdown } from "@/components/ui/markdown";
-import { Textarea } from "@/components/ui/textarea";
 import { copyText } from "@/lib/clipboard";
 import type { MinimizeReason } from "@/lib/git/api";
 import type { PrThreadOut, Reaction, RepoLabel } from "@/lib/git/types";
@@ -198,11 +198,12 @@ export function Thread({
       </p>
       {editing ? (
         <div className="space-y-2">
-          <Textarea
+          <MarkdownEditor
+            aria-label="Edit comment"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={setDraft}
             rows={3}
-            className="max-h-48 min-h-16 resize-y font-mono"
+            textareaClassName="max-h-48 min-h-16 resize-y font-mono"
           />
           <div className="flex items-center gap-2">
             <Button

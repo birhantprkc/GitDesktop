@@ -8,6 +8,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { toast } from "sonner";
+import { MarkdownEditor } from "@/components/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -25,7 +26,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import {
   useCheckoutCommit,
   useDeleteRelease,
@@ -318,12 +318,13 @@ export function TagDetailView({
                   onChange={(e) => setEditTitle(e.target.value)}
                   placeholder="Title"
                 />
-                <Textarea
+                <MarkdownEditor
+                  aria-label="Release notes"
                   value={editNotes}
-                  onChange={(e) => setEditNotes(e.target.value)}
+                  onChange={setEditNotes}
                   placeholder="Notes…"
                   rows={8}
-                  className="max-h-72 min-h-24 resize-y font-mono"
+                  textareaClassName="max-h-72 min-h-24 resize-y font-mono"
                 />
                 <div className="flex flex-wrap gap-x-6 gap-y-2">
                   <label className="flex cursor-pointer items-center gap-2 text-xs">

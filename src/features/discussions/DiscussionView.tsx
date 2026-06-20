@@ -9,6 +9,10 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+  MarkdownEditor,
+  type MarkdownEditorHandle,
+} from "@/components/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -33,7 +37,6 @@ import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
 import { ReactionBar } from "@/features/conversations/ReactionBar";
 import {
   AuthorAvatar,
@@ -181,7 +184,7 @@ export function DiscussionView({
   const selectDiscussion = useUiStore((s) => s.selectDiscussion);
 
   const [composeBody, setComposeBody] = useState("");
-  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<MarkdownEditorHandle>(null);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyBody, setReplyBody] = useState("");
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
@@ -700,11 +703,12 @@ export function DiscussionView({
                   ))}
                   {replyingTo === c.id && (
                     <div className="space-y-2">
-                      <Textarea
+                      <MarkdownEditor
                         autoFocus
+                        aria-label="Write a reply"
                         placeholder="Write a reply…"
                         value={replyBody}
-                        onChange={(e) => setReplyBody(e.target.value)}
+                        onChange={setReplyBody}
                         onKeyDown={(e) => {
                           if (
                             (e.ctrlKey || e.metaKey) &&
@@ -717,7 +721,7 @@ export function DiscussionView({
                           }
                         }}
                         rows={2}
-                        className="max-h-32 min-h-12 resize-y"
+                        textareaClassName="max-h-32 min-h-12 resize-y"
                       />
                       <div className="flex items-center gap-2">
                         <Button
@@ -749,11 +753,12 @@ export function DiscussionView({
         </div>
       </ScrollArea>
       <div className="space-y-2 border-t p-3">
-        <Textarea
+        <MarkdownEditor
           ref={composerRef}
+          aria-label="Add to the discussion"
           placeholder="Add to the discussion…"
           value={composeBody}
-          onChange={(e) => setComposeBody(e.target.value)}
+          onChange={setComposeBody}
           onKeyDown={(e) => {
             if (
               (e.ctrlKey || e.metaKey) &&
@@ -766,7 +771,7 @@ export function DiscussionView({
             }
           }}
           rows={2}
-          className="max-h-32 min-h-12 resize-y"
+          textareaClassName="max-h-32 min-h-12 resize-y"
         />
         <div className="flex items-center gap-2">
           <Button

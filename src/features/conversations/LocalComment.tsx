@@ -1,5 +1,6 @@
 import { DotsThreeIcon } from "@phosphor-icons/react";
 import { useState } from "react";
+import { MarkdownEditor } from "@/components/markdown-editor";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -8,7 +9,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Markdown } from "@/components/ui/markdown";
-import { Textarea } from "@/components/ui/textarea";
 import { copyText } from "@/lib/clipboard";
 import { formatRelativeTime } from "@/lib/time";
 
@@ -95,11 +95,12 @@ export function LocalComment({
       </p>
       {editing ? (
         <div className="space-y-2">
-          <Textarea
+          <MarkdownEditor
+            aria-label="Edit comment"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={setDraft}
             rows={3}
-            className="max-h-48 min-h-16 resize-y"
+            textareaClassName="max-h-48 min-h-16 resize-y"
           />
           <div className="flex items-center gap-2">
             <Button

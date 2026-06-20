@@ -12,6 +12,17 @@ commit list.
 
 ### Added
 
+- **Write/Preview markdown everywhere, with a formatting toolbar.** Every place
+  you write markdown now has GitHub-style **Write / Preview** tabs and a
+  formatting toolbar — pull request, issue and discussion comments and replies,
+  comment edits, and release notes. The toolbar covers bold, italic, heading,
+  quote, code, link, and bulleted / numbered / task lists, with `Ctrl+B`,
+  `Ctrl+I` and `Ctrl+K` shortcuts; it wraps your current selection (or drops in
+  a placeholder), and Preview renders exactly what the conversation will show.
+  Rendered markdown also got a refresh — a clearer heading hierarchy with
+  GitHub-style underlines, roomier spacing, and proper task-list checkboxes — so
+  descriptions, comments and AI review output read the way they do on GitHub.
+
 - **Iterative AI reviews that remember the last round.** When you re-run a code
   review or security audit on a pull request, it now builds on the previous
   one: the earlier findings and a diff of what changed since travel along as

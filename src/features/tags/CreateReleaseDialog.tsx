@@ -8,8 +8,12 @@ import {
 } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+  MarkdownEditor,
+  type MarkdownEditorHandle,
+} from "@/components/markdown-editor";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -35,7 +39,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Markdown } from "@/components/ui/markdown";
 import {
   Popover,
   PopoverContent,
@@ -43,7 +46,6 @@ import {
 } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import { useAppForm } from "@/lib/form";
 import {
   useBranches,
@@ -117,7 +119,7 @@ export function CreateReleaseDialog({
   const [previousTagOverride, setPreviousTagOverride] = useState<string | null>(
     null,
   );
-  const [notesTab, setNotesTab] = useState<"write" | "preview">("write");
+  const notesEditorRef = useRef<MarkdownEditorHandle>(null);
 
   const form = useAppForm({
     defaultValues: RELEASE_DEFAULTS,
@@ -182,7 +184,7 @@ export function CreateReleaseDialog({
     );
     setCreatedTags([]);
     setPreviousTagOverride(null);
-    setNotesTab("write");
+    // The editor remounts with the dialog (Write tab) — no explicit reset needed.
   });
   useEffect(() => {
     if (open) seedOnOpen();
@@ -214,7 +216,7 @@ export function CreateReleaseDialog({
           if (gen.name && !form.getFieldValue("title").trim()) {
             form.setFieldValue("title", gen.name);
           }
-          setNotesTab("preview");
+          notesEditorRef.current?.showPreview();
         },
         onError: toastError,
       },
@@ -375,17 +377,16 @@ export function CreateReleaseDialog({
                   </div>
                 )}
               </div>
-              <Tabs
-                value={notesTab}
-                onValueChange={(v) => setNotesTab(v as "write" | "preview")}
-              >
-                <div className="flex items-center gap-2">
-                  <TabsList variant="line">
-                    <TabsTrigger value="write">Write</TabsTrigger>
-                    <TabsTrigger value="preview">Preview</TabsTrigger>
-                  </TabsList>
-                  <span className="flex-1" />
-                  {busyGenerating ? (
+              <MarkdownEditor
+                ref={notesEditorRef}
+                aria-label="Release notes"
+                value={notes}
+                onChange={(v) => form.setFieldValue("notes", v)}
+                placeholder="What's changed… (or generate notes above)"
+                rows={8}
+                textareaClassName="max-h-72 min-h-32 resize-y font-mono"
+                actions={
+                  busyGenerating ? (
                     <Button
                       type="button"
                       variant="ghost"
@@ -432,31 +433,9 @@ export function CreateReleaseDialog({
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
-                  )}
-                </div>
-                <TabsContent value="write">
-                  <Textarea
-                    value={notes}
-                    onChange={(e) =>
-                      form.setFieldValue("notes", e.target.value)
-                    }
-                    placeholder="What's changed… (or generate notes above)"
-                    rows={8}
-                    className="max-h-72 min-h-32 resize-y font-mono"
-                  />
-                </TabsContent>
-                <TabsContent value="preview">
-                  <div className="max-h-72 min-h-32 overflow-auto rounded-none border p-3">
-                    {notes.trim() ? (
-                      <Markdown>{notes}</Markdown>
-                    ) : (
-                      <p className="text-xs text-muted-foreground italic">
-                        Nothing to preview yet.
-                      </p>
-                    )}
-                  </div>
-                </TabsContent>
-              </Tabs>
+                  )
+                }
+              />
             </div>
 
             <div className="flex flex-wrap gap-x-6 gap-y-2">

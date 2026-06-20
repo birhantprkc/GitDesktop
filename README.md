@@ -24,6 +24,11 @@ git works against any remote via system `git`.
 - **Issues & Discussions, in-app** — triage GitHub issues (types, sub-issues,
   dependencies, linked PRs and branches) and Discussions without the browser,
   plus private **local to-dos** that need no remote.
+- **Markdown editor everywhere you write** — Write/Preview tabs and a formatting
+  toolbar (bold, italic, headings, quote, code, links, and bulleted / numbered /
+  task lists, with Ctrl+B / I / K) on every comment, reply, and release-notes
+  field — and rendered markdown that mirrors GitHub's heading hierarchy, spacing,
+  and task lists.
 - **GitHub Actions cockpit** — browse workflow runs, drill into jobs and steps,
   re-run (all or failed), cancel, manually dispatch a workflow, and read
   failed-step logs — none of which GitHub Desktop does.
@@ -88,8 +93,8 @@ browser, tag management, and submodule management.
 with gated Continue / Abort.
 
 **Pull requests** — full read + write for GitHub PRs and local PRs (see
-Highlights), AI review + security audit on any PR, and Write/Preview markdown
-everywhere you author.
+Highlights), AI review + security audit on any PR, and a Write/Preview markdown
+editor — formatting toolbar and live preview — everywhere you author.
 
 **Issues & to-dos** — a dedicated tab for GitHub issues and private **local
 to-dos** (no remote needed; publishable to GitHub in one click). Browse, create,

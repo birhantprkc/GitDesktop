@@ -1,34 +1,309 @@
-import { type ReactNode, useState } from "react";
+import {
+  CodeIcon,
+  type Icon,
+  LinkIcon,
+  ListBulletsIcon,
+  ListChecksIcon,
+  ListNumbersIcon,
+  QuotesIcon,
+  TextBIcon,
+  TextHIcon,
+  TextItalicIcon,
+} from "@phosphor-icons/react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  type Ref,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";
 import { Textarea } from "@/components/ui/textarea";
 
+export interface MarkdownEditorHandle {
+  /** Focus the input, switching to the Write tab first if needed. */
+  focus: () => void;
+  /** Switch to the Preview tab (e.g. after generating content into it). */
+  showPreview: () => void;
+}
+
+/** A formatting operation a toolbar button (or shortcut) performs. */
+type FormatAction =
+  | { kind: "wrap"; before: string; after: string; placeholder: string }
+  | { kind: "line"; prefix: string }
+  | { kind: "link" };
+
+interface SelectionEdit {
+  text: string;
+  selStart: number;
+  selEnd: number;
+}
+
+/** Wrap the selection with `before`/`after` (or insert a placeholder at the caret). */
+function applyWrap(
+  value: string,
+  start: number,
+  end: number,
+  before: string,
+  after: string,
+  placeholder: string,
+): SelectionEdit {
+  const selected = value.slice(start, end) || placeholder;
+  const text =
+    value.slice(0, start) + before + selected + after + value.slice(end);
+  const selStart = start + before.length;
+  return { text, selStart, selEnd: selStart + selected.length };
+}
+
+/** Toggle a line prefix (`> `, `- `, `1. `, `- [ ] `, `### `) on every spanned line. */
+function applyLine(
+  value: string,
+  start: number,
+  end: number,
+  prefix: string,
+): SelectionEdit {
+  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+  let lineEnd = value.indexOf("\n", end);
+  if (lineEnd === -1) lineEnd = value.length;
+  const lines = value.slice(lineStart, lineEnd).split("\n");
+  const allPrefixed = lines.every((l) => l.startsWith(prefix));
+  const next = lines
+    .map((l) => {
+      if (allPrefixed) return l.slice(prefix.length);
+      return l.startsWith(prefix) ? l : prefix + l;
+    })
+    .join("\n");
+  const text = value.slice(0, lineStart) + next + value.slice(lineEnd);
+  return { text, selStart: lineStart, selEnd: lineStart + next.length };
+}
+
+/** Insert a markdown link, selecting the part the user should fill in next. */
+function applyLink(value: string, start: number, end: number): SelectionEdit {
+  const selected = value.slice(start, end);
+  if (selected) {
+    const text = `${value.slice(0, start)}[${selected}](url)${value.slice(end)}`;
+    const urlStart = start + selected.length + 3; // past "[selected]("
+    return { text, selStart: urlStart, selEnd: urlStart + 3 };
+  }
+  const text = `${value.slice(0, start)}[](url)${value.slice(end)}`;
+  return { text, selStart: start + 1, selEnd: start + 1 };
+}
+
+const BOLD: FormatAction = {
+  kind: "wrap",
+  before: "**",
+  after: "**",
+  placeholder: "bold text",
+};
+const ITALIC: FormatAction = {
+  kind: "wrap",
+  before: "_",
+  after: "_",
+  placeholder: "italic text",
+};
+const LINK: FormatAction = { kind: "link" };
+
+/** Toolbar buttons, grouped (a divider renders between groups). */
+const TOOLBAR_GROUPS: {
+  id: string;
+  label: string;
+  icon: Icon;
+  action: FormatAction;
+  shortcut?: string;
+}[][] = [
+  [
+    {
+      id: "heading",
+      label: "Heading",
+      icon: TextHIcon,
+      action: { kind: "line", prefix: "### " },
+    },
+  ],
+  [
+    {
+      id: "bold",
+      label: "Bold",
+      icon: TextBIcon,
+      action: BOLD,
+      shortcut: "Ctrl+B",
+    },
+    {
+      id: "italic",
+      label: "Italic",
+      icon: TextItalicIcon,
+      action: ITALIC,
+      shortcut: "Ctrl+I",
+    },
+  ],
+  [
+    {
+      id: "quote",
+      label: "Quote",
+      icon: QuotesIcon,
+      action: { kind: "line", prefix: "> " },
+    },
+    {
+      id: "code",
+      label: "Inline code",
+      icon: CodeIcon,
+      action: { kind: "wrap", before: "`", after: "`", placeholder: "code" },
+    },
+    {
+      id: "link",
+      label: "Link",
+      icon: LinkIcon,
+      action: LINK,
+      shortcut: "Ctrl+K",
+    },
+  ],
+  [
+    {
+      id: "bulleted-list",
+      label: "Bulleted list",
+      icon: ListBulletsIcon,
+      action: { kind: "line", prefix: "- " },
+    },
+    {
+      id: "numbered-list",
+      label: "Numbered list",
+      icon: ListNumbersIcon,
+      action: { kind: "line", prefix: "1. " },
+    },
+    {
+      id: "task-list",
+      label: "Task list",
+      icon: ListChecksIcon,
+      action: { kind: "line", prefix: "- [ ] " },
+    },
+  ],
+];
+
 /**
- * A description editor with GitHub-style Write/Preview tabs. Preview renders
- * through the same Markdown component PR bodies use, so what you see is what
- * the conversation view will show. `actions` renders on the right of the tab
- * row (e.g. an AI Generate button).
+ * A description editor with GitHub-style Write/Preview tabs and a formatting
+ * toolbar. Preview renders through the same Markdown component PR bodies use,
+ * so what you see is what the conversation view will show. `actions` renders on
+ * the right of the tab row (e.g. an AI Generate button).
  */
 export function MarkdownEditor({
+  ref,
   id,
   value,
   onChange,
+  onKeyDown,
   placeholder,
   rows = 7,
   disabled,
+  autoFocus,
   textareaClassName,
   actions,
+  "aria-label": ariaLabel,
 }: {
+  ref?: Ref<MarkdownEditorHandle>;
   id?: string;
   value: string;
   onChange: (value: string) => void;
+  onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
   placeholder?: string;
   rows?: number;
   disabled?: boolean;
+  autoFocus?: boolean;
   textareaClassName?: string;
   actions?: ReactNode;
+  "aria-label"?: string;
 }) {
   const [mode, setMode] = useState<"write" | "preview">("write");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Selection to restore after a controlled-value update from a format action.
+  const pendingSelection = useRef<[number, number] | null>(null);
+  // A focus() requested while in Preview mode, honored once Write remounts.
+  const pendingFocus = useRef(false);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus() {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+        } else {
+          pendingFocus.current = true;
+          setMode("write");
+        }
+      },
+      showPreview() {
+        setMode("preview");
+      },
+    }),
+    [],
+  );
+
+  // Restore the caret/selection after a format action rewrites the value.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `value` is the trigger — the selection must be re-applied only once the controlled update has landed.
+  useLayoutEffect(() => {
+    const pending = pendingSelection.current;
+    if (!pending) return;
+    pendingSelection.current = null;
+    const ta = textareaRef.current;
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(pending[0], pending[1]);
+    }
+  }, [value]);
+
+  function runAction(action: FormatAction) {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const edit =
+      action.kind === "wrap"
+        ? applyWrap(
+            value,
+            start,
+            end,
+            action.before,
+            action.after,
+            action.placeholder,
+          )
+        : action.kind === "line"
+          ? applyLine(value, start, end, action.prefix)
+          : applyLink(value, start, end);
+    pendingSelection.current = [edit.selStart, edit.selEnd];
+    onChange(edit.text);
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+      const key = e.key.toLowerCase();
+      if (key === "b") {
+        e.preventDefault();
+        runAction(BOLD);
+        return;
+      }
+      if (key === "i") {
+        e.preventDefault();
+        runAction(ITALIC);
+        return;
+      }
+      if (key === "k") {
+        e.preventDefault();
+        runAction(LINK);
+        return;
+      }
+    }
+    onKeyDown?.(e);
+  }
+
+  // Honor a focus() that arrived while Preview was showing, once Write remounts.
+  useEffect(() => {
+    if (mode === "write" && pendingFocus.current) {
+      pendingFocus.current = false;
+      textareaRef.current?.focus();
+    }
+  }, [mode]);
 
   return (
     <div className="space-y-1.5">
@@ -59,15 +334,57 @@ export function MarkdownEditor({
         )}
       </div>
       {mode === "write" ? (
-        <Textarea
-          id={id}
-          placeholder={placeholder}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          rows={rows}
-          disabled={disabled}
-          className={textareaClassName}
-        />
+        <>
+          <div className="flex flex-wrap items-center gap-0.5">
+            {TOOLBAR_GROUPS.map((group, i) => (
+              <div key={group[0].id} className="flex items-center gap-0.5">
+                {i > 0 && (
+                  <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
+                )}
+                {group.map((btn) => {
+                  const Glyph = btn.icon;
+                  return (
+                    <Button
+                      key={btn.id}
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      disabled={disabled}
+                      aria-label={
+                        btn.shortcut
+                          ? `${btn.label} (${btn.shortcut})`
+                          : btn.label
+                      }
+                      title={
+                        btn.shortcut
+                          ? `${btn.label} · ${btn.shortcut}`
+                          : btn.label
+                      }
+                      // Keep the textarea focused/selected when clicking a button.
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => runAction(btn.action)}
+                    >
+                      <Glyph />
+                    </Button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+          <Textarea
+            ref={textareaRef}
+            id={id}
+            placeholder={placeholder}
+            aria-label={ariaLabel}
+            autoFocus={autoFocus}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={rows}
+            disabled={disabled}
+            className={textareaClassName}
+          />
+        </>
       ) : (
         <div className="max-h-72 min-h-24 overflow-y-auto border border-input px-3 py-2">
           {value.trim() ? (

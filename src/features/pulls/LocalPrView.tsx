@@ -14,6 +14,10 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+  MarkdownEditor,
+  type MarkdownEditorHandle,
+} from "@/components/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,7 +37,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Textarea } from "@/components/ui/textarea";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { LocalComment } from "@/features/conversations/LocalComment";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
@@ -116,7 +119,7 @@ export function LocalPrView({
       }
     },
   });
-  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<MarkdownEditorHandle>(null);
 
   const comparison = useCompareBranches(
     repoPath,
@@ -487,11 +490,12 @@ export function LocalPrView({
           {/* Shown for closed PRs too, so you can comment / quote-reply after
               closing; approving stays open-only. */}
           <div className="space-y-2 border-t p-3">
-            <Textarea
+            <MarkdownEditor
               ref={composerRef}
+              aria-label="Leave a note"
               placeholder="Leave a note…"
               value={comment}
-              onChange={(e) => setComment(e.target.value)}
+              onChange={setComment}
               onKeyDown={(e) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                   e.preventDefault();
@@ -499,7 +503,7 @@ export function LocalPrView({
                 }
               }}
               rows={2}
-              className="max-h-32 min-h-12 resize-y"
+              textareaClassName="max-h-32 min-h-12 resize-y"
             />
             <div className="flex items-center gap-2">
               <Button

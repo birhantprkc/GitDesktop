@@ -179,6 +179,11 @@ quote-reply), **review** (approve / comment / request changes), **edit** the tit
 and body, manage **labels**, mark a draft **ready**, **merge** (merge commit,
 squash, or rebase, with optional branch deletion), and **close**.
 
+Comments, replies, edits and descriptions use a Markdown editor with **Write /
+Preview** tabs and a formatting toolbar (bold, italic, headings, quote, code,
+links, and bulleted / numbered / task lists, with Ctrl+B / I / K). The same
+editor is everywhere you write Markdown — issues, discussions, and release notes.
+
 Create a PR with **New → Pull request on GitHub** (or from the Compare tab),
 optionally with an **AI-generated** title and description from the branch diff.
 
