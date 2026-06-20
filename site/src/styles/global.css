@@ -171,3 +171,63 @@ kbd {
   background: var(--color-surface-2);
   white-space: nowrap;
 }
+
+/* --- Legal / long-form pages (privacy, terms): mono prose on the dark canvas,
+   styling the bare HTML that Astro renders from Markdown. */
+.legal h1 {
+  font-size: clamp(1.9rem, 4.5vw, 2.6rem);
+  letter-spacing: -0.02em;
+}
+.legal > p:first-of-type em {
+  color: var(--color-muted);
+  font-style: normal;
+  font-size: 0.875rem;
+}
+.legal h2 {
+  font-size: 1.1rem;
+  margin-top: 2.5rem;
+  font-weight: 600;
+}
+.legal p,
+.legal li {
+  max-width: 72ch;
+  line-height: 1.75;
+}
+.legal p {
+  margin-top: 1rem;
+  color: var(--color-body);
+}
+.legal ul {
+  margin-top: 1rem;
+  padding-left: 1.2rem;
+  list-style: disc;
+}
+.legal li {
+  margin-top: 0.45rem;
+  color: var(--color-body);
+}
+.legal li::marker {
+  color: var(--color-faint);
+}
+.legal a {
+  color: var(--color-mint);
+  text-underline-offset: 3px;
+}
+.legal a:hover {
+  text-decoration: underline;
+}
+.legal strong {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+.legal code {
+  background: var(--color-surface-2);
+  padding: 0.12em 0.38em;
+  border-radius: 4px;
+  font-size: 0.88em;
+}
+.legal hr {
+  border: 0;
+  border-top: 1px solid var(--color-line);
+  margin: 2.75rem 0;
+}

@@ -17,8 +17,10 @@ import FeatureRow from "../components/FeatureRow.astro";
 import "../styles/global.css";
 
 const repo = "https://github.com/theBGuy/GitDesktop";
-const download = `${repo}/releases/latest`;
 const base = import.meta.env.BASE_URL;
+// The Download CTAs go to the on-site, OS-aware download page (not straight to
+// GitHub Releases).
+const download = `${base}download`;
 
 // A deliberately long, scannable index (not a grid of identical icon cards).
 // `ai` items drop out of the "Just Git" view, mirroring the app's hide-AI setting.
@@ -195,8 +197,9 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
               >
                 <a
                   href={download}
+                  data-dl
                   class="rounded-lg bg-mint px-5 py-2.5 font-medium text-mint-ink transition-opacity hover:opacity-90"
-                  >Download for free</a
+                  ><span data-dl-label>Download for free</span></a
                 >
                 <a
                   href={repo}
@@ -205,7 +208,7 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
                 >
               </div>
               <p data-reveal style="transition-delay:240ms" class="mt-6 text-sm text-muted">
-                Windows &amp; Linux · macOS coming · Apache-2.0 ·
+                <span data-dl-version></span>Windows &amp; Linux · macOS coming · Apache-2.0 ·
                 <button type="button" data-mode-btn="git" class="text-mint underline-offset-4 hover:underline">
                   not into AI? hide it →
                 </button>
@@ -476,8 +479,9 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
               >
                 <a
                   href={download}
+                  data-dl
                   class="rounded-lg bg-mint px-5 py-2.5 font-medium text-mint-ink transition-opacity hover:opacity-90"
-                  >Download for free</a
+                  ><span data-dl-label>Download for free</span></a
                 >
                 <a
                   href={repo}
@@ -486,7 +490,7 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
                 >
               </div>
               <p data-reveal style="transition-delay:240ms" class="mt-6 text-sm text-muted">
-                Windows &amp; Linux · macOS coming · Apache-2.0 ·
+                <span data-dl-version></span>Windows &amp; Linux · macOS coming · Apache-2.0 ·
                 <button type="button" data-mode-btn="ai" class="text-mint underline-offset-4 hover:underline">
                   curious about the AI? →
                 </button>
@@ -673,8 +677,9 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
           >
             <a
               href={download}
+              data-dl
               class="rounded-lg bg-mint px-6 py-3 font-medium text-mint-ink transition-opacity hover:opacity-90"
-              >Download GitDesktop</a
+              ><span data-dl-label>Download GitDesktop</span></a
             >
             <a
               href={repo}
@@ -683,7 +688,7 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
             >
           </div>
           <p data-reveal style="transition-delay:200ms" class="mt-6 text-sm text-muted">
-            Windows &amp; Linux today · macOS coming
+            <span data-dl-version></span>Windows &amp; Linux today · macOS coming
           </p>
         </div>
       </section>
@@ -699,8 +704,9 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
         </p>
         <div class="flex items-center gap-6">
           <a href={repo} class="transition-colors hover:text-ink">GitHub</a>
-          <a href={download} class="transition-colors hover:text-ink">Releases</a>
-          <a href={`${repo}/blob/master/PRIVACY.md`} class="transition-colors hover:text-ink">Privacy</a>
+          <a href={`${repo}/releases`} class="transition-colors hover:text-ink">Releases</a>
+          <a href={`${base}privacy`} class="transition-colors hover:text-ink">Privacy</a>
+          <a href={`${base}terms`} class="transition-colors hover:text-ink">Terms</a>
         </div>
       </div>
     </footer>
@@ -731,6 +737,79 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
             window.scrollTo({ top: 0 });
           });
         });
+      })();
+    </script>
+
+    <script is:inline>
+      // OS-aware download CTAs + current-version badge. Labels the primary
+      // buttons for the visitor's OS (Windows/Linux — the platforms we ship)
+      // and fills the version + direct asset links from the latest GitHub
+      // release. Degrades to the /download hub with no JS or no release.
+      (function () {
+        var OWNER = "theBGuy";
+        var REPO = "GitDesktop";
+        var ua = navigator.userAgent || "";
+        var plat =
+          (navigator.userAgentData && navigator.userAgentData.platform) ||
+          navigator.platform ||
+          "";
+        var hay = plat + " " + ua;
+        var os = /Win/i.test(hay)
+          ? "windows"
+          : /Mac/i.test(hay)
+            ? "macos"
+            : /Linux|X11/i.test(hay) && !/Android/i.test(ua)
+              ? "linux"
+              : "other";
+        var suffix = { windows: "-setup.exe", linux: ".AppImage" };
+        var label = {
+          windows: "Download for Windows",
+          linux: "Download for Linux",
+        };
+        var btns = document.querySelectorAll("[data-dl]");
+        if (label[os]) {
+          document.querySelectorAll("[data-dl-label]").forEach(function (el) {
+            el.textContent = label[os];
+          });
+        }
+        fetch(
+          "https://api.github.com/repos/" + OWNER + "/" + REPO + "/releases/latest",
+          { headers: { Accept: "application/vnd.github+json" } }
+        )
+          .then(function (r) {
+            if (!r.ok) throw 0;
+            return r.json();
+          })
+          .then(function (rel) {
+            if (rel.tag_name) {
+              document
+                .querySelectorAll("[data-dl-version]")
+                .forEach(function (el) {
+                  el.textContent = rel.tag_name + " · ";
+                });
+            }
+            if (suffix[os]) {
+              var assets = rel.assets || [];
+              var s = suffix[os];
+              var url = null;
+              for (var i = 0; i < assets.length; i++) {
+                var n = assets[i].name || "";
+                if (
+                  n.length >= s.length &&
+                  n.slice(-s.length) === s &&
+                  n.indexOf(".sig") === -1
+                ) {
+                  url = assets[i].browser_download_url;
+                  break;
+                }
+              }
+              if (url)
+                btns.forEach(function (b) {
+                  b.href = url;
+                });
+            }
+          })
+          .catch(function () {});
       })();
     </script>
   </body>

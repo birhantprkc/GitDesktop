@@ -1,0 +1,207 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+const repo = "https://github.com/theBGuy/GitDesktop";
+const releases = `${repo}/releases`;
+
+// Each row's download link defaults to the Releases page and is upgraded to the
+// matching asset of the latest release by the client script below — so the links
+// stay correct across versions without rebuilding the site.
+const builds = [
+  { id: "dl-win", os: "Windows", detail: "Installer .exe · x64" },
+  { id: "dl-linux-appimage", os: "Linux", detail: "AppImage · x64 · portable" },
+  { id: "dl-linux-deb", os: "Linux", detail: "Debian .deb · x64 · apt-based" },
+  { id: "dl-linux-rpm", os: "Linux", detail: "Fedora .rpm · x64 · dnf-based" },
+];
+---
+
+<Layout
+  title="Download GitDesktop"
+  description="Download GitDesktop for Windows or Linux — macOS coming soon. Free, open-source, with signed auto-updates."
+>
+  <section class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
+      <p class="text-sm text-faint"><span class="text-add">//</span> download</p>
+      <h1 class="mt-5 text-[clamp(2rem,5vw,3rem)] font-semibold tracking-tight">
+        Get GitDesktop.
+      </h1>
+      <p class="mt-6 max-w-[56ch] text-base leading-relaxed text-body sm:text-lg">
+        Native installers for Windows and Linux — macOS is on the way. Free,
+        open-source, and self-updating after install.
+      </p>
+      <div class="mt-9 flex flex-wrap items-center gap-3">
+        <a
+          id="primary-dl"
+          href={releases}
+          class="inline-flex items-center gap-2 rounded-lg bg-mint px-5 py-2.5 font-medium text-mint-ink transition-opacity hover:opacity-90"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 3v12m0 0l-4-4m4 4l4-4"></path>
+            <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path>
+          </svg>
+          <span data-label>Download</span>
+        </a>
+        <a
+          href={repo}
+          class="rounded-lg border border-line-2 px-5 py-2.5 font-medium text-ink transition-colors hover:bg-surface"
+          >View source</a
+        >
+      </div>
+      <p id="dl-meta" class="mt-6 text-sm text-muted">
+        Free · Windows &amp; Linux · macOS coming
+      </p>
+    </div>
+  </section>
+
+  <section class="mx-auto max-w-6xl px-5 py-14 md:py-16">
+    <div class="grid gap-12 lg:grid-cols-[1.6fr_1fr]">
+      <div>
+        <p class="text-sm text-faint">all builds</p>
+        <ul class="mt-5 border-y border-line">
+          {
+            builds.map((b) => (
+              <li class="flex items-center justify-between gap-4 border-line py-4 not-last:border-b">
+                <div class="min-w-0">
+                  <p class="font-medium text-ink">{b.os}</p>
+                  <p class="text-sm text-muted">{b.detail}</p>
+                </div>
+                <a
+                  id={b.id}
+                  href={releases}
+                  class="shrink-0 rounded-md border border-line-2 px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-surface"
+                >
+                  Download
+                </a>
+              </li>
+            ))
+          }
+          <li class="flex items-center justify-between gap-4 border-t border-line py-4 opacity-60">
+            <div class="min-w-0">
+              <p class="font-medium text-ink">macOS</p>
+              <p class="text-sm text-muted">.dmg · Apple Silicon — coming soon</p>
+            </div>
+            <span class="shrink-0 rounded-md border border-line px-4 py-2 text-sm text-faint">
+              Soon
+            </span>
+          </li>
+        </ul>
+        <p class="mt-5 text-sm text-muted">
+          Latest builds, checksums, and release notes live on
+          <a href={releases} class="text-mint underline-offset-4 hover:underline">GitHub Releases</a>.
+        </p>
+      </div>
+
+      <aside class="self-start rounded-lg border border-line bg-surface/40 p-6 text-sm">
+        <p class="text-faint">requires</p>
+        <ul class="mt-4 space-y-3 leading-relaxed text-body">
+          <li>
+            <span class="text-ink">Windows 10+</span> or a modern Linux desktop
+            (webkit2gtk).
+          </li>
+          <li>
+            <span class="text-ink">Git</span> and the
+            <span class="text-ink">GitHub CLI (gh)</span> for GitHub features — GitDesktop
+            runs through your existing auth and never stores a token.
+          </li>
+          <li>
+            Updates are <span class="text-ink">signed and verified</span>,
+            installed only on your consent.
+          </li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+
+  <script is:inline>
+    // Detect the visitor's OS to label the primary button, then fetch the latest
+    // release and point each button at its matching asset. Everything degrades to
+    // the Releases page if there's no release yet, we're rate-limited, or offline.
+    (function () {
+      var OWNER = "theBGuy";
+      var REPO = "GitDesktop";
+      var ua = navigator.userAgent || "";
+      var plat =
+        (navigator.userAgentData && navigator.userAgentData.platform) ||
+        navigator.platform ||
+        "";
+      var hay = plat + " " + ua;
+      var os = /Win/i.test(hay)
+        ? "windows"
+        : /Mac/i.test(hay)
+          ? "macos"
+          : /Linux|X11/i.test(hay) && !/Android/i.test(ua)
+            ? "linux"
+            : "other";
+
+      var primary = document.getElementById("primary-dl");
+      var label = primary && primary.querySelector("[data-label]");
+      var labels = {
+        windows: "Download for Windows",
+        macos: "macOS — coming soon",
+        linux: "Download for Linux",
+        other: "Download",
+      };
+      if (label) label.textContent = labels[os];
+
+      var rowSuffix = {
+        "dl-win": "-setup.exe",
+        "dl-linux-appimage": ".AppImage",
+        "dl-linux-deb": ".deb",
+        "dl-linux-rpm": ".rpm",
+      };
+      var primarySuffix = { windows: "-setup.exe", linux: ".AppImage" };
+
+      fetch(
+        "https://api.github.com/repos/" + OWNER + "/" + REPO + "/releases/latest",
+        { headers: { Accept: "application/vnd.github+json" } }
+      )
+        .then(function (r) {
+          if (!r.ok) throw 0;
+          return r.json();
+        })
+        .then(function (rel) {
+          var assets = rel.assets || [];
+          function find(suffix) {
+            for (var i = 0; i < assets.length; i++) {
+              var n = assets[i].name || "";
+              if (
+                n.length >= suffix.length &&
+                n.slice(-suffix.length) === suffix &&
+                n.indexOf(".sig") === -1
+              ) {
+                return assets[i].browser_download_url;
+              }
+            }
+            return null;
+          }
+          Object.keys(rowSuffix).forEach(function (id) {
+            var el = document.getElementById(id);
+            var url = find(rowSuffix[id]);
+            if (el && url) el.href = url;
+          });
+          var meta = document.getElementById("dl-meta");
+          if (meta && rel.tag_name) {
+            meta.textContent =
+              rel.tag_name + " · Free · Windows & Linux · macOS coming";
+          }
+          if (primary && primarySuffix[os]) {
+            var purl = find(primarySuffix[os]);
+            if (purl) primary.href = purl;
+          }
+        })
+        .catch(function () {
+          /* No release yet / rate-limited / offline — keep the Releases fallback. */
+        });
+    })();
+  </script>
+</Layout>

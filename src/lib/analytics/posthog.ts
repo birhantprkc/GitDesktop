@@ -6,7 +6,7 @@ import { COLD_START, storeName } from "@/lib/test-mode";
  * Public privacy-policy URL. Set this once the policy is hosted; the UI hides
  * the link while it's empty so we never ship a dead link.
  */
-export const PRIVACY_POLICY_URL = "";
+export const PRIVACY_POLICY_URL = "https://gitdesktop.app/privacy";
 
 let initialized = false;
 
