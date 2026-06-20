@@ -267,6 +267,37 @@ pub async fn git_diff_between_refs(
     })
 }
 
+/// Current tip SHA of each requested local branch — one `for-each-ref` call,
+/// so watching N open local PRs' heads for new commits is a single git
+/// invocation. Branches that don't exist are simply absent from the map.
+#[tauri::command]
+pub async fn git_branch_tips(
+    repo_path: String,
+    branches: Vec<String>,
+) -> AppResult<std::collections::HashMap<String, String>> {
+    let wanted: std::collections::HashSet<&str> =
+        branches.iter().map(String::as_str).collect();
+    let out = run_git_raw(
+        Some(&repo_path),
+        &[
+            "for-each-ref",
+            "--format=%(refname:short) %(objectname)",
+            "refs/heads/",
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let mut map = std::collections::HashMap::new();
+    for line in out.stdout_lossy().lines() {
+        if let Some((name, sha)) = line.split_once(' ') {
+            if wanted.contains(name) {
+                map.insert(name.to_string(), sha.to_string());
+            }
+        }
+    }
+    Ok(map)
+}
+
 /// Creates a throwaway DETACHED worktree pinned at `sha`, so a repo-aware CLI
 /// review can read the PR head's files without moving the user's active branch.
 /// Returns `None` when a worktree isn't needed or possible — the repo is already

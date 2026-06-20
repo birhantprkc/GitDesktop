@@ -24,6 +24,14 @@ commit list.
   branch was rebased or the PR isn't checked out, it says so and falls back to a
   full review. Reviews that run automatically (via an automation rule) are
   remembered too, so a later manual re-run builds on them.
+- **Auto re-review on new commits.** A new automation trigger, **"On new commits
+  to a reviewed PR,"** watches the PRs you've already reviewed and re-runs the
+  review automatically when you push new commits to one — building on the last
+  review, so the new pass confirms what you fixed and focuses on what's new.
+  It's opt-in per PR (it only re-reviews PRs you've reviewed at least once, not
+  every open PR) and fires at most once per new head. Works for local PRs and
+  for GitHub PRs whose branch you have checked out. Add it under
+  **Settings → Automations**.
 - **Repo-aware CLI reviews read the right branch.** When a Claude Code / Codex
   review is set to read repo files for context, it now reviews the pull
   request's actual files even when that branch isn't the one you have checked

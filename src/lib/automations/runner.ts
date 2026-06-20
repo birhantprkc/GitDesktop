@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 import { cancelAgentReview } from "@/lib/ai/agent";
 import { createAiClient } from "@/lib/ai/client";
+import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider } from "@/lib/ai/providers";
 import { runCliStream } from "@/lib/ai/stream";
@@ -8,7 +9,7 @@ import type { AiSettings, ReviewMode } from "@/lib/ai/types";
 import { ghPrComment, gitBranchDiff, gitCommitDiff } from "@/lib/git/api";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { listLocalPrs, saveLocalPr } from "@/lib/pulls/local";
-import { saveReview } from "@/lib/pulls/reviews-history";
+import { getLatestReview, saveReview } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
 import { useAutomationResults } from "./results";
@@ -36,9 +37,38 @@ export type AutomationEvent =
       target:
         | { type: "remote"; number: number }
         | { type: "local"; id: string };
+    }
+  | {
+      kind: "pr-sync";
+      repoPath: string;
+      base: string;
+      head: string;
+      /** The PR head's CURRENT tip SHA (the new commits). The runner re-reviews
+       *  only when this is past the last-reviewed head for the rule's mode. */
+      headSha?: string;
+      title: string;
+      body: string;
+      commitSubjects: string[];
+      target:
+        | { type: "remote"; number: number }
+        | { type: "local"; id: string };
     };
 
+/** PR-targeted events (pr-open + pr-sync) share delivery, persistence, and
+ *  prior-context handling — only their trigger semantics differ. */
+type PrAutomationEvent = Extract<
+  AutomationEvent,
+  { kind: "pr-open" | "pr-sync" }
+>;
+
 const DIFF_MAX_BYTES = 200_000;
+
+/** The store key for a PR target, used to look up its review-history watermark. */
+function targetRef(event: PrAutomationEvent): string {
+  return event.target.type === "remote"
+    ? String(event.target.number)
+    : event.target.id;
+}
 
 function modeLabel(mode: ReviewMode): string {
   return mode === "security" ? "security audit" : "review";
@@ -62,6 +92,20 @@ async function run(event: AutomationEvent): Promise<void> {
   const settings = await loadSettings();
   const notify = settings.notifications.automations;
   for (const rule of rules) {
+    // pr-sync is opt-in per PR: re-review only a PR already reviewed in this
+    // mode, and only once its head has advanced past the last-reviewed commit
+    // (the persisted review's headSha is the per-mode watermark). This scopes
+    // auto re-review to PRs you're actively iterating on and avoids re-firing
+    // for a head that mode already covered.
+    if (event.kind === "pr-sync") {
+      const prior = await getLatestReview(
+        event.repoPath,
+        event.target.type,
+        targetRef(event),
+        rule.action,
+      );
+      if (!prior || prior.headSha === event.headSha) continue;
+    }
     const label = modeLabel(rule.action);
     // Per-rule cancellation: HTTP providers stop via the AbortSignal; CLI
     // providers stop by killing the subprocess (`cancelAgentReview` once we
@@ -111,9 +155,10 @@ async function run(event: AutomationEvent): Promise<void> {
       const body = `**AI ${label} (${settings.reviewAi.model})** · automated\n\n${text}`;
       await deliver(event, rule.action, body, text, toastId, notify);
       // Seed the review-history store so an automated review participates in the
-      // iterative loop — a later manual re-run builds on these findings. Best-
-      // effort: a persistence failure must never fail a delivered review.
-      if (event.kind === "pr-open") {
+      // iterative loop — the next run (manual or auto) builds on these findings,
+      // and its headSha becomes the pr-sync watermark. Best-effort: a
+      // persistence failure must never fail a delivered review.
+      if (event.kind === "pr-open" || event.kind === "pr-sync") {
         await persistReviewHistory(
           event,
           rule.action,
@@ -158,11 +203,26 @@ async function generateReviewText(
   // Cancelled while the diff loaded — don't start the model.
   if (signal.aborted) return null;
 
+  // Build on a prior review of this PR + mode (a no-op when none exists), so an
+  // auto re-review acknowledges what was fixed and focuses on new/unresolved
+  // issues — the same soft context the interactive path uses.
+  const prior: PriorContext =
+    event.kind === "commit"
+      ? {}
+      : await resolvePriorContext(
+          event.repoPath,
+          event.target.type,
+          targetRef(event),
+          mode,
+          event.headSha,
+        );
+  if (signal.aborted) return null;
+
   const { system, prompt } = buildReviewPrompt(
     {
       title: event.title,
-      body: event.kind === "pr-open" ? event.body : "",
-      commitSubjects: event.kind === "pr-open" ? event.commitSubjects : [],
+      body: event.kind === "commit" ? "" : event.body,
+      commitSubjects: event.kind === "commit" ? [] : event.commitSubjects,
       diffText: diff.text,
       diffTruncated: diff.truncated,
       files: diff.files.map((f) => ({
@@ -171,6 +231,7 @@ async function generateReviewText(
         deleted: f.deleted,
         isBinary: f.isBinary,
       })),
+      ...prior,
     },
     mode,
   );
@@ -299,17 +360,14 @@ async function deliver(
  * tab reflects it immediately.
  */
 async function persistReviewHistory(
-  event: Extract<AutomationEvent, { kind: "pr-open" }>,
+  event: PrAutomationEvent,
   mode: ReviewMode,
   text: string,
   model: string,
 ): Promise<void> {
   if (!text.trim()) return;
   const kind = event.target.type;
-  const ref =
-    event.target.type === "remote"
-      ? String(event.target.number)
-      : event.target.id;
+  const ref = targetRef(event);
   const now = Date.now();
   await saveReview(event.repoPath, {
     schemaVersion: 1,

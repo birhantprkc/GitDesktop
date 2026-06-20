@@ -1,6 +1,6 @@
 import type { ReviewMode } from "@/lib/ai/types";
 
-export type AutomationTrigger = "commit" | "pr-open";
+export type AutomationTrigger = "commit" | "pr-open" | "pr-sync";
 
 export interface AutomationRule {
   id: string;
@@ -29,6 +29,7 @@ export const EMPTY_AUTOMATIONS: AutomationsConfig = { global: [], repos: {} };
 export const TRIGGER_LABELS: Record<AutomationTrigger, string> = {
   commit: "On commit",
   "pr-open": "On pull request opened",
+  "pr-sync": "On new commits to a reviewed PR",
 };
 
 export const ACTION_LABELS: Record<ReviewMode, string> = {

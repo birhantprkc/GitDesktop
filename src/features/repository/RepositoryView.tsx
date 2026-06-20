@@ -35,6 +35,7 @@ import { RemoteIssueView } from "@/features/issues/RemoteIssueView";
 import { LocalPrView } from "@/features/pulls/LocalPrView";
 import { PullRequestsPanel } from "@/features/pulls/PullRequestsPanel";
 import { RemotePrView } from "@/features/pulls/RemotePrView";
+import { useWatchPrHeads } from "@/features/pulls/useWatchPrHeads";
 import { TagDetailView } from "@/features/tags/TagDetailView";
 import { TagsPanel } from "@/features/tags/TagsPanel";
 import { useRepoStatus } from "@/lib/git/queries";
@@ -87,6 +88,9 @@ export function RepositoryView() {
   // OS notifications for PR/check and workflow-run events while this repo is open.
   usePrNotifications(repoPath ?? "");
   useRunNotifications(repoPath ?? "");
+  // Auto re-review open PRs (local + remote) whose head branch gets new
+  // commits — pr-sync, gated by the runner's opt-in + per-mode watermark.
+  useWatchPrHeads(repoPath ?? "");
 
   function changeTab(tab: RepoTab) {
     startTabTransition(() => setRepoTab(tab));

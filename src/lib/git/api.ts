@@ -662,6 +662,11 @@ export const gitDiffBetweenRefs = (
 export const gitFetchObjects = (repoPath: string, refs: string[]) =>
   invoke<boolean>("git_fetch_objects", { repoPath, refs });
 
+/** Current tip SHA of each requested local branch (one for-each-ref call).
+ *  Branches that don't exist are omitted. Used to watch open local PRs' heads. */
+export const gitBranchTips = (repoPath: string, branches: string[]) =>
+  invoke<Record<string, string>>("git_branch_tips", { repoPath, branches });
+
 /** Creates a throwaway detached worktree at `sha` so a repo-aware CLI review
  *  reads the PR head's files without moving the active branch. Returns the
  *  worktree path, or null when one isn't needed/possible (already on that

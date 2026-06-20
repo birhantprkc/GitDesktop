@@ -3,14 +3,14 @@ import { toast } from "sonner";
 import { create } from "zustand";
 import { cancelAgentReview } from "@/lib/ai/agent";
 import { createAiClient } from "@/lib/ai/client";
+import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider, isLocalProvider } from "@/lib/ai/providers";
 import { runCliStream } from "@/lib/ai/stream";
 import type { AiSettings, ReviewDeltaState, ReviewMode } from "@/lib/ai/types";
-import { gitDiffBetweenRefs, gitFetchObjects } from "@/lib/git/api";
 import type { DiffStatEntry } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
-import { getLatestReview, saveReview } from "@/lib/pulls/reviews-history";
+import { saveReview } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
 
@@ -238,88 +238,6 @@ async function notifyReviewDone(
   }
 }
 
-/** Upper bound on the delta fetched from git; the prompt budget trims further. */
-const DELTA_MAX_BYTES = 200_000;
-
-/** What `buildReviewPrompt` needs about a prior review of the same PR + mode. */
-interface PriorContext {
-  priorFindings?: string;
-  priorReviewedAt?: number;
-  deltaDiffText?: string;
-  deltaTruncated?: boolean;
-  deltaState?: ReviewDeltaState;
-}
-
-/**
- * Loads the previous review for this PR + mode (if any) and computes a two-dot
- * delta of what changed since. All SOFT and best-effort: a missing prior, an
- * un-fetched remote SHA, a rewritten branch, or any git failure degrades to
- * "prior findings without a delta" (or nothing) — it never blocks the review.
- * The full current diff stays the authoritative source of truth.
- *
- * Note: remote PRs not checked out locally land on `indeterminate` (the head
- * SHA isn't a local object). A best-effort `git fetch` of the two SHAs is the
- * planned fast-follow to make the remote delta resolve.
- */
-async function resolvePriorContext(
-  target: ReviewTarget,
-  mode: ReviewMode,
-  currentHeadSha: string | undefined,
-): Promise<PriorContext> {
-  const prior = await getLatestReview(
-    target.repoPath,
-    target.kind,
-    target.ref,
-    mode,
-  );
-  if (!prior?.text.trim()) return {};
-  const base: PriorContext = {
-    priorFindings: prior.text,
-    priorReviewedAt: prior.finishedAt,
-  };
-  if (!currentHeadSha || !prior.headSha) {
-    return { ...base, deltaState: "indeterminate" };
-  }
-  if (currentHeadSha === prior.headSha) {
-    // Head unchanged — but the authoritative (merge-base-relative) diff can still
-    // differ if the base moved, so we never treat this as a no-op here.
-    return { ...base, deltaState: "head-unchanged" };
-  }
-  try {
-    if (target.kind === "remote") {
-      // A remote PR may never have been checked out, so its commits aren't local
-      // objects (gh pr diff fetches nothing). Best-effort fetch the two SHAs so
-      // the delta can resolve; ignore failure — the diff falls back gracefully.
-      await gitFetchObjects(target.repoPath, [
-        prior.headSha,
-        currentHeadSha,
-      ]).catch(() => undefined);
-    }
-    const delta = await gitDiffBetweenRefs(
-      target.repoPath,
-      prior.headSha,
-      currentHeadSha,
-      DELTA_MAX_BYTES,
-    );
-    if (delta.reason === "ok") {
-      return {
-        ...base,
-        deltaDiffText: delta.text,
-        deltaTruncated: delta.truncated,
-        deltaState: "ok",
-      };
-    }
-    if (delta.reason === "rewritten") {
-      return { ...base, deltaState: "rewritten" };
-    }
-    // "missing" (un-fetched remote SHA) and "indeterminate" (shallow clone) both
-    // mean "no usable delta" — carry the prior findings, drop the delta.
-    return { ...base, deltaState: "indeterminate" };
-  } catch {
-    return { ...base, deltaState: "indeterminate" };
-  }
-}
-
 /**
  * Starts an AI review (general or security) for a PR, keyed so the run is
  * decoupled from the view that triggered it. The run, its result, and its
@@ -398,7 +316,13 @@ export async function startReview(
     // on a held slot after the diff loads — never during the queued wait.
     const prior: PriorContext = ignorePrior
       ? {}
-      : await resolvePriorContext(target, mode, context.headSha);
+      : await resolvePriorContext(
+          target.repoPath,
+          target.kind,
+          target.ref,
+          mode,
+          context.headSha,
+        );
     if (control.cancelled) return;
     patch({ deltaState: prior.deltaState });
     const { system, prompt } = buildReviewPrompt(
