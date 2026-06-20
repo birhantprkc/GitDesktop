@@ -29,6 +29,12 @@ export const CLI_PROVIDERS: AiProviderId[] = ["claude-cli", "codex-cli"];
 export const isCliProvider = (id: AiProviderId): boolean =>
   CLI_PROVIDERS.includes(id);
 
+/** Providers whose work runs on the user's own machine — a CLI agent subprocess
+ *  or local Ollama inference — rather than a cloud HTTP API. Concurrency for
+ *  these is bound by the machine, not a provider rate limit. */
+export const isLocalProvider = (id: AiProviderId): boolean =>
+  isCliProvider(id) || id === "ollama";
+
 export const ALL_PROVIDER_IDS = Object.keys(PROVIDER_LABELS) as AiProviderId[];
 
 /** Providers offered for commit/PR message generation (CLI agents excluded). */

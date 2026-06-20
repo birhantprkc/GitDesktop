@@ -1,6 +1,7 @@
 import {
   CaretUpIcon,
   CheckCircleIcon,
+  ClockIcon,
   ProhibitIcon,
   ShieldCheckIcon,
   SparkleIcon,
@@ -26,14 +27,17 @@ import { useUiStore } from "@/lib/stores/ui";
 
 function summarize(tasks: ReviewTask[]) {
   const running = tasks.filter((t) => t.phase === "running").length;
+  const queued = tasks.filter((t) => t.phase === "queued").length;
   const failed = tasks.filter((t) => t.phase === "error").length;
   const summary =
     running > 0
-      ? `${running} running`
-      : failed > 0
-        ? `${failed} failed`
-        : `${tasks.length} ready`;
-  return { running, failed, summary };
+      ? `${running} running${queued > 0 ? ` · ${queued} queued` : ""}`
+      : queued > 0
+        ? `${queued} queued`
+        : failed > 0
+          ? `${failed} failed`
+          : `${tasks.length} ready`;
+  return { running, queued, failed, summary };
 }
 
 /**
@@ -58,7 +62,7 @@ export function ActivityDock() {
 
   if (tasks.length === 0) return null;
 
-  const { running, failed, summary } = summarize(tasks);
+  const { running, queued, failed, summary } = summarize(tasks);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -67,7 +71,7 @@ export function ActivityDock() {
         aria-label={`AI activity: ${summary}. Open the list.`}
         title={`AI activity: ${summary}`}
       >
-        <TriggerIcon running={running} failed={failed} />
+        <TriggerIcon running={running} queued={queued} failed={failed} />
         <span className="font-medium tabular-nums">{tasks.length}</span>
       </PopoverTrigger>
       <PopoverContent
@@ -95,7 +99,7 @@ export function ActivityStrip() {
   // the headerless screens. Nothing to show otherwise.
   if (view === "repo" || tasks.length === 0) return null;
 
-  const { running, failed, summary } = summarize(tasks);
+  const { running, queued, failed, summary } = summarize(tasks);
 
   return (
     <div className="flex h-7 shrink-0 items-center border-t bg-background px-1.5">
@@ -104,7 +108,7 @@ export function ActivityStrip() {
           className="inline-flex h-6 items-center gap-1.5 rounded-none px-1.5 text-xs text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50 aria-expanded:bg-muted aria-expanded:text-foreground"
           aria-label={`AI activity: ${summary}. Open the list.`}
         >
-          <TriggerIcon running={running} failed={failed} />
+          <TriggerIcon running={running} queued={queued} failed={failed} />
           <span className="font-medium">{summary}</span>
           <CaretUpIcon className="size-3" />
         </PopoverTrigger>
@@ -121,8 +125,16 @@ export function ActivityStrip() {
   );
 }
 
-function TriggerIcon({ running, failed }: { running: number; failed: number }) {
-  if (running > 0) return <Spinner className="size-4" />;
+function TriggerIcon({
+  running,
+  queued,
+  failed,
+}: {
+  running: number;
+  queued: number;
+  failed: number;
+}) {
+  if (running > 0 || queued > 0) return <Spinner className="size-4" />;
   if (failed > 0)
     return (
       <WarningCircleIcon className="size-4 text-amber-500" weight="fill" />
@@ -141,7 +153,18 @@ function ActivityList({
   const repoPath = useUiStore((s) => s.repoPath);
   const openPrReview = useUiStore((s) => s.openPrReview);
   const running = tasks.filter((t) => t.phase === "running").length;
-  const finished = tasks.filter((t) => t.phase !== "running");
+  const finished = tasks.filter(
+    (t) => t.phase !== "running" && t.phase !== "queued",
+  );
+  // Queue position per lane (local and cloud run independently), FIFO by seq —
+  // derived from the entries, so no module queue state is read in render.
+  const queuePos = new Map<string, number>();
+  for (const isLocal of [true, false]) {
+    tasks
+      .filter((t) => t.phase === "queued" && t.local === isLocal)
+      .sort((a, b) => a.seq - b.seq)
+      .forEach((t, i) => queuePos.set(t.key, i + 1));
+  }
 
   return (
     <>
@@ -169,6 +192,9 @@ function ActivityList({
             key={task.key}
             task={task}
             crossRepo={task.target.repoPath !== repoPath}
+            queuePosition={
+              task.phase === "queued" ? (queuePos.get(task.key) ?? 0) : 0
+            }
             onView={() => {
               openPrReview(task.target);
               onClose();
@@ -183,22 +209,30 @@ function ActivityList({
 function TaskRow({
   task,
   crossRepo,
+  queuePosition,
   onView,
 }: {
   task: ReviewTask;
   crossRepo: boolean;
+  /** 1-based place in the run queue when phase is "queued", else 0. */
+  queuePosition: number;
   onView: () => void;
 }) {
   const ModeIcon = task.mode === "security" ? ShieldCheckIcon : SparkleIcon;
   const modeName = task.mode === "security" ? "Security audit" : "Review";
+  const pending = task.phase === "running" || task.phase === "queued";
   const stateWord =
-    task.phase === "running"
-      ? task.status.trim() || "Running…"
-      : task.phase === "error"
-        ? "Failed"
-        : task.phase === "cancelled"
-          ? "Cancelled"
-          : "Ready";
+    task.phase === "queued"
+      ? queuePosition <= 1
+        ? "Queued · next"
+        : `Queued · #${queuePosition}`
+      : task.phase === "running"
+        ? task.status.trim() || "Running…"
+        : task.phase === "error"
+          ? "Failed"
+          : task.phase === "cancelled"
+            ? "Cancelled"
+            : "Ready";
 
   return (
     <div className="flex items-start gap-2 px-3 py-2 not-last:border-b">
@@ -219,7 +253,7 @@ function TaskRow({
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-0.5">
-        {task.phase === "running" ? (
+        {pending ? (
           <Button
             variant="ghost"
             size="xs"
@@ -251,6 +285,8 @@ function TaskRow({
  *  meaning, so it never relies on color alone. */
 function StateGlyph({ phase }: { phase: ReviewPhase }) {
   switch (phase) {
+    case "queued":
+      return <ClockIcon className="size-3 shrink-0" />;
     case "running":
       return <Spinner className="size-3 shrink-0" />;
     case "error":

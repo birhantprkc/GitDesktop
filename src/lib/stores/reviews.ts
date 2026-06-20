@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { cancelAgentReview } from "@/lib/ai/agent";
 import { createAiClient } from "@/lib/ai/client";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
-import { isCliProvider } from "@/lib/ai/providers";
+import { isCliProvider, isLocalProvider } from "@/lib/ai/providers";
 import { runCliStream } from "@/lib/ai/stream";
 import type { AiSettings, ReviewMode } from "@/lib/ai/types";
 import type { DiffStatEntry } from "@/lib/git/types";
@@ -32,7 +32,13 @@ export interface ReviewTarget {
   ref: string;
 }
 
-export type ReviewPhase = "idle" | "running" | "done" | "error" | "cancelled";
+export type ReviewPhase =
+  | "idle"
+  | "queued"
+  | "running"
+  | "done"
+  | "error"
+  | "cancelled";
 
 /** State of one review run, keyed by repo + PR in the store. */
 export interface ReviewEntry {
@@ -45,12 +51,17 @@ export interface ReviewEntry {
   mode: ReviewMode;
   /** The model the run used, captured so the posted label stays accurate. */
   model: string;
+  /** Whether this run is machine-bound (CLI agent subprocess or local Ollama)
+   *  vs a cloud HTTP provider — picks its concurrency lane and groups its queue
+   *  position. */
+  local: boolean;
   /** PR title — the activity dock's row label. */
   title: string;
   /** Where the run came from — drives the dock's "View" navigation. */
   target: ReviewTarget;
-  /** Wall-clock start, for newest-first ordering in the dock. */
-  startedAt: number;
+  /** Monotonic start order — drives newest-first display and FIFO queue
+   *  position exactly (a timestamp can collide within a millisecond). */
+  seq: number;
   /** Failure message when `phase === "error"`. */
   error: string;
 }
@@ -73,9 +84,10 @@ const EMPTY_ENTRY: ReviewEntry = {
   status: "",
   mode: "general",
   model: "",
+  local: false,
   title: "",
   target: EMPTY_TARGET,
-  startedAt: 0,
+  seq: 0,
   error: "",
 };
 
@@ -120,9 +132,79 @@ interface RunControl {
   abort: AbortController | null;
   cliReviewId: string | null;
   cancelled: boolean;
+  /** Whether this run currently holds a concurrency slot. */
+  hasSlot: boolean;
+  /** While queued, resolves the slot wait so the run can start or unwind. */
+  wakeQueued: (() => void) | null;
+  /** The lane this run draws its slot from (for release + queue removal). */
+  lane: Limiter | null;
 }
 
 const controls = new Map<string, RunControl>();
+
+/** Monotonic counter stamped on each run for exact start-order display. */
+let reviewSeq = 0;
+
+const clamp = (v: number, lo: number, hi: number) =>
+  Math.min(hi, Math.max(lo, v));
+
+/**
+ * Two independent concurrency lanes so kicking off reviews on several PRs at
+ * once doesn't overload the machine. Runs over a lane's cap enter the `queued`
+ * phase and start FIFO as slots free up; the lanes are separate so a local
+ * backlog never blocks a cloud run (or vice versa).
+ *
+ * - The **local** lane (CLI agent subprocesses + local Ollama inference) is
+ *   bound by the machine, so its cap scales conservatively with CPU cores.
+ * - The **cloud** lane (Anthropic/OpenAI/OpenRouter streaming) spawns no
+ *   process and isn't machine-bound, so it's far higher — its real ceiling is
+ *   the provider's own rate limit, which is the user's to manage.
+ */
+interface Limiter {
+  max: number;
+  active: number;
+  waiting: RunControl[];
+}
+
+const cores = Math.max(1, navigator.hardwareConcurrency || 4);
+const localLane: Limiter = {
+  max: clamp(Math.floor(cores / 2), 2, 8),
+  active: 0,
+  waiting: [],
+};
+const cloudLane: Limiter = {
+  max: clamp(cores * 2, 8, 32),
+  active: 0,
+  waiting: [],
+};
+
+/** Reserves a slot in `lane`, resolving immediately if free or once one frees. */
+function acquireSlot(lane: Limiter, control: RunControl): Promise<void> {
+  if (lane.active < lane.max) {
+    lane.active++;
+    control.hasSlot = true;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    control.wakeQueued = () => {
+      control.wakeQueued = null;
+      resolve();
+    };
+    lane.waiting.push(control);
+  });
+}
+
+/** Hands a freed slot to the next live waiter in `lane`, or frees it if none. */
+function releaseSlot(lane: Limiter): void {
+  while (lane.waiting.length > 0) {
+    const next = lane.waiting.shift();
+    if (!next || next.cancelled) continue; // cancelled waiters drop out
+    next.hasSlot = true;
+    next.wakeQueued?.();
+    return; // slot handed off — lane.active unchanged
+  }
+  lane.active--;
+}
 
 /**
  * Starts an AI review (general or security) for a PR, keyed so the run is
@@ -140,32 +222,46 @@ export async function startReview(
 ): Promise<void> {
   const key = reviewKey(target);
   // Single-flight per key — the UI hides the run buttons while generating, but
-  // guard against a double-fire racing two streams into one entry.
-  if (useReviewStore.getState().entries[key]?.phase === "running") return;
+  // guard against a double-fire racing two streams into one entry (a queued run
+  // counts as already-started).
+  const phase = useReviewStore.getState().entries[key]?.phase;
+  if (phase === "running" || phase === "queued") return;
 
   const patch = (p: Partial<ReviewEntry>) =>
     useReviewStore.getState().patch(key, p);
-  // Register the run and flip to "running" before any async work, so the
+  const local = isLocalProvider(ai.provider);
+  const lane = local ? localLane : cloudLane;
+  // Register the run and mark it queued before any async work, so the
   // single-flight guard above stays atomic even if an `await` is added here.
   const control: RunControl = {
     abort: null,
     cliReviewId: null,
     cancelled: false,
+    hasSlot: false,
+    wakeQueued: null,
+    lane,
   };
   controls.set(key, control);
   patch({
-    phase: "running",
+    phase: "queued",
     text: "",
     status: "",
     mode,
     model: ai.model,
+    local,
     title,
     target,
-    startedAt: Date.now(),
+    seq: reviewSeq++,
     error: "",
   });
 
+  // Wait for a slot in this run's lane (immediate when under the cap). A cancel
+  // while queued wakes this too — `control.cancelled` then short-circuits below.
+  await acquireSlot(lane, control);
+
   try {
+    if (control.cancelled) return;
+    patch({ phase: "running" });
     const diff = await context.loadDiff();
     if (control.cancelled) return;
     if (!diff.text.trim()) {
@@ -228,6 +324,12 @@ export async function startReview(
       });
     }
   } finally {
+    // Release the lane slot for the next queued run (only if this run actually
+    // held one — a run cancelled while queued never did).
+    if (control.hasSlot) {
+      control.hasSlot = false;
+      releaseSlot(lane);
+    }
     // Only the owning run releases its handle — a cancel may have replaced us.
     if (controls.get(key) === control) controls.delete(key);
   }
@@ -245,6 +347,13 @@ export function cancelReview(key: string): void {
   control.abort?.abort();
   if (control.cliReviewId) {
     cancelAgentReview(control.cliReviewId).catch(() => undefined);
+  }
+  // If it's still queued, pull it from its lane's queue and wake its slot-wait
+  // so the run unwinds — it never took a slot, so there's nothing to release.
+  if (control.wakeQueued && control.lane) {
+    const i = control.lane.waiting.indexOf(control);
+    if (i >= 0) control.lane.waiting.splice(i, 1);
+    control.wakeQueued();
   }
   useReviewStore.getState().patch(key, { phase: "cancelled", status: "" });
   controls.delete(key);
@@ -267,7 +376,7 @@ export function useReviewTasks(): ReviewTask[] {
     () =>
       Object.entries(entries)
         .map(([key, e]) => ({ key, ...e }))
-        .sort((a, b) => b.startedAt - a.startedAt),
+        .sort((a, b) => b.seq - a.seq),
     [entries],
   );
 }

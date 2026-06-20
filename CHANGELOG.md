@@ -19,7 +19,10 @@ commit list.
   you're in a repository, and a thin strip along the bottom on the other
   screens. Open it to watch progress, cancel a run, or jump straight back to a
   finished review; the result is also waiting on the PR's Review panel when you
-  return.
+  return. Running reviews on several pull requests at once is paced to your
+  hardware — cloud providers run many in parallel, while local CLI-agent and
+  Ollama runs are capped more conservatively to your CPU — and any extras wait
+  in a short queue and start automatically as running ones finish.
 
 ## [0.1.0] - 2026-06-19
 
