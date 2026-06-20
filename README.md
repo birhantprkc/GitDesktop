@@ -10,7 +10,7 @@ Built with **Tauri 2 + React 19**. All GitHub access goes through the **GitHub
 CLI (`gh`)** — there's no OAuth app and the app never stores your tokens. Core
 git works against any remote via system `git`.
 
-> Runs on Windows and Linux today (macOS planned).
+> Runs on Windows, macOS, and Linux.
 <!-- See
 > [github-desktop.md](github-desktop.md) for a full, honest feature-by-feature
 > comparison with GitHub Desktop. -->

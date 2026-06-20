@@ -9,6 +9,7 @@ const releases = `${repo}/releases`;
 // stay correct across versions without rebuilding the site.
 const builds = [
   { id: "dl-win", os: "Windows", detail: "Installer .exe · x64" },
+  { id: "dl-mac", os: "macOS", detail: ".dmg · Apple Silicon & Intel (universal)" },
   { id: "dl-linux-appimage", os: "Linux", detail: "AppImage · x64 · portable" },
   { id: "dl-linux-deb", os: "Linux", detail: "Debian .deb · x64 · apt-based" },
   { id: "dl-linux-rpm", os: "Linux", detail: "Fedora .rpm · x64 · dnf-based" },
@@ -17,7 +18,7 @@ const builds = [
 
 <Layout
   title="Download GitDesktop"
-  description="Download GitDesktop for Windows or Linux — macOS coming soon. Free, open-source, with signed auto-updates."
+  description="Download GitDesktop for Windows, macOS, or Linux. Free, open-source, with signed auto-updates."
 >
   <section class="border-b border-line">
     <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
@@ -26,8 +27,8 @@ const builds = [
         Get GitDesktop.
       </h1>
       <p class="mt-6 max-w-[56ch] text-base leading-relaxed text-body sm:text-lg">
-        Native installers for Windows and Linux — macOS is on the way. Free,
-        open-source, and self-updating after install.
+        Native installers for Windows, macOS, and Linux. Free, open-source, and
+        self-updating after install.
       </p>
       <div class="mt-9 flex flex-wrap items-center gap-3">
         <a
@@ -58,7 +59,7 @@ const builds = [
         >
       </div>
       <p id="dl-meta" class="mt-6 text-sm text-muted">
-        Free · Windows &amp; Linux · macOS coming
+        Free · Windows, macOS &amp; Linux
       </p>
     </div>
   </section>
@@ -85,15 +86,6 @@ const builds = [
               </li>
             ))
           }
-          <li class="flex items-center justify-between gap-4 border-t border-line py-4 opacity-60">
-            <div class="min-w-0">
-              <p class="font-medium text-ink">macOS</p>
-              <p class="text-sm text-muted">.dmg · Apple Silicon — coming soon</p>
-            </div>
-            <span class="shrink-0 rounded-md border border-line px-4 py-2 text-sm text-faint">
-              Soon
-            </span>
-          </li>
         </ul>
         <p class="mt-5 text-sm text-muted">
           Latest builds, checksums, and release notes live on
@@ -105,7 +97,8 @@ const builds = [
         <p class="text-faint">requires</p>
         <ul class="mt-4 space-y-3 leading-relaxed text-body">
           <li>
-            <span class="text-ink">Windows 10+</span> or a modern Linux desktop
+            <span class="text-ink">Windows 10+</span>,
+            <span class="text-ink">macOS 11+</span>, or a modern Linux desktop
             (webkit2gtk).
           </li>
           <li>
@@ -147,7 +140,7 @@ const builds = [
       var label = primary && primary.querySelector("[data-label]");
       var labels = {
         windows: "Download for Windows",
-        macos: "macOS — coming soon",
+        macos: "Download for macOS",
         linux: "Download for Linux",
         other: "Download",
       };
@@ -155,11 +148,16 @@ const builds = [
 
       var rowSuffix = {
         "dl-win": "-setup.exe",
+        "dl-mac": ".dmg",
         "dl-linux-appimage": ".AppImage",
         "dl-linux-deb": ".deb",
         "dl-linux-rpm": ".rpm",
       };
-      var primarySuffix = { windows: "-setup.exe", linux: ".AppImage" };
+      var primarySuffix = {
+        windows: "-setup.exe",
+        macos: ".dmg",
+        linux: ".AppImage",
+      };
 
       fetch(
         "https://api.github.com/repos/" + OWNER + "/" + REPO + "/releases/latest",
@@ -192,7 +190,7 @@ const builds = [
           var meta = document.getElementById("dl-meta");
           if (meta && rel.tag_name) {
             meta.textContent =
-              rel.tag_name + " · Free · Windows & Linux · macOS coming";
+              rel.tag_name + " · Free · Windows, macOS & Linux";
           }
           if (primary && primarySuffix[os]) {
             var purl = find(primarySuffix[os]);

@@ -208,7 +208,7 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
                 >
               </div>
               <p data-reveal style="transition-delay:240ms" class="mt-6 text-sm text-muted">
-                <span data-dl-version></span>Windows &amp; Linux · macOS coming · Apache-2.0 ·
+                <span data-dl-version></span>Windows, macOS &amp; Linux · Apache-2.0 ·
                 <button type="button" data-mode-btn="git" class="text-mint underline-offset-4 hover:underline">
                   not into AI? hide it →
                 </button>
@@ -490,7 +490,7 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
                 >
               </div>
               <p data-reveal style="transition-delay:240ms" class="mt-6 text-sm text-muted">
-                <span data-dl-version></span>Windows &amp; Linux · macOS coming · Apache-2.0 ·
+                <span data-dl-version></span>Windows, macOS &amp; Linux · Apache-2.0 ·
                 <button type="button" data-mode-btn="ai" class="text-mint underline-offset-4 hover:underline">
                   curious about the AI? →
                 </button>
@@ -688,7 +688,7 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
             >
           </div>
           <p data-reveal style="transition-delay:200ms" class="mt-6 text-sm text-muted">
-            <span data-dl-version></span>Windows &amp; Linux today · macOS coming
+            <span data-dl-version></span>Windows, macOS &amp; Linux
           </p>
         </div>
       </section>
@@ -761,9 +761,10 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
             : /Linux|X11/i.test(hay) && !/Android/i.test(ua)
               ? "linux"
               : "other";
-        var suffix = { windows: "-setup.exe", linux: ".AppImage" };
+        var suffix = { windows: "-setup.exe", macos: ".dmg", linux: ".AppImage" };
         var label = {
           windows: "Download for Windows",
+          macos: "Download for macOS",
           linux: "Download for Linux",
         };
         var btns = document.querySelectorAll("[data-dl]");
