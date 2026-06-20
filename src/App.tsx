@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Spinner } from "@/components/ui/spinner";
+import { ActivityStrip } from "@/features/activity/ActivityDock";
 import { AutomationResultDialog } from "@/features/automations/AutomationResultDialog";
 import { HelpScreen } from "@/features/help/HelpScreen";
 import { RepositoryView } from "@/features/repository/RepositoryView";
@@ -123,10 +124,15 @@ function App() {
 
   return (
     <>
-      {view === "welcome" && <WelcomeScreen />}
-      {view === "repo" && <RepositoryView />}
-      {view === "settings" && <SettingsScreen />}
-      {view === "help" && <HelpScreen />}
+      <div className="flex h-screen flex-col">
+        {view === "welcome" && <WelcomeScreen />}
+        {view === "repo" && <RepositoryView />}
+        {view === "settings" && <SettingsScreen />}
+        {view === "help" && <HelpScreen />}
+        {/* A thin activity strip for the headerless screens (the repo view uses
+            its in-header dock instead); only present while a review runs. */}
+        <ActivityStrip />
+      </div>
       <AutomationResultDialog />
       <UpdateChecker />
       <WhatsNew />

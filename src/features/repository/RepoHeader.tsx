@@ -2,6 +2,7 @@ import { ArrowLeftIcon, GearIcon, QuestionIcon } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { BranchCiBadge } from "@/features/actions/BranchCiBadge";
+import { ActivityDock } from "@/features/activity/ActivityDock";
 import { useUiStore } from "@/lib/stores/ui";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { RepoSwitcher } from "./RepoSwitcher";
@@ -30,6 +31,7 @@ export function RepoHeader({ repoPath }: { repoPath: string }) {
       <BranchCiBadge repoPath={repoPath} />
       <div className="flex-1" />
       <SyncControls repoPath={repoPath} />
+      <ActivityDock />
       <Button
         variant="ghost"
         size="icon-sm"

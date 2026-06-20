@@ -10,6 +10,17 @@ commit list.
 
 ## [Unreleased]
 
+### Added
+
+- **Activity indicator for AI reviews.** A code review or security audit you
+  start on a pull request no longer disappears when you switch the PR's sub-tab
+  or open a different PR — it keeps running in the background, surfaced by a
+  compact indicator that's hidden when nothing's happening: in the header while
+  you're in a repository, and a thin strip along the bottom on the other
+  screens. Open it to watch progress, cancel a run, or jump straight back to a
+  finished review; the result is also waiting on the PR's Review panel when you
+  return.
+
 ## [0.1.0] - 2026-06-19
 
 First release. GitDesktop is an AI-native, keyboard-first desktop Git client

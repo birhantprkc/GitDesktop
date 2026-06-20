@@ -12,7 +12,7 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,7 +75,20 @@ export function LocalPrView({
   const del = useDeleteLocalPr(repoPath);
   const merge = useMergeLocalPr(repoPath);
   const selectPr = useUiStore((s) => s.selectPr);
+  const selectedPr = useUiStore((s) => s.selectedPr);
+  const pendingPrSection = useUiStore((s) => s.pendingPrSection);
+  const setPendingPrSection = useUiStore((s) => s.setPendingPrSection);
   const [section, setSection] = useState<Section>("conversation");
+  // The activity dock's "View" lands here via a pending hint; switch to the
+  // review sub-tab once, then clear it. Guarded on this being the *selected* PR
+  // so a still-mounted lagging view (deferredPr) can't swallow the hint first.
+  useEffect(() => {
+    const isSelected = selectedPr?.kind === "local" && selectedPr.id === id;
+    if (pendingPrSection === "review" && isSelected) {
+      setSection("review");
+      setPendingPrSection(null);
+    }
+  }, [pendingPrSection, setPendingPrSection, selectedPr, id]);
   const aiEnabled = useAiEnabled();
   const rulesConfig = useEffectiveBranchRules(repoPath);
   const [comment, setComment] = useState("");
@@ -371,6 +384,8 @@ export function LocalPrView({
 
       {aiEnabled && section === "review" && (
         <PrReviewPanel
+          prKind="local"
+          prRef={id}
           context={{
             title: pr.title,
             body: pr.body,

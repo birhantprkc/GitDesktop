@@ -11,7 +11,7 @@ import {
   XCircleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -76,6 +76,7 @@ import {
   useUnminimizeComment,
 } from "@/lib/git/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
+import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -148,6 +149,20 @@ export function RemotePrView({
     details.data?.id ?? "",
   );
   const [section, setSection] = useState<Section>("conversation");
+  const pendingPrSection = useUiStore((s) => s.pendingPrSection);
+  const setPendingPrSection = useUiStore((s) => s.setPendingPrSection);
+  const selectedPr = useUiStore((s) => s.selectedPr);
+  // The activity dock's "View" lands here via a pending hint; switch to the
+  // review sub-tab once, then clear it. Guarded on this being the *selected* PR
+  // so a still-mounted lagging view (deferredPr) can't swallow the hint first.
+  useEffect(() => {
+    const isSelected =
+      selectedPr?.kind === "remote" && selectedPr.id === String(number);
+    if (pendingPrSection === "review" && isSelected) {
+      setSection("review");
+      setPendingPrSection(null);
+    }
+  }, [pendingPrSection, setPendingPrSection, selectedPr, number]);
   const aiEnabled = useAiEnabled();
   const rulesConfig = useEffectiveBranchRules(repoPath);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -471,6 +486,8 @@ export function RemotePrView({
 
       {aiEnabled && section === "review" && (
         <PrReviewPanel
+          prKind="remote"
+          prRef={String(number)}
           context={{
             title: pr.title,
             body: pr.body,

@@ -90,6 +90,10 @@ interface UiState {
   compareBranch: string | null;
   /** Selected PR on the Pull Requests tab. */
   selectedPr: SelectedPr | null;
+  /** PR sub-tab to land on when the Pulls view next opens a PR — set by the
+   *  activity dock's "View" so a finished review opens straight to it;
+   *  consumed and cleared by the PR detail views. */
+  pendingPrSection: "review" | null;
   /** Selected issue on the Issues tab. */
   selectedIssue: SelectedIssue | null;
   /** Selected discussion (by number) on the Discussions tab. */
@@ -124,6 +128,15 @@ interface UiState {
 
   openRepo: (info: RepoInfo) => void;
   closeRepo: () => void;
+  /** Open a repo (if not already open) and land on a PR's AI-review sub-tab —
+   *  used by the activity dock's "View". One atomic update so the landing
+   *  target survives openRepo's own reset. */
+  openPrReview: (target: {
+    kind: "remote" | "local";
+    repoPath: string;
+    repoName: string;
+    ref: string;
+  }) => void;
   openSettings: (target?: SettingsTarget) => void;
   clearSettingsTarget: () => void;
   closeSettings: () => void;
@@ -132,6 +145,7 @@ interface UiState {
   setRepoTab: (tab: RepoTab) => void;
   setCompareBranch: (branch: string | null) => void;
   selectPr: (pr: SelectedPr | null) => void;
+  setPendingPrSection: (section: "review" | null) => void;
   selectIssue: (issue: SelectedIssue | null) => void;
   selectDiscussion: (discussion: { number: number } | null) => void;
   setPendingIssueDraft: (
@@ -202,6 +216,7 @@ export const useUiStore = create<UiState>()((set, get) => {
     repoTab: "changes",
     compareBranch: null,
     selectedPr: null,
+    pendingPrSection: null,
     selectedIssue: null,
     selectedDiscussion: null,
     pendingIssueDraft: null,
@@ -228,6 +243,7 @@ export const useUiStore = create<UiState>()((set, get) => {
           repoTab: "changes",
           compareBranch: null,
           selectedPr: null,
+          pendingPrSection: null,
           selectedIssue: null,
           selectedDiscussion: null,
           pendingIssueDraft: null,
@@ -256,6 +272,7 @@ export const useUiStore = create<UiState>()((set, get) => {
           repoTab: "changes",
           compareBranch: null,
           selectedPr: null,
+          pendingPrSection: null,
           selectedIssue: null,
           selectedDiscussion: null,
           pendingIssueDraft: null,
@@ -271,9 +288,43 @@ export const useUiStore = create<UiState>()((set, get) => {
           activeDraftKey: null,
         }),
       ),
+    openPrReview: (target) =>
+      startViewTransition(() => {
+        const switchingRepo = get().repoPath !== target.repoPath;
+        set({
+          view: "repo",
+          previousView: "repo",
+          repoPath: target.repoPath,
+          repoName: target.repoName,
+          repoTab: "pulls",
+          selectedPr: { kind: target.kind, id: target.ref },
+          pendingPrSection: "review",
+          // Switching repos clears the rest the way openRepo does; staying in
+          // the same repo keeps your other selections and just retargets the PR.
+          ...(switchingRepo
+            ? {
+                compareBranch: null,
+                selectedIssue: null,
+                selectedDiscussion: null,
+                pendingIssueDraft: null,
+                selectedRunId: null,
+                selectedTag: null,
+                selectedFile: null,
+                selectedCommitHash: null,
+                commitTitle: "",
+                commitBody: "",
+                commitCoAuthors: [],
+                commitAiGenerated: false,
+                amendingHash: null,
+                activeDraftKey: null,
+              }
+            : {}),
+        });
+      }),
     setRepoTab: (tab) => set({ repoTab: tab }),
     setCompareBranch: (branch) => set({ compareBranch: branch }),
     selectPr: (pr) => set({ selectedPr: pr }),
+    setPendingPrSection: (section) => set({ pendingPrSection: section }),
     selectIssue: (issue) => set({ selectedIssue: issue }),
     selectDiscussion: (discussion) => set({ selectedDiscussion: discussion }),
     setPendingIssueDraft: (draft) => set({ pendingIssueDraft: draft }),

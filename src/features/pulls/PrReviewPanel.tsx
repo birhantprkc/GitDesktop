@@ -1,6 +1,6 @@
 import { ShieldCheckIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,24 +36,46 @@ import {
   useSecretPreview,
   useSettings,
 } from "@/lib/settings/queries";
-import { type ReviewContext, useGenerateReview } from "./useGenerateReview";
+import {
+  type ReviewContext,
+  type ReviewTarget,
+  useReviewRun,
+} from "@/lib/stores/reviews";
+import { useUiStore } from "@/lib/stores/ui";
 
 const PROVIDER_IDS = Object.keys(PROVIDER_LABELS) as AiProviderId[];
 
 export function PrReviewPanel({
   context,
+  prKind,
+  prRef,
   onPost,
   posting,
 }: {
   context: ReviewContext;
+  /** Whether this PR is a GitHub PR or a local-only one. */
+  prKind: "remote" | "local";
+  /** Remote PR number (as a string) or local PR id — identifies the run. */
+  prRef: string;
   onPost?: (body: string) => void | Promise<void>;
   posting?: boolean;
 }) {
   const settings = useSettings();
   const saveSettings = useSaveSettings();
-  const { generate, cancel, reset, generating, text, status } =
-    useGenerateReview();
-  const [lastMode, setLastMode] = useState<ReviewMode>("general");
+  const repoName = useUiStore((s) => s.repoName) ?? "";
+  // The review run is keyed by repo + PR so it survives this panel unmounting;
+  // memoized so its identity is stable across the panel's many re-renders.
+  const target = useMemo<ReviewTarget>(
+    () => ({
+      kind: prKind,
+      repoPath: context.repoPath,
+      repoName,
+      ref: prRef,
+    }),
+    [prKind, context.repoPath, repoName, prRef],
+  );
+  const { generate, cancel, reset, generating, text, status, mode, model } =
+    useReviewRun(target);
 
   const reviewAi = settings.data?.reviewAi;
   const provider = reviewAi?.provider ?? "anthropic";
@@ -82,7 +104,6 @@ export function PrReviewPanel({
 
   function run(mode: ReviewMode) {
     if (!reviewAi) return;
-    setLastMode(mode);
     generate(reviewAi, mode, context);
     const model = reviewAi.model.toLowerCase();
     const model_tier =
@@ -105,8 +126,8 @@ export function PrReviewPanel({
 
   async function post() {
     if (!onPost || !text.trim() || posting) return;
-    const label = lastMode === "security" ? "security audit" : "review";
-    const body = `**AI ${label} (${reviewAi?.model ?? "model"})**\n\n${text}`;
+    const label = mode === "security" ? "security audit" : "review";
+    const body = `**AI ${label} (${model || reviewAi?.model || "model"})**\n\n${text}`;
     try {
       await onPost(body);
       reset();

@@ -81,7 +81,7 @@ export function WelcomeScreen() {
   ];
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-2">
           <BrandMark className="size-5" />
