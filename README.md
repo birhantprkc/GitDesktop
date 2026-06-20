@@ -38,6 +38,11 @@ git works against any remote via system `git`.
   navigate between PRs, and even after you close the window (GitDesktop stays in
   the tray, finishes it, and notifies you). A small activity indicator tracks
   what's running, with a cancel and a concurrency-capped queue.
+- **Iterative reviews that remember the last round** — re-running a review or
+  security audit feeds back the previous findings and what changed since as soft,
+  re-verifiable context, so it confirms what you fixed and stops re-raising the
+  same points (the current diff is always the source of truth). Ignore the prior
+  review for a clean pass, or trim a false finding before re-running.
 - **Privacy-first** — API keys live in the OS keychain (never in app files),
   local models keep code on your machine, AI-ignore patterns keep sensitive
   files out of context, and a single switch hides every AI surface.

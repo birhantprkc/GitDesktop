@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::error::{AppError, AppResult};
 use crate::git::diff::{parse_numstat_z, truncate_at_char_boundary};
-use crate::git::runner::{run_git, DEFAULT_TIMEOUT};
+use crate::git::runner::{run_git, run_git_raw, DEFAULT_TIMEOUT, NETWORK_TIMEOUT};
 use crate::git::types::{CommitSummary, DiffStatEntry, FileDiff, StagedDiff};
 
 /// Commits that distinguish two branches, from the current branch's point of
@@ -157,4 +157,187 @@ pub async fn git_branch_file_diff(
         is_truncated,
         text,
     })
+}
+
+/// What `git_diff_between_refs` could determine about the relationship between
+/// the two refs — drives how the frontend frames (or omits) the delta.
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeltaReason {
+    /// `from..to` is a clean append; `text`/`files` carry the delta.
+    Ok,
+    /// One or both refs aren't local objects (e.g. a remote SHA never fetched).
+    Missing,
+    /// `from` is not an ancestor of `to` — branch was rebased / force-pushed.
+    Rewritten,
+    /// Ancestry couldn't be determined (e.g. a shallow clone).
+    Indeterminate,
+}
+
+/// The literal two-dot `from_ref..to_ref` diff ("what changed since"). Unlike
+/// `git_branch_diff` (three-dot, merge-base relative), this is the exact delta
+/// between two commits. Carries enough context for the caller to fall back
+/// gracefully — `reason` says why the delta is absent — rather than surfacing a
+/// raw git failure for what is soft, best-effort context.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeltaDiff {
+    /// Both refs present locally and ancestry determinable.
+    pub resolvable: bool,
+    /// `from` is an ancestor of `to` (a clean append — the delta is meaningful).
+    pub is_ancestor: bool,
+    pub reason: DeltaReason,
+    pub text: String,
+    pub truncated: bool,
+    pub files: Vec<DiffStatEntry>,
+}
+
+fn empty_delta(resolvable: bool, reason: DeltaReason) -> DeltaDiff {
+    DeltaDiff {
+        resolvable,
+        is_ancestor: false,
+        reason,
+        text: String::new(),
+        truncated: false,
+        files: Vec::new(),
+    }
+}
+
+#[tauri::command]
+pub async fn git_diff_between_refs(
+    repo_path: String,
+    from_ref: String,
+    to_ref: String,
+    max_bytes: Option<usize>,
+) -> AppResult<DeltaDiff> {
+    validate_ref(&from_ref)?;
+    validate_ref(&to_ref)?;
+
+    // 1. Presence — both must be local objects. `cat-file -e` exits 0 iff the
+    //    object resolves locally; a remote SHA never fetched exits non-zero.
+    for r in [from_ref.as_str(), to_ref.as_str()] {
+        let present = run_git_raw(Some(&repo_path), &["cat-file", "-e", r], DEFAULT_TIMEOUT)
+            .await?
+            .code
+            == 0;
+        if !present {
+            return Ok(empty_delta(false, DeltaReason::Missing));
+        }
+    }
+
+    // 2. Ancestry — exit 0 = ancestor (clean append), 1 = not (rebase/force-push),
+    //    anything else (e.g. 128 on a shallow clone) = couldn't determine. This is
+    //    why "rewritten" and "indeterminate" are distinct (N4): only a definite
+    //    exit-1 means the history was actually rewritten.
+    let anc = run_git_raw(
+        Some(&repo_path),
+        &["merge-base", "--is-ancestor", &from_ref, &to_ref],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    match anc.code {
+        0 => {}
+        1 => return Ok(empty_delta(true, DeltaReason::Rewritten)),
+        _ => return Ok(empty_delta(false, DeltaReason::Indeterminate)),
+    }
+
+    // 3. The delta itself — two-dot, so genuinely "what changed from..to".
+    let range = format!("{from_ref}..{to_ref}");
+    let text_out = run_git(
+        Some(&repo_path),
+        &["diff", "--no-color", &range],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let (text, truncated) =
+        truncate_at_char_boundary(text_out.stdout_lossy(), max_bytes.unwrap_or(1_000_000));
+    let files_out = run_git(
+        Some(&repo_path),
+        &["diff", "--numstat", "-z", &range],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(DeltaDiff {
+        resolvable: true,
+        is_ancestor: true,
+        reason: DeltaReason::Ok,
+        text,
+        truncated,
+        files: parse_numstat_z(&files_out.stdout_lossy()),
+    })
+}
+
+/// Creates a throwaway DETACHED worktree pinned at `sha`, so a repo-aware CLI
+/// review can read the PR head's files without moving the user's active branch.
+/// Returns `None` when a worktree isn't needed or possible — the repo is already
+/// on that commit (its own working tree matches), the object isn't local (an
+/// un-fetched remote PR), or the checkout fails — so the caller falls back to the
+/// repo root. Best-effort: never the source of a review failure.
+#[tauri::command]
+pub async fn git_review_worktree(repo_path: String, sha: String) -> AppResult<Option<String>> {
+    validate_ref(&sha)?;
+    // Already on this commit → the repo's own working tree already matches.
+    let head = run_git_raw(Some(&repo_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT).await?;
+    if head.code == 0 && head.stdout_lossy().trim() == sha {
+        return Ok(None);
+    }
+    // The commit must be a local object (a remote PR may not be fetched).
+    let present = run_git_raw(Some(&repo_path), &["cat-file", "-e", &sha], DEFAULT_TIMEOUT)
+        .await?
+        .code
+        == 0;
+    if !present {
+        return Ok(None);
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let short = &sha[..sha.len().min(8)];
+    let path = std::env::temp_dir().join(format!("gd-review-{short}-{nanos}"));
+    let path_str = path.to_string_lossy().into_owned();
+    let out = run_git_raw(
+        Some(&repo_path),
+        &["worktree", "add", "--detach", &path_str, &sha],
+        NETWORK_TIMEOUT,
+    )
+    .await?;
+    if out.code != 0 {
+        return Ok(None);
+    }
+    Ok(Some(path_str))
+}
+
+/// Removes a review worktree created by `git_review_worktree` and prunes stale
+/// administrative entries. Best-effort and idempotent.
+#[tauri::command]
+pub async fn git_remove_worktree(repo_path: String, worktree_path: String) -> AppResult<()> {
+    let _ = run_git_raw(
+        Some(&repo_path),
+        &["worktree", "remove", "--force", &worktree_path],
+        DEFAULT_TIMEOUT,
+    )
+    .await;
+    let _ = run_git_raw(Some(&repo_path), &["worktree", "prune"], DEFAULT_TIMEOUT).await;
+    Ok(())
+}
+
+/// Best-effort fetch of specific commit objects from `origin`, so a remote PR's
+/// prior-review delta can be computed even when the PR was never checked out
+/// (its head SHA isn't a local object). Returns whether the fetch succeeded;
+/// never the source of a hard failure for the caller — a `false` (or error)
+/// simply means "no delta" and the review falls back to a full pass. GitHub
+/// permits fetching arbitrary reachable SHAs this way.
+#[tauri::command]
+pub async fn git_fetch_objects(repo_path: String, refs: Vec<String>) -> AppResult<bool> {
+    for r in &refs {
+        validate_ref(r)?;
+    }
+    if refs.is_empty() {
+        return Ok(false);
+    }
+    let mut args: Vec<&str> = vec!["fetch", "--no-tags", "origin"];
+    args.extend(refs.iter().map(String::as_str));
+    let out = run_git_raw(Some(&repo_path), &args, NETWORK_TIMEOUT).await?;
+    Ok(out.code == 0)
 }

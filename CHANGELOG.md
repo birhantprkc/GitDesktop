@@ -12,6 +12,24 @@ commit list.
 
 ### Added
 
+- **Iterative AI reviews that remember the last round.** When you re-run a code
+  review or security audit on a pull request, it now builds on the previous
+  one: the earlier findings and a diff of what changed since travel along as
+  soft context, so the reviewer can confirm what you fixed (a "Resolved since
+  last review" list) and stop re-raising the same points. The previous findings
+  are treated as hints to re-verify, never as fact — the current diff stays the
+  source of truth — and you stay in control: a per-mode banner lets you ignore
+  the previous review for a clean pass, and a **Previous reviews** list lets you
+  expand, trim a false finding before re-running, or delete past reviews. When a
+  branch was rebased or the PR isn't checked out, it says so and falls back to a
+  full review. Reviews that run automatically (via an automation rule) are
+  remembered too, so a later manual re-run builds on them.
+- **Repo-aware CLI reviews read the right branch.** When a Claude Code / Codex
+  review is set to read repo files for context, it now reviews the pull
+  request's actual files even when that branch isn't the one you have checked
+  out — GitDesktop spins up a throwaway, detached worktree at the PR's head for
+  the duration of the review and cleans it up afterward, so your working branch
+  never moves.
 - **Close to tray / background running.** Closing the window now hides GitDesktop
   to the system tray and keeps it running, so a long AI review finishes in the
   background instead of being cut off — you get an OS notification when it's done

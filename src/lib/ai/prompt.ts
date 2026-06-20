@@ -1,8 +1,9 @@
-import { budgetDiff } from "./truncate";
+import { budgetDiff, budgetReviewExtras, type ReviewExtras } from "./truncate";
 import type {
   BranchNamePromptInput,
   CommitPromptInput,
   PrPromptInput,
+  ReviewDeltaState,
   ReviewMode,
   ReviewPromptInput,
 } from "./types";
@@ -203,6 +204,44 @@ Output GitHub-flavored Markdown:
 
 Do not wrap the whole review in a code fence.`;
 
+/** Appended to the review system prompt ONLY when prior-review context is fed,
+ *  so a first-ever review's system prompt is unchanged. Frames the previous
+ *  findings as unverified hints the model must re-confirm against the current
+ *  diff — the user's core constraint (priors are often false positives). */
+const ITERATIVE_REVIEW_CLAUSE = `
+
+You are also given findings from a PREVIOUS review of an earlier version of this PR, and (when available) a diff of what changed since. Treat the previous findings as UNVERIFIED CONTEXT, not ground truth — earlier reviews often contain false positives. For each previous finding: re-verify it against the CURRENT diff above; if the current code no longer has the problem, note it under a short \`### Resolved since last review\` list and do not re-report it; if it still applies, report it; if it was never valid, drop it silently. Only mark a finding "Resolved" if you can see the corrected code in the current diff — if the relevant code isn't shown, say "could not verify" instead of claiming a fix. Never repeat a previous finding without confirming it against the current diff. Your authority is the current diff; the previous findings only tell you where to look first.`;
+
+/** The "Changes since that review" section body, varying by delta state. */
+function deltaSection(
+  state: ReviewDeltaState | undefined,
+  extras: ReviewExtras,
+  upstreamTruncated: boolean,
+): string {
+  const header = "## Changes since that review";
+  if (state === "rewritten") {
+    return `${header}\n(The branch was rewritten since the last review — re-review the full diff below from scratch.)`;
+  }
+  if (state === "indeterminate") {
+    return `${header}\n(The previous commit isn't available locally — re-review the full diff below from scratch.)`;
+  }
+  if (state === "head-unchanged") {
+    return `${header}\n(The PR head is unchanged since the last review; the base branch may have advanced. Re-review the full diff below.)`;
+  }
+  if (extras.deltaDropped) {
+    // Distinct from an empty delta: there WERE changes, but the soft delta was
+    // dropped to keep the authoritative diff in budget — don't say "no changes".
+    return `${header}\n(The delta was omitted to keep the current diff in context — re-review the full diff below.)`;
+  }
+  const body = extras.delta.text.trim() || "(no textual changes)";
+  let section = `${header}\n${body}`;
+  if (upstreamTruncated || extras.delta.truncated) {
+    section +=
+      "\n[delta truncated — the full current diff below is authoritative.]";
+  }
+  return section;
+}
+
 export function buildReviewPrompt(
   input: ReviewPromptInput,
   mode: ReviewMode,
@@ -229,6 +268,32 @@ export function buildReviewPrompt(
   }
   promptParts.push(`## Files changed\n${fileSummary || "(none)"}`);
 
+  // Soft prior-review context, gated on `priorFindings` so a first-ever review
+  // is byte-for-byte identical to before. Placed AFTER the file summary and
+  // BEFORE the full diff, so the authoritative diff stays the last large block.
+  const hasPrior = Boolean(input.priorFindings?.trim());
+  if (hasPrior) {
+    const extras = budgetReviewExtras({
+      diffLen: budgeted.text.length,
+      deltaText: input.deltaDiffText
+        ? stripBinarySections(input.deltaDiffText)
+        : undefined,
+      priorText: input.priorFindings,
+    });
+    let priorSection = `## Previous review (CONTEXT ONLY — re-verify, may contain false positives)\n${extras.prior.text}`;
+    if (extras.prior.truncated) {
+      priorSection += "\n[previous review truncated]";
+    }
+    if (extras.priorDropped) {
+      priorSection +=
+        "\n[previous review omitted to keep the current diff in context]";
+    }
+    promptParts.push(priorSection);
+    promptParts.push(
+      deltaSection(input.deltaState, extras, Boolean(input.deltaTruncated)),
+    );
+  }
+
   let diffSection = `## Diff\n${budgeted.text}`;
   if (budgeted.truncated || input.diffTruncated) {
     const omitted =
@@ -244,9 +309,10 @@ export function buildReviewPrompt(
       : "Review these changes.",
   );
 
+  const baseSystem =
+    mode === "security" ? SECURITY_REVIEW_SYSTEM : GENERAL_REVIEW_SYSTEM;
   return {
-    system:
-      mode === "security" ? SECURITY_REVIEW_SYSTEM : GENERAL_REVIEW_SYSTEM,
+    system: hasPrior ? baseSystem + ITERATIVE_REVIEW_CLAUSE : baseSystem,
     prompt: promptParts.join("\n\n"),
   };
 }

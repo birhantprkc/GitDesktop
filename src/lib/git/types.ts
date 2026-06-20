@@ -93,6 +93,21 @@ export interface StagedDiff {
   excludedFiles: number;
 }
 
+/** Why a `DeltaDiff` could (or couldn't) be computed — drives how the caller
+ *  frames or omits the "changes since last review" delta. */
+export type DeltaReason = "ok" | "missing" | "rewritten" | "indeterminate";
+
+/** The literal two-dot `from..to` diff ("what changed since"), with a `reason`
+ *  for graceful fallback when the delta can't be produced. */
+export interface DeltaDiff {
+  resolvable: boolean;
+  isAncestor: boolean;
+  reason: DeltaReason;
+  text: string;
+  truncated: boolean;
+  files: DiffStatEntry[];
+}
+
 export interface CommitSummary {
   hash: string;
   subject: string;

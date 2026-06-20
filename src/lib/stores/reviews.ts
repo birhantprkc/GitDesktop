@@ -6,9 +6,12 @@ import { createAiClient } from "@/lib/ai/client";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider, isLocalProvider } from "@/lib/ai/providers";
 import { runCliStream } from "@/lib/ai/stream";
-import type { AiSettings, ReviewMode } from "@/lib/ai/types";
+import type { AiSettings, ReviewDeltaState, ReviewMode } from "@/lib/ai/types";
+import { gitDiffBetweenRefs, gitFetchObjects } from "@/lib/git/api";
 import type { DiffStatEntry } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
+import { getLatestReview, saveReview } from "@/lib/pulls/reviews-history";
+import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
 
 export interface ReviewContext {
@@ -17,6 +20,9 @@ export interface ReviewContext {
   commitSubjects: string[];
   /** Repo working directory — the CLI agent runs here. */
   repoPath: string;
+  /** Current PR head SHA. Persisted with the review so the NEXT run can compute
+   *  a "changes since" delta against it; absent for views that don't supply it. */
+  headSha?: string;
   /** Lazily fetch the combined diff (only when a review is actually run). */
   loadDiff: () => Promise<{
     text: string;
@@ -66,6 +72,10 @@ export interface ReviewEntry {
   seq: number;
   /** Failure message when `phase === "error"`. */
   error: string;
+  /** When the run used prior-review context, how its "changes since" delta
+   *  resolved — drives the panel's rewrite/indeterminate note. Undefined on a
+   *  first run or when prior context was ignored. */
+  deltaState?: ReviewDeltaState;
 }
 
 /** A store entry tagged with its key — what the activity dock renders. */
@@ -228,12 +238,98 @@ async function notifyReviewDone(
   }
 }
 
+/** Upper bound on the delta fetched from git; the prompt budget trims further. */
+const DELTA_MAX_BYTES = 200_000;
+
+/** What `buildReviewPrompt` needs about a prior review of the same PR + mode. */
+interface PriorContext {
+  priorFindings?: string;
+  priorReviewedAt?: number;
+  deltaDiffText?: string;
+  deltaTruncated?: boolean;
+  deltaState?: ReviewDeltaState;
+}
+
+/**
+ * Loads the previous review for this PR + mode (if any) and computes a two-dot
+ * delta of what changed since. All SOFT and best-effort: a missing prior, an
+ * un-fetched remote SHA, a rewritten branch, or any git failure degrades to
+ * "prior findings without a delta" (or nothing) — it never blocks the review.
+ * The full current diff stays the authoritative source of truth.
+ *
+ * Note: remote PRs not checked out locally land on `indeterminate` (the head
+ * SHA isn't a local object). A best-effort `git fetch` of the two SHAs is the
+ * planned fast-follow to make the remote delta resolve.
+ */
+async function resolvePriorContext(
+  target: ReviewTarget,
+  mode: ReviewMode,
+  currentHeadSha: string | undefined,
+): Promise<PriorContext> {
+  const prior = await getLatestReview(
+    target.repoPath,
+    target.kind,
+    target.ref,
+    mode,
+  );
+  if (!prior?.text.trim()) return {};
+  const base: PriorContext = {
+    priorFindings: prior.text,
+    priorReviewedAt: prior.finishedAt,
+  };
+  if (!currentHeadSha || !prior.headSha) {
+    return { ...base, deltaState: "indeterminate" };
+  }
+  if (currentHeadSha === prior.headSha) {
+    // Head unchanged — but the authoritative (merge-base-relative) diff can still
+    // differ if the base moved, so we never treat this as a no-op here.
+    return { ...base, deltaState: "head-unchanged" };
+  }
+  try {
+    if (target.kind === "remote") {
+      // A remote PR may never have been checked out, so its commits aren't local
+      // objects (gh pr diff fetches nothing). Best-effort fetch the two SHAs so
+      // the delta can resolve; ignore failure — the diff falls back gracefully.
+      await gitFetchObjects(target.repoPath, [
+        prior.headSha,
+        currentHeadSha,
+      ]).catch(() => undefined);
+    }
+    const delta = await gitDiffBetweenRefs(
+      target.repoPath,
+      prior.headSha,
+      currentHeadSha,
+      DELTA_MAX_BYTES,
+    );
+    if (delta.reason === "ok") {
+      return {
+        ...base,
+        deltaDiffText: delta.text,
+        deltaTruncated: delta.truncated,
+        deltaState: "ok",
+      };
+    }
+    if (delta.reason === "rewritten") {
+      return { ...base, deltaState: "rewritten" };
+    }
+    // "missing" (un-fetched remote SHA) and "indeterminate" (shallow clone) both
+    // mean "no usable delta" — carry the prior findings, drop the delta.
+    return { ...base, deltaState: "indeterminate" };
+  } catch {
+    return { ...base, deltaState: "indeterminate" };
+  }
+}
+
 /**
  * Starts an AI review (general or security) for a PR, keyed so the run is
  * decoupled from the view that triggered it. The run, its result, and its
  * Cancel affordance all survive navigating away — the run lives in this module
  * + the store (surfaced by the activity dock), not in a component. Routes to
  * the Vercel AI SDK for HTTP providers or a local agent CLI for CLI providers.
+ *
+ * On a re-run, the PREVIOUS review's findings + a "changes since" delta ride
+ * along as soft, re-verifiable context (unless `ignorePrior`); the result is
+ * persisted on success so the NEXT run can build on it.
  */
 export async function startReview(
   target: ReviewTarget,
@@ -241,6 +337,7 @@ export async function startReview(
   ai: AiSettings,
   mode: ReviewMode,
   context: ReviewContext,
+  ignorePrior = false,
 ): Promise<void> {
   const key = reviewKey(target);
   // Single-flight per key — the UI hides the run buttons while generating, but
@@ -275,7 +372,12 @@ export async function startReview(
     target,
     seq: reviewSeq++,
     error: "",
+    deltaState: undefined,
   });
+
+  // Wall-clock start for the persisted history record (the store itself orders
+  // by monotonic `seq`, not a timestamp).
+  const startedAtMs = Date.now();
 
   // Wait for a slot in this run's lane (immediate when under the cap). A cancel
   // while queued wakes this too — `control.cancelled` then short-circuits below.
@@ -292,6 +394,13 @@ export async function startReview(
       useReviewStore.getState().remove(key);
       return;
     }
+    // Soft prior-review context (skipped when the user asked to ignore it). Runs
+    // on a held slot after the diff loads — never during the queued wait.
+    const prior: PriorContext = ignorePrior
+      ? {}
+      : await resolvePriorContext(target, mode, context.headSha);
+    if (control.cancelled) return;
+    patch({ deltaState: prior.deltaState });
     const { system, prompt } = buildReviewPrompt(
       {
         title: context.title,
@@ -305,6 +414,7 @@ export async function startReview(
           deleted: f.deleted,
           isBinary: f.isBinary,
         })),
+        ...prior,
       },
       mode,
     );
@@ -315,6 +425,7 @@ export async function startReview(
         system,
         prompt,
         repoPath: context.repoPath,
+        headSha: context.headSha,
         setText: (t) => patch({ text: t }),
         setStatus: (s) => patch({ status: s }),
         registerId: (id) => {
@@ -338,6 +449,42 @@ export async function startReview(
     if (control.cancelled) return;
     patch({ phase: "done", status: "" });
     void notifyReviewDone(title, mode, true);
+    // Persist the finished review so the NEXT run can use it as soft context.
+    // The final text is read from the store (covers both the CLI and HTTP
+    // paths); a cancelled run returns above, so no mid-stream fragment is ever
+    // stored. Best-effort — a persistence failure must not surface to the user.
+    const finalText = useReviewStore.getState().entries[key]?.text ?? "";
+    if (finalText.trim()) {
+      void saveReview(target.repoPath, {
+        schemaVersion: 1,
+        id: crypto.randomUUID(),
+        kind: target.kind,
+        ref: target.ref,
+        mode,
+        model: ai.model,
+        title,
+        text: finalText,
+        // Empty when the view supplied no head (degenerate no-commits state);
+        // the next run then routes to the safe "indeterminate" delta path and
+        // self-heals once a later review records a real SHA.
+        headSha: context.headSha ?? "",
+        startedAt: startedAtMs,
+        finishedAt: Date.now(),
+      })
+        // Refresh the panel's history (banner + "Previous reviews") immediately,
+        // not just on the next window focus / remount.
+        .then(() =>
+          queryClient.invalidateQueries({
+            queryKey: [
+              "review-history",
+              target.repoPath,
+              target.kind,
+              target.ref,
+            ],
+          }),
+        )
+        .catch(() => undefined);
+    }
   } catch (e) {
     if (!control.cancelled) {
       patch({
@@ -414,8 +561,13 @@ export function useReviewRun(target: ReviewTarget) {
   const key = reviewKey(target);
   const entry = useReviewStore((s) => s.entries[key]) ?? EMPTY_ENTRY;
   const generate = useCallback(
-    (ai: AiSettings, mode: ReviewMode, context: ReviewContext) => {
-      void startReview(target, context.title, ai, mode, context);
+    (
+      ai: AiSettings,
+      mode: ReviewMode,
+      context: ReviewContext,
+      ignorePrior?: boolean,
+    ) => {
+      void startReview(target, context.title, ai, mode, context, ignorePrior);
     },
     [target],
   );
@@ -430,5 +582,6 @@ export function useReviewRun(target: ReviewTarget) {
     status: entry.status,
     mode: entry.mode,
     model: entry.model,
+    deltaState: entry.deltaState,
   };
 }

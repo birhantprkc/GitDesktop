@@ -71,6 +71,15 @@ export interface BranchNamePromptInput {
 
 export type ReviewMode = "general" | "security";
 
+/** How the "changes since last review" delta relates to the prior review.
+ *  `head-unchanged` is JS-only (the Rust command never returns it); the Rust
+ *  `missing` reason is mapped to `indeterminate` before it reaches the prompt. */
+export type ReviewDeltaState =
+  | "ok"
+  | "rewritten"
+  | "indeterminate"
+  | "head-unchanged";
+
 export interface ReviewPromptInput {
   title: string;
   body: string;
@@ -78,4 +87,15 @@ export interface ReviewPromptInput {
   diffText: string;
   diffTruncated: boolean;
   files: { path: string; added: number; deleted: number; isBinary: boolean }[];
+  /** Prior review's raw finding markdown — soft, re-verifiable context. When
+   *  absent, the prompt is byte-for-byte identical to a first-ever review. */
+  priorFindings?: string;
+  /** When the prior review ran (epoch ms) — for the section header. */
+  priorReviewedAt?: number;
+  /** Two-dot delta of what changed since the prior review (when computable). */
+  deltaDiffText?: string;
+  /** Whether `deltaDiffText` was already truncated upstream (Rust max_bytes). */
+  deltaTruncated?: boolean;
+  /** Why the delta is present or absent — frames the "Changes since" section. */
+  deltaState?: ReviewDeltaState;
 }

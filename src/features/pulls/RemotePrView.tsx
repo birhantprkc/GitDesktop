@@ -493,6 +493,8 @@ export function RemotePrView({
             body: pr.body,
             commitSubjects: pr.commits.map((c) => c.headline),
             repoPath,
+            // gh GraphQL returns commits oldest-first, so the head is the last.
+            headSha: pr.commits.at(-1)?.oid,
             loadDiff: () =>
               ghPrDiff(repoPath, number).then((text) => ({
                 text,

@@ -85,6 +85,8 @@ export function CreatePrDialog({
           repoPath,
           base: value.base,
           head: value.head,
+          // `ahead` (git log) is newest-first, so the head is the first entry.
+          headSha: ahead[0]?.hash,
           title: value.title.trim(),
           body: value.body,
           commitSubjects: ahead.map((c) => c.subject),

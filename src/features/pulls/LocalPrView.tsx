@@ -391,6 +391,8 @@ export function LocalPrView({
             body: pr.body,
             commitSubjects: ahead.map((c) => c.subject),
             repoPath,
+            // `ahead` (git log) is newest-first, so the head is the first entry.
+            headSha: ahead[0]?.hash,
             loadDiff: () =>
               gitBranchDiff(repoPath, pr.base, pr.head, 200000).then((d) => ({
                 text: d.text,

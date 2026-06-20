@@ -1,6 +1,11 @@
-import { ShieldCheckIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
+import {
+  ShieldCheckIcon,
+  SparkleIcon,
+  WarningIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +36,8 @@ import {
 } from "@/lib/ai/providers";
 import type { AiProviderId, ReviewMode } from "@/lib/ai/types";
 import { track } from "@/lib/analytics";
+import { useReviewHistory } from "@/lib/pulls/queries";
+import type { PersistedReview } from "@/lib/pulls/reviews-history";
 import {
   useSaveSettings,
   useSecretPreview,
@@ -42,6 +49,18 @@ import {
   useReviewRun,
 } from "@/lib/stores/reviews";
 import { useUiStore } from "@/lib/stores/ui";
+import { formatRelativeTime } from "@/lib/time";
+import { ReviewHistory } from "./ReviewHistory";
+
+/** Pre-run note shown when a re-run's "changes since" delta couldn't be used. */
+const DELTA_NOTE: Partial<Record<string, string>> = {
+  rewritten:
+    "History was rewritten since the last review — re-reviewing the full diff.",
+  indeterminate:
+    "Previous version not available locally — re-reviewing the full diff.",
+  "head-unchanged":
+    "Head unchanged; the base branch may have moved — re-reviewing the full diff.",
+};
 
 const PROVIDER_IDS = Object.keys(PROVIDER_LABELS) as AiProviderId[];
 
@@ -74,8 +93,42 @@ export function PrReviewPanel({
     }),
     [prKind, context.repoPath, repoName, prRef],
   );
-  const { generate, cancel, reset, generating, text, status, mode, model } =
-    useReviewRun(target);
+  const {
+    generate,
+    cancel,
+    reset,
+    generating,
+    text,
+    status,
+    mode,
+    model,
+    deltaState,
+  } = useReviewRun(target);
+
+  // Prior reviews for this PR, used for the per-mode context banner. Read-only —
+  // never creates a record, so a first-ever review is unaffected.
+  const history = useReviewHistory(context.repoPath, prKind, prRef);
+  const latestByMode = useMemo(() => {
+    const out: Partial<Record<ReviewMode, PersistedReview>> = {};
+    // The list is newest-first, so the first hit per mode is the latest. Skip
+    // empty-text records (trimmed to nothing) — the run feeds them no context,
+    // so the banner shouldn't claim it'll "build on" them.
+    for (const r of history.data ?? []) {
+      if (r.text.trim()) out[r.mode] ??= r;
+    }
+    return out;
+  }, [history.data]);
+  // Which modes the next run should ignore the prior review for — derived from
+  // the clicked button's mode, never the shared store entry (avoids mislabeling).
+  const [ignoredModes, setIgnoredModes] = useState<Set<ReviewMode>>(new Set());
+  function toggleIgnore(m: ReviewMode) {
+    setIgnoredModes((cur) => {
+      const next = new Set(cur);
+      if (next.has(m)) next.delete(m);
+      else next.add(m);
+      return next;
+    });
+  }
 
   const reviewAi = settings.data?.reviewAi;
   const provider = reviewAi?.provider ?? "anthropic";
@@ -104,7 +157,7 @@ export function PrReviewPanel({
 
   function run(mode: ReviewMode) {
     if (!reviewAi) return;
-    generate(reviewAi, mode, context);
+    generate(reviewAi, mode, context, ignoredModes.has(mode));
     const model = reviewAi.model.toLowerCase();
     const model_tier =
       model.includes("haiku") ||
@@ -242,6 +295,36 @@ export function PrReviewPanel({
             </Button>
           )}
         </div>
+        {(["general", "security"] as ReviewMode[]).map((m) => {
+          const prior = latestByMode[m];
+          if (!prior) return null;
+          const ignored = ignoredModes.has(m);
+          const label = m === "security" ? "security audit" : "review";
+          return (
+            <div
+              key={m}
+              className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground"
+            >
+              <SparkleIcon className="size-3 shrink-0" />
+              <span className="min-w-0">
+                {ignored
+                  ? `Next ${label} starts fresh, ignoring your previous one.`
+                  : `Next ${label} builds on your last (${formatRelativeTime(
+                      new Date(prior.finishedAt).toISOString(),
+                    )}).`}
+              </span>
+              <button
+                type="button"
+                aria-pressed={ignored}
+                disabled={generating}
+                className="underline-offset-2 hover:underline disabled:opacity-50"
+                onClick={() => toggleIgnore(m)}
+              >
+                {ignored ? "Use previous review" : "Ignore previous review"}
+              </button>
+            </div>
+          );
+        })}
         {cliKind === "claude" && (
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <Switch
@@ -260,11 +343,24 @@ export function PrReviewPanel({
             Codex reads repo files for context (read-only sandbox).
           </p>
         )}
+        <ReviewHistory
+          repoPath={context.repoPath}
+          prKind={prKind}
+          prRef={prRef}
+        />
       </div>
 
       {/* ph-no-capture: AI review output quotes the user's code — block from replay. */}
       <ScrollArea className="ph-no-capture min-h-0 flex-1">
         <div className="p-4">
+          {deltaState &&
+            DELTA_NOTE[deltaState] &&
+            (text.trim() || generating) && (
+              <p className="mb-3 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                <WarningIcon className="size-3.5 shrink-0" />
+                {DELTA_NOTE[deltaState]}
+              </p>
+            )}
           {text.trim() ? (
             <Markdown>{text}</Markdown>
           ) : generating ? (

@@ -15,6 +15,7 @@ import type {
   CommitDetails,
   CommitResult,
   CommitSummary,
+  DeltaDiff,
   DiffStatEntry,
   DiscussionDetails,
   DiscussionInfo,
@@ -638,6 +639,39 @@ export const gitBranchDiff = (
     compare,
     maxBytes: maxBytes ?? null,
   });
+
+/** The literal `fromRef..toRef` diff — "what changed since the last review".
+ *  Soft, best-effort: never throws for missing/rewritten history; the result's
+ *  `reason` says why the delta is absent so the caller can fall back. */
+export const gitDiffBetweenRefs = (
+  repoPath: string,
+  fromRef: string,
+  toRef: string,
+  maxBytes?: number,
+) =>
+  invoke<DeltaDiff>("git_diff_between_refs", {
+    repoPath,
+    fromRef,
+    toRef,
+    maxBytes: maxBytes ?? null,
+  });
+
+/** Best-effort fetch of specific commit SHAs from origin, so a remote PR's
+ *  prior-review delta can resolve when the PR was never checked out. Returns
+ *  whether the fetch succeeded; callers treat failure as "no delta". */
+export const gitFetchObjects = (repoPath: string, refs: string[]) =>
+  invoke<boolean>("git_fetch_objects", { repoPath, refs });
+
+/** Creates a throwaway detached worktree at `sha` so a repo-aware CLI review
+ *  reads the PR head's files without moving the active branch. Returns the
+ *  worktree path, or null when one isn't needed/possible (already on that
+ *  commit, object not local, or checkout failed) — caller uses the repo root. */
+export const gitReviewWorktree = (repoPath: string, sha: string) =>
+  invoke<string | null>("git_review_worktree", { repoPath, sha });
+
+/** Removes a review worktree (best-effort, idempotent). */
+export const gitRemoveWorktree = (repoPath: string, worktreePath: string) =>
+  invoke<void>("git_remove_worktree", { repoPath, worktreePath });
 
 export const ghStatus = (repoPath: string) =>
   invoke<GhStatus>("gh_status", { repoPath });

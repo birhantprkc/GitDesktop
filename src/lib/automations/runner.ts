@@ -8,6 +8,7 @@ import type { AiSettings, ReviewMode } from "@/lib/ai/types";
 import { ghPrComment, gitBranchDiff, gitCommitDiff } from "@/lib/git/api";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { listLocalPrs, saveLocalPr } from "@/lib/pulls/local";
+import { saveReview } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
 import { useAutomationResults } from "./results";
@@ -26,6 +27,9 @@ export type AutomationEvent =
       repoPath: string;
       base: string;
       head: string;
+      /** Head commit SHA at trigger time — the delta anchor persisted so a later
+       *  (manual or automated) re-review can compute "what changed since". */
+      headSha?: string;
       title: string;
       body: string;
       commitSubjects: string[];
@@ -106,6 +110,17 @@ async function run(event: AutomationEvent): Promise<void> {
       }
       const body = `**AI ${label} (${settings.reviewAi.model})** · automated\n\n${text}`;
       await deliver(event, rule.action, body, text, toastId, notify);
+      // Seed the review-history store so an automated review participates in the
+      // iterative loop — a later manual re-run builds on these findings. Best-
+      // effort: a persistence failure must never fail a delivered review.
+      if (event.kind === "pr-open") {
+        await persistReviewHistory(
+          event,
+          rule.action,
+          text,
+          settings.reviewAi.model,
+        ).catch(() => undefined);
+      }
     } catch (e) {
       if (cancelled) continue;
       toast.error(`AI ${label} failed: ${e instanceof Error ? e.message : e}`, {
@@ -169,6 +184,9 @@ async function generateReviewText(
       system,
       prompt,
       repoPath: event.repoPath,
+      // Read the reviewed commit / PR-head's files in a worktree, not whatever
+      // branch happens to be checked out.
+      headSha: event.kind === "commit" ? event.hash : event.headSha,
       // runCliStream accumulates; the last setText carries the full text.
       setText: (t) => {
         result = t;
@@ -271,4 +289,42 @@ async function deliver(
   if (notify) {
     void notifyIfUnfocused(`AI ${label} finished`, `Local PR "${pr.title}"`);
   }
+}
+
+/**
+ * Persists an automated PR review into the keyed history store (same shape +
+ * key the interactive path uses), so the next review of that PR + mode builds
+ * on it. Keyed by `(kind, ref, mode)`; `text` is the raw findings, not the
+ * comment-wrapped body. Invalidates the panel's history query so an open Review
+ * tab reflects it immediately.
+ */
+async function persistReviewHistory(
+  event: Extract<AutomationEvent, { kind: "pr-open" }>,
+  mode: ReviewMode,
+  text: string,
+  model: string,
+): Promise<void> {
+  if (!text.trim()) return;
+  const kind = event.target.type;
+  const ref =
+    event.target.type === "remote"
+      ? String(event.target.number)
+      : event.target.id;
+  const now = Date.now();
+  await saveReview(event.repoPath, {
+    schemaVersion: 1,
+    id: crypto.randomUUID(),
+    kind,
+    ref,
+    mode,
+    model,
+    title: event.title,
+    text,
+    headSha: event.headSha ?? "",
+    startedAt: now,
+    finishedAt: now,
+  });
+  await queryClient.invalidateQueries({
+    queryKey: ["review-history", event.repoPath, kind, ref],
+  });
 }

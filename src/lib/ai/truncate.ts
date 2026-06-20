@@ -82,3 +82,69 @@ export function budgetDiff(
     omittedFiles,
   };
 }
+
+/** Overall soft ceiling for the diff + delta + prior-findings sections combined.
+ *  Above `DIFF_CHAR_BUDGET` so a full diff still leaves room for soft context. */
+export const PROMPT_CHAR_BUDGET = 100_000;
+/** Cap for the "changes since last review" delta. */
+export const DELTA_DIFF_CHAR_BUDGET = 24_000;
+/** Cap for the prior review's findings (head-kept — reviews front-load blockers). */
+export const PRIOR_FINDINGS_CHAR_BUDGET = 8_000;
+
+export interface ReviewExtras {
+  /** Budgeted delta diff (empty when absent or dropped for budget). */
+  delta: BudgetedDiff;
+  /** Delta dropped entirely to protect the authoritative diff's budget. */
+  deltaDropped: boolean;
+  /** Budgeted (head-truncated) prior findings. */
+  prior: { text: string; truncated: boolean };
+  /** Prior findings dropped entirely for budget. */
+  priorDropped: boolean;
+}
+
+/**
+ * Allocates the soft context (delta + prior findings) into whatever budget the
+ * authoritative full diff leaves, against one shared ceiling. Order is enforced:
+ * the diff is sacrosanct, the delta gets next claim, prior findings take the
+ * remainder — so under pressure prior findings drop first, then the delta,
+ * never the diff. `diffLen` is the length of the already-budgeted main diff.
+ */
+export function budgetReviewExtras(input: {
+  diffLen: number;
+  deltaText?: string;
+  priorText?: string;
+}): ReviewExtras {
+  const emptyDiff: BudgetedDiff = {
+    text: "",
+    truncated: false,
+    omittedFiles: [],
+  };
+  let remaining = Math.max(0, PROMPT_CHAR_BUDGET - input.diffLen);
+
+  let delta = emptyDiff;
+  let deltaDropped = false;
+  if (input.deltaText?.trim()) {
+    const cap = Math.min(remaining, DELTA_DIFF_CHAR_BUDGET);
+    if (cap <= 0) {
+      deltaDropped = true;
+    } else {
+      delta = budgetDiff(input.deltaText, cap);
+      remaining -= delta.text.length;
+    }
+  }
+
+  let prior = { text: "", truncated: false };
+  let priorDropped = false;
+  if (input.priorText?.trim()) {
+    const cap = Math.min(remaining, PRIOR_FINDINGS_CHAR_BUDGET);
+    if (cap <= 0) {
+      priorDropped = true;
+    } else if (input.priorText.length <= cap) {
+      prior = { text: input.priorText, truncated: false };
+    } else {
+      prior = { text: input.priorText.slice(0, cap), truncated: true };
+    }
+  }
+
+  return { delta, deltaDropped, prior, priorDropped };
+}
