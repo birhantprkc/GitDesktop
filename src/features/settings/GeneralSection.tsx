@@ -33,6 +33,22 @@ export const GeneralSection = withForm({
           </p>
         </div>
         <div className="space-y-1.5">
+          <form.AppField name="closeToTray">
+            {(field) => (
+              <field.CheckboxField
+                label="Keep running in the tray when the window is closed"
+                className="flex cursor-pointer items-center gap-2 text-xs"
+              />
+            )}
+          </form.AppField>
+          <p className="text-xs text-muted-foreground">
+            Closing the window hides GitDesktop to the system tray instead of
+            quitting, so background work like AI reviews keeps running. Reopen
+            from the tray icon, or use its Quit menu to exit. Turn this off to
+            make closing quit the app.
+          </p>
+        </div>
+        <div className="space-y-1.5">
           <form.AppField name="analyticsEnabled">
             {(field) => (
               <field.CheckboxField

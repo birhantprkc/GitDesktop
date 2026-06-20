@@ -30,6 +30,7 @@ const capabilities = [
   { label: "Branch compare — ahead/behind, 3-dot" },
   { label: "GitHub PRs + private local PRs" },
   { label: "AI code & security review", ai: true },
+  { label: "Reviews keep running in the background", ai: true },
   { label: "File history & line blame" },
   { label: "GitHub Actions — runs, jobs & re-run" },
   { label: "Tags, releases & assets" },
@@ -280,7 +281,9 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
                 Run a general review or a security audit on any pull request — local
                 or on GitHub. It reads the changed files, flags real issues with a
                 severity, and cites the exact lines. The result stays on your machine
-                unless you choose to post it.
+                unless you choose to post it — and it keeps running while you move
+                between PRs, or even after you close the window, then pings you when
+                it's done.
               </p>
             </div>
             <figure data-reveal style="transition-delay:120ms" class="window mt-10">

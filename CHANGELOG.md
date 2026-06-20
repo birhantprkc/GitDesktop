@@ -12,6 +12,11 @@ commit list.
 
 ### Added
 
+- **Close to tray / background running.** Closing the window now hides GitDesktop
+  to the system tray and keeps it running, so a long AI review finishes in the
+  background instead of being cut off — you get an OS notification when it's done
+  and can reopen from the tray icon (right-click for Open / Quit). Prefer closing
+  to quit? Turn off **Settings → General → "Keep running in the tray"**.
 - **Ollama Cloud provider.** Alongside the local Ollama server, you can now use
   Ollama's hosted models (e.g. `gpt-oss:120b`, `qwen3-coder:480b`) with an API
   key from [ollama.com/settings/keys](https://ollama.com/settings/keys) — no

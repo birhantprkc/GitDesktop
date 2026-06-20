@@ -34,6 +34,10 @@ git works against any remote via system `git`.
   review or security audit, from Anthropic, OpenAI, OpenRouter, **Ollama**
   (local or cloud), or **keyless CLI agents**
   (Claude Code / Codex via your existing subscription — no API key).
+- **Reviews that don't get interrupted** — an AI review keeps running while you
+  navigate between PRs, and even after you close the window (GitDesktop stays in
+  the tray, finishes it, and notifies you). A small activity indicator tracks
+  what's running, with a cancel and a concurrency-capped queue.
 - **Privacy-first** — API keys live in the OS keychain (never in app files),
   local models keep code on your machine, AI-ignore patterns keep sensitive
   files out of context, and a single switch hides every AI surface.

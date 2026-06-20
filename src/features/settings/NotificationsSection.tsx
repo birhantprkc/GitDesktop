@@ -55,14 +55,24 @@ export const NotificationsSection = withForm({
           )}
         </form.AppField>
         {aiEnabled && (
-          <form.AppField name="notifications.automations">
-            {(field) => (
-              <field.CheckboxField
-                label="Automation results (AI reviews posted or failed)"
-                className="flex cursor-pointer items-center gap-2 text-xs"
-              />
-            )}
-          </form.AppField>
+          <>
+            <form.AppField name="notifications.reviews">
+              {(field) => (
+                <field.CheckboxField
+                  label="An AI review you started finishes in the background"
+                  className="flex cursor-pointer items-center gap-2 text-xs"
+                />
+              )}
+            </form.AppField>
+            <form.AppField name="notifications.automations">
+              {(field) => (
+                <field.CheckboxField
+                  label="Automation results (AI reviews posted or failed)"
+                  className="flex cursor-pointer items-center gap-2 text-xs"
+                />
+              )}
+            </form.AppField>
+          </>
         )}
       </section>
     );

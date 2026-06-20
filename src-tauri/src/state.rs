@@ -1,17 +1,32 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify, OnceCell};
 
 use crate::git::types::GitInfo;
 
-#[derive(Default)]
 pub struct AppState {
     repo_locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
     pub git_info: OnceCell<GitInfo>,
     /// In-flight agent-CLI reviews keyed by a frontend-supplied id, so a
     /// separate cancel command can signal the streaming run to stop.
     agent_cancels: Mutex<HashMap<String, Arc<Notify>>>,
+    /// Whether closing the window hides the app to the tray (keeping it running)
+    /// instead of quitting. Mirrors the user's setting, pushed from the frontend;
+    /// defaults to true so the first close behaves correctly before that sync.
+    close_to_tray: AtomicBool,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            repo_locks: Mutex::new(HashMap::new()),
+            git_info: OnceCell::new(),
+            agent_cancels: Mutex::new(HashMap::new()),
+            close_to_tray: AtomicBool::new(true),
+        }
+    }
 }
 
 impl AppState {
@@ -44,5 +59,13 @@ impl AppState {
         if let Some(notify) = self.agent_cancels.lock().await.get(id) {
             notify.notify_waiters();
         }
+    }
+
+    pub fn close_to_tray(&self) -> bool {
+        self.close_to_tray.load(Ordering::Relaxed)
+    }
+
+    pub fn set_close_to_tray(&self, enabled: bool) {
+        self.close_to_tray.store(enabled, Ordering::Relaxed);
     }
 }

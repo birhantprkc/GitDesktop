@@ -7,6 +7,7 @@ mod hooks;
 mod instructions;
 mod secrets;
 mod state;
+mod tray;
 
 use state::AppState;
 
@@ -22,10 +23,14 @@ pub fn run() {
         .setup(|app| {
             // Desktop-only auto-updater (GitHub Releases). No-op on mobile.
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+                tray::setup_tray(app.handle())?;
+            }
             Ok(())
         })
+        .on_window_event(tray::handle_window_event)
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             git::repo::check_git_installed,
@@ -242,6 +247,7 @@ pub fn run() {
             agent::agent_detect,
             agent::agent_review,
             agent::agent_review_cancel,
+            tray::set_close_to_tray,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

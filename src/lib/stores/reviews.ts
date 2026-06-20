@@ -8,6 +8,8 @@ import { isCliProvider, isLocalProvider } from "@/lib/ai/providers";
 import { runCliStream } from "@/lib/ai/stream";
 import type { AiSettings, ReviewMode } from "@/lib/ai/types";
 import type { DiffStatEntry } from "@/lib/git/types";
+import { notifyIfUnfocused } from "@/lib/notify";
+import { loadSettings } from "@/lib/settings/api";
 
 export interface ReviewContext {
   title: string;
@@ -206,6 +208,26 @@ function releaseSlot(lane: Limiter): void {
   lane.active--;
 }
 
+/** OS notification when a review settles while the window is hidden (close to
+ *  tray) or unfocused, gated on the user's setting. Best-effort. */
+async function notifyReviewDone(
+  title: string,
+  mode: ReviewMode,
+  ok: boolean,
+): Promise<void> {
+  try {
+    const { notifications } = await loadSettings();
+    if (!notifications.reviews) return;
+    const label = mode === "security" ? "security audit" : "review";
+    void notifyIfUnfocused(
+      ok ? `AI ${label} ready` : `AI ${label} failed`,
+      `"${title}"`,
+    );
+  } catch {
+    // best-effort — a missed notification must never affect the review
+  }
+}
+
 /**
  * Starts an AI review (general or security) for a PR, keyed so the run is
  * decoupled from the view that triggered it. The run, its result, and its
@@ -315,6 +337,7 @@ export async function startReview(
     }
     if (control.cancelled) return;
     patch({ phase: "done", status: "" });
+    void notifyReviewDone(title, mode, true);
   } catch (e) {
     if (!control.cancelled) {
       patch({
@@ -322,6 +345,7 @@ export async function startReview(
         status: "",
         error: e instanceof Error ? e.message : String(e),
       });
+      void notifyReviewDone(title, mode, false);
     }
   } finally {
     // Release the lane slot for the next queued run (only if this run actually

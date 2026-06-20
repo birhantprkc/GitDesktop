@@ -46,6 +46,8 @@ export interface CustomLanguage {
 export interface NotificationSettings {
   /** Automation results (review posted / ready / failed). */
   automations: boolean;
+  /** An AI code review or security audit you started finishing in the background. */
+  reviews: boolean;
   /** CI check completion on open PRs. */
   prChecks: "off" | "mine" | "all";
   /** PRs opened / merged / closed in the current repo. */
@@ -65,6 +67,9 @@ export interface AppSettings {
   hideAi: boolean;
   /** OS notifications (sent only while the window is unfocused). */
   notifications: NotificationSettings;
+  /** Hide the app to the system tray on window close (so background work like
+   *  AI reviews keeps running) instead of quitting. */
+  closeToTray: boolean;
   globalInstructions: string;
   /** gitignore-style globs (one per line) excluded from AI context. */
   aiIgnorePatterns: string;
@@ -124,11 +129,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hideAi: false,
   notifications: {
     automations: true,
+    reviews: true,
     prChecks: "all",
     prActivity: true,
     prReviews: true,
     actionRuns: true,
   },
+  closeToTray: true,
   globalInstructions: "",
   aiIgnorePatterns: "",
   externalEditor: "",
