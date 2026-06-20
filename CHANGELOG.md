@@ -10,6 +10,8 @@ commit list.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-19
+
 First release. GitDesktop is an AI-native, keyboard-first desktop Git client
 built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 
@@ -28,7 +30,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
   a multi-selection from the
   context menu; untrack tracked files; and recycle-bin-safe discard. Commit with
   a 72-character title budget, co-authors suggested from history, amend, undo,
-  reset, and revert.
+  reset, and revert; in-progress commit messages are preserved per repository and
+  branch.
 - **AI assistance** — streamed commit messages, branch names, pull-request and
   issue titles/descriptions (drafted from your issue templates), repository
   descriptions and topics, plus a code review or focused security audit on any PR.
@@ -46,8 +49,7 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - **History & advanced git** — paged, filterable history; a rich commit detail
   view; per-file history and line blame; cherry-pick onto the current or another
   branch (including a multi-selection); squash and reorder unpushed commits
-  through an atomic replay engine; a stash browser; tag management; and submodule
-  management.
+  through an atomic replay engine; a stash browser; and submodule management.
 - **Syncing** — fetch, pull, and push with ahead/behind indicators. Pull is
   `--ff-only`, and divergence routes to a guarded force push with
   `--force-with-lease`; an in-progress merge/rebase/cherry-pick shows a conflict
@@ -63,6 +65,12 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
   branches, plus create-a-branch); and duplicate, transfer, pin, lock, or delete.
   A separate Discussions tab reads, creates, edits, reacts to, and upvotes a
   repository's GitHub Discussions.
+- **Tags & releases** — a Tags tab listing every git tag with its GitHub release
+  status (latest / pre-release / draft); create a tag, check it out, push, or
+  delete it; and create, edit, publish, or delete GitHub releases with uploadable
+  assets. Generate release notes from GitHub's commit-and-PR summary or with AI,
+  with the previous tag resolved automatically (semver- and monorepo-aware) and
+  a tabbed branch / recent-commit target picker.
 - **GitHub Actions** — a dedicated tab listing workflow runs with live status; a
   run detail view with jobs and steps; re-run (all or failed), cancel, and
   manual workflow dispatch; inline failed-step logs; **Debug with AI**, which
@@ -81,10 +89,15 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
   checks, and CI runs.
 - **Auto-updates** — signed, verified updates from GitHub Releases, installed
   only on your consent, with an opt-out launch check.
+- **Privacy & analytics** — anonymous, aggregate usage analytics (on by default,
+  shown on first run with a one-switch opt-out; no source code, diffs, or commit
+  content is captured) plus opt-in, masked session replay for diagnosing UI
+  issues.
 
 ### Fixed
 
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/commits/master
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/theBGuy/GitDesktop/releases/tag/v0.1.0
