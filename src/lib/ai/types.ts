@@ -3,6 +3,7 @@ export type AiProviderId =
   | "openai"
   | "openrouter"
   | "ollama"
+  | "ollama-cloud"
   | "claude-cli"
   | "codex-cli";
 

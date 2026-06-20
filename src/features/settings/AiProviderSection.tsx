@@ -299,7 +299,8 @@ export const AiProviderSection = withForm({
       setTesting(true);
       setTestResult(null);
       try {
-        const client = await createAiClient(ai);
+        // Use a typed-but-unsaved key if present, so you can test before saving.
+        const client = await createAiClient(ai, keyForm.getFieldValue("key"));
         const result = await client.testConnection();
         setTestResult(
           result.ok ? { ok: true } : { ok: false, message: result.message },

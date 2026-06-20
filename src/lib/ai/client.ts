@@ -11,9 +11,20 @@ export class MissingApiKeyError extends Error {
   }
 }
 
-export async function createAiClient(settings: AiSettings): Promise<AiClient> {
+/**
+ * Builds a client for `settings`. `apiKeyOverride` lets a caller (e.g. the
+ * Settings "Test connection" button) try a key that's been typed but not yet
+ * saved to the keychain; when empty, the saved key is used.
+ */
+export async function createAiClient(
+  settings: AiSettings,
+  apiKeyOverride?: string,
+): Promise<AiClient> {
   const needsKey = PROVIDERS_REQUIRING_KEY.includes(settings.provider);
-  const apiKey = needsKey ? await getSecret(settings.provider) : null;
+  const override = apiKeyOverride?.trim();
+  const apiKey = needsKey
+    ? override || (await getSecret(settings.provider))
+    : null;
   if (needsKey && !apiKey) {
     throw new MissingApiKeyError(settings.provider);
   }

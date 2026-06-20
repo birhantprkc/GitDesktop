@@ -1,7 +1,13 @@
 use crate::error::{AppError, AppResult};
 
 const SERVICE: &str = "com.thebguy.gitdesktop";
-const KNOWN_PROVIDERS: &[&str] = &["anthropic", "openai", "openrouter", "ollama"];
+const KNOWN_PROVIDERS: &[&str] = &[
+    "anthropic",
+    "openai",
+    "openrouter",
+    "ollama",
+    "ollama-cloud",
+];
 
 fn entry_for(provider: &str) -> AppResult<keyring::Entry> {
     if !KNOWN_PROVIDERS.contains(&provider) {

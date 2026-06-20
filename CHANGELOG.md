@@ -12,6 +12,11 @@ commit list.
 
 ### Added
 
+- **Ollama Cloud provider.** Alongside the local Ollama server, you can now use
+  Ollama's hosted models (e.g. `gpt-oss:120b`, `qwen3-coder:480b`) with an API
+  key from [ollama.com/settings/keys](https://ollama.com/settings/keys) — no
+  local install required. The model picker lists the cloud catalog live, just
+  like the other keyed providers.
 - **Activity indicator for AI reviews.** A code review or security audit you
   start on a pull request no longer disappears when you switch the PR's sub-tab
   or open a different PR — it keeps running in the background, surfaced by a
@@ -23,6 +28,12 @@ commit list.
   hardware — cloud providers run many in parallel, while local CLI-agent and
   Ollama runs are capped more conservatively to your CPU — and any extras wait
   in a short queue and start automatically as running ones finish.
+
+### Fixed
+
+- **Settings → AI: "Test connection" now tests the key you've typed**, even
+  before you save it — so you can verify a new API key before committing it to
+  the keychain, instead of getting a "no key saved" error.
 
 ## [0.1.0] - 2026-06-19
 

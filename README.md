@@ -31,8 +31,8 @@ git works against any remote via system `git`.
   root-cause + fix, ending with a ready-to-paste prompt for a coding agent.
 - **AI where it helps** — commit messages, branch names, PR and issue
   titles/descriptions, repository descriptions and topics, and a streaming code
-  review or security audit, from Anthropic, OpenAI, OpenRouter, local
-  **Ollama**, or **keyless CLI agents**
+  review or security audit, from Anthropic, OpenAI, OpenRouter, **Ollama**
+  (local or cloud), or **keyless CLI agents**
   (Claude Code / Codex via your existing subscription — no API key).
 - **Privacy-first** — API keys live in the OS keychain (never in app files),
   local models keep code on your machine, AI-ignore patterns keep sensitive
@@ -108,9 +108,10 @@ executable), and tunable OS notifications for PR activity, checks, and CI runs.
 
 ## AI configuration
 
-- **Providers** — Anthropic, OpenAI, OpenRouter, local **Ollama**, and the
-  **Claude Code / Codex CLIs** (keyless, via your subscription). Separate models
-  for generation vs. review; live model lists in a searchable picker.
+- **Providers** — Anthropic, OpenAI, OpenRouter, local **Ollama**, **Ollama
+  Cloud** (hosted models via an API key), and the **Claude Code / Codex CLIs**
+  (keyless, via your subscription). Separate models for generation vs. review;
+  live model lists in a searchable picker.
 - **Custom instructions** (included in every generation):
   - **Global** — Settings → AI instructions (e.g. "Follow Conventional Commits").
   - **Per-repo** — `.gitdesktop/instructions.md` in the repo. Takes precedence.
@@ -135,8 +136,8 @@ verified by the app — separate from OS code signing. Maintainer release steps:
 - **GitHub CLI (`gh`)**, installed and authenticated (`gh auth login`), for the
   pull-request and Actions features — they stay hidden when it isn't available.
 - An **AI provider** for the AI features: an API key (Anthropic / OpenAI /
-  OpenRouter), a local **Ollama** server, or a signed-in **Claude Code / Codex**
-  CLI. All optional.
+  OpenRouter / **Ollama Cloud**), a local **Ollama** server, or a signed-in
+  **Claude Code / Codex** CLI. All optional.
 
 ## Development
 

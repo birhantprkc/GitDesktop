@@ -18,6 +18,7 @@
         { "url": "https://api.anthropic.com/*" },
         { "url": "https://api.openai.com/*" },
         { "url": "https://openrouter.ai/*" },
+        { "url": "https://ollama.com/*" },
         { "url": "http://localhost:11434/*" },
         { "url": "http://127.0.0.1:11434/*" },
         { "url": "https://eu.i.posthog.com/*" },

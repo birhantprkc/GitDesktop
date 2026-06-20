@@ -26,7 +26,7 @@ A few things worth knowing up front:
   sign-in, and the app never stores your tokens. Plain Git (clone/fetch/pull/push)
   works against any remote without GitHub.
 - **AI is optional.** Commit messages, PR descriptions, reviews, and CI debugging
-  can use Anthropic, OpenAI, OpenRouter, a local Ollama model, or the Claude
+  can use Anthropic, OpenAI, OpenRouter, Ollama (local or cloud), or the Claude
   Code / Codex CLIs. You can also hide every AI feature in Settings.
 
 ## Open your first repository
@@ -234,9 +234,9 @@ debugging. It's entirely optional — and configurable in **Settings → AI**.
 
 Bring your own model:
 
-- **Anthropic, OpenAI, OpenRouter** — paste an API key (stored in your OS keychain,
-  never in app files).
-- **Ollama** — a fully local model, so your code never leaves your machine.
+- **Anthropic, OpenAI, OpenRouter, Ollama Cloud** — paste an API key (stored in
+  your OS keychain, never in app files).
+- **Ollama (local)** — a fully local model, so your code never leaves your machine.
 - **Claude Code / Codex CLIs** — *keyless*: they reuse your existing CLI
   subscription login, with no API key. Used for review and CI debugging, and can
   read repo files for deeper context.

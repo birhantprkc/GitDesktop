@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { getSecret } from "@/lib/git/api";
-import { MODEL_SUGGESTIONS } from "./providers";
+import { MODEL_SUGGESTIONS, OLLAMA_CLOUD_HOST } from "./providers";
 import type { AiSettings } from "./types";
 
 export interface AvailableModels {
@@ -58,6 +58,15 @@ async function fetchProviderModels(settings: AiSettings): Promise<string[]> {
       return ((json.models ?? []) as { name: string }[])
         .map((m) => m.name)
         .sort();
+    }
+    case "ollama-cloud": {
+      const key = await getSecret("ollama-cloud");
+      if (!key) return [];
+      // OpenAI-compatible catalog endpoint on the cloud host.
+      const json = await fetchJson(`${OLLAMA_CLOUD_HOST}/v1/models`, {
+        Authorization: `Bearer ${key}`,
+      });
+      return (json.data as { id: string }[]).map((m) => m.id).sort();
     }
     case "claude-cli":
     case "codex-cli":

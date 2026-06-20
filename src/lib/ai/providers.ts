@@ -11,14 +11,20 @@ export const PROVIDER_LABELS: Record<AiProviderId, string> = {
   openai: "OpenAI",
   openrouter: "OpenRouter",
   ollama: "Ollama (local)",
+  "ollama-cloud": "Ollama Cloud",
   "claude-cli": "Claude Code (CLI)",
   "codex-cli": "Codex (CLI)",
 };
+
+/** Host for Ollama's hosted models, reached with an API key (vs the local
+ *  server). Native API at `/api`, OpenAI-compatible model list at `/v1/models`. */
+export const OLLAMA_CLOUD_HOST = "https://ollama.com";
 
 export const PROVIDERS_REQUIRING_KEY: AiProviderId[] = [
   "anthropic",
   "openai",
   "openrouter",
+  "ollama-cloud",
 ];
 
 /** Providers backed by a locally-installed coding-agent CLI rather than an
@@ -51,6 +57,7 @@ export const MODEL_SUGGESTIONS: Record<AiProviderId, string[]> = {
     "google/gemini-2.5-flash",
   ],
   ollama: ["llama3.1", "qwen2.5-coder", "mistral"],
+  "ollama-cloud": ["gpt-oss:120b", "qwen3-coder:480b", "deepseek-v3.1:671b"],
   // CLI model aliases passed straight to `claude --model`.
   "claude-cli": ["sonnet", "opus", "haiku", "fable"],
   // Codex: blank uses the account default (proven to work); user can type one.
@@ -74,6 +81,12 @@ export function createModel(
     case "ollama":
       return createOllama({
         baseURL: `${settings.ollamaBaseUrl.replace(/\/$/, "")}/api`,
+        fetch,
+      })(settings.model);
+    case "ollama-cloud":
+      return createOllama({
+        baseURL: `${OLLAMA_CLOUD_HOST}/api`,
+        headers: { Authorization: `Bearer ${apiKey ?? ""}` },
         fetch,
       })(settings.model);
     case "claude-cli":
