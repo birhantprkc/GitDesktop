@@ -1,23 +1,8 @@
-import {
-  CaretDownIcon,
-  CheckCircleIcon,
-  CircleDashedIcon,
-  PlusIcon,
-} from "@phosphor-icons/react";
+import { CheckCircleIcon, CircleDashedIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
 import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
+import { ConversationListPanel } from "@/features/conversations/ConversationListPanel";
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
-import { GhNotReady } from "@/features/repository/GhNotReady";
 import type { IssueStateFilter } from "@/lib/git/api";
 import {
   useGhStatus,
@@ -30,7 +15,6 @@ import { useLocalIssues } from "@/lib/issues/queries";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
-import { cn } from "@/lib/utils";
 import { CreateIssueDialog } from "./CreateIssueDialog";
 import { CreateLocalIssueDialog } from "./CreateLocalIssueDialog";
 
@@ -109,46 +93,22 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const RowIcon = stateFilter === "open" ? CircleDashedIcon : CheckCircleIcon;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-1 border-b p-2">
-        {(["open", "closed"] as const).map((s) => (
-          <Button
-            key={s}
-            variant={stateFilter === s ? "secondary" : "ghost"}
-            size="xs"
-            aria-pressed={stateFilter === s}
-            onClick={() => setStateFilter(s)}
-          >
-            {s === "open" ? "Open" : "Closed"}
-          </Button>
-        ))}
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button variant="ghost" size="xs" className="ml-auto">
-                <PlusIcon data-icon="inline-start" />
-                New
-                <CaretDownIcon data-icon="inline-end" />
-              </Button>
-            }
-          />
-          <DropdownMenuContent align="end" className="min-w-56">
-            <DropdownMenuItem
-              disabled={!ghReady}
-              title={
-                ghReady
-                  ? undefined
-                  : "Connect this repository to GitHub to open an issue."
-              }
-              onClick={() => setCreateOpen(true)}
-            >
-              Issue on GitHub…
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setCreateLocalOpen(true)}>
-              Local issue…
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+    <ConversationListPanel
+      repoPath={repoPath}
+      feature="issues"
+      stateFilter={stateFilter}
+      onStateFilter={setStateFilter}
+      newMenu={{
+        ghLabel: "Issue on GitHub…",
+        ghDisabled: !ghReady,
+        ghReason: ghReady
+          ? undefined
+          : "Connect this repository to GitHub to open an issue.",
+        onGh: () => setCreateOpen(true),
+        localLabel: "Local issue…",
+        onLocal: () => setCreateLocalOpen(true),
+      }}
+      filterSlot={
         <ConversationFilterPopover
           authors={authors}
           labels={labels}
@@ -159,130 +119,69 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
           authorCount={authorCount}
           labelCount={labelCount}
         />
-      </div>
-      <div className="border-b p-2">
-        <Input
-          ref={filterRef}
-          value={filterText}
-          onChange={(e) => setFilterText(e.target.value)}
-          placeholder="Search by title, #, author, or label"
-          className="h-7"
-          autoComplete="off"
-        />
-      </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <div onKeyDown={onListKeyDown}>
-          <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground">Local</p>
-          {visibleLocal.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground">
-              {stateLocal.length > 0
-                ? "No local issues match the filter."
-                : `No ${stateFilter} local issues.`}
-            </p>
-          ) : (
-            visibleLocal.map((issue) => {
-              const active =
-                selectedIssue?.kind === "local" &&
-                selectedIssue.id === issue.id;
-              return (
-                <button
-                  type="button"
-                  key={issue.id}
-                  data-row={`local:${issue.id}`}
-                  className={cn(
-                    "block w-full border-b px-3 py-2 text-left",
-                    active
-                      ? "bg-accent text-accent-foreground"
-                      : "hover:bg-muted/60",
-                  )}
-                  onClick={() => selectIssue({ kind: "local", id: issue.id })}
-                >
-                  <p className="flex items-center gap-1.5 text-xs font-medium">
-                    <RowIcon className="size-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate" title={issue.title}>
-                      {issue.title}
-                    </span>
-                  </p>
-                  <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
-                    local · {formatRelativeTime(issue.createdAt)}
-                    {issue.archived ? " · archived" : ""}
-                  </p>
-                </button>
-              );
-            })
-          )}
-          {archivedLocalCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowArchived((v) => !v)}
-              className="px-3 py-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-            >
-              {showArchived
-                ? "Hide archived"
-                : `Show archived (${archivedLocalCount})`}
-            </button>
-          )}
-
-          <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">GitHub</p>
-          {gh.isPending ? (
-            <div className="space-y-2 p-3">
-              <Skeleton className="h-9 w-full" />
-            </div>
-          ) : !ghReady ? (
-            <GhNotReady repoPath={repoPath} feature="issues" />
-          ) : issueList.isPending ? (
-            <div className="space-y-2 p-3">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-9 w-full" />
-            </div>
-          ) : visible.length === 0 ? (
-            <p className="px-3 py-4 text-xs text-muted-foreground">
-              {issues.length > 0
-                ? "No issues match the filter."
-                : `No ${stateFilter} issues.`}
-            </p>
-          ) : (
-            visible.map((issue) => {
-              const active =
-                selectedIssue?.kind === "remote" &&
-                selectedIssue.id === String(issue.number);
-              return (
-                <button
-                  type="button"
-                  key={issue.number}
-                  data-row={`remote:${issue.number}`}
-                  className={cn(
-                    "block w-full border-b px-3 py-2 text-left",
-                    active
-                      ? "bg-accent text-accent-foreground"
-                      : "hover:bg-muted/60",
-                  )}
-                  onClick={() =>
-                    selectIssue({ kind: "remote", id: String(issue.number) })
-                  }
-                  onMouseEnter={() =>
-                    hoverPrefetch(() => prefetchIssue(issue.number))
-                  }
-                >
-                  <p className="flex items-center gap-1.5 text-xs font-medium">
-                    <RowIcon className="size-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate" title={issue.title}>
-                      {issue.title}
-                    </span>
-                  </p>
-                  <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
-                    #{issue.number} ·{" "}
-                    {issue.author ? `${issue.author.login} · ` : ""}
-                    {formatRelativeTime(issue.createdAt)}
-                  </p>
-                </button>
-              );
-            })
-          )}
-        </div>
-      </ScrollArea>
-
+      }
+      filterRef={filterRef}
+      filterText={filterText}
+      onFilterText={setFilterText}
+      onListKeyDown={onListKeyDown}
+      stateLocal={stateLocal}
+      visibleLocal={visibleLocal}
+      localKey={(issue) => issue.id}
+      isLocalActive={(issue) =>
+        selectedIssue?.kind === "local" && selectedIssue.id === issue.id
+      }
+      onSelectLocal={(issue) => selectIssue({ kind: "local", id: issue.id })}
+      renderLocalRow={(issue) => (
+        <>
+          <p className="flex items-center gap-1.5 text-xs font-medium">
+            <RowIcon className="size-3 shrink-0 text-muted-foreground" />
+            <span className="truncate" title={issue.title}>
+              {issue.title}
+            </span>
+          </p>
+          <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
+            local · {formatRelativeTime(issue.createdAt)}
+            {issue.archived ? " · archived" : ""}
+          </p>
+        </>
+      )}
+      archivedLocalCount={archivedLocalCount}
+      showArchived={showArchived}
+      onToggleArchived={() => setShowArchived((v) => !v)}
+      ghPending={gh.isPending}
+      ghReady={ghReady}
+      listPending={issueList.isPending}
+      stateRemote={issues}
+      visibleRemote={visible}
+      remoteKey={(issue) => String(issue.number)}
+      isRemoteActive={(issue) =>
+        selectedIssue?.kind === "remote" &&
+        selectedIssue.id === String(issue.number)
+      }
+      onSelectRemote={(issue) =>
+        selectIssue({ kind: "remote", id: String(issue.number) })
+      }
+      onRemoteHover={(issue) =>
+        hoverPrefetch(() => prefetchIssue(issue.number))
+      }
+      renderRemoteRow={(issue) => (
+        <>
+          <p className="flex items-center gap-1.5 text-xs font-medium">
+            <RowIcon className="size-3 shrink-0 text-muted-foreground" />
+            <span className="truncate" title={issue.title}>
+              {issue.title}
+            </span>
+          </p>
+          <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
+            #{issue.number} · {issue.author ? `${issue.author.login} · ` : ""}
+            {formatRelativeTime(issue.createdAt)}
+          </p>
+        </>
+      )}
+      remoteSkeletonRows={3}
+      localNoun="issues"
+      remoteNoun="issues"
+    >
       <CreateIssueDialog
         repoPath={repoPath}
         open={createOpen}
@@ -297,6 +196,6 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
         open={createLocalOpen}
         onOpenChange={setCreateLocalOpen}
       />
-    </div>
+    </ConversationListPanel>
   );
 }

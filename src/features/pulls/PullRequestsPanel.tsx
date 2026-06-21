@@ -1,23 +1,9 @@
-import {
-  CaretDownIcon,
-  GitPullRequestIcon,
-  PlusIcon,
-} from "@phosphor-icons/react";
+import { GitPullRequestIcon } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
 import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
+import { ConversationListPanel } from "@/features/conversations/ConversationListPanel";
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
-import { GhNotReady } from "@/features/repository/GhNotReady";
 import type { PrStateFilter } from "@/lib/git/api";
 import {
   useGhStatus,
@@ -29,7 +15,6 @@ import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useLocalPrs } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { cn } from "@/lib/utils";
 import { CreateLocalPrDialog } from "./CreateLocalPrDialog";
 import { CreatePrDialog } from "./CreatePrDialog";
 import { useReconcileLocalPrs } from "./useReconcileLocalPrs";
@@ -107,42 +92,20 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   });
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-1 border-b p-2">
-        {(["open", "closed"] as const).map((s) => (
-          <Button
-            key={s}
-            variant={stateFilter === s ? "secondary" : "ghost"}
-            size="xs"
-            aria-pressed={stateFilter === s}
-            onClick={() => setStateFilter(s)}
-          >
-            {s === "open" ? "Open" : "Closed"}
-          </Button>
-        ))}
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button variant="ghost" size="xs" className="ml-auto">
-                <PlusIcon data-icon="inline-start" />
-                New
-                <CaretDownIcon data-icon="inline-end" />
-              </Button>
-            }
-          />
-          <DropdownMenuContent align="end" className="min-w-56">
-            <DropdownMenuItem
-              disabled={!canCreateGhPr}
-              title={ghCreateReason ?? undefined}
-              onClick={() => setGhCreateOpen(true)}
-            >
-              Pull request on GitHub…
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setCreateOpen(true)}>
-              Local pull request…
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+    <ConversationListPanel
+      repoPath={repoPath}
+      feature="pull requests"
+      stateFilter={stateFilter}
+      onStateFilter={setStateFilter}
+      newMenu={{
+        ghLabel: "Pull request on GitHub…",
+        ghDisabled: !canCreateGhPr,
+        ghReason: ghCreateReason ?? undefined,
+        onGh: () => setGhCreateOpen(true),
+        localLabel: "Local pull request…",
+        onLocal: () => setCreateOpen(true),
+      }}
+      filterSlot={
         <ConversationFilterPopover
           authors={authors}
           labels={labels}
@@ -153,138 +116,77 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
           authorCount={authorCount}
           labelCount={labelCount}
         />
-      </div>
-      <div className="border-b p-2">
-        <Input
-          ref={filterRef}
-          value={filterText}
-          onChange={(e) => setFilterText(e.target.value)}
-          placeholder="Search by title, #, author, or label"
-          className="h-7"
-          autoComplete="off"
-        />
-      </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <div onKeyDown={onListKeyDown}>
-          <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground">Local</p>
-          {visibleLocal.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground">
-              {stateLocal.length > 0
-                ? "No local pull requests match the filter."
-                : `No ${stateFilter} local pull requests.`}
-            </p>
-          ) : (
-            visibleLocal.map((pr) => {
-              const active =
-                selectedPr?.kind === "local" && selectedPr.id === pr.id;
-              return (
-                <button
-                  type="button"
-                  key={pr.id}
-                  data-row={`local:${pr.id}`}
-                  className={cn(
-                    "block w-full border-b px-3 py-2 text-left",
-                    active
-                      ? "bg-accent text-accent-foreground"
-                      : "hover:bg-muted/60",
-                  )}
-                  onClick={() => selectPr({ kind: "local", id: pr.id })}
-                >
-                  <p className="flex items-center gap-1.5 text-xs font-medium">
-                    <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate" title={pr.title}>
-                      {pr.title}
-                    </span>
-                    {pr.status !== "open" && (
-                      <Badge variant="secondary" className="capitalize">
-                        {pr.status}
-                      </Badge>
-                    )}
-                  </p>
-                  <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
-                    {pr.head} → {pr.base}
-                    {pr.archived ? " · archived" : ""}
-                  </p>
-                </button>
-              );
-            })
-          )}
-          {archivedLocalCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowArchived((v) => !v)}
-              className="px-3 py-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-            >
-              {showArchived
-                ? "Hide archived"
-                : `Show archived (${archivedLocalCount})`}
-            </button>
-          )}
-
-          <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">GitHub</p>
-          {gh.isPending ? (
-            <div className="space-y-2 p-3">
-              <Skeleton className="h-9 w-full" />
-            </div>
-          ) : !ghReady ? (
-            <GhNotReady repoPath={repoPath} feature="pull requests" />
-          ) : prList.isPending ? (
-            <div className="space-y-2 p-3">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-9 w-full" />
-            </div>
-          ) : visibleRemote.length === 0 ? (
-            <p className="px-3 py-4 text-xs text-muted-foreground">
-              {stateRemote.length > 0
-                ? "No pull requests match the filter."
-                : `No ${stateFilter} pull requests.`}
-            </p>
-          ) : (
-            visibleRemote.map((pr) => {
-              const active =
-                selectedPr?.kind === "remote" &&
-                selectedPr.id === String(pr.number);
-              return (
-                <button
-                  type="button"
-                  key={pr.number}
-                  data-row={`remote:${pr.number}`}
-                  className={cn(
-                    "block w-full border-b px-3 py-2 text-left",
-                    active
-                      ? "bg-accent text-accent-foreground"
-                      : "hover:bg-muted/60",
-                  )}
-                  onClick={() =>
-                    selectPr({ kind: "remote", id: String(pr.number) })
-                  }
-                  onMouseEnter={() =>
-                    hoverPrefetch(() => prefetchPr(pr.number))
-                  }
-                >
-                  <p className="flex items-center gap-1.5 text-xs font-medium">
-                    <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate" title={pr.title}>
-                      {pr.title}
-                    </span>
-                    {pr.isDraft && <Badge variant="secondary">draft</Badge>}
-                    {pr.state !== "OPEN" && (
-                      <Badge variant="secondary" className="capitalize">
-                        {pr.state.toLowerCase()}
-                      </Badge>
-                    )}
-                  </p>
-                  <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
-                    #{pr.number} · {pr.author ? `${pr.author.login} · ` : ""}
-                    {pr.headRefName} → {pr.baseRefName}
-                  </p>
-                </button>
-              );
-            })
-          )}
-        </div>
-      </ScrollArea>
-
+      }
+      filterRef={filterRef}
+      filterText={filterText}
+      onFilterText={setFilterText}
+      onListKeyDown={onListKeyDown}
+      stateLocal={stateLocal}
+      visibleLocal={visibleLocal}
+      localKey={(pr) => pr.id}
+      isLocalActive={(pr) =>
+        selectedPr?.kind === "local" && selectedPr.id === pr.id
+      }
+      onSelectLocal={(pr) => selectPr({ kind: "local", id: pr.id })}
+      renderLocalRow={(pr) => (
+        <>
+          <p className="flex items-center gap-1.5 text-xs font-medium">
+            <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
+            <span className="truncate" title={pr.title}>
+              {pr.title}
+            </span>
+            {pr.status !== "open" && (
+              <Badge variant="secondary" className="capitalize">
+                {pr.status}
+              </Badge>
+            )}
+          </p>
+          <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
+            {pr.head} → {pr.base}
+            {pr.archived ? " · archived" : ""}
+          </p>
+        </>
+      )}
+      archivedLocalCount={archivedLocalCount}
+      showArchived={showArchived}
+      onToggleArchived={() => setShowArchived((v) => !v)}
+      ghPending={gh.isPending}
+      ghReady={ghReady}
+      listPending={prList.isPending}
+      stateRemote={stateRemote}
+      visibleRemote={visibleRemote}
+      remoteKey={(pr) => String(pr.number)}
+      isRemoteActive={(pr) =>
+        selectedPr?.kind === "remote" && selectedPr.id === String(pr.number)
+      }
+      onSelectRemote={(pr) =>
+        selectPr({ kind: "remote", id: String(pr.number) })
+      }
+      onRemoteHover={(pr) => hoverPrefetch(() => prefetchPr(pr.number))}
+      renderRemoteRow={(pr) => (
+        <>
+          <p className="flex items-center gap-1.5 text-xs font-medium">
+            <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
+            <span className="truncate" title={pr.title}>
+              {pr.title}
+            </span>
+            {pr.isDraft && <Badge variant="secondary">draft</Badge>}
+            {pr.state !== "OPEN" && (
+              <Badge variant="secondary" className="capitalize">
+                {pr.state.toLowerCase()}
+              </Badge>
+            )}
+          </p>
+          <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
+            #{pr.number} · {pr.author ? `${pr.author.login} · ` : ""}
+            {pr.headRefName} → {pr.baseRefName}
+          </p>
+        </>
+      )}
+      remoteSkeletonRows={2}
+      localNoun="pull requests"
+      remoteNoun="pull requests"
+    >
       <CreateLocalPrDialog
         repoPath={repoPath}
         open={createOpen}
@@ -296,6 +198,6 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
         open={ghCreateOpen}
         onOpenChange={setGhCreateOpen}
       />
-    </div>
+    </ConversationListPanel>
   );
 }
