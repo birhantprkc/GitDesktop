@@ -7,7 +7,7 @@ import {
   SparkleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -28,6 +28,14 @@ import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { DebugJobDialog } from "./DebugJobDialog";
 import { isFailureConclusion, StatusIcon, statusLabel } from "./status";
+
+/** `gh` writes a short "still in progress" line to the log when a job's archive
+ *  isn't ready yet (it briefly races a just-finished job). Detect it so we show
+ *  a clean note instead of the raw line. Real logs are far longer. */
+function isLogPending(log: string): boolean {
+  const t = log.trim();
+  return t.length < 300 && /still in progress|will be available/i.test(t);
+}
 
 /** "1m 12s" elapsed between two ISO timestamps (now if not yet finished). */
 function duration(start: string, end: string): string {
@@ -58,8 +66,28 @@ function JobRow({
     isRunActive(job.status) || isFailureConclusion(job.conclusion),
   );
   const [showLogs, setShowLogs] = useState(false);
-  const logs = useJobLogs(repoPath, job.id, open && showLogs);
+  const jobActive = isRunActive(job.status);
+  // The archived log only exists once the job finishes, so don't fetch while it
+  // runs (gh would just return a "still in progress" line).
+  const logs = useJobLogs(repoPath, job.id, open && showLogs && !jobActive);
   const elapsed = duration(job.startedAt, job.completedAt);
+
+  // Auto-reveal the (now archived) logs the moment a job we're watching finishes.
+  const wasActive = useRef(jobActive);
+  useEffect(() => {
+    if (wasActive.current && !jobActive && open) setShowLogs(true);
+    wasActive.current = jobActive;
+  }, [jobActive, open]);
+
+  // The archive briefly races a just-finished job; poll until it's ready.
+  const pendingLog =
+    !jobActive && showLogs && !!logs.data && isLogPending(logs.data);
+  const refetchLogs = logs.refetch;
+  useEffect(() => {
+    if (!pendingLog) return;
+    const t = setTimeout(() => void refetchLogs(), 3000);
+    return () => clearTimeout(t);
+  }, [pendingLog, refetchLogs]);
 
   return (
     <div className="border-b last:border-b-0">
@@ -152,29 +180,58 @@ function JobRow({
       )}
       {open && (
         <div className="pr-3 pb-2 pl-10">
-          <button
-            type="button"
-            onClick={() => setShowLogs((v) => !v)}
-            className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-          >
-            {showLogs ? "Hide logs" : "Show logs"}
-          </button>
-          {showLogs && (
-            <div className="mt-1.5">
-              {logs.isPending ? (
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <Spinner /> Loading logs…
-                </div>
-              ) : logs.isError ? (
-                <p className="text-[11px] text-muted-foreground">
-                  Couldn't load logs.
-                </p>
-              ) : (
-                <pre className="max-h-80 overflow-auto border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-                  {logs.data?.trim() || "No logs available."}
-                </pre>
+          {jobActive ? (
+            // GitHub's logs API only serves a job's log once it's archived (on
+            // completion), so while it runs we point at GitHub's live view
+            // instead of showing gh's "still in progress" stderr.
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <Spinner className="size-3" />
+                Logs appear here when this job finishes.
+              </span>
+              {job.url && (
+                <button
+                  type="button"
+                  onClick={() => openUrl(job.url)}
+                  className="inline-flex items-center gap-1 underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  <ArrowSquareOutIcon className="size-3" />
+                  Watch live on GitHub
+                </button>
               )}
-            </div>
+            </p>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowLogs((v) => !v)}
+                className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              >
+                {showLogs ? "Hide logs" : "Show logs"}
+              </button>
+              {showLogs && (
+                <div className="mt-1.5">
+                  {logs.isPending ? (
+                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <Spinner /> Loading logs…
+                    </div>
+                  ) : logs.isError ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      Couldn't load logs.
+                    </p>
+                  ) : pendingLog ? (
+                    <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <Spinner className="size-3" />
+                      Logs are being archived — this can take a moment.
+                    </p>
+                  ) : (
+                    <pre className="max-h-80 overflow-auto border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                      {logs.data?.trim() || "No logs available."}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

@@ -12,6 +12,13 @@ commit list.
 
 ### Added
 
+- **Cleaner in-progress logs for GitHub Actions.** While a job is still running,
+  its logs section now shows a tidy "logs appear when this job finishes" note
+  with a **Watch live on GitHub** link — instead of GitHub's raw "still in
+  progress" message (the API only serves a job's log once it's archived on
+  completion). The moment the job finishes, its logs load in automatically — no
+  need to reopen the section.
+
 - **Syntax-highlighted code blocks in rendered markdown.** Fenced code blocks —
   in PR / issue / discussion descriptions and comments, AI review output, and
   release notes — are now syntax-highlighted with the GitHub color palette
