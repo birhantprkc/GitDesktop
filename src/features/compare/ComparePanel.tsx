@@ -153,7 +153,7 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
           <Button
             variant="outline"
             size="sm"
-            className="w-full"
+            className="w-full cursor-pointer"
             onClick={() => openUrl(existingPr.url)}
             title={existingPr.title}
           >

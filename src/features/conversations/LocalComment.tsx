@@ -123,7 +123,7 @@ export function LocalComment({
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          className="cursor-pointer text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
           Show hidden comment
         </button>
@@ -133,7 +133,7 @@ export function LocalComment({
             <button
               type="button"
               onClick={() => setExpanded(false)}
-              className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              className="cursor-pointer text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
               Hide comment
             </button>

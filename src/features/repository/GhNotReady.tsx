@@ -47,6 +47,7 @@ export function GhNotReady({
             variant="outline"
             size="sm"
             onClick={() => openUrl("https://cli.github.com")}
+            className="cursor-pointer"
           >
             <GithubLogoIcon data-icon="inline-start" />
             Install GitHub CLI

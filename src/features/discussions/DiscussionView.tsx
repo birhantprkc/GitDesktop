@@ -366,6 +366,7 @@ export function DiscussionView({
             size="xs"
             onClick={() => openUrl(d.url)}
             title="Open this discussion on GitHub"
+            className="cursor-pointer"
           >
             <ArrowSquareOutIcon data-icon="inline-start" />
             GitHub

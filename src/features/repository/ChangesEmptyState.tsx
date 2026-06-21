@@ -95,6 +95,7 @@ export function ChangesEmptyState({
             <Button
               variant="outline"
               size="sm"
+              className="cursor-pointer"
               onClick={() =>
                 ghRepoUrl(repoPath)
                   .then((url) => openUrl(url))

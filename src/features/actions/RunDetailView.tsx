@@ -157,7 +157,7 @@ function JobRow({
                     type="button"
                     onClick={() => openUrl(href)}
                     title="Open this step's logs on GitHub"
-                    className="group flex w-full items-center gap-2 py-1 pr-3 pl-10 text-left text-xs hover:bg-muted/40"
+                    className="group flex w-full cursor-pointer items-center gap-2 py-1 pr-3 pl-10 text-left text-xs hover:bg-muted/40"
                   >
                     {inner}
                   </button>
@@ -193,7 +193,7 @@ function JobRow({
                 <button
                   type="button"
                   onClick={() => openUrl(job.url)}
-                  className="inline-flex items-center gap-1 underline-offset-2 hover:text-foreground hover:underline"
+                  className="inline-flex cursor-pointer items-center gap-1 underline-offset-2 hover:text-foreground hover:underline"
                 >
                   <ArrowSquareOutIcon className="size-3" />
                   Watch live on GitHub
@@ -205,7 +205,7 @@ function JobRow({
               <button
                 type="button"
                 onClick={() => setShowLogs((v) => !v)}
-                className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                className="cursor-pointer text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
               >
                 {showLogs ? "Hide logs" : "Show logs"}
               </button>
@@ -365,7 +365,7 @@ export function RunDetailView({
           <Button
             variant="ghost"
             size="sm"
-            className="ml-auto"
+            className="ml-auto cursor-pointer"
             disabled={!run.url}
             onClick={() => run.url && openUrl(run.url)}
           >

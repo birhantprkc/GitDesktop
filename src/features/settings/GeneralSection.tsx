@@ -83,7 +83,7 @@ export const GeneralSection = withForm({
           {PRIVACY_POLICY_URL && (
             <button
               type="button"
-              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              className="cursor-pointer text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
               onClick={() => openUrl(PRIVACY_POLICY_URL)}
             >
               Privacy policy

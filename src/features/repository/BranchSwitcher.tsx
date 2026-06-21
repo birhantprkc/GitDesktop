@@ -617,7 +617,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                         : `${PR_STATE_LABEL[pr.state]} pull request ${pr.label} — open in Pull Requests`
                     }
                     className={cn(
-                      "flex shrink-0 items-center gap-0.5 text-[11px] tabular-nums hover:underline",
+                      "flex shrink-0 cursor-pointer items-center gap-0.5 text-[11px] tabular-nums hover:underline",
                       PR_TONE[pr.state],
                     )}
                     onClick={(e) => {

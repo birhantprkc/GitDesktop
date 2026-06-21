@@ -287,6 +287,7 @@ export function RemoteIssueView({
             size="xs"
             onClick={() => openUrl(issue.url)}
             title="Open this issue on GitHub"
+            className="cursor-pointer"
           >
             <ArrowSquareOutIcon data-icon="inline-start" />
             GitHub

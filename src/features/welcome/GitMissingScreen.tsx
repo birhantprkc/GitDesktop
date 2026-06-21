@@ -19,6 +19,7 @@ export function GitMissingScreen({ onRetry }: { onRetry: () => void }) {
           <Button onClick={onRetry}>Retry</Button>
           <Button
             variant="outline"
+            className="cursor-pointer"
             onClick={() => openUrl("https://git-scm.com/downloads")}
           >
             Download Git

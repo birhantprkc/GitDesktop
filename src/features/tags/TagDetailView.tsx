@@ -182,6 +182,7 @@ export function TagDetailView({
                 variant="outline"
                 size="xs"
                 onClick={() => openUrl(rel.url)}
+                className="cursor-pointer"
               >
                 <ArrowSquareOutIcon data-icon="inline-start" />
                 GitHub

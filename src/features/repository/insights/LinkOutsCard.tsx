@@ -64,7 +64,7 @@ export function LinkOutsCard({
         <Button
           variant="outline"
           size="sm"
-          className="justify-start"
+          className="cursor-pointer justify-start"
           onClick={openStars}
         >
           <ArrowSquareOutIcon data-icon="inline-start" />

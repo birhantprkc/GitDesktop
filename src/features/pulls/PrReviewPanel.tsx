@@ -338,7 +338,7 @@ export function PrReviewPanel({
                 type="button"
                 aria-pressed={ignored}
                 disabled={generating}
-                className="underline-offset-2 hover:underline disabled:opacity-50"
+                className="cursor-pointer underline-offset-2 hover:underline disabled:opacity-50"
                 onClick={() => toggleIgnore(m)}
               >
                 {ignored ? "Use previous review" : "Ignore previous review"}
@@ -358,7 +358,7 @@ export function PrReviewPanel({
               type="button"
               aria-pressed={ignoreExternal}
               disabled={generating}
-              className="underline-offset-2 hover:underline disabled:opacity-50"
+              className="cursor-pointer underline-offset-2 hover:underline disabled:opacity-50"
               onClick={() => setIgnoreExternal((v) => !v)}
             >
               {ignoreExternal

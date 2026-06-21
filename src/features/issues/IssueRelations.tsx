@@ -60,7 +60,7 @@ function RelatedRow({
       <button
         type="button"
         onClick={() => onOpen(issue.number)}
-        className="min-w-0 flex-1 truncate text-left hover:underline"
+        className="min-w-0 flex-1 cursor-pointer truncate text-left hover:underline"
         title={`#${issue.number} ${issue.title}`}
       >
         <span className="text-muted-foreground">#{issue.number}</span>{" "}

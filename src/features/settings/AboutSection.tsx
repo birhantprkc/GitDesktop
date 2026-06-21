@@ -121,7 +121,7 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
         <Button
           variant="outline"
           size="xs"
-          className="shrink-0"
+          className="shrink-0 cursor-pointer"
           onClick={() => openUrl(meta.install)}
         >
           Install

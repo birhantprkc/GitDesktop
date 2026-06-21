@@ -167,6 +167,17 @@ commit list.
 
 ### Fixed
 
+- **Links to external pages use the pointer cursor.** Buttons and link-styled
+  text that open something in your browser — the "GitHub" / "View on GitHub"
+  buttons across pull requests, issues, discussions, tags, and the compare view;
+  the issue sidebar's Projects/Notifications links; setup links (Download Git,
+  Install GitHub CLI); the Settings privacy-policy and component-install links;
+  the Actions step/run deep-links; and the linked-PR/issue rows — now show the
+  hand (pointer) cursor on hover instead of the default arrow, so they read as
+  the links they are. The link-styled in-app toggles (show/hide a hidden comment,
+  show/hide archived, ignore a prior review) got the same treatment for
+  consistency.
+
 - **The Changes list stays fast (and stops crashing) on huge working trees.**
   Repositories with thousands of changed files used to bog down or crash the
   Changes tab. The list is now virtualized — only the visible rows are rendered —

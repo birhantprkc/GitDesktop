@@ -373,6 +373,7 @@ export function RemotePrView({
             size="xs"
             onClick={() => openUrl(pr.url)}
             title="Open this pull request on GitHub"
+            className="cursor-pointer"
           >
             <ArrowSquareOutIcon data-icon="inline-start" />
             GitHub

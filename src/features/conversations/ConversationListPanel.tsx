@@ -193,7 +193,7 @@ export function ConversationListPanel<L, R>(props: {
             <button
               type="button"
               onClick={onToggleArchived}
-              className="px-3 py-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              className="cursor-pointer px-3 py-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
               {showArchived
                 ? "Hide archived"
