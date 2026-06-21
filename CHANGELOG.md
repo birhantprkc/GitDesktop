@@ -121,6 +121,13 @@ commit list.
 
 ### Fixed
 
+- **The Changes list stays fast (and stops crashing) on huge working trees.**
+  Repositories with thousands of changed files used to bog down or crash the
+  Changes tab. The list is now virtualized — only the visible rows are rendered —
+  and the per-file right-click menu was consolidated into one shared menu instead
+  of mounting a menu for every row. Selecting, filtering, and arrow-key
+  navigation stay smooth no matter how many files have changed.
+
 - **"Debug with AI" no longer cancels when you close the dialog.** The Actions
   failure-diagnosis used to stop and discard itself the moment you closed its
   window — so an accidental close threw away the analysis. Now closing just hides

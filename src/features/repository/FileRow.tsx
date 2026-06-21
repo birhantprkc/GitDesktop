@@ -1,27 +1,7 @@
 import { MinusIcon, PlusIcon } from "@phosphor-icons/react";
-import { useEffect, useRef } from "react";
-import { toast } from "sonner";
+import { memo } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import { copyText } from "@/lib/clipboard";
-import {
-  openWithDefault,
-  openWithProgram,
-  revealInExplorer,
-} from "@/lib/git/api";
-import { useAppendToGitignore, useUntrack } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
-import { useSettings } from "@/lib/settings/queries";
-import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 const KIND_BADGE: Record<ChangeKind, { letter: string; className: string }> = {
@@ -35,334 +15,89 @@ const KIND_BADGE: Record<ChangeKind, { letter: string; className: string }> = {
   conflicted: { letter: "!", className: "text-destructive" },
 };
 
-/** "src/lib/x.ts" -> ["src/lib", "src"] (closest folder first). */
-function ancestorFolders(path: string): string[] {
-  const folders: string[] = [];
-  let current = path;
-  for (;;) {
-    const slash = current.lastIndexOf("/");
-    if (slash === -1) break;
-    current = current.slice(0, slash);
-    folders.push(current);
-  }
-  return folders;
-}
-
-export function FileRow({
+/**
+ * A single changed-file row. Deliberately light: it carries no context menu or
+ * data hooks of its own (those live in one shared menu at the panel level, so a
+ * list of thousands of files doesn't mount thousands of portals). `memo` keeps a
+ * selection change from re-rendering every windowed row — only the rows whose
+ * `selected`/`active` actually flip.
+ */
+export const FileRow = memo(function FileRow({
   entry,
   kind,
   staged,
   selected,
   active,
-  selectionCount,
   disabled,
-  repoPath,
   onSelect,
   onToggle,
-  onDiscard,
-  onStashFile,
-  onViewHistory,
-  onBlame,
-  onStageSelected,
-  onUnstageSelected,
-  onDiscardSelected,
-  onStashSelected,
-  onIgnoreSelected,
-  onUntrackSelected,
-  selectedTrackedCount,
 }: {
   entry: FileEntry;
   kind: ChangeKind;
   staged: boolean;
   /** Part of the multi-selection (drives the row highlight). */
   selected: boolean;
-  /** The active row whose diff is shown — keep it scrolled into view. */
+  /** The active row whose diff is shown (keeps its toggle button visible). */
   active: boolean;
-  /** Size of the current multi-selection (drives bulk vs. single menu). */
-  selectionCount: number;
   disabled: boolean;
-  repoPath: string;
-  onSelect: (mods: { ctrlOrMeta: boolean; shift: boolean }) => void;
-  onToggle: () => void;
-  onDiscard?: () => void;
-  onStashFile?: () => void;
-  onViewHistory?: () => void;
-  onBlame?: () => void;
-  onStageSelected?: () => void;
-  onUnstageSelected?: () => void;
-  onDiscardSelected?: () => void;
-  onStashSelected?: () => void;
-  onIgnoreSelected?: () => void;
-  onUntrackSelected?: () => void;
-  /** How many of the selection git tracks (drives the bulk "Untrack" item). */
-  selectedTrackedCount?: number;
+  onSelect: (
+    entry: FileEntry,
+    staged: boolean,
+    mods: { ctrlOrMeta: boolean; shift: boolean },
+  ) => void;
+  onToggle: (entry: FileEntry, staged: boolean) => void;
 }) {
-  const appendIgnore = useAppendToGitignore(repoPath);
-  const untrack = useUntrack(repoPath);
-  const settings = useSettings();
-  const rowRef = useRef<HTMLDivElement>(null);
-  // Keep the active row visible when the selection moves with the arrow keys
-  // (a no-op for clicks — the row is already in view). Tracks the active row,
-  // not every multi-selected row, so a range-select doesn't fight to scroll.
-  useEffect(() => {
-    if (active) rowRef.current?.scrollIntoView({ block: "nearest" });
-  }, [active]);
-  const externalEditor = (settings.data?.externalEditor ?? "").trim();
-  const editorName =
-    (settings.data?.externalEditorName ?? "").trim() || "editor";
   const badge = KIND_BADGE[kind];
   const label = entry.origPath
     ? `${entry.origPath} → ${entry.path}`
     : entry.path;
-  const absolutePath = `${repoPath}\\${entry.path.replaceAll("/", "\\")}`;
-  const folders = ancestorFolders(entry.path);
-  const dot = entry.path.lastIndexOf(".");
-  const extension =
-    dot > entry.path.lastIndexOf("/") + 1 ? entry.path.slice(dot + 1) : null;
-  // Untracking only makes sense for files git already tracks — not a fresh
-  // untracked file (nothing to remove) nor a brand-new staged add (that's just
-  // unstaging).
-  const isTracked = entry.unstaged !== "untracked" && entry.staged !== "added";
-
-  function ignore(pattern: string) {
-    appendIgnore.mutate([pattern], {
-      onSuccess: () => toast.success(`Added "${pattern}" to .gitignore`),
-      onError: (e) => toastError(e),
-    });
-  }
-
-  // `pathspec` is what `git rm --cached` removes; `ignorePattern` is the
-  // matching .gitignore line so the file stays untracked afterwards.
-  function doUntrack(pathspec: string, ignorePattern: string, label: string) {
-    untrack.mutate(
-      { pathspecs: [pathspec], ignorePatterns: [ignorePattern] },
-      {
-        onSuccess: () =>
-          toast.success(
-            `Untracked ${label} — kept on disk, added to .gitignore`,
-          ),
-        onError: (e) => toastError(e),
-      },
-    );
-  }
-
-  const onError = (e: unknown) => toastError(e);
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger
-        render={
-          <div
-            ref={rowRef}
-            data-row={`${staged ? "staged" : "unstaged"}:${entry.path}`}
-            className={cn(
-              "group flex w-full cursor-pointer items-center gap-2 px-2 py-1 text-left text-xs",
-              selected
-                ? "bg-accent text-accent-foreground"
-                : "hover:bg-muted/60",
-            )}
-            onClick={(e) =>
-              onSelect({
-                ctrlOrMeta: e.ctrlKey || e.metaKey,
-                shift: e.shiftKey,
-              })
-            }
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ")
-                onSelect({ ctrlOrMeta: false, shift: false });
-            }}
-            role="button"
-            tabIndex={0}
-          >
-            <span className={cn("w-3 shrink-0 font-semibold", badge.className)}>
-              {badge.letter}
-            </span>
-            <span className="min-w-0 flex-1 truncate" title={label}>
-              {label}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className={cn(
-                // Hover reveals the toggle; keep it visible on the active row
-                // (the one whose diff is shown) and any selected row so keyboard
-                // navigation and the current selection always expose the action.
-                "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
-                (active || selected) && "opacity-100",
-              )}
-              aria-label={
-                staged ? `Unstage ${entry.path}` : `Stage ${entry.path}`
-              }
-              disabled={disabled}
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggle();
-              }}
-            >
-              {staged ? <MinusIcon /> : <PlusIcon />}
-            </Button>
-          </div>
-        }
-      />
-      <ContextMenuContent className="min-w-64">
-        {selected && selectionCount > 1 ? (
-          <>
-            {!staged && onStageSelected && (
-              <ContextMenuItem onClick={onStageSelected}>
-                Stage {selectionCount} files
-              </ContextMenuItem>
-            )}
-            {staged && onUnstageSelected && (
-              <ContextMenuItem onClick={onUnstageSelected}>
-                Unstage {selectionCount} files
-              </ContextMenuItem>
-            )}
-            <ContextMenuItem onClick={onDiscardSelected}>
-              Discard {selectionCount} changes…
-            </ContextMenuItem>
-            <ContextMenuItem onClick={onStashSelected}>
-              Stash {selectionCount} changes…
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={onIgnoreSelected}>
-              Ignore {selectionCount} files (add to .gitignore)
-            </ContextMenuItem>
-            {(selectedTrackedCount ?? 0) > 0 && onUntrackSelected && (
-              <ContextMenuItem onClick={onUntrackSelected}>
-                Untrack {selectedTrackedCount} files (keep on disk)
-              </ContextMenuItem>
-            )}
-          </>
-        ) : (
-          <>
-            <ContextMenuItem onClick={onToggle}>
-              {staged ? "Unstage file" : "Stage file"}
-            </ContextMenuItem>
-            {!staged && onDiscard && (
-              <ContextMenuItem onClick={onDiscard}>
-                Discard changes…
-              </ContextMenuItem>
-            )}
-            {onStashFile && (
-              <ContextMenuItem onClick={onStashFile}>
-                Stash change…
-              </ContextMenuItem>
-            )}
-            {isTracked && onViewHistory && (
-              <>
-                <ContextMenuSeparator />
-                <ContextMenuItem onClick={onViewHistory}>
-                  View file history…
-                </ContextMenuItem>
-                {onBlame && (
-                  <ContextMenuItem onClick={onBlame}>Blame…</ContextMenuItem>
-                )}
-              </>
-            )}
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => ignore(`/${entry.path}`)}>
-              Ignore file (add to .gitignore)
-            </ContextMenuItem>
-            {folders.length > 0 && (
-              <ContextMenuSub>
-                <ContextMenuSubTrigger>
-                  Ignore folder (add to .gitignore)
-                </ContextMenuSubTrigger>
-                <ContextMenuSubContent>
-                  {folders.map((folder) => (
-                    <ContextMenuItem
-                      key={folder}
-                      onClick={() => ignore(`/${folder}/`)}
-                    >
-                      <span className="font-mono">{folder}/</span>
-                    </ContextMenuItem>
-                  ))}
-                </ContextMenuSubContent>
-              </ContextMenuSub>
-            )}
-            {extension && (
-              <ContextMenuItem onClick={() => ignore(`*.${extension}`)}>
-                Ignore all .{extension} files (add to .gitignore)
-              </ContextMenuItem>
-            )}
-            {isTracked && (
-              <>
-                <ContextMenuSeparator />
-                <ContextMenuItem
-                  onClick={() =>
-                    doUntrack(entry.path, `/${entry.path}`, `"${entry.path}"`)
-                  }
-                >
-                  Untrack file (keep on disk)
-                </ContextMenuItem>
-                {folders.length > 0 && (
-                  <ContextMenuSub>
-                    <ContextMenuSubTrigger>
-                      Untrack folder (keep on disk)
-                    </ContextMenuSubTrigger>
-                    <ContextMenuSubContent>
-                      {folders.map((folder) => (
-                        <ContextMenuItem
-                          key={folder}
-                          onClick={() =>
-                            doUntrack(folder, `/${folder}/`, `"${folder}/"`)
-                          }
-                        >
-                          <span className="font-mono">{folder}/</span>
-                        </ContextMenuItem>
-                      ))}
-                    </ContextMenuSubContent>
-                  </ContextMenuSub>
-                )}
-                {extension && (
-                  <ContextMenuItem
-                    onClick={() =>
-                      doUntrack(
-                        `*.${extension}`,
-                        `*.${extension}`,
-                        `*.${extension} files`,
-                      )
-                    }
-                  >
-                    Untrack all .{extension} files (keep on disk)
-                  </ContextMenuItem>
-                )}
-              </>
-            )}
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              onClick={() => copyText(absolutePath, "Path copied")}
-            >
-              Copy file path
-            </ContextMenuItem>
-            <ContextMenuItem
-              onClick={() => copyText(entry.path, "Relative path copied")}
-            >
-              Copy relative file path
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              onClick={() => revealInExplorer(absolutePath).catch(onError)}
-            >
-              Show in Explorer
-            </ContextMenuItem>
-            {externalEditor && (
-              <ContextMenuItem
-                onClick={() =>
-                  openWithProgram(externalEditor, absolutePath).catch(onError)
-                }
-              >
-                Open in {editorName}
-              </ContextMenuItem>
-            )}
-            <ContextMenuItem
-              onClick={() => openWithDefault(absolutePath).catch(onError)}
-            >
-              Open with default program
-            </ContextMenuItem>
-          </>
+    <div
+      data-row={`${staged ? "staged" : "unstaged"}:${entry.path}`}
+      className={cn(
+        "group flex w-full cursor-pointer items-center gap-2 px-2 py-1 text-left text-xs",
+        selected ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
+      )}
+      onClick={(e) =>
+        onSelect(entry, staged, {
+          ctrlOrMeta: e.ctrlKey || e.metaKey,
+          shift: e.shiftKey,
+        })
+      }
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ")
+          onSelect(entry, staged, { ctrlOrMeta: false, shift: false });
+      }}
+      role="option"
+      aria-selected={selected}
+      tabIndex={0}
+    >
+      <span className={cn("w-3 shrink-0 font-semibold", badge.className)}>
+        {badge.letter}
+      </span>
+      <span className="min-w-0 flex-1 truncate" title={label}>
+        {label}
+      </span>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        className={cn(
+          // Hover reveals the toggle; keep it visible on the active row (the one
+          // whose diff is shown) and any selected row so keyboard navigation and
+          // the current selection always expose the action.
+          "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+          (active || selected) && "opacity-100",
         )}
-      </ContextMenuContent>
-    </ContextMenu>
+        aria-label={staged ? `Unstage ${entry.path}` : `Stage ${entry.path}`}
+        disabled={disabled}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle(entry, staged);
+        }}
+      >
+        {staged ? <MinusIcon /> : <PlusIcon />}
+      </Button>
+    </div>
   );
-}
+});

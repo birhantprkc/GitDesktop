@@ -13,8 +13,9 @@ import {
   StackIcon,
   TerminalIcon,
 } from "@phosphor-icons/react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -22,6 +23,10 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -41,15 +46,16 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BlameDialog } from "@/features/history/BlameDialog";
 import { FileHistoryDialog } from "@/features/history/FileHistoryDialog";
+import { copyText } from "@/lib/clipboard";
 import {
   ghRepoUrl,
   openInTerminal,
   openWithDefault,
   openWithProgram,
+  revealInExplorer,
 } from "@/lib/git/api";
 import {
   useAppendToGitignore,
@@ -73,6 +79,7 @@ import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 import { ConflictBanner } from "./ConflictBanner";
 import { FileRow } from "./FileRow";
 import { StashesDialog } from "./StashesDialog";
@@ -83,6 +90,19 @@ import { StashesDialog } from "./StashesDialog";
  */
 function unstagePaths(entry: FileEntry): string[] {
   return entry.origPath ? [entry.path, entry.origPath] : [entry.path];
+}
+
+/** "src/lib/x.ts" -> ["src/lib", "src"] (closest folder first). */
+function ancestorFolders(path: string): string[] {
+  const folders: string[] = [];
+  let current = path;
+  for (;;) {
+    const slash = current.lastIndexOf("/");
+    if (slash === -1) break;
+    current = current.slice(0, slash);
+    folders.push(current);
+  }
+  return folders;
 }
 
 type FilterKind = "included" | "excluded" | "new" | "modified" | "deleted";
@@ -116,31 +136,18 @@ type ChangeActionScope =
   | { kind: "all" }
   | null;
 
-/** Right-click wrapper for a section header, exposing the whole-tree
- *  "Discard all" / "Stash all" actions. */
-function SectionHeaderMenu({
-  header,
-  onDiscardAll,
-  onStashAll,
-}: {
-  header: React.ReactElement;
-  onDiscardAll: () => void;
-  onStashAll: () => void;
-}) {
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger render={header} />
-      <ContextMenuContent className="min-w-56">
-        <ContextMenuItem onClick={onDiscardAll}>
-          Discard all changes…
-        </ContextMenuItem>
-        <ContextMenuItem onClick={onStashAll}>
-          Stash all changes…
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}
+/** A flattened row in the virtualized changes list: a section header or a file.
+ *  One flat list (not two nested sections) keeps virtualization, cross-section
+ *  arrow-key navigation, and range selection in a single index space. */
+type FlatRow =
+  | { type: "header"; section: "staged" | "unstaged"; count: number }
+  | { type: "file"; entry: FileEntry; staged: boolean };
+
+/** What the one shared context menu acts on, set on right-click. */
+type MenuTarget =
+  | { kind: "row"; entry: FileEntry; staged: boolean }
+  | { kind: "global" }
+  | null;
 
 export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
@@ -177,7 +184,13 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const [stashesOpen, setStashesOpen] = useState(false);
   const [historyPath, setHistoryPath] = useState<string | null>(null);
   const [blamePath, setBlamePath] = useState<string | null>(null);
+  // The one shared context menu acts on whatever was right-clicked.
+  const [menuTarget, setMenuTarget] = useState<MenuTarget>(null);
   const filterRef = useRef<HTMLInputElement>(null);
+  // State-backed (not a plain ref) so the virtualizer observes the scroll
+  // element the instant it mounts — the list area is only rendered once there
+  // are changes, and a plain ref would leave the first paint blank.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
 
   const entries = status.data?.entries ?? [];
 
@@ -253,6 +266,48 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     (e) => e.unstaged !== "untracked" && e.staged !== "added",
   );
 
+  // One flattened list (section headers + their files) drives a single
+  // virtualizer, so a working tree with thousands of changed files only renders
+  // a window of rows instead of mounting every row (which used to crash).
+  const flatRows: FlatRow[] = [];
+  if (stagedEntries.length > 0) {
+    flatRows.push({
+      type: "header",
+      section: "staged",
+      count: stagedEntries.length,
+    });
+    for (const entry of stagedEntries)
+      flatRows.push({ type: "file", entry, staged: true });
+  }
+  if (unstagedEntries.length > 0) {
+    flatRows.push({
+      type: "header",
+      section: "unstaged",
+      count: unstagedEntries.length,
+    });
+    for (const entry of unstagedEntries)
+      flatRows.push({ type: "file", entry, staged: false });
+  }
+  const rowVirtualizer = useVirtualizer({
+    count: flatRows.length,
+    getScrollElement: () => scrollEl,
+    estimateSize: (i) => {
+      const r = flatRows[i];
+      if (r.type === "file") return 28;
+      // The "Changes" header carries a top gap only when it follows the staged
+      // section; bake that into the estimate so the first paint never overlaps.
+      return r.section === "unstaged" && stagedEntries.length > 0 ? 40 : 32;
+    },
+    overscan: 16,
+  });
+  // Flat index of the active file row, so we can keep it scrolled into view
+  // under virtualization (its own DOM node may not be mounted).
+  const activeFlatIndex = activeKey
+    ? flatRows.findIndex(
+        (r) => r.type === "file" && keyOf(r.entry.path, r.staged) === activeKey,
+      )
+    : -1;
+
   // Arrow keys walk the rows across both sections; Shift extends from the
   // anchor, a plain arrow collapses to the single active row.
   const rowKey = (r: { entry: FileEntry; staged: boolean }) =>
@@ -303,6 +358,18 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
       return next.size === prev.size ? prev : next;
     });
   }, [status.data]);
+  // Keep the active row scrolled into view as the selection moves — under
+  // virtualization its DOM node may not be mounted, so scroll by index.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on active change
+  useEffect(() => {
+    if (activeFlatIndex >= 0)
+      rowVirtualizer.scrollToIndex(activeFlatIndex, { align: "auto" });
+  }, [activeFlatIndex]);
+  // Jump back to the top whenever the filter changes the visible set.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on filter change
+  useEffect(() => {
+    rowVirtualizer.scrollToOffset(0);
+  }, [text, activeKinds]);
   const mutating = stage.isPending || unstage.isPending;
   const onError = (e: unknown) => toastError(e);
 
@@ -355,6 +422,50 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     }
     setSelectedKeys(new Set([key]));
     setAnchorKey(key);
+  }
+
+  // Toggle one file's staged state — the row's +/- button and the single menu.
+  function handleToggle(entry: FileEntry, staged: boolean) {
+    if (staged) unstage.mutate(unstagePaths(entry), { onError });
+    else stage.mutate([entry.path], { onError });
+  }
+
+  // Single-file ignore / untrack (the per-row menu); the bulk equivalents are
+  // ignoreSelected / untrackSelected below.
+  function ignoreOne(pattern: string) {
+    appendIgnore.mutate([pattern], {
+      onSuccess: () => toast.success(`Added "${pattern}" to .gitignore`),
+      onError,
+    });
+  }
+  function untrackOne(pathspec: string, ignorePattern: string, label: string) {
+    untrack.mutate(
+      { pathspecs: [pathspec], ignorePatterns: [ignorePattern] },
+      {
+        onSuccess: () =>
+          toast.success(
+            `Untracked ${label} — kept on disk, added to .gitignore`,
+          ),
+        onError,
+      },
+    );
+  }
+
+  // Right-click anywhere in the list: act on the row under the cursor, or fall
+  // back to the whole-tree menu for section headers and blank space.
+  function handleContextMenu(e: MouseEvent) {
+    const rowEl = (e.target as HTMLElement).closest("[data-row]");
+    const key = rowEl?.getAttribute("data-row");
+    if (key) {
+      const staged = key.startsWith("staged:");
+      const path = key.slice(key.indexOf(":") + 1);
+      const entry = entries.find((en) => en.path === path);
+      if (entry) {
+        setMenuTarget({ kind: "row", entry, staged });
+        return;
+      }
+    }
+    setMenuTarget({ kind: "global" });
   }
 
   function stageAll() {
@@ -505,6 +616,193 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
         finish();
       },
     });
+  }
+
+  // The shared context menu's items, chosen from whatever was right-clicked:
+  // the whole tree (header / blank space), a multi-selection, or a single file.
+  function renderMenuItems() {
+    if (!menuTarget) return null;
+    if (menuTarget.kind === "global") {
+      return (
+        <>
+          <ContextMenuItem onClick={() => setDiscardScope({ kind: "all" })}>
+            Discard all changes…
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => setStashScope({ kind: "all" })}>
+            Stash all changes…
+          </ContextMenuItem>
+        </>
+      );
+    }
+    const { entry, staged } = menuTarget;
+    const inSelection = selectedKeys.has(keyOf(entry.path, staged));
+    if (inSelection && selectionCount > 1) {
+      return (
+        <>
+          {!staged && (
+            <ContextMenuItem onClick={stageSelected}>
+              Stage {selectionCount} files
+            </ContextMenuItem>
+          )}
+          {staged && (
+            <ContextMenuItem onClick={unstageSelected}>
+              Unstage {selectionCount} files
+            </ContextMenuItem>
+          )}
+          <ContextMenuItem onClick={requestDiscardSelected}>
+            Discard {selectionCount} changes…
+          </ContextMenuItem>
+          <ContextMenuItem onClick={requestStashSelected}>
+            Stash {selectionCount} changes…
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={ignoreSelected}>
+            Ignore {selectionCount} files (add to .gitignore)
+          </ContextMenuItem>
+          {selectedTracked.length > 0 && (
+            <ContextMenuItem onClick={untrackSelected}>
+              Untrack {selectedTracked.length} files (keep on disk)
+            </ContextMenuItem>
+          )}
+        </>
+      );
+    }
+    const absolutePath = `${repoPath}\\${entry.path.replaceAll("/", "\\")}`;
+    const folders = ancestorFolders(entry.path);
+    const dot = entry.path.lastIndexOf(".");
+    const extension =
+      dot > entry.path.lastIndexOf("/") + 1 ? entry.path.slice(dot + 1) : null;
+    const isTracked =
+      entry.unstaged !== "untracked" && entry.staged !== "added";
+    return (
+      <>
+        <ContextMenuItem onClick={() => handleToggle(entry, staged)}>
+          {staged ? "Unstage file" : "Stage file"}
+        </ContextMenuItem>
+        {!staged && (
+          <ContextMenuItem
+            onClick={() => setDiscardScope({ kind: "files", entries: [entry] })}
+          >
+            Discard changes…
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem
+          onClick={() => setStashScope({ kind: "files", entries: [entry] })}
+        >
+          Stash change…
+        </ContextMenuItem>
+        {isTracked && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => setHistoryPath(entry.path)}>
+              View file history…
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => setBlamePath(entry.path)}>
+              Blame…
+            </ContextMenuItem>
+          </>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => ignoreOne(`/${entry.path}`)}>
+          Ignore file (add to .gitignore)
+        </ContextMenuItem>
+        {folders.length > 0 && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              Ignore folder (add to .gitignore)
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {folders.map((folder) => (
+                <ContextMenuItem
+                  key={folder}
+                  onClick={() => ignoreOne(`/${folder}/`)}
+                >
+                  <span className="font-mono">{folder}/</span>
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
+        {extension && (
+          <ContextMenuItem onClick={() => ignoreOne(`*.${extension}`)}>
+            Ignore all .{extension} files (add to .gitignore)
+          </ContextMenuItem>
+        )}
+        {isTracked && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onClick={() =>
+                untrackOne(entry.path, `/${entry.path}`, `"${entry.path}"`)
+              }
+            >
+              Untrack file (keep on disk)
+            </ContextMenuItem>
+            {folders.length > 0 && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  Untrack folder (keep on disk)
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  {folders.map((folder) => (
+                    <ContextMenuItem
+                      key={folder}
+                      onClick={() =>
+                        untrackOne(folder, `/${folder}/`, `"${folder}/"`)
+                      }
+                    >
+                      <span className="font-mono">{folder}/</span>
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            )}
+            {extension && (
+              <ContextMenuItem
+                onClick={() =>
+                  untrackOne(
+                    `*.${extension}`,
+                    `*.${extension}`,
+                    `*.${extension} files`,
+                  )
+                }
+              >
+                Untrack all .{extension} files (keep on disk)
+              </ContextMenuItem>
+            )}
+          </>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => copyText(absolutePath, "Path copied")}>
+          Copy file path
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => copyText(entry.path, "Relative path copied")}
+        >
+          Copy relative file path
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onClick={() => revealInExplorer(absolutePath).catch(onError)}
+        >
+          Show in Explorer
+        </ContextMenuItem>
+        {editorPath && (
+          <ContextMenuItem
+            onClick={() =>
+              openWithProgram(editorPath, absolutePath).catch(onError)
+            }
+          >
+            Open in {editorName}
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem
+          onClick={() => openWithDefault(absolutePath).catch(onError)}
+        >
+          Open with default program
+        </ContextMenuItem>
+      </>
+    );
   }
 
   useHotkeyAction(
@@ -768,130 +1066,109 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
               </div>
             )}
 
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="p-2" onKeyDown={onListKeyDown}>
-              {nothingMatches && (
+          <ContextMenu>
+            <ContextMenuTrigger
+              render={
+                // The whole list is one right-click target + one virtualizer,
+                // so thousands of changed files no longer mount thousands of
+                // menus/rows. `handleContextMenu` (capture phase, so it runs
+                // before the menu opens) records which row/header was hit.
+                <div
+                  ref={setScrollEl}
+                  className="min-h-0 flex-1 overflow-y-auto"
+                  onKeyDown={onListKeyDown}
+                  onContextMenuCapture={handleContextMenu}
+                  role="listbox"
+                  aria-label="Changed files"
+                  aria-multiselectable="true"
+                />
+              }
+            >
+              {nothingMatches ? (
                 <p className="px-2 py-8 text-center text-xs text-muted-foreground">
                   No files match the filter
                 </p>
-              )}
-
-              {stagedEntries.length > 0 && (
-                <section className="mb-3">
-                  <SectionHeaderMenu
-                    onDiscardAll={() => setDiscardScope({ kind: "all" })}
-                    onStashAll={() => setStashScope({ kind: "all" })}
-                    header={
-                      <div className="flex items-center justify-between pr-1 pl-2">
-                        <h3 className="py-1 text-xs font-medium text-muted-foreground">
-                          Staged ({stagedEntries.length})
-                        </h3>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          className="text-muted-foreground"
-                          disabled={mutating}
-                          onClick={unstageAll}
-                        >
-                          Unstage all
-                        </Button>
+              ) : (
+                <div
+                  className="relative w-full"
+                  style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+                >
+                  {rowVirtualizer.getVirtualItems().map((vi) => {
+                    const row = flatRows[vi.index];
+                    return (
+                      <div
+                        key={
+                          row.type === "header"
+                            ? `header:${row.section}`
+                            : keyOf(row.entry.path, row.staged)
+                        }
+                        data-index={vi.index}
+                        ref={rowVirtualizer.measureElement}
+                        className="absolute top-0 left-0 w-full"
+                        style={{ transform: `translateY(${vi.start}px)` }}
+                      >
+                        {row.type === "header" ? (
+                          <div
+                            data-section-header
+                            className={cn(
+                              "flex items-center justify-between pr-1 pl-2",
+                              // Gap only between the staged and unstaged sections,
+                              // never at the very top of the list.
+                              row.section === "unstaged" &&
+                                stagedEntries.length > 0 &&
+                                "pt-2",
+                            )}
+                          >
+                            <h3 className="py-1 text-xs font-medium text-muted-foreground">
+                              {row.section === "staged"
+                                ? `Staged (${row.count})`
+                                : `Changes (${row.count})`}
+                            </h3>
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="text-muted-foreground"
+                              disabled={mutating}
+                              onClick={
+                                row.section === "staged" ? unstageAll : stageAll
+                              }
+                            >
+                              {row.section === "staged"
+                                ? "Unstage all"
+                                : "Stage all"}
+                            </Button>
+                          </div>
+                        ) : (
+                          <FileRow
+                            entry={row.entry}
+                            kind={
+                              (row.staged
+                                ? row.entry.staged
+                                : row.entry.unstaged) ?? "modified"
+                            }
+                            staged={row.staged}
+                            disabled={mutating}
+                            selected={selectedKeys.has(
+                              keyOf(row.entry.path, row.staged),
+                            )}
+                            active={
+                              selectedFile?.path === row.entry.path &&
+                              selectedFile.staged === row.staged
+                            }
+                            onSelect={handleSelect}
+                            onToggle={handleToggle}
+                          />
+                        )}
                       </div>
-                    }
-                  />
-                  {stagedEntries.map((entry) => (
-                    <FileRow
-                      key={`staged:${entry.path}`}
-                      entry={entry}
-                      kind={entry.staged ?? "modified"}
-                      staged
-                      disabled={mutating}
-                      repoPath={repoPath}
-                      selected={selectedKeys.has(keyOf(entry.path, true))}
-                      active={
-                        selectedFile?.path === entry.path &&
-                        selectedFile.staged === true
-                      }
-                      selectionCount={selectionCount}
-                      onSelect={(mods) => handleSelect(entry, true, mods)}
-                      onToggle={() =>
-                        unstage.mutate(unstagePaths(entry), { onError })
-                      }
-                      onStashFile={() =>
-                        setStashScope({ kind: "files", entries: [entry] })
-                      }
-                      onViewHistory={() => setHistoryPath(entry.path)}
-                      onBlame={() => setBlamePath(entry.path)}
-                      onStageSelected={stageSelected}
-                      onUnstageSelected={unstageSelected}
-                      onDiscardSelected={requestDiscardSelected}
-                      onStashSelected={requestStashSelected}
-                      onIgnoreSelected={ignoreSelected}
-                      onUntrackSelected={untrackSelected}
-                      selectedTrackedCount={selectedTracked.length}
-                    />
-                  ))}
-                </section>
+                    );
+                  })}
+                </div>
               )}
-
-              {unstagedEntries.length > 0 && (
-                <section>
-                  <SectionHeaderMenu
-                    onDiscardAll={() => setDiscardScope({ kind: "all" })}
-                    onStashAll={() => setStashScope({ kind: "all" })}
-                    header={
-                      <div className="flex items-center justify-between pr-1 pl-2">
-                        <h3 className="py-1 text-xs font-medium text-muted-foreground">
-                          Changes ({unstagedEntries.length})
-                        </h3>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          className="text-muted-foreground"
-                          disabled={mutating}
-                          onClick={stageAll}
-                        >
-                          Stage all
-                        </Button>
-                      </div>
-                    }
-                  />
-                  {unstagedEntries.map((entry) => (
-                    <FileRow
-                      key={`unstaged:${entry.path}`}
-                      entry={entry}
-                      kind={entry.unstaged ?? "modified"}
-                      staged={false}
-                      disabled={mutating}
-                      repoPath={repoPath}
-                      selected={selectedKeys.has(keyOf(entry.path, false))}
-                      active={
-                        selectedFile?.path === entry.path &&
-                        selectedFile.staged === false
-                      }
-                      selectionCount={selectionCount}
-                      onSelect={(mods) => handleSelect(entry, false, mods)}
-                      onToggle={() => stage.mutate([entry.path], { onError })}
-                      onDiscard={() =>
-                        setDiscardScope({ kind: "files", entries: [entry] })
-                      }
-                      onStashFile={() =>
-                        setStashScope({ kind: "files", entries: [entry] })
-                      }
-                      onViewHistory={() => setHistoryPath(entry.path)}
-                      onBlame={() => setBlamePath(entry.path)}
-                      onStageSelected={stageSelected}
-                      onUnstageSelected={unstageSelected}
-                      onDiscardSelected={requestDiscardSelected}
-                      onStashSelected={requestStashSelected}
-                      onIgnoreSelected={ignoreSelected}
-                      onUntrackSelected={untrackSelected}
-                      selectedTrackedCount={selectedTracked.length}
-                    />
-                  ))}
-                </section>
-              )}
-            </div>
-          </ScrollArea>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="min-w-64">
+              {renderMenuItems()}
+            </ContextMenuContent>
+          </ContextMenu>
         </>
       )}
 
