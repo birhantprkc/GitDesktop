@@ -7,7 +7,6 @@ import {
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -15,14 +14,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Empty,
   EmptyContent,
@@ -32,40 +23,29 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { AmendForcePushDialog } from "@/features/commit/AmendForcePushDialog";
 import { copyText } from "@/lib/clipboard";
-import { required, useAppForm } from "@/lib/form";
+import { useAppForm } from "@/lib/form";
 import { gitCommitDetails } from "@/lib/git/api";
 import {
   useBranches,
   useCheckoutCommit,
   useCherryPick,
-  useCherryPickOnto,
   useCommitSearch,
   useCreateBranch,
   useCreateTag,
-  useDeleteTag,
   useHoverPrefetch,
   useLog,
   usePrefetchCommit,
   usePushTag,
   useRepoStatus,
-  useResetToCommit,
   useRevertCommit,
   useUndoCommit,
 } from "@/lib/git/queries";
-import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
+import { sanitizeRefName } from "@/lib/git/ref-name";
 import type { RewriteStep } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
@@ -73,6 +53,13 @@ import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import {
+  CherryPickOntoDialog,
+  CreateRefFromCommitDialog,
+  createRefFromCommitFormOpts,
+  DeleteTagDialog,
+  ResetCommitDialog,
+} from "./HistoryDialogs";
 import { ReorderDialog, SquashDialog } from "./RewriteDialogs";
 import { useAmendWithConfirm } from "./useAmendCommit";
 
@@ -87,15 +74,12 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const setCommitDraft = useUiStore((s) => s.setCommitDraft);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
 
-  const resetMutation = useResetToCommit(repoPath);
   const checkoutCommit = useCheckoutCommit(repoPath);
   const revertCommit = useRevertCommit(repoPath);
   const cherryPick = useCherryPick(repoPath);
-  const cherryPickOnto = useCherryPickOnto(repoPath);
   const createBranch = useCreateBranch(repoPath);
   const createTag = useCreateTag(repoPath);
   const pushTag = usePushTag(repoPath);
-  const deleteTag = useDeleteTag(repoPath);
   const branches = useBranches(repoPath);
 
   const [resetHash, setResetHash] = useState<string | null>(null);
@@ -138,7 +122,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const targetBranches = (branches.data ?? []).filter((b) => !b.isCurrent);
 
   const branchForm = useAppForm({
-    defaultValues: { name: "" },
+    ...createRefFromCommitFormOpts,
     onSubmit: async ({ value }) => {
       if (!branchHash) return;
       const name = sanitizeRefName(value.name);
@@ -157,7 +141,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   });
 
   const tagForm = useAppForm({
-    defaultValues: { name: "" },
+    ...createRefFromCommitFormOpts,
     onSubmit: async ({ value }) => {
       if (!tagHash) return;
       const name = sanitizeRefName(value.name);
@@ -405,34 +389,6 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   function openCherryPickOnto(hash: string) {
     setPickOntoHashes(effectiveSelection(hash));
     setPickOntoBranch(targetBranches[0]?.name ?? "");
-  }
-
-  function runCherryPickOnto() {
-    if (!pickOntoHashes || !pickOntoBranch) return;
-    const branch = pickOntoBranch;
-    cherryPickOnto.mutate(
-      { hashes: pickOntoHashes, targetBranch: branch },
-      {
-        onSuccess: ({ applied, skipped }) => {
-          if (applied === 0) {
-            toast.info(
-              `Nothing to copy onto ${branch} — those changes are already there.`,
-            );
-          } else {
-            const note = skipped > 0 ? ` (${skipped} already present)` : "";
-            toast.success(
-              `Copied ${applied} commit${applied === 1 ? "" : "s"} onto ${branch}${note}`,
-            );
-          }
-          setPickOntoHashes(null);
-          setSelected(new Set());
-        },
-        onError: (e) => {
-          onError(e);
-          setPickOntoHashes(null);
-        },
-      },
-    );
   }
 
   return (
@@ -819,251 +775,52 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
 
       <AmendForcePushDialog {...forcePushDialog} />
 
-      <Dialog
-        open={deleteTagName !== null}
-        onOpenChange={(open) => {
-          if (!open) setDeleteTagName(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete tag {deleteTagName}?</DialogTitle>
-            <DialogDescription>
-              Removes the tag from this repository. The commit it points at is
-              not affected.
-            </DialogDescription>
-          </DialogHeader>
-          <label className="flex cursor-pointer items-center gap-2 text-xs">
-            <Checkbox
-              checked={deleteTagRemote}
-              onCheckedChange={(v) => setDeleteTagRemote(v === true)}
-            />
-            Also delete the tag on origin
-          </label>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTagName(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={deleteTag.isPending}
-              onClick={() => {
-                if (!deleteTagName) return;
-                deleteTag.mutate(
-                  { name: deleteTagName, onRemote: deleteTagRemote },
-                  {
-                    onSuccess: () => {
-                      toast.success(
-                        `Deleted tag ${deleteTagName}${deleteTagRemote ? " (local and origin)" : ""}`,
-                      );
-                      setDeleteTagName(null);
-                    },
-                    onError: (e) => {
-                      onError(e);
-                      setDeleteTagName(null);
-                    },
-                  },
-                );
-              }}
-            >
-              {deleteTag.isPending && <Spinner data-icon="inline-start" />}
-              Delete tag
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteTagDialog
+        repoPath={repoPath}
+        name={deleteTagName}
+        remote={deleteTagRemote}
+        onRemoteChange={setDeleteTagRemote}
+        onClose={() => setDeleteTagName(null)}
+      />
 
-      <Dialog
-        open={resetHash !== null}
-        onOpenChange={(open) => {
-          if (!open) setResetHash(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Reset to commit?</DialogTitle>
-            <DialogDescription>
-              Moves the current branch to {resetHash?.slice(0, 7)}. Changes from
-              later commits stay in your working tree as uncommitted changes
-              (mixed reset). Commits that were only on this branch will be
-              orphaned.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setResetHash(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={resetMutation.isPending}
-              onClick={() => {
-                if (!resetHash) return;
-                resetMutation.mutate(resetHash, {
-                  onSuccess: () => {
-                    toast.success(`Reset to ${resetHash.slice(0, 7)}`);
-                    setResetHash(null);
-                  },
-                  onError: (e) => {
-                    onError(e);
-                    setResetHash(null);
-                  },
-                });
-              }}
-            >
-              Reset
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ResetCommitDialog
+        repoPath={repoPath}
+        hash={resetHash}
+        onClose={() => setResetHash(null)}
+      />
 
-      <Dialog
+      <CreateRefFromCommitDialog
+        form={branchForm}
         open={branchHash !== null}
-        onOpenChange={(open) => {
-          if (!open) setBranchHash(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create branch from commit</DialogTitle>
-            <DialogDescription>
-              Creates a branch starting at {branchHash?.slice(0, 7)} and
-              switches to it.
-            </DialogDescription>
-          </DialogHeader>
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              branchForm.handleSubmit();
-            }}
-          >
-            <branchForm.AppField
-              name="name"
-              validators={{ onChange: ({ value }) => required(value) }}
-            >
-              {(field) => (
-                <field.TextField
-                  label="Branch name"
-                  placeholder="feature/from-commit"
-                  warning={refNameWarning}
-                />
-              )}
-            </branchForm.AppField>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setBranchHash(null)}
-              >
-                Cancel
-              </Button>
-              <branchForm.AppForm>
-                <branchForm.SubmitButton>Create branch</branchForm.SubmitButton>
-              </branchForm.AppForm>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+        onClose={() => setBranchHash(null)}
+        title="Create branch from commit"
+        description={`Creates a branch starting at ${branchHash?.slice(0, 7) ?? ""} and switches to it.`}
+        fieldLabel="Branch name"
+        placeholder="feature/from-commit"
+        submitLabel="Create branch"
+      />
 
-      <Dialog
+      <CreateRefFromCommitDialog
+        form={tagForm}
         open={tagHash !== null}
-        onOpenChange={(open) => {
-          if (!open) setTagHash(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create tag</DialogTitle>
-            <DialogDescription>
-              Tags commit {tagHash?.slice(0, 7)}.
-            </DialogDescription>
-          </DialogHeader>
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              tagForm.handleSubmit();
-            }}
-          >
-            <tagForm.AppField
-              name="name"
-              validators={{ onChange: ({ value }) => required(value) }}
-            >
-              {(field) => (
-                <field.TextField
-                  label="Tag name"
-                  placeholder="v1.0.0"
-                  warning={refNameWarning}
-                />
-              )}
-            </tagForm.AppField>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setTagHash(null)}
-              >
-                Cancel
-              </Button>
-              <tagForm.AppForm>
-                <tagForm.SubmitButton>Create tag</tagForm.SubmitButton>
-              </tagForm.AppForm>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+        onClose={() => setTagHash(null)}
+        title="Create tag"
+        description={`Tags commit ${tagHash?.slice(0, 7) ?? ""}.`}
+        fieldLabel="Tag name"
+        placeholder="v1.0.0"
+        submitLabel="Create tag"
+      />
 
-      <Dialog
-        open={pickOntoHashes !== null}
-        onOpenChange={(open) => {
-          if (!open) setPickOntoHashes(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Cherry-pick to branch</DialogTitle>
-            <DialogDescription>
-              {pickOntoHashes && pickOntoHashes.length > 1
-                ? `Copies these ${pickOntoHashes.length} commits onto the chosen branch and switches to it. `
-                : "Copies this commit onto the chosen branch and switches to it. "}
-              They stay on {currentBranch ?? "this branch"} too. Commits already
-              present are skipped; a conflict rolls the whole thing back.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label>Destination branch</Label>
-            <Select
-              items={Object.fromEntries(
-                targetBranches.map((b) => [b.name, b.name]),
-              )}
-              value={pickOntoBranch || null}
-              onValueChange={(v) => v && setPickOntoBranch(v)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {targetBranches.map((b) => (
-                  <SelectItem key={b.name} value={b.name}>
-                    {b.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPickOntoHashes(null)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={runCherryPickOnto}
-              disabled={!pickOntoBranch || cherryPickOnto.isPending}
-            >
-              Cherry-pick
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CherryPickOntoDialog
+        repoPath={repoPath}
+        hashes={pickOntoHashes}
+        branch={pickOntoBranch}
+        onBranchChange={setPickOntoBranch}
+        branches={targetBranches}
+        currentBranch={currentBranch}
+        onClose={() => setPickOntoHashes(null)}
+        onDone={() => setSelected(new Set())}
+      />
     </>
   );
 }
