@@ -1363,6 +1363,182 @@ pub async fn gh_pr_diff(repo_path: String, number: u64) -> AppResult<String> {
     Ok(text)
 }
 
+/// One external (third-party) review item harvested from a GitHub PR — a
+/// submitted review body, a line-anchored inline review comment, or a
+/// conversation comment — with each author's bot flag. Surfaced so an AI
+/// re-review can fold in what tools like GitHub Copilot or CodeRabbit already
+/// flagged (as soft, re-verifiable context, never ground truth). The frontend
+/// decides which authors count as AI reviewers and how to format them.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalReviewItem {
+    /// "review" (PR-level review body), "inline" (line-anchored review comment),
+    /// or "comment" (top-level conversation comment).
+    pub kind: String,
+    /// The author's GitHub login (e.g. "coderabbitai", "copilot-pull-request-reviewer").
+    pub author: String,
+    /// Whether the author is a GitHub App / bot (GraphQL `__typename == "Bot"`).
+    pub is_bot: bool,
+    pub body: String,
+    /// File path for `inline` items ("" otherwise).
+    pub path: String,
+    /// 1-based line for `inline` items (0 when unknown / the line is outdated).
+    pub line: u32,
+    /// The commit OID the item was made against ("" when unknown) — for staleness.
+    pub commit_sha: String,
+    /// Submitted-review state (APPROVED / CHANGES_REQUESTED / COMMENTED) for
+    /// `review` items; "" otherwise.
+    pub state: String,
+    /// For `inline` items: GitHub's own thread flags. `is_outdated` means the
+    /// anchored line moved since the comment was made.
+    pub is_resolved: bool,
+    pub is_outdated: bool,
+    pub created_at: String,
+}
+
+/// All review activity on a PR — submitted reviews, inline review-thread
+/// comments, and conversation comments — in one GraphQL round trip, each tagged
+/// with its author's bot flag. The frontend filters to AI reviewers and folds
+/// their findings into an AI re-review as soft context.
+#[tauri::command]
+pub async fn gh_pr_external_reviews(
+    repo_path: String,
+    number: u64,
+) -> AppResult<Vec<ExternalReviewItem>> {
+    let (owner, name) = repo_owner_name(&repo_path).await?;
+    validate_graphql_embed(&owner, "repository owner")?;
+    validate_graphql_embed(&name, "repository name")?;
+
+    // `number` is a u64 (digits only), so it's safe to embed directly.
+    let query = format!(
+        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ pullRequest(number:{number}){{ reviews(first:50){{ nodes{{ author{{ login __typename }} body state submittedAt commit{{ oid }} }} }} reviewThreads(first:100){{ nodes{{ isResolved isOutdated path line originalLine comments(first:1){{ nodes{{ author{{ login __typename }} body createdAt commit{{ oid }} originalCommit{{ oid }} }} }} }} }} comments(first:100){{ nodes{{ author{{ login __typename }} body createdAt }} }} }} }} }}"#
+    );
+    let out = run_gh(
+        Some(&repo_path),
+        &["api", "graphql", "-f", &format!("query={query}")],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the PR reviews: {e}")))?;
+    let pr = value.pointer("/data/repository/pullRequest");
+
+    let str_at = |v: &serde_json::Value, p: &str| {
+        v.pointer(p).and_then(|x| x.as_str()).unwrap_or("").to_string()
+    };
+    let is_bot = |v: &serde_json::Value, p: &str| {
+        v.pointer(p).and_then(|x| x.as_str()) == Some("Bot")
+    };
+
+    let mut items: Vec<ExternalReviewItem> = Vec::new();
+
+    // Submitted reviews (PR-level bodies) — a bot reviewer's summary review.
+    if let Some(nodes) = pr
+        .and_then(|p| p.pointer("/reviews/nodes"))
+        .and_then(|v| v.as_array())
+    {
+        for n in nodes {
+            let body = str_at(n, "/body");
+            if body.trim().is_empty() {
+                continue;
+            }
+            items.push(ExternalReviewItem {
+                kind: "review".into(),
+                author: str_at(n, "/author/login"),
+                is_bot: is_bot(n, "/author/__typename"),
+                body,
+                path: String::new(),
+                line: 0,
+                commit_sha: str_at(n, "/commit/oid"),
+                state: str_at(n, "/state"),
+                is_resolved: false,
+                is_outdated: false,
+                created_at: str_at(n, "/submittedAt"),
+            });
+        }
+    }
+
+    // Inline review-thread comments — the line-anchored findings (Copilot's and
+    // CodeRabbit's specific suggestions). Take each thread's first comment (its
+    // opener = the reviewer), not the human replies beneath it.
+    if let Some(nodes) = pr
+        .and_then(|p| p.pointer("/reviewThreads/nodes"))
+        .and_then(|v| v.as_array())
+    {
+        for t in nodes {
+            let Some(c) = t.pointer("/comments/nodes/0") else {
+                continue;
+            };
+            let body = str_at(c, "/body");
+            if body.trim().is_empty() {
+                continue;
+            }
+            let line = t
+                .pointer("/line")
+                .or_else(|| t.pointer("/originalLine"))
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0) as u32;
+            let commit_sha = {
+                let latest = str_at(c, "/commit/oid");
+                if latest.is_empty() {
+                    str_at(c, "/originalCommit/oid")
+                } else {
+                    latest
+                }
+            };
+            items.push(ExternalReviewItem {
+                kind: "inline".into(),
+                author: str_at(c, "/author/login"),
+                is_bot: is_bot(c, "/author/__typename"),
+                body,
+                path: str_at(t, "/path"),
+                line,
+                commit_sha,
+                state: String::new(),
+                is_resolved: t
+                    .pointer("/isResolved")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false),
+                is_outdated: t
+                    .pointer("/isOutdated")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false),
+                created_at: str_at(c, "/createdAt"),
+            });
+        }
+    }
+
+    // Top-level conversation comments — CodeRabbit posts its walkthrough/summary
+    // here. The frontend keeps these only from known reviewer bots (CI / deploy
+    // bots also post on this surface).
+    if let Some(nodes) = pr
+        .and_then(|p| p.pointer("/comments/nodes"))
+        .and_then(|v| v.as_array())
+    {
+        for n in nodes {
+            let body = str_at(n, "/body");
+            if body.trim().is_empty() {
+                continue;
+            }
+            items.push(ExternalReviewItem {
+                kind: "comment".into(),
+                author: str_at(n, "/author/login"),
+                is_bot: is_bot(n, "/author/__typename"),
+                body,
+                path: String::new(),
+                line: 0,
+                commit_sha: String::new(),
+                state: String::new(),
+                is_resolved: false,
+                is_outdated: false,
+                created_at: str_at(n, "/createdAt"),
+            });
+        }
+    }
+
+    Ok(items)
+}
+
 /// Open PRs whose head is `head` (there's at most one per base). Lets the UI
 /// offer "View pull request" instead of "Create" once one already exists.
 #[tauri::command]

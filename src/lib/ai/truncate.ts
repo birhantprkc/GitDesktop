@@ -90,6 +90,8 @@ export const PROMPT_CHAR_BUDGET = 100_000;
 export const DELTA_DIFF_CHAR_BUDGET = 24_000;
 /** Cap for the prior review's findings (head-kept — reviews front-load blockers). */
 export const PRIOR_FINDINGS_CHAR_BUDGET = 8_000;
+/** Cap for third-party AI-reviewer findings (lowest priority — noisier, theirs). */
+export const EXTERNAL_FINDINGS_CHAR_BUDGET = 8_000;
 
 export interface ReviewExtras {
   /** Budgeted delta diff (empty when absent or dropped for budget). */
@@ -100,19 +102,25 @@ export interface ReviewExtras {
   prior: { text: string; truncated: boolean };
   /** Prior findings dropped entirely for budget. */
   priorDropped: boolean;
+  /** Budgeted (head-truncated) third-party AI-reviewer findings. */
+  external: { text: string; truncated: boolean };
+  /** External findings dropped entirely for budget. */
+  externalDropped: boolean;
 }
 
 /**
- * Allocates the soft context (delta + prior findings) into whatever budget the
- * authoritative full diff leaves, against one shared ceiling. Order is enforced:
- * the diff is sacrosanct, the delta gets next claim, prior findings take the
- * remainder — so under pressure prior findings drop first, then the delta,
- * never the diff. `diffLen` is the length of the already-budgeted main diff.
+ * Allocates the soft context (delta + prior findings + external findings) into
+ * whatever budget the authoritative full diff leaves, against one shared
+ * ceiling. Order is enforced: the diff is sacrosanct, the delta gets next claim,
+ * our prior findings take the remainder, third-party reviewer findings get
+ * what's left — so under pressure external drops first, then prior, then the
+ * delta, never the diff. `diffLen` is the length of the already-budgeted main diff.
  */
 export function budgetReviewExtras(input: {
   diffLen: number;
   deltaText?: string;
   priorText?: string;
+  externalText?: string;
 }): ReviewExtras {
   const emptyDiff: BudgetedDiff = {
     text: "",
@@ -133,18 +141,29 @@ export function budgetReviewExtras(input: {
     }
   }
 
-  let prior = { text: "", truncated: false };
-  let priorDropped = false;
-  if (input.priorText?.trim()) {
-    const cap = Math.min(remaining, PRIOR_FINDINGS_CHAR_BUDGET);
-    if (cap <= 0) {
-      priorDropped = true;
-    } else if (input.priorText.length <= cap) {
-      prior = { text: input.priorText, truncated: false };
-    } else {
-      prior = { text: input.priorText.slice(0, cap), truncated: true };
-    }
-  }
+  const fit = (text: string | undefined, max: number) => {
+    if (!text?.trim())
+      return { result: { text: "", truncated: false }, dropped: false };
+    const cap = Math.min(remaining, max);
+    if (cap <= 0)
+      return { result: { text: "", truncated: false }, dropped: true };
+    const result =
+      text.length <= cap
+        ? { text, truncated: false }
+        : { text: text.slice(0, cap), truncated: true };
+    remaining -= result.text.length;
+    return { result, dropped: false };
+  };
 
-  return { delta, deltaDropped, prior, priorDropped };
+  const priorFit = fit(input.priorText, PRIOR_FINDINGS_CHAR_BUDGET);
+  const externalFit = fit(input.externalText, EXTERNAL_FINDINGS_CHAR_BUDGET);
+
+  return {
+    delta,
+    deltaDropped,
+    prior: priorFit.result,
+    priorDropped: priorFit.dropped,
+    external: externalFit.result,
+    externalDropped: externalFit.dropped,
+  };
 }

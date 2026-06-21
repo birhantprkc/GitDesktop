@@ -1,5 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  externalReviewerNames,
+  fetchExternalFindings,
+} from "@/lib/ai/external-context";
+import {
   createLocalPr,
   deleteLocalPr,
   type LocalPr,
@@ -101,4 +105,22 @@ export function useClearReviews(repo: string, kind: PrKind, ref: string) {
   return useReviewHistoryMutation(repo, kind, ref, () =>
     clearReviewsFor(repo, kind, ref),
   );
+}
+
+/** Third-party AI-reviewer findings on a remote PR (Copilot/CodeRabbit/…), for
+ *  the Review panel's "build on external reviews" banner. Remote PRs only;
+ *  best-effort (errors degrade to no banner). Returns the kept findings plus the
+ *  distinct reviewer display names. */
+export function useExternalReviews(repo: string, kind: PrKind, ref: string) {
+  const enabled = kind === "remote" && repo !== "" && /^\d+$/.test(ref);
+  return useQuery({
+    queryKey: ["external-reviews", repo, ref],
+    queryFn: async () => {
+      const items = await fetchExternalFindings(repo, Number(ref));
+      return { items, reviewers: externalReviewerNames(items) };
+    },
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
 }

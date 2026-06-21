@@ -568,6 +568,28 @@ export interface PrDetails {
   labels: RepoLabel[];
 }
 
+/** One review item on a GitHub PR (a submitted review, an inline review comment,
+ *  or a conversation comment) with its author's bot flag — the raw material a
+ *  re-review folds in from third-party AI reviewers. From `gh_pr_external_reviews`. */
+export interface ExternalReviewItem {
+  kind: "review" | "inline" | "comment";
+  author: string;
+  isBot: boolean;
+  body: string;
+  /** File path for `inline` items ("" otherwise). */
+  path: string;
+  /** 1-based line for `inline` items (0 when unknown / outdated). */
+  line: number;
+  /** Commit OID the item was made against ("" when unknown) — for staleness. */
+  commitSha: string;
+  /** Submitted-review state (APPROVED/CHANGES_REQUESTED/COMMENTED); "" otherwise. */
+  state: string;
+  /** Inline only: GitHub's thread flags (`isOutdated` = the anchored line moved). */
+  isResolved: boolean;
+  isOutdated: boolean;
+  createdAt: string;
+}
+
 export interface IssueInfo {
   number: number;
   url: string;

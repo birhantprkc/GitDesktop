@@ -1,6 +1,10 @@
 import { toast } from "sonner";
 import { cancelAgentReview } from "@/lib/ai/agent";
 import { createAiClient } from "@/lib/ai/client";
+import {
+  type ExternalContext,
+  resolveExternalContext,
+} from "@/lib/ai/external-context";
 import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider } from "@/lib/ai/providers";
@@ -258,6 +262,21 @@ async function generateReviewText(
         );
   if (signal.aborted) return null;
 
+  // Third-party AI-reviewer findings (Copilot/CodeRabbit) on the remote PR, so an
+  // automated re-review weighs them too — same soft context the interactive path
+  // uses. Remote PRs only; best-effort.
+  const external: ExternalContext =
+    event.kind !== "commit" && event.target.type === "remote"
+      ? await resolveExternalContext(
+          event.repoPath,
+          "remote",
+          targetRef(event),
+          event.headSha,
+          false,
+        )
+      : {};
+  if (signal.aborted) return null;
+
   const { system, prompt } = buildReviewPrompt(
     {
       title: event.title,
@@ -272,6 +291,7 @@ async function generateReviewText(
         isBinary: f.isBinary,
       })),
       ...prior,
+      ...external,
     },
     mode,
   );

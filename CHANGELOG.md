@@ -12,6 +12,17 @@ commit list.
 
 ### Added
 
+- **Reviews build on other AI reviewers.** If GitHub Copilot, CodeRabbit, or
+  another review bot has already weighed in on a GitHub pull request, an AI
+  review or security audit now folds their findings — including their
+  line-anchored inline comments — in as soft context, the same way it builds on
+  your own previous review. So instead of starting cold, your review begins from
+  what's already been flagged, re-verifies each point against the current diff
+  (their findings are treated as hints, never fact), and stays high-signal by not
+  re-raising what they got wrong or what you've since fixed. It only pulls from
+  recognized code-review bots — deploy and CI bots are ignored — notes when a
+  finding was made against an older commit, and a per-PR banner lets you opt out
+  for a clean pass.
 - **Insights tab.** A new **Insights** tab (Ctrl/Cmd-9, or "Insights…" in the
   repository menu) with a GitHub-style board of repository graphs. Four of them —
   **commit activity** (per week), **code frequency** (additions vs. deletions per

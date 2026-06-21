@@ -3,6 +3,10 @@ import { toast } from "sonner";
 import { create } from "zustand";
 import { cancelAgentReview } from "@/lib/ai/agent";
 import { createAiClient } from "@/lib/ai/client";
+import {
+  type ExternalContext,
+  resolveExternalContext,
+} from "@/lib/ai/external-context";
 import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider, isLocalProvider } from "@/lib/ai/providers";
@@ -246,8 +250,10 @@ async function notifyReviewDone(
  * the Vercel AI SDK for HTTP providers or a local agent CLI for CLI providers.
  *
  * On a re-run, the PREVIOUS review's findings + a "changes since" delta ride
- * along as soft, re-verifiable context (unless `ignorePrior`); the result is
- * persisted on success so the NEXT run can build on it.
+ * along as soft, re-verifiable context (unless `ignorePrior`); on a remote PR,
+ * findings posted by third-party AI reviewers (Copilot/CodeRabbit) ride along
+ * too (unless `ignoreExternal`). The result is persisted on success so the NEXT
+ * run can build on it.
  */
 export async function startReview(
   target: ReviewTarget,
@@ -256,6 +262,7 @@ export async function startReview(
   mode: ReviewMode,
   context: ReviewContext,
   ignorePrior = false,
+  ignoreExternal = false,
 ): Promise<void> {
   const key = reviewKey(target);
   // Single-flight per key — the UI hides the run buttons while generating, but
@@ -325,6 +332,16 @@ export async function startReview(
         );
     if (control.cancelled) return;
     patch({ deltaState: prior.deltaState });
+    // Third-party AI-reviewer findings on the remote PR (best-effort, remote-only,
+    // skipped when ignored). Same soft-context framing as the prior review.
+    const external: ExternalContext = await resolveExternalContext(
+      target.repoPath,
+      target.kind,
+      target.ref,
+      context.headSha,
+      ignoreExternal,
+    );
+    if (control.cancelled) return;
     const { system, prompt } = buildReviewPrompt(
       {
         title: context.title,
@@ -339,6 +356,7 @@ export async function startReview(
           isBinary: f.isBinary,
         })),
         ...prior,
+        ...external,
       },
       mode,
     );
@@ -490,8 +508,17 @@ export function useReviewRun(target: ReviewTarget) {
       mode: ReviewMode,
       context: ReviewContext,
       ignorePrior?: boolean,
+      ignoreExternal?: boolean,
     ) => {
-      void startReview(target, context.title, ai, mode, context, ignorePrior);
+      void startReview(
+        target,
+        context.title,
+        ai,
+        mode,
+        context,
+        ignorePrior,
+        ignoreExternal,
+      );
     },
     [target],
   );

@@ -48,6 +48,10 @@ git works against any remote via system `git`.
   re-verifiable context, so it confirms what you fixed and stops re-raising the
   same points (the current diff is always the source of truth). Ignore the prior
   review for a clean pass, or trim a false finding before re-running.
+- **Builds on other AI reviewers** — if GitHub Copilot, CodeRabbit, or another
+  bot has already reviewed a GitHub pull request, your review folds their
+  findings in as the same soft, re-verifiable context — so it starts from what's
+  already been flagged instead of cold. Opt out per PR.
 - **Privacy-first** — API keys live in the OS keychain (never in app files),
   local models keep code on your machine, AI-ignore patterns keep sensitive
   files out of context, and a single switch hides every AI surface.

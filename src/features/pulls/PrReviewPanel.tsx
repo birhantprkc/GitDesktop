@@ -1,4 +1,5 @@
 import {
+  RobotIcon,
   ShieldCheckIcon,
   SparkleIcon,
   WarningIcon,
@@ -36,7 +37,7 @@ import {
 } from "@/lib/ai/providers";
 import type { AiProviderId, ReviewMode } from "@/lib/ai/types";
 import { track } from "@/lib/analytics";
-import { useReviewHistory } from "@/lib/pulls/queries";
+import { useExternalReviews, useReviewHistory } from "@/lib/pulls/queries";
 import type { PersistedReview } from "@/lib/pulls/reviews-history";
 import {
   useSaveSettings,
@@ -130,6 +131,14 @@ export function PrReviewPanel({
     });
   }
 
+  // Third-party AI reviews (Copilot/CodeRabbit/…) posted on this remote PR, for
+  // the "build on external reviews" banner. The run re-fetches them itself; this
+  // only drives the banner + the opt-out. Remote PRs only.
+  const external = useExternalReviews(context.repoPath, prKind, prRef);
+  const externalReviewers = external.data?.reviewers ?? [];
+  const externalCount = external.data?.items.length ?? 0;
+  const [ignoreExternal, setIgnoreExternal] = useState(false);
+
   const reviewAi = settings.data?.reviewAi;
   const provider = reviewAi?.provider ?? "anthropic";
   const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
@@ -157,7 +166,7 @@ export function PrReviewPanel({
 
   function run(mode: ReviewMode) {
     if (!reviewAi) return;
-    generate(reviewAi, mode, context, ignoredModes.has(mode));
+    generate(reviewAi, mode, context, ignoredModes.has(mode), ignoreExternal);
     const model = reviewAi.model.toLowerCase();
     const model_tier =
       model.includes("haiku") ||
@@ -325,6 +334,27 @@ export function PrReviewPanel({
             </div>
           );
         })}
+        {externalCount > 0 && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+            <RobotIcon className="size-3 shrink-0" />
+            <span className="min-w-0">
+              {ignoreExternal
+                ? `Ignoring ${externalCount} finding${externalCount === 1 ? "" : "s"} from ${externalReviewers.join(", ")}.`
+                : `Next review weighs ${externalCount} finding${externalCount === 1 ? "" : "s"} from ${externalReviewers.join(", ")} as context.`}
+            </span>
+            <button
+              type="button"
+              aria-pressed={ignoreExternal}
+              disabled={generating}
+              className="underline-offset-2 hover:underline disabled:opacity-50"
+              onClick={() => setIgnoreExternal((v) => !v)}
+            >
+              {ignoreExternal
+                ? "Use external reviews"
+                : "Ignore external reviews"}
+            </button>
+          </div>
+        )}
         {cliKind === "claude" && (
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <Switch

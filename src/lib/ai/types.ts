@@ -98,4 +98,12 @@ export interface ReviewPromptInput {
   deltaTruncated?: boolean;
   /** Why the delta is present or absent — frames the "Changes since" section. */
   deltaState?: ReviewDeltaState;
+  /** Pre-formatted findings posted on the remote PR by third-party AI reviewers
+   *  (GitHub Copilot, CodeRabbit, …) — soft, re-verifiable context like
+   *  `priorFindings`. Absent for local PRs and when none were found. */
+  externalFindings?: string;
+  /** Distinct external reviewer display names — for the section header. */
+  externalReviewers?: string[];
+  /** Whether any external finding may be stale (made against an older commit). */
+  externalStale?: boolean;
 }

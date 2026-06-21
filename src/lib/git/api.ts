@@ -23,6 +23,7 @@ import type {
   DiscussionDetails,
   DiscussionInfo,
   DiscussionMeta,
+  ExternalReviewItem,
   FileDiff,
   GeneratedNotes,
   GhAccounts,
@@ -1032,6 +1033,9 @@ export const ghIssueRemoveSubIssue = (
 
 export const ghPrDiff = (repoPath: string, number: number) =>
   invoke<string>("gh_pr_diff", { repoPath, number });
+
+export const ghPrExternalReviews = (repoPath: string, number: number) =>
+  invoke<ExternalReviewItem[]>("gh_pr_external_reviews", { repoPath, number });
 
 export type ReviewAction = "approve" | "comment" | "request_changes";
 

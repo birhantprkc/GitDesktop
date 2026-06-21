@@ -131,6 +131,7 @@ pub fn run() {
             github::pr::gh_pr_poll,
             github::pr::gh_pr_view,
             github::pr::gh_pr_diff,
+            github::pr::gh_pr_external_reviews,
             github::pr::gh_pr_review,
             github::pr::gh_pr_comment,
             github::pr::gh_pr_edit_comment,

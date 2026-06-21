@@ -212,6 +212,13 @@ const ITERATIVE_REVIEW_CLAUSE = `
 
 You are also given findings from a PREVIOUS review of an earlier version of this PR, and (when available) a diff of what changed since. Treat the previous findings as UNVERIFIED CONTEXT, not ground truth — earlier reviews often contain false positives. For each previous finding: re-verify it against the CURRENT diff above; if the current code no longer has the problem, note it under a short \`### Resolved since last review\` list and do not re-report it; if it still applies, report it; if it was never valid, drop it silently. Only mark a finding "Resolved" if you can see the corrected code in the current diff — if the relevant code isn't shown, say "could not verify" instead of claiming a fix. Never repeat a previous finding without confirming it against the current diff. Your authority is the current diff; the previous findings only tell you where to look first.`;
 
+/** Appended ONLY when third-party AI-reviewer findings are fed. Frames them with
+ *  the same skepticism as the previous-review findings: noisy, possibly stale,
+ *  re-verify against the current diff before repeating any of them. */
+const EXTERNAL_REVIEW_CLAUSE = `
+
+You are ALSO given findings that OTHER automated code reviewers (e.g. GitHub Copilot, CodeRabbit) posted on this PR. Treat them with the same skepticism: UNVERIFIED context, often noisy, low-signal, or made against an earlier commit. Re-verify each against the CURRENT diff before mentioning it; if the current code shows a real, still-present problem they raised, you may incorporate it; otherwise ignore it. Do NOT pad your review by restating their points, and never present another tool's claim as confirmed unless the current diff proves it. The current diff is your sole authority.`;
+
 /** The "Changes since that review" section body, varying by delta state. */
 function deltaSection(
   state: ReviewDeltaState | undefined,
@@ -268,30 +275,59 @@ export function buildReviewPrompt(
   }
   promptParts.push(`## Files changed\n${fileSummary || "(none)"}`);
 
-  // Soft prior-review context, gated on `priorFindings` so a first-ever review
-  // is byte-for-byte identical to before. Placed AFTER the file summary and
-  // BEFORE the full diff, so the authoritative diff stays the last large block.
+  // Soft context — our own prior review (+ a "changes since" delta) and any
+  // third-party AI-reviewer findings — each gated independently so a first-ever
+  // review with no external reviews is byte-for-byte identical to before. Placed
+  // AFTER the file summary and BEFORE the full diff, so the authoritative diff
+  // stays the last large block. One shared budget: the diff is sacrosanct, then
+  // delta, then our prior, then external (drops first under pressure).
   const hasPrior = Boolean(input.priorFindings?.trim());
-  if (hasPrior) {
+  const hasExternal = Boolean(input.externalFindings?.trim());
+  // Whether the external section actually fit (it drops first under budget
+  // pressure) — drives whether the system clause is appended, so the clause
+  // never references a section that isn't in the prompt.
+  let renderedExternal = false;
+  if (hasPrior || hasExternal) {
     const extras = budgetReviewExtras({
       diffLen: budgeted.text.length,
-      deltaText: input.deltaDiffText
-        ? stripBinarySections(input.deltaDiffText)
-        : undefined,
+      deltaText:
+        hasPrior && input.deltaDiffText
+          ? stripBinarySections(input.deltaDiffText)
+          : undefined,
       priorText: input.priorFindings,
+      externalText: input.externalFindings,
     });
-    let priorSection = `## Previous review (CONTEXT ONLY — re-verify, may contain false positives)\n${extras.prior.text}`;
-    if (extras.prior.truncated) {
-      priorSection += "\n[previous review truncated]";
+    if (hasPrior) {
+      let priorSection = `## Previous review (CONTEXT ONLY — re-verify, may contain false positives)\n${extras.prior.text}`;
+      if (extras.prior.truncated) {
+        priorSection += "\n[previous review truncated]";
+      }
+      if (extras.priorDropped) {
+        priorSection +=
+          "\n[previous review omitted to keep the current diff in context]";
+      }
+      promptParts.push(priorSection);
+      promptParts.push(
+        deltaSection(input.deltaState, extras, Boolean(input.deltaTruncated)),
+      );
     }
-    if (extras.priorDropped) {
-      priorSection +=
-        "\n[previous review omitted to keep the current diff in context]";
+    // Only render the external section when something actually fit — under
+    // budget pressure it drops silently (lowest priority; the diff is authoritative).
+    if (hasExternal && extras.external.text.trim()) {
+      const who = input.externalReviewers?.length
+        ? input.externalReviewers.join(", ")
+        : "other AI reviewers";
+      let extSection = `## Other AI reviewers (CONTEXT ONLY — re-verify, may be noisy or outdated)\nFindings posted on this PR by ${who}. Hints to re-check against the current diff, never ground truth.\n\n${extras.external.text}`;
+      if (extras.external.truncated) {
+        extSection += "\n[external findings truncated]";
+      }
+      if (input.externalStale) {
+        extSection +=
+          "\n[some findings were made against an earlier commit and may already be addressed]";
+      }
+      promptParts.push(extSection);
+      renderedExternal = true;
     }
-    promptParts.push(priorSection);
-    promptParts.push(
-      deltaSection(input.deltaState, extras, Boolean(input.deltaTruncated)),
-    );
   }
 
   let diffSection = `## Diff\n${budgeted.text}`;
@@ -311,8 +347,11 @@ export function buildReviewPrompt(
 
   const baseSystem =
     mode === "security" ? SECURITY_REVIEW_SYSTEM : GENERAL_REVIEW_SYSTEM;
+  let system = baseSystem;
+  if (hasPrior) system += ITERATIVE_REVIEW_CLAUSE;
+  if (renderedExternal) system += EXTERNAL_REVIEW_CLAUSE;
   return {
-    system: hasPrior ? baseSystem + ITERATIVE_REVIEW_CLAUSE : baseSystem,
+    system,
     prompt: promptParts.join("\n\n"),
   };
 }
