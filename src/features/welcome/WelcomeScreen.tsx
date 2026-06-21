@@ -131,7 +131,8 @@ export function WelcomeScreen() {
           <div className="flex flex-col gap-6 md:pr-10">
             <div className="space-y-2">
               <h1 className="font-heading text-2xl font-semibold tracking-tight text-balance">
-                A calmer way to move work through Git.
+                The whole loop,
+                <br className="hidden sm:block" /> one window.
               </h1>
               <p className="text-xs/relaxed text-muted-foreground">
                 Open a repository to start reviewing, committing, and shipping

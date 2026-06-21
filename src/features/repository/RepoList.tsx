@@ -1,7 +1,6 @@
-import { FolderIcon, XIcon } from "@phosphor-icons/react";
+import { FolderIcon } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -259,7 +258,7 @@ function RepoRow({
           <div
             data-highlighted={highlighted || undefined}
             className={cn(
-              "group flex items-center",
+              "flex items-center",
               currentPath === repo.path
                 ? "bg-accent text-accent-foreground"
                 : highlighted
@@ -293,15 +292,6 @@ function RepoRow({
                 </span>
               </span>
             </button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Remove ${repoDisplayName(repo)}`}
-              className="mr-1 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-              onClick={() => onRemove(repo)}
-            >
-              <XIcon />
-            </Button>
           </div>
         }
       />
