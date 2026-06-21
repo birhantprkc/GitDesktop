@@ -81,6 +81,12 @@ commit list.
 
 ### Fixed
 
+- **Undo/redo now works in the markdown editor.** `Ctrl+Z` / `Ctrl+Y` (and
+  `Ctrl+Shift+Z`) reliably undo and redo in every comment, reply, and
+  description field — including formatting-toolbar actions (bold, lists, links),
+  which previously couldn't be undone at all. Switching between the **Write** and
+  **Preview** tabs no longer wipes your undo history either.
+
 - **Settings → AI: "Test connection" now tests the key you've typed**, even
   before you save it — so you can verify a new API key before committing it to
   the keychain, instead of getting a "no key saved" error.

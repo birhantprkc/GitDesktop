@@ -23,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
 export interface MarkdownEditorHandle {
   /** Focus the input, switching to the Write tab first if needed. */
@@ -37,8 +38,16 @@ type FormatAction =
   | { kind: "line"; prefix: string }
   | { kind: "link" };
 
-interface SelectionEdit {
-  text: string;
+/**
+ * A splice: replace `[rangeStart, rangeEnd)` with `replacement`, then select
+ * `[selStart, selEnd)`. Expressed as a *local* edit (not a whole-value rewrite)
+ * so it can be applied through `document.execCommand("insertText")`, which is
+ * the only API that keeps the textarea's native undo stack intact.
+ */
+interface SpliceEdit {
+  rangeStart: number;
+  rangeEnd: number;
+  replacement: string;
   selStart: number;
   selEnd: number;
 }
@@ -51,12 +60,16 @@ function applyWrap(
   before: string,
   after: string,
   placeholder: string,
-): SelectionEdit {
+): SpliceEdit {
   const selected = value.slice(start, end) || placeholder;
-  const text =
-    value.slice(0, start) + before + selected + after + value.slice(end);
   const selStart = start + before.length;
-  return { text, selStart, selEnd: selStart + selected.length };
+  return {
+    rangeStart: start,
+    rangeEnd: end,
+    replacement: before + selected + after,
+    selStart,
+    selEnd: selStart + selected.length,
+  };
 }
 
 /** Toggle a line prefix (`> `, `- `, `1. `, `- [ ] `, `### `) on every spanned line. */
@@ -65,7 +78,7 @@ function applyLine(
   start: number,
   end: number,
   prefix: string,
-): SelectionEdit {
+): SpliceEdit {
   const lineStart = value.lastIndexOf("\n", start - 1) + 1;
   let lineEnd = value.indexOf("\n", end);
   if (lineEnd === -1) lineEnd = value.length;
@@ -77,20 +90,35 @@ function applyLine(
       return l.startsWith(prefix) ? l : prefix + l;
     })
     .join("\n");
-  const text = value.slice(0, lineStart) + next + value.slice(lineEnd);
-  return { text, selStart: lineStart, selEnd: lineStart + next.length };
+  return {
+    rangeStart: lineStart,
+    rangeEnd: lineEnd,
+    replacement: next,
+    selStart: lineStart,
+    selEnd: lineStart + next.length,
+  };
 }
 
 /** Insert a markdown link, selecting the part the user should fill in next. */
-function applyLink(value: string, start: number, end: number): SelectionEdit {
+function applyLink(value: string, start: number, end: number): SpliceEdit {
   const selected = value.slice(start, end);
   if (selected) {
-    const text = `${value.slice(0, start)}[${selected}](url)${value.slice(end)}`;
-    const urlStart = start + selected.length + 3; // past "[selected]("
-    return { text, selStart: urlStart, selEnd: urlStart + 3 };
+    const selStart = start + selected.length + 3; // past "[selected]("
+    return {
+      rangeStart: start,
+      rangeEnd: end,
+      replacement: `[${selected}](url)`,
+      selStart,
+      selEnd: selStart + 3,
+    };
   }
-  const text = `${value.slice(0, start)}[](url)${value.slice(end)}`;
-  return { text, selStart: start + 1, selEnd: start + 1 };
+  return {
+    rangeStart: start,
+    rangeEnd: end,
+    replacement: "[](url)",
+    selStart: start + 1,
+    selEnd: start + 1,
+  };
 }
 
 const BOLD: FormatAction = {
@@ -226,18 +254,20 @@ export function MarkdownEditor({
     ref,
     () => ({
       focus() {
-        if (textareaRef.current) {
-          textareaRef.current.focus();
-        } else {
+        // The textarea stays mounted in Preview (just hidden) but can't take
+        // focus while hidden, so switch to Write first and focus on remount.
+        if (mode === "preview") {
           pendingFocus.current = true;
           setMode("write");
+        } else {
+          textareaRef.current?.focus();
         }
       },
       showPreview() {
         setMode("preview");
       },
     }),
-    [],
+    [mode],
   );
 
   // Restore the caret/selection after a format action rewrites the value.
@@ -271,8 +301,24 @@ export function MarkdownEditor({
         : action.kind === "line"
           ? applyLine(value, start, end, action.prefix)
           : applyLink(value, start, end);
+    // Restore the resulting selection once the value update has landed.
     pendingSelection.current = [edit.selStart, edit.selEnd];
-    onChange(edit.text);
+    ta.focus();
+    ta.setSelectionRange(edit.rangeStart, edit.rangeEnd);
+    // execCommand is the only API that writes through the document while keeping
+    // the textarea's native undo stack intact, so Ctrl+Z reverts a toolbar edit
+    // and prior typing alike. Deprecated, but supported in WebView2 + WKWebView
+    // (all we ship); its input event keeps the controlled `value` in sync.
+    const ok = document.execCommand("insertText", false, edit.replacement);
+    if (!ok) {
+      // Fallback (not expected on our webviews): a plain controlled rewrite. The
+      // edit still applies; only this action won't be on the native undo stack.
+      onChange(
+        value.slice(0, edit.rangeStart) +
+          edit.replacement +
+          value.slice(edit.rangeEnd),
+      );
+    }
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -333,59 +379,61 @@ export function MarkdownEditor({
           </>
         )}
       </div>
-      {mode === "write" ? (
-        <>
-          <div className="flex flex-wrap items-center gap-0.5">
-            {TOOLBAR_GROUPS.map((group, i) => (
-              <div key={group[0].id} className="flex items-center gap-0.5">
-                {i > 0 && (
-                  <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
-                )}
-                {group.map((btn) => {
-                  const Glyph = btn.icon;
-                  return (
-                    <Button
-                      key={btn.id}
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      disabled={disabled}
-                      aria-label={
-                        btn.shortcut
-                          ? `${btn.label} (${btn.shortcut})`
-                          : btn.label
-                      }
-                      title={
-                        btn.shortcut
-                          ? `${btn.label} · ${btn.shortcut}`
-                          : btn.label
-                      }
-                      // Keep the textarea focused/selected when clicking a button.
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => runAction(btn.action)}
-                    >
-                      <Glyph />
-                    </Button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-          <Textarea
-            ref={textareaRef}
-            id={id}
-            placeholder={placeholder}
-            aria-label={ariaLabel}
-            autoFocus={autoFocus}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={rows}
-            disabled={disabled}
-            className={textareaClassName}
-          />
-        </>
-      ) : (
+      {mode === "write" && (
+        <div className="flex flex-wrap items-center gap-0.5">
+          {TOOLBAR_GROUPS.map((group, i) => (
+            <div key={group[0].id} className="flex items-center gap-0.5">
+              {i > 0 && (
+                <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
+              )}
+              {group.map((btn) => {
+                const Glyph = btn.icon;
+                return (
+                  <Button
+                    key={btn.id}
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    disabled={disabled}
+                    aria-label={
+                      btn.shortcut
+                        ? `${btn.label} (${btn.shortcut})`
+                        : btn.label
+                    }
+                    title={
+                      btn.shortcut
+                        ? `${btn.label} · ${btn.shortcut}`
+                        : btn.label
+                    }
+                    // Keep the textarea focused/selected when clicking a button.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => runAction(btn.action)}
+                  >
+                    <Glyph />
+                  </Button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+      {/* The textarea stays mounted across the Preview toggle (hidden, not
+          unmounted) so its native undo/redo history isn't wiped on each
+          round-trip. */}
+      <Textarea
+        ref={textareaRef}
+        id={id}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        autoFocus={autoFocus}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={handleKeyDown}
+        rows={rows}
+        disabled={disabled}
+        className={cn(textareaClassName, mode === "preview" && "hidden")}
+      />
+      {mode === "preview" && (
         <div className="max-h-72 min-h-24 overflow-y-auto border border-input px-3 py-2">
           {value.trim() ? (
             <Markdown>{value}</Markdown>

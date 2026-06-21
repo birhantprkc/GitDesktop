@@ -42,4 +42,8 @@ cd site && pnpm build   # build the marketing site
   fix at the feature/call-site level.
 - **Keyboard-first, WCAG AA** — wire arrow-key nav for any new selectable list in the
   same change; never convey meaning by color alone; keep destructive paths confirmed.
+- **macOS Edit menu** — we rely on Tauri's `Menu::default()` (it ships the Edit submenu
+  that powers undo/redo/cut/copy/paste in inputs on macOS). If you add a custom app menu,
+  derive it from `Menu::default()` or include the Edit `PredefinedMenuItem`s, or macOS
+  text editing breaks.
 - The site deploys to Cloudflare Pages at `gitdesktop.app` (`base: "/"`).
