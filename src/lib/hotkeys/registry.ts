@@ -426,7 +426,13 @@ export const CATEGORY_ORDER: ActionCategory[] = [
  * Fixed keys that aren't actions and can't be rebound — shown in the cheat
  * sheet's "Built-in" section so the documentation is complete.
  */
-export const BUILT_IN_KEYS: { keys: string; what: string }[] = [
+export const BUILT_IN_KEYS: {
+  keys: string;
+  what: string;
+  /** Canonical binding, formatted per-platform at render (⌘ on macOS). When set,
+   *  it supersedes the literal `keys` display string. */
+  binding?: string;
+}[] = [
   {
     keys: "↑ / ↓",
     what: "Move through lists (files, commits, PRs, repositories)",
@@ -434,5 +440,9 @@ export const BUILT_IN_KEYS: { keys: string; what: string }[] = [
   { keys: "Shift+↑ / Shift+↓", what: "Extend the selection in History" },
   { keys: "Enter", what: "Open or select the highlighted item" },
   { keys: "Esc", what: "Close dialogs, menus, and settings" },
-  { keys: "Ctrl+Enter", what: "Submit a PR comment from its text box" },
+  {
+    keys: "Ctrl+Enter",
+    what: "Submit a PR comment from its text box",
+    binding: "mod+enter",
+  },
 ];

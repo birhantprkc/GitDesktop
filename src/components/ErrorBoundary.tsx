@@ -27,9 +27,20 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
           <p className="max-w-lg text-center text-xs text-muted-foreground">
             {this.state.error.message}
           </p>
-          <Button size="sm" onClick={() => this.setState({ error: null })}>
-            Try again
-          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => this.setState({ error: null })}>
+              Try again
+            </Button>
+            {/* Escape hatch when the error is deterministic and "Try again" just
+                re-renders into the same crash — a full reload resets everything. */}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => window.location.reload()}
+            >
+              Reload
+            </Button>
+          </div>
         </div>
       );
     }

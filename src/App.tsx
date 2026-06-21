@@ -36,6 +36,11 @@ function App() {
 
   // Show a one-time passive notice on first launch, letting users opt out.
   const noticeShown = useRef(false);
+  // The notice lingers ~10s; read the LATEST settings at click/dismiss time (not
+  // the value frozen when it was shown) so a setting changed in the meantime
+  // isn't clobbered when we persist `seenAnalyticsNotice`.
+  const settingsRef = useRef(settings.data);
+  settingsRef.current = settings.data;
   useEffect(() => {
     if (
       !settings.data ||
@@ -45,24 +50,25 @@ function App() {
     )
       return;
     noticeShown.current = true;
-    const snap = settings.data;
+    const persist = (extra?: { analyticsEnabled: false }) => {
+      const latest = settingsRef.current;
+      if (latest)
+        saveSettings.mutate({
+          ...latest,
+          ...extra,
+          seenAnalyticsNotice: true,
+        });
+    };
     toast("GitDesktop sends anonymous usage data", {
       description:
         "No code, paths, or secrets — and no session recordings unless you opt in. Manage in Settings → General.",
       duration: 10000,
       action: {
         label: "Turn off",
-        onClick: () =>
-          saveSettings.mutate({
-            ...snap,
-            analyticsEnabled: false,
-            seenAnalyticsNotice: true,
-          }),
+        onClick: () => persist({ analyticsEnabled: false }),
       },
-      onDismiss: () =>
-        saveSettings.mutate({ ...snap, seenAnalyticsNotice: true }),
-      onAutoClose: () =>
-        saveSettings.mutate({ ...snap, seenAnalyticsNotice: true }),
+      onDismiss: () => persist(),
+      onAutoClose: () => persist(),
     });
   }, [settings.data, saveSettings]);
 

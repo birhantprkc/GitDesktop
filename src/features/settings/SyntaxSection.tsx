@@ -403,7 +403,7 @@ export const SyntaxSection = withForm({
 
     function update(next: SyntaxConfig) {
       if (activeScope === "repo") {
-        if (repoPath) saveShared.mutate(next);
+        if (repoPath) saveShared.mutate(next, { onError: toastError });
       } else {
         form.setFieldValue("syntaxMap", next.syntaxMap);
         form.setFieldValue("customLanguages", next.customLanguages);

@@ -714,7 +714,10 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
             />
           </div>
 
-          {(settings.data?.showSelectionHint ?? true) &&
+          {/* Gate on settings.data being loaded so "Don't show again" (which
+              merges into it) can't silently no-op during the brief cold load. */}
+          {settings.data &&
+            (settings.data.showSelectionHint ?? true) &&
             entries.length >= 2 && (
               <div className="flex items-center gap-2 border-b bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
                 <InfoIcon className="size-3.5 shrink-0" />

@@ -77,7 +77,9 @@ export function ShortcutsDialog({
                   className="flex items-center justify-between gap-3 text-xs"
                 >
                   <span className="min-w-0">{row.what}</span>
-                  <Kbd>{row.keys}</Kbd>
+                  <Kbd>
+                    {row.binding ? formatBinding(row.binding) : row.keys}
+                  </Kbd>
                 </li>
               ))}
             </ul>
