@@ -38,7 +38,10 @@ import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
+import { CommitsList } from "@/features/conversations/CommitsList";
+import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import { LocalComment } from "@/features/conversations/LocalComment";
+import { makeQuoteReply } from "@/features/conversations/quoteReply";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
@@ -205,18 +208,7 @@ export function LocalPrView({
     save.mutate({ ...pr, labels: pr.labels.filter((l) => l !== label) });
   }
 
-  /** GitHub-style quote reply: prefixes each line with "> " in the composer. */
-  function quoteReply(body: string) {
-    const quoted = body
-      .trim()
-      .split("\n")
-      .map((line) => `> ${line}`)
-      .join("\n");
-    setComment((prev) =>
-      prev.trim() ? `${prev.trimEnd()}\n\n${quoted}\n\n` : `${quoted}\n\n`,
-    );
-    composerRef.current?.focus();
-  }
+  const quoteReply = makeQuoteReply({ composerRef, setBody: setComment });
 
   function openEdit() {
     if (!pr) return;
@@ -542,22 +534,16 @@ export function LocalPrView({
       )}
 
       {section === "commits" && (
-        <ScrollArea className="min-h-0 flex-1">
-          {ahead.map((c) => (
-            <div key={c.hash} className="border-b px-4 py-2">
-              <p className="truncate text-xs font-medium">{c.subject}</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                <span className="font-mono">{c.hash.slice(0, 7)}</span> ·{" "}
-                {c.author} · {formatRelativeTime(c.date)}
-              </p>
-            </div>
-          ))}
-          {ahead.length === 0 && (
-            <p className="px-4 py-6 text-center text-xs text-muted-foreground">
-              No commits to merge.
-            </p>
-          )}
-        </ScrollArea>
+        <CommitsList
+          commits={ahead.map((c) => ({
+            id: c.hash,
+            subject: c.subject,
+            shortSha: c.hash.slice(0, 7),
+            author: c.author,
+            date: c.date,
+          }))}
+          emptyMessage="No commits to merge."
+        />
       )}
 
       {section === "files" && (
@@ -765,39 +751,15 @@ export function LocalPrView({
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={deletingCommentId !== null}
-        onOpenChange={(o) => {
-          if (!o) setDeletingCommentId(null);
+      <DeleteCommentDialog
+        commentId={deletingCommentId}
+        onClose={() => setDeletingCommentId(null)}
+        description="Removes this comment from the local pull request. This cannot be undone."
+        onConfirm={(commentId) => {
+          deleteComment(commentId);
+          setDeletingCommentId(null);
         }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete comment?</DialogTitle>
-            <DialogDescription>
-              Removes this comment from the local pull request. This cannot be
-              undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDeletingCommentId(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                if (deletingCommentId) deleteComment(deletingCommentId);
-                setDeletingCommentId(null);
-              }}
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      />
     </div>
   );
 }

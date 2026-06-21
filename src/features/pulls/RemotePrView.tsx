@@ -38,7 +38,10 @@ import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { CommitsList } from "@/features/conversations/CommitsList";
+import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import { LabelsPopover } from "@/features/conversations/LabelsPopover";
+import { makeQuoteReply } from "@/features/conversations/quoteReply";
 import { ReactionBar } from "@/features/conversations/ReactionBar";
 import {
   AuthorAvatar,
@@ -80,7 +83,6 @@ import {
 } from "@/lib/git/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { PrReviewPanel } from "./PrReviewPanel";
@@ -197,18 +199,7 @@ export function RemotePrView({
 
   const onError = (e: unknown) => toastError(e);
 
-  /** GitHub-style quote reply: prefixes each line with "> " in the composer. */
-  function quoteReply(body: string) {
-    const quoted = body
-      .trim()
-      .split("\n")
-      .map((line) => `> ${line}`)
-      .join("\n");
-    setComposeBody((prev) =>
-      prev.trim() ? `${prev.trimEnd()}\n\n${quoted}\n\n` : `${quoted}\n\n`,
-    );
-    composerRef.current?.focus();
-  }
+  const quoteReply = makeQuoteReply({ composerRef, setBody: setComposeBody });
 
   function submitReview(action: ReviewAction) {
     review.mutate(
@@ -717,17 +708,15 @@ export function RemotePrView({
       )}
 
       {section === "commits" && (
-        <ScrollArea className="min-h-0 flex-1">
-          {pr.commits.map((c) => (
-            <div key={c.oid} className="border-b px-4 py-2">
-              <p className="truncate text-xs font-medium">{c.headline}</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                <span className="font-mono">{c.oid.slice(0, 7)}</span> •{" "}
-                {c.author} • {c.date && formatRelativeTime(c.date)}
-              </p>
-            </div>
-          ))}
-        </ScrollArea>
+        <CommitsList
+          commits={pr.commits.map((c) => ({
+            id: c.oid,
+            subject: c.headline,
+            shortSha: c.oid.slice(0, 7),
+            author: c.author,
+            date: c.date,
+          }))}
+        />
       )}
 
       {section === "files" && (
@@ -950,50 +939,23 @@ export function RemotePrView({
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={deletingCommentId !== null}
-        onOpenChange={(o) => {
-          if (!o) setDeletingCommentId(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete comment?</DialogTitle>
-            <DialogDescription>
-              This permanently deletes the comment on GitHub. This cannot be
-              undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDeletingCommentId(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={deleteComment.isPending}
-              onClick={() => {
-                const commentId = deletingCommentId;
-                if (!commentId) return;
-                deleteComment.mutate(commentId, {
-                  onSuccess: () => {
-                    toast.success("Comment deleted");
-                    setDeletingCommentId(null);
-                  },
-                  onError: (e) => {
-                    onError(e);
-                    setDeletingCommentId(null);
-                  },
-                });
-              }}
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteCommentDialog
+        commentId={deletingCommentId}
+        onClose={() => setDeletingCommentId(null)}
+        pending={deleteComment.isPending}
+        onConfirm={(commentId) =>
+          deleteComment.mutate(commentId, {
+            onSuccess: () => {
+              toast.success("Comment deleted");
+              setDeletingCommentId(null);
+            },
+            onError: (e) => {
+              onError(e);
+              setDeletingCommentId(null);
+            },
+          })
+        }
+      />
     </div>
   );
 }

@@ -37,6 +37,8 @@ import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
+import { makeQuoteReply } from "@/features/conversations/quoteReply";
 import { ReactionBar } from "@/features/conversations/ReactionBar";
 import {
   AuthorAvatar,
@@ -235,17 +237,7 @@ export function DiscussionView({
     );
   }
 
-  function quoteReply(body: string) {
-    const quoted = body
-      .trim()
-      .split("\n")
-      .map((line) => `> ${line}`)
-      .join("\n");
-    setComposeBody((prev) =>
-      prev.trim() ? `${prev.trimEnd()}\n\n${quoted}\n\n` : `${quoted}\n\n`,
-    );
-    composerRef.current?.focus();
-  }
+  const quoteReply = makeQuoteReply({ composerRef, setBody: setComposeBody });
 
   function saveCommentEdit(commentId: string, body: string) {
     updateComment.mutate(
@@ -796,50 +788,23 @@ export function DiscussionView({
         </div>
       </div>
 
-      <Dialog
-        open={deletingCommentId !== null}
-        onOpenChange={(o) => {
-          if (!o) setDeletingCommentId(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete comment?</DialogTitle>
-            <DialogDescription>
-              This permanently deletes the comment on GitHub. This cannot be
-              undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDeletingCommentId(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={deleteComment.isPending}
-              onClick={() => {
-                const commentId = deletingCommentId;
-                if (!commentId) return;
-                deleteComment.mutate(commentId, {
-                  onSuccess: () => {
-                    toast.success("Comment deleted");
-                    setDeletingCommentId(null);
-                  },
-                  onError: (e) => {
-                    onError(e);
-                    setDeletingCommentId(null);
-                  },
-                });
-              }}
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteCommentDialog
+        commentId={deletingCommentId}
+        onClose={() => setDeletingCommentId(null)}
+        pending={deleteComment.isPending}
+        onConfirm={(commentId) =>
+          deleteComment.mutate(commentId, {
+            onSuccess: () => {
+              toast.success("Comment deleted");
+              setDeletingCommentId(null);
+            },
+            onError: (e) => {
+              onError(e);
+              setDeletingCommentId(null);
+            },
+          })
+        }
+      />
 
       <Dialog open={deletingDiscussion} onOpenChange={setDeletingDiscussion}>
         <DialogContent>

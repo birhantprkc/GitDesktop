@@ -33,7 +33,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import { LocalComment } from "@/features/conversations/LocalComment";
+import { makeQuoteReply } from "@/features/conversations/quoteReply";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
@@ -151,18 +153,7 @@ export function LocalIssueView({
     save.mutate({ ...issue, labels: issue.labels.filter((l) => l !== label) });
   }
 
-  /** GitHub-style quote reply: prefixes each line with "> " in the composer. */
-  function quoteReply(body: string) {
-    const quoted = body
-      .trim()
-      .split("\n")
-      .map((line) => `> ${line}`)
-      .join("\n");
-    setComment((prev) =>
-      prev.trim() ? `${prev.trimEnd()}\n\n${quoted}\n\n` : `${quoted}\n\n`,
-    );
-    composerRef.current?.focus();
-  }
+  const quoteReply = makeQuoteReply({ composerRef, setBody: setComment });
 
   function openEdit() {
     if (!issue) return;
@@ -525,38 +516,15 @@ export function LocalIssueView({
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={deletingCommentId !== null}
-        onOpenChange={(o) => {
-          if (!o) setDeletingCommentId(null);
+      <DeleteCommentDialog
+        commentId={deletingCommentId}
+        onClose={() => setDeletingCommentId(null)}
+        description="Removes this comment from the local issue. This cannot be undone."
+        onConfirm={(commentId) => {
+          deleteComment(commentId);
+          setDeletingCommentId(null);
         }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete comment?</DialogTitle>
-            <DialogDescription>
-              Removes this comment from the local issue. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDeletingCommentId(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                if (deletingCommentId) deleteComment(deletingCommentId);
-                setDeletingCommentId(null);
-              }}
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      />
     </div>
   );
 }
