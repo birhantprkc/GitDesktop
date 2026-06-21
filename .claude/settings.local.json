@@ -8,5 +8,9 @@
       "PowerShell(cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings)",
       "Bash(cargo check *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "shadcn",
+    "Astro docs"
+  ]
 }

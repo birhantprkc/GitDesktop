@@ -71,6 +71,7 @@ import {
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import type { Branch } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useLocalPrs } from "@/lib/pulls/queries";
 import { useAiConfigured, useAiEnabled } from "@/lib/settings/queries";
 import { type SelectedPr, useUiStore } from "@/lib/stores/ui";
@@ -173,6 +174,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [open, setOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [branchFilter, setBranchFilter] = useState("");
+  // The branch row the keyboard nav last landed on (drives arrow-key movement).
+  const [activeBranch, setActiveBranch] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -287,6 +290,19 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const archivedBranches = sortedBranches.filter(
     (b) => b.archived && matchesFilter(b),
   );
+  // Arrow-key navigation over the visible rows (+ archived when expanded) so
+  // keyboard users can move through branches instead of Tabbing each one. Enter
+  // on the focused row checks it out via the row button's native click.
+  const navBranches = [
+    ...visibleBranches,
+    ...(showArchived ? archivedBranches : []),
+  ];
+  const onBranchKeyDown = listKeyboardNav({
+    items: navBranches,
+    activeIndex: navBranches.findIndex((b) => b.name === activeBranch),
+    onActivate: (b) => setActiveBranch(b.name),
+    rowKey: (b) => b.name,
+  });
   const stashes = stashCount.data ?? 0;
   const hasChanges = (status.data?.entries.length ?? 0) > 0;
   // Naming a branch from changes needs a commit to diff against; an unborn HEAD
@@ -548,7 +564,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
           render={
             <button
               type="button"
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground"
+              data-row={branch.name}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
               onClick={() => {
                 if (!branch.isCurrent) switchTo(branch.name);
               }}
@@ -678,7 +695,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         open={open}
         onOpenChange={(o) => {
           setOpen(o);
-          if (!o) setBranchFilter("");
+          if (!o) {
+            setBranchFilter("");
+            setActiveBranch(null);
+          }
         }}
       >
         <Popover.Trigger
@@ -710,7 +730,12 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             sideOffset={4}
             className="isolate z-50"
           >
-            <Popover.Popup className="w-108 rounded-none bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10">
+            <Popover.Popup
+              className="w-108 rounded-none bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10"
+              // Arrow keys move through the branch rows whether focus is on the
+              // filter input, a row, or the popup itself (Esc/Tab pass through).
+              onKeyDown={onBranchKeyDown}
+            >
               <div className="border-b p-2">
                 <Input
                   value={branchFilter}

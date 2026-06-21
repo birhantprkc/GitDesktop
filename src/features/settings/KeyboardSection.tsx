@@ -1,6 +1,6 @@
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { withForm } from "@/lib/form";
 import { eventToBinding, formatBinding } from "@/lib/hotkeys/binding";
@@ -55,36 +55,45 @@ export const KeyboardSection = withForm({
     }
 
     // While recording, capture every keypress before the app's own hotkey
-    // dispatcher sees it. Esc cancels; Backspace/Delete unbinds.
+    // dispatcher sees it. Esc cancels; Backspace/Delete unbinds; Tab cancels and
+    // is allowed through so it never traps keyboard focus inside the row.
+    const onRecordKey = useEffectEvent((e: KeyboardEvent) => {
+      const id = recordingId;
+      if (id === null) return;
+      if (e.key === "Tab") {
+        setRecordingId(null);
+        return; // don't preventDefault — let focus move out of recording
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecordingId(null);
+        return;
+      }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        setBinding(id, null);
+        setRecordingId(null);
+        return;
+      }
+      const binding = eventToBinding(e);
+      if (!binding) return; // bare modifier — keep waiting
+      if (!isBindableCombo(binding)) {
+        setNote(
+          "Shortcuts need a modifier (Ctrl or Alt) or a function key, so they can't collide with typing.",
+        );
+        return;
+      }
+      setBinding(id, binding);
+      setRecordingId(null);
+    });
+
+    // Subscribe only while recording, not on every render.
     useEffect(() => {
       if (recordingId === null) return;
-      const id = recordingId;
-      function onKeyDown(e: KeyboardEvent) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.key === "Escape") {
-          setRecordingId(null);
-          return;
-        }
-        if (e.key === "Backspace" || e.key === "Delete") {
-          setBinding(id, null);
-          setRecordingId(null);
-          return;
-        }
-        const binding = eventToBinding(e);
-        if (!binding) return; // bare modifier — keep waiting
-        if (!isBindableCombo(binding)) {
-          setNote(
-            "Shortcuts need a modifier (Ctrl or Alt) or a function key, so they can't collide with typing.",
-          );
-          return;
-        }
-        setBinding(id, binding);
-        setRecordingId(null);
-      }
-      window.addEventListener("keydown", onKeyDown, true);
-      return () => window.removeEventListener("keydown", onKeyDown, true);
-    });
+      const handler = (e: KeyboardEvent) => onRecordKey(e);
+      window.addEventListener("keydown", handler, true);
+      return () => window.removeEventListener("keydown", handler, true);
+    }, [recordingId]);
 
     const overrideCount = Object.keys(overrides).length;
 
@@ -102,6 +111,14 @@ export const KeyboardSection = withForm({
               {note}
             </p>
           )}
+          {/* Announce recording state + notes to screen readers. */}
+          <span role="status" aria-live="assertive" className="sr-only">
+            {recordingId
+              ? `Recording shortcut for ${
+                  ACTIONS.find((a) => a.id === recordingId)?.label ?? "action"
+                }. Press the new combination, or Escape to cancel.`
+              : (note ?? "")}
+          </span>
         </div>
         <div className="flex gap-2">
           <Button
@@ -141,6 +158,13 @@ export const KeyboardSection = withForm({
                     </span>
                     <button
                       type="button"
+                      aria-label={
+                        recording
+                          ? `Recording shortcut for ${action.label}. Press the new combination, or Escape to cancel.`
+                          : `Shortcut for ${action.label}: ${
+                              binding ? formatBinding(binding) : "unbound"
+                            }. Click to change.`
+                      }
                       onClick={() =>
                         setRecordingId(recording ? null : action.id)
                       }

@@ -52,6 +52,12 @@ type Row = { kind: "header"; owner: string } | { kind: "repo"; repo: GhRepo };
 
 const DEFAULTS = { url: "", destination: "" };
 
+const REPO_LISTBOX_ID = "clone-repo-listbox";
+/** Stable DOM id per repo row, so the filter's aria-activedescendant can point
+ *  at the keyboard-highlighted option for screen readers. */
+const repoOptionId = (nameWithOwner: string) =>
+  `clone-repo-${nameWithOwner.replace(/[^\w-]/g, "_")}`;
+
 export function CloneRepoDialog({
   open,
   onOpenChange,
@@ -220,6 +226,13 @@ export function CloneRepoDialog({
                   onKeyDown={onFilterKeyDown}
                   placeholder="Filter your repositories"
                   aria-label="Filter your repositories"
+                  role="combobox"
+                  aria-expanded={repos.isSuccess}
+                  aria-controls={REPO_LISTBOX_ID}
+                  aria-autocomplete="list"
+                  aria-activedescendant={
+                    selected ? repoOptionId(selected.nameWithOwner) : undefined
+                  }
                   disabled={!repos.isSuccess}
                   className="h-8 flex-1"
                 />
@@ -375,7 +388,13 @@ function RepoBrowser({
   }
 
   return (
-    <div ref={parentRef} className="h-full overflow-auto">
+    <div
+      ref={parentRef}
+      className="h-full overflow-auto"
+      role="listbox"
+      id={REPO_LISTBOX_ID}
+      aria-label="Your repositories"
+    >
       <div
         className="relative w-full"
         style={{ height: virtualizer.getTotalSize() }}
@@ -387,6 +406,9 @@ function RepoBrowser({
               key={v.key}
               data-index={v.index}
               ref={virtualizer.measureElement}
+              // Presentation wrapper so the virtualizer's positioning div doesn't
+              // sit between the listbox and its options in the a11y tree.
+              role="presentation"
               className="absolute top-0 left-0 w-full"
               style={{ transform: `translateY(${v.start}px)` }}
             >
@@ -426,6 +448,9 @@ function RepoRow({
   return (
     <button
       type="button"
+      id={repoOptionId(repo.nameWithOwner)}
+      role="option"
+      aria-selected={active}
       onClick={() => onSelect(repo)}
       title={repo.description ?? repo.nameWithOwner}
       className={cn(

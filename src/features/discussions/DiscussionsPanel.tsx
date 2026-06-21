@@ -224,7 +224,16 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
                       {d.commentCount}{" "}
                       {d.commentCount === 1 ? "comment" : "comments"} ·{" "}
                       {formatRelativeTime(d.createdAt)}
-                      {d.upvoteCount > 0 ? ` · ▲ ${d.upvoteCount}` : ""}
+                      {d.upvoteCount > 0 && (
+                        <>
+                          {" · "}
+                          <span aria-hidden>▲ {d.upvoteCount}</span>
+                          <span className="sr-only">
+                            {d.upvoteCount}{" "}
+                            {d.upvoteCount === 1 ? "upvote" : "upvotes"}
+                          </span>
+                        </>
+                      )}
                     </p>
                   </div>
                 </button>
