@@ -194,6 +194,9 @@ export function RunDetailView({
   const cancel = useCancelRun(repoPath);
   const aiEnabled = useAiEnabled();
   const [debugJob, setDebugJob] = useState<RunJob | null>(null);
+  // Dialog visibility is tracked separately from the debug session so closing
+  // the dialog just hides it (the run keeps streaming) and reopening resumes.
+  const [debugOpen, setDebugOpen] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const logs = useRunFailedLogs(repoPath, runId, showLogs);
 
@@ -335,7 +338,10 @@ export function RunDetailView({
                   job={job}
                   onDebug={
                     aiEnabled && isFailureConclusion(job.conclusion)
-                      ? () => setDebugJob(job)
+                      ? () => {
+                          setDebugJob(job);
+                          setDebugOpen(true);
+                        }
                       : undefined
                   }
                 />
@@ -383,10 +389,8 @@ export function RunDetailView({
         repoPath={repoPath}
         workflowName={run.workflowName}
         job={debugJob}
-        open={debugJob !== null}
-        onOpenChange={(o) => {
-          if (!o) setDebugJob(null);
-        }}
+        open={debugOpen}
+        onOpenChange={setDebugOpen}
       />
     </div>
   );

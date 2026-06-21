@@ -125,6 +125,10 @@ export function useAiTextStream() {
   const abortRef = useRef<AbortController | null>(null);
   const cliIdRef = useRef<string | null>(null);
   const cancelledRef = useRef(false);
+  // Bumped on every run() so a superseded run (e.g. switching debug jobs while
+  // the previous run is still streaming) can't clobber the newer run's shared
+  // state or surface a stale error toast.
+  const runGenRef = useRef(0);
 
   const cancel = useCallback(() => {
     cancelledRef.current = true;
@@ -140,6 +144,15 @@ export function useAiTextStream() {
   }, []);
 
   const run = useCallback(async (ai: AiSettings, args: RunStreamArgs) => {
+    const gen = ++runGenRef.current;
+    const isCurrent = () => gen === runGenRef.current;
+    // A superseded run must not touch the shared state the newer run now owns.
+    const putText = (t: string) => {
+      if (isCurrent()) setText(t);
+    };
+    const putStatus = (s: string) => {
+      if (isCurrent()) setStatus(s);
+    };
     cancelledRef.current = false;
     setGenerating(true);
     setText("");
@@ -151,15 +164,15 @@ export function useAiTextStream() {
           system: args.system,
           prompt: args.prompt,
           repoPath: args.repoPath,
-          setText,
-          setStatus,
+          setText: putText,
+          setStatus: putStatus,
           registerId: (id) => {
-            cliIdRef.current = id;
+            if (isCurrent()) cliIdRef.current = id;
           },
         });
       } else {
         const abort = new AbortController();
-        abortRef.current = abort;
+        if (isCurrent()) abortRef.current = abort;
         const client = await createAiClient(ai);
         let buffer = "";
         for await (const chunk of client.stream({
@@ -168,16 +181,19 @@ export function useAiTextStream() {
           abortSignal: abort.signal,
         })) {
           buffer += chunk;
-          setText(buffer);
+          putText(buffer);
         }
       }
     } catch (e) {
-      if (!cancelledRef.current) toastError(e);
+      if (!cancelledRef.current && isCurrent()) toastError(e);
     } finally {
-      setGenerating(false);
-      setStatus("");
-      abortRef.current = null;
-      cliIdRef.current = null;
+      // Only the latest run settles the shared state.
+      if (isCurrent()) {
+        setGenerating(false);
+        setStatus("");
+        abortRef.current = null;
+        cliIdRef.current = null;
+      }
     }
   }, []);
 

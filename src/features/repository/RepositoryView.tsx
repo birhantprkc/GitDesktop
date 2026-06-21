@@ -288,7 +288,11 @@ export function RepositoryView() {
           </Activity>
           <Activity mode={mode("actions")}>
             {selectedRunId !== null ? (
-              <RunDetailView repoPath={repoPath} runId={selectedRunId} />
+              <RunDetailView
+                key={selectedRunId}
+                repoPath={repoPath}
+                runId={selectedRunId}
+              />
             ) : (
               <DiffPlaceholder
                 icon={PlayIcon}

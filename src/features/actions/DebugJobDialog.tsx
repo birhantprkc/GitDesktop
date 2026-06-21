@@ -4,7 +4,7 @@ import {
   SparkleIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -48,8 +48,15 @@ export function DebugJobDialog({
   const { run, cancel, reset, generating, text, status } = useAiTextStream();
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [logsError, setLogsError] = useState<string | null>(null);
+  // The job id we've already kicked off an analysis for, so reopening the dialog
+  // resumes that run instead of restarting it.
+  const startedJobId = useRef<number | null>(null);
 
   async function runDebug(j: RunJob, ai: AiSettings) {
+    // Stop any prior run before starting a new one (e.g. switching jobs). Done
+    // before the log fetch so the aborted run settles while `cancelled` is still
+    // set and doesn't surface an error toast.
+    cancel();
     setLogsError(null);
     reset();
     setLoadingLogs(true);
@@ -79,14 +86,19 @@ export function DebugJobDialog({
     await run(ai, { system, prompt, repoPath });
   }
 
-  // Kick off automatically when the dialog opens; cancel on close.
+  // Kick off automatically the first time a job is selected — once per job, not
+  // on every reopen. Closing the dialog does NOT cancel: this component stays
+  // mounted (the parent always renders it), so the run keeps streaming while
+  // hidden and reopening resumes it. Only the Cancel button stops a run.
   const start = useEffectEvent(() => {
-    if (job && reviewAi) void runDebug(job, reviewAi);
+    if (job && reviewAi) {
+      startedJobId.current = job.id;
+      void runDebug(job, reviewAi);
+    }
   });
   useEffect(() => {
-    if (open) start();
-    return () => cancel();
-  }, [open, cancel]);
+    if (job && job.id !== startedJobId.current) start();
+  }, [job]);
 
   const busy = loadingLogs || generating;
   const agentPrompt = extractAgentPrompt(text);

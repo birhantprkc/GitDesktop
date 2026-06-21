@@ -81,6 +81,13 @@ commit list.
 
 ### Fixed
 
+- **"Debug with AI" no longer cancels when you close the dialog.** The Actions
+  failure-diagnosis used to stop and discard itself the moment you closed its
+  window — so an accidental close threw away the analysis. Now closing just hides
+  it: the run keeps streaming in the background and reopening shows the same
+  (in-progress or finished) diagnosis. Only the explicit **Cancel** button stops
+  a run.
+
 - **The commit message clears instantly when you commit.** The title and
   description now empty the moment you hit Commit, instead of staying on screen
   until the commit finishes and then snapping blank — so a fast local commit
