@@ -40,13 +40,16 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { CommitsList } from "@/features/conversations/CommitsList";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
+import {
+  EditTitleBodyDialog,
+  useEditTitleBody,
+} from "@/features/conversations/EditTitleBodyDialog";
 import { LocalComment } from "@/features/conversations/LocalComment";
 import { makeQuoteReply } from "@/features/conversations/quoteReply";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
-import { required, useAppForm } from "@/lib/form";
 import { gitBranchDiff, type MergeStrategy } from "@/lib/git/api";
 import {
   useBranchDiffFiles,
@@ -102,24 +105,13 @@ export function LocalPrView({
     null,
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [editOpen, setEditOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const ghStatus = useGhStatus(repoPath);
   const [labelInput, setLabelInput] = useState("");
-  const editForm = useAppForm({
-    defaultValues: { title: "", body: "" },
-    onSubmit: async ({ value }) => {
+  const edit = useEditTitleBody({
+    onSave: async ({ title, body }) => {
       if (!pr) return;
-      try {
-        await save.mutateAsync({
-          ...pr,
-          title: value.title.trim(),
-          body: value.body,
-        });
-        setEditOpen(false);
-      } catch (e) {
-        toastError(e);
-      }
+      await save.mutateAsync({ ...pr, title, body });
     },
   });
   const composerRef = useRef<MarkdownEditorHandle>(null);
@@ -212,13 +204,7 @@ export function LocalPrView({
 
   function openEdit() {
     if (!pr) return;
-    // keepDefaultValues: otherwise the per-render options sync clobbers the
-    // seeded values back to empty (untouched form).
-    editForm.reset(
-      { title: pr.title, body: pr.body },
-      { keepDefaultValues: true },
-    );
-    setEditOpen(true);
+    edit.openEdit({ title: pr.title, body: pr.body });
   }
 
   function doMerge(strategy: MergeStrategy) {
@@ -705,51 +691,15 @@ export function LocalPrView({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent>
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              editForm.handleSubmit();
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>Edit pull request</DialogTitle>
-              <DialogDescription>
-                Updates the title and description of this local pull request.
-              </DialogDescription>
-            </DialogHeader>
-            <editForm.AppField
-              name="title"
-              validators={{ onChange: ({ value }) => required(value) }}
-            >
-              {(field) => <field.TextField label="Title" />}
-            </editForm.AppField>
-            <editForm.AppField name="body">
-              {(field) => (
-                <field.MarkdownField
-                  label="Description"
-                  rows={8}
-                  textareaClassName="max-h-72"
-                />
-              )}
-            </editForm.AppField>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setEditOpen(false)}
-              >
-                Cancel
-              </Button>
-              <editForm.AppForm>
-                <editForm.SubmitButton>Save</editForm.SubmitButton>
-              </editForm.AppForm>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <EditTitleBodyDialog
+        form={edit.form}
+        open={edit.open}
+        onOpenChange={edit.setOpen}
+        title="Edit pull request"
+        description="Updates the title and description of this local pull request."
+        contentClassName={undefined}
+        bodyTextareaClassName="max-h-72"
+      />
 
       <DeleteCommentDialog
         commentId={deletingCommentId}

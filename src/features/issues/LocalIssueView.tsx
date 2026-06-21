@@ -34,11 +34,14 @@ import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
+import {
+  EditTitleBodyDialog,
+  useEditTitleBody,
+} from "@/features/conversations/EditTitleBodyDialog";
 import { LocalComment } from "@/features/conversations/LocalComment";
 import { makeQuoteReply } from "@/features/conversations/quoteReply";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { copyText } from "@/lib/clipboard";
-import { required, useAppForm } from "@/lib/form";
 import { useGhStatus } from "@/lib/git/queries";
 import {
   useDeleteLocalIssue,
@@ -68,24 +71,13 @@ export function LocalIssueView({
     null,
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [editOpen, setEditOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [labelInput, setLabelInput] = useState("");
   const composerRef = useRef<MarkdownEditorHandle>(null);
-  const editForm = useAppForm({
-    defaultValues: { title: "", body: "" },
-    onSubmit: async ({ value }) => {
+  const edit = useEditTitleBody({
+    onSave: async ({ title, body }) => {
       if (!issue) return;
-      try {
-        await save.mutateAsync({
-          ...issue,
-          title: value.title.trim(),
-          body: value.body,
-        });
-        setEditOpen(false);
-      } catch (e) {
-        toastError(e);
-      }
+      await save.mutateAsync({ ...issue, title, body });
     },
   });
 
@@ -157,11 +149,7 @@ export function LocalIssueView({
 
   function openEdit() {
     if (!issue) return;
-    editForm.reset(
-      { title: issue.title, body: issue.body },
-      { keepDefaultValues: true },
-    );
-    setEditOpen(true);
+    edit.openEdit({ title: issue.title, body: issue.body });
   }
 
   return (
@@ -470,51 +458,15 @@ export function LocalIssueView({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent>
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              editForm.handleSubmit();
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>Edit issue</DialogTitle>
-              <DialogDescription>
-                Updates the title and description of this local issue.
-              </DialogDescription>
-            </DialogHeader>
-            <editForm.AppField
-              name="title"
-              validators={{ onChange: ({ value }) => required(value) }}
-            >
-              {(field) => <field.TextField label="Title" />}
-            </editForm.AppField>
-            <editForm.AppField name="body">
-              {(field) => (
-                <field.MarkdownField
-                  label="Description"
-                  rows={8}
-                  textareaClassName="max-h-72"
-                />
-              )}
-            </editForm.AppField>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setEditOpen(false)}
-              >
-                Cancel
-              </Button>
-              <editForm.AppForm>
-                <editForm.SubmitButton>Save</editForm.SubmitButton>
-              </editForm.AppForm>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <EditTitleBodyDialog
+        form={edit.form}
+        open={edit.open}
+        onOpenChange={edit.setOpen}
+        title="Edit issue"
+        description="Updates the title and description of this local issue."
+        contentClassName={undefined}
+        bodyTextareaClassName="max-h-72"
+      />
 
       <DeleteCommentDialog
         commentId={deletingCommentId}

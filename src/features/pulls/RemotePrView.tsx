@@ -40,6 +40,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { CommitsList } from "@/features/conversations/CommitsList";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
+import {
+  EditTitleBodyDialog,
+  useEditTitleBody,
+} from "@/features/conversations/EditTitleBodyDialog";
 import { LabelsPopover } from "@/features/conversations/LabelsPopover";
 import { makeQuoteReply } from "@/features/conversations/quoteReply";
 import { ReactionBar } from "@/features/conversations/ReactionBar";
@@ -54,7 +58,6 @@ import { DiffContent } from "@/features/diff/DiffSurface";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
-import { required, useAppForm } from "@/lib/form";
 import {
   ghPrDiff,
   type MergeStrategy,
@@ -178,22 +181,11 @@ export function RemotePrView({
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeStrategy, setMergeStrategy] = useState<MergeStrategy>("merge");
   const [deleteBranch, setDeleteBranch] = useState(false);
-  const [editOpen, setEditOpen] = useState(false);
-  const editForm = useAppForm({
-    defaultValues: { title: "", body: "" },
-    onSubmit: async ({ value }) => {
-      try {
-        await editPr.mutateAsync({
-          number,
-          title: value.title.trim(),
-          body: value.body,
-        });
-        setEditOpen(false);
-        toast.success("Pull request updated");
-      } catch (e) {
-        toastError(e);
-      }
+  const edit = useEditTitleBody({
+    onSave: async ({ title, body }) => {
+      await editPr.mutateAsync({ number, title, body });
     },
+    successToast: "Pull request updated",
   });
   const composerRef = useRef<MarkdownEditorHandle>(null);
 
@@ -378,15 +370,7 @@ export function RemotePrView({
             <Button
               variant="outline"
               size="xs"
-              onClick={() => {
-                // keepDefaultValues: otherwise the per-render options sync
-                // clobbers the seeded values back to empty (untouched form).
-                editForm.reset(
-                  { title: pr.title, body: pr.body },
-                  { keepDefaultValues: true },
-                );
-                setEditOpen(true);
-              }}
+              onClick={() => edit.openEdit({ title: pr.title, body: pr.body })}
               title="Edit the title and description"
             >
               <PencilSimpleIcon data-icon="inline-start" />
@@ -555,13 +539,9 @@ export function RemotePrView({
                       </DropdownMenuItem>
                       {isOpen && (
                         <DropdownMenuItem
-                          onClick={() => {
-                            editForm.reset(
-                              { title: pr.title, body: pr.body },
-                              { keepDefaultValues: true },
-                            );
-                            setEditOpen(true);
-                          }}
+                          onClick={() =>
+                            edit.openEdit({ title: pr.title, body: pr.body })
+                          }
                         >
                           Edit
                         </DropdownMenuItem>
@@ -893,51 +873,15 @@ export function RemotePrView({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              editForm.handleSubmit();
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>Edit pull request</DialogTitle>
-              <DialogDescription>
-                Updates the title and description of #{number} on GitHub.
-              </DialogDescription>
-            </DialogHeader>
-            <editForm.AppField
-              name="title"
-              validators={{ onChange: ({ value }) => required(value) }}
-            >
-              {(field) => <field.TextField label="Title" />}
-            </editForm.AppField>
-            <editForm.AppField name="body">
-              {(field) => (
-                <field.MarkdownField
-                  label="Description"
-                  rows={8}
-                  textareaClassName="max-h-72 min-h-24 resize-y font-mono"
-                />
-              )}
-            </editForm.AppField>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setEditOpen(false)}
-              >
-                Cancel
-              </Button>
-              <editForm.AppForm>
-                <editForm.SubmitButton>Save</editForm.SubmitButton>
-              </editForm.AppForm>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <EditTitleBodyDialog
+        form={edit.form}
+        open={edit.open}
+        onOpenChange={edit.setOpen}
+        title="Edit pull request"
+        description={`Updates the title and description of #${number} on GitHub.`}
+        contentClassName="sm:max-w-lg"
+        bodyTextareaClassName="max-h-72 min-h-24 resize-y font-mono"
+      />
 
       <DeleteCommentDialog
         commentId={deletingCommentId}
