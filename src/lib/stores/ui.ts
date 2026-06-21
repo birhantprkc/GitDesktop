@@ -11,7 +11,8 @@ export type RepoTab =
   | "issues"
   | "discussions"
   | "actions"
-  | "tags";
+  | "tags"
+  | "insights";
 /** A Settings section to open directly (matches SettingsScreen's panel ids). */
 export type SettingsTarget =
   | "general"

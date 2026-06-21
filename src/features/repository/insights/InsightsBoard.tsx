@@ -1,0 +1,224 @@
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  useCodeFrequency,
+  useCommitActivity,
+  useCommunityInsights,
+  useContributorActivity,
+  useGhStatus,
+  usePunchCard,
+} from "@/lib/git/queries";
+import type { ContributorChurn } from "@/lib/git/types";
+import { useWorkflowRuns } from "@/lib/github/actions";
+import { CommunityCard } from "./CommunityCard";
+import {
+  ActionsDurationChart,
+  CodeFrequencyChart,
+  CommitActivityChart,
+  type RunDurationPoint,
+} from "./charts";
+import { PunchCard } from "./PunchCard";
+import { fmt, InsightCard } from "./primitives";
+
+const WINDOW_WEEKS = 52;
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="py-6 text-center text-xs text-muted-foreground">{children}</p>
+  );
+}
+
+function ChartSkeleton() {
+  return <Skeleton className="h-40 w-full" />;
+}
+
+/** Top contributors as an accessible bar-list (name + commits + line churn). */
+function ContributorsList({ data }: { data: ContributorChurn[] }) {
+  const top = data.slice(0, 12);
+  const max = Math.max(1, ...top.map((c) => c.commits));
+  return (
+    <ul className="space-y-1.5">
+      {top.map((c) => (
+        <li key={c.name} className="space-y-1">
+          <div className="flex items-baseline justify-between gap-2 text-xs">
+            <span className="truncate font-medium">{c.name}</span>
+            <span className="shrink-0 tabular-nums text-muted-foreground">
+              {fmt(c.commits)} {c.commits === 1 ? "commit" : "commits"} ·{" "}
+              <span className="text-green-600 dark:text-green-400">
+                +{fmt(c.additions)}
+              </span>{" "}
+              <span className="text-red-600 dark:text-red-400">
+                −{fmt(c.deletions)}
+              </span>
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary"
+              style={{ width: `${(c.commits / max) * 100}%` }}
+            />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function durationMinutes(start: string, end: string): number {
+  const s = new Date(start).getTime();
+  const e = new Date(end).getTime();
+  if (Number.isNaN(s) || Number.isNaN(e) || e < s) return 0;
+  return Math.round((e - s) / 600) / 100; // minutes, 2 decimals
+}
+
+/**
+ * The wide Insights board: the local-git graphs (commit activity, code
+ * frequency, contributors, punch card) over a trailing window, plus a GitHub
+ * Actions duration/success trend and a community-health card. All local data is
+ * computed from the clone (works offline, on private repos, with no token).
+ */
+export function InsightsBoard({ repoPath }: { repoPath: string }) {
+  const [allTime, setAllTime] = useState(false);
+  const weeks = allTime ? 0 : WINDOW_WEEKS;
+
+  const gh = useGhStatus(repoPath);
+  const canGh = Boolean(
+    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
+  );
+
+  const commitActivity = useCommitActivity(repoPath, weeks, true);
+  const codeFreq = useCodeFrequency(repoPath, weeks, true);
+  const punchCard = usePunchCard(repoPath, weeks, true);
+  const contributors = useContributorActivity(repoPath, weeks, true);
+  const community = useCommunityInsights(repoPath, canGh);
+  const runs = useWorkflowRuns(repoPath, canGh);
+
+  const completed = (runs.data ?? []).filter((r) => r.status === "completed");
+  const successRate = completed.length
+    ? Math.round(
+        (100 * completed.filter((r) => r.conclusion === "success").length) /
+          completed.length,
+      )
+    : null;
+  const durationPoints: RunDurationPoint[] = completed
+    .filter((r) => r.startedAt)
+    .slice(0, 30)
+    .reverse()
+    .map((r) => ({
+      run: `#${r.number}`,
+      minutes: durationMinutes(r.startedAt, r.updatedAt),
+      conclusion: r.conclusion || "—",
+    }));
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center justify-between border-b p-2">
+        <h2 className="px-1 text-xs font-medium text-muted-foreground">
+          Insights
+        </h2>
+        <div
+          className="flex items-center gap-0.5"
+          role="group"
+          aria-label="Time window"
+        >
+          <Button
+            type="button"
+            size="xs"
+            variant={allTime ? "ghost" : "secondary"}
+            aria-pressed={!allTime}
+            onClick={() => setAllTime(false)}
+          >
+            {WINDOW_WEEKS} weeks
+          </Button>
+          <Button
+            type="button"
+            size="xs"
+            variant={allTime ? "secondary" : "ghost"}
+            aria-pressed={allTime}
+            onClick={() => setAllTime(true)}
+          >
+            All time
+          </Button>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <InsightCard title="Commit activity">
+            {commitActivity.isPending ? (
+              <ChartSkeleton />
+            ) : commitActivity.data?.length ? (
+              <CommitActivityChart data={commitActivity.data} />
+            ) : (
+              <Empty>No commits in this window.</Empty>
+            )}
+          </InsightCard>
+
+          <InsightCard title="Code frequency">
+            {codeFreq.isPending ? (
+              <ChartSkeleton />
+            ) : codeFreq.data?.length ? (
+              <CodeFrequencyChart data={codeFreq.data} />
+            ) : (
+              <Empty>No code changes in this window.</Empty>
+            )}
+          </InsightCard>
+
+          <InsightCard title="Contributors" className="xl:col-span-2">
+            {contributors.isPending ? (
+              <ChartSkeleton />
+            ) : contributors.data?.length ? (
+              <ContributorsList data={contributors.data} />
+            ) : (
+              <Empty>No contributors in this window.</Empty>
+            )}
+          </InsightCard>
+
+          <InsightCard title="Commits by day & hour" className="xl:col-span-2">
+            {punchCard.isPending ? (
+              <ChartSkeleton />
+            ) : punchCard.data ? (
+              <PunchCard grid={punchCard.data} />
+            ) : (
+              <Empty>No commit times to chart.</Empty>
+            )}
+          </InsightCard>
+
+          {canGh && (
+            <InsightCard
+              title="Actions"
+              action={
+                successRate !== null && (
+                  <span className="text-[11px] text-muted-foreground tabular-nums">
+                    {successRate}% success · {completed.length} runs
+                  </span>
+                )
+              }
+            >
+              {runs.isPending ? (
+                <ChartSkeleton />
+              ) : durationPoints.length ? (
+                <ActionsDurationChart data={durationPoints} />
+              ) : (
+                <Empty>No completed workflow runs yet.</Empty>
+              )}
+            </InsightCard>
+          )}
+
+          {canGh && (
+            <InsightCard title="Community">
+              {community.isPending ? (
+                <ChartSkeleton />
+              ) : community.data ? (
+                <CommunityCard data={community.data} />
+              ) : (
+                <Empty>Community insights are unavailable.</Empty>
+              )}
+            </InsightCard>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

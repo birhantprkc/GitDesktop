@@ -207,6 +207,48 @@ export interface BranchStats {
   deletions: number;
 }
 
+// ── Insights graphs (local-git) ──────────────────────────────────────────────
+
+/** A contributor with commit count + line churn, for the Insights tab. */
+export interface ContributorChurn {
+  name: string;
+  commits: number;
+  additions: number;
+  deletions: number;
+}
+
+/** Commits in one ISO week ("2025-07"); sorts chronologically as a string. */
+export interface WeekCount {
+  week: string;
+  commits: number;
+}
+
+/** Additions/deletions in one ISO week, for the code-frequency graph. */
+export interface CodeFreqPoint {
+  week: string;
+  additions: number;
+  deletions: number;
+}
+
+/** Punch card: 7 rows (day-of-week, 0=Sun) × 24 columns (hour) of commit counts. */
+export type PunchCard = number[][];
+
+/** Community-health profile + social counts (gh API), for the Insights tab. */
+export interface CommunityInsights {
+  healthPercentage: number;
+  hasReadme: boolean;
+  hasLicense: boolean;
+  hasCodeOfConduct: boolean;
+  hasContributing: boolean;
+  hasIssueTemplate: boolean;
+  hasPullRequestTemplate: boolean;
+  license: string | null;
+  forksCount: number;
+  stargazersCount: number;
+  watchersCount: number;
+  openIssuesCount: number;
+}
+
 export interface RepoOpState {
   merging: boolean;
   rebasing: boolean;

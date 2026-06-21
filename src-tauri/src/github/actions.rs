@@ -50,6 +50,11 @@ pub struct WorkflowRun {
     pub event: String,
     #[serde(default)]
     pub created_at: String,
+    /// When the run actually started executing (after any queue wait); paired
+    /// with `updated_at` (≈ completion for a finished run) this gives run
+    /// duration for the Insights Actions trend, with no extra API call.
+    #[serde(default)]
+    pub started_at: String,
     #[serde(default)]
     pub updated_at: String,
     #[serde(default)]
@@ -140,7 +145,7 @@ pub struct Workflow {
     pub state: String,
 }
 
-const RUN_LIST_FIELDS: &str = "databaseId,number,displayTitle,status,conclusion,workflowName,headBranch,event,createdAt,updatedAt,url,headSha";
+const RUN_LIST_FIELDS: &str = "databaseId,number,displayTitle,status,conclusion,workflowName,headBranch,event,createdAt,startedAt,updatedAt,url,headSha";
 const RUN_VIEW_FIELDS: &str = "databaseId,number,displayTitle,status,conclusion,workflowName,headBranch,event,createdAt,url,headSha,jobs";
 /// Failed-step logs can run to many MB; keep the tail (failures land at the end).
 const RUN_LOG_CAP: usize = 200_000;

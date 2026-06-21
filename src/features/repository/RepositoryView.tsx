@@ -44,6 +44,8 @@ import { useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
 import { ChangesPanel } from "./ChangesPanel";
+import { InsightsBoard } from "./insights/InsightsBoard";
+import { InsightsPanel } from "./insights/InsightsPanel";
 import { RepoHeader } from "./RepoHeader";
 import { usePrNotifications } from "./usePrNotifications";
 
@@ -55,6 +57,7 @@ const SECONDARY_TABS: { tab: RepoTab; label: string }[] = [
   { tab: "discussions", label: "Discussions" },
   { tab: "actions", label: "Actions" },
   { tab: "tags", label: "Tags" },
+  { tab: "insights", label: "Insights" },
 ];
 
 export function RepositoryView() {
@@ -105,6 +108,7 @@ export function RepositoryView() {
   useHotkeyAction("tab-discussions", () => changeTab("discussions"));
   useHotkeyAction("tab-actions", () => changeTab("actions"));
   useHotkeyAction("tab-tags", () => changeTab("tags"));
+  useHotkeyAction("tab-insights", () => changeTab("insights"));
   useHotkeyAction("back-to-repositories", closeRepo);
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open.
@@ -210,6 +214,9 @@ export function RepositoryView() {
           <Activity mode={mode("tags")}>
             <TagsPanel repoPath={repoPath} />
           </Activity>
+          <Activity mode={mode("insights")}>
+            <InsightsPanel repoPath={repoPath} />
+          </Activity>
         </aside>
         <main className="min-w-0 flex-1">
           <Activity mode={mode("changes")}>
@@ -306,6 +313,9 @@ export function RepositoryView() {
             ) : (
               <DiffPlaceholder icon={TagIcon} message="Select a tag" />
             )}
+          </Activity>
+          <Activity mode={mode("insights")}>
+            <InsightsBoard repoPath={repoPath} />
           </Activity>
         </main>
       </div>

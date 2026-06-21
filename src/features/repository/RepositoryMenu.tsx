@@ -66,7 +66,6 @@ import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { RemoteUrlDialog } from "./RemoteUrlDialog";
 import { RemoveRepoDialog, RepoAliasDialog } from "./RepoDialogs";
-import { RepoStatsDialog } from "./RepoStatsDialog";
 import { RepositoryFilesDialog } from "./RepositoryFilesDialog";
 import { SubmodulesDialog } from "./SubmodulesDialog";
 
@@ -74,6 +73,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
   const settings = useSettings();
   const repoName = useUiStore((s) => s.repoName);
+  const setRepoTab = useUiStore((s) => s.setRepoTab);
   const fork = useForkRepo(repoPath);
   const [automationsOpen, setAutomationsOpen] = useState(false);
   const [repoSettingsOpen, setRepoSettingsOpen] = useState(false);
@@ -88,7 +88,6 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     "contribute",
   );
   const [remoteUrlOpen, setRemoteUrlOpen] = useState(false);
-  const [statsOpen, setStatsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [aliasTarget, setAliasTarget] = useState<RecentRepo | null>(null);
   const [removeTarget, setRemoveTarget] = useState<RecentRepo | null>(null);
@@ -144,7 +143,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     () => openWithProgram(editor, repoPath).catch(onError),
     Boolean(editor),
   );
-  useHotkeyAction("repository-statistics", () => setStatsOpen(true));
+  useHotkeyAction("repository-statistics", () => setRepoTab("insights"));
   useHotkeyAction("manage-files", () => setFilesOpen(true));
   useHotkeyAction("automations", () => setAutomationsOpen(true));
   useHotkeyAction(
@@ -251,9 +250,9 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => setStatsOpen(true)}>
+        <DropdownMenuItem onClick={() => setRepoTab("insights")}>
           <ChartBarIcon />
-          Repository statistics…
+          Insights…
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => setFilesOpen(true)}>
           <FilesIcon />
@@ -334,11 +333,6 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={remoteUrlOpen}
         onOpenChange={setRemoteUrlOpen}
-      />
-      <RepoStatsDialog
-        repoPath={repoPath}
-        open={statsOpen}
-        onOpenChange={setStatsOpen}
       />
       <RepositoryFilesDialog
         repoPath={repoPath}

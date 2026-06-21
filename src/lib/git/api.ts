@@ -11,10 +11,13 @@ import type {
   BranchComparison,
   BranchDivergence,
   BranchStats,
+  CodeFreqPoint,
   CommitAuthor,
   CommitDetails,
   CommitResult,
   CommitSummary,
+  CommunityInsights,
+  ContributorChurn,
   DeltaDiff,
   DiffStatEntry,
   DiscussionDetails,
@@ -44,6 +47,7 @@ import type {
   PrInfo,
   PrPollInfo,
   PrRef,
+  PunchCard,
   ReleaseDetails,
   ReleaseInfo,
   RepoInfo,
@@ -64,6 +68,7 @@ import type {
   UnignoreRule,
   Webhook,
   WebhookInput,
+  WeekCount,
 } from "./types";
 
 export const checkGitInstalled = () => invoke<GitInfo>("check_git_installed");
@@ -613,6 +618,22 @@ export const gitBranchStats = (
   branch: string,
   base: string,
 ) => invoke<BranchStats>("git_branch_stats", { repoPath, branch, base });
+
+// Insights graphs — `weeks > 0` limits to a trailing window; `0` is all history.
+export const gitContributorActivity = (repoPath: string, weeks: number) =>
+  invoke<ContributorChurn[]>("git_contributor_activity", { repoPath, weeks });
+
+export const gitCommitActivity = (repoPath: string, weeks: number) =>
+  invoke<WeekCount[]>("git_commit_activity", { repoPath, weeks });
+
+export const gitCodeFrequency = (repoPath: string, weeks: number) =>
+  invoke<CodeFreqPoint[]>("git_code_frequency", { repoPath, weeks });
+
+export const gitPunchCard = (repoPath: string, weeks: number) =>
+  invoke<PunchCard>("git_punch_card", { repoPath, weeks });
+
+export const ghCommunityInsights = (repoPath: string) =>
+  invoke<CommunityInsights>("gh_community_insights", { repoPath });
 
 export const gitCompareBranches = (
   repoPath: string,

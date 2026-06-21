@@ -61,8 +61,7 @@ git works against any remote via system `git`.
 
 **Repositories** — clone, add local, create (README / .gitignore / license
 scaffolding), publish to GitHub, and fork. A header repo switcher groups every
-repo by owner with a Recent section and filter; aliases, repository statistics
-(languages, contributors, sizes, branch-vs-default stats), and recycle-bin-safe
+repo by owner with a Recent section and filter; aliases and recycle-bin-safe
 removal. Star or unstar a repo from the menu, and (for admins) manage GitHub
 repo settings — description and topics (with AI suggestions), merge options, and
 webhooks with delivery history — without leaving the app. **Manage files** git
@@ -113,6 +112,14 @@ edit them, and react or upvote, with Write/Preview markdown throughout.
 **GitHub Actions** — a dedicated tab with live run status, run detail, re-run /
 cancel / manual dispatch, inline failed-step logs, **Debug with AI**, a current-branch
 CI badge in the header, and run-completion notifications.
+
+**Insights** — a repository-graphs tab (Ctrl/Cmd-9): commit activity, code
+frequency (additions vs. deletions), contributor churn, and a commit punch card —
+all computed **locally from your clone**, so they work offline, on private repos,
+with no token or rate limit, and without GitHub's 10k-commit chart degradation.
+Plus the at-a-glance overview (languages, contributors, sizes, branch-vs-default),
+a GitHub Actions success-rate / duration trend, and a community-health card.
+Charts ship one-line captions, data-table fallbacks, and keyboard navigation.
 
 **Git hooks** — view, edit, enable/disable, and template `.git/hooks`, with
 husky / pre-commit / lefthook detection and install integration.

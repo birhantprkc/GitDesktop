@@ -384,6 +384,223 @@ pub async fn git_branch_stats(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Insights graphs — computed locally from git (no token, works on private
+// repos and offline, no rate limit, and none of GitHub's stats/* API
+// degradations at ≥10k commits). `--no-merges` + an ISO week-year (`%G-%V`)
+// bucket match GitHub's own graphs. `weeks > 0` limits to a trailing window
+// (GitHub defaults to ~52); `weeks == 0` means all history.
+// ---------------------------------------------------------------------------
+
+/// Builds a `git log` arg list with the common insights flags, optionally
+/// windowed. `since` must outlive the returned borrow.
+fn insights_log_args<'a>(
+    pretty: &'a str,
+    date_format: Option<&'a str>,
+    numstat: bool,
+    weeks: u32,
+    since: &'a str,
+) -> Vec<&'a str> {
+    let mut args = vec!["log", "--no-merges"];
+    if numstat {
+        args.push("--numstat");
+    }
+    if let Some(df) = date_format {
+        args.push(df);
+    }
+    args.push(pretty);
+    if weeks > 0 {
+        args.push(since);
+    }
+    args
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributorChurn {
+    pub name: String,
+    pub commits: u32,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+/// Every contributor with their commit count and line churn (`git log
+/// --numstat`), most commits first. The Insights superset of `top_contributors`.
+#[tauri::command]
+pub async fn git_contributor_activity(
+    repo_path: String,
+    weeks: u32,
+) -> AppResult<Vec<ContributorChurn>> {
+    let since = format!("--since={weeks} weeks ago");
+    let args = insights_log_args(
+        "--pretty=format:%x01%aN%x00%aE",
+        None,
+        true,
+        weeks,
+        &since,
+    );
+    let out = run_git_raw(Some(&repo_path), &args, STATS_TIMEOUT).await?;
+    if out.code != 0 {
+        return Ok(Vec::new());
+    }
+    let text = out.stdout_lossy();
+    let mut by_author: HashMap<String, ContributorChurn> = HashMap::new();
+    // Each commit block starts with the \x01 sentinel; its first line is
+    // "name\0email", the rest are numstat "adds\tdels\tpath" rows.
+    for block in text.split('\u{1}') {
+        let block = block.trim_start_matches('\n');
+        if block.is_empty() {
+            continue;
+        }
+        let mut lines = block.lines();
+        let Some(header) = lines.next() else { continue };
+        let (name, _email) = header.split_once('\0').unwrap_or((header, ""));
+        let entry = by_author
+            .entry(name.to_string())
+            .or_insert_with(|| ContributorChurn {
+                name: name.to_string(),
+                commits: 0,
+                additions: 0,
+                deletions: 0,
+            });
+        entry.commits += 1;
+        for l in lines {
+            let mut parts = l.split('\t');
+            let (Some(add), Some(del)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            entry.additions += add.parse::<u64>().unwrap_or(0);
+            entry.deletions += del.parse::<u64>().unwrap_or(0);
+        }
+    }
+    let mut list: Vec<ContributorChurn> = by_author.into_values().collect();
+    list.sort_by(|a, b| b.commits.cmp(&a.commits).then(a.name.cmp(&b.name)));
+    Ok(list)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeekCount {
+    /// ISO week-year, e.g. "2025-07" (sorts chronologically as a string).
+    pub week: String,
+    pub commits: u32,
+}
+
+/// Commits per ISO week — GitHub's "commit activity" graph.
+#[tauri::command]
+pub async fn git_commit_activity(repo_path: String, weeks: u32) -> AppResult<Vec<WeekCount>> {
+    let since = format!("--since={weeks} weeks ago");
+    let args = insights_log_args(
+        "--pretty=format:%ad",
+        Some("--date=format:%G-%V"),
+        false,
+        weeks,
+        &since,
+    );
+    let out = run_git_raw(Some(&repo_path), &args, STATS_TIMEOUT).await?;
+    if out.code != 0 {
+        return Ok(Vec::new());
+    }
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for line in out.stdout_lossy().lines() {
+        let week = line.trim();
+        if week.is_empty() {
+            continue;
+        }
+        *counts.entry(week.to_string()).or_default() += 1;
+    }
+    let mut list: Vec<WeekCount> = counts
+        .into_iter()
+        .map(|(week, commits)| WeekCount { week, commits })
+        .collect();
+    list.sort_by(|a, b| a.week.cmp(&b.week));
+    Ok(list)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeFreqPoint {
+    pub week: String,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+/// Additions/deletions per ISO week — GitHub's "code frequency" graph.
+#[tauri::command]
+pub async fn git_code_frequency(repo_path: String, weeks: u32) -> AppResult<Vec<CodeFreqPoint>> {
+    let since = format!("--since={weeks} weeks ago");
+    let args = insights_log_args(
+        "--pretty=format:%x00%ad",
+        Some("--date=format:%G-%V"),
+        true,
+        weeks,
+        &since,
+    );
+    let out = run_git_raw(Some(&repo_path), &args, STATS_TIMEOUT).await?;
+    if out.code != 0 {
+        return Ok(Vec::new());
+    }
+    let mut by_week: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut current: Option<String> = None;
+    // A "\0<week>" line sets the current bucket; following numstat rows add to it.
+    for line in out.stdout_lossy().lines() {
+        if let Some(week) = line.strip_prefix('\0') {
+            current = Some(week.to_string());
+            continue;
+        }
+        let Some(week) = &current else { continue };
+        let mut parts = line.split('\t');
+        let (Some(add), Some(del)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let entry = by_week.entry(week.clone()).or_insert((0, 0));
+        entry.0 += add.parse::<u64>().unwrap_or(0);
+        entry.1 += del.parse::<u64>().unwrap_or(0);
+    }
+    let mut list: Vec<CodeFreqPoint> = by_week
+        .into_iter()
+        .map(|(week, (additions, deletions))| CodeFreqPoint {
+            week,
+            additions,
+            deletions,
+        })
+        .collect();
+    list.sort_by(|a, b| a.week.cmp(&b.week));
+    Ok(list)
+}
+
+/// Commits bucketed into a 7×24 day-of-week × hour grid (`%w` 0=Sunday, matching
+/// GitHub's punch card). Always 7 rows of 24, zero-filled.
+#[tauri::command]
+pub async fn git_punch_card(repo_path: String, weeks: u32) -> AppResult<Vec<Vec<u32>>> {
+    let since = format!("--since={weeks} weeks ago");
+    let args = insights_log_args(
+        "--pretty=format:%ad",
+        Some("--date=format:%w %H"),
+        false,
+        weeks,
+        &since,
+    );
+    let out = run_git_raw(Some(&repo_path), &args, STATS_TIMEOUT).await?;
+    let mut grid = vec![vec![0u32; 24]; 7];
+    if out.code != 0 {
+        return Ok(grid);
+    }
+    for line in out.stdout_lossy().lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(d), Some(h)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let (Ok(day), Ok(hour)) = (d.parse::<usize>(), h.parse::<usize>()) else {
+            continue;
+        };
+        if day < 7 && hour < 24 {
+            grid[day][hour] += 1;
+        }
+    }
+    Ok(grid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

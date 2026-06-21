@@ -15,6 +15,8 @@ export interface WorkflowRun {
   headBranch: string;
   event: string;
   createdAt: string;
+  /** When the run started executing (after queue); "" if never started. */
+  startedAt: string;
   updatedAt: string;
   url: string;
   headSha: string;

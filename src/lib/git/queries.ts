@@ -324,6 +324,68 @@ export function useBranchStats(
   });
 }
 
+// ── Insights graphs ──────────────────────────────────────────────────────────
+// All keyed on the trailing window (`weeks`) so toggling it refetches. Local-git
+// queries are cheap to keep fresh; the gh community call is gated on a GitHub repo.
+
+export function useContributorActivity(
+  repo: string,
+  weeks: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "insights", "contributors", weeks] as const,
+    queryFn: () => api.gitContributorActivity(repo, weeks),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useCommitActivity(
+  repo: string,
+  weeks: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "insights", "commit-activity", weeks] as const,
+    queryFn: () => api.gitCommitActivity(repo, weeks),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useCodeFrequency(
+  repo: string,
+  weeks: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "insights", "code-frequency", weeks] as const,
+    queryFn: () => api.gitCodeFrequency(repo, weeks),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function usePunchCard(repo: string, weeks: number, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "insights", "punch-card", weeks] as const,
+    queryFn: () => api.gitPunchCard(repo, weeks),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useCommunityInsights(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "insights", "community"] as const,
+    queryFn: () => api.ghCommunityInsights(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
 export function useCompareBranches(
   repo: string,
   base: string | null,

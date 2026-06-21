@@ -12,6 +12,19 @@ commit list.
 
 ### Added
 
+- **Insights tab.** A new **Insights** tab (Ctrl/Cmd-9, or "Insights…" in the
+  repository menu) with a GitHub-style board of repository graphs. Four of them —
+  **commit activity** (per week), **code frequency** (additions vs. deletions per
+  week), **contributors** (commits + line churn), and a **punch card** (commits by
+  day-of-week × hour) — are computed **locally from your clone**, so they work
+  offline, on private repos, with no token or rate limit, and without GitHub's
+  10,000-commit chart degradation. Alongside them: the at-a-glance **overview**
+  (commits, contributors, languages, sizes — the old "Repository statistics"
+  dialog, now folded in), a **GitHub Actions** success-rate and run-duration
+  trend computed from runs already fetched, and a **community-health** card
+  (stars, forks, watchers, README/license/templates). Every chart ships a
+  one-line caption, a data-table fallback, and keyboard navigation.
+
 - **Manage repository files beyond pending changes.** A new **Manage files…**
   entry in the repository menu opens a dialog with two tabs. **Tracked** lists
   every file git tracks so you can untrack one that was committed by mistake —
