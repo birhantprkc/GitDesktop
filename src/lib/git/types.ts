@@ -715,3 +715,18 @@ export interface GeneratedNotes {
   name: string;
   body: string;
 }
+
+/** An ignored file and the .gitignore rule responsible for ignoring it. A
+ *  trailing "/" on `path` marks a collapsed fully-ignored directory. */
+export interface IgnoredFile {
+  path: string;
+  source: string;
+  line: number;
+  pattern: string;
+}
+
+/** A gitignore rule to delete: the file it lives in + its exact pattern line. */
+export interface UnignoreRule {
+  source: string;
+  pattern: string;
+}

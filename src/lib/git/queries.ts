@@ -22,6 +22,7 @@ import type {
   RepoOp,
   RepoSettingsInput,
   RewriteStep,
+  UnignoreRule,
   WebhookInput,
 } from "./types";
 
@@ -1298,6 +1299,38 @@ export function useUntrack(repo: string) {
     repo,
     (args: { pathspecs: string[]; ignorePatterns: string[] }) =>
       api.gitUntrack(repo, args.pathspecs, args.ignorePatterns),
+  );
+}
+
+/** Every file git tracks — for the Repository files manager. Fetched lazily. */
+export function useTrackedFiles(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "tracked-files"] as const,
+    queryFn: () => api.gitListTracked(repo),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** Files git ignores, with the rule responsible for each. Fetched lazily. */
+export function useIgnoredFiles(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "ignored-files"] as const,
+    queryFn: () => api.gitIgnoredFiles(repo),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useForceAdd(repo: string) {
+  return useRepoMutation(repo, (pathspecs: string[]) =>
+    api.gitForceAdd(repo, pathspecs),
+  );
+}
+
+export function useUnignoreRules(repo: string) {
+  return useRepoMutation(repo, (rules: UnignoreRule[]) =>
+    api.gitUnignoreRules(repo, rules),
   );
 }
 

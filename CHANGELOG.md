@@ -12,6 +12,17 @@ commit list.
 
 ### Added
 
+- **Manage repository files beyond pending changes.** A new **Manage files…**
+  entry in the repository menu opens a dialog with two tabs. **Tracked** lists
+  every file git tracks so you can untrack one that was committed by mistake —
+  it stays on disk and is added to `.gitignore` so it doesn't come back.
+  **Ignored** lists every file an ignore rule is hiding, showing the exact rule
+  (`.gitignore:line · pattern`) responsible — so you can **force-add** a file
+  that's ignored by mistake, or **remove the rule** that's ignoring it. Both
+  tabs are filterable, virtualized for huge repos, multi-select (with arrow-key
+  and Shift-range keyboard navigation), and confirm before anything that touches
+  `.gitignore` or the index.
+
 - **Ignore or untrack multiple files at once.** Select several files in the
   Changes list (Ctrl/Cmd-click or Shift-click) and the right-click menu now
   offers **Ignore N files** and **Untrack N files** alongside the existing bulk

@@ -30,6 +30,7 @@ import type {
   HookDelivery,
   HookDeliveryDetail,
   HooksInfo,
+  IgnoredFile,
   IssueDependencies,
   IssueDetails,
   IssueDevelopment,
@@ -60,6 +61,7 @@ import type {
   StashFile,
   Submodule,
   TagInfo,
+  UnignoreRule,
   Webhook,
   WebhookInput,
 } from "./types";
@@ -405,6 +407,18 @@ export const gitUntrack = (
   pathspecs: string[],
   ignorePatterns: string[],
 ) => invoke<void>("git_untrack", { repoPath, pathspecs, ignorePatterns });
+
+export const gitListTracked = (repoPath: string) =>
+  invoke<string[]>("git_list_tracked", { repoPath });
+
+export const gitIgnoredFiles = (repoPath: string) =>
+  invoke<IgnoredFile[]>("git_ignored_files", { repoPath });
+
+export const gitForceAdd = (repoPath: string, pathspecs: string[]) =>
+  invoke<void>("git_force_add", { repoPath, pathspecs });
+
+export const gitUnignoreRules = (repoPath: string, rules: UnignoreRule[]) =>
+  invoke<void>("git_unignore_rules", { repoPath, rules });
 
 export const revealInExplorer = (path: string) =>
   invoke<void>("reveal_in_explorer", { path });

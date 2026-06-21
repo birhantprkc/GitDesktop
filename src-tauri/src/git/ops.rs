@@ -1,11 +1,12 @@
 ﻿use std::path::Path;
 
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::git::diff::parse_numstat_z;
 use crate::git::history::validate_hash;
-use crate::git::runner::{run_git, run_git_mutating, DEFAULT_TIMEOUT};
+use crate::git::runner::{run_git, run_git_mutating, run_git_raw_input, DEFAULT_TIMEOUT};
 use crate::git::types::{FileDiff, RepoOpState, RewriteStep, StashEntry, TagInfo};
 use crate::state::AppState;
 
@@ -459,6 +460,184 @@ pub async fn git_untrack(
 #[tauri::command]
 pub async fn git_stash_pop(state: State<'_, AppState>, repo_path: String) -> AppResult<()> {
     run_git_mutating(&state, &repo_path, &["stash", "pop"], DEFAULT_TIMEOUT).await?;
+    Ok(())
+}
+
+/// Every file git currently tracks (`git ls-files`), so the user can untrack one
+/// that isn't showing pending changes (e.g. accidentally committed). Read-only.
+#[tauri::command]
+pub async fn git_list_tracked(repo_path: String) -> AppResult<Vec<String>> {
+    let out = run_git(Some(&repo_path), &["ls-files", "-z"], DEFAULT_TIMEOUT).await?;
+    Ok(out
+        .stdout_lossy()
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// An ignored file and the .gitignore rule responsible for ignoring it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IgnoredFile {
+    /// Repo-relative path; a trailing "/" marks a collapsed ignored directory.
+    path: String,
+    /// The gitignore file the rule lives in (".gitignore", ".git/info/exclude", …).
+    source: String,
+    /// 1-based line of the rule in `source` (0 if it couldn't be parsed).
+    line: u32,
+    /// The matching pattern text.
+    pattern: String,
+}
+
+/// Files git ignores (untracked + matched by a gitignore rule), each with the
+/// rule responsible — surfaced nowhere else (git_status drops ignored entries).
+/// Fully-ignored directories are collapsed (e.g. "node_modules/"). Read-only.
+#[tauri::command]
+pub async fn git_ignored_files(repo_path: String) -> AppResult<Vec<IgnoredFile>> {
+    let listed = run_git(
+        Some(&repo_path),
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "--no-empty-directory",
+            "-z",
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let paths: Vec<String> = listed
+        .stdout_lossy()
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Attach the responsible rule via `check-ignore -v` (NUL output, four tokens
+    // per match: source, line, pattern, path). `-z` requires the paths on stdin,
+    // not as args, so feed them NUL-delimited.
+    let input: String = paths.iter().map(|p| format!("{p}\0")).collect();
+    let checked = run_git_raw_input(
+        Some(&repo_path),
+        &["check-ignore", "--verbose", "-z", "--stdin"],
+        Some(&input),
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let text = checked.stdout_lossy();
+    let tokens: Vec<&str> = text.split('\0').collect();
+
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 3 < tokens.len() {
+        let (source, line, pattern, path) =
+            (tokens[i], tokens[i + 1], tokens[i + 2], tokens[i + 3]);
+        i += 4;
+        if path.is_empty() {
+            continue;
+        }
+        out.push(IgnoredFile {
+            path: path.to_string(),
+            source: source.to_string(),
+            line: line.parse().unwrap_or(0),
+            pattern: pattern.to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// Force-adds the given pathspecs (`git add --force`), tracking files a gitignore
+/// rule would otherwise exclude. A directory tracks its whole (ignored) content,
+/// so callers should confirm first.
+#[tauri::command]
+pub async fn git_force_add(
+    state: State<'_, AppState>,
+    repo_path: String,
+    pathspecs: Vec<String>,
+) -> AppResult<()> {
+    let specs: Vec<&str> = pathspecs
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if specs.is_empty() {
+        return Ok(());
+    }
+    let mut args: Vec<&str> = vec!["add", "--force", "--"];
+    args.extend(specs);
+    run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    Ok(())
+}
+
+/// A gitignore rule to delete: the file it lives in + its exact pattern line.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnignoreRule {
+    source: String,
+    pattern: String,
+}
+
+/// Removes gitignore rule lines (matched by exact trimmed content) from their
+/// source files — the "remove rule" / stop-ignoring action. Matching by content
+/// (not line number) keeps it safe if the file shifted since it was read.
+#[tauri::command]
+pub async fn git_unignore_rules(repo_path: String, rules: Vec<UnignoreRule>) -> AppResult<()> {
+    // Group the patterns to remove by their source gitignore file.
+    let mut by_source: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for r in rules {
+        let pat = r.pattern.trim().to_string();
+        if r.source.trim().is_empty() || pat.is_empty() {
+            continue;
+        }
+        by_source.entry(r.source).or_default().push(pat);
+    }
+
+    for (source, patterns) in by_source {
+        let path = {
+            let p = Path::new(&source);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                Path::new(&repo_path).join(&source)
+            }
+        };
+        let raw = match tokio::fs::read_to_string(&path).await {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(AppError::Io(e)),
+        };
+        // Strip a leading UTF-8 BOM for processing (otherwise it rides on the
+        // first line and breaks the `trim() == pattern` match), and restore it
+        // on write. Preserve the file's existing line-ending convention — `lines()`
+        // drops both \n and \r\n, so a naive `join("\n")` would silently rewrite a
+        // Windows CRLF .gitignore to LF.
+        let (has_bom, content) = match raw.strip_prefix('\u{feff}') {
+            Some(rest) => (true, rest),
+            None => (false, raw.as_str()),
+        };
+        let ending = if content.contains("\r\n") { "\r\n" } else { "\n" };
+        let kept: Vec<&str> = content
+            .lines()
+            .filter(|l| !patterns.iter().any(|p| l.trim() == p))
+            .collect();
+        let mut next = kept.join(ending);
+        // Keep the trailing newline if the original had one, even when every
+        // line was removed (so the file's convention is preserved, not truncated).
+        if content.ends_with('\n') {
+            next.push_str(ending);
+        }
+        if has_bom {
+            next.insert_str(0, "\u{feff}");
+        }
+        tokio::fs::write(&path, next).await.map_err(AppError::Io)?;
+    }
     Ok(())
 }
 
@@ -1195,6 +1374,60 @@ mod tests {
         let status = git(&repo, &["status", "--porcelain"]).await;
         assert!(status.trim().is_empty(), "tree should be clean: {status}");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Makes a throwaway dir and writes `.gitignore` with the given raw bytes.
+    fn gitignore_dir(marker: &str, content: &str) -> (std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!(
+            "gd-unignore-{marker}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".gitignore"), content).unwrap();
+        let repo = dir.to_string_lossy().into_owned();
+        (dir, repo)
+    }
+
+    fn rule(pattern: &str) -> UnignoreRule {
+        UnignoreRule {
+            source: ".gitignore".into(),
+            pattern: pattern.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn unignore_preserves_crlf_and_comments() {
+        // A Windows .gitignore (CRLF) with a comment and two rules.
+        let (dir, repo) = gitignore_dir("crlf", "# build artifacts\r\n*.log\r\nbuild/\r\n");
+        git_unignore_rules(repo, vec![rule("*.log")]).await.unwrap();
+        let out = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        // CRLF kept, comment + the untouched rule kept, trailing CRLF kept.
+        assert_eq!(out, "# build artifacts\r\nbuild/\r\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn unignore_last_rule_keeps_trailing_newline() {
+        let (dir, repo) = gitignore_dir("last", "*.log\n");
+        git_unignore_rules(repo, vec![rule("*.log")]).await.unwrap();
+        let out = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        // Removing the only rule leaves a single newline, not a 0-byte file.
+        assert_eq!(out, "\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn unignore_strips_and_restores_bom() {
+        // A UTF-8 BOM ahead of the first (targeted) rule must not block the match.
+        let (dir, repo) = gitignore_dir("bom", "\u{feff}*.log\nbuild/\n");
+        git_unignore_rules(repo, vec![rule("*.log")]).await.unwrap();
+        let out = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert_eq!(out, "\u{feff}build/\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

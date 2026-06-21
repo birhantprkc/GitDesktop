@@ -5,6 +5,7 @@ import {
   CopyIcon,
   CubeIcon,
   DotsThreeVerticalIcon,
+  FilesIcon,
   FolderOpenIcon,
   GearSixIcon,
   GitForkIcon,
@@ -66,6 +67,7 @@ import { toastError } from "@/lib/toast";
 import { RemoteUrlDialog } from "./RemoteUrlDialog";
 import { RemoveRepoDialog, RepoAliasDialog } from "./RepoDialogs";
 import { RepoStatsDialog } from "./RepoStatsDialog";
+import { RepositoryFilesDialog } from "./RepositoryFilesDialog";
 import { SubmodulesDialog } from "./SubmodulesDialog";
 
 export function RepositoryMenu({ repoPath }: { repoPath: string }) {
@@ -87,6 +89,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   );
   const [remoteUrlOpen, setRemoteUrlOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [aliasTarget, setAliasTarget] = useState<RecentRepo | null>(null);
   const [removeTarget, setRemoveTarget] = useState<RecentRepo | null>(null);
 
@@ -226,6 +229,10 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <ChartBarIcon />
           Repository statistics…
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setFilesOpen(true)}>
+          <FilesIcon />
+          Manage files…
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => setAutomationsOpen(true)}>
           <LightningIcon />
           Automations…
@@ -306,6 +313,11 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={statsOpen}
         onOpenChange={setStatsOpen}
+      />
+      <RepositoryFilesDialog
+        repoPath={repoPath}
+        open={filesOpen}
+        onOpenChange={setFilesOpen}
       />
       <RepoAliasDialog
         key={

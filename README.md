@@ -65,7 +65,10 @@ repo by owner with a Recent section and filter; aliases, repository statistics
 (languages, contributors, sizes, branch-vs-default stats), and recycle-bin-safe
 removal. Star or unstar a repo from the menu, and (for admins) manage GitHub
 repo settings — description and topics (with AI suggestions), merge options, and
-webhooks with delivery history — without leaving the app.
+webhooks with delivery history — without leaving the app. **Manage files** git
+tracks or ignores beyond your pending changes: untrack a file committed by
+mistake (kept on disk), or surface every ignored file with the rule responsible
+and force-add it or remove that rule.
 
 **Changes & commits** — unified/split diff with syntax highlighting and image
 diffing; filter the changes list by path or category; hunk- and line-level
