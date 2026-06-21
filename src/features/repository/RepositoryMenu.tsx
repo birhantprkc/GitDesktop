@@ -145,9 +145,35 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     Boolean(editor),
   );
   useHotkeyAction("repository-statistics", () => setStatsOpen(true));
+  useHotkeyAction("manage-files", () => setFilesOpen(true));
   useHotkeyAction("automations", () => setAutomationsOpen(true));
+  useHotkeyAction(
+    "repository-settings",
+    () => setRepoSettingsOpen(true),
+    canGh && Boolean(admin.data),
+  );
+  useHotkeyAction("branch-rules", () => setBranchRulesOpen(true));
+  useHotkeyAction("git-hooks", () => setHooksOpen(true));
+  useHotkeyAction("submodules", () => setSubmodulesOpen(true), hasSubmodules);
+  useHotkeyAction(
+    "star-repository",
+    () =>
+      setStar.mutate(!starred, {
+        onSuccess: () =>
+          toast.success(
+            starred
+              ? "Star removed"
+              : `Starred ${gh.data?.repo ?? "repository"}`,
+          ),
+        onError,
+      }),
+    canGh && !setStar.isPending,
+  );
   useHotkeyAction("change-remote-url", () => setRemoteUrlOpen(true));
   useHotkeyAction("repo-alias", () => setAliasTarget(repoEntry));
+  useHotkeyAction("copy-repo-path", () =>
+    copyText(repoPath, "Repository path copied"),
+  );
   useHotkeyAction("remove-repository", () => setRemoveTarget(repoEntry));
 
   return (

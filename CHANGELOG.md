@@ -23,6 +23,13 @@ commit list.
   and Shift-range keyboard navigation), and confirm before anything that touches
   `.gitignore` or the index.
 
+- **More of the app is reachable from the keyboard.** The command palette
+  (Ctrl/Cmd-K) and Settings → Keyboard now include the repository-menu actions
+  that were previously click-only: **manage files**, **star / unstar**,
+  **repository settings**, **branch rules**, **git hooks**, **submodules**, and
+  **copy repository path** — each respecting the same availability as its menu
+  item, and rebindable like every other shortcut.
+
 - **Ignore or untrack multiple files at once.** Select several files in the
   Changes list (Ctrl/Cmd-click or Shift-click) and the right-click menu now
   offers **Ignore N files** and **Untrack N files** alongside the existing bulk

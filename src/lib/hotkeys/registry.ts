@@ -164,6 +164,12 @@ export const ACTIONS = [
     defaultBinding: "mod+shift+g",
   },
   {
+    id: "star-repository",
+    label: "Star or unstar repository",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
     id: "create-issue",
     label: "Create issue on GitHub",
     category: "Repository",
@@ -176,8 +182,38 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "manage-files",
+    label: "Manage repository files",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
     id: "automations",
     label: "Automations",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "repository-settings",
+    label: "Repository settings",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "branch-rules",
+    label: "Branch rules",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "git-hooks",
+    label: "Git hooks",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "submodules",
+    label: "Submodules",
     category: "Repository",
     defaultBinding: null,
   },
@@ -196,6 +232,12 @@ export const ACTIONS = [
   {
     id: "repo-alias",
     label: "Create or change alias",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "copy-repo-path",
+    label: "Copy repository path",
     category: "Repository",
     defaultBinding: null,
   },
