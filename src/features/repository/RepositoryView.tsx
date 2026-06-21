@@ -9,7 +9,15 @@ import {
   TagIcon,
 } from "@phosphor-icons/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Activity, useDeferredValue, useEffect, useTransition } from "react";
+import {
+  Activity,
+  lazy,
+  Suspense,
+  useDeferredValue,
+  useEffect,
+  useState,
+  useTransition,
+} from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,10 +52,17 @@ import { useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
 import { ChangesPanel } from "./ChangesPanel";
-import { InsightsBoard } from "./insights/InsightsBoard";
 import { InsightsPanel } from "./insights/InsightsPanel";
 import { RepoHeader } from "./RepoHeader";
 import { usePrNotifications } from "./usePrNotifications";
+
+// The Insights board pulls in Recharts; lazy-load it so that chunk stays off
+// the boot path and only loads once the user first opens the Insights tab.
+const InsightsBoard = lazy(() =>
+  import("./insights/InsightsBoard").then((m) => ({
+    default: m.InsightsBoard,
+  })),
+);
 
 // Secondary surfaces live behind a "More ▾" overflow so the four primary tabs
 // keep their full labels in the fixed-width rail. The trigger shows the active
@@ -87,6 +102,11 @@ export function RepositoryView() {
   // Tab switches are transitions: a heavy first render of the target panel
   // never blocks the click, and hidden Activities pre-render at low priority.
   const [, startTabTransition] = useTransition();
+  // Mount the (lazy, Recharts-heavy) Insights board only once its tab is first
+  // opened, then keep it mounted — <Activity> preserves its state. This keeps
+  // its chunk + heavy queries off the boot path until the user opens Insights.
+  const [insightsSeen, setInsightsSeen] = useState(false);
+  if (repoTab === "insights" && !insightsSeen) setInsightsSeen(true);
 
   // OS notifications for PR/check and workflow-run events while this repo is open.
   usePrNotifications(repoPath ?? "");
@@ -129,8 +149,10 @@ export function RepositoryView() {
   if (!repoPath) return null;
 
   // Panels live inside <Activity> so switching tabs preserves their state
-  // (filters, selections, scroll) instead of unmounting them. Hidden panels'
-  // effects are deferred, so inactive tabs don't poll or fetch.
+  // (filters, selections, scroll) instead of unmounting them. <Activity> defers
+  // hidden panels' *effects*, but NOT React Query fetches (those run during
+  // render/commit) — so a heavy tab like Insights must gate its queries on its
+  // own visibility, not rely on being hidden. See `active` below.
   const mode = (tab: RepoTab) => (repoTab === tab ? "visible" : "hidden");
   const activeSecondary = SECONDARY_TABS.find((t) => t.tab === repoTab);
 
@@ -215,7 +237,10 @@ export function RepositoryView() {
             <TagsPanel repoPath={repoPath} />
           </Activity>
           <Activity mode={mode("insights")}>
-            <InsightsPanel repoPath={repoPath} />
+            <InsightsPanel
+              repoPath={repoPath}
+              active={repoTab === "insights"}
+            />
           </Activity>
         </aside>
         <main className="min-w-0 flex-1">
@@ -315,7 +340,14 @@ export function RepositoryView() {
             )}
           </Activity>
           <Activity mode={mode("insights")}>
-            <InsightsBoard repoPath={repoPath} />
+            {insightsSeen && (
+              <Suspense fallback={null}>
+                <InsightsBoard
+                  repoPath={repoPath}
+                  active={repoTab === "insights"}
+                />
+              </Suspense>
+            )}
           </Activity>
         </main>
       </div>

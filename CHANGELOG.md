@@ -154,6 +154,17 @@ commit list.
   Ollama runs are capped more conservatively to your CPU — and any extras wait
   in a short queue and start automatically as running ones finish.
 
+### Changed
+
+- **The Insights tab does nothing until you open it.** Its repository scans and
+  GitHub calls used to run in the background every time you opened a repository,
+  even if you never visited the tab. They now start only when you first open
+  Insights, so opening a repo is lighter.
+
+- **Faster startup.** Analytics and the Insights charting library are no longer
+  bundled into the initial app load — they load on demand (the charts the first
+  time you open Insights), so the app starts quicker.
+
 ### Fixed
 
 - **The Changes list stays fast (and stops crashing) on huge working trees.**
@@ -185,6 +196,21 @@ commit list.
 - **Settings → AI: "Test connection" now tests the key you've typed**, even
   before you save it — so you can verify a new API key before committing it to
   the keychain, instead of getting a "no key saved" error.
+
+- **macOS: the Changes-list file actions use the right path.** Right-clicking a
+  file and choosing **Copy file path**, **Show in Finder**, **Open in editor**,
+  or **Open with default program** built a Windows-style path on macOS and
+  failed. They now use the correct separator on every platform.
+
+- **Line-by-line staging always targets the right hunk.** When two changed
+  regions of a file happened to share an identical header line, selecting and
+  staging individual lines could occasionally act on the wrong region. Each
+  region now has a stable identity, so the lines you pick are the lines that
+  stage.
+
+- **Clearer message when AI needs a key.** Generating a pull-request description
+  with AI now points you to **Settings → AI** when no API key is configured,
+  instead of showing a generic error — matching the AI issue drafter.
 
 ## [0.1.0] - 2026-06-19
 

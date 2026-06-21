@@ -1,6 +1,6 @@
 import { Component, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { scrubError, track } from "@/lib/analytics";
+import { trackCaughtError } from "@/lib/analytics";
 
 interface State {
   error: Error | null;
@@ -14,11 +14,9 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
   }
 
   componentDidCatch(error: Error): void {
-    const { message, kind } = scrubError(error);
-    track({
-      name: "error_caught",
-      properties: { error_kind: kind, fatal: true, message },
-    });
+    // Runs before React re-dispatches the same error to window.onerror, so this
+    // (fatal) report registers the error and the global handler skips it.
+    trackCaughtError(error, true);
   }
 
   render() {

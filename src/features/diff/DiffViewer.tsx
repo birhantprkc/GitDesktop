@@ -175,8 +175,6 @@ function WorkingTreeDiff({
     );
   }
 
-  const hunkKeyOf = (hunk: DiffHunk) => hunk.header + hunk.text.length;
-
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
@@ -224,8 +222,11 @@ function WorkingTreeDiff({
             </button>
           </div>
         )}
-        {parsed.hunks.map((hunk) => {
-          const key = hunkKeyOf(hunk);
+        {parsed.hunks.map((hunk, i) => {
+          // Index is a stable, collision-free identity within one parsed diff
+          // (hunks don't reorder; the view remounts per file and selection is
+          // cleared on apply) — unlike header+length, which two hunks can share.
+          const key = String(i);
           const sel =
             selection && selection.hunkKey === key ? selection.lines : null;
           const n = sel?.length ?? 0;

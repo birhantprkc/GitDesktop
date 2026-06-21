@@ -17,6 +17,10 @@ const KEY_NAMES: Record<string, string> = {
 export const isMac =
   typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 
+/** True on Windows. Used for native path-separator decisions (macOS + Linux use "/"). */
+export const isWindows =
+  typeof navigator !== "undefined" && /win/i.test(navigator.platform);
+
 /**
  * The canonical binding a keyboard event represents, or null when the event
  * is a bare modifier or carries no usable key.

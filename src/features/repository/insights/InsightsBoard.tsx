@@ -83,19 +83,29 @@ function durationMinutes(start: string, end: string): number {
  * Actions duration/success trend and a community-health card. All local data is
  * computed from the clone (works offline, on private repos, with no token).
  */
-export function InsightsBoard({ repoPath }: { repoPath: string }) {
+export function InsightsBoard({
+  repoPath,
+  active,
+}: {
+  repoPath: string;
+  active: boolean;
+}) {
   const [allTime, setAllTime] = useState(false);
   const weeks = allTime ? 0 : WINDOW_WEEKS;
 
   const gh = useGhStatus(repoPath);
   const canGh = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
+    active && gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );
 
-  const commitActivity = useCommitActivity(repoPath, weeks, true);
-  const codeFreq = useCodeFrequency(repoPath, weeks, true);
-  const punchCard = usePunchCard(repoPath, weeks, true);
-  const contributors = useContributorActivity(repoPath, weeks, true);
+  // These are heavy (full-history git scans + gh calls); gate them on the
+  // Insights tab being visible. <Activity> keeps this mounted while hidden but
+  // does NOT defer React Query fetches, so without this gate they'd run on
+  // every repo open even if the user never opens Insights.
+  const commitActivity = useCommitActivity(repoPath, weeks, active);
+  const codeFreq = useCodeFrequency(repoPath, weeks, active);
+  const punchCard = usePunchCard(repoPath, weeks, active);
+  const contributors = useContributorActivity(repoPath, weeks, active);
   const community = useCommunityInsights(repoPath, canGh);
   const traffic = useRepoTraffic(repoPath, canGh);
   const dependencies = useRepoDependencies(repoPath, canGh);

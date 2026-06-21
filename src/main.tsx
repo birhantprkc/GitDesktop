@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { initAnalytics, scrubError, track } from "@/lib/analytics";
+import { initAnalytics, trackCaughtError } from "@/lib/analytics";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
 import { darkQuery } from "@/lib/use-is-dark";
@@ -26,20 +26,14 @@ loadSettings()
     // Analytics is best-effort — never surface its failures.
   });
 
-// Wire up unhandled errors to PostHog after the page loads.
+// Wire up unhandled errors to PostHog after the page loads. trackCaughtError
+// dedupes by identity, so errors already reported by an ErrorBoundary (fatal)
+// aren't re-counted here as non-fatal.
 window.addEventListener("error", (e) => {
-  const { message, kind } = scrubError(e.error ?? e.message);
-  track({
-    name: "error_caught",
-    properties: { error_kind: kind, fatal: false, message },
-  });
+  trackCaughtError(e.error ?? e.message, false);
 });
 window.addEventListener("unhandledrejection", (e) => {
-  const { message, kind } = scrubError(e.reason);
-  track({
-    name: "error_caught",
-    properties: { error_kind: kind, fatal: false, message },
-  });
+  trackCaughtError(e.reason, false);
 });
 
 createRoot(document.getElementById("root")!).render(

@@ -73,7 +73,7 @@ import {
   useUntrack,
 } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
-import { isMac } from "@/lib/hotkeys/binding";
+import { isMac, isWindows } from "@/lib/hotkeys/binding";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
@@ -667,7 +667,10 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
         </>
       );
     }
-    const absolutePath = `${repoPath}\\${entry.path.replaceAll("/", "\\")}`;
+    // Build the absolute path with the OS-native separator: git emits "/" in
+    // entry.path, but reveal/open/copy expect "\" on Windows and "/" elsewhere.
+    const sep = isWindows ? "\\" : "/";
+    const absolutePath = `${repoPath}${sep}${entry.path.replaceAll("/", sep)}`;
     const folders = ancestorFolders(entry.path);
     const dot = entry.path.lastIndexOf(".");
     const extension =

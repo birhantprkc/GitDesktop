@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
-import { createAiClient } from "@/lib/ai/client";
+import { createAiClient, MissingApiKeyError } from "@/lib/ai/client";
 import { buildPrPrompt, splitCommitMessage } from "@/lib/ai/prompt";
 import { gitBranchDiff, readRepoInstructions } from "@/lib/git/api";
 import { loadSettings } from "@/lib/settings/api";
+import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 
 /** Raw diff bytes requested from the backend; prompt budgeting trims further. */
@@ -62,7 +63,19 @@ export function useGeneratePrDescription(repoPath: string) {
           onUpdate(splitCommitMessage(buffer));
         }
       } catch (e) {
-        if (!abort.signal.aborted) toastError(e);
+        if (!abort.signal.aborted) {
+          if (e instanceof MissingApiKeyError) {
+            toast.error(e.message, {
+              duration: 8000,
+              action: {
+                label: "Open settings",
+                onClick: () => useUiStore.getState().openSettings("ai"),
+              },
+            });
+          } else {
+            toastError(e);
+          }
+        }
       } finally {
         setGenerating(false);
         abortRef.current = null;

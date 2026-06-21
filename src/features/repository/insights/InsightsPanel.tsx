@@ -20,13 +20,21 @@ import {
  * contributors, and the current branch vs the default branch. The richer
  * charts live in the wide `InsightsBoard` on the right.
  */
-export function InsightsPanel({ repoPath }: { repoPath: string }) {
-  const stats = useRepoStats(repoPath, true);
+export function InsightsPanel({
+  repoPath,
+  active,
+}: {
+  repoPath: string;
+  active: boolean;
+}) {
+  // useRepoStats/useBranchStats are heavy scans; gate them on the Insights tab
+  // being visible (<Activity> keeps this mounted but doesn't defer fetches).
+  const stats = useRepoStats(repoPath, active);
   const status = useRepoStatus(repoPath);
   const defaultBranch = useDefaultBranch(repoPath);
   const currentBranch = status.data?.branch?.name ?? null;
   const base = defaultBranch.data ?? null;
-  const branchStats = useBranchStats(repoPath, currentBranch, base, true);
+  const branchStats = useBranchStats(repoPath, currentBranch, base, active);
   const showBranch =
     currentBranch !== null && base !== null && currentBranch !== base;
   const data = stats.data;

@@ -5,4 +5,4 @@ export {
   syncAnalytics,
 } from "./posthog";
 export { scrubError } from "./scrub-error";
-export { track } from "./track";
+export { track, trackCaughtError } from "./track";

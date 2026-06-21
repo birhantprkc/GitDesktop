@@ -1,5 +1,5 @@
 import { load } from "@tauri-apps/plugin-store";
-import posthog from "posthog-js";
+import type { PostHog } from "posthog-js";
 import { COLD_START, storeName } from "@/lib/test-mode";
 
 /**
@@ -9,6 +9,10 @@ import { COLD_START, storeName } from "@/lib/test-mode";
 export const PRIVACY_POLICY_URL = "https://gitdesktop.app/privacy";
 
 let initialized = false;
+// posthog-js (~190KB) is imported lazily on first init so it stays off the boot
+// path; null until initAnalytics loads it. track() and the sync/reset helpers
+// no-op while it's null.
+let posthog: PostHog | null = null;
 
 function analyticsStore() {
   return load(storeName("analytics.json"), { autoSave: true, defaults: {} });
@@ -52,7 +56,11 @@ export async function initAnalytics(
   // pure VITE_POSTHOG_HOST change. Non-cloud/self-hosted hosts pass through.
   const uiHost = host.replace(".i.posthog.com", ".posthog.com");
 
-  posthog.init(key, {
+  // Load posthog-js now (not at module load) to keep it out of the boot bundle.
+  const { default: ph } = await import("posthog-js");
+  posthog = ph;
+
+  ph.init(key, {
     api_host: host,
     ui_host: uiHost,
     // Anonymous-only: never create person profiles or send PII. The device's
@@ -87,7 +95,7 @@ export async function initAnalytics(
     bootstrap: { distinctID: distinctId },
   });
 
-  if (replay) posthog.startSessionRecording();
+  if (replay) ph.startSessionRecording();
 }
 
 /**
@@ -99,16 +107,16 @@ export async function syncAnalytics(
   replay: boolean,
 ): Promise<void> {
   if (!enabled) {
-    if (initialized) posthog.opt_out_capturing(); // stops events + recording
+    if (initialized) posthog?.opt_out_capturing(); // stops events + recording
     return;
   }
   if (!initialized) {
     await initAnalytics(true, replay);
     return;
   }
-  posthog.opt_in_capturing();
-  if (replay) posthog.startSessionRecording();
-  else posthog.stopSessionRecording();
+  posthog?.opt_in_capturing();
+  if (replay) posthog?.startSessionRecording();
+  else posthog?.stopSessionRecording();
 }
 
 /**
@@ -118,7 +126,7 @@ export async function syncAnalytics(
 export async function resetAnalyticsId(): Promise<void> {
   const store = await analyticsStore();
   await store.set("distinct_id", crypto.randomUUID());
-  if (initialized) posthog.reset();
+  if (initialized) posthog?.reset();
 }
 
 export { posthog };
