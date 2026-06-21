@@ -30,6 +30,8 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
   const setCommitBody = useUiStore((s) => s.setCommitBody);
   const setCoAuthors = useUiStore((s) => s.setCommitCoAuthors);
   const clearCommitDraft = useUiStore((s) => s.clearCommitDraft);
+  const restoreCommitDraft = useUiStore((s) => s.restoreCommitDraft);
+  const activeDraftKey = useUiStore((s) => s.activeDraftKey);
   const loadCommitDraft = useUiStore((s) => s.loadCommitDraft);
   const commitAiGenerated = useUiStore((s) => s.commitAiGenerated);
   const { generate, cancel, generating } = useGenerateCommitMessage(repoPath);
@@ -76,27 +78,38 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
     const fullBody = [body.trim(), coAuthorTrailers(coAuthors)]
       .filter(Boolean)
       .join("\n\n");
+    // Snapshot everything the in-flight commit (and its analytics) needs, since
+    // we clear the draft *before* the async commit resolves. `draftKey` is
+    // captured too so an error restores to this branch's draft even if the user
+    // switched branches while the commit was in flight.
+    const snapshot = { title, body, coAuthors, aiGenerated: commitAiGenerated };
+    const draftKey = activeDraftKey;
+    const wasAmending = amendingHash !== null;
+    const fileCount = stagedCount;
+    // Clear optimistically so the fields empty the instant you commit (GitHub
+    // Desktop feel) instead of snapping empty once the commit resolves. Also
+    // flips canCommit false, which blocks an accidental double-submit.
+    clearCommitDraft();
     commit.mutate(
-      { title: commitTitle, body: fullBody || undefined, amend: amending },
+      { title: commitTitle, body: fullBody || undefined, amend: wasAmending },
       {
         onSuccess: (result) => {
-          if (!amending) {
+          if (!wasAmending) {
             track({
               name: "commit_created",
               properties: {
-                file_count: stagedCount,
-                has_ai_message: commitAiGenerated,
-                has_co_authors: coAuthors.length > 0,
+                file_count: fileCount,
+                has_ai_message: snapshot.aiGenerated,
+                has_co_authors: snapshot.coAuthors.length > 0,
               },
             });
           }
-          clearCommitDraft();
           toast.success(
-            `${amending ? "Amended" : "Committed"} ${result.hash.slice(0, 7)}`,
+            `${wasAmending ? "Amended" : "Committed"} ${result.hash.slice(0, 7)}`,
           );
           // Amending rewrites an existing commit; only new commits fire
           // on-commit automations.
-          if (!amending) {
+          if (!wasAmending) {
             triggerAutomations({
               kind: "commit",
               repoPath,
@@ -105,7 +118,12 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
             });
           }
         },
-        onError: (e) => toastError(e),
+        onError: (e) => {
+          // The commit failed — put the message back so it isn't lost (restores
+          // amending mode too).
+          restoreCommitDraft({ ...snapshot, amendingHash }, draftKey);
+          toastError(e);
+        },
       },
     );
   }

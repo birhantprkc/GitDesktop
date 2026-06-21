@@ -160,6 +160,12 @@ interface UiState {
   setCommitBody: (body: string) => void;
   setCommitCoAuthors: (coAuthors: CommitAuthor[]) => void;
   clearCommitDraft: () => void;
+  /** Restore a snapshot for the draft `key` it belonged to (re-mirrors it into
+   *  `commitDrafts[key]`, and into the live fields only if that key is still
+   *  active). Used to undo an optimistic clear when a commit fails — `key` is
+   *  captured at submit so a mid-commit branch switch can't restore to the
+   *  wrong branch. */
+  restoreCommitDraft: (draft: CommitDraft, key: string | null) => void;
   setGenerating: (generating: boolean) => void;
   setCommitAiGenerated: (generated: boolean) => void;
   setAmending: (hash: string | null) => void;
@@ -375,6 +381,28 @@ export const useUiStore = create<UiState>()((set, get) => {
           amendingHash: null,
           commitDrafts: drafts,
         };
+      }),
+    restoreCommitDraft: (draft, key) =>
+      set((s) => {
+        const result: Partial<UiState> = {};
+        // Put the message back into the draft it belonged to.
+        if (key) {
+          const drafts = { ...s.commitDrafts };
+          if (isEmptyDraft(draft)) delete drafts[key];
+          else drafts[key] = draft;
+          result.commitDrafts = drafts;
+        }
+        // Only touch the live fields if that draft is still the active one —
+        // if the user switched branches mid-commit, leave their current draft
+        // alone (the restored message reappears when they switch back).
+        if (s.activeDraftKey === key) {
+          result.commitTitle = draft.title;
+          result.commitBody = draft.body;
+          result.commitCoAuthors = draft.coAuthors;
+          result.commitAiGenerated = draft.aiGenerated;
+          result.amendingHash = draft.amendingHash;
+        }
+        return result;
       }),
     setGenerating: (generating) => set({ generating }),
     setCommitAiGenerated: (generated) =>

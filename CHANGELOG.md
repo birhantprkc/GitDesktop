@@ -81,6 +81,12 @@ commit list.
 
 ### Fixed
 
+- **The commit message clears instantly when you commit.** The title and
+  description now empty the moment you hit Commit, instead of staying on screen
+  until the commit finishes and then snapping blank — so a fast local commit
+  feels snappy. If the commit fails, your message (and amend mode) comes back so
+  nothing is lost.
+
 - **Undo/redo now works in the markdown editor.** `Ctrl+Z` / `Ctrl+Y` (and
   `Ctrl+Shift+Z`) reliably undo and redo in every comment, reply, and
   description field — including formatting-toolbar actions (bold, lists, links),
