@@ -214,8 +214,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       : true);
   // Ahead/behind vs. the default branch, fetched only while the menu is open.
   const divergence = useBranchDivergence(repoPath, defaultName, open);
-  const divByName = new Map(
-    (divergence.data ?? []).map((d) => [d.name, d] as const),
+  const divByName = useMemo(
+    () => new Map((divergence.data ?? []).map((d) => [d.name, d] as const)),
+    [divergence.data],
   );
 
   // Per-branch PR badge. Remote PRs (open + closed, the latter carrying merged)
@@ -277,18 +278,31 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     setOpen(false);
   };
   // Default branch pinned on top, then the rest by most recently committed.
-  const sortedBranches = [...allBranches].sort((a, b) => {
-    if (a.name === defaultName) return -1;
-    if (b.name === defaultName) return 1;
-    return b.lastCommitDate.localeCompare(a.lastCommitDate);
-  });
-  const bq = branchFilter.trim().toLowerCase();
-  const matchesFilter = (b: Branch) => !bq || b.name.toLowerCase().includes(bq);
-  const visibleBranches = sortedBranches.filter(
-    (b) => !b.archived && matchesFilter(b),
+  // Memoized: the compiler won't hoist the `.sort()` copy or the filter
+  // allocations, and these recompute on every filter keystroke otherwise.
+  const sortedBranches = useMemo(
+    () =>
+      [...allBranches].sort((a, b) => {
+        if (a.name === defaultName) return -1;
+        if (b.name === defaultName) return 1;
+        return b.lastCommitDate.localeCompare(a.lastCommitDate);
+      }),
+    [allBranches, defaultName],
   );
-  const archivedBranches = sortedBranches.filter(
-    (b) => b.archived && matchesFilter(b),
+  const bq = branchFilter.trim().toLowerCase();
+  const visibleBranches = useMemo(
+    () =>
+      sortedBranches.filter(
+        (b) => !b.archived && (!bq || b.name.toLowerCase().includes(bq)),
+      ),
+    [sortedBranches, bq],
+  );
+  const archivedBranches = useMemo(
+    () =>
+      sortedBranches.filter(
+        (b) => b.archived && (!bq || b.name.toLowerCase().includes(bq)),
+      ),
+    [sortedBranches, bq],
   );
   // Arrow-key navigation over the visible rows (+ archived when expanded) so
   // keyboard users can move through branches instead of Tabbing each one. Enter
@@ -314,11 +328,14 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const amending = amendingHash !== null;
   // Bases offered when creating a branch: the current branch and/or the
   // default branch (deduped — they're the same when you're on the default).
-  const baseOptions = [
-    ...new Set(
-      [currentName, defaultName].filter((b): b is string => Boolean(b)),
-    ),
-  ];
+  const baseOptions = useMemo(
+    () => [
+      ...new Set(
+        [currentName, defaultName].filter((b): b is string => Boolean(b)),
+      ),
+    ],
+    [currentName, defaultName],
+  );
 
   const onError = (e: unknown) => toastError(e);
 

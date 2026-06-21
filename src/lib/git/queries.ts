@@ -48,6 +48,22 @@ export const repoKeys = {
     ["repo", repo, "compare", base, compare, "diff", file] as const,
 };
 
+/**
+ * The working-tree query keys a staging-class mutation actually touches: repo
+ * status, every working-tree file diff, and the worktree side of file-at-rev
+ * reads (the image-diff "new" pane) — all prefix-matched. Hot mutations
+ * (stage/unstage/discard/apply) pass this to {@link useRepoMutation} so they
+ * don't needlessly mark the heavy history/branches/Insights/SBOM queries stale.
+ * The committed-rev file-at-rev reads are deliberately left alone (their content
+ * can't change), so only the `"worktree"` slice is invalidated.
+ */
+const workingTreeKeys = (repo: string) =>
+  [
+    repoKeys.status(repo),
+    ["repo", repo, "diff"],
+    ["repo", repo, "file-b64", "worktree"],
+  ] as const;
+
 export function useGitInstalled() {
   return useQuery({
     queryKey: ["git-installed"],
@@ -1245,21 +1261,35 @@ export function useGhRepos(enabled: boolean) {
   });
 }
 
-/** Builds a mutation that invalidates everything under the repo when done. */
+/**
+ * Builds a mutation that invalidates repo queries when it settles. By default it
+ * invalidates the entire repo subtree (correct but broad); pass `invalidateKeys`
+ * to narrow it for hot mutations (each key is prefix-matched, react-query's
+ * default). Reserve the whole-subtree default for ops that touch history or
+ * branch topology (checkout/pull/reset/commit/merge).
+ */
 function useRepoMutation<TArgs, TData>(
   repo: string,
   mutationFn: (args: TArgs) => Promise<TData>,
+  invalidateKeys?: readonly (readonly unknown[])[],
 ) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn,
-    onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: repoKeys.all(repo) }),
+    onSettled: () => {
+      for (const queryKey of invalidateKeys ?? [repoKeys.all(repo)]) {
+        queryClient.invalidateQueries({ queryKey });
+      }
+    },
   });
 }
 
 export function useStage(repo: string) {
-  return useRepoMutation(repo, (paths: string[]) => api.gitStage(repo, paths));
+  return useRepoMutation(
+    repo,
+    (paths: string[]) => api.gitStage(repo, paths),
+    workingTreeKeys(repo),
+  );
 }
 
 export function useRemoteUrl(repo: string, name: string, enabled: boolean) {
@@ -1309,6 +1339,7 @@ export function useApplyPatch(repo: string) {
     repo,
     (args: { patch: string; cached: boolean; reverse: boolean }) =>
       api.gitApplyPatch(repo, args.patch, args.cached, args.reverse),
+    workingTreeKeys(repo),
   );
 }
 
@@ -1328,12 +1359,15 @@ export function useApplyPartial(repo: string) {
         args.cached,
         args.reverse,
       ),
+    workingTreeKeys(repo),
   );
 }
 
 export function useUnstage(repo: string) {
-  return useRepoMutation(repo, (paths: string[]) =>
-    api.gitUnstage(repo, paths),
+  return useRepoMutation(
+    repo,
+    (paths: string[]) => api.gitUnstage(repo, paths),
+    workingTreeKeys(repo),
   );
 }
 
@@ -1365,8 +1399,11 @@ export function useCreateBranch(repo: string) {
 }
 
 export function useDiscard(repo: string) {
-  return useRepoMutation(repo, (args: { path: string; untracked: boolean }) =>
-    api.gitDiscard(repo, args.path, args.untracked),
+  return useRepoMutation(
+    repo,
+    (args: { path: string; untracked: boolean }) =>
+      api.gitDiscard(repo, args.path, args.untracked),
+    workingTreeKeys(repo),
   );
 }
 

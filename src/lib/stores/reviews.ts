@@ -55,8 +55,6 @@ export type ReviewPhase =
 /** State of one review run, keyed by repo + PR in the store. */
 export interface ReviewEntry {
   phase: ReviewPhase;
-  /** Accumulated markdown of the (possibly in-progress) review. */
-  text: string;
   /** Transient sub-status line shown while a CLI agent works. */
   status: string;
   /** The mode of the run that produced `text` (drives the "post" label). */
@@ -96,7 +94,6 @@ const EMPTY_TARGET: ReviewTarget = {
 
 const EMPTY_ENTRY: ReviewEntry = {
   phase: "idle",
-  text: "",
   status: "",
   mode: "general",
   model: "",
@@ -118,12 +115,18 @@ export function reviewKey(t: {
 
 interface ReviewStore {
   entries: Record<string, ReviewEntry>;
+  /** In-flight review markdown, kept OUT of `entries` so the per-token streaming
+   *  updates don't churn the dock-facing entry map (the activity dock renders
+   *  metadata only — never the text — so it shouldn't re-render per token). */
+  texts: Record<string, string>;
   patch: (key: string, p: Partial<ReviewEntry>) => void;
+  setText: (key: string, text: string) => void;
   remove: (key: string) => void;
 }
 
 const useReviewStore = create<ReviewStore>((set) => ({
   entries: {},
+  texts: {},
   patch: (key, p) =>
     set((s) => ({
       entries: {
@@ -131,12 +134,15 @@ const useReviewStore = create<ReviewStore>((set) => ({
         [key]: { ...(s.entries[key] ?? EMPTY_ENTRY), ...p },
       },
     })),
+  setText: (key, text) => set((s) => ({ texts: { ...s.texts, [key]: text } })),
   remove: (key) =>
     set((s) => {
-      if (!(key in s.entries)) return s;
-      const next = { ...s.entries };
-      delete next[key];
-      return { entries: next };
+      if (!(key in s.entries) && !(key in s.texts)) return s;
+      const entries = { ...s.entries };
+      delete entries[key];
+      const texts = { ...s.texts };
+      delete texts[key];
+      return { entries, texts };
     }),
 }));
 
@@ -273,6 +279,7 @@ export async function startReview(
 
   const patch = (p: Partial<ReviewEntry>) =>
     useReviewStore.getState().patch(key, p);
+  const pushText = (t: string) => useReviewStore.getState().setText(key, t);
   const local = isLocalProvider(ai.provider);
   const lane = local ? localLane : cloudLane;
   // Register the run and mark it queued before any async work, so the
@@ -286,9 +293,10 @@ export async function startReview(
     lane,
   };
   controls.set(key, control);
+  // Clear any text from a prior run on this key before the new stream appends.
+  pushText("");
   patch({
     phase: "queued",
-    text: "",
     status: "",
     mode,
     model: ai.model,
@@ -368,7 +376,7 @@ export async function startReview(
         prompt,
         repoPath: context.repoPath,
         headSha: context.headSha,
-        setText: (t) => patch({ text: t }),
+        setText: pushText,
         setStatus: (s) => patch({ status: s }),
         registerId: (id) => {
           control.cliReviewId = id;
@@ -385,7 +393,7 @@ export async function startReview(
         abortSignal: abort.signal,
       })) {
         buffer += chunk;
-        patch({ text: buffer });
+        pushText(buffer);
       }
     }
     if (control.cancelled) return;
@@ -395,7 +403,7 @@ export async function startReview(
     // The final text is read from the store (covers both the CLI and HTTP
     // paths); a cancelled run returns above, so no mid-stream fragment is ever
     // stored. Best-effort — a persistence failure must not surface to the user.
-    const finalText = useReviewStore.getState().entries[key]?.text ?? "";
+    const finalText = useReviewStore.getState().texts[key] ?? "";
     if (finalText.trim()) {
       void saveReview(target.repoPath, {
         schemaVersion: 1,
@@ -502,6 +510,9 @@ export function useReviewTasks(): ReviewTask[] {
 export function useReviewRun(target: ReviewTarget) {
   const key = reviewKey(target);
   const entry = useReviewStore((s) => s.entries[key]) ?? EMPTY_ENTRY;
+  // Subscribed separately from `entry` so the per-token text updates re-render
+  // only this panel, not the dock (which selects `entries`).
+  const text = useReviewStore((s) => s.texts[key]) ?? "";
   const generate = useCallback(
     (
       ai: AiSettings,
@@ -529,7 +540,7 @@ export function useReviewRun(target: ReviewTarget) {
     cancel,
     reset,
     generating: entry.phase === "running",
-    text: entry.text,
+    text,
     status: entry.status,
     mode: entry.mode,
     model: entry.model,

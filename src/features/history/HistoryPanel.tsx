@@ -4,7 +4,7 @@ import {
   MagnifyingGlassIcon,
   TagIcon,
 } from "@phosphor-icons/react";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -203,6 +203,42 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   useHotkeyAction("undo-commit", undoLast, canUndo && !undoCommit.isPending);
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
 
+  // Derived commit lists — memoized so the per-render .flat()/.filter()/.map()
+  // allocations don't churn (they feed the list + selection gating on every
+  // keystroke). Computed before the early returns to satisfy the rules of hooks;
+  // harmlessly empty while the log is still loading.
+  const commits = useMemo(() => log.data?.pages.flat() ?? [], [log.data]);
+  const searchCommits = useMemo(
+    () => search.data?.pages.flat() ?? [],
+    [search.data],
+  );
+  // Client-side filter over the loaded pages (subject, author, or SHA).
+  const query = filterText.trim().toLowerCase();
+  const filteredCommits = useMemo(
+    () =>
+      query
+        ? commits.filter(
+            (c) =>
+              c.subject.toLowerCase().includes(query) ||
+              c.author.toLowerCase().includes(query) ||
+              c.hash.toLowerCase().startsWith(query),
+          )
+        : commits,
+    [commits, query],
+  );
+  // In search mode the list is whole-history grep results; otherwise it's the
+  // (client-filtered) loaded pages.
+  const visibleCommits = searchActive ? searchCommits : filteredCommits;
+  // Squash gating needs the selection's positions in REAL history (not the
+  // filtered view), so index against `commits`.
+  const selectedIndices = useMemo(
+    () =>
+      commits
+        .map((c, i) => (selected.has(c.hash) ? i : -1))
+        .filter((i) => i >= 0),
+    [commits, selected],
+  );
+
   if (log.isPending) {
     return (
       <div className="flex-1 space-y-3 p-3">
@@ -213,7 +249,6 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     );
   }
 
-  const commits = log.data?.pages.flat() ?? [];
   if (commits.length === 0) {
     return (
       <Empty className="flex-1">
@@ -240,21 +275,6 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
       </Empty>
     );
   }
-
-  // Client-side filter over the loaded pages (subject, author, or SHA).
-  const query = filterText.trim().toLowerCase();
-  const filteredCommits = query
-    ? commits.filter(
-        (c) =>
-          c.subject.toLowerCase().includes(query) ||
-          c.author.toLowerCase().includes(query) ||
-          c.hash.toLowerCase().startsWith(query),
-      )
-    : commits;
-  // In search mode the list is whole-history grep results; otherwise it's the
-  // (client-filtered) loaded pages.
-  const searchCommits = search.data?.pages.flat() ?? [];
-  const visibleCommits = searchActive ? searchCommits : filteredCommits;
 
   function onRowClick(e: React.MouseEvent, index: number, hash: string) {
     // Keep the diff panel on the clicked commit regardless of modifiers.
@@ -335,9 +355,6 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
 
   // Squash: the selection must be >1, contiguous in real history (not the
   // filtered view), entirely unpushed, and have a commit below it as base.
-  const selectedIndices = commits
-    .map((c, i) => (selected.has(c.hash) ? i : -1))
-    .filter((i) => i >= 0);
   const squashMax = selectedIndices.at(-1) ?? -1;
   const canSquash =
     selectedIndices.length > 1 &&
