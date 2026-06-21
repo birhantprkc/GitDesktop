@@ -19,7 +19,7 @@ use tokio::process::Command;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
-const DETECT_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const DETECT_TIMEOUT: Duration = Duration::from_secs(20);
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(300);
 /// Repo-aware (Tier 2) runs explore the tree with tools and take longer.
 const REVIEW_TIMEOUT_AGENTIC: Duration = Duration::from_secs(600);
@@ -237,14 +237,14 @@ async fn resolve_via_login_shell(names: &[&str]) -> Option<PathBuf> {
     None
 }
 
-/// Resolves the binary to run: an explicit override if it exists, else a static
-/// search of PATH + known dirs, else (non-Windows) the user's login shell.
-async fn resolve(kind: AgentKind, bin_path: Option<&str>) -> Option<PathBuf> {
+/// Resolves a binary by candidate `names`: an explicit override if it exists,
+/// else a static search of PATH + known dirs, else (non-Windows) the user's
+/// login shell. Shared by the agent CLIs and the health-screen tool detection.
+pub(crate) async fn resolve_named(names: &[&str], bin_path: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = bin_path.map(str::trim).filter(|s| !s.is_empty()) {
         let pb = PathBuf::from(p);
         return pb.is_file().then_some(pb);
     }
-    let names = kind.binary_names();
     if let Some(found) = find_executable(names) {
         return Some(found);
     }
@@ -258,10 +258,19 @@ async fn resolve(kind: AgentKind, bin_path: Option<&str>) -> Option<PathBuf> {
     }
 }
 
+/// Resolves the agent CLI's binary (override → PATH → login shell).
+async fn resolve(kind: AgentKind, bin_path: Option<&str>) -> Option<PathBuf> {
+    resolve_named(kind.binary_names(), bin_path).await
+}
+
 // --- detection -------------------------------------------------------------
 
 /// Runs a short command and returns (exit code, stdout+stderr).
-async fn run_capture(program: &Path, args: &[&str], timeout: Duration) -> AppResult<(i32, String)> {
+pub(crate) async fn run_capture(
+    program: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> AppResult<(i32, String)> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .env("NO_COLOR", "1")

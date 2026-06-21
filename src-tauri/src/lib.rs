@@ -3,6 +3,7 @@ mod error;
 mod fsops;
 mod git;
 mod github;
+mod health;
 mod hooks;
 mod instructions;
 mod secrets;
@@ -250,6 +251,7 @@ pub fn run() {
             hooks::git_hook_delete,
             hooks::git_run_hook_manager,
             agent::agent_detect,
+            health::system_health,
             agent::agent_review,
             agent::agent_review_cancel,
             tray::set_close_to_tray,

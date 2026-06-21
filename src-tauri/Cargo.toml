@@ -33,6 +33,7 @@ tokio = { version = "1", features = ["process", "time", "macros", "sync"] }
 thiserror = "2"
 base64 = "0.22.1"
 tauri-plugin-notification = "2.3.3"
+os_info = "3"
 
 # Desktop-only: the updater plugin doesn't build for mobile.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

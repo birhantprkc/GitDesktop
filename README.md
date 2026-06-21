@@ -120,6 +120,11 @@ global defaults and per-repo overrides.
 **Integrations** — open in any editor or terminal (auto-detected, or point at any
 executable), and tunable OS notifications for PR activity, checks, and CI runs.
 
+**Environment check** — a Settings → **About** panel reports your app/OS/Tauri
+versions and the status of every CLI GitDesktop uses (git, the GitHub & GitLab
+CLIs, Claude Code, Codex): installed?, version, resolved path, and sign-in
+state — with an Install link for anything that's missing.
+
 ## AI configuration
 
 - **Providers** — Anthropic, OpenAI, OpenRouter, local **Ollama**, **Ollama

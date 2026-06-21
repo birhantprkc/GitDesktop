@@ -12,6 +12,14 @@ commit list.
 
 ### Added
 
+- **Settings → About: a one-glance environment check.** A new **About** section
+  shows your app, OS and Tauri versions plus a **Components** table for every
+  command-line tool GitDesktop relies on — git, the GitHub and GitLab CLIs, and
+  the Claude/Codex agent CLIs. Each row shows whether it's installed, its version
+  and resolved path, and (where it applies) whether you're signed in — with a
+  one-click **Install** link for anything that's missing. Several features quietly
+  degrade when a CLI is absent or signed out; now the dependency is explicit.
+
 - **Cleaner in-progress logs for GitHub Actions.** While a job is still running,
   its logs section now shows a tidy "logs appear when this job finishes" note
   with a **Watch live on GitHub** link — instead of GitHub's raw "still in

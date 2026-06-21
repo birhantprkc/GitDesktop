@@ -19,6 +19,7 @@ import { useAppForm } from "@/lib/form";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
+import { AboutSection } from "./AboutSection";
 import { AccountsSection } from "./AccountsSection";
 import { AiProviderSection } from "./AiProviderSection";
 import { EditorSection } from "./EditorSection";
@@ -44,6 +45,7 @@ const PANELS = [
   { id: "editor", label: "External editor" },
   { id: "terminal", label: "Terminal" },
   { id: "updates", label: "Updates" },
+  { id: "about", label: "About" },
 ] as const;
 
 type PanelId = (typeof PANELS)[number]["id"];
@@ -238,6 +240,7 @@ export function SettingsScreen() {
               {activePanel === "editor" && <EditorSection form={form} />}
               {activePanel === "terminal" && <TerminalSection form={form} />}
               {activePanel === "updates" && <UpdatesSection form={form} />}
+              {activePanel === "about" && <AboutSection />}
             </main>
           </ScrollArea>
         </div>
