@@ -185,6 +185,12 @@ export function DependenciesCard({ data }: { data: RepoDependencies }) {
           </span>{" "}
           total · <span className="tabular-nums">{fmt(directCount)}</span>{" "}
           direct
+          {(q || directOnly) && (
+            <>
+              {" · "}
+              <span className="tabular-nums">{fmt(filtered.length)}</span> shown
+            </>
+          )}
         </p>
         <Button
           type="button"

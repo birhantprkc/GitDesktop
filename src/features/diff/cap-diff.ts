@@ -20,8 +20,14 @@ interface CappedDiff {
  * so the result stays a valid hunk the renderer can parse.
  */
 export function capDiffText(text: string, maxLines: number): CappedDiff {
+  // Count lines without allocating — most diffs fit under the cap and never need
+  // the full split (which builds an array as large as the whole diff).
+  let lineCount = 1;
+  for (let k = 0; k < text.length; k++) {
+    if (text.charCodeAt(k) === 10 /* \n */) lineCount++;
+  }
+  if (lineCount <= maxLines) return { text, hidden: 0 };
   const lines = text.split("\n");
-  if (lines.length <= maxLines) return { text, hidden: 0 };
 
   // Header = everything before the first hunk (diff --git, index, ---, +++).
   const firstHunk = lines.findIndex((l) => l.startsWith("@@"));

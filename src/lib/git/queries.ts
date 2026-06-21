@@ -1749,7 +1749,7 @@ export function useStashPop(repo: string) {
   return useRepoMutation(repo, () => api.gitStashPop(repo));
 }
 
-export function useStashList(repo: string, enabled = true) {
+export function useStashList(repo: string, enabled = false) {
   return useQuery({
     queryKey: ["repo", repo, "stashes"] as const,
     queryFn: () => api.gitStashList(repo),

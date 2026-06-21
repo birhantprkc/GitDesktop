@@ -120,18 +120,25 @@ export function useAvailableActions(): Set<ActionId> {
  */
 export function useHotkeysListener() {
   const bindings = useEffectiveBindings();
+  // Invert ActionId→binding to binding→ActionId once per settings change, so the
+  // keydown handler is an O(1) lookup instead of scanning all ~64 actions every
+  // keystroke. First action wins a (rare) binding collision, matching the prior
+  // first-match loop over ACTIONS order.
+  const byBinding = useMemo(() => {
+    const map = new Map<string, ActionId>();
+    for (const [id, bound] of bindings) {
+      if (bound !== null && !map.has(bound)) map.set(bound, id);
+    }
+    return map;
+  }, [bindings]);
 
   const onKeyDown = useEffectEvent((e: KeyboardEvent) => {
     if (e.defaultPrevented || e.repeat) return;
     const binding = eventToBinding(e);
     if (!binding) return;
     if (isEditableTarget(e.target) && !firesInEditable(binding)) return;
-    for (const [id, bound] of bindings) {
-      if (bound === binding) {
-        if (dispatchAction(id)) e.preventDefault();
-        return;
-      }
-    }
+    const id = byBinding.get(binding);
+    if (id && dispatchAction(id)) e.preventDefault();
   });
 
   useEffect(() => {

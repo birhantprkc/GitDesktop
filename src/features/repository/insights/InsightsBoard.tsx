@@ -74,7 +74,8 @@ function durationMinutes(start: string, end: string): number {
   const s = new Date(start).getTime();
   const e = new Date(end).getTime();
   if (Number.isNaN(s) || Number.isNaN(e) || e < s) return 0;
-  return Math.round((e - s) / 600) / 100; // minutes, 2 decimals
+  // ms → minutes (÷60_000), rounded to 2 decimals (×100 / round / ÷100).
+  return Math.round(((e - s) / 60_000) * 100) / 100;
 }
 
 /**

@@ -152,7 +152,10 @@ export function RepositoryView() {
   useHotkeyAction("create-release", () => requestCreate("release"), canGh);
   useHotkeyAction("create-tag", () => requestCreate("tag"));
 
-  // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open.
+  // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open. No
+  // cleanup here: a branch switch updates the title in one pass instead of
+  // flashing through the bare "GitDesktop" (the cleanup used to run on every
+  // dep change, racing the async setTitle).
   useEffect(() => {
     const display = alias ?? repoName;
     if (!display) return;
@@ -160,12 +163,15 @@ export function RepositoryView() {
     getCurrentWindow()
       .setTitle(`${title} — GitDesktop`)
       .catch(() => undefined);
+  }, [repoName, alias, currentName]);
+  // Reset to the bare title only when the repo view unmounts (repo closed).
+  useEffect(() => {
     return () => {
       getCurrentWindow()
         .setTitle("GitDesktop")
         .catch(() => undefined);
     };
-  }, [repoName, alias, currentName]);
+  }, []);
 
   if (!repoPath) return null;
 
