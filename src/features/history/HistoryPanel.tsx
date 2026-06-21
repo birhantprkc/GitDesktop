@@ -1,5 +1,6 @@
 import {
   ArrowLeftIcon,
+  ArrowUpIcon,
   GitCommitIcon,
   MagnifyingGlassIcon,
   TagIcon,
@@ -228,6 +229,22 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     [commits, selected],
   );
 
+  // Commits not yet on the remote: the top `ahead` commits, or everything when
+  // there's no upstream (an unpublished branch — all commits are unpushed).
+  // Drives both the rewrite gating below and the per-row "not pushed" marker.
+  const unpushedCount = head
+    ? head.upstream
+      ? head.ahead
+      : commits.length
+    : 0;
+  // The unpushed set (top `unpushedCount` of the HEAD-order log), for marking
+  // rows. Memoized — the React Compiler won't hoist the .slice/.map/new Set.
+  // Auto-clears after a push: useRepoStatus refetches, head.ahead → 0.
+  const unpushedHashes = useMemo(
+    () => new Set(commits.slice(0, unpushedCount).map((c) => c.hash)),
+    [commits, unpushedCount],
+  );
+
   if (log.isPending) {
     return (
       <div className="flex-1 space-y-3 p-3">
@@ -333,14 +350,6 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
       .map((c) => c.hash)
       .reverse();
   }
-
-  // Rewriting may only touch commits that aren't on the remote: the top
-  // `ahead` commits, or everything (minus the root) when there's no upstream.
-  const unpushedCount = head
-    ? head.upstream
-      ? head.ahead
-      : commits.length
-    : 0;
 
   // Squash: the selection must be >1, contiguous in real history (not the
   // filtered view), entirely unpushed, and have a commit below it as base.
@@ -689,6 +698,19 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
                       title={commit.tags.join(", ")}
                     >
                       +{commit.tags.length - 2}
+                    </span>
+                  )}
+                  {unpushedHashes.has(commit.hash) && (
+                    <span
+                      className="ml-auto flex shrink-0 items-center text-muted-foreground"
+                      title={
+                        head?.upstream
+                          ? `Not pushed yet — ahead of ${head.upstream}`
+                          : "Not pushed yet"
+                      }
+                      aria-label="Not pushed yet"
+                    >
+                      <ArrowUpIcon className="size-3" weight="bold" />
                     </span>
                   )}
                 </p>

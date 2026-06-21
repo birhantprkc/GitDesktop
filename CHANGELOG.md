@@ -12,6 +12,11 @@ commit list.
 
 ### Added
 
+- **See what you haven't pushed.** The History list now marks every commit that
+  isn't on the remote yet with a small up-arrow (hover for "ahead of
+  origin/…") — so it's clear at a glance what a push would send. On a branch
+  with no upstream, every commit is marked until you publish it. The markers
+  clear themselves once the push lands.
 - **Reviews build on other AI reviewers.** If GitHub Copilot, CodeRabbit, or
   another review bot has already weighed in on a GitHub pull request, an AI
   review or security audit now folds their findings — including their

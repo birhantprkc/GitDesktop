@@ -89,7 +89,8 @@ branch-protection rules** (naming, merge methods, require-PR, force-push) that
 are shareable via a committed file or importable from GitHub.
 
 **History & advanced** — paged, filterable history with rich commit detail,
-per-file history and line blame; cherry-pick (onto the current or another branch),
+per-file history and line blame, and an at-a-glance marker on every commit that
+hasn't been pushed yet; cherry-pick (onto the current or another branch),
 squash and reorder unpushed commits behind an atomic replay engine, a stash
 browser, tag management, and submodule management.
 
