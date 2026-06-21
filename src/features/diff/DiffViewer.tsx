@@ -145,6 +145,15 @@ function WorkingTreeDiff({
         imageRevs={
           file.staged ? { old: "HEAD", new: ":0" } : { old: "HEAD", new: null }
         }
+        // Full-text highlight context, aligned to the diff's actual sides:
+        // staged = HEAD↔index, unstaged = index↔worktree, added = worktree only.
+        contentRevs={
+          file.untracked
+            ? { newRev: null }
+            : file.staged
+              ? { oldRev: "HEAD", newRev: ":0" }
+              : { oldRev: ":0", newRev: null }
+        }
       />
     );
   }

@@ -172,6 +172,16 @@ commit list.
 
 ### Fixed
 
+- **Diffs highlight with full-file context, and show expandable surrounding
+  lines.** When a diff's first visible line landed in the middle of a multi-line
+  comment, the code after the comment could be mis-colored (highlighted as if it
+  were still inside the comment), because only the changed hunk — not the file
+  around it — was handed to the highlighter. Commit, stash, and new-file diffs
+  now read the whole file for context, so highlighting is correct, and you can
+  expand the unchanged lines above and below each change in place (GitHub-style),
+  instead of just a fixed "Show full diff." Large files and truncated diffs keep
+  the previous lightweight view.
+
 - **Links to external pages use the pointer cursor.** Buttons and link-styled
   text that open something in your browser — the "GitHub" / "View on GitHub"
   buttons across pull requests, issues, discussions, tags, and the compare view;

@@ -255,6 +255,7 @@ export function CommitDetailView({
               diff={diff}
               repoPath={repoPath}
               imageRevs={{ old: `${hash}~1`, new: hash }}
+              contentRevs={{ oldRev: `${hash}~1`, newRev: hash }}
             />
           ) : (
             <DiffPlaceholder message="Select a file to see its changes" />

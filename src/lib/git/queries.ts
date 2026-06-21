@@ -54,14 +54,17 @@ export const repoKeys = {
  * reads (the image-diff "new" pane) — all prefix-matched. Hot mutations
  * (stage/unstage/discard/apply) pass this to {@link useRepoMutation} so they
  * don't needlessly mark the heavy history/branches/Insights/SBOM queries stale.
- * The committed-rev file-at-rev reads are deliberately left alone (their content
- * can't change), so only the `"worktree"` slice is invalidated.
+ * Of the file-at-rev reads (image diffs + the diff viewer's whole-file highlight
+ * context), only the mutable sides are invalidated: the `"worktree"` slice and
+ * the index (`":0"`) slice, which staging rewrites. Committed-rev reads (HEAD,
+ * commit SHAs) are immutable here and deliberately left alone.
  */
 const workingTreeKeys = (repo: string) =>
   [
     repoKeys.status(repo),
     ["repo", repo, "diff"],
     ["repo", repo, "file-b64", "worktree"],
+    ["repo", repo, "file-b64", ":0"],
   ] as const;
 
 export function useGitInstalled() {

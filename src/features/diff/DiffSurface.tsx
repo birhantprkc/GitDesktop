@@ -3,6 +3,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { useDeferredValue, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
+import { useFileAtRev } from "@/lib/git/queries";
 import type { FileDiff } from "@/lib/git/types";
 import type { CustomLanguage } from "@/lib/settings/api";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
@@ -27,6 +28,34 @@ import { ensureCustomLanguages } from "./syntax";
 export interface SyntaxPrefs {
   syntaxMap?: Record<string, string>;
   customLanguages?: CustomLanguage[];
+}
+
+/**
+ * Which revisions to read each side's full file text from, so highlighting has
+ * whole-file comment/string context (a hunk that starts mid-block-comment would
+ * otherwise mis-color the code after it). `null` = working tree; omit a side
+ * (undefined) when it has no version there (e.g. an added file's old side). The
+ * pair MUST match the diff command's own old/new, or tokens map onto the wrong
+ * lines. See the diff-highlight-midcomment task.
+ */
+export interface DiffContentRevs {
+  oldRev?: string | null;
+  newRev?: string | null;
+}
+
+/** Lines in a string, allocation-free (mirrors cap-diff's counter). */
+function countLines(s: string): number {
+  let n = 1;
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++;
+  return n;
+}
+
+/** Decode base64 file bytes (from git_file_base64) to a UTF-8 string. */
+function decodeBase64Utf8(b64: string): string {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
 }
 
 /** The persisted Unified/Split preference toggle. */
@@ -69,13 +98,23 @@ export function DiffModeToggle() {
 export function GitDiffView({
   filePath,
   text,
+  repoPath,
+  contentRevs,
 }: {
   filePath: string;
   text: string;
+  /** The diff's own repo, for reading full file text (highlight context). */
+  repoPath?: string;
+  contentRevs?: DiffContentRevs;
 }) {
   return (
     <DiffErrorBoundary resetKey={`${filePath} ${text.length}`}>
-      <RenderedDiff filePath={filePath} text={text} />
+      <RenderedDiff
+        filePath={filePath}
+        text={text}
+        repoPath={repoPath}
+        contentRevs={contentRevs}
+      />
     </DiffErrorBoundary>
   );
 }
@@ -100,6 +139,10 @@ export function createDiffFile(
   filePath: string,
   text: string,
   prefs?: SyntaxPrefs,
+  // Full old/new file text. When supplied, the renderer highlights the whole
+  // files (correct comment/string state) and maps tokens onto the diff lines —
+  // and switches to collapsible full-file context instead of a bare hunk.
+  content?: { old: string | null; new: string | null },
 ): DiffFile | null {
   if (!text.trim()) return null;
   try {
@@ -121,8 +164,16 @@ export function createDiffFile(
       ? (!!tmLang && isShikiLang(lang)) || ensureBuiltinShikiLang(lang)
       : false;
     const file = DiffFile.createInstance({
-      oldFile: { fileName: filePath, fileLang: lang },
-      newFile: { fileName: filePath, fileLang: lang },
+      oldFile: {
+        fileName: filePath,
+        fileLang: lang,
+        content: content?.old ?? null,
+      },
+      newFile: {
+        fileName: filePath,
+        fileLang: lang,
+        content: content?.new ?? null,
+      },
       hunks: [text],
     });
     file.initRaw();
@@ -147,7 +198,17 @@ export function createDiffFile(
   }
 }
 
-function RenderedDiff({ filePath, text }: { filePath: string; text: string }) {
+function RenderedDiff({
+  filePath,
+  text,
+  repoPath,
+  contentRevs,
+}: {
+  filePath: string;
+  text: string;
+  repoPath?: string;
+  contentRevs?: DiffContentRevs;
+}) {
   const settings = useSettings();
   const isDark = useIsDark();
   const viewMode = settings.data?.diffViewMode ?? "unified";
@@ -168,18 +229,86 @@ function RenderedDiff({ filePath, text }: { filePath: string; text: string }) {
   const deferredText = useDeferredValue(text);
   const deferredPath = useDeferredValue(filePath);
 
+  // Whole-file highlight context (fixes mis-coloring when a hunk starts inside a
+  // block comment, and gives GitHub-style collapsible context). Only attempt it
+  // for small, non-truncated diffs (`contentRevs` is already cleared upstream
+  // when the diff was truncated) whose files we can read — big diffs keep the
+  // capped hunk-only path. The rev pair must match the diff's own old/new.
+  const oldRev = contentRevs?.oldRev;
+  const newRev = contentRevs?.newRev;
+  const wantContent =
+    !!repoPath && !!contentRevs && countLines(deferredText) <= DIFF_LINE_CAP;
+  const oldQ = useFileAtRev(
+    repoPath ?? "",
+    oldRev ?? null,
+    deferredPath,
+    wantContent && oldRev !== undefined,
+  );
+  const newQ = useFileAtRev(
+    repoPath ?? "",
+    newRev ?? null,
+    deferredPath,
+    wantContent && newRev !== undefined,
+  );
+  // An omitted side (undefined rev) has no version there → "" — gated on the
+  // rev, not just the data, because a disabled `null` read shares the worktree
+  // query key and would otherwise cache-hit the *other* side's content. A null
+  // read with a defined rev = the file is absent there (added/deleted) → "".
+  const oldText = useMemo(
+    () =>
+      oldRev !== undefined && oldQ.data ? decodeBase64Utf8(oldQ.data) : "",
+    [oldRev, oldQ.data],
+  );
+  const newText = useMemo(
+    () =>
+      newRev !== undefined && newQ.data ? decodeBase64Utf8(newQ.data) : "",
+    [newRev, newQ.data],
+  );
+  // Usable once the enabled side-reads settle and both files fit the highlight
+  // budget (a 1-line change in a huge file stays hunk-only, no whole-file walk).
+  const oldSettled = oldRev === undefined || !oldQ.isPending;
+  const newSettled = newRev === undefined || !newQ.isPending;
+  const fitsBudget = (s: string) =>
+    s.length <= HIGHLIGHT_MAX_CHARS && countLines(s) <= HIGHLIGHT_MAX_LINES;
+  const useContent =
+    wantContent &&
+    oldSettled &&
+    newSettled &&
+    (oldText !== "" || newText !== "") &&
+    fitsBudget(oldText) &&
+    fitsBudget(newText);
+
   const { shown, hidden } = useMemo(() => {
+    // Content mode renders the full diff (the renderer collapses non-hunk
+    // context into expandable gaps), so the cap doesn't apply there.
+    if (useContent) return { shown: deferredText, hidden: 0 };
     const r = showFull
       ? { text: deferredText, hidden: 0 }
       : capDiffText(deferredText, DIFF_LINE_CAP);
     return { shown: r.text, hidden: r.hidden };
-  }, [deferredText, showFull]);
+  }, [deferredText, showFull, useContent]);
 
-  const repoPath = useUiStore((s) => s.repoPath);
-  const { syntaxMap, customLanguages } = useEffectiveSyntax(repoPath);
+  // Syntax prefs follow the active repo (repo-scoped custom languages); the
+  // active repo owns every surface that supplies content, so this matches.
+  const activeRepo = useUiStore((s) => s.repoPath);
+  const { syntaxMap, customLanguages } = useEffectiveSyntax(activeRepo);
   const diffFile = useMemo(
-    () => createDiffFile(deferredPath, shown, { syntaxMap, customLanguages }),
-    [shown, deferredPath, syntaxMap, customLanguages],
+    () =>
+      createDiffFile(
+        deferredPath,
+        shown,
+        { syntaxMap, customLanguages },
+        useContent ? { old: oldText, new: newText } : undefined,
+      ),
+    [
+      shown,
+      deferredPath,
+      syntaxMap,
+      customLanguages,
+      useContent,
+      oldText,
+      newText,
+    ],
   );
 
   if (!diffFile) return <DiffPlaceholder message="No changes to show" />;
@@ -219,11 +348,13 @@ export function DiffSurface({
   diff,
   repoPath,
   imageRevs,
+  contentRevs,
 }: {
   filePath: string;
   diff: UseQueryResult<FileDiff>;
   repoPath?: string;
   imageRevs?: ImageRevs;
+  contentRevs?: DiffContentRevs;
 }) {
   return (
     <DiffContent
@@ -233,6 +364,7 @@ export function DiffSurface({
       isError={diff.isError}
       repoPath={repoPath}
       imageRevs={imageRevs}
+      contentRevs={contentRevs}
     />
   );
 }
@@ -248,6 +380,7 @@ export function DiffContent({
   isError,
   repoPath,
   imageRevs,
+  contentRevs,
 }: {
   filePath: string;
   data: FileDiff | undefined;
@@ -256,6 +389,8 @@ export function DiffContent({
   /** With `imageRevs`, binary image files render as an image comparison. */
   repoPath?: string;
   imageRevs?: ImageRevs;
+  /** Revs to read full file text from for highlight context (text diffs). */
+  contentRevs?: DiffContentRevs;
 }) {
   // Diffs load near-instantly from local git, so a skeleton only adds a flash
   // and a layout shift on the way to the real content — render nothing until
@@ -306,7 +441,14 @@ export function DiffContent({
             />
           </div>
         )}
-        <GitDiffView filePath={filePath} text={data.text} />
+        <GitDiffView
+          filePath={filePath}
+          text={data.text}
+          repoPath={repoPath}
+          // A truncated diff was cut by the byte cap and can't line up with the
+          // full file text, so don't try whole-file highlighting there.
+          contentRevs={data.isTruncated ? undefined : contentRevs}
+        />
       </div>
     </div>
   );

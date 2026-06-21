@@ -305,6 +305,13 @@ function StashFiles({ repoPath, index }: { repoPath: string; index: number }) {
             diff={diff}
             repoPath={repoPath}
             imageRevs={imageRevs}
+            // Stash revs already match the diff's sides (^1↔stash, ^1↔^3 for
+            // untracked), so reuse them for whole-file highlight context.
+            contentRevs={
+              imageRevs
+                ? { oldRev: imageRevs.old, newRev: imageRevs.new }
+                : undefined
+            }
           />
         ) : (
           <DiffPlaceholder message="This stash has no files" />
