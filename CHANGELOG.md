@@ -22,8 +22,14 @@ commit list.
   (commits, contributors, languages, sizes — the old "Repository statistics"
   dialog, now folded in), a **GitHub Actions** success-rate and run-duration
   trend computed from runs already fetched, and a **community-health** card
-  (stars, forks, watchers, README/license/templates). Every chart ships a
-  one-line caption, a data-table fallback, and keyboard navigation.
+  (stars, forks, watchers, README/license/templates). It also surfaces repository
+  **traffic** (14-day views, clones, referrers, and popular paths — when you have
+  push access), a searchable **dependencies** card from the dependency graph
+  (direct vs. transitive, each linking to its registry with a description on
+  hover), and quick links to the insights GitHub only renders on the web (Pulse,
+  network graph, forks, dependents, Actions usage/performance, stars over time).
+  Every chart ships a one-line caption, a data-table fallback, and keyboard
+  navigation.
 
 - **Manage repository files beyond pending changes.** A new **Manage files…**
   entry in the repository menu opens a dialog with two tabs. **Tracked** lists

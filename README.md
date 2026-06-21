@@ -118,8 +118,11 @@ frequency (additions vs. deletions), contributor churn, and a commit punch card 
 all computed **locally from your clone**, so they work offline, on private repos,
 with no token or rate limit, and without GitHub's 10k-commit chart degradation.
 Plus the at-a-glance overview (languages, contributors, sizes, branch-vs-default),
-a GitHub Actions success-rate / duration trend, and a community-health card.
-Charts ship one-line captions, data-table fallbacks, and keyboard navigation.
+a GitHub Actions success-rate / duration trend, a community-health card,
+14-day **traffic** (views/clones/referrers/paths, with push access), a
+**dependencies** card, and quick links to the web-only GitHub insights (Pulse,
+network, dependents, Actions metrics, stars over time). Charts ship one-line
+captions, data-table fallbacks, and keyboard navigation.
 
 **Git hooks** — view, edit, enable/disable, and template `.git/hooks`, with
 husky / pre-commit / lefthook detection and install integration.

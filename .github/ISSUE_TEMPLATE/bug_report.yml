@@ -59,6 +59,7 @@ body:
       options:
         - Windows
         - Linux
+        - Mac
         - Other (note in description)
     validations:
       required: true

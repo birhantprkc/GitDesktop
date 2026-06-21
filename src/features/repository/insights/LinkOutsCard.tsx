@@ -1,0 +1,76 @@
+import { ArrowSquareOutIcon } from "@phosphor-icons/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { Button } from "@/components/ui/button";
+import { ghRepoUrl } from "@/lib/git/api";
+import { toastError } from "@/lib/toast";
+
+// Insights surfaces GitHub only renders on the web (no usable API) — link out
+// rather than show an empty panel. See [[api-hardstop-github-link]].
+const LINKS: { label: string; suffix: string; publicOnly?: boolean }[] = [
+  { label: "Pulse", suffix: "/pulse" },
+  { label: "Network graph", suffix: "/network" },
+  { label: "Forks", suffix: "/network/members" },
+  // "Dependents" only exists for public repos that others depend on; it 404s otherwise.
+  { label: "Dependents", suffix: "/network/dependents", publicOnly: true },
+  { label: "Actions usage", suffix: "/actions/metrics/usage" },
+  { label: "Actions performance", suffix: "/actions/metrics/performance" },
+];
+
+export function LinkOutsCard({
+  repoPath,
+  isPublic,
+}: {
+  repoPath: string;
+  isPublic?: boolean;
+}) {
+  async function open(suffix: string) {
+    try {
+      const url = await ghRepoUrl(repoPath);
+      await openUrl(`${url}${suffix}`);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+  // Stars-over-time has no native GitHub page; star-history.com is the de-facto tool.
+  async function openStars() {
+    try {
+      const url = await ghRepoUrl(repoPath);
+      const slug = url
+        .replace(/^https?:\/\/github\.com\//, "")
+        .replace(/\/$/, "");
+      await openUrl(`https://star-history.com/#${slug}&Date`);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">
+        These insights only render on github.com:
+      </p>
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        {LINKS.filter((l) => !l.publicOnly || isPublic).map((l) => (
+          <Button
+            key={l.label}
+            variant="outline"
+            size="sm"
+            className="cursor-pointer justify-start"
+            onClick={() => open(l.suffix)}
+          >
+            <ArrowSquareOutIcon data-icon="inline-start" />
+            {l.label}
+          </Button>
+        ))}
+        <Button
+          variant="outline"
+          size="sm"
+          className="justify-start"
+          onClick={openStars}
+        >
+          <ArrowSquareOutIcon data-icon="inline-start" />
+          Stars over time
+        </Button>
+      </div>
+    </div>
+  );
+}

@@ -50,6 +50,7 @@ import type {
   PunchCard,
   ReleaseDetails,
   ReleaseInfo,
+  RepoDependencies,
   RepoInfo,
   RepoLabel,
   RepoOp,
@@ -59,6 +60,7 @@ import type {
   RepoSettingsInput,
   RepoStats,
   RepoStatus,
+  RepoTraffic,
   RewriteStep,
   StagedDiff,
   StashEntry,
@@ -634,6 +636,12 @@ export const gitPunchCard = (repoPath: string, weeks: number) =>
 
 export const ghCommunityInsights = (repoPath: string) =>
   invoke<CommunityInsights>("gh_community_insights", { repoPath });
+
+export const ghRepoTraffic = (repoPath: string) =>
+  invoke<RepoTraffic>("gh_repo_traffic", { repoPath });
+
+export const ghRepoDependencies = (repoPath: string) =>
+  invoke<RepoDependencies>("gh_repo_dependencies", { repoPath });
 
 export const gitCompareBranches = (
   repoPath: string,

@@ -14,7 +14,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
-import type { CodeFreqPoint, WeekCount } from "@/lib/git/types";
+import type { CodeFreqPoint, TrafficPoint, WeekCount } from "@/lib/git/types";
 import { ChartFigure, fmt } from "./primitives";
 
 /** "2025-07" → "W7"; the year still shows in the tooltip/table. */
@@ -232,6 +232,149 @@ export function ActionsDurationChart({ data }: { data: RunDurationPoint[] }) {
           <ChartTooltip content={<ChartTooltipContent />} />
           <Bar dataKey="minutes" fill="var(--color-minutes)" radius={2} />
         </BarChart>
+      </ChartContainer>
+    </ChartFigure>
+  );
+}
+
+const trafficConfig = {
+  views: { label: "Views", color: "var(--primary)" },
+  clones: { label: "Clones", color: "var(--chart-2)" },
+} satisfies ChartConfig;
+
+/** "2025-06-21T00:00:00Z" → "6/21". */
+function dayTick(ts: string): string {
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? ts : `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+interface TrafficDay {
+  timestamp: string;
+  views: number;
+  viewsUniques: number;
+  clones: number;
+  clonesUniques: number;
+}
+
+/** Views and clones come as separate per-day arrays; align them by day. */
+function mergeTraffic(
+  views: TrafficPoint[],
+  clones: TrafficPoint[],
+): TrafficDay[] {
+  const byDay = new Map<string, TrafficDay>();
+  const blank = (timestamp: string): TrafficDay => ({
+    timestamp,
+    views: 0,
+    viewsUniques: 0,
+    clones: 0,
+    clonesUniques: 0,
+  });
+  for (const v of views) {
+    const e = byDay.get(v.timestamp) ?? blank(v.timestamp);
+    e.views = v.count;
+    e.viewsUniques = v.uniques;
+    byDay.set(v.timestamp, e);
+  }
+  for (const c of clones) {
+    const e = byDay.get(c.timestamp) ?? blank(c.timestamp);
+    e.clones = c.count;
+    e.clonesUniques = c.uniques;
+    byDay.set(c.timestamp, e);
+  }
+  return [...byDay.values()].sort((a, b) =>
+    a.timestamp.localeCompare(b.timestamp),
+  );
+}
+
+/** Daily views + git clones over the trailing 14 days; unique counts surface in
+ *  the hover tooltip and the data table (the 14-day totals are in the stat row). */
+export function TrafficChart({
+  views,
+  clones,
+}: {
+  views: TrafficPoint[];
+  clones: TrafficPoint[];
+}) {
+  const data = mergeTraffic(views, clones);
+  return (
+    <ChartFigure
+      caption="Daily views and git clones over the last 14 days (hover for unique counts)."
+      table={
+        <DataTable
+          headers={["Day", "Views", "Unique", "Clones", "Unique"]}
+          rows={data.map((d) => [
+            dayTick(d.timestamp),
+            fmt(d.views),
+            fmt(d.viewsUniques),
+            fmt(d.clones),
+            fmt(d.clonesUniques),
+          ])}
+        />
+      }
+    >
+      <ChartContainer
+        config={trafficConfig}
+        className="aspect-auto h-36 w-full"
+      >
+        <AreaChart data={data} accessibilityLayer margin={{ right: 8 }}>
+          <CartesianGrid vertical={false} />
+          <XAxis
+            dataKey="timestamp"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={6}
+            minTickGap={24}
+            tickFormatter={dayTick}
+          />
+          <YAxis
+            width={32}
+            tickLine={false}
+            axisLine={false}
+            allowDecimals={false}
+            tickFormatter={(v: number) => compact.format(v)}
+          />
+          <ChartTooltip
+            content={
+              <ChartTooltipContent
+                labelFormatter={(value) => dayTick(String(value))}
+                formatter={(value, name, item) => {
+                  const day = item?.payload as TrafficDay | undefined;
+                  const uniques =
+                    name === "views" ? day?.viewsUniques : day?.clonesUniques;
+                  return (
+                    <span className="flex w-full justify-between gap-3">
+                      <span className="text-muted-foreground">
+                        {name === "views" ? "Views" : "Clones"}
+                      </span>
+                      <span className="font-mono font-medium tabular-nums">
+                        {fmt(Number(value))}
+                        {typeof uniques === "number" && (
+                          <span className="ml-1 font-sans text-muted-foreground">
+                            · {fmt(uniques)} unique
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  );
+                }}
+              />
+            }
+          />
+          <Area
+            dataKey="views"
+            type="monotone"
+            fill="var(--color-views)"
+            fillOpacity={0.2}
+            stroke="var(--color-views)"
+          />
+          <Area
+            dataKey="clones"
+            type="monotone"
+            fill="var(--color-clones)"
+            fillOpacity={0.2}
+            stroke="var(--color-clones)"
+          />
+        </AreaChart>
       </ChartContainer>
     </ChartFigure>
   );

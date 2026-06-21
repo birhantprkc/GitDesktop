@@ -8,6 +8,8 @@ import {
   useContributorActivity,
   useGhStatus,
   usePunchCard,
+  useRepoDependencies,
+  useRepoTraffic,
 } from "@/lib/git/queries";
 import type { ContributorChurn } from "@/lib/git/types";
 import { useWorkflowRuns } from "@/lib/github/actions";
@@ -18,8 +20,11 @@ import {
   CommitActivityChart,
   type RunDurationPoint,
 } from "./charts";
+import { DependenciesCard } from "./DependenciesCard";
+import { LinkOutsCard } from "./LinkOutsCard";
 import { PunchCard } from "./PunchCard";
 import { fmt, InsightCard } from "./primitives";
+import { TrafficCard } from "./TrafficCard";
 
 const WINDOW_WEEKS = 52;
 
@@ -92,6 +97,8 @@ export function InsightsBoard({ repoPath }: { repoPath: string }) {
   const punchCard = usePunchCard(repoPath, weeks, true);
   const contributors = useContributorActivity(repoPath, weeks, true);
   const community = useCommunityInsights(repoPath, canGh);
+  const traffic = useRepoTraffic(repoPath, canGh);
+  const dependencies = useRepoDependencies(repoPath, canGh);
   const runs = useWorkflowRuns(repoPath, canGh);
 
   const completed = (runs.data ?? []).filter((r) => r.status === "completed");
@@ -215,6 +222,39 @@ export function InsightsBoard({ repoPath }: { repoPath: string }) {
               ) : (
                 <Empty>Community insights are unavailable.</Empty>
               )}
+            </InsightCard>
+          )}
+
+          {canGh && (
+            <InsightCard title="Traffic" className="xl:col-span-2">
+              {traffic.isPending ? (
+                <ChartSkeleton />
+              ) : traffic.data ? (
+                <TrafficCard data={traffic.data} />
+              ) : (
+                <Empty>Traffic is unavailable.</Empty>
+              )}
+            </InsightCard>
+          )}
+
+          {canGh && (
+            <InsightCard title="Dependencies">
+              {dependencies.isPending ? (
+                <ChartSkeleton />
+              ) : dependencies.data ? (
+                <DependenciesCard data={dependencies.data} />
+              ) : (
+                <Empty>Dependencies are unavailable.</Empty>
+              )}
+            </InsightCard>
+          )}
+
+          {canGh && (
+            <InsightCard title="More on GitHub">
+              <LinkOutsCard
+                repoPath={repoPath}
+                isPublic={community.data ? !community.data.private : undefined}
+              />
             </InsightCard>
           )}
         </div>

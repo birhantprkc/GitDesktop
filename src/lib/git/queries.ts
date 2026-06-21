@@ -386,6 +386,26 @@ export function useCommunityInsights(repo: string, enabled: boolean) {
   });
 }
 
+export function useRepoTraffic(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "insights", "traffic"] as const,
+    queryFn: () => api.ghRepoTraffic(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+export function useRepoDependencies(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "insights", "dependencies"] as const,
+    queryFn: () => api.ghRepoDependencies(repo),
+    enabled,
+    staleTime: 30 * 60_000,
+    retry: false,
+  });
+}
+
 export function useCompareBranches(
   repo: string,
   base: string | null,

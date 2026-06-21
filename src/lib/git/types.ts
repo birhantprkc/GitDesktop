@@ -247,6 +247,50 @@ export interface CommunityInsights {
   stargazersCount: number;
   watchersCount: number;
   openIssuesCount: number;
+  private: boolean;
+}
+
+/** One day of traffic (views or clones). */
+export interface TrafficPoint {
+  timestamp: string;
+  count: number;
+  uniques: number;
+}
+
+/** A traffic referrer or popular path. */
+export interface TrafficItem {
+  name: string;
+  title: string;
+  count: number;
+  uniques: number;
+}
+
+/** 14-day repo traffic (gh API; needs push access → `available: false` if not). */
+export interface RepoTraffic {
+  available: boolean;
+  viewsCount: number;
+  viewsUniques: number;
+  views: TrafficPoint[];
+  clonesCount: number;
+  clonesUniques: number;
+  clones: TrafficPoint[];
+  referrers: TrafficItem[];
+  paths: TrafficItem[];
+}
+
+export interface DependencyPackage {
+  ecosystem: string;
+  name: string;
+  version: string;
+  /** Declared directly by the repo (vs. pulled in transitively). */
+  direct: boolean;
+}
+
+/** Dependency-graph SBOM summary (gh API; `available: false` when the graph is off). */
+export interface RepoDependencies {
+  available: boolean;
+  total: number;
+  packages: DependencyPackage[];
 }
 
 export interface RepoOpState {

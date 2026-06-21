@@ -193,6 +193,8 @@ pub fn run() {
             github::discussion::gh_discussion_delete,
             github::repo_settings::gh_repo_admin,
             github::insights::gh_community_insights,
+            github::insights::gh_repo_traffic,
+            github::insights::gh_repo_dependencies,
             github::repo_settings::gh_hooks_list,
             github::repo_settings::gh_hook_create,
             github::repo_settings::gh_hook_update,
