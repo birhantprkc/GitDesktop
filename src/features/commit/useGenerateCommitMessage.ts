@@ -40,7 +40,7 @@ export function useGenerateCommitMessage(repoPath: string) {
       const exclude = [...repoIgnore, ...globalIgnore];
 
       const [staged, commits, repoInstructions] = await Promise.all([
-        gitStagedDiff(repoPath, RAW_DIFF_MAX_BYTES, exclude),
+        gitStagedDiff(repoPath, { maxBytes: RAW_DIFF_MAX_BYTES, exclude }),
         gitRecentCommits(repoPath, 10),
         readRepoInstructions(repoPath),
       ]);

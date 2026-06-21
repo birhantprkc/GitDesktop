@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { createAiClient, MissingApiKeyError } from "@/lib/ai/client";
 import { buildBranchNamePrompt, extractBranchName } from "@/lib/ai/prompt";
 import {
-  gitWorkingTreeDiff,
+  gitStagedDiff,
   readRepoAiIgnore,
   readRepoInstructions,
 } from "@/lib/git/api";
@@ -47,7 +47,11 @@ export function useGenerateBranchName(repoPath: string) {
         const exclude = [...repoIgnore, ...globalIgnore];
 
         const [diff, repoInstructions] = await Promise.all([
-          gitWorkingTreeDiff(repoPath, RAW_DIFF_MAX_BYTES, exclude),
+          gitStagedDiff(repoPath, {
+            maxBytes: RAW_DIFF_MAX_BYTES,
+            exclude,
+            worktree: true,
+          }),
           readRepoInstructions(repoPath),
         ]);
 

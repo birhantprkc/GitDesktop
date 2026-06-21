@@ -435,24 +435,15 @@ export interface RepoSettings {
   webCommitSignoffRequired: boolean;
 }
 
-/** Edited settings sent to the backend. */
-export interface RepoSettingsInput {
+/** Edited settings sent to the backend — {@link RepoSettings} with
+ *  description/homepage as plain (possibly empty) strings rather than nullable. */
+export type RepoSettingsInput = Omit<
+  RepoSettings,
+  "description" | "homepage"
+> & {
   description: string;
   homepage: string;
-  topics: string[];
-  defaultBranch: string;
-  hasIssues: boolean;
-  hasProjects: boolean;
-  hasWiki: boolean;
-  hasDiscussions: boolean;
-  allowSquashMerge: boolean;
-  allowMergeCommit: boolean;
-  allowRebaseMerge: boolean;
-  allowUpdateBranch: boolean;
-  deleteBranchOnMerge: boolean;
-  allowAutoMerge: boolean;
-  webCommitSignoffRequired: boolean;
-}
+};
 
 /** A GitHub (classic) branch protection rule, for importing into branch rules. */
 export interface GhBranchProtection {

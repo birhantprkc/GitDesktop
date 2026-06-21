@@ -128,30 +128,20 @@ export const gitDiffFile = (
 ) =>
   invoke<FileDiff>("git_diff_file", { repoPath, filePath, staged, untracked });
 
+/** Staged diff vs HEAD. With `worktree: true` it instead returns ALL in-progress
+ *  tracked changes (staged + unstaged) vs HEAD — for naming a branch off work
+ *  that may not be staged yet. Untracked files are never included (callers pass
+ *  their paths from the status entries separately). */
 export const gitStagedDiff = (
   repoPath: string,
-  maxBytes?: number,
-  exclude?: string[],
+  opts: { maxBytes?: number; exclude?: string[]; worktree?: boolean } = {},
 ) =>
   invoke<StagedDiff>("git_staged_diff", {
     repoPath,
-    maxBytes: maxBytes ?? null,
-    exclude: exclude ?? null,
-  });
-
-/** All in-progress changes (staged + unstaged tracked) vs HEAD, for naming a
- *  branch off work that may not be staged yet. Untracked files aren't included
- *  (callers pass their paths from the status entries separately). */
-export const gitWorkingTreeDiff = (
-  repoPath: string,
-  maxBytes?: number,
-  exclude?: string[],
-) =>
-  invoke<StagedDiff>("git_staged_diff", {
-    repoPath,
-    maxBytes: maxBytes ?? null,
-    exclude: exclude ?? null,
-    worktree: true,
+    maxBytes: opts.maxBytes ?? null,
+    exclude: opts.exclude ?? null,
+    // Only send the flag when set, matching the prior two-function behaviour.
+    ...(opts.worktree ? { worktree: true } : {}),
   });
 
 export const gitStage = (repoPath: string, paths: string[]) =>

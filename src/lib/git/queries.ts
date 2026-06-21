@@ -1262,34 +1262,46 @@ export function useGhRepos(enabled: boolean) {
 }
 
 /**
- * Builds a mutation that invalidates repo queries when it settles. By default it
- * invalidates the entire repo subtree (correct but broad); pass `invalidateKeys`
- * to narrow it for hot mutations (each key is prefix-matched, react-query's
- * default). Reserve the whole-subtree default for ops that touch history or
- * branch topology (checkout/pull/reset/commit/merge).
+ * Builds a mutation that invalidates repo queries when it completes. By default
+ * it invalidates the entire repo subtree (correct but broad) in `onSettled`;
+ * pass `opts.invalidate` to narrow it for hot mutations (each key is
+ * prefix-matched). Reserve the whole-subtree default for ops that touch history
+ * or branch topology (checkout/pull/reset/merge). Pass `opts.refetchBeforeSuccess`
+ * for commit, where the refetch must land before the caller's onSuccess.
  */
 function useRepoMutation<TArgs, TData>(
   repo: string,
   mutationFn: (args: TArgs) => Promise<TData>,
-  invalidateKeys?: readonly (readonly unknown[])[],
+  opts: {
+    /** Query keys to invalidate on completion (prefix-matched). Defaults to the
+     *  whole repo subtree. */
+    invalidate?: readonly (readonly unknown[])[];
+    /** Invalidate (and AWAIT) in onSuccess instead of fire-and-forget in
+     *  onSettled, so the refetch lands BEFORE the caller's own onSuccess —
+     *  commit uses this so the emptied list, cleared draft, and toast appear
+     *  together. (As a result it does NOT invalidate on error.) */
+    refetchBeforeSuccess?: boolean;
+  } = {},
 ) {
   const queryClient = useQueryClient();
+  const invalidate = () =>
+    Promise.all(
+      (opts.invalidate ?? [repoKeys.all(repo)]).map((queryKey) =>
+        queryClient.invalidateQueries({ queryKey }),
+      ),
+    );
   return useMutation({
     mutationFn,
-    onSettled: () => {
-      for (const queryKey of invalidateKeys ?? [repoKeys.all(repo)]) {
-        queryClient.invalidateQueries({ queryKey });
-      }
-    },
+    ...(opts.refetchBeforeSuccess
+      ? { onSuccess: () => invalidate() }
+      : { onSettled: () => void invalidate() }),
   });
 }
 
 export function useStage(repo: string) {
-  return useRepoMutation(
-    repo,
-    (paths: string[]) => api.gitStage(repo, paths),
-    workingTreeKeys(repo),
-  );
+  return useRepoMutation(repo, (paths: string[]) => api.gitStage(repo, paths), {
+    invalidate: workingTreeKeys(repo),
+  });
 }
 
 export function useRemoteUrl(repo: string, name: string, enabled: boolean) {
@@ -1339,7 +1351,7 @@ export function useApplyPatch(repo: string) {
     repo,
     (args: { patch: string; cached: boolean; reverse: boolean }) =>
       api.gitApplyPatch(repo, args.patch, args.cached, args.reverse),
-    workingTreeKeys(repo),
+    { invalidate: workingTreeKeys(repo) },
   );
 }
 
@@ -1359,7 +1371,7 @@ export function useApplyPartial(repo: string) {
         args.cached,
         args.reverse,
       ),
-    workingTreeKeys(repo),
+    { invalidate: workingTreeKeys(repo) },
   );
 }
 
@@ -1367,21 +1379,20 @@ export function useUnstage(repo: string) {
   return useRepoMutation(
     repo,
     (paths: string[]) => api.gitUnstage(repo, paths),
-    workingTreeKeys(repo),
+    { invalidate: workingTreeKeys(repo) },
   );
 }
 
 export function useCommit(repo: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (args: { title: string; body?: string; amend?: boolean }) =>
+  // refetchBeforeSuccess so the emptied changes list, cleared draft, and success
+  // toast land together instead of the toast firing while the list still shows
+  // old entries (react-query awaits the onSuccess refetch before the caller's).
+  return useRepoMutation(
+    repo,
+    (args: { title: string; body?: string; amend?: boolean }) =>
       api.gitCommit(repo, args.title, args.body, args.amend ?? false),
-    // Refetch BEFORE caller onSuccess runs (react-query awaits this), so the
-    // emptied changes list, cleared draft, and success toast land together
-    // instead of the toast firing while the list still shows old entries.
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: repoKeys.all(repo) }),
-  });
+    { refetchBeforeSuccess: true },
+  );
 }
 
 export function useCheckoutBranch(repo: string) {
@@ -1403,7 +1414,7 @@ export function useDiscard(repo: string) {
     repo,
     (args: { path: string; untracked: boolean }) =>
       api.gitDiscard(repo, args.path, args.untracked),
-    workingTreeKeys(repo),
+    { invalidate: workingTreeKeys(repo) },
   );
 }
 

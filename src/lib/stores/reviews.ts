@@ -2,15 +2,14 @@ import { useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import { create } from "zustand";
 import { cancelAgentReview } from "@/lib/ai/agent";
-import { createAiClient } from "@/lib/ai/client";
 import {
   type ExternalContext,
   resolveExternalContext,
 } from "@/lib/ai/external-context";
 import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
-import { isCliProvider, isLocalProvider } from "@/lib/ai/providers";
-import { runCliStream } from "@/lib/ai/stream";
+import { isLocalProvider } from "@/lib/ai/providers";
+import { streamAi } from "@/lib/ai/stream";
 import type { AiSettings, ReviewDeltaState, ReviewMode } from "@/lib/ai/types";
 import type { DiffStatEntry } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
@@ -369,33 +368,21 @@ export async function startReview(
       mode,
     );
 
-    if (isCliProvider(ai.provider)) {
-      await runCliStream({
-        ai,
-        system,
-        prompt,
-        repoPath: context.repoPath,
-        headSha: context.headSha,
-        setText: pushText,
-        setStatus: (s) => patch({ status: s }),
-        registerId: (id) => {
-          control.cliReviewId = id;
-        },
-      });
-    } else {
-      const abort = new AbortController();
-      control.abort = abort;
-      const client = await createAiClient(ai);
-      let buffer = "";
-      for await (const chunk of client.stream({
-        system,
-        prompt,
-        abortSignal: abort.signal,
-      })) {
-        buffer += chunk;
-        pushText(buffer);
-      }
-    }
+    await streamAi({
+      ai,
+      system,
+      prompt,
+      repoPath: context.repoPath,
+      headSha: context.headSha,
+      setText: pushText,
+      setStatus: (s) => patch({ status: s }),
+      onCliId: (id) => {
+        control.cliReviewId = id;
+      },
+      onAbort: (a) => {
+        control.abort = a;
+      },
+    });
     if (control.cancelled) return;
     patch({ phase: "done", status: "" });
     void notifyReviewDone(title, mode, true);

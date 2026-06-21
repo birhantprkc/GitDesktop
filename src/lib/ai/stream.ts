@@ -107,6 +107,68 @@ export async function runCliStream({
   }
 }
 
+export interface StreamAiOpts {
+  ai: AiSettings;
+  system: string;
+  prompt: string;
+  /** Working directory / repo root (CLI providers only). */
+  repoPath: string;
+  /** PR head SHA for a CLI repo-aware worktree; omit for non-PR flows. */
+  headSha?: string;
+  setText: (text: string) => void;
+  setStatus: (status: string) => void;
+  /** CLI path: receives the agent review id (cancel via `cancelAgentReview`). */
+  onCliId: (id: string) => void;
+  /** HTTP path: receives the AbortController driving the stream (cancel via
+   *  `.abort()`). Not called for CLI providers. */
+  onAbort: (controller: AbortController) => void;
+}
+
+/**
+ * Routes a system+prompt to a CLI agent ({@link runCliStream}) or an HTTP
+ * provider (Vercel AI SDK), accumulating response deltas via `setText`. The two
+ * cancel handles differ — CLI by review id, HTTP by AbortController — so the
+ * caller registers whichever applies via `onCliId` / `onAbort`. The single
+ * streaming engine shared by {@link useAiTextStream} and the PR-review store.
+ */
+export async function streamAi({
+  ai,
+  system,
+  prompt,
+  repoPath,
+  headSha,
+  setText,
+  setStatus,
+  onCliId,
+  onAbort,
+}: StreamAiOpts): Promise<void> {
+  if (isCliProvider(ai.provider)) {
+    await runCliStream({
+      ai,
+      system,
+      prompt,
+      repoPath,
+      headSha,
+      setText,
+      setStatus,
+      registerId: onCliId,
+    });
+    return;
+  }
+  const abort = new AbortController();
+  onAbort(abort);
+  const client = await createAiClient(ai);
+  let buffer = "";
+  for await (const chunk of client.stream({
+    system,
+    prompt,
+    abortSignal: abort.signal,
+  })) {
+    buffer += chunk;
+    setText(buffer);
+  }
+}
+
 export interface RunStreamArgs {
   system: string;
   prompt: string;
@@ -158,32 +220,20 @@ export function useAiTextStream() {
     setText("");
     setStatus("");
     try {
-      if (isCliProvider(ai.provider)) {
-        await runCliStream({
-          ai,
-          system: args.system,
-          prompt: args.prompt,
-          repoPath: args.repoPath,
-          setText: putText,
-          setStatus: putStatus,
-          registerId: (id) => {
-            if (isCurrent()) cliIdRef.current = id;
-          },
-        });
-      } else {
-        const abort = new AbortController();
-        if (isCurrent()) abortRef.current = abort;
-        const client = await createAiClient(ai);
-        let buffer = "";
-        for await (const chunk of client.stream({
-          system: args.system,
-          prompt: args.prompt,
-          abortSignal: abort.signal,
-        })) {
-          buffer += chunk;
-          putText(buffer);
-        }
-      }
+      await streamAi({
+        ai,
+        system: args.system,
+        prompt: args.prompt,
+        repoPath: args.repoPath,
+        setText: putText,
+        setStatus: putStatus,
+        onCliId: (id) => {
+          if (isCurrent()) cliIdRef.current = id;
+        },
+        onAbort: (a) => {
+          if (isCurrent()) abortRef.current = a;
+        },
+      });
     } catch (e) {
       if (!cancelledRef.current && isCurrent()) toastError(e);
     } finally {
