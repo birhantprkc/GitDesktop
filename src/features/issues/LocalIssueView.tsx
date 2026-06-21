@@ -9,11 +9,8 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useRef, useState } from "react";
-import {
-  MarkdownEditor,
-  type MarkdownEditorHandle,
-} from "@/components/markdown-editor";
+import { useState } from "react";
+import { MarkdownEditor } from "@/components/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,7 +36,7 @@ import {
   useEditTitleBody,
 } from "@/features/conversations/EditTitleBodyDialog";
 import { LocalComment } from "@/features/conversations/LocalComment";
-import { makeQuoteReply } from "@/features/conversations/quoteReply";
+import { useLocalConversation } from "@/features/conversations/useLocalConversation";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { copyText } from "@/lib/clipboard";
 import { useGhStatus } from "@/lib/git/queries";
@@ -66,14 +63,24 @@ export function LocalIssueView({
   const del = useDeleteLocalIssue(repoPath);
   const selectIssue = useUiStore((s) => s.selectIssue);
   const ghStatus = useGhStatus(repoPath);
-  const [comment, setComment] = useState("");
-  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
-    null,
-  );
+  const {
+    comment,
+    setComment,
+    labelInput,
+    setLabelInput,
+    deletingCommentId,
+    setDeletingCommentId,
+    composerRef,
+    quoteReply,
+    addComment,
+    editComment,
+    deleteComment,
+    setCommentHidden,
+    addLabel,
+    removeLabel,
+  } = useLocalConversation(issue, save);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
-  const [labelInput, setLabelInput] = useState("");
-  const composerRef = useRef<MarkdownEditorHandle>(null);
   const edit = useEditTitleBody({
     onSave: async ({ title, body }) => {
       if (!issue) return;
@@ -86,66 +93,6 @@ export function LocalIssueView({
   }
 
   const isOpen = issue.status === "open";
-
-  function addComment() {
-    if (!issue || !comment.trim()) return;
-    save.mutate({
-      ...issue,
-      comments: [
-        ...issue.comments,
-        {
-          id: crypto.randomUUID(),
-          body: comment.trim(),
-          createdAt: new Date().toISOString(),
-        },
-      ],
-    });
-    setComment("");
-  }
-
-  function editComment(commentId: string, body: string) {
-    if (!issue) return;
-    save.mutate({
-      ...issue,
-      comments: issue.comments.map((c) =>
-        c.id === commentId ? { ...c, body } : c,
-      ),
-    });
-  }
-
-  function deleteComment(commentId: string) {
-    if (!issue) return;
-    save.mutate({
-      ...issue,
-      comments: issue.comments.filter((c) => c.id !== commentId),
-    });
-  }
-
-  function setCommentHidden(commentId: string, hidden: boolean) {
-    if (!issue) return;
-    save.mutate({
-      ...issue,
-      comments: issue.comments.map((c) =>
-        c.id === commentId ? { ...c, hidden } : c,
-      ),
-    });
-  }
-
-  function addLabel() {
-    const name = labelInput.trim();
-    if (!issue || !name) return;
-    if (!issue.labels.includes(name)) {
-      save.mutate({ ...issue, labels: [...issue.labels, name] });
-    }
-    setLabelInput("");
-  }
-
-  function removeLabel(label: string) {
-    if (!issue) return;
-    save.mutate({ ...issue, labels: issue.labels.filter((l) => l !== label) });
-  }
-
-  const quoteReply = makeQuoteReply({ composerRef, setBody: setComment });
 
   function openEdit() {
     if (!issue) return;

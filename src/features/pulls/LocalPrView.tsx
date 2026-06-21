@@ -12,12 +12,9 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import {
-  MarkdownEditor,
-  type MarkdownEditorHandle,
-} from "@/components/markdown-editor";
+import { MarkdownEditor } from "@/components/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,7 +42,7 @@ import {
   useEditTitleBody,
 } from "@/features/conversations/EditTitleBodyDialog";
 import { LocalComment } from "@/features/conversations/LocalComment";
-import { makeQuoteReply } from "@/features/conversations/quoteReply";
+import { useLocalConversation } from "@/features/conversations/useLocalConversation";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
@@ -100,21 +97,31 @@ export function LocalPrView({
   }, [pendingPrSection, setPendingPrSection, selectedPr, id]);
   const aiEnabled = useAiEnabled();
   const rulesConfig = useEffectiveBranchRules(repoPath);
-  const [comment, setComment] = useState("");
-  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
-    null,
-  );
+  const {
+    comment,
+    setComment,
+    labelInput,
+    setLabelInput,
+    deletingCommentId,
+    setDeletingCommentId,
+    composerRef,
+    quoteReply,
+    addComment,
+    editComment,
+    deleteComment,
+    setCommentHidden,
+    addLabel,
+    removeLabel,
+  } = useLocalConversation(pr, save);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const ghStatus = useGhStatus(repoPath);
-  const [labelInput, setLabelInput] = useState("");
   const edit = useEditTitleBody({
     onSave: async ({ title, body }) => {
       if (!pr) return;
       await save.mutateAsync({ ...pr, title, body });
     },
   });
-  const composerRef = useRef<MarkdownEditorHandle>(null);
 
   const comparison = useCompareBranches(
     repoPath,
@@ -137,70 +144,10 @@ export function LocalPrView({
   const fileCount = diffFiles.data?.length;
   const canMerge = pr.status === "open" && pr.approved;
 
-  function addComment() {
-    if (!pr || !comment.trim()) return;
-    save.mutate({
-      ...pr,
-      comments: [
-        ...pr.comments,
-        {
-          id: crypto.randomUUID(),
-          body: comment.trim(),
-          createdAt: new Date().toISOString(),
-        },
-      ],
-    });
-    setComment("");
-  }
-
-  function editComment(commentId: string, body: string) {
-    if (!pr) return;
-    save.mutate({
-      ...pr,
-      comments: pr.comments.map((c) =>
-        c.id === commentId ? { ...c, body } : c,
-      ),
-    });
-  }
-
-  function deleteComment(commentId: string) {
-    if (!pr) return;
-    save.mutate({
-      ...pr,
-      comments: pr.comments.filter((c) => c.id !== commentId),
-    });
-  }
-
-  function setCommentHidden(commentId: string, hidden: boolean) {
-    if (!pr) return;
-    save.mutate({
-      ...pr,
-      comments: pr.comments.map((c) =>
-        c.id === commentId ? { ...c, hidden } : c,
-      ),
-    });
-  }
-
   function toggleApprove() {
     if (!pr) return;
     save.mutate({ ...pr, approved: !pr.approved });
   }
-
-  function addLabel() {
-    const name = labelInput.trim();
-    if (!pr || !name) return;
-    if (!pr.labels.includes(name)) {
-      save.mutate({ ...pr, labels: [...pr.labels, name] });
-    }
-    setLabelInput("");
-  }
-
-  function removeLabel(label: string) {
-    if (!pr) return;
-    save.mutate({ ...pr, labels: pr.labels.filter((l) => l !== label) });
-  }
-
-  const quoteReply = makeQuoteReply({ composerRef, setBody: setComment });
 
   function openEdit() {
     if (!pr) return;
