@@ -126,7 +126,8 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
 
   // Every menu entry doubles as a hotkey/palette action with the same gates.
   useHotkeyAction("view-on-github", () => openWeb(), canGh);
-  useHotkeyAction("create-issue", () => openWeb("/issues/new"), canGh);
+  // create-issue is the in-app dialog (registered in RepositoryView + IssuesPanel);
+  // the "Create issue on GitHub" menu item below still opens the web page directly.
   useHotkeyAction("fork-repository", () => setForkOpen(true), canGh);
   useHotkeyAction("open-in-terminal", () =>
     openInTerminal(

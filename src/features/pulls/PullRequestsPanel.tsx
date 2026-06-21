@@ -1,5 +1,5 @@
 import { GitPullRequestIcon } from "@phosphor-icons/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
 import { ConversationListPanel } from "@/features/conversations/ConversationListPanel";
@@ -68,10 +68,23 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
     ? null
     : "Connect this repository to GitHub to open a pull request here.";
   const canCreateGhPr = ghReady;
+  const pendingCreate = useUiStore((s) => s.pendingCreate);
+  const clearPendingCreate = useUiStore((s) => s.clearPendingCreate);
 
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
   useHotkeyAction("create-local-pr", () => setCreateOpen(true));
   useHotkeyAction("create-pr", () => setGhCreateOpen(true), canCreateGhPr);
+
+  // Opened from the command palette / New menu via requestCreate (any tab).
+  useEffect(() => {
+    if (pendingCreate === "pr") {
+      setGhCreateOpen(true);
+      clearPendingCreate();
+    } else if (pendingCreate === "local-pr") {
+      setCreateOpen(true);
+      clearPendingCreate();
+    }
+  }, [pendingCreate, clearPendingCreate]);
 
   // Arrow keys walk the visible rows, local section first like the list.
   const navTargets = [

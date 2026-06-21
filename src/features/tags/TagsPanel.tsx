@@ -1,5 +1,5 @@
 import { CaretDownIcon, PlusIcon, TagIcon } from "@phosphor-icons/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -69,8 +69,21 @@ export function TagsPanel({ repoPath }: { repoPath: string }) {
   const [newTagOpen, setNewTagOpen] = useState(false);
   const [newTagName, setNewTagName] = useState("");
   const filterRef = useRef<HTMLInputElement>(null);
+  const pendingCreate = useUiStore((s) => s.pendingCreate);
+  const clearPendingCreate = useUiStore((s) => s.clearPendingCreate);
 
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
+
+  // Opened from the command palette / New menu via requestCreate (any tab).
+  useEffect(() => {
+    if (pendingCreate === "release") {
+      setCreateReleaseOpen(true);
+      clearPendingCreate();
+    } else if (pendingCreate === "tag") {
+      setNewTagOpen(true);
+      clearPendingCreate();
+    }
+  }, [pendingCreate, clearPendingCreate]);
 
   const tags = tagList.data ?? [];
   const releases = releaseList.data ?? [];

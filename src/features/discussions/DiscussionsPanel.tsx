@@ -1,5 +1,5 @@
 import { CaretDownIcon, PlusIcon } from "@phosphor-icons/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,8 +45,18 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
   const [filterText, setFilterText] = useState("");
   const filterRef = useRef<HTMLInputElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const pendingCreate = useUiStore((s) => s.pendingCreate);
+  const clearPendingCreate = useUiStore((s) => s.clearPendingCreate);
 
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
+
+  // Opened from the command palette / New menu via requestCreate (any tab).
+  useEffect(() => {
+    if (pendingCreate === "discussion") {
+      setCreateOpen(true);
+      clearPendingCreate();
+    }
+  }, [pendingCreate, clearPendingCreate]);
 
   const categories = meta.data?.categories ?? [];
   const activeCat = categories.find((c) => c.id === categoryId);

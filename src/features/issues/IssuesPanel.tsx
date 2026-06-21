@@ -35,6 +35,8 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const localIssues = useLocalIssues(repoPath);
   const pendingIssueDraft = useUiStore((s) => s.pendingIssueDraft);
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
+  const pendingCreate = useUiStore((s) => s.pendingCreate);
+  const clearPendingCreate = useUiStore((s) => s.clearPendingCreate);
   const [issueDraft, setIssueDraft] = useState<
     { title: string; body: string; labels?: string[] } | undefined
   >();
@@ -50,6 +52,18 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
       setPendingIssueDraft(null);
     }
   }, [pendingIssueDraft, setPendingIssueDraft]);
+
+  // Opened from the command palette / New menu via requestCreate (works from any
+  // tab — RepositoryView switches here first, then this fires).
+  useEffect(() => {
+    if (pendingCreate === "issue") {
+      setCreateOpen(true);
+      clearPendingCreate();
+    } else if (pendingCreate === "local-issue") {
+      setCreateLocalOpen(true);
+      clearPendingCreate();
+    }
+  }, [pendingCreate, clearPendingCreate]);
 
   const {
     filterText,

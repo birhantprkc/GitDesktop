@@ -182,6 +182,30 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "create-local-issue",
+    label: "Create local issue",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "create-discussion",
+    label: "Create discussion",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "create-release",
+    label: "Create release",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "create-tag",
+    label: "Create tag",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
     id: "repository-statistics",
     label: "Repository statistics",
     category: "Repository",

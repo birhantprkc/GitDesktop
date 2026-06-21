@@ -46,7 +46,7 @@ import { RemotePrView } from "@/features/pulls/RemotePrView";
 import { useWatchPrHeads } from "@/features/pulls/useWatchPrHeads";
 import { TagDetailView } from "@/features/tags/TagDetailView";
 import { TagsPanel } from "@/features/tags/TagsPanel";
-import { useRepoStatus } from "@/lib/git/queries";
+import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
@@ -81,6 +81,7 @@ export function RepositoryView() {
   const repoName = useUiStore((s) => s.repoName);
   const repoTab = useUiStore((s) => s.repoTab);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
+  const requestCreate = useUiStore((s) => s.requestCreate);
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const compareBranch = useUiStore((s) => s.compareBranch);
   const selectedPr = useUiStore((s) => s.selectedPr);
@@ -99,6 +100,10 @@ export function RepositoryView() {
   const status = useRepoStatus(repoPath ?? "");
   const alias = useRepoAlias(repoPath);
   const currentName = status.data?.branch?.name ?? null;
+  const gh = useGhStatus(repoPath ?? "");
+  const canGh = Boolean(
+    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
+  );
   // Tab switches are transitions: a heavy first render of the target panel
   // never blocks the click, and hidden Activities pre-render at low priority.
   const [, startTabTransition] = useTransition();
@@ -130,6 +135,22 @@ export function RepositoryView() {
   useHotkeyAction("tab-tags", () => changeTab("tags"));
   useHotkeyAction("tab-insights", () => changeTab("insights"));
   useHotkeyAction("back-to-repositories", closeRepo);
+
+  // Create actions registered here (always mounted) so the command palette can
+  // reach them from any tab: each switches to the owning tab and flags its panel
+  // to open its dialog. The panels also register these while visible (newest
+  // wins), so on-tab the panel's own handler opens directly with full context.
+  useHotkeyAction("create-local-issue", () => requestCreate("local-issue"));
+  useHotkeyAction("create-issue", () => requestCreate("issue"), canGh);
+  useHotkeyAction("create-pr", () => requestCreate("pr"), canGh);
+  useHotkeyAction("create-local-pr", () => requestCreate("local-pr"));
+  useHotkeyAction(
+    "create-discussion",
+    () => requestCreate("discussion"),
+    canGh,
+  );
+  useHotkeyAction("create-release", () => requestCreate("release"), canGh);
+  useHotkeyAction("create-tag", () => requestCreate("tag"));
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open.
   useEffect(() => {

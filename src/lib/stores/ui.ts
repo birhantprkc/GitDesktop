@@ -13,6 +13,25 @@ export type RepoTab =
   | "actions"
   | "tags"
   | "insights";
+/** A create dialog the command palette / New menus can request from any tab. */
+export type CreateKind =
+  | "issue"
+  | "local-issue"
+  | "pr"
+  | "local-pr"
+  | "release"
+  | "tag"
+  | "discussion";
+/** The tab each create dialog lives on; requestCreate switches to it. */
+const CREATE_TAB: Record<CreateKind, RepoTab> = {
+  issue: "issues",
+  "local-issue": "issues",
+  pr: "pulls",
+  "local-pr": "pulls",
+  release: "tags",
+  tag: "tags",
+  discussion: "discussions",
+};
 /** A Settings section to open directly (matches SettingsScreen's panel ids). */
 export type SettingsTarget =
   | "general"
@@ -107,6 +126,10 @@ interface UiState {
     body: string;
     labels?: string[];
   } | null;
+  /** A create dialog requested from the palette / a New menu; the owning panel
+   *  opens its dialog when this matches its kind, then clears it. Survives the
+   *  tab switch requestCreate performs. */
+  pendingCreate: CreateKind | null;
   /** Selected workflow run (databaseId) on the Actions tab. */
   selectedRunId: number | null;
   /** Selected tag (by name) on the Tags tab. */
@@ -152,6 +175,9 @@ interface UiState {
   setPendingIssueDraft: (
     draft: { title: string; body: string; labels?: string[] } | null,
   ) => void;
+  /** Switch to the create's tab and flag its panel to open the dialog. */
+  requestCreate: (kind: CreateKind) => void;
+  clearPendingCreate: () => void;
   selectRun: (id: number | null) => void;
   selectTag: (tag: { tag: string } | null) => void;
   selectFile: (file: SelectedFile | null) => void;
@@ -227,6 +253,7 @@ export const useUiStore = create<UiState>()((set, get) => {
     selectedIssue: null,
     selectedDiscussion: null,
     pendingIssueDraft: null,
+    pendingCreate: null,
     selectedRunId: null,
     selectedTag: null,
     selectedFile: null,
@@ -335,6 +362,9 @@ export const useUiStore = create<UiState>()((set, get) => {
     selectIssue: (issue) => set({ selectedIssue: issue }),
     selectDiscussion: (discussion) => set({ selectedDiscussion: discussion }),
     setPendingIssueDraft: (draft) => set({ pendingIssueDraft: draft }),
+    requestCreate: (kind) =>
+      set({ repoTab: CREATE_TAB[kind], pendingCreate: kind }),
+    clearPendingCreate: () => set({ pendingCreate: null }),
     selectRun: (id) => set({ selectedRunId: id }),
     selectTag: (tag) => set({ selectedTag: tag }),
     selectCommit: (hash) => set({ selectedCommitHash: hash }),
