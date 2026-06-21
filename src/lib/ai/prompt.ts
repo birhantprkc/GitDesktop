@@ -213,11 +213,20 @@ const ITERATIVE_REVIEW_CLAUSE = `
 You are also given findings from a PREVIOUS review of an earlier version of this PR, and (when available) a diff of what changed since. Treat the previous findings as UNVERIFIED CONTEXT, not ground truth — earlier reviews often contain false positives. For each previous finding: re-verify it against the CURRENT diff above; if the current code no longer has the problem, note it under a short \`### Resolved since last review\` list and do not re-report it; if it still applies, report it; if it was never valid, drop it silently. Only mark a finding "Resolved" if you can see the corrected code in the current diff — if the relevant code isn't shown, say "could not verify" instead of claiming a fix. Never repeat a previous finding without confirming it against the current diff. Your authority is the current diff; the previous findings only tell you where to look first.`;
 
 /** Appended ONLY when third-party AI-reviewer findings are fed. Frames them with
- *  the same skepticism as the previous-review findings: noisy, possibly stale,
- *  re-verify against the current diff before repeating any of them. */
+ *  the same skepticism as the previous-review findings (noisy, possibly stale)
+ *  and asks the model to VET them: credit genuine overlaps tersely, and — the
+ *  valuable part — briefly dismiss a bot finding when it checks out as wrong or
+ *  already addressed, triaging their false positives for the reader. */
 const EXTERNAL_REVIEW_CLAUSE = `
 
-You are ALSO given findings that OTHER automated code reviewers (e.g. GitHub Copilot, CodeRabbit) posted on this PR. Treat them with the same skepticism: UNVERIFIED context, often noisy, low-signal, or made against an earlier commit. Re-verify each against the CURRENT diff before mentioning it; if the current code shows a real, still-present problem they raised, you may incorporate it; otherwise ignore it. Do NOT pad your review by restating their points, and never present another tool's claim as confirmed unless the current diff proves it. The current diff is your sole authority.`;
+You are ALSO given findings that OTHER automated code reviewers (e.g. GitHub Copilot, CodeRabbit) posted on this PR. Treat them with the same skepticism: UNVERIFIED context, often noisy, low-signal, or made against an earlier commit — the current diff is your sole authority. Your review is about the code, not about the other tools, so do not lead with them or pad your review by restating their points.
+
+Re-verify each of their findings against the CURRENT diff and use them like this:
+- If one identifies a real, still-present problem, report it as a normal finding; you MAY add a terse parenthetical credit like "(also flagged by Copilot)" when it independently matches your own conclusion.
+- If one is WRONG, already fixed, or unsupported by the current diff, AND it's the kind of thing a reader might otherwise act on, add a short line briefly dismissing it (e.g. "Copilot flagged X here; not an issue because …"). Triaging their false positives is the most useful thing you can do with them.
+- Otherwise (trivial or irrelevant), ignore it silently.
+
+Never present another tool's claim as confirmed unless the current diff proves it, and never invent a finding just to agree or disagree with them.`;
 
 /** The "Changes since that review" section body, varying by delta state. */
 function deltaSection(

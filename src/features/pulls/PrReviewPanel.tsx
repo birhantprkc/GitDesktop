@@ -1,4 +1,5 @@
 import {
+  CopyIcon,
   RobotIcon,
   ShieldCheckIcon,
   SparkleIcon,
@@ -37,6 +38,7 @@ import {
 } from "@/lib/ai/providers";
 import type { AiProviderId, ReviewMode } from "@/lib/ai/types";
 import { track } from "@/lib/analytics";
+import { copyText } from "@/lib/clipboard";
 import { useExternalReviews, useReviewHistory } from "@/lib/pulls/queries";
 import type { PersistedReview } from "@/lib/pulls/reviews-history";
 import {
@@ -296,6 +298,16 @@ export function PrReviewPanel({
                 Security audit
               </Button>
             </>
+          )}
+          {text.trim() && !generating && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => copyText(text, "Review copied")}
+            >
+              <CopyIcon data-icon="inline-start" />
+              Copy
+            </Button>
           )}
           {onPost && text.trim() && !generating && (
             <Button variant="ghost" size="sm" disabled={posting} onClick={post}>
