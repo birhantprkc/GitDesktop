@@ -12,6 +12,13 @@ commit list.
 
 ### Added
 
+- **Ignore or untrack multiple files at once.** Select several files in the
+  Changes list (Ctrl/Cmd-click or Shift-click) and the right-click menu now
+  offers **Ignore N files** and **Untrack N files** alongside the existing bulk
+  stage / discard / stash — previously these were single-file only. Untrack
+  applies to the tracked files in the selection (kept on disk), and ignoring a
+  batch skips any `.gitignore` lines that are already there.
+
 - **Settings → About: a one-glance environment check.** A new **About** section
   shows your app, OS and Tauri versions plus a **Components** table for every
   command-line tool GitDesktop relies on — git, the GitHub and GitLab CLIs, and

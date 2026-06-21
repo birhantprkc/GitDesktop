@@ -429,26 +429,30 @@ pub async fn git_stash_paths(
     Ok(())
 }
 
-/// Stops tracking files matching `pathspec` (a file, a folder, or a glob like
-/// "*.log") via `git rm --cached`, so they stay on disk but leave the index,
-/// then appends `ignore_pattern` to .gitignore so they aren't re-added. The
-/// "untrack" counterpart to the per-file ignore menu. `--force` covers files
-/// with staged changes (their content is preserved in the working tree).
+/// Stops tracking the files matching `pathspecs` (each a file, a folder, or a
+/// glob like "*.log") via one `git rm --cached`, so they stay on disk but leave
+/// the index, then appends `ignore_patterns` to .gitignore so they aren't
+/// re-added. The "untrack" counterpart to the ignore menu — one or many files.
+/// `--force` covers files with staged changes (content preserved on disk).
 #[tauri::command]
 pub async fn git_untrack(
     state: State<'_, AppState>,
     repo_path: String,
-    pathspec: String,
-    ignore_pattern: String,
+    pathspecs: Vec<String>,
+    ignore_patterns: Vec<String>,
 ) -> AppResult<()> {
-    run_git_mutating(
-        &state,
-        &repo_path,
-        &["rm", "--cached", "--force", "-r", "--", &pathspec],
-        DEFAULT_TIMEOUT,
-    )
-    .await?;
-    crate::fsops::append_to_gitignore(repo_path, ignore_pattern).await?;
+    let specs: Vec<&str> = pathspecs
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if specs.is_empty() {
+        return Ok(());
+    }
+    let mut args: Vec<&str> = vec!["rm", "--cached", "--force", "-r", "--"];
+    args.extend(specs);
+    run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    crate::fsops::append_to_gitignore(repo_path, ignore_patterns).await?;
     Ok(())
 }
 

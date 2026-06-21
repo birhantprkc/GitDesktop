@@ -20,24 +20,51 @@ pub struct DetectedTerminal {
     pub path: String,
 }
 
-/// Appends an ignore pattern to the repo root .gitignore (created if absent).
+/// Appends one or more ignore patterns to the repo root .gitignore (created if
+/// absent). Trims and de-duplicates the batch and skips any pattern already
+/// present as an exact line, so bulk-ignoring a selection can't add duplicates.
 #[tauri::command]
-pub async fn append_to_gitignore(repo_path: String, pattern: String) -> AppResult<()> {
-    let pattern = pattern.trim();
-    if pattern.is_empty() {
-        return Err(AppError::InvalidArgument("empty ignore pattern".into()));
+pub async fn append_to_gitignore(repo_path: String, patterns: Vec<String>) -> AppResult<()> {
+    // Normalize + de-dupe within the batch (preserving order).
+    let mut wanted: Vec<String> = Vec::new();
+    for p in patterns {
+        let t = p.trim().to_string();
+        if !t.is_empty() && !wanted.contains(&t) {
+            wanted.push(t);
+        }
     }
+    if wanted.is_empty() {
+        return Ok(());
+    }
+
     let path = Path::new(&repo_path).join(".gitignore");
     let mut content = match tokio::fs::read_to_string(&path).await {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(AppError::Io(e)),
     };
+
+    // Drop anything already in the file (scoped so the borrow ends before we
+    // mutate `content`).
+    let to_add: Vec<String> = {
+        let existing: std::collections::HashSet<&str> =
+            content.lines().map(str::trim).collect();
+        wanted
+            .into_iter()
+            .filter(|p| !existing.contains(p.as_str()))
+            .collect()
+    };
+    if to_add.is_empty() {
+        return Ok(());
+    }
+
     if !content.is_empty() && !content.ends_with('\n') {
         content.push('\n');
     }
-    content.push_str(pattern);
-    content.push('\n');
+    for p in to_add {
+        content.push_str(&p);
+        content.push('\n');
+    }
     tokio::fs::write(&path, content).await.map_err(AppError::Io)
 }
 

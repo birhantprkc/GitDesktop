@@ -397,14 +397,14 @@ export const ghReleaseDownloadAsset = (
 ) =>
   invoke<void>("gh_release_download_asset", { repoPath, tag, assetName, dir });
 
-export const appendToGitignore = (repoPath: string, pattern: string) =>
-  invoke<void>("append_to_gitignore", { repoPath, pattern });
+export const appendToGitignore = (repoPath: string, patterns: string[]) =>
+  invoke<void>("append_to_gitignore", { repoPath, patterns });
 
 export const gitUntrack = (
   repoPath: string,
-  pathspec: string,
-  ignorePattern: string,
-) => invoke<void>("git_untrack", { repoPath, pathspec, ignorePattern });
+  pathspecs: string[],
+  ignorePatterns: string[],
+) => invoke<void>("git_untrack", { repoPath, pathspecs, ignorePatterns });
 
 export const revealInExplorer = (path: string) =>
   invoke<void>("reveal_in_explorer", { path });

@@ -67,6 +67,9 @@ export function FileRow({
   onUnstageSelected,
   onDiscardSelected,
   onStashSelected,
+  onIgnoreSelected,
+  onUntrackSelected,
+  selectedTrackedCount,
 }: {
   entry: FileEntry;
   kind: ChangeKind;
@@ -89,6 +92,10 @@ export function FileRow({
   onUnstageSelected?: () => void;
   onDiscardSelected?: () => void;
   onStashSelected?: () => void;
+  onIgnoreSelected?: () => void;
+  onUntrackSelected?: () => void;
+  /** How many of the selection git tracks (drives the bulk "Untrack" item). */
+  selectedTrackedCount?: number;
 }) {
   const appendIgnore = useAppendToGitignore(repoPath);
   const untrack = useUntrack(repoPath);
@@ -118,7 +125,7 @@ export function FileRow({
   const isTracked = entry.unstaged !== "untracked" && entry.staged !== "added";
 
   function ignore(pattern: string) {
-    appendIgnore.mutate(pattern, {
+    appendIgnore.mutate([pattern], {
       onSuccess: () => toast.success(`Added "${pattern}" to .gitignore`),
       onError: (e) => toastError(e),
     });
@@ -128,7 +135,7 @@ export function FileRow({
   // matching .gitignore line so the file stays untracked afterwards.
   function doUntrack(pathspec: string, ignorePattern: string, label: string) {
     untrack.mutate(
-      { pathspec, ignorePattern },
+      { pathspecs: [pathspec], ignorePatterns: [ignorePattern] },
       {
         onSuccess: () =>
           toast.success(
@@ -216,6 +223,15 @@ export function FileRow({
             <ContextMenuItem onClick={onStashSelected}>
               Stash {selectionCount} changes…
             </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={onIgnoreSelected}>
+              Ignore {selectionCount} files (add to .gitignore)
+            </ContextMenuItem>
+            {(selectedTrackedCount ?? 0) > 0 && onUntrackSelected && (
+              <ContextMenuItem onClick={onUntrackSelected}>
+                Untrack {selectedTrackedCount} files (keep on disk)
+              </ContextMenuItem>
+            )}
           </>
         ) : (
           <>

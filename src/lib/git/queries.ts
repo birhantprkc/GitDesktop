@@ -1288,16 +1288,16 @@ export function useDiscard(repo: string) {
 }
 
 export function useAppendToGitignore(repo: string) {
-  return useRepoMutation(repo, (pattern: string) =>
-    api.appendToGitignore(repo, pattern),
+  return useRepoMutation(repo, (patterns: string[]) =>
+    api.appendToGitignore(repo, patterns),
   );
 }
 
 export function useUntrack(repo: string) {
   return useRepoMutation(
     repo,
-    (args: { pathspec: string; ignorePattern: string }) =>
-      api.gitUntrack(repo, args.pathspec, args.ignorePattern),
+    (args: { pathspecs: string[]; ignorePatterns: string[] }) =>
+      api.gitUntrack(repo, args.pathspecs, args.ignorePatterns),
   );
 }
 

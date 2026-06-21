@@ -52,6 +52,7 @@ import {
   openWithProgram,
 } from "@/lib/git/api";
 import {
+  useAppendToGitignore,
   useCompareBranches,
   useDefaultBranch,
   useDiscardAll,
@@ -63,6 +64,7 @@ import {
   useStashCount,
   useStashPaths,
   useUnstage,
+  useUntrack,
 } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
 import { isMac } from "@/lib/hotkeys/binding";
@@ -148,6 +150,8 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const discardAll = useDiscardAll(repoPath);
   const stashPaths = useStashPaths(repoPath);
   const stashAll = useStashAll(repoPath);
+  const appendIgnore = useAppendToGitignore(repoPath);
+  const untrack = useUntrack(repoPath);
   const selectedFile = useUiStore((s) => s.selectedFile);
   const selectFile = useUiStore((s) => s.selectFile);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
@@ -243,6 +247,11 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   );
   const selectedEntries = entries.filter((e) => selectedPaths.has(e.path));
   const selectionCount = selectedEntries.length;
+  // Untracking only applies to files git already tracks (not fresh untracked
+  // files or brand-new staged adds) — mirrors FileRow's per-file rule.
+  const selectedTracked = selectedEntries.filter(
+    (e) => e.unstaged !== "untracked" && e.staged !== "added",
+  );
 
   // Arrow keys walk the rows across both sections; Shift extends from the
   // anchor, a plain arrow collapses to the single active row.
@@ -386,6 +395,41 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   function requestStashSelected() {
     if (selectionCount > 0)
       setStashScope({ kind: "files", entries: selectedEntries });
+  }
+
+  // Bulk ignore: add a `/path` line per selected file (any kind). The Rust side
+  // de-dupes and skips lines already present.
+  function ignoreSelected() {
+    if (selectionCount === 0) return;
+    const patterns = selectedEntries.map((e) => `/${e.path}`);
+    appendIgnore.mutate(patterns, {
+      onSuccess: () => {
+        toast.success(`Added ${patterns.length} entries to .gitignore`);
+        setSelectedKeys(new Set());
+      },
+      onError,
+    });
+  }
+
+  // Bulk untrack: `git rm --cached` the tracked files in the selection (kept on
+  // disk) + add their ignore lines, in one shot.
+  function untrackSelected() {
+    if (selectedTracked.length === 0) return;
+    untrack.mutate(
+      {
+        pathspecs: selectedTracked.map((e) => e.path),
+        ignorePatterns: selectedTracked.map((e) => `/${e.path}`),
+      },
+      {
+        onSuccess: () => {
+          toast.success(
+            `Untracked ${selectedTracked.length} files — kept on disk, added to .gitignore`,
+          );
+          setSelectedKeys(new Set());
+        },
+        onError,
+      },
+    );
   }
 
   function confirmDiscard() {
@@ -781,6 +825,9 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                       onUnstageSelected={unstageSelected}
                       onDiscardSelected={requestDiscardSelected}
                       onStashSelected={requestStashSelected}
+                      onIgnoreSelected={ignoreSelected}
+                      onUntrackSelected={untrackSelected}
+                      selectedTrackedCount={selectedTracked.length}
                     />
                   ))}
                 </section>
@@ -836,6 +883,9 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                       onUnstageSelected={unstageSelected}
                       onDiscardSelected={requestDiscardSelected}
                       onStashSelected={requestStashSelected}
+                      onIgnoreSelected={ignoreSelected}
+                      onUntrackSelected={untrackSelected}
+                      selectedTrackedCount={selectedTracked.length}
                     />
                   ))}
                 </section>
