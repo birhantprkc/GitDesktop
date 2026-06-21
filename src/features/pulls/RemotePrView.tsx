@@ -19,15 +19,6 @@ import {
 } from "@/components/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,7 +45,6 @@ import {
   Thread,
 } from "@/features/conversations/Thread";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
-import { DiffContent } from "@/features/diff/DiffSurface";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
@@ -89,6 +79,7 @@ import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { PrReviewPanel } from "./PrReviewPanel";
+import { MergePrDialog, PrFilesPane } from "./RemotePrViewParts";
 
 type Section = "conversation" | "commits" | "files" | "review";
 
@@ -700,50 +691,14 @@ export function RemotePrView({
       )}
 
       {section === "files" && (
-        <div className="flex min-h-0 flex-1">
-          <aside className="flex w-72 shrink-0 flex-col border-r">
-            <ScrollArea className="min-h-0 flex-1">
-              {pr.files.map((file) => (
-                <button
-                  type="button"
-                  key={file.path}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
-                    effectivePath === file.path
-                      ? "bg-accent text-accent-foreground"
-                      : "hover:bg-muted/60",
-                  )}
-                  onClick={() => setSelectedPath(file.path)}
-                  title={file.path}
-                >
-                  <span className="min-w-0 flex-1 truncate font-mono">
-                    {file.path}
-                  </span>
-                  <span className="shrink-0 tabular-nums">
-                    <span className="text-green-600 dark:text-green-400">
-                      +{file.additions}
-                    </span>{" "}
-                    <span className="text-red-600 dark:text-red-400">
-                      -{file.deletions}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </ScrollArea>
-          </aside>
-          <main className="min-w-0 flex-1">
-            {effectivePath ? (
-              <DiffContent
-                filePath={effectivePath}
-                data={fileDiff}
-                isPending={prDiff.isPending}
-                isError={prDiff.isError}
-              />
-            ) : (
-              <DiffPlaceholder message="Select a file to see its changes" />
-            )}
-          </main>
-        </div>
+        <PrFilesPane
+          files={pr.files}
+          effectivePath={effectivePath}
+          onSelectPath={setSelectedPath}
+          fileDiff={fileDiff}
+          isPending={prDiff.isPending}
+          isError={prDiff.isError}
+        />
       )}
 
       {isOpen && (
@@ -842,36 +797,18 @@ export function RemotePrView({
         </div>
       )}
 
-      <Dialog open={mergeOpen} onOpenChange={setMergeOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Merge pull request #{number}?</DialogTitle>
-            <DialogDescription>
-              {MERGE_LABEL[mergeStrategy]} — merges{" "}
-              <span className="font-mono">{pr.headRefName}</span> into{" "}
-              <span className="font-mono">{pr.baseRefName}</span> on GitHub.
-              This cannot be easily undone.
-            </DialogDescription>
-          </DialogHeader>
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-            <Checkbox
-              checked={deleteBranch}
-              onCheckedChange={(checked) => setDeleteBranch(checked === true)}
-            />
-            Delete <span className="font-mono">{pr.headRefName}</span> after
-            merging
-          </label>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMergeOpen(false)}>
-              Cancel
-            </Button>
-            <Button disabled={mergePr.isPending} onClick={confirmMerge}>
-              {mergePr.isPending && <Spinner data-icon="inline-start" />}
-              {MERGE_LABEL[mergeStrategy]}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <MergePrDialog
+        open={mergeOpen}
+        onClose={() => setMergeOpen(false)}
+        number={number}
+        headRefName={pr.headRefName}
+        baseRefName={pr.baseRefName}
+        strategyLabel={MERGE_LABEL[mergeStrategy]}
+        deleteBranch={deleteBranch}
+        onDeleteBranchChange={setDeleteBranch}
+        pending={mergePr.isPending}
+        onConfirm={confirmMerge}
+      />
 
       <EditTitleBodyDialog
         form={edit.form}

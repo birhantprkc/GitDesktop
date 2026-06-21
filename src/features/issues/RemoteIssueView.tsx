@@ -15,14 +15,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -32,17 +24,14 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import {
   EditTitleBodyDialog,
   useEditTitleBody,
 } from "@/features/conversations/EditTitleBodyDialog";
-import { LabelsPopover } from "@/features/conversations/LabelsPopover";
 import { makeQuoteReply } from "@/features/conversations/quoteReply";
 import { ReactionBar } from "@/features/conversations/ReactionBar";
 import {
@@ -67,9 +56,6 @@ import {
   useMinimizeComment,
   usePinIssue,
   useReopenIssue,
-  useSetIssueAssignees,
-  useSetIssueMilestone,
-  useSetIssueType,
   useToggleReaction,
   useTransferIssue,
   useUnlockIssue,
@@ -78,13 +64,12 @@ import {
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
-import { IssueDevelopment } from "./IssueDevelopment";
+import { IssueSubIssues } from "./IssueRelations";
 import {
-  AssigneesPopover,
-  IssueTypeMenu,
-  MilestoneMenu,
-} from "./IssueMetaPickers";
-import { IssueRelationships, IssueSubIssues } from "./IssueRelations";
+  DeleteIssueDialog,
+  IssueSidebar,
+  TransferIssueDialog,
+} from "./RemoteIssueViewParts";
 
 /** GitHub's lock reasons (menu label → API value); null locks with no reason. */
 const LOCK_REASONS: [string, LockReason | null][] = [
@@ -117,9 +102,6 @@ export function RemoteIssueView({
   const deleteComment = useDeletePrComment(repoPath);
   const minimizeComment = useMinimizeComment(repoPath);
   const unminimizeComment = useUnminimizeComment(repoPath);
-  const setAssignees = useSetIssueAssignees(repoPath);
-  const setMilestone = useSetIssueMilestone(repoPath);
-  const setType = useSetIssueType(repoPath);
   const pinIssue = usePinIssue(repoPath);
   const lockIssue = useLockIssue(repoPath);
   const unlockIssue = useUnlockIssue(repoPath);
@@ -620,77 +602,7 @@ export function RemoteIssueView({
             </div>
           </div>
         </div>
-        <aside className="w-64 shrink-0 space-y-4 overflow-y-auto border-l p-4">
-          <IssueTypeMenu
-            repoPath={repoPath}
-            enabled
-            value={issue.issueType}
-            onChange={(type) =>
-              setType.mutate(
-                { number, typeName: type?.name ?? null, type },
-                { onError },
-              )
-            }
-          />
-          <AssigneesPopover
-            repoPath={repoPath}
-            enabled
-            value={issue.assignees}
-            commitOnClose
-            onChange={(next) =>
-              setAssignees.mutate({ number, assignees: next }, { onError })
-            }
-          />
-          <LabelsPopover
-            repoPath={repoPath}
-            enabled
-            labelableId={issue.id}
-            labels={issue.labels}
-          />
-          <MilestoneMenu
-            repoPath={repoPath}
-            enabled
-            value={issue.milestone?.number ?? null}
-            valueLabel={issue.milestone?.title}
-            onChange={(m, title) =>
-              setMilestone.mutate({ number, milestone: m, title }, { onError })
-            }
-          />
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground">
-              Projects
-            </p>
-            <button
-              type="button"
-              onClick={() => openUrl(issue.url)}
-              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
-            >
-              <ArrowSquareOutIcon className="size-3" />
-              Manage on GitHub
-            </button>
-          </div>
-          <IssueRelationships repoPath={repoPath} number={number} />
-          <IssueDevelopment
-            repoPath={repoPath}
-            number={number}
-            issueId={issue.id}
-            issueTitle={issue.title}
-            issueUrl={issue.url}
-          />
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground">
-              Notifications
-            </p>
-            <button
-              type="button"
-              onClick={() => openUrl(issue.url)}
-              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
-            >
-              <ArrowSquareOutIcon className="size-3" />
-              Subscribe on GitHub
-            </button>
-          </div>
-        </aside>
+        <IssueSidebar repoPath={repoPath} number={number} issue={issue} />
       </div>
 
       <EditTitleBodyDialog
@@ -721,91 +633,25 @@ export function RemoteIssueView({
         }
       />
 
-      <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
-        <DialogContent>
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              submitTransfer();
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>Transfer issue #{number}</DialogTitle>
-              <DialogDescription>
-                Moves this issue to another repository you can push to. Its
-                comments, labels, and assignees move with it.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-1.5">
-              <Input
-                autoFocus
-                value={transferDest}
-                onChange={(e) => setTransferDest(e.target.value)}
-                placeholder="owner/repo"
-                autoComplete="off"
-              />
-              {repoSuggestions.length > 0 && (
-                <div className="max-h-40 overflow-auto border">
-                  {repoSuggestions.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      className="block w-full truncate px-2 py-1.5 text-left text-xs hover:bg-muted/60"
-                      onClick={() => setTransferDest(name)}
-                    >
-                      {name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setTransferOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={!transferDest.trim() || transferIssue.isPending}
-              >
-                {transferIssue.isPending && (
-                  <Spinner data-icon="inline-start" />
-                )}
-                Transfer
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <TransferIssueDialog
+        open={transferOpen}
+        onClose={() => setTransferOpen(false)}
+        number={number}
+        dest={transferDest}
+        onDestChange={setTransferDest}
+        suggestions={repoSuggestions}
+        pending={transferIssue.isPending}
+        onSubmit={submitTransfer}
+      />
 
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete issue #{number}?</DialogTitle>
-            <DialogDescription>
-              This permanently deletes “{issue.title}” on GitHub. This cannot be
-              undone, and requires admin or triage access.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={deleteIssue.isPending}
-              onClick={confirmDelete}
-            >
-              {deleteIssue.isPending && <Spinner data-icon="inline-start" />}
-              Delete issue
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteIssueDialog
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        number={number}
+        title={issue.title}
+        pending={deleteIssue.isPending}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }
