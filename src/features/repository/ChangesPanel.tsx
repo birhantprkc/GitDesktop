@@ -1,20 +1,11 @@
 import { Popover } from "@base-ui/react/popover";
 import {
-  ArrowSquareOutIcon,
   CaretRightIcon,
-  CheckCircleIcon,
-  ClockCounterClockwiseIcon,
-  FolderOpenIcon,
   FunnelIcon,
-  GitCommitIcon,
-  GitPullRequestIcon,
   InfoIcon,
-  PencilSimpleIcon,
   StackIcon,
-  TerminalIcon,
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -22,11 +13,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -37,26 +23,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BlameDialog } from "@/features/history/BlameDialog";
 import { FileHistoryDialog } from "@/features/history/FileHistoryDialog";
-import { copyText } from "@/lib/clipboard";
-import {
-  ghRepoUrl,
-  openInTerminal,
-  openWithDefault,
-  openWithProgram,
-  revealInExplorer,
-} from "@/lib/git/api";
 import {
   useAppendToGitignore,
   useCompareBranches,
@@ -73,13 +43,15 @@ import {
   useUntrack,
 } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
-import { isMac, isWindows } from "@/lib/hotkeys/binding";
+import { isMac } from "@/lib/hotkeys/binding";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { ChangesContextMenuItems, type MenuTarget } from "./ChangesContextMenu";
+import { ChangesEmptyState } from "./ChangesEmptyState";
 import { ConflictBanner } from "./ConflictBanner";
 import { FileRow } from "./FileRow";
 import { StashesDialog } from "./StashesDialog";
@@ -90,19 +62,6 @@ import { StashesDialog } from "./StashesDialog";
  */
 function unstagePaths(entry: FileEntry): string[] {
   return entry.origPath ? [entry.path, entry.origPath] : [entry.path];
-}
-
-/** "src/lib/x.ts" -> ["src/lib", "src"] (closest folder first). */
-function ancestorFolders(path: string): string[] {
-  const folders: string[] = [];
-  let current = path;
-  for (;;) {
-    const slash = current.lastIndexOf("/");
-    if (slash === -1) break;
-    current = current.slice(0, slash);
-    folders.push(current);
-  }
-  return folders;
 }
 
 type FilterKind = "included" | "excluded" | "new" | "modified" | "deleted";
@@ -143,12 +102,6 @@ type FlatRow =
   | { type: "header"; section: "staged" | "unstaged"; count: number }
   | { type: "file"; entry: FileEntry; staged: boolean };
 
-/** What the one shared context menu acts on, set on right-click. */
-type MenuTarget =
-  | { kind: "row"; entry: FileEntry; staged: boolean }
-  | { kind: "global" }
-  | null;
-
 export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
   const stage = useStage(repoPath);
@@ -161,13 +114,8 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const untrack = useUntrack(repoPath);
   const selectedFile = useUiStore((s) => s.selectedFile);
   const selectFile = useUiStore((s) => s.selectFile);
-  const setRepoTab = useUiStore((s) => s.setRepoTab);
-  const setCompareBranch = useUiStore((s) => s.setCompareBranch);
   const settings = useSettings();
   const saveSettings = useSaveSettings();
-  const editorPath = (settings.data?.externalEditor ?? "").trim();
-  const editorName =
-    (settings.data?.externalEditorName ?? "").trim() || "editor";
   const stashCount = useStashCount(repoPath);
   // A confirm dialog is open when its scope is non-null. "files" covers a
   // single right-clicked row and a multi-selection alike (1+ entries); "all"
@@ -618,196 +566,6 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     });
   }
 
-  // The shared context menu's items, chosen from whatever was right-clicked:
-  // the whole tree (header / blank space), a multi-selection, or a single file.
-  function renderMenuItems() {
-    if (!menuTarget) return null;
-    if (menuTarget.kind === "global") {
-      return (
-        <>
-          <ContextMenuItem onClick={() => setDiscardScope({ kind: "all" })}>
-            Discard all changes…
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => setStashScope({ kind: "all" })}>
-            Stash all changes…
-          </ContextMenuItem>
-        </>
-      );
-    }
-    const { entry, staged } = menuTarget;
-    const inSelection = selectedKeys.has(keyOf(entry.path, staged));
-    if (inSelection && selectionCount > 1) {
-      return (
-        <>
-          {!staged && (
-            <ContextMenuItem onClick={stageSelected}>
-              Stage {selectionCount} files
-            </ContextMenuItem>
-          )}
-          {staged && (
-            <ContextMenuItem onClick={unstageSelected}>
-              Unstage {selectionCount} files
-            </ContextMenuItem>
-          )}
-          <ContextMenuItem onClick={requestDiscardSelected}>
-            Discard {selectionCount} changes…
-          </ContextMenuItem>
-          <ContextMenuItem onClick={requestStashSelected}>
-            Stash {selectionCount} changes…
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onClick={ignoreSelected}>
-            Ignore {selectionCount} files (add to .gitignore)
-          </ContextMenuItem>
-          {selectedTracked.length > 0 && (
-            <ContextMenuItem onClick={untrackSelected}>
-              Untrack {selectedTracked.length} files (keep on disk)
-            </ContextMenuItem>
-          )}
-        </>
-      );
-    }
-    // Build the absolute path with the OS-native separator: git emits "/" in
-    // entry.path, but reveal/open/copy expect "\" on Windows and "/" elsewhere.
-    const sep = isWindows ? "\\" : "/";
-    const absolutePath = `${repoPath}${sep}${entry.path.replaceAll("/", sep)}`;
-    const folders = ancestorFolders(entry.path);
-    const dot = entry.path.lastIndexOf(".");
-    const extension =
-      dot > entry.path.lastIndexOf("/") + 1 ? entry.path.slice(dot + 1) : null;
-    const isTracked =
-      entry.unstaged !== "untracked" && entry.staged !== "added";
-    return (
-      <>
-        <ContextMenuItem onClick={() => handleToggle(entry, staged)}>
-          {staged ? "Unstage file" : "Stage file"}
-        </ContextMenuItem>
-        {!staged && (
-          <ContextMenuItem
-            onClick={() => setDiscardScope({ kind: "files", entries: [entry] })}
-          >
-            Discard changes…
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem
-          onClick={() => setStashScope({ kind: "files", entries: [entry] })}
-        >
-          Stash change…
-        </ContextMenuItem>
-        {isTracked && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => setHistoryPath(entry.path)}>
-              View file history…
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => setBlamePath(entry.path)}>
-              Blame…
-            </ContextMenuItem>
-          </>
-        )}
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => ignoreOne(`/${entry.path}`)}>
-          Ignore file (add to .gitignore)
-        </ContextMenuItem>
-        {folders.length > 0 && (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              Ignore folder (add to .gitignore)
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent>
-              {folders.map((folder) => (
-                <ContextMenuItem
-                  key={folder}
-                  onClick={() => ignoreOne(`/${folder}/`)}
-                >
-                  <span className="font-mono">{folder}/</span>
-                </ContextMenuItem>
-              ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        )}
-        {extension && (
-          <ContextMenuItem onClick={() => ignoreOne(`*.${extension}`)}>
-            Ignore all .{extension} files (add to .gitignore)
-          </ContextMenuItem>
-        )}
-        {isTracked && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              onClick={() =>
-                untrackOne(entry.path, `/${entry.path}`, `"${entry.path}"`)
-              }
-            >
-              Untrack file (keep on disk)
-            </ContextMenuItem>
-            {folders.length > 0 && (
-              <ContextMenuSub>
-                <ContextMenuSubTrigger>
-                  Untrack folder (keep on disk)
-                </ContextMenuSubTrigger>
-                <ContextMenuSubContent>
-                  {folders.map((folder) => (
-                    <ContextMenuItem
-                      key={folder}
-                      onClick={() =>
-                        untrackOne(folder, `/${folder}/`, `"${folder}/"`)
-                      }
-                    >
-                      <span className="font-mono">{folder}/</span>
-                    </ContextMenuItem>
-                  ))}
-                </ContextMenuSubContent>
-              </ContextMenuSub>
-            )}
-            {extension && (
-              <ContextMenuItem
-                onClick={() =>
-                  untrackOne(
-                    `*.${extension}`,
-                    `*.${extension}`,
-                    `*.${extension} files`,
-                  )
-                }
-              >
-                Untrack all .{extension} files (keep on disk)
-              </ContextMenuItem>
-            )}
-          </>
-        )}
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => copyText(absolutePath, "Path copied")}>
-          Copy file path
-        </ContextMenuItem>
-        <ContextMenuItem
-          onClick={() => copyText(entry.path, "Relative path copied")}
-        >
-          Copy relative file path
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          onClick={() => revealInExplorer(absolutePath).catch(onError)}
-        >
-          Show in Explorer
-        </ContextMenuItem>
-        {editorPath && (
-          <ContextMenuItem
-            onClick={() =>
-              openWithProgram(editorPath, absolutePath).catch(onError)
-            }
-          >
-            Open in {editorName}
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem
-          onClick={() => openWithDefault(absolutePath).catch(onError)}
-        >
-          Open with default program
-        </ContextMenuItem>
-      </>
-    );
-  }
-
   useHotkeyAction(
     "stage-all",
     stageAll,
@@ -877,103 +635,14 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <ConflictBanner repoPath={repoPath} conflictedCount={conflictedCount} />
       {entries.length === 0 ? (
-        <Empty className="flex-1">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              {isUnborn ? <GitCommitIcon /> : <CheckCircleIcon />}
-            </EmptyMedia>
-            <EmptyTitle>
-              {isUnborn ? "Make your first commit" : "No local changes"}
-            </EmptyTitle>
-            <EmptyDescription>
-              {isUnborn
-                ? "This repository has no commits yet. Edit a file in your project, then stage it and write a message below to commit."
-                : "Your working tree is clean."}
-            </EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <div className="flex w-full max-w-60 flex-col gap-2">
-              {!isUnborn && proposeCount > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setCompareBranch(defaultName);
-                    setRepoTab("compare");
-                  }}
-                  title={`${currentName} is ${proposeCount} commit${
-                    proposeCount === 1 ? "" : "s"
-                  } ahead of ${defaultName}`}
-                >
-                  <GitPullRequestIcon data-icon="inline-start" />
-                  Open pull request
-                </Button>
-              )}
-              {!isUnborn && ghReady && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    ghRepoUrl(repoPath)
-                      .then((url) => openUrl(url))
-                      .catch(onError)
-                  }
-                >
-                  <ArrowSquareOutIcon data-icon="inline-start" />
-                  View on GitHub
-                </Button>
-              )}
-              {editorPath ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    openWithProgram(editorPath, repoPath).catch(onError)
-                  }
-                >
-                  <PencilSimpleIcon data-icon="inline-start" />
-                  Open in {editorName}
-                </Button>
-              ) : (
-                // No editor configured yet — a folder has no "default editor",
-                // so the honest fallback is to reveal the files so they can be
-                // opened/edited however the user likes.
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => openWithDefault(repoPath).catch(onError)}
-                >
-                  <FolderOpenIcon data-icon="inline-start" />
-                  Show in Explorer
-                </Button>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  openInTerminal(
-                    repoPath,
-                    settings.data?.terminal,
-                    settings.data?.terminalPath,
-                  ).catch(onError)
-                }
-              >
-                <TerminalIcon data-icon="inline-start" />
-                Open in terminal
-              </Button>
-              {!isUnborn && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setRepoTab("history")}
-                >
-                  <ClockCounterClockwiseIcon data-icon="inline-start" />
-                  View history
-                </Button>
-              )}
-            </div>
-          </EmptyContent>
-        </Empty>
+        <ChangesEmptyState
+          repoPath={repoPath}
+          isUnborn={isUnborn}
+          ghReady={ghReady}
+          proposeCount={proposeCount}
+          currentName={currentName}
+          defaultName={defaultName}
+        />
       ) : (
         <>
           <div className="flex items-center gap-1 border-b p-2">
@@ -1169,7 +838,38 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
               )}
             </ContextMenuTrigger>
             <ContextMenuContent className="min-w-64">
-              {renderMenuItems()}
+              <ChangesContextMenuItems
+                target={menuTarget}
+                repoPath={repoPath}
+                inSelection={
+                  menuTarget?.kind === "row"
+                    ? selectedKeys.has(
+                        keyOf(menuTarget.entry.path, menuTarget.staged),
+                      )
+                    : false
+                }
+                selectionCount={selectionCount}
+                selectedTrackedCount={selectedTracked.length}
+                actions={{
+                  discardAll: () => setDiscardScope({ kind: "all" }),
+                  stashAll: () => setStashScope({ kind: "all" }),
+                  stageSelected,
+                  unstageSelected,
+                  discardSelected: requestDiscardSelected,
+                  stashSelected: requestStashSelected,
+                  ignoreSelected,
+                  untrackSelected,
+                  toggle: handleToggle,
+                  discardFile: (entry) =>
+                    setDiscardScope({ kind: "files", entries: [entry] }),
+                  stashFile: (entry) =>
+                    setStashScope({ kind: "files", entries: [entry] }),
+                  viewHistory: setHistoryPath,
+                  blame: setBlamePath,
+                  ignore: ignoreOne,
+                  untrack: untrackOne,
+                }}
+              />
             </ContextMenuContent>
           </ContextMenu>
         </>
