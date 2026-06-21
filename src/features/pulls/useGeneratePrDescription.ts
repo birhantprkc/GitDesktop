@@ -1,11 +1,8 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback } from "react";
 import { toast } from "sonner";
-import { createAiClient, MissingApiKeyError } from "@/lib/ai/client";
+import { useAiStream } from "@/features/conversations/useAiStream";
 import { buildPrPrompt, splitCommitMessage } from "@/lib/ai/prompt";
 import { gitBranchDiff, readRepoInstructions } from "@/lib/git/api";
-import { loadSettings } from "@/lib/settings/api";
-import { useUiStore } from "@/lib/stores/ui";
-import { toastError } from "@/lib/toast";
 
 /** Raw diff bytes requested from the backend; prompt budgeting trims further. */
 const RAW_DIFF_MAX_BYTES = 200_000;
@@ -15,10 +12,7 @@ const RAW_DIFF_MAX_BYTES = 200_000;
  * the PR would introduce. `onUpdate` fires with the parsed draft on each chunk.
  */
 export function useGeneratePrDescription(repoPath: string) {
-  const [generating, setGenerating] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-
-  const cancel = useCallback(() => abortRef.current?.abort(), []);
+  const { generating, cancel, run } = useAiStream();
 
   const generate = useCallback(
     async (
@@ -27,61 +21,31 @@ export function useGeneratePrDescription(repoPath: string) {
       commitSubjects: string[],
       onUpdate: (draft: { title: string; body: string }) => void,
     ) => {
-      const abort = new AbortController();
-      abortRef.current = abort;
-      setGenerating(true);
-      try {
-        const settings = await loadSettings();
-        const [diff, repoInstructions] = await Promise.all([
-          gitBranchDiff(repoPath, base, head, RAW_DIFF_MAX_BYTES),
-          readRepoInstructions(repoPath),
-        ]);
-        if (diff.files.length === 0) {
-          toast.error("No changes between these branches to describe.");
-          return;
-        }
-
-        const { system, prompt } = buildPrPrompt({
-          diffText: diff.text,
-          diffTruncated: diff.truncated,
-          files: diff.files,
-          commitSubjects,
-          baseBranch: base,
-          headBranch: head,
-          repoInstructions,
-          globalInstructions: settings.globalInstructions,
-        });
-
-        const client = await createAiClient(settings.ai);
-        let buffer = "";
-        for await (const chunk of client.stream({
-          system,
-          prompt,
-          abortSignal: abort.signal,
-        })) {
-          buffer += chunk;
-          onUpdate(splitCommitMessage(buffer));
-        }
-      } catch (e) {
-        if (!abort.signal.aborted) {
-          if (e instanceof MissingApiKeyError) {
-            toast.error(e.message, {
-              duration: 8000,
-              action: {
-                label: "Open settings",
-                onClick: () => useUiStore.getState().openSettings("ai"),
-              },
-            });
-          } else {
-            toastError(e);
+      await run(
+        async (settings) => {
+          const [diff, repoInstructions] = await Promise.all([
+            gitBranchDiff(repoPath, base, head, RAW_DIFF_MAX_BYTES),
+            readRepoInstructions(repoPath),
+          ]);
+          if (diff.files.length === 0) {
+            toast.error("No changes between these branches to describe.");
+            return null;
           }
-        }
-      } finally {
-        setGenerating(false);
-        abortRef.current = null;
-      }
+          return buildPrPrompt({
+            diffText: diff.text,
+            diffTruncated: diff.truncated,
+            files: diff.files,
+            commitSubjects,
+            baseBranch: base,
+            headBranch: head,
+            repoInstructions,
+            globalInstructions: settings.globalInstructions,
+          });
+        },
+        { onChunk: (buffer) => onUpdate(splitCommitMessage(buffer)) },
+      );
     },
-    [repoPath],
+    [repoPath, run],
   );
 
   return { generate, cancel, generating };
