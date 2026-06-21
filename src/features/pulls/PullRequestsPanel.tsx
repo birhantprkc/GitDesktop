@@ -1,14 +1,11 @@
-import { Popover } from "@base-ui/react/popover";
 import {
   CaretDownIcon,
-  FunnelIcon,
   GitPullRequestIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +15,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
+import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import { GhNotReady } from "@/features/repository/GhNotReady";
 import type { PrStateFilter } from "@/lib/git/api";
 import {
@@ -28,7 +27,6 @@ import {
 } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
-import type { LocalPr } from "@/lib/pulls/local";
 import { useLocalPrs } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
@@ -53,11 +51,30 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   const hoverPrefetch = useHoverPrefetch();
   const [createOpen, setCreateOpen] = useState(false);
   const [ghCreateOpen, setGhCreateOpen] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
-  const [filterText, setFilterText] = useState("");
-  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
-  const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set());
   const filterRef = useRef<HTMLInputElement>(null);
+  const {
+    filterText,
+    setFilterText,
+    authorFilter,
+    labelFilter,
+    toggle,
+    showArchived,
+    setShowArchived,
+    authors,
+    labels,
+    activeFilterCount,
+    stateLocal,
+    stateRemote,
+    visibleLocal,
+    archivedLocalCount,
+    visibleRemote,
+    authorCount,
+    labelCount,
+  } = useLocalRemoteFilter({
+    locals: localPrs.data ?? [],
+    remotes: prList.data ?? [],
+    stateFilter,
+  });
 
   // The dialog picks the head/base branches itself (so main → staging works
   // just as well as feature → main), so the only requirement here is that the
@@ -70,66 +87,6 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
   useHotkeyAction("create-local-pr", () => setCreateOpen(true));
   useHotkeyAction("create-pr", () => setGhCreateOpen(true), canCreateGhPr);
-
-  const stateLocal = (localPrs.data ?? []).filter((p) =>
-    stateFilter === "open" ? p.status === "open" : p.status !== "open",
-  );
-  const stateRemote = prList.data ?? [];
-
-  // Filter options come from everything in the current state tab.
-  const authors = [
-    ...new Set(stateRemote.flatMap((p) => (p.author ? [p.author.login] : []))),
-  ].sort();
-  const labels = [
-    ...new Set([
-      ...stateRemote.flatMap((p) => p.labels.map((l) => l.name)),
-      ...stateLocal.flatMap((p) => p.labels),
-    ]),
-  ].sort();
-
-  const query = filterText.trim().toLowerCase();
-
-  function matchesLocal(pr: LocalPr): boolean {
-    if (
-      query &&
-      !pr.title.toLowerCase().includes(query) &&
-      !pr.labels.some((l) => l.toLowerCase().includes(query))
-    ) {
-      return false;
-    }
-    // Local PRs have no GitHub author — an author filter excludes them.
-    if (authorFilter.size > 0) return false;
-    if (labelFilter.size > 0 && !pr.labels.some((l) => labelFilter.has(l))) {
-      return false;
-    }
-    return true;
-  }
-
-  const matchingLocal = stateLocal.filter(matchesLocal);
-  const visibleLocal = matchingLocal.filter((p) => showArchived || !p.archived);
-  const archivedLocalCount = matchingLocal.filter((p) => p.archived).length;
-  const visibleRemote = stateRemote.filter((pr) => {
-    const author = pr.author?.login ?? "";
-    if (
-      query &&
-      !pr.title.toLowerCase().includes(query) &&
-      !`#${pr.number}`.includes(query) &&
-      !author.toLowerCase().includes(query) &&
-      !pr.labels.some((l) => l.name.toLowerCase().includes(query))
-    ) {
-      return false;
-    }
-    if (authorFilter.size > 0 && !authorFilter.has(author)) return false;
-    if (
-      labelFilter.size > 0 &&
-      !pr.labels.some((l) => labelFilter.has(l.name))
-    ) {
-      return false;
-    }
-    return true;
-  });
-
-  const activeFilterCount = authorFilter.size + labelFilter.size;
 
   // Arrow keys walk the visible rows, local section first like the list.
   const navTargets = [
@@ -148,18 +105,6 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
     onActivate: (target) => selectPr(target),
     rowKey: (target) => `${target.kind}:${target.id}`,
   });
-
-  function toggle(
-    set: Set<string>,
-    update: (next: Set<string>) => void,
-    value: string,
-    on: boolean,
-  ) {
-    const next = new Set(set);
-    if (on) next.add(value);
-    else next.delete(value);
-    update(next);
-  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -198,94 +143,16 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Popover.Root>
-          <Popover.Trigger
-            render={
-              <Button
-                variant="outline"
-                size="icon-sm"
-                aria-label={
-                  activeFilterCount > 0
-                    ? `Filter by author or label (${activeFilterCount} active)`
-                    : "Filter by author or label"
-                }
-                className="relative"
-              />
-            }
-          >
-            <FunnelIcon />
-            {activeFilterCount > 0 && (
-              <span
-                aria-hidden
-                className="absolute -top-1 -right-1 flex size-3.5 items-center justify-center bg-primary text-[9px] font-medium text-primary-foreground tabular-nums"
-              >
-                {activeFilterCount}
-              </span>
-            )}
-          </Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Positioner
-              align="end"
-              sideOffset={4}
-              className="isolate z-50"
-            >
-              <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
-                <p className="px-1 pb-1.5 text-xs font-medium">Author</p>
-                {authors.length === 0 && (
-                  <p className="px-1 pb-1 text-xs text-muted-foreground">
-                    No authors to filter by.
-                  </p>
-                )}
-                {authors.map((a) => (
-                  <label
-                    key={a}
-                    className="flex cursor-pointer items-center gap-2 rounded-none px-1 py-1.5 text-xs hover:bg-muted/60"
-                  >
-                    <Checkbox
-                      checked={authorFilter.has(a)}
-                      onCheckedChange={(v) =>
-                        toggle(authorFilter, setAuthorFilter, a, v === true)
-                      }
-                    />
-                    <span className="flex-1 truncate">{a}</span>
-                    <span className="text-muted-foreground">
-                      ({stateRemote.filter((p) => p.author?.login === a).length}
-                      )
-                    </span>
-                  </label>
-                ))}
-                <p className="px-1 pt-2 pb-1.5 text-xs font-medium">Label</p>
-                {labels.length === 0 && (
-                  <p className="px-1 pb-1 text-xs text-muted-foreground">
-                    No labels to filter by.
-                  </p>
-                )}
-                {labels.map((l) => (
-                  <label
-                    key={l}
-                    className="flex cursor-pointer items-center gap-2 rounded-none px-1 py-1.5 text-xs hover:bg-muted/60"
-                  >
-                    <Checkbox
-                      checked={labelFilter.has(l)}
-                      onCheckedChange={(v) =>
-                        toggle(labelFilter, setLabelFilter, l, v === true)
-                      }
-                    />
-                    <span className="flex-1 truncate">{l}</span>
-                    <span className="text-muted-foreground">
-                      (
-                      {stateRemote.filter((p) =>
-                        p.labels.some((x) => x.name === l),
-                      ).length +
-                        stateLocal.filter((p) => p.labels.includes(l)).length}
-                      )
-                    </span>
-                  </label>
-                ))}
-              </Popover.Popup>
-            </Popover.Positioner>
-          </Popover.Portal>
-        </Popover.Root>
+        <ConversationFilterPopover
+          authors={authors}
+          labels={labels}
+          authorFilter={authorFilter}
+          labelFilter={labelFilter}
+          toggle={toggle}
+          activeFilterCount={activeFilterCount}
+          authorCount={authorCount}
+          labelCount={labelCount}
+        />
       </div>
       <div className="border-b p-2">
         <Input

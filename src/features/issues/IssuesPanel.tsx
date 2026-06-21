@@ -1,14 +1,11 @@
-import { Popover } from "@base-ui/react/popover";
 import {
   CaretDownIcon,
   CheckCircleIcon,
   CircleDashedIcon,
-  FunnelIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +15,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
+import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import { GhNotReady } from "@/features/repository/GhNotReady";
 import type { IssueStateFilter } from "@/lib/git/api";
 import {
@@ -27,7 +26,6 @@ import {
   usePrefetchIssue,
 } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
-import type { LocalIssue } from "@/lib/issues/local";
 import { useLocalIssues } from "@/lib/issues/queries";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
@@ -47,13 +45,9 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const selectIssue = useUiStore((s) => s.selectIssue);
   const prefetchIssue = usePrefetchIssue(repoPath);
   const hoverPrefetch = useHoverPrefetch();
-  const [filterText, setFilterText] = useState("");
-  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
-  const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set());
   const filterRef = useRef<HTMLInputElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createLocalOpen, setCreateLocalOpen] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
   const localIssues = useLocalIssues(repoPath);
   const pendingIssueDraft = useUiStore((s) => s.pendingIssueDraft);
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
@@ -73,64 +67,29 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
     }
   }, [pendingIssueDraft, setPendingIssueDraft]);
 
-  const issues = issueList.data ?? [];
-  const stateLocal = (localIssues.data ?? []).filter((i) =>
-    stateFilter === "open" ? i.status === "open" : i.status !== "open",
-  );
-
-  const authors = [
-    ...new Set(issues.flatMap((i) => (i.author ? [i.author.login] : []))),
-  ].sort();
-  const labels = [
-    ...new Set([
-      ...issues.flatMap((i) => i.labels.map((l) => l.name)),
-      ...stateLocal.flatMap((i) => i.labels),
-    ]),
-  ].sort();
-
-  const query = filterText.trim().toLowerCase();
-
-  function matchesLocal(issue: LocalIssue): boolean {
-    if (
-      query &&
-      !issue.title.toLowerCase().includes(query) &&
-      !issue.labels.some((l) => l.toLowerCase().includes(query))
-    ) {
-      return false;
-    }
-    // Local issues have no GitHub author — an author filter excludes them.
-    if (authorFilter.size > 0) return false;
-    if (labelFilter.size > 0 && !issue.labels.some((l) => labelFilter.has(l))) {
-      return false;
-    }
-    return true;
-  }
-
-  const matchingLocal = stateLocal.filter(matchesLocal);
-  const visibleLocal = matchingLocal.filter((i) => showArchived || !i.archived);
-  const archivedLocalCount = matchingLocal.filter((i) => i.archived).length;
-  const visible = issues.filter((issue) => {
-    const author = issue.author?.login ?? "";
-    if (
-      query &&
-      !issue.title.toLowerCase().includes(query) &&
-      !`#${issue.number}`.includes(query) &&
-      !author.toLowerCase().includes(query) &&
-      !issue.labels.some((l) => l.name.toLowerCase().includes(query))
-    ) {
-      return false;
-    }
-    if (authorFilter.size > 0 && !authorFilter.has(author)) return false;
-    if (
-      labelFilter.size > 0 &&
-      !issue.labels.some((l) => labelFilter.has(l.name))
-    ) {
-      return false;
-    }
-    return true;
+  const {
+    filterText,
+    setFilterText,
+    authorFilter,
+    labelFilter,
+    toggle,
+    showArchived,
+    setShowArchived,
+    authors,
+    labels,
+    activeFilterCount,
+    stateLocal,
+    stateRemote: issues,
+    visibleLocal,
+    archivedLocalCount,
+    visibleRemote: visible,
+    authorCount,
+    labelCount,
+  } = useLocalRemoteFilter({
+    locals: localIssues.data ?? [],
+    remotes: issueList.data ?? [],
+    stateFilter,
   });
-
-  const activeFilterCount = authorFilter.size + labelFilter.size;
 
   // Arrow keys walk the visible rows, local section first like the list.
   const navTargets = [
@@ -146,18 +105,6 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
     onActivate: (target) => selectIssue(target),
     rowKey: (target) => `${target.kind}:${target.id}`,
   });
-
-  function toggle(
-    set: Set<string>,
-    update: (next: Set<string>) => void,
-    value: string,
-    on: boolean,
-  ) {
-    const next = new Set(set);
-    if (on) next.add(value);
-    else next.delete(value);
-    update(next);
-  }
 
   const RowIcon = stateFilter === "open" ? CircleDashedIcon : CheckCircleIcon;
 
@@ -202,93 +149,16 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Popover.Root>
-          <Popover.Trigger
-            render={
-              <Button
-                variant="outline"
-                size="icon-sm"
-                aria-label={
-                  activeFilterCount > 0
-                    ? `Filter by author or label (${activeFilterCount} active)`
-                    : "Filter by author or label"
-                }
-                className="relative"
-              />
-            }
-          >
-            <FunnelIcon />
-            {activeFilterCount > 0 && (
-              <span
-                aria-hidden
-                className="absolute -top-1 -right-1 flex size-3.5 items-center justify-center bg-primary text-[9px] font-medium text-primary-foreground tabular-nums"
-              >
-                {activeFilterCount}
-              </span>
-            )}
-          </Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Positioner
-              align="end"
-              sideOffset={4}
-              className="isolate z-50"
-            >
-              <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
-                <p className="px-1 pb-1.5 text-xs font-medium">Author</p>
-                {authors.length === 0 && (
-                  <p className="px-1 pb-1 text-xs text-muted-foreground">
-                    No authors to filter by.
-                  </p>
-                )}
-                {authors.map((a) => (
-                  <label
-                    key={a}
-                    className="flex cursor-pointer items-center gap-2 rounded-none px-1 py-1.5 text-xs hover:bg-muted/60"
-                  >
-                    <Checkbox
-                      checked={authorFilter.has(a)}
-                      onCheckedChange={(v) =>
-                        toggle(authorFilter, setAuthorFilter, a, v === true)
-                      }
-                    />
-                    <span className="flex-1 truncate">{a}</span>
-                    <span className="text-muted-foreground">
-                      ({issues.filter((i) => i.author?.login === a).length})
-                    </span>
-                  </label>
-                ))}
-                <p className="px-1 pt-2 pb-1.5 text-xs font-medium">Label</p>
-                {labels.length === 0 && (
-                  <p className="px-1 pb-1 text-xs text-muted-foreground">
-                    No labels to filter by.
-                  </p>
-                )}
-                {labels.map((l) => (
-                  <label
-                    key={l}
-                    className="flex cursor-pointer items-center gap-2 rounded-none px-1 py-1.5 text-xs hover:bg-muted/60"
-                  >
-                    <Checkbox
-                      checked={labelFilter.has(l)}
-                      onCheckedChange={(v) =>
-                        toggle(labelFilter, setLabelFilter, l, v === true)
-                      }
-                    />
-                    <span className="flex-1 truncate">{l}</span>
-                    <span className="text-muted-foreground">
-                      (
-                      {
-                        issues.filter((i) => i.labels.some((x) => x.name === l))
-                          .length
-                      }
-                      )
-                    </span>
-                  </label>
-                ))}
-              </Popover.Popup>
-            </Popover.Positioner>
-          </Popover.Portal>
-        </Popover.Root>
+        <ConversationFilterPopover
+          authors={authors}
+          labels={labels}
+          authorFilter={authorFilter}
+          labelFilter={labelFilter}
+          toggle={toggle}
+          activeFilterCount={activeFilterCount}
+          authorCount={authorCount}
+          labelCount={labelCount}
+        />
       </div>
       <div className="border-b p-2">
         <Input
