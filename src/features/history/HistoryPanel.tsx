@@ -4,7 +4,7 @@ import {
   MagnifyingGlassIcon,
   TagIcon,
 } from "@phosphor-icons/react";
-import { useMemo, useRef, useState } from "react";
+import { type MouseEvent, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,7 +46,7 @@ import {
   useUndoCommit,
 } from "@/lib/git/queries";
 import { sanitizeRefName } from "@/lib/git/ref-name";
-import type { RewriteStep } from "@/lib/git/types";
+import type { CommitSummary, RewriteStep } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
@@ -109,6 +109,11 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     defaultMessage: string;
   } | null>(null);
   const [reorderOpen, setReorderOpen] = useState(false);
+  // The commit (+ its row index) the one shared context menu acts on.
+  const [menuTarget, setMenuTarget] = useState<{
+    commit: CommitSummary;
+    index: number;
+  } | null>(null);
 
   const searchActive = searchMode && filterText.trim().length > 0;
   const search = useCommitSearch(
@@ -391,6 +396,227 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     setPickOntoBranch(targetBranches[0]?.name ?? "");
   }
 
+  // One shared context menu for the whole list (capture phase, so it records the
+  // right-clicked row before the menu opens) instead of a portal per commit.
+  // Mirrors the old per-row onContextMenu's selection-collapse, then captures
+  // the target; a right-click on blank space hits no row → suppress the menu.
+  function handleCommitContextMenu(e: MouseEvent) {
+    const rowEl = (e.target as HTMLElement).closest("[data-hash]");
+    const hash = rowEl?.getAttribute("data-hash");
+    const index = hash ? visibleCommits.findIndex((c) => c.hash === hash) : -1;
+    if (index < 0) {
+      setMenuTarget(null);
+      e.preventDefault();
+      return;
+    }
+    onRowContextMenu(index, visibleCommits[index].hash);
+    setMenuTarget({ commit: visibleCommits[index], index });
+  }
+
+  // The items for whichever commit was right-clicked — three exclusive variants:
+  // search results (position-independent), a multi-selection, or a single commit.
+  function renderCommitMenu() {
+    if (!menuTarget) return null;
+    const { commit, index } = menuTarget;
+    if (searchActive) {
+      // Search results: only position-independent, single-commit actions (no
+      // amend/reset/squash/reorder, which assume contiguous recent history).
+      return (
+        <>
+          <ContextMenuItem
+            onClick={() => checkoutCommit.mutate(commit.hash, { onError })}
+          >
+            Checkout commit
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={() => revertCommit.mutate(commit.hash, { onError })}
+          >
+            Revert changes in commit
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={() =>
+              cherryPick.mutate(commit.hash, {
+                onSuccess: (applied) =>
+                  applied
+                    ? toast.success(`Cherry-picked ${commit.hash.slice(0, 7)}`)
+                    : toast.info(
+                        "Nothing to cherry-pick — already on this branch.",
+                      ),
+                onError,
+              })
+            }
+          >
+            Cherry-pick commit
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            onClick={() => {
+              branchForm.reset({ name: "" });
+              setBranchHash(commit.hash);
+            }}
+          >
+            Create branch from commit…
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={() => {
+              tagForm.reset({ name: "" });
+              setTagHash(commit.hash);
+            }}
+          >
+            Create tag…
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={() => copyText(commit.hash, "SHA copied")}>
+            Copy SHA
+          </ContextMenuItem>
+        </>
+      );
+    }
+    if (selected.has(commit.hash) && selected.size > 1) {
+      // Multi-selection: only actions that apply to the whole selection, so
+      // nothing silently targets one commit.
+      return (
+        <>
+          <ContextMenuItem
+            disabled={targetBranches.length === 0}
+            onClick={() => openCherryPickOnto(commit.hash)}
+          >
+            Cherry-pick {selected.size} commits to branch…
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!canSquash} onClick={openSquash}>
+            Squash {selected.size} commits…
+            {!canSquash && " (must be adjacent and unpushed)"}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!canReorder}
+            onClick={() => setReorderOpen(true)}
+          >
+            Reorder unpushed commits…
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            onClick={() =>
+              copyText(
+                effectiveSelection(commit.hash).reverse().join("\n"),
+                `${selected.size} SHAs copied`,
+              )
+            }
+          >
+            Copy {selected.size} SHAs
+          </ContextMenuItem>
+        </>
+      );
+    }
+    return (
+      <>
+        <ContextMenuItem
+          disabled={index !== 0}
+          onClick={() => requestAmend(commit.hash)}
+        >
+          Amend commit…
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={index !== 0 || !canUndo || undoCommit.isPending}
+          onClick={undoLast}
+        >
+          Undo commit (keep changes)
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={index === 0}
+          onClick={() => setResetHash(commit.hash)}
+        >
+          Reset to commit…
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => checkoutCommit.mutate(commit.hash, { onError })}
+        >
+          Checkout commit
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => revertCommit.mutate(commit.hash, { onError })}
+        >
+          Revert changes in commit
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onClick={() => {
+            branchForm.reset({ name: "" });
+            setBranchHash(commit.hash);
+          }}
+        >
+          Create branch from commit…
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => {
+            tagForm.reset({ name: "" });
+            setTagHash(commit.hash);
+          }}
+        >
+          Create tag…
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() =>
+            cherryPick.mutate(commit.hash, {
+              onSuccess: (applied) => {
+                if (applied) {
+                  toast.success(`Cherry-picked ${commit.hash.slice(0, 7)}`);
+                } else {
+                  toast.info(
+                    "Nothing to cherry-pick — these changes are already on this branch.",
+                  );
+                }
+              },
+              onError,
+            })
+          }
+        >
+          Cherry-pick commit
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={targetBranches.length === 0}
+          onClick={() => openCherryPickOnto(commit.hash)}
+        >
+          Cherry-pick to branch…
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!canReorder || index >= reorderLen}
+          onClick={() => setReorderOpen(true)}
+        >
+          Reorder unpushed commits…
+        </ContextMenuItem>
+        {commit.tags.length > 0 && <ContextMenuSeparator />}
+        {commit.tags.map((tag) => (
+          <ContextMenuItem
+            key={`push:${tag}`}
+            onClick={() =>
+              pushTag.mutate(tag, {
+                onSuccess: () => toast.success(`Pushed tag ${tag} to origin`),
+                onError,
+              })
+            }
+          >
+            Push tag {tag} to origin
+          </ContextMenuItem>
+        ))}
+        {commit.tags.map((tag) => (
+          <ContextMenuItem
+            key={`delete:${tag}`}
+            onClick={() => {
+              setDeleteTagRemote(false);
+              setDeleteTagName(tag);
+            }}
+          >
+            Delete tag {tag}…
+          </ContextMenuItem>
+        ))}
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => copyText(commit.hash, "SHA copied")}>
+          Copy SHA
+        </ContextMenuItem>
+      </>
+    );
+  }
+
   return (
     <>
       <div className="border-b p-2">
@@ -408,345 +634,141 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
         />
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div onKeyDown={onListKeyDown}>
-          {visibleCommits.length === 0 && (
-            <p className="px-3 py-8 text-center text-xs text-muted-foreground">
-              {searchActive
-                ? search.isFetching
-                  ? "Searching all history…"
-                  : `No commits match "${filterText.trim()}"`
-                : "No loaded commits match the filter"}
-            </p>
-          )}
-          {visibleCommits.map((commit, index) => (
-            <ContextMenu key={commit.hash}>
-              <ContextMenuTrigger
-                render={
-                  <button
-                    type="button"
-                    data-hash={commit.hash}
-                    className={cn(
-                      "block w-full border-b px-3 py-2 text-left",
-                      selected.has(commit.hash) ||
-                        (selected.size === 0 &&
-                          selectedCommitHash === commit.hash)
-                        ? "bg-accent text-accent-foreground"
-                        : "hover:bg-muted/60",
-                    )}
-                    onClick={(e) => onRowClick(e, index, commit.hash)}
-                    onContextMenu={() => onRowContextMenu(index, commit.hash)}
-                    onMouseEnter={() =>
-                      hoverPrefetch(() => prefetchCommit(commit.hash))
-                    }
-                  >
-                    <p className="flex items-center gap-1.5 text-xs font-medium">
-                      <span className="min-w-0 truncate" title={commit.subject}>
-                        {commit.subject}
-                      </span>
-                      {commit.tags.slice(0, 2).map((tag) => (
-                        <span
-                          key={tag}
-                          className="flex max-w-24 shrink-0 items-center gap-0.5 border px-1 py-px text-[10px] font-normal text-muted-foreground"
-                          title={`tag: ${tag}`}
-                        >
-                          <TagIcon className="size-2.5 shrink-0" />
-                          <span className="truncate">{tag}</span>
-                        </span>
-                      ))}
-                      {commit.tags.length > 2 && (
-                        <span
-                          className="shrink-0 text-[10px] font-normal text-muted-foreground"
-                          title={commit.tags.join(", ")}
-                        >
-                          +{commit.tags.length - 2}
-                        </span>
-                      )}
-                    </p>
-                    <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <span className="flex size-3.5 items-center justify-center rounded-full bg-muted text-[8px] uppercase">
-                        {commit.author.slice(0, 1)}
-                      </span>
-                      <span className="truncate">{commit.author}</span>
-                      <span>•</span>
-                      <span className="shrink-0">
-                        {formatRelativeTime(commit.date)}
-                      </span>
-                    </p>
-                  </button>
-                }
+        <ContextMenu>
+          <ContextMenuTrigger
+            render={
+              <div
+                onKeyDown={onListKeyDown}
+                onContextMenuCapture={handleCommitContextMenu}
               />
-              {searchActive ? (
-                /* Search results: only position-independent, single-commit
-                   actions (no amend/reset/squash/reorder, which assume
-                   contiguous recent history). */
-                <ContextMenuContent className="min-w-60">
-                  <ContextMenuItem
-                    onClick={() =>
-                      checkoutCommit.mutate(commit.hash, { onError })
-                    }
-                  >
-                    Checkout commit
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onClick={() =>
-                      revertCommit.mutate(commit.hash, { onError })
-                    }
-                  >
-                    Revert changes in commit
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onClick={() =>
-                      cherryPick.mutate(commit.hash, {
-                        onSuccess: (applied) =>
-                          applied
-                            ? toast.success(
-                                `Cherry-picked ${commit.hash.slice(0, 7)}`,
-                              )
-                            : toast.info(
-                                "Nothing to cherry-pick — already on this branch.",
-                              ),
-                        onError,
-                      })
-                    }
-                  >
-                    Cherry-pick commit
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    onClick={() => {
-                      branchForm.reset({ name: "" });
-                      setBranchHash(commit.hash);
-                    }}
-                  >
-                    Create branch from commit…
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onClick={() => {
-                      tagForm.reset({ name: "" });
-                      setTagHash(commit.hash);
-                    }}
-                  >
-                    Create tag…
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    onClick={() => copyText(commit.hash, "SHA copied")}
-                  >
-                    Copy SHA
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              ) : selected.has(commit.hash) && selected.size > 1 ? (
-                /* Multi-selection: only actions that apply to the whole
-                   selection, so nothing silently targets one commit. */
-                <ContextMenuContent className="min-w-60">
-                  <ContextMenuItem
-                    disabled={targetBranches.length === 0}
-                    onClick={() => openCherryPickOnto(commit.hash)}
-                  >
-                    Cherry-pick {selected.size} commits to branch…
-                  </ContextMenuItem>
-                  <ContextMenuItem disabled={!canSquash} onClick={openSquash}>
-                    Squash {selected.size} commits…
-                    {!canSquash && " (must be adjacent and unpushed)"}
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    disabled={!canReorder}
-                    onClick={() => setReorderOpen(true)}
-                  >
-                    Reorder unpushed commits…
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    onClick={() =>
-                      copyText(
-                        effectiveSelection(commit.hash).reverse().join("\n"),
-                        `${selected.size} SHAs copied`,
-                      )
-                    }
-                  >
-                    Copy {selected.size} SHAs
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              ) : (
-                <ContextMenuContent className="min-w-60">
-                  <ContextMenuItem
-                    disabled={index !== 0}
-                    onClick={() => requestAmend(commit.hash)}
-                  >
-                    Amend commit…
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    disabled={index !== 0 || !canUndo || undoCommit.isPending}
-                    onClick={undoLast}
-                  >
-                    Undo commit (keep changes)
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    disabled={index === 0}
-                    onClick={() => setResetHash(commit.hash)}
-                  >
-                    Reset to commit…
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onClick={() =>
-                      checkoutCommit.mutate(commit.hash, { onError })
-                    }
-                  >
-                    Checkout commit
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onClick={() =>
-                      revertCommit.mutate(commit.hash, { onError })
-                    }
-                  >
-                    Revert changes in commit
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    onClick={() => {
-                      branchForm.reset({ name: "" });
-                      setBranchHash(commit.hash);
-                    }}
-                  >
-                    Create branch from commit…
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onClick={() => {
-                      tagForm.reset({ name: "" });
-                      setTagHash(commit.hash);
-                    }}
-                  >
-                    Create tag…
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onClick={() =>
-                      cherryPick.mutate(commit.hash, {
-                        onSuccess: (applied) => {
-                          if (applied) {
-                            toast.success(
-                              `Cherry-picked ${commit.hash.slice(0, 7)}`,
-                            );
-                          } else {
-                            toast.info(
-                              "Nothing to cherry-pick — these changes are already on this branch.",
-                            );
-                          }
-                        },
-                        onError,
-                      })
-                    }
-                  >
-                    Cherry-pick commit
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    disabled={targetBranches.length === 0}
-                    onClick={() => openCherryPickOnto(commit.hash)}
-                  >
-                    Cherry-pick to branch…
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    disabled={!canReorder || index >= reorderLen}
-                    onClick={() => setReorderOpen(true)}
-                  >
-                    Reorder unpushed commits…
-                  </ContextMenuItem>
-                  {commit.tags.length > 0 && <ContextMenuSeparator />}
-                  {commit.tags.map((tag) => (
-                    <ContextMenuItem
-                      key={`push:${tag}`}
-                      onClick={() =>
-                        pushTag.mutate(tag, {
-                          onSuccess: () =>
-                            toast.success(`Pushed tag ${tag} to origin`),
-                          onError,
-                        })
-                      }
+            }
+          >
+            {visibleCommits.length === 0 && (
+              <p className="px-3 py-8 text-center text-xs text-muted-foreground">
+                {searchActive
+                  ? search.isFetching
+                    ? "Searching all history…"
+                    : `No commits match "${filterText.trim()}"`
+                  : "No loaded commits match the filter"}
+              </p>
+            )}
+            {visibleCommits.map((commit, index) => (
+              <button
+                key={commit.hash}
+                type="button"
+                data-hash={commit.hash}
+                className={cn(
+                  "block w-full border-b px-3 py-2 text-left",
+                  selected.has(commit.hash) ||
+                    (selected.size === 0 && selectedCommitHash === commit.hash)
+                    ? "bg-accent text-accent-foreground"
+                    : "hover:bg-muted/60",
+                )}
+                onClick={(e) => onRowClick(e, index, commit.hash)}
+                onMouseEnter={() =>
+                  hoverPrefetch(() => prefetchCommit(commit.hash))
+                }
+              >
+                <p className="flex items-center gap-1.5 text-xs font-medium">
+                  <span className="min-w-0 truncate" title={commit.subject}>
+                    {commit.subject}
+                  </span>
+                  {commit.tags.slice(0, 2).map((tag) => (
+                    <span
+                      key={tag}
+                      className="flex max-w-24 shrink-0 items-center gap-0.5 border px-1 py-px text-[10px] font-normal text-muted-foreground"
+                      title={`tag: ${tag}`}
                     >
-                      Push tag {tag} to origin
-                    </ContextMenuItem>
+                      <TagIcon className="size-2.5 shrink-0" />
+                      <span className="truncate">{tag}</span>
+                    </span>
                   ))}
-                  {commit.tags.map((tag) => (
-                    <ContextMenuItem
-                      key={`delete:${tag}`}
-                      onClick={() => {
-                        setDeleteTagRemote(false);
-                        setDeleteTagName(tag);
-                      }}
+                  {commit.tags.length > 2 && (
+                    <span
+                      className="shrink-0 text-[10px] font-normal text-muted-foreground"
+                      title={commit.tags.join(", ")}
                     >
-                      Delete tag {tag}…
-                    </ContextMenuItem>
-                  ))}
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    onClick={() => copyText(commit.hash, "SHA copied")}
-                  >
-                    Copy SHA
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              )}
-            </ContextMenu>
-          ))}
-          {searchActive ? (
-            <div className="space-y-0.5 px-3 py-2 text-center">
-              {search.hasNextPage && (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground"
-                  disabled={search.isFetchingNextPage}
-                  onClick={() => search.fetchNextPage()}
-                >
-                  {search.isFetchingNextPage && (
-                    <Spinner data-icon="inline-start" />
+                      +{commit.tags.length - 2}
+                    </span>
                   )}
-                  Load more results
-                </Button>
-              )}
-              <div>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground"
-                  onClick={() => setSearchMode(false)}
-                >
-                  Back to recent history
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <>
-              {query && (
-                <div className="px-3 py-2 text-center">
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="text-primary"
-                    onClick={() => setSearchMode(true)}
-                  >
-                    <MagnifyingGlassIcon data-icon="inline-start" />
-                    Search all history for "{filterText.trim()}"
-                  </Button>
-                </div>
-              )}
-              {log.hasNextPage && (
-                <div className="px-3 py-2 text-center">
+                </p>
+                <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span className="flex size-3.5 items-center justify-center rounded-full bg-muted text-[8px] uppercase">
+                    {commit.author.slice(0, 1)}
+                  </span>
+                  <span className="truncate">{commit.author}</span>
+                  <span>•</span>
+                  <span className="shrink-0">
+                    {formatRelativeTime(commit.date)}
+                  </span>
+                </p>
+              </button>
+            ))}
+            {searchActive ? (
+              <div className="space-y-0.5 px-3 py-2 text-center">
+                {search.hasNextPage && (
                   <Button
                     variant="ghost"
                     size="xs"
                     className="text-muted-foreground"
-                    disabled={log.isFetchingNextPage}
-                    onClick={() => log.fetchNextPage()}
+                    disabled={search.isFetchingNextPage}
+                    onClick={() => search.fetchNextPage()}
                   >
-                    {log.isFetchingNextPage && (
+                    {search.isFetchingNextPage && (
                       <Spinner data-icon="inline-start" />
                     )}
-                    Load more ({commits.length} loaded)
+                    Load more results
+                  </Button>
+                )}
+                <div>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    onClick={() => setSearchMode(false)}
+                  >
+                    Back to recent history
                   </Button>
                 </div>
-              )}
-            </>
-          )}
-        </div>
+              </div>
+            ) : (
+              <>
+                {query && (
+                  <div className="px-3 py-2 text-center">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-primary"
+                      onClick={() => setSearchMode(true)}
+                    >
+                      <MagnifyingGlassIcon data-icon="inline-start" />
+                      Search all history for "{filterText.trim()}"
+                    </Button>
+                  </div>
+                )}
+                {log.hasNextPage && (
+                  <div className="px-3 py-2 text-center">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-muted-foreground"
+                      disabled={log.isFetchingNextPage}
+                      onClick={() => log.fetchNextPage()}
+                    >
+                      {log.isFetchingNextPage && (
+                        <Spinner data-icon="inline-start" />
+                      )}
+                      Load more ({commits.length} loaded)
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </ContextMenuTrigger>
+          <ContextMenuContent className="min-w-60">
+            {renderCommitMenu()}
+          </ContextMenuContent>
+        </ContextMenu>
       </ScrollArea>
 
       {squashCtx && (

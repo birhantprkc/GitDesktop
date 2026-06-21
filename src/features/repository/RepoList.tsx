@@ -1,6 +1,6 @@
 import { FolderIcon } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -58,6 +58,8 @@ export function RepoList({
   const [filter, setFilter] = useState("");
   const [highlight, setHighlight] = useState(-1);
   const [openingPath, setOpeningPath] = useState<string | null>(null);
+  // The repo the one shared context menu acts on, set on right-click.
+  const [menuRepo, setMenuRepo] = useState<RecentRepo | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const filterInputRef = useRef<HTMLInputElement>(null);
 
@@ -142,14 +144,30 @@ export function RepoList({
     }
   }
 
+  // One shared context menu for the whole list (capture phase, so it records
+  // the row before the menu opens). A right-click on blank space / a section
+  // header hits no row — suppress the menu rather than show an empty one.
+  function handleContextMenu(e: MouseEvent) {
+    const rowEl = (e.target as HTMLElement).closest("[data-repo-path]");
+    const path = rowEl?.getAttribute("data-repo-path");
+    const repo = path ? recents.find((r) => r.path === path) : undefined;
+    if (repo) {
+      setMenuRepo(repo);
+    } else {
+      setMenuRepo(null);
+      e.preventDefault();
+    }
+  }
+
+  const editor = (settings.data?.externalEditor ?? "").trim();
+  const editorName =
+    (settings.data?.externalEditorName ?? "").trim() || "editor";
+
   const sectionProps = {
     currentPath: currentPath ?? null,
     highlightedPath,
     openingPath,
-    ownerOf: (path: string) => ownerByPath.get(path) ?? null,
     onOpen: handleOpen,
-    onAlias: onAliasRepo,
-    onRemove: onRemoveRepo,
   };
 
   return (
@@ -175,25 +193,45 @@ export function RepoList({
         className="min-h-0 **:data-[slot=scroll-area-viewport]:max-h-96"
         ref={listRef}
       >
-        {filtered.length === 0 ? (
-          <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-            {recents.length === 0
-              ? "No repositories yet."
-              : "No repositories match."}
-          </p>
-        ) : (
-          <>
-            <RepoSection title="Recent" repos={recent} {...sectionProps} />
-            {groupNames.map((name) => (
-              <RepoSection
-                key={name}
-                title={name}
-                repos={groups.get(name) ?? []}
-                {...sectionProps}
+        <ContextMenu>
+          <ContextMenuTrigger
+            render={<div onContextMenuCapture={handleContextMenu} />}
+          >
+            {filtered.length === 0 ? (
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                {recents.length === 0
+                  ? "No repositories yet."
+                  : "No repositories match."}
+              </p>
+            ) : (
+              <>
+                <RepoSection title="Recent" repos={recent} {...sectionProps} />
+                {groupNames.map((name) => (
+                  <RepoSection
+                    key={name}
+                    title={name}
+                    repos={groups.get(name) ?? []}
+                    {...sectionProps}
+                  />
+                ))}
+              </>
+            )}
+          </ContextMenuTrigger>
+          <ContextMenuContent className="min-w-52">
+            {menuRepo && (
+              <RepoMenuItems
+                repo={menuRepo}
+                owner={ownerByPath.get(menuRepo.path) ?? null}
+                editor={editor}
+                editorName={editorName}
+                terminal={settings.data?.terminal}
+                terminalPath={settings.data?.terminalPath}
+                onAlias={onAliasRepo}
+                onRemove={onRemoveRepo}
               />
-            ))}
-          </>
-        )}
+            )}
+          </ContextMenuContent>
+        </ContextMenu>
       </ScrollArea>
     </div>
   );
@@ -203,10 +241,7 @@ interface RepoRowsProps {
   currentPath: string | null;
   highlightedPath: string | null;
   openingPath: string | null;
-  ownerOf: (path: string) => string | null;
   onOpen: (path: string) => void;
-  onAlias: (repo: RecentRepo) => void;
-  onRemove: (repo: RecentRepo) => void;
 }
 
 function RepoSection({
@@ -232,115 +267,119 @@ function RepoRow({
   currentPath,
   highlightedPath,
   openingPath,
-  ownerOf,
   onOpen,
-  onAlias,
-  onRemove,
 }: RepoRowsProps & { repo: RecentRepo }) {
-  const settings = useSettings();
   const highlighted = repo.path === highlightedPath;
   const opening = repo.path === openingPath;
-  const owner = ownerOf(repo.path);
-  const editor = (settings.data?.externalEditor ?? "").trim();
-  const editorName =
-    (settings.data?.externalEditorName ?? "").trim() || "editor";
-
-  function openWeb() {
-    ghRepoUrl(repo.path)
-      .then((url) => openUrl(url))
-      .catch(toastError);
-  }
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger
-        render={
-          <div
-            data-highlighted={highlighted || undefined}
-            className={cn(
-              "flex items-center",
-              currentPath === repo.path
-                ? "bg-accent text-accent-foreground"
-                : highlighted
-                  ? "bg-muted"
-                  : "hover:bg-muted/60",
-            )}
-          >
-            <button
-              type="button"
-              className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
-              onClick={() => onOpen(repo.path)}
-              disabled={openingPath !== null}
-            >
-              {opening ? (
-                <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
-              ) : (
-                <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-              )}
-              <span className="min-w-0 flex-1">
-                <span
-                  className={cn(
-                    "block truncate text-xs",
-                    repo.alias && "italic",
-                  )}
-                  title={repo.alias ? repo.name : undefined}
-                >
-                  {repoDisplayName(repo)}
-                </span>
-                <span className="block truncate text-[11px] text-muted-foreground">
-                  {repo.path}
-                </span>
-              </span>
-            </button>
-          </div>
-        }
-      />
-      <ContextMenuContent className="min-w-52">
-        <ContextMenuItem onClick={() => onAlias(repo)}>
-          {repo.alias ? "Change alias…" : "Create alias…"}
-        </ContextMenuItem>
-        <ContextMenuItem
-          onClick={() => copyText(repo.name, "Repository name copied")}
-        >
-          Copy repo name
-        </ContextMenuItem>
-        <ContextMenuItem
-          onClick={() => copyText(repo.path, "Repository path copied")}
-        >
-          Copy repo path
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        {owner && (
-          <ContextMenuItem onClick={openWeb}>View on GitHub</ContextMenuItem>
+    <div
+      data-repo-path={repo.path}
+      data-highlighted={highlighted || undefined}
+      className={cn(
+        "flex items-center",
+        currentPath === repo.path
+          ? "bg-accent text-accent-foreground"
+          : highlighted
+            ? "bg-muted"
+            : "hover:bg-muted/60",
+      )}
+    >
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
+        onClick={() => onOpen(repo.path)}
+        disabled={openingPath !== null}
+      >
+        {opening ? (
+          <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
         )}
+        <span className="min-w-0 flex-1">
+          <span
+            className={cn("block truncate text-xs", repo.alias && "italic")}
+            title={repo.alias ? repo.name : undefined}
+          >
+            {repoDisplayName(repo)}
+          </span>
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {repo.path}
+          </span>
+        </span>
+      </button>
+    </div>
+  );
+}
+
+/** The shared context menu's items for whichever repo row was right-clicked. */
+function RepoMenuItems({
+  repo,
+  owner,
+  editor,
+  editorName,
+  terminal,
+  terminalPath,
+  onAlias,
+  onRemove,
+}: {
+  repo: RecentRepo;
+  owner: string | null;
+  editor: string;
+  editorName: string;
+  terminal?: string;
+  terminalPath?: string;
+  onAlias: (repo: RecentRepo) => void;
+  onRemove: (repo: RecentRepo) => void;
+}) {
+  return (
+    <>
+      <ContextMenuItem onClick={() => onAlias(repo)}>
+        {repo.alias ? "Change alias…" : "Create alias…"}
+      </ContextMenuItem>
+      <ContextMenuItem
+        onClick={() => copyText(repo.name, "Repository name copied")}
+      >
+        Copy repo name
+      </ContextMenuItem>
+      <ContextMenuItem
+        onClick={() => copyText(repo.path, "Repository path copied")}
+      >
+        Copy repo path
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      {owner && (
         <ContextMenuItem
           onClick={() =>
-            openInTerminal(
-              repo.path,
-              settings.data?.terminal,
-              settings.data?.terminalPath,
-            ).catch(toastError)
+            ghRepoUrl(repo.path)
+              .then((url) => openUrl(url))
+              .catch(toastError)
           }
         >
-          Open in terminal
+          View on GitHub
         </ContextMenuItem>
+      )}
+      <ContextMenuItem
+        onClick={() =>
+          openInTerminal(repo.path, terminal, terminalPath).catch(toastError)
+        }
+      >
+        Open in terminal
+      </ContextMenuItem>
+      <ContextMenuItem
+        onClick={() => openWithDefault(repo.path).catch(toastError)}
+      >
+        Show in Explorer
+      </ContextMenuItem>
+      {editor && (
         <ContextMenuItem
-          onClick={() => openWithDefault(repo.path).catch(toastError)}
+          onClick={() => openWithProgram(editor, repo.path).catch(toastError)}
         >
-          Show in Explorer
+          Open in {editorName}
         </ContextMenuItem>
-        {editor && (
-          <ContextMenuItem
-            onClick={() => openWithProgram(editor, repo.path).catch(toastError)}
-          >
-            Open in {editorName}
-          </ContextMenuItem>
-        )}
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => onRemove(repo)}>
-          Remove…
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+      )}
+      <ContextMenuSeparator />
+      <ContextMenuItem onClick={() => onRemove(repo)}>Remove…</ContextMenuItem>
+    </>
   );
 }
