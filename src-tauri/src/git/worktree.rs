@@ -222,6 +222,31 @@ pub async fn git_worktree_squash(
     Ok(true)
 }
 
+/// Re-creates a worktree for a previously *kept* session, checking out its
+/// EXISTING branch (not a fresh `-b` one) at `path`, so the user can resume work
+/// where they left off. Prunes first in case a stale admin entry lingers from
+/// the worktree's prior removal. The branch must not be checked out elsewhere
+/// (Keep removes the worktree before this is ever called), and `base` is
+/// unchanged on the frontend so the cumulative `base..HEAD` diff still spans all
+/// turns.
+#[tauri::command]
+pub async fn git_worktree_resume(
+    state: State<'_, AppState>,
+    repo_path: String,
+    path: String,
+    branch: String,
+) -> AppResult<()> {
+    let _ = run_git_mutating(&state, &repo_path, &["worktree", "prune"], DEFAULT_TIMEOUT).await;
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["worktree", "add", &path, &branch],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Parses `git worktree list --porcelain` into one `WorktreeInfo` per stanza.
 /// Stanzas are blank-line separated; each carries a `worktree <path>` line and
 /// (unless detached) a `branch refs/heads/<name>` line.
@@ -360,6 +385,63 @@ branch refs/heads/gd/session/sess1
         assert!(
             after.iter().all(|w| w.branch != "gd/session/test"),
             "session worktree is gone after remove"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Keep (remove worktree, retain branch) then Resume (re-add the worktree on
+    /// the SAME existing branch at the SAME path) — the resumed checkout has the
+    /// kept work and the branch is back in the worktree list.
+    #[tokio::test]
+    async fn worktree_keep_then_resume_reattaches_branch() {
+        let base = std::env::temp_dir().join(format!(
+            "gd-wt-resume-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo = base.join("repo");
+        let wt = base.join("wt");
+        std::fs::create_dir_all(&repo).unwrap();
+        let repo_s = repo.to_string_lossy().into_owned();
+        let wt_s = wt.to_string_lossy().into_owned();
+
+        run(&repo_s, &["init", "-q"]).await;
+        run(&repo_s, &["config", "user.email", "t@t.local"]).await;
+        run(&repo_s, &["config", "user.name", "T"]).await;
+        std::fs::write(repo.join("a.txt"), "hello\n").unwrap();
+        run(&repo_s, &["add", "-A"]).await;
+        run(&repo_s, &["commit", "-qm", "seed"]).await;
+
+        // Session: worktree on a fresh branch, makes a commit (the "kept" work).
+        run(
+            &repo_s,
+            &["worktree", "add", "-b", "gd/session/keep", &wt_s, "HEAD"],
+        )
+        .await;
+        std::fs::write(wt.join("b.txt"), "work\n").unwrap();
+        run(&wt_s, &["add", "-A"]).await;
+        run(&wt_s, &["commit", "-qm", "agent work"]).await;
+
+        // Keep: drop the worktree dir, retain the branch. No --force, matching
+        // production (per-turn commits leave the worktree clean).
+        run(&repo_s, &["worktree", "remove", &wt_s]).await;
+        assert!(!wt.exists(), "worktree dir gone after keep");
+
+        // Resume: re-add a worktree on the EXISTING branch at the same path.
+        run(&repo_s, &["worktree", "prune"]).await;
+        run(&repo_s, &["worktree", "add", &wt_s, "gd/session/keep"]).await;
+        assert!(
+            wt.join("b.txt").exists(),
+            "resumed worktree has the kept work"
+        );
+        let list = parse_worktree_list(&run(&repo_s, &["worktree", "list", "--porcelain"]).await);
+        assert!(
+            list.iter().any(|w| w.branch == "gd/session/keep"),
+            "branch is checked out in a worktree again after resume"
         );
 
         let _ = std::fs::remove_dir_all(&base);

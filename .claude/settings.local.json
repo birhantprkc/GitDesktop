@@ -6,7 +6,9 @@
       "PowerShell(pnpm lint)",
       "PowerShell(pnpm exec tsc -b)",
       "PowerShell(cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings)",
-      "Bash(cargo check *)"
+      "Bash(cargo check *)",
+      "Bash(pnpm build *)",
+      "Bash(pnpm lint *)"
     ]
   },
   "enabledMcpjsonServers": [

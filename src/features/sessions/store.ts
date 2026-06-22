@@ -7,6 +7,7 @@ import {
   listWorktrees,
   pruneWorktrees,
   removeWorktree,
+  resumeWorktree,
   squashWorktree,
 } from "@/lib/git/worktree";
 import { toastError } from "@/lib/toast";
@@ -45,6 +46,10 @@ export interface AgentSession {
   model: string;
   /** A turn is currently streaming for THIS session (sessions run independently). */
   running: boolean;
+  /** Kept: the work was finalized onto `branch` and the worktree removed to free
+   *  disk; the session lingers as a resumable record. `resume` re-creates the
+   *  worktree on `branch` so the conversation can continue. */
+  kept: boolean;
   turns: SessionTurn[];
 }
 
@@ -77,7 +82,10 @@ interface SessionsState {
   setModel: (id: string, model: string) => void;
   cancel: (id: string) => Promise<void>;
   keep: (id: string, squash: boolean) => Promise<void>;
+  resume: (id: string) => Promise<void>;
   discard: (id: string) => Promise<void>;
+  /** Remove a kept session's record (its branch is preserved). */
+  deleteSession: (id: string) => void;
 }
 
 function newTurn(prompt: string): SessionTurn {
@@ -268,8 +276,10 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
           // Repo unreadable/gone → its sessions drop out (no entry in `live`).
         }
       }
-      const alive = idled.filter((s) =>
-        live[s.repoPath]?.has(normPath(s.worktreePath)),
+      // Kept sessions intentionally have no worktree (freed on Keep) — spare
+      // them from the orphan sweep; everything else must have a live worktree.
+      const alive = idled.filter(
+        (s) => s.kept || live[s.repoPath]?.has(normPath(s.worktreePath)),
       );
       set({ sessions: alive });
     }
@@ -300,6 +310,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       claudeSessionId: crypto.randomUUID(),
       model,
       running: false,
+      kept: false,
       turns: [newTurn(task)],
     };
     set({
@@ -312,7 +323,8 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 
   send: async (id, prompt) => {
     const s = get().sessions.find((x) => x.id === id);
-    if (!s || s.running) return;
+    // A kept session has no worktree to run in — it must be resumed first.
+    if (!s || s.running || s.kept) return;
     const task = prompt.trim();
     if (!task) return;
     set({
@@ -358,7 +370,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 
   keep: async (id, squash) => {
     const s = get().sessions.find((x) => x.id === id);
-    if (!s || s.running || get().busyId) return;
+    if (!s || s.kept || s.running || get().busyId) return;
     set({ busyId: id });
     try {
       if (squash && s.headHash !== s.base) {
@@ -367,10 +379,36 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
           "Agent session";
         await squashWorktree(s.worktreePath, s.base, msg);
       }
-      // Keep the branch (its commit holds the work); drop only the worktree dir.
+      // Free the worktree dir but keep the branch (it holds the work). The
+      // session lingers as a `kept` record you can resume later.
       await removeWorktree(s.repoPath, s.worktreePath, null, false);
       toast.success(`Kept on branch ${s.branch}`);
-      removeSession(get, set, id);
+      set({
+        busyId: null,
+        sessions: get().sessions.map((x) =>
+          x.id === id ? { ...x, kept: true, running: false } : x,
+        ),
+      });
+    } catch (e) {
+      toastError(e);
+      set({ busyId: null });
+    }
+  },
+
+  resume: async (id) => {
+    const s = get().sessions.find((x) => x.id === id);
+    if (!s || !s.kept || get().busyId) return;
+    set({ busyId: id });
+    try {
+      // Re-create the worktree on the kept branch (which holds the work); the
+      // conversation resumes via `--resume` on the next message.
+      await resumeWorktree(s.repoPath, s.worktreePath, s.branch);
+      set({
+        busyId: null,
+        sessions: get().sessions.map((x) =>
+          x.id === id ? { ...x, kept: false } : x,
+        ),
+      });
     } catch (e) {
       toastError(e);
       set({ busyId: null });
@@ -379,7 +417,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 
   discard: async (id) => {
     const s = get().sessions.find((x) => x.id === id);
-    if (!s || s.running || get().busyId) return;
+    if (!s || s.kept || s.running || get().busyId) return;
     set({ busyId: id });
     try {
       await removeWorktree(s.repoPath, s.worktreePath, s.branch, true);
@@ -388,6 +426,14 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       toastError(e);
       set({ busyId: null });
     }
+  },
+
+  // Remove a kept session's record. Its branch is left intact (the work was
+  // kept); the user can delete the branch via the Branches view if they want.
+  deleteSession: (id) => {
+    const s = get().sessions.find((x) => x.id === id);
+    if (!s || !s.kept) return;
+    removeSession(get, set, id);
   },
 }));
 

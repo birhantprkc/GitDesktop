@@ -38,6 +38,14 @@ export const removeWorktree = (
 export const pruneWorktrees = (repoPath: string) =>
   invoke<void>("git_worktree_prune", { repoPath });
 
+/** Re-creates a kept session's worktree, checking out its EXISTING branch at
+ *  `path` so the user can resume work (the branch already holds the kept work). */
+export const resumeWorktree = (
+  repoPath: string,
+  path: string,
+  branch: string,
+) => invoke<void>("git_worktree_resume", { repoPath, path, branch });
+
 /** Stages everything (incl. untracked) in a worktree and commits it. Returns
  *  the new commit hash, or null when the agent changed nothing. Used to commit
  *  each agent turn as a checkpoint. */

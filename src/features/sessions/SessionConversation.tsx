@@ -4,11 +4,12 @@ import {
   SparkleIcon,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { AgentNarration } from "./AgentNarration";
 import { SessionComposer, type SessionComposerHandle } from "./SessionComposer";
-import type { AgentSession, SessionTurn } from "./store";
+import { type AgentSession, type SessionTurn, useSessionsStore } from "./store";
 
 /**
  * The conversation column of the agent canvas: a document-style log of turns
@@ -25,6 +26,8 @@ export function SessionConversation({
   session: AgentSession;
   repoPath: string;
 }) {
+  const resume = useSessionsStore((s) => s.resume);
+  const busy = useSessionsStore((s) => s.busyId === session.id);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<SessionComposerHandle>(null);
   // Whether the view is pinned to the bottom (so streaming output keeps it
@@ -97,7 +100,8 @@ export function SessionConversation({
               <TurnView
                 key={`${i}:${turn.prompt.slice(0, 32)}`}
                 turn={turn}
-                baseDir={session.worktreePath}
+                baseDir={session.kept ? session.repoPath : session.worktreePath}
+                resendable={!session.kept}
                 onEditResend={() => composerRef.current?.setPrompt(turn.prompt)}
               />
             ))}
@@ -115,11 +119,28 @@ export function SessionConversation({
         )}
       </div>
       <div className="shrink-0 border-t p-2">
-        <SessionComposer
-          repoPath={repoPath}
-          session={session}
-          handleRef={composerRef}
-        />
+        {session.kept ? (
+          <div className="flex items-center gap-2 px-1 py-1">
+            <span className="min-w-0 flex-1 text-[11px] text-muted-foreground">
+              Kept on <span className="font-mono">{session.branch}</span> —
+              resume to continue the conversation.
+            </span>
+            <Button
+              size="sm"
+              className="shrink-0"
+              disabled={busy}
+              onClick={() => resume(session.id)}
+            >
+              Resume
+            </Button>
+          </div>
+        ) : (
+          <SessionComposer
+            repoPath={repoPath}
+            session={session}
+            handleRef={composerRef}
+          />
+        )}
       </div>
     </div>
   );
@@ -137,10 +158,13 @@ function RoleLabel({ children, agent }: { children: string; agent?: boolean }) {
 function TurnView({
   turn,
   baseDir,
+  resendable,
   onEditResend,
 }: {
   turn: SessionTurn;
   baseDir: string;
+  /** Whether edit & resend is available (false for a kept session — no composer). */
+  resendable: boolean;
   onEditResend: () => void;
 }) {
   const running = turn.status === "running" || turn.status === "committing";
@@ -148,6 +172,7 @@ function TurnView({
   // nothing — offer to edit & resend it so a failure is easy to retry. Normal,
   // successful turns stay clean (recall any prompt with ↑/↓ in the composer).
   const unproductive =
+    resendable &&
     !running &&
     (turn.status === "error" || (!turn.commitHash && !turn.narration));
   return (

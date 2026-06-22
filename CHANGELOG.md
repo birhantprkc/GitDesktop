@@ -36,9 +36,12 @@ commit list.
   restarts** — close and reopen the app and your sessions are still there, ready
   to keep iterating (a follow-up picks up right where it left off). When you're
   happy, **Keep** the work — optionally squashing the per-turn commits into one —
-  and it lands on its own branch ready to open as a PR, or **Discard** it (with a
-  confirm, since that removes the branch and worktree). New session, Keep, Discard,
-  and the view toggle are all in the command palette and keyboard-bindable. It
+  and it lands on its own branch ready to open as a PR. **Kept sessions stay in
+  the list**, so you can come back later: **Resume** re-opens one and continues
+  the conversation right where it left off, or **Delete** removes it from the app
+  (the branch is preserved). **Discard** throws an in-progress session away
+  entirely (branch and all). New session, Keep, Resume, Delete, Discard, and the
+  view toggle are all in the command palette and keyboard-bindable. It
   builds on the CLI agent you already have — currently Claude Code, no separate
   subscription — and only appears when AI features are enabled.
 - **Commit — or discard — part of a brand-new file.** Line- and hunk-level

@@ -47,32 +47,48 @@ function SessionCanvas({
 }) {
   const busyId = useSessionsStore((s) => s.busyId);
   const keep = useSessionsStore((s) => s.keep);
+  const resume = useSessionsStore((s) => s.resume);
   const discard = useSessionsStore((s) => s.discard);
+  const deleteSession = useSessionsStore((s) => s.deleteSession);
   const [segment, setSegment] = useState<Segment>("conversation");
   const [squash, setSquash] = useState(true);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const hasCommits = session.headHash !== session.base;
+  const kept = session.kept;
+  const hasCommits = kept || session.headHash !== session.base;
   const commitCount = session.turns.filter((t) => t.commitHash).length;
-  // Keep/Discard are disabled while the agent runs or a keep/discard is mid-flight.
+  // Actions are disabled while the agent runs or a keep/resume/discard is mid-flight.
   const blocked = session.running || busyId === session.id;
   const title = session.turns[0]?.prompt.trim() || "Agent session";
 
   const doKeep = () => {
-    if (!blocked && hasCommits) keep(session.id, squash);
+    if (!blocked && !kept && hasCommits) keep(session.id, squash);
   };
   // Discarding deletes the worktree AND branch — confirm when there's work to
   // lose; an empty session (no commits) is a harmless cleanup, so skip the gate.
   const doDiscard = () => {
-    if (blocked) return;
+    if (blocked || kept) return;
     if (hasCommits) setConfirmDiscard(true);
     else discard(session.id);
+  };
+  const doResume = () => {
+    if (!blocked && kept) resume(session.id);
+  };
+  const doDelete = () => {
+    if (!blocked && kept) setConfirmDelete(true);
   };
   const toggleView = () =>
     setSegment((s) => (s === "conversation" ? "changes" : "conversation"));
 
-  useHotkeyAction("agent-keep-session", doKeep, !blocked && hasCommits);
-  useHotkeyAction("agent-discard-session", doDiscard, !blocked);
+  useHotkeyAction(
+    "agent-keep-session",
+    doKeep,
+    !blocked && !kept && hasCommits,
+  );
+  useHotkeyAction("agent-discard-session", doDiscard, !blocked && !kept);
+  useHotkeyAction("agent-resume-session", doResume, !blocked && kept);
+  useHotkeyAction("agent-delete-session", doDelete, !blocked && kept);
   useHotkeyAction("agent-toggle-view", toggleView);
 
   return (
@@ -97,30 +113,48 @@ function SessionCanvas({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {commitCount > 1 && (
-              <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground select-none">
-                <Checkbox
-                  checked={squash}
-                  onCheckedChange={(v) => setSquash(v === true)}
-                />
-                Squash {commitCount}
-              </label>
+            {kept ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={blocked}
+                  onClick={doDelete}
+                >
+                  Delete
+                </Button>
+                <Button size="sm" disabled={blocked} onClick={doResume}>
+                  Resume
+                </Button>
+              </>
+            ) : (
+              <>
+                {commitCount > 1 && (
+                  <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground select-none">
+                    <Checkbox
+                      checked={squash}
+                      onCheckedChange={(v) => setSquash(v === true)}
+                    />
+                    Squash {commitCount}
+                  </label>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={blocked}
+                  onClick={doDiscard}
+                >
+                  Discard
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={blocked || !hasCommits}
+                  onClick={doKeep}
+                >
+                  Keep
+                </Button>
+              </>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={blocked}
-              onClick={doDiscard}
-            >
-              Discard
-            </Button>
-            <Button
-              size="sm"
-              disabled={blocked || !hasCommits}
-              onClick={doKeep}
-            >
-              Keep
-            </Button>
           </div>
         </div>
         <div className="px-3 py-2.5">
@@ -179,12 +213,40 @@ function SessionCanvas({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this session?</DialogTitle>
+            <DialogDescription>
+              This removes the session and its conversation from the app. The
+              work stays on branch{" "}
+              <span className="font-mono">{session.branch}</span> — delete that
+              from Branches if you no longer need it.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setConfirmDelete(false);
+                deleteSession(session.id);
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
 function SessionChanges({ session }: { session: AgentSession }) {
-  const hasCommits = session.headHash !== session.base;
+  const hasCommits = session.kept || session.headHash !== session.base;
   if (!hasCommits) {
     return (
       <DiffPlaceholder
@@ -197,11 +259,14 @@ function SessionChanges({ session }: { session: AgentSession }) {
       />
     );
   }
+  // Diff `base..branch` (not the cached headHash, which goes stale after a Keep
+  // squashes the checkpoints). A kept session has no worktree, but its branch +
+  // commits live in the shared object database, so read it from the main repo.
   return (
     <BranchDiffView
-      repoPath={session.worktreePath}
+      repoPath={session.kept ? session.repoPath : session.worktreePath}
       base={session.base}
-      compare={session.headHash}
+      compare={session.branch}
     />
   );
 }

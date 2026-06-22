@@ -80,6 +80,7 @@ pub fn run() {
             git::worktree::git_worktree_prune,
             git::worktree::git_worktree_commit_all,
             git::worktree::git_worktree_squash,
+            git::worktree::git_worktree_resume,
             git::ops::git_checkout_commit,
             git::ops::git_revert,
             git::ops::git_cherry_pick,
