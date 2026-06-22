@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { type AgentSession, useSessionsStore } from "./store";
 
 const CLAUDE_MODELS = MODEL_SUGGESTIONS["claude-cli"];
+const CODEX_MODELS = MODEL_SUGGESTIONS["codex-cli"];
 // "" (account default) maps to a non-empty sentinel for the Select value.
 const DEFAULT_MODEL = "default";
 const MAX_MENTIONS = 8;
@@ -69,6 +70,7 @@ export function SessionComposer({
   const creating = useSessionsStore((s) => s.creating);
   const [draft, setDraft] = useState("");
   const [startModel, setStartModel] = useState("");
+  const [startAgent, setStartAgent] = useState<"claude" | "codex">("claude");
   const [mention, setMention] = useState<Mention | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   // Prompt-history navigation (terminal-style Up/Down recall). `histIndex` null
@@ -79,6 +81,9 @@ export function SessionComposer({
 
   const running = session?.running ?? false;
   const model = session ? session.model : startModel;
+  // Agent is fixed once a session exists; while starting, it's user-selectable.
+  const agent = session ? session.agent : startAgent;
+  const models = agent === "codex" ? CODEX_MODELS : CLAUDE_MODELS;
   const onModel = session
     ? (m: string) => setModel(session.id, m)
     : setStartModel;
@@ -158,7 +163,7 @@ export function SessionComposer({
     const text = draft.trim();
     if (!text || running || creating) return;
     if (session) send(session.id, text);
-    else start(repoPath, text, startModel);
+    else start(repoPath, text, startModel, startAgent);
     setDraft("");
     setMention(null);
   };
@@ -322,9 +327,20 @@ export function SessionComposer({
             className="max-h-40 min-h-9 w-full resize-none overflow-y-auto bg-transparent px-3 py-2.5 text-xs leading-relaxed outline-none placeholder:text-muted-foreground"
           />
           <div className="flex items-center gap-2 px-2 pb-2">
-            <ModelPicker value={model} onChange={onModel} />
+            {!session && (
+              <AgentPicker
+                value={startAgent}
+                onChange={(a) => {
+                  setStartAgent(a);
+                  setStartModel(""); // model lists differ between agents
+                }}
+              />
+            )}
+            <ModelPicker value={model} onChange={onModel} models={models} />
             <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
-              ↵ send · ⇧↵ newline
+              {!session && agent === "codex"
+                ? "Codex runs in a Docker/Podman container"
+                : "↵ send · ⇧↵ newline"}
             </span>
             <AnimatePresence mode="wait" initial={false}>
               {running ? (
@@ -440,9 +456,11 @@ function MentionList({
 function ModelPicker({
   value,
   onChange,
+  models,
 }: {
   value: string;
   onChange: (m: string) => void;
+  models: string[];
 }) {
   return (
     <Select
@@ -458,11 +476,40 @@ function ModelPicker({
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={DEFAULT_MODEL}>Default model</SelectItem>
-        {CLAUDE_MODELS.map((m) => (
+        {models.map((m) => (
           <SelectItem key={m} value={m}>
             {m}
           </SelectItem>
         ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** Picks the CLI for a NEW session (fixed once it starts). Codex runs only in a
+ *  container — the store forces container isolation for it. */
+function AgentPicker({
+  value,
+  onChange,
+}: {
+  value: "claude" | "codex";
+  onChange: (a: "claude" | "codex") => void;
+}) {
+  return (
+    <Select
+      value={value}
+      onValueChange={(v) => onChange(v === "codex" ? "codex" : "claude")}
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label="Agent"
+        className="w-auto border-0 text-muted-foreground shadow-none hover:bg-muted dark:bg-transparent"
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="claude">Claude</SelectItem>
+        <SelectItem value="codex">Codex</SelectItem>
       </SelectContent>
     </Select>
   );

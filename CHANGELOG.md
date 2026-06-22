@@ -70,8 +70,9 @@ commit list.
   (the branch is preserved). **Discard** throws an in-progress session away
   entirely (branch and all). New session, Keep, Resume, Delete, Discard, and the
   view toggle are all in the command palette and keyboard-bindable. It
-  builds on the CLI agent you already have — currently Claude Code, no separate
-  subscription — and only appears when AI features are enabled.
+  builds on the CLI agent you already have — **Claude Code**, or **Codex** (pick
+  it per session; Codex runs only in the container for safety) — no separate
+  subscription, and only appears when AI features are enabled.
 - **Commit — or discard — part of a brand-new file.** Line- and hunk-level
   staging now works on untracked (new) files too, not just files git already
   tracks — drag across the lines you want in a new file's diff and stage just

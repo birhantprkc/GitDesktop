@@ -76,6 +76,8 @@ export const cancelAgentReview = (reviewId: string) =>
   invoke<void>("agent_review_cancel", { reviewId });
 
 export interface AgentSessionArgs {
+  /** Which CLI drives the session. "codex" is container-only. */
+  agent: "claude" | "codex";
   /** Explicit Claude binary path, or null to auto-detect. */
   binPath: string | null;
   model: string;
@@ -99,12 +101,14 @@ export interface AgentSessionArgs {
  * Runs one turn of a write-capable agent session: the CLI implements
  * `userPrompt` full-auto inside the worktree, streaming the same events as a
  * review. Follow-up turns (`resume: true`) keep the full conversation + worktree
- * state. Claude-only for now (Codex's workspace-write is trust-gated).
+ * state. Claude runs on the host or in a container; Codex is **container-only**
+ * (its host workspace-write is trust-gated; full-bypass is safe in the box).
  */
 export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
   const channel = new Channel<ReviewEvent>();
   channel.onmessage = args.onEvent;
   await invoke<void>("agent_session", {
+    agent: args.agent,
     binPath: args.binPath,
     model: args.model,
     systemPrompt: args.systemPrompt,

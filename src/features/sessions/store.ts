@@ -65,6 +65,8 @@ export interface AgentSession {
   /** Isolation mode, fixed at creation: "worktree" (host, worktree-only) or
    *  "container" (also inside a Docker/Podman container). */
   isolation: "worktree" | "container";
+  /** Which CLI drives the session, fixed at creation. "codex" is container-only. */
+  agent: "claude" | "codex";
   /** A turn is currently streaming for THIS session (sessions run independently). */
   running: boolean;
   /** Kept: the work was finalized onto `branch` and the worktree removed to free
@@ -98,7 +100,12 @@ interface SessionsState {
   hydrated: boolean;
   hydrate: () => Promise<void>;
   setActive: (id: string | null) => void;
-  start: (repoPath: string, prompt: string, model: string) => Promise<void>;
+  start: (
+    repoPath: string,
+    prompt: string,
+    model: string,
+    agent: "claude" | "codex",
+  ) => Promise<void>;
   send: (id: string, prompt: string) => Promise<void>;
   setModel: (id: string, model: string) => void;
   cancel: (id: string) => Promise<void>;
@@ -182,7 +189,7 @@ async function runTurn(
   const find = () => get().sessions.find((s) => s.id === id);
   const s0 = find();
   if (!s0) return;
-  const { claudeSessionId, worktreePath, model, isolation } = s0;
+  const { claudeSessionId, worktreePath, model, isolation, agent } = s0;
 
   const setSession = (updater: (s: AgentSession) => AgentSession) =>
     set({
@@ -237,6 +244,7 @@ async function runTurn(
       sessionId: claudeSessionId,
       resume,
       isolation,
+      agent,
       onEvent: (ev) => {
         const s = find();
         if (!s) return;
@@ -356,14 +364,16 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 
   setActive: (id) => set({ activeId: id }),
 
-  start: async (repoPath, prompt, model) => {
+  start: async (repoPath, prompt, model, agent) => {
     const task = prompt.trim();
     if (!task || get().creating) return;
     set({ creating: true });
     // Isolation is fixed for the life of the session (every turn must run the
-    // same way), so resolve it from settings once, here at creation.
-    const isolation =
+    // same way), so resolve it once here. Codex is container-only; Claude honors
+    // the setting.
+    const setting =
       (await loadSettings().catch(() => null))?.agentIsolation ?? "worktree";
+    const isolation = agent === "codex" ? "container" : setting;
     let wt: Awaited<ReturnType<typeof createWorktree>>;
     try {
       wt = await createWorktree(repoPath);
@@ -382,6 +392,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       claudeSessionId: crypto.randomUUID(),
       model,
       isolation,
+      agent,
       running: false,
       kept: false,
       turns: [newTurn(task)],
@@ -401,6 +412,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
         claudeSessionId: session.claudeSessionId,
         model: session.model,
         isolation: session.isolation,
+        agent: session.agent,
       }),
     );
     persist(appendTurn(wt.id, 0, task, model));

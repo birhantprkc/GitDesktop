@@ -403,6 +403,33 @@ fn claude_session_args(
     args
 }
 
+/// Codex write-capable *session* invocation — **container-only**. On the host
+/// Codex's `workspace-write` is trust-gated for a fresh, non-interactive worktree
+/// (resolves read-only); inside a container the kernel is the boundary, so the
+/// full-bypass flag is safe and is the only mode that actually writes. The task
+/// goes on stdin (`-`); `--skip-git-repo-check` because the mounted worktree's
+/// `.git` is a dangling pointer in-container (the host drives git).
+///
+/// Multi-turn: each session has its own dedicated container home + cwd, so it's
+/// the only recorded session there — `exec resume --last` continues it without us
+/// tracking a thread id.
+fn codex_session_args(model: &str, resume: bool) -> Vec<String> {
+    let mut args: Vec<String> = vec!["exec".into()];
+    if resume {
+        args.push("resume".into());
+        args.push("--last".into());
+    }
+    args.push("--dangerously-bypass-approvals-and-sandbox".into());
+    args.push("--skip-git-repo-check".into());
+    args.push("--json".into());
+    if !model.trim().is_empty() {
+        args.push("-m".into());
+        args.push(model.into());
+    }
+    args.push("-".into());
+    args
+}
+
 /// Friendly progress label for a Claude Tier-2 tool call.
 fn tool_status(name: &str) -> String {
     match name {
@@ -764,16 +791,21 @@ pub async fn agent_review_cancel(
 
 /// Runs one turn of a write-capable agent session: the CLI implements
 /// `user_prompt` full-auto inside `worktree_path` (a throwaway worktree — the
-/// sandbox boundary). `resume = false` starts the session under `session_id`;
-/// `resume = true` continues it (keeping context). Streams the same
-/// `ReviewEvent`s as a review; cancel via `agent_review_cancel` with the same
-/// `session_id`. Claude-only for now — Codex's `workspace-write` is trust-gated
-/// for fresh, non-interactive worktrees (see `docs/agent-sessions.md`).
+/// sandbox boundary). `resume = false` starts the session; `resume = true`
+/// continues it (keeping context). Streams the same `ReviewEvent`s as a review;
+/// cancel via `agent_review_cancel` with the same `session_id`.
+///
+/// `agent` picks the CLI. **Claude** runs on the host (full-auto via
+/// `bypassPermissions`) or in a container. **Codex** is **container-only**: on
+/// the host its `workspace-write` is trust-gated for a fresh non-interactive
+/// worktree (read-only), but inside a container the full-bypass flag is safe.
 #[tauri::command]
 pub async fn agent_session(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     bin_path: Option<String>,
+    // "claude" (default) or "codex".
+    agent: String,
     model: String,
     system_prompt: String,
     user_prompt: String,
@@ -785,21 +817,72 @@ pub async fn agent_session(
     isolation: Option<String>,
     on_event: Channel<ReviewEvent>,
 ) -> AppResult<()> {
-    let inner = claude_session_args(&model, &system_prompt, &session_id, resume);
+    // Strict: reject an unknown agent rather than silently coercing it.
+    let kind = match agent.as_str() {
+        "claude" => AgentKind::Claude,
+        "codex" => AgentKind::Codex,
+        other => {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown agent: {other:?}"
+            )));
+        }
+    };
+    let agent_name = match kind {
+        AgentKind::Codex => "codex",
+        AgentKind::Claude => "claude",
+    };
+    let container = isolation.as_deref() == Some("container");
 
-    // Container isolation: wrap the same Claude invocation in an ephemeral,
+    // Codex only writes safely inside a container.
+    if matches!(kind, AgentKind::Codex) && !container {
+        return Err(AppError::Command(
+            "Codex agent sessions run only in container isolation — enable it in Settings → AI."
+                .to_string(),
+        ));
+    }
+
+    // The inner CLI invocation + the stdin for this turn. Claude carries the
+    // system prompt as a flag; Codex has none, so it's prepended on stdin (turn
+    // 1 only — a resumed Codex session already has it in context).
+    let (inner, stdin_text) = match kind {
+        AgentKind::Claude => (
+            claude_session_args(&model, &system_prompt, &session_id, resume),
+            user_prompt,
+        ),
+        AgentKind::Codex => (
+            codex_session_args(&model, resume),
+            if resume {
+                user_prompt
+            } else {
+                format!("{system_prompt}\n\n{user_prompt}")
+            },
+        ),
+    };
+
+    // Container isolation: wrap the same invocation in an ephemeral,
     // worktree-confined container. The agent CLI lives in the image, so we don't
     // resolve a host binary; the runtime drives it.
-    if isolation.as_deref() == Some("container") {
+    if container {
         let (runtime, runtime_name) = crate::agent_sandbox::detect_runtime().await.ok_or_else(|| {
-            AppError::Command(
-                "Container isolation is on, but Docker/Podman isn't available. Install/start it or turn isolation off in Settings.".to_string(),
-            )
+            AppError::Command(if matches!(kind, AgentKind::Codex) {
+                // Codex is container-only, so "turn isolation off" isn't an option.
+                "Codex sessions need Docker or Podman (they run only in a container). Install and start it, then build the image in Settings → AI — or use Claude instead.".to_string()
+            } else {
+                "Container isolation is on, but Docker/Podman isn't available. Install/start it or turn isolation off in Settings.".to_string()
+            })
         })?;
         if !crate::agent_sandbox::image_present(&runtime).await {
             return Err(AppError::Command(
                 "The agent container image isn't built yet. Open Settings → AI and click \"Build image\", then try again.".to_string(),
             ));
+        }
+        // Fail early with a clear message if the agent isn't logged in on the
+        // host (its creds are what we mount into the container).
+        if !crate::agent_sandbox::host_logged_in(agent_name) {
+            return Err(AppError::Command(format!(
+                "{} isn't logged in on this machine. Sign in with its CLI first, then start the session.",
+                if matches!(kind, AgentKind::Codex) { "Codex" } else { "Claude" }
+            )));
         }
         // Defense-in-depth: the worktree is bind-mounted, so never let a `..` in
         // its path widen the mount beyond the intended directory.
@@ -811,10 +894,11 @@ pub async fn agent_session(
                 "worktree path must not contain '..'".to_string(),
             ));
         }
-        let home = crate::agent_sandbox::seed_session_home(&app, &session_id)?;
+        let home = crate::agent_sandbox::seed_session_home(&app, &session_id, agent_name)?;
         let name = crate::agent_sandbox::container_name(&session_id);
         let args = crate::agent_sandbox::build_run_args(
             &runtime_name,
+            agent_name,
             &worktree_path,
             &home,
             &name,
@@ -822,10 +906,10 @@ pub async fn agent_session(
         );
         return stream_agent(
             &state,
-            AgentKind::Claude,
+            kind,
             &runtime,
             args,
-            user_prompt,
+            stdin_text,
             &worktree_path,
             SESSION_TIMEOUT,
             &session_id,
@@ -836,7 +920,13 @@ pub async fn agent_session(
         .await;
     }
 
-    // Host: run the CLI directly, confined only by the throwaway worktree.
+    // Host: Claude only. Codex was rejected above (container-only); re-check here
+    // as belt-and-suspenders so no future refactor lets it run unconfined.
+    if matches!(kind, AgentKind::Codex) {
+        return Err(AppError::Command(
+            "Codex agent sessions run only in a container.".to_string(),
+        ));
+    }
     let binary = resolve(AgentKind::Claude, bin_path.as_deref())
         .await
         .ok_or_else(|| {
@@ -849,7 +939,7 @@ pub async fn agent_session(
         AgentKind::Claude,
         &binary,
         inner,
-        user_prompt,
+        stdin_text,
         &worktree_path,
         SESSION_TIMEOUT,
         &session_id,

@@ -9,13 +9,17 @@
 //! `.git` is a file-pointer that doesn't resolve in-container), so commit/diff/
 //! Keep-Discard are unchanged.
 //!
-//! Auth: the CLI's credentials are a file (`~/.claude/.credentials.json`), so we
-//! seed a **copy** into a per-session claude-home that's mounted read-write — the
-//! container authenticates with no API key, can refresh its own token, and never
-//! sees the host's real `~/.claude`. The home persists across a session's turns
+//! Auth: each agent CLI's credentials are a file (Claude `~/.claude/
+//! .credentials.json`, Codex `~/.codex/auth.json`), so we seed a **copy** into a
+//! per-session, per-agent home that's mounted read-write at the CLI's dotdir —
+//! the container authenticates with no API key, can refresh its own token, and
+//! never sees the host's real config. The home persists across a session's turns
 //! (so `--resume` finds the transcript) and is removed on discard/delete.
 //!
-//! Validated end-to-end by spike 2026-06-22; see docs/agent-sandbox-docker.md.
+//! Claude runs on the host or in a container; **Codex is container-only** (its
+//! host `workspace-write` is trust-gated, but full-bypass is safe in the box).
+//! Validated end-to-end by spike + live Codex run 2026-06-22; see
+//! docs/agent-sandbox-docker.md.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -28,15 +32,23 @@ use tokio::process::Command;
 use crate::agent::{resolve_named, run_capture, DETECT_TIMEOUT};
 use crate::error::{AppError, AppResult};
 
-/// The managed image: a small Node base with the Claude Code CLI, run as the
-/// non-root `node` user (the CLI refuses `bypassPermissions` as root).
-pub const IMAGE: &str = "gitdesktop-agent:claude";
+/// The managed image: a small Node base with the Claude Code and Codex CLIs, run
+/// as the non-root `node` user (the CLIs refuse full-bypass as root). The tag is
+/// versioned so changing the Dockerfile (e.g. adding a CLI) forces a rebuild —
+/// `agent_container_detect` reports the image as missing until it's rebuilt.
+pub const IMAGE: &str = "gitdesktop-agent:3";
 const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 
+// `node:22-slim` ships without ca-certificates, so the agents can't establish TLS
+// to their APIs ("no native root CA certificates found") — install them.
 const DOCKERFILE: &str = "\
 FROM node:22-slim
-RUN npm install -g @anthropic-ai/claude-code \
- && mkdir -p /home/node/.claude && chown -R node:node /home/node/.claude
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g @anthropic-ai/claude-code @openai/codex \
+ && mkdir -p /home/node/.claude /home/node/.codex \
+ && chown -R node:node /home/node/.claude /home/node/.codex
 USER node
 WORKDIR /workspace
 ";
@@ -56,6 +68,24 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
+}
+
+/// The host credentials file an agent's container home is seeded from.
+fn host_creds(agent: &str) -> Option<PathBuf> {
+    home_dir().map(|h| {
+        if agent == "codex" {
+            h.join(".codex").join("auth.json")
+        } else {
+            h.join(".claude").join(".credentials.json")
+        }
+    })
+}
+
+/// Whether the agent CLI is logged in on the host (its creds file exists) — so a
+/// container session can fail early with a clear "log in first" message instead
+/// of a cryptic in-container auth error.
+pub(crate) fn host_logged_in(agent: &str) -> bool {
+    host_creds(agent).is_some_and(|p| p.is_file())
 }
 
 /// Finds Docker or Podman on PATH (Docker preferred). Returns (binary, name).
@@ -118,8 +148,8 @@ pub async fn agent_container_detect() -> AppResult<ContainerStatus> {
     })
 }
 
-/// Builds the managed agent image (`<rt> build -t IMAGE -`, Dockerfile on stdin,
-/// empty context). Idempotent + cached by the engine; a few minutes on first run.
+/// Builds the managed agent image (`<rt> build -t IMAGE <ctx>` from a tiny temp
+/// context dir). Idempotent + cached by the engine; a few minutes on first run.
 #[tauri::command]
 pub async fn agent_container_prepare() -> AppResult<()> {
     let (bin, _) = detect_runtime()
@@ -184,24 +214,30 @@ fn agent_home_root(app: &AppHandle) -> AppResult<PathBuf> {
         .join("agent-home"))
 }
 
-/// `<app_data>/agent-home/<session>/claude` — mounted at the container's
-/// `/home/node/.claude`. Session ids are app-generated hex; validated upstream.
-fn session_home(app: &AppHandle, session_id: &str) -> AppResult<PathBuf> {
-    Ok(agent_home_root(app)?.join(session_id).join("claude"))
+/// `<app_data>/agent-home/<session>/<agent>` — mounted at the container's
+/// `~/.claude` or `~/.codex`. Session ids are app-generated hex; validated upstream.
+fn session_home(app: &AppHandle, session_id: &str, agent: &str) -> AppResult<PathBuf> {
+    Ok(agent_home_root(app)?.join(session_id).join(agent))
 }
 
-/// Ensures the per-session claude-home exists and (re-)seeds the host's current
-/// credentials into it, so the container authenticates with the user's live
-/// subscription and a refreshed token each run. Returns the home path to mount.
-pub(crate) fn seed_session_home(app: &AppHandle, session_id: &str) -> AppResult<PathBuf> {
+/// Ensures the per-session agent-home exists and (re-)seeds the host's current
+/// credentials for `agent` into it, so the container authenticates with the
+/// user's live subscription and a refreshed token each run. Returns the home path
+/// to mount. Claude reads `~/.claude/.credentials.json`; Codex `~/.codex/auth.json`.
+pub(crate) fn seed_session_home(
+    app: &AppHandle,
+    session_id: &str,
+    agent: &str,
+) -> AppResult<PathBuf> {
     crate::sessions::validate_id(session_id)?; // no path traversal into the home root
-    let home = session_home(app, session_id)?;
+    let home = session_home(app, session_id, agent)?;
     std::fs::create_dir_all(&home)?;
-    if let Some(creds) = home_dir().map(|h| h.join(".claude").join(".credentials.json")) {
-        if creds.is_file() {
-            // Re-copy every run so an expired in-home token is refreshed from the
-            // host's current one. Best-effort: auth simply fails loudly if absent.
-            let _ = std::fs::copy(&creds, home.join(".credentials.json"));
+    // Re-copy every run so an expired in-home token is refreshed from the host's
+    // current one. Best-effort: the container branch pre-checks `host_logged_in`
+    // for a clearer message if the creds are absent.
+    if let Some(src) = host_creds(agent) {
+        if let (true, Some(name)) = (src.is_file(), src.file_name()) {
+            let _ = std::fs::copy(&src, home.join(name));
         }
     }
     Ok(home)
@@ -263,15 +299,24 @@ pub(crate) fn to_mount_source(path: &str, runtime: &str) -> String {
 /// `--rm` tears it down, resource + capability limits harden it.
 pub(crate) fn build_run_args(
     runtime: &str,
+    agent: &str,
     worktree_path: &str,
     home_path: &Path,
     container_name: &str,
     inner: &[String],
 ) -> Vec<String> {
     let workspace_mount = format!("{}:/workspace", to_mount_source(worktree_path, runtime));
+    // The agent-home mounts at the CLI's own dotdir so it finds its creds +
+    // session transcript (Codex resumes via `--last` from its mounted ~/.codex).
+    let home_target = if agent == "codex" {
+        "/home/node/.codex"
+    } else {
+        "/home/node/.claude"
+    };
     let home_mount = format!(
-        "{}:/home/node/.claude",
-        to_mount_source(&home_path.to_string_lossy(), runtime)
+        "{}:{}",
+        to_mount_source(&home_path.to_string_lossy(), runtime),
+        home_target
     );
     let mut args: Vec<String> = vec![
         "run".into(),
@@ -345,12 +390,22 @@ mod tests {
             "/data/agent-home/s1/claude"
         });
         let inner = vec!["-p".to_string(), "--resume".to_string(), "s1".to_string()];
-        let args = build_run_args("docker", "/repos/wt", &home, "gd-agent-s1", &inner);
+        let args = build_run_args(
+            "docker",
+            "claude",
+            "/repos/wt",
+            &home,
+            "gd-agent-s1",
+            &inner,
+        );
         assert_eq!(args[0], "run");
         assert!(args.contains(&"--rm".to_string()));
         assert!(args.contains(&"node".to_string())); // runs as non-root
         assert!(args.iter().any(|a| a.ends_with(":/workspace")));
         assert!(args.iter().any(|a| a.ends_with(":/home/node/.claude")));
+        // Codex mounts its home at ~/.codex instead.
+        let codex = build_run_args("docker", "codex", "/repos/wt", &home, "n", &inner);
+        assert!(codex.iter().any(|a| a.ends_with(":/home/node/.codex")));
         assert!(args.contains(&IMAGE.to_string()));
         // inner args come last, after the image.
         let img = args.iter().position(|a| a == IMAGE).unwrap();
@@ -362,9 +417,9 @@ mod tests {
     fn linux_podman_adds_keep_id_docker_does_not() {
         let home = PathBuf::from("/data/agent-home/s1/claude");
         let inner = vec!["-p".to_string()];
-        let podman = build_run_args("podman", "/repos/wt", &home, "n", &inner);
+        let podman = build_run_args("podman", "claude", "/repos/wt", &home, "n", &inner);
         assert!(podman.iter().any(|a| a == "--userns=keep-id"));
-        let docker = build_run_args("docker", "/repos/wt", &home, "n", &inner);
+        let docker = build_run_args("docker", "claude", "/repos/wt", &home, "n", &inner);
         assert!(!docker.iter().any(|a| a == "--userns=keep-id"));
     }
 

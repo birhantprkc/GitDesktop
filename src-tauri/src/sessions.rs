@@ -35,6 +35,11 @@ fn default_isolation() -> String {
     "worktree".to_string()
 }
 
+/// Back-compat default for sessions persisted before the agent was a field.
+fn default_agent() -> String {
+    "claude".to_string()
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -73,6 +78,9 @@ struct Header {
     /// transcript in a mode-specific place).
     #[serde(default = "default_isolation")]
     isolation: String,
+    /// Which CLI drives the session: "claude" or "codex". Fixed at creation.
+    #[serde(default = "default_agent")]
+    agent: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +150,7 @@ pub struct LoadedSession {
     claude_session_id: String,
     model: String,
     isolation: String,
+    agent: String,
     running: bool,
     kept: bool,
     turns: Vec<LoadedTurn>,
@@ -159,6 +168,7 @@ pub struct NewSession {
     claude_session_id: String,
     model: String,
     isolation: String,
+    agent: String,
 }
 
 // ----------------------------------------------------------------- paths + io
@@ -276,6 +286,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
         claude_session_id: header.claude_session_id,
         model,
         isolation: header.isolation,
+        agent: header.agent,
         running: false,
         kept,
         turns,
@@ -360,6 +371,7 @@ fn migrate_legacy_if_needed(app: &AppHandle) -> AppResult<()> {
                 claude_session_id: str_field(s, "claudeSessionId"),
                 model: str_field(s, "model"),
                 isolation: "worktree".into(),
+                agent: "claude".into(),
             }),
         )?;
         let turns = s
@@ -446,6 +458,7 @@ pub async fn transcript_create(app: AppHandle, session: NewSession) -> AppResult
             claude_session_id: session.claude_session_id,
             model: session.model,
             isolation: session.isolation,
+            agent: session.agent,
         }),
     )
 }
@@ -562,6 +575,7 @@ mod tests {
             claude_session_id: "uuid".into(),
             model: "opus".into(),
             isolation: "worktree".into(),
+            agent: "claude".into(),
         })
     }
 
