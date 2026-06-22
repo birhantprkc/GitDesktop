@@ -12,6 +12,12 @@ commit list.
 
 ### Added
 
+- **Commit part of a brand-new file.** Line- and hunk-level staging now works on
+  untracked (new) files too, not just files git already tracks — drag across the
+  lines you want in a new file's diff and stage just those, leaving the rest for a
+  later commit. (Previously a new file could only be staged whole.) The unstaged
+  remainder keeps showing as you go, and discarding a new file still happens whole,
+  via the recycle bin.
 - **See what you haven't pushed.** The History list now marks every commit that
   isn't on the remote yet with a small up-arrow (hover for "ahead of
   origin/…") — so it's clear at a glance what a push would send. On a branch

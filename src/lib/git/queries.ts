@@ -111,7 +111,14 @@ export function useFileDiff(
   file: { path: string; staged: boolean; untracked: boolean } | null,
 ) {
   return useQuery({
-    queryKey: repoKeys.diff(repo, file?.path ?? "", file?.staged ?? false),
+    // `untracked` is in the key so the untracked→tracked flip (after staging part
+    // of a new file) subscribes to a fresh query — the `--no-index` "all new"
+    // diff and the normal remainder diff must not share a cache entry, or an
+    // invalidation race could leave the stale all-lines view on screen.
+    queryKey: [
+      ...repoKeys.diff(repo, file?.path ?? "", file?.staged ?? false),
+      file?.untracked ?? false,
+    ] as const,
     queryFn: () =>
       api.gitDiffFile(
         repo,

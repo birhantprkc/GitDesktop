@@ -102,7 +102,17 @@ function WorkingTreeDiff({
   repoPath: string;
   file: SelectedFile;
 }) {
-  const diff = useFileDiff(repoPath, file);
+  const status = useRepoStatus(repoPath);
+  // `untracked` must follow LIVE status, not the click-time snapshot: once some
+  // lines of a new file are staged it becomes a tracked `AM` file, and the
+  // unstaged side must switch from the `git diff --no-index` "everything is new"
+  // view to a normal diff of the remaining (unstaged) lines. The staged side is
+  // never untracked.
+  const liveEntry = status.data?.entries.find((e) => e.path === file.path);
+  const untracked =
+    !file.staged &&
+    (liveEntry ? liveEntry.unstaged === "untracked" : file.untracked);
+  const diff = useFileDiff(repoPath, { ...file, untracked });
   const applyPatch = useApplyPatch(repoPath);
   const applyPartial = useApplyPartial(repoPath);
   const settings = useSettings();
@@ -133,8 +143,11 @@ function WorkingTreeDiff({
   }, []);
 
   // A truncated parse could cut a hunk in half — never offer to apply one.
-  const hunkMode =
-    !file.untracked && parsed !== null && parsed.hunks.length > 0;
+  // Untracked text files line-stage too: `git apply --cached` of a subset of a
+  // new-file patch creates the index entry directly (no intent-to-add needed),
+  // so part of a new file can be committed. Binary/huge untracked files have
+  // `parsed === null` and still fall through to the whole-file view below.
+  const hunkMode = parsed !== null && parsed.hunks.length > 0;
   if (!hunkMode) {
     return (
       <DiffSurface
@@ -148,7 +161,7 @@ function WorkingTreeDiff({
         // Full-text highlight context, aligned to the diff's actual sides:
         // staged = HEAD↔index, unstaged = index↔worktree, added = worktree only.
         contentRevs={
-          file.untracked
+          untracked
             ? { newRev: null }
             : file.staged
               ? { oldRev: "HEAD", newRev: ":0" }
@@ -273,21 +286,26 @@ function WorkingTreeDiff({
                     >
                       Stage hunk
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      className="text-destructive"
-                      disabled={busy}
-                      onClick={() =>
-                        setDiscard({
-                          label: hunk.header,
-                          run: () =>
-                            applyHunk(hunk, { cached: false, reverse: true }),
-                        })
-                      }
-                    >
-                      Discard…
-                    </Button>
+                    {/* Discarding part of a brand-new file is ambiguous (delete
+                        vs. empty); new files are discarded whole via the recycle
+                        bin from the Changes list, so hide it while untracked. */}
+                    {!untracked && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        className="text-destructive"
+                        disabled={busy}
+                        onClick={() =>
+                          setDiscard({
+                            label: hunk.header,
+                            run: () =>
+                              applyHunk(hunk, { cached: false, reverse: true }),
+                          })
+                        }
+                      >
+                        Discard…
+                      </Button>
+                    )}
                   </>
                 )}
               </div>
@@ -322,24 +340,26 @@ function WorkingTreeDiff({
                       >
                         Stage
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        className="text-destructive"
-                        disabled={busy}
-                        onClick={() =>
-                          setDiscard({
-                            label: `${n} selected ${n === 1 ? "line" : "lines"}`,
-                            run: () =>
-                              applyLines(hunk, sel, {
-                                cached: false,
-                                reverse: true,
-                              }),
-                          })
-                        }
-                      >
-                        Discard…
-                      </Button>
+                      {!untracked && (
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          className="text-destructive"
+                          disabled={busy}
+                          onClick={() =>
+                            setDiscard({
+                              label: `${n} selected ${n === 1 ? "line" : "lines"}`,
+                              run: () =>
+                                applyLines(hunk, sel, {
+                                  cached: false,
+                                  reverse: true,
+                                }),
+                            })
+                          }
+                        >
+                          Discard…
+                        </Button>
+                      )}
                     </>
                   )}
                   <Button
