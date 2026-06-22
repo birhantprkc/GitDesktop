@@ -20,6 +20,15 @@ commit list.
   replaces its loading placeholder. Everything respects your system "reduce motion"
   setting (it falls back to a plain fade or no animation).
 
+### Fixed
+
+- **Rust diffs no longer lose syntax highlighting partway down a file.** A large
+  Rust diff could render the top of a file highlighted and everything past a
+  certain line as plain text — a quirk of the lightweight highlighter mis-reading
+  a character literal or lifetime and giving up on the rest of the file. Rust now
+  renders with the same VS Code-grade grammar already used for TypeScript, Vue,
+  and others, which highlights every line reliably.
+
 ### Added
 
 - **Delegate a task to an AI agent, and iterate with it (agent sessions).** A new

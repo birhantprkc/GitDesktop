@@ -50,6 +50,32 @@ function countLines(s: string): number {
   return n;
 }
 
+/**
+ * The highest old- and new-side line numbers a unified diff's hunk headers
+ * reference. Content mode maps syntax onto the diff *by line number*, so each
+ * side's read-back file must reach these lines; if a cached content read has
+ * gone stale and is shorter than the diff (e.g. `:0` was cached when the staged
+ * file was smaller, then it grew), the renderer highlights only the lines the
+ * stale content covers and leaves the rest plain. {@link useFileContent} uses
+ * this to fall back to the self-consistent hunk-only path instead.
+ */
+function diffMaxLineNumbers(diffText: string): { old: number; new: number } {
+  let maxOld = 0;
+  let maxNew = 0;
+  const re = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm;
+  let m: RegExpExecArray | null = re.exec(diffText);
+  while (m !== null) {
+    const oldStart = Number(m[1]);
+    const oldCount = m[2] === undefined ? 1 : Number(m[2]);
+    const newStart = Number(m[3]);
+    const newCount = m[4] === undefined ? 1 : Number(m[4]);
+    if (oldCount > 0) maxOld = Math.max(maxOld, oldStart + oldCount - 1);
+    if (newCount > 0) maxNew = Math.max(maxNew, newStart + newCount - 1);
+    m = re.exec(diffText);
+  }
+  return { old: maxOld, new: maxNew };
+}
+
 /** Decode base64 file bytes (from git_file_base64) to a UTF-8 string. */
 function decodeBase64Utf8(b64: string): string {
   const bin = atob(b64);
@@ -122,11 +148,10 @@ export function GitDiffView({
 // Past this size, syntax highlighting (synchronous highlight.js) blocks long
 // enough to hurt; render the still-diff-colored plain view instead.
 const HIGHLIGHT_MAX_CHARS = 100_000;
-// Mirror the renderer's own line threshold (maxLineToIgnoreSyntax, default
-// 2000): above it the renderer refuses to highlight and logs a dev warning, so
-// we skip initSyntax ourselves rather than ask for work it won't do. rawLength
-// (the reconstructed file line count) is populated by initRaw but absent from
-// the public type.
+// Cap on the whole-file content read for content mode's highlight context: past
+// this many lines a file isn't read in full (the hunk-only path is used), and
+// useFileContent's budget check uses it too. Set to highlight.js's own line
+// threshold so any file small enough to read in full is also one it'll highlight.
 export const HIGHLIGHT_MAX_LINES = 2000;
 
 /**
@@ -178,14 +203,12 @@ export function createDiffFile(
     });
     file.initRaw();
     // Highlighting is cheap (<10ms even here); the real cost is the DiffView
-    // render, so build the diff in a single pass — skipping highlight for files
-    // too big in chars or lines for the renderer to highlight anyway.
-    const rawLines = (file as { rawLength?: number }).rawLength ?? 0;
-    if (
-      lang &&
-      text.length <= HIGHLIGHT_MAX_CHARS &&
-      rawLines <= HIGHLIGHT_MAX_LINES
-    ) {
+    // render, so build the diff in a single pass — skipping highlight only for
+    // files too big in chars to be worth it. The line-count cutoff is left to the
+    // renderer's own per-engine `maxLineToIgnoreSyntax` (highlight.js 2000, our
+    // Shiki highlighter 5000): gating here on one line count would wrongly skip
+    // large Shiki-rendered files (e.g. Rust) the renderer would happily do.
+    if (lang && text.length <= HIGHLIGHT_MAX_CHARS) {
       if (useShiki) {
         file.initSyntax({ registerHighlighter: shikiDiffHighlighter() });
       } else {
@@ -256,13 +279,22 @@ export function useFileContent(
   const newSettled = newRev === undefined || !newQ.isPending;
   const fitsBudget = (s: string) =>
     s.length <= HIGHLIGHT_MAX_CHARS && countLines(s) <= HIGHLIGHT_MAX_LINES;
+  // Content mode maps syntax onto the diff by line number, so each side's
+  // read-back text must reach the highest line the diff references. A stale,
+  // shorter read (e.g. `:0` cached before the staged file grew) would otherwise
+  // highlight only its first lines and leave the rest plain — fall back to the
+  // self-consistent hunk-only path instead.
+  const { old: maxOldLine, new: maxNewLine } = diffMaxLineNumbers(diffText);
+  const covers = (s: string, max: number) => max === 0 || countLines(s) >= max;
   const useContent =
     wantContent &&
     oldSettled &&
     newSettled &&
     (oldText !== "" || newText !== "") &&
     fitsBudget(oldText) &&
-    fitsBudget(newText);
+    fitsBudget(newText) &&
+    covers(newText, maxNewLine) &&
+    covers(oldText, maxOldLine);
   return useMemo(
     () => (useContent ? { old: oldText, new: newText } : null),
     [useContent, oldText, newText],

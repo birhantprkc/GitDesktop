@@ -16,6 +16,7 @@ import jsonGrammar from "@shikijs/langs/json";
 import jsonnetGrammar from "@shikijs/langs/jsonnet";
 import jsxGrammar from "@shikijs/langs/jsx";
 import prismaGrammar from "@shikijs/langs/prisma";
+import rustGrammar from "@shikijs/langs/rust";
 import solidityGrammar from "@shikijs/langs/solidity";
 import svelteGrammar from "@shikijs/langs/svelte";
 import terraformGrammar from "@shikijs/langs/terraform";
@@ -93,6 +94,12 @@ const BUILTIN_LANGS: Record<string, LanguageRegistration[]> = {
   // grammars don't tokenize JSX (the markup stayed plain).
   jsx: jsxGrammar,
   prisma: prismaGrammar,
+  // Rust renders via Shiki because highlight.js's flat tokenizer can mis-scope
+  // a lifetime/char-literal sequence and swallow the rest of the file as one
+  // token — leaving everything past that point unhighlighted. TextMate grammars
+  // are stateful and always emit one token line per source line, so coverage is
+  // complete regardless of tricky/mid-edit content.
+  rust: rustGrammar,
   solidity: solidityGrammar,
   svelte: svelteGrammar,
   terraform: terraformGrammar,
