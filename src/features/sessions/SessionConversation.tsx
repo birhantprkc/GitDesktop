@@ -3,9 +3,11 @@ import {
   ArrowDownIcon,
   SparkleIcon,
 } from "@phosphor-icons/react";
+import { AnimatePresence, m } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { quickTransition } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { AgentNarration } from "./AgentNarration";
 import { SessionComposer, type SessionComposerHandle } from "./SessionComposer";
@@ -107,16 +109,27 @@ export function SessionConversation({
             ))}
           </div>
         </div>
-        {!atBottom && (
-          <button
-            type="button"
-            onClick={jumpToLatest}
-            className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 border bg-background px-2.5 py-1 text-[11px] font-medium shadow-sm transition-colors hover:bg-muted focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-          >
-            <ArrowDownIcon className="size-3.5" />
-            Latest
-          </button>
-        )}
+        <AnimatePresence>
+          {!atBottom && (
+            // Centering = left-1/2 + motion x:-50% (NOT a -translate-x-1/2
+            // class — motion owns the x transform so it can compose with the
+            // animated y; re-adding that class would double-center it off-screen).
+            <m.button
+              key="latest"
+              type="button"
+              onClick={jumpToLatest}
+              style={{ x: "-50%" }}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={quickTransition}
+              className="absolute bottom-3 left-1/2 flex items-center gap-1.5 border bg-background px-2.5 py-1 text-[11px] font-medium shadow-sm transition-colors hover:bg-muted focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <ArrowDownIcon className="size-3.5" />
+              Latest
+            </m.button>
+          )}
+        </AnimatePresence>
       </div>
       <div className="shrink-0 border-t p-2">
         {session.kept ? (

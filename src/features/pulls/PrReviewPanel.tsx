@@ -7,6 +7,7 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
+import { AnimatePresence, m } from "motion/react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ import {
 import type { AiProviderId, ReviewMode } from "@/lib/ai/types";
 import { track } from "@/lib/analytics";
 import { copyText } from "@/lib/clipboard";
+import { quickTransition } from "@/lib/motion";
 import { useExternalReviews, useReviewHistory } from "@/lib/pulls/queries";
 import type { PersistedReview } from "@/lib/pulls/reviews-history";
 import {
@@ -278,27 +280,44 @@ export function PrReviewPanel({
             </p>
           )}
         <div className="flex flex-wrap items-center gap-2">
-          {generating ? (
-            <Button variant="outline" size="sm" onClick={cancel}>
-              <XIcon data-icon="inline-start" />
-              Cancel
-            </Button>
-          ) : (
-            <>
-              <Button size="sm" onClick={() => run("general")}>
-                <SparkleIcon data-icon="inline-start" />
-                Review
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => run("security")}
+          <AnimatePresence mode="wait" initial={false}>
+            {generating ? (
+              <m.div
+                key="cancel"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={quickTransition}
               >
-                <ShieldCheckIcon data-icon="inline-start" />
-                Security audit
-              </Button>
-            </>
-          )}
+                <Button variant="outline" size="sm" onClick={cancel}>
+                  <XIcon data-icon="inline-start" />
+                  Cancel
+                </Button>
+              </m.div>
+            ) : (
+              <m.div
+                key="run"
+                className="flex items-center gap-2"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={quickTransition}
+              >
+                <Button size="sm" onClick={() => run("general")}>
+                  <SparkleIcon data-icon="inline-start" />
+                  Review
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => run("security")}
+                >
+                  <ShieldCheckIcon data-icon="inline-start" />
+                  Security audit
+                </Button>
+              </m.div>
+            )}
+          </AnimatePresence>
           {text.trim() && !generating && (
             <Button
               variant="ghost"

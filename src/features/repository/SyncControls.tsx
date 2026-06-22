@@ -6,6 +6,7 @@ import {
   UploadSimpleIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
+import { AnimatePresence, m } from "motion/react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +37,7 @@ import {
   useRepoStatus,
 } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { quickTransition } from "@/lib/motion";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { PublishDialog } from "./PublishDialog";
@@ -136,18 +138,36 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
 
   return (
     <div className="flex items-center gap-2">
-      {head && head.ahead > 0 && (
-        <Badge variant="secondary">
-          <ArrowUpIcon className="size-3" />
-          {head.ahead}
-        </Badge>
-      )}
-      {head && head.behind > 0 && (
-        <Badge variant="secondary">
-          <ArrowDownIcon className="size-3" />
-          {head.behind}
-        </Badge>
-      )}
+      <AnimatePresence>
+        {head && head.ahead > 0 && (
+          <m.div
+            key="ahead"
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            transition={quickTransition}
+          >
+            <Badge variant="secondary">
+              <ArrowUpIcon className="size-3" />
+              {head.ahead}
+            </Badge>
+          </m.div>
+        )}
+        {head && head.behind > 0 && (
+          <m.div
+            key="behind"
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            transition={quickTransition}
+          >
+            <Badge variant="secondary">
+              <ArrowDownIcon className="size-3" />
+              {head.behind}
+            </Badge>
+          </m.div>
+        )}
+      </AnimatePresence>
       <ButtonGroup>
         <Button
           variant="outline"

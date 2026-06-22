@@ -1,4 +1,5 @@
 import { InfoIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
+import { AnimatePresence, m } from "motion/react";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { coAuthorTrailers } from "@/lib/git/co-authors";
 import { useCommit, useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { quickTransition } from "@/lib/motion";
 import { useAiConfigured, useAiEnabled } from "@/lib/settings/queries";
 import { commitDraftKey, useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -195,40 +197,61 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
         disabled={generating}
       />
       <div className="flex gap-2">
-        {aiEnabled &&
-          (generating ? (
-            <Button variant="outline" size="sm" onClick={cancel}>
-              <XIcon data-icon="inline-start" />
-              Cancel
-            </Button>
-          ) : aiConfigured ? (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={stagedCount === 0}
-              onClick={generate}
-              title={
-                stagedCount === 0
-                  ? "Stage changes to generate a commit message"
-                  : "Generate commit message with AI"
-              }
-            >
-              <SparkleIcon data-icon="inline-start" />
-              Generate
-            </Button>
-          ) : (
-            // AI is on but no provider is set up yet — turn the dead-end
-            // Generate click into a one-time path to Settings → AI.
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => openSettings("ai")}
-              title="Connect an AI provider to generate commit messages"
-            >
-              <SparkleIcon data-icon="inline-start" />
-              Set up AI
-            </Button>
-          ))}
+        {aiEnabled && (
+          <AnimatePresence mode="wait" initial={false}>
+            {generating ? (
+              <m.div
+                key="cancel"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={quickTransition}
+              >
+                <Button variant="outline" size="sm" onClick={cancel}>
+                  <XIcon data-icon="inline-start" />
+                  Cancel
+                </Button>
+              </m.div>
+            ) : (
+              <m.div
+                key="generate"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={quickTransition}
+              >
+                {aiConfigured ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={stagedCount === 0}
+                    onClick={generate}
+                    title={
+                      stagedCount === 0
+                        ? "Stage changes to generate a commit message"
+                        : "Generate commit message with AI"
+                    }
+                  >
+                    <SparkleIcon data-icon="inline-start" />
+                    Generate
+                  </Button>
+                ) : (
+                  // AI is on but no provider is set up yet — turn the dead-end
+                  // Generate click into a one-time path to Settings → AI.
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => openSettings("ai")}
+                    title="Connect an AI provider to generate commit messages"
+                  >
+                    <SparkleIcon data-icon="inline-start" />
+                    Set up AI
+                  </Button>
+                )}
+              </m.div>
+            )}
+          </AnimatePresence>
+        )}
         <Button
           size="sm"
           className="min-w-0 flex-1"

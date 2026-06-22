@@ -632,7 +632,10 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
         : `${stashFiles.length} selected files are saved to the stash and removed from your working tree. "Pop latest stash" restores them.`;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    // Calm fade as data replaces the loading skeleton (runs once on mount; a
+    // one-shot opacity fade is the existing tw-animate-css idiom, lighter than
+    // wrapping this whole tree in a motion component). Reduced-motion-safe.
+    <div className="flex min-h-0 flex-1 flex-col motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
       <ConflictBanner repoPath={repoPath} conflictedCount={conflictedCount} />
       {entries.length === 0 ? (
         <ChangesEmptyState

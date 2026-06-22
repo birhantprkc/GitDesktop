@@ -1,10 +1,12 @@
 import { QueryClientProvider } from "@tanstack/react-query";
+import { domAnimation, LazyMotion, MotionConfig } from "motion/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { initAnalytics, trackCaughtError } from "@/lib/analytics";
+import { calmTransition } from "@/lib/motion";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
 import { darkQuery } from "@/lib/use-is-dark";
@@ -41,7 +43,14 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ErrorBoundary>
-          <App />
+          {/* One calm motion baseline: reducedMotion="user" disables transform/
+              layout motion for users who ask (opacity still fades); LazyMotion +
+              `m` keeps the bundle small (use m.*, never motion.*). */}
+          <LazyMotion features={domAnimation} strict>
+            <MotionConfig reducedMotion="user" transition={calmTransition}>
+              <App />
+            </MotionConfig>
+          </LazyMotion>
         </ErrorBoundary>
         <Toaster position="bottom-right" />
       </TooltipProvider>

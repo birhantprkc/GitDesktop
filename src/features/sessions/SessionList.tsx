@@ -3,6 +3,12 @@ import {
   PlusIcon,
   SparkleIcon,
 } from "@phosphor-icons/react";
+import {
+  AnimatePresence,
+  type MotionProps,
+  m,
+  useReducedMotion,
+} from "motion/react";
 import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,6 +72,23 @@ export function SessionList({ repoPath }: { repoPath: string }) {
     setTab((t) => (t === "active" ? "kept" : "active")),
   );
   useHotkeyAction("focus-filter", () => searchRef.current?.focus());
+
+  // Rows fade + collapse on add/remove so the list reflows calmly. Reduced
+  // motion → opacity only (no height motion). py-2 (8px) is mirrored here because
+  // motion owns the row's vertical padding while it collapses to nothing.
+  const reduce = useReducedMotion();
+  const rowMotion: Pick<MotionProps, "initial" | "animate" | "exit"> = reduce
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } }
+    : {
+        initial: { opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0 },
+        animate: {
+          opacity: 1,
+          height: "auto",
+          paddingTop: 8,
+          paddingBottom: 8,
+        },
+        exit: { opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0 },
+      };
 
   const activeIndex = sessions.findIndex((s) => s.id === activeId);
   // When nothing in this list is selected, the first row is the roving tab stop
@@ -134,15 +157,20 @@ export function SessionList({ repoPath }: { repoPath: string }) {
               onKeyDown={onKeyDown}
               className="min-h-0 flex-1 overflow-y-auto p-1"
             >
-              {sessions.map((s, i) => (
-                <SessionRow
-                  key={s.id}
-                  session={s}
-                  active={s.id === activeId}
-                  tabIndex={i === rovingIndex ? 0 : -1}
-                  onClick={() => setActive(s.id)}
-                />
-              ))}
+              {/* Keyed by tab so switching tabs is an instant swap (no per-row
+                  exit flurry); within a tab, add/remove animates. */}
+              <AnimatePresence key={tab} initial={false}>
+                {sessions.map((s, i) => (
+                  <SessionRow
+                    key={s.id}
+                    session={s}
+                    active={s.id === activeId}
+                    tabIndex={i === rovingIndex ? 0 : -1}
+                    motionProps={rowMotion}
+                    onClick={() => setActive(s.id)}
+                  />
+                ))}
+              </AnimatePresence>
             </div>
           )}
         </>
@@ -200,17 +228,20 @@ function SessionRow({
   session,
   active,
   tabIndex,
+  motionProps,
   onClick,
 }: {
   session: AgentSession;
   active: boolean;
   tabIndex: number;
+  motionProps: Pick<MotionProps, "initial" | "animate" | "exit">;
   onClick: () => void;
 }) {
   const title = session.turns[0]?.prompt.trim() || "New session";
   const cost = session.turns.reduce((sum, t) => sum + (t.costUsd ?? 0), 0);
   return (
-    <button
+    <m.button
+      {...motionProps}
       type="button"
       role="option"
       aria-selected={active}
@@ -218,7 +249,7 @@ function SessionRow({
       tabIndex={tabIndex}
       onClick={onClick}
       className={cn(
-        "flex w-full flex-col items-start gap-1 px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+        "flex w-full flex-col items-start gap-1 overflow-hidden px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
         active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
       )}
     >
@@ -233,6 +264,6 @@ function SessionRow({
           </span>
         )}
       </span>
-    </button>
+    </m.button>
   );
 }

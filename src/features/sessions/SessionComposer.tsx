@@ -1,4 +1,5 @@
 import { StopIcon } from "@phosphor-icons/react";
+import { AnimatePresence, m } from "motion/react";
 import {
   useImperativeHandle,
   useLayoutEffect,
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
 import { useTrackedFiles } from "@/lib/git/queries";
+import { quickTransition } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { type AgentSession, useSessionsStore } from "./store";
 
@@ -324,26 +326,45 @@ export function SessionComposer({
             <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
               ↵ send · ⇧↵ newline
             </span>
-            {running ? (
-              <Button
-                size="sm"
-                variant="outline"
-                className="ml-auto"
-                onClick={() => session && cancel(session.id)}
-              >
-                <StopIcon weight="fill" />
-                Stop
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                className="ml-auto min-w-20"
-                disabled={!canSubmit}
-                onClick={submit}
-              >
-                {creating && !session ? "Starting…" : "Send"}
-              </Button>
-            )}
+            <AnimatePresence mode="wait" initial={false}>
+              {running ? (
+                <m.div
+                  key="stop"
+                  className="ml-auto"
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  transition={quickTransition}
+                >
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => session && cancel(session.id)}
+                  >
+                    <StopIcon weight="fill" />
+                    Stop
+                  </Button>
+                </m.div>
+              ) : (
+                <m.div
+                  key="send"
+                  className="ml-auto"
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  transition={quickTransition}
+                >
+                  <Button
+                    size="sm"
+                    className="min-w-20"
+                    disabled={!canSubmit}
+                    onClick={submit}
+                  >
+                    {creating && !session ? "Starting…" : "Send"}
+                  </Button>
+                </m.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </div>

@@ -10,6 +10,16 @@ commit list.
 
 ## [Unreleased]
 
+### Changed
+
+- **Subtle, calm transitions in a few spots.** A handful of state changes now ease
+  in instead of popping: the Send/Stop, Generate/Cancel, and Review/Cancel buttons
+  when an AI task starts or stops; agent sessions sliding in and out of the list as
+  you start, keep, or delete them; the "jump to latest" button in an agent chat;
+  the ahead/behind badges in the toolbar; and a soft fade as the Changes list
+  replaces its loading placeholder. Everything respects your system "reduce motion"
+  setting (it falls back to a plain fade or no animation).
+
 ### Added
 
 - **Delegate a task to an AI agent, and iterate with it (agent sessions).** A new
