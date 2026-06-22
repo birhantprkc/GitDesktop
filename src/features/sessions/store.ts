@@ -4,10 +4,13 @@ import { cancelAgentSession, runAgentSession } from "@/lib/ai/agent";
 import {
   commitWorktreeAll,
   createWorktree,
+  listWorktrees,
+  pruneWorktrees,
   removeWorktree,
   squashWorktree,
 } from "@/lib/git/worktree";
 import { toastError } from "@/lib/toast";
+import { loadPersistedSessions, persistSessions } from "./persistence";
 
 export type TurnStatus = "running" | "committing" | "done" | "error";
 
@@ -63,6 +66,9 @@ interface SessionsState {
   creating: boolean;
   /** The session currently being kept/discarded (its actions are disabled). */
   busyId: string | null;
+  /** Whether persisted sessions have been loaded + reconciled (gates persisting). */
+  hydrated: boolean;
+  hydrate: () => Promise<void>;
   setActive: (id: string | null) => void;
   start: (repoPath: string, prompt: string, model: string) => Promise<void>;
   send: (id: string, prompt: string) => Promise<void>;
@@ -85,10 +91,41 @@ function newTurn(prompt: string): SessionTurn {
 }
 
 type Get = () => SessionsState;
-type Set = (partial: Partial<SessionsState>) => void;
+type SetState = (partial: Partial<SessionsState>) => void;
+
+/** Normalize a path for comparison (git reports forward slashes; Windows paths
+ *  arrive with backslashes, and are case-insensitive). */
+function normPath(p: string): string {
+  return p.replace(/\\/g, "/").toLowerCase();
+}
+
+/** A session loaded from disk can't have a live turn — its CLI process is gone.
+ *  Mark a mid-run turn as interrupted so the session is idle (resumes on the
+ *  next message). */
+function markInterrupted(s: AgentSession): AgentSession {
+  const i = s.turns.length - 1;
+  const last = s.turns[i];
+  if (
+    !s.running &&
+    !(last?.status === "running" || last?.status === "committing")
+  )
+    return { ...s, running: false };
+  const turns = s.turns.slice();
+  if (last)
+    turns[i] = {
+      ...last,
+      status: last.status === "done" ? "done" : "error",
+      error:
+        last.status === "running" || last.status === "committing"
+          ? "Interrupted by restart."
+          : last.error,
+      statusText: "",
+    };
+  return { ...s, running: false, turns };
+}
 
 /** Removes a session from the list, moving `activeId` to a survivor (or null). */
-function removeSession(get: Get, set: Set, id: string) {
+function removeSession(get: Get, set: SetState, id: string) {
   const remaining = get().sessions.filter((s) => s.id !== id);
   const activeId =
     get().activeId === id
@@ -106,7 +143,7 @@ function removeSession(get: Get, set: Set, id: string) {
  */
 async function runTurn(
   get: Get,
-  set: Set,
+  set: SetState,
   id: string,
   prompt: string,
   resume: boolean,
@@ -204,6 +241,38 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
   activeId: null,
   creating: false,
   busyId: null,
+  hydrated: false,
+
+  hydrate: async () => {
+    if (get().hydrated) return;
+    let persisted: AgentSession[] = [];
+    try {
+      persisted = await loadPersistedSessions();
+    } catch {
+      // No store yet / unreadable — start clean.
+    }
+    if (persisted.length) {
+      const idled = persisted.map(markInterrupted);
+      // Reconcile per repo: prune orphan admin entries, then keep only sessions
+      // whose worktree still exists on disk (a crash/reload may have left some).
+      const repos = [...new Set(idled.map((s) => s.repoPath))];
+      const live: Record<string, Set<string>> = {};
+      for (const repo of repos) {
+        try {
+          await pruneWorktrees(repo);
+          const list = await listWorktrees(repo);
+          live[repo] = new Set(list.map((w) => normPath(w.path)));
+        } catch {
+          // Repo unreadable/gone → its sessions drop out (no entry in `live`).
+        }
+      }
+      const alive = idled.filter((s) =>
+        live[s.repoPath]?.has(normPath(s.worktreePath)),
+      );
+      set({ sessions: alive });
+    }
+    set({ hydrated: true });
+  },
 
   setActive: (id) => set({ activeId: id }),
 
@@ -319,3 +388,20 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     }
   },
 }));
+
+// Persist the sessions list (debounced) whenever it changes — but only after
+// hydrate has loaded the existing ones, so a pre-hydrate change can't clobber
+// the store with an empty list before it's read.
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+useSessionsStore.subscribe((state) => {
+  if (!state.hydrated) return;
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    void persistSessions(useSessionsStore.getState().sessions);
+  }, 500);
+});
+
+// Load persisted sessions + reconcile orphaned worktrees once at startup.
+// (Sessions survive a reload/restart: their worktrees + Claude transcripts live
+// on disk, so a follow-up message resumes right where it left off.)
+void useSessionsStore.getState().hydrate();

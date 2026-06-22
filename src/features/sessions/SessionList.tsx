@@ -11,10 +11,12 @@ import { type AgentSession, useSessionsStore } from "./store";
  * canvas; New shows the composer. Each session runs in its own worktree, so one
  * can be working while you read another.
  */
-export function SessionList() {
-  const sessions = useSessionsStore((s) => s.sessions);
+export function SessionList({ repoPath }: { repoPath: string }) {
+  const allSessions = useSessionsStore((s) => s.sessions);
   const activeId = useSessionsStore((s) => s.activeId);
   const setActive = useSessionsStore((s) => s.setActive);
+  // Sessions belong to the repo they were started in.
+  const sessions = allSessions.filter((s) => s.repoPath === repoPath);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

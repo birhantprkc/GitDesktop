@@ -15,7 +15,10 @@ import { type AgentSession, useSessionsStore } from "./store";
 export function SessionView({ repoPath }: { repoPath: string }) {
   const sessions = useSessionsStore((s) => s.sessions);
   const activeId = useSessionsStore((s) => s.activeId);
-  const active = sessions.find((s) => s.id === activeId) ?? null;
+  // Only adopt the active session if it belongs to this repo (activeId is
+  // global; switching repos shows the new-session composer until you pick one).
+  const active =
+    sessions.find((s) => s.id === activeId && s.repoPath === repoPath) ?? null;
 
   return (
     <div className="flex h-full min-w-0">

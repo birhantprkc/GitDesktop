@@ -279,7 +279,7 @@ export function RepositoryView() {
           </Activity>
           {aiEnabled && (
             <Activity mode={mode("agent")}>
-              <SessionList />
+              <SessionList repoPath={repoPath} />
             </Activity>
           )}
         </aside>
