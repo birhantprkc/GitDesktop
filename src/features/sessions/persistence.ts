@@ -1,25 +1,67 @@
-import { load, type Store } from "@tauri-apps/plugin-store";
-import { storeName } from "@/lib/test-mode";
+import { invoke } from "@/lib/tauri/invoke";
 import type { AgentSession } from "./store";
 
-// Agent sessions persist in their own store file (separate from settings) so a
-// reload/restart doesn't lose them — their worktrees + Claude transcripts live
-// on disk and can be resumed. autoSave flushes writes for us.
-let storePromise: Promise<Store> | null = null;
-function getStore(): Promise<Store> {
-  storePromise ??= load(storeName("agent-sessions.json"), {
-    autoSave: true,
-    defaults: {},
+// Sessions persist as append-only JSON-Lines transcripts, one file per session
+// (`<app_data>/sessions/<id>.jsonl`), written by the Rust `sessions` module — so
+// a long, resumable conversation never re-serializes its whole history the way
+// the previous single growing blob did. The store appends one event per
+// lifecycle transition (create / turn start / turn result / model / kept) and
+// folds the log back into sessions on startup. Diffs aren't stored — a turn
+// carries its checkpoint commit and the diff is reconstructed from git.
+
+/** Load + fold all persisted sessions (in creation order, `running:false`,
+ *  interrupted turns already marked). Migrates the legacy single-file store on
+ *  first run. */
+export const loadPersistedSessions = () =>
+  invoke<AgentSession[]>("transcript_load_all");
+
+/** Write a new session's header line (once, at creation). */
+export const createTranscript = (session: {
+  id: string;
+  repoPath: string;
+  worktreePath: string;
+  branch: string;
+  base: string;
+  claudeSessionId: string;
+  model: string;
+}) => invoke<void>("transcript_create", { session });
+
+/** Record the start of a turn (`seq` = its index in the session). */
+export const appendTurn = (
+  id: string,
+  seq: number,
+  prompt: string,
+  model: string,
+) => invoke<void>("transcript_append_turn", { id, seq, prompt, model });
+
+/** Record a turn's terminal result. `status` is "done" or "error". */
+export const appendResult = (
+  id: string,
+  seq: number,
+  status: string,
+  narration: string,
+  commitHash: string | null,
+  costUsd: number | null,
+  error: string | null,
+) =>
+  invoke<void>("transcript_append_result", {
+    id,
+    seq,
+    status,
+    narration,
+    commitHash,
+    costUsd,
+    error,
   });
-  return storePromise;
-}
 
-export async function loadPersistedSessions(): Promise<AgentSession[]> {
-  const store = await getStore();
-  return (await store.get<AgentSession[]>("sessions")) ?? [];
-}
+/** Record a mid-session model change (folded last-wins). */
+export const appendModel = (id: string, model: string) =>
+  invoke<void>("transcript_append_meta", { id, model });
 
-export async function persistSessions(sessions: AgentSession[]): Promise<void> {
-  const store = await getStore();
-  await store.set("sessions", sessions);
-}
+/** Record a Keep (`kept=true`) or Resume (`kept=false`). */
+export const setKept = (id: string, kept: boolean) =>
+  invoke<void>("transcript_set_kept", { id, kept });
+
+/** Delete a session's transcript (on discard / record removal). */
+export const removeTranscript = (id: string) =>
+  invoke<void>("transcript_remove", { id });

@@ -11,7 +11,21 @@ import {
   squashWorktree,
 } from "@/lib/git/worktree";
 import { toastError } from "@/lib/toast";
-import { loadPersistedSessions, persistSessions } from "./persistence";
+import {
+  appendModel,
+  appendResult,
+  appendTurn,
+  createTranscript,
+  loadPersistedSessions,
+  removeTranscript,
+  setKept,
+} from "./persistence";
+
+/** Fire-and-forget a transcript write: persistence must never break a session,
+ *  so swallow + log failures. Per-session append ordering is preserved by the
+ *  store calling these in sequence (and a process-wide lock in Rust). */
+const persist = (p: Promise<unknown>) =>
+  void p.catch((e) => console.error("[sessions] persist failed", e));
 
 export type TurnStatus = "running" | "committing" | "done" | "error";
 
@@ -174,6 +188,24 @@ async function runTurn(
       turns[turns.length - 1] = { ...turns[turns.length - 1], ...p };
       return { ...s, turns };
     });
+  // Persist the now-terminal last turn (one append per turn, at its end).
+  const persistResult = () => {
+    const s = find();
+    const i = (s?.turns.length ?? 0) - 1;
+    const t = s?.turns[i];
+    if (!t) return;
+    persist(
+      appendResult(
+        id,
+        i,
+        t.status,
+        t.narration,
+        t.commitHash,
+        t.costUsd,
+        t.error,
+      ),
+    );
+  };
 
   setSession((s) => ({ ...s, running: true }));
   try {
@@ -211,6 +243,7 @@ async function runTurn(
   } catch (e) {
     patchTurn({ status: "error", error: String(e), statusText: "" });
     setSession((s) => ({ ...s, running: false }));
+    persistResult();
     return;
   }
 
@@ -218,6 +251,7 @@ async function runTurn(
   if (!s1) return;
   if (s1.turns[s1.turns.length - 1]?.status === "error") {
     setSession((s) => ({ ...s, running: false }));
+    persistResult();
     return;
   }
   patchTurn({ status: "committing", statusText: "Committing this turn…" });
@@ -234,9 +268,11 @@ async function runTurn(
       };
       return { ...s, running: false, turns, headHash: hash ?? s.headHash };
     });
+    persistResult();
   } catch (e) {
     patchTurn({ status: "error", error: String(e), statusText: "" });
     setSession((s) => ({ ...s, running: false }));
+    persistResult();
   }
 }
 
@@ -281,6 +317,18 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       const alive = idled.filter(
         (s) => s.kept || live[s.repoPath]?.has(normPath(s.worktreePath)),
       );
+      // A non-kept session whose repo WAS reachable but whose worktree is gone
+      // is confirmed dead — delete its transcript so it doesn't reaccumulate.
+      // (Sessions in an unreachable repo are kept on disk; they return when the
+      // repo is back, rather than being silently lost.)
+      for (const s of idled) {
+        if (
+          !s.kept &&
+          live[s.repoPath] &&
+          !live[s.repoPath].has(normPath(s.worktreePath))
+        )
+          persist(removeTranscript(s.id));
+      }
       set({ sessions: alive });
     }
     set({ hydrated: true });
@@ -318,6 +366,18 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       sessions: [...get().sessions, session],
       activeId: wt.id,
     });
+    persist(
+      createTranscript({
+        id: session.id,
+        repoPath: session.repoPath,
+        worktreePath: session.worktreePath,
+        branch: session.branch,
+        base: session.base,
+        claudeSessionId: session.claudeSessionId,
+        model: session.model,
+      }),
+    );
+    persist(appendTurn(wt.id, 0, task, model));
     await runTurn(get, set, wt.id, task, false);
   },
 
@@ -327,18 +387,22 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     if (!s || s.running || s.kept) return;
     const task = prompt.trim();
     if (!task) return;
+    const seq = s.turns.length;
     set({
       sessions: get().sessions.map((x) =>
         x.id === id ? { ...x, turns: [...x.turns, newTurn(task)] } : x,
       ),
     });
+    persist(appendTurn(id, seq, task, s.model));
     await runTurn(get, set, id, task, true);
   },
 
-  setModel: (id, model) =>
+  setModel: (id, model) => {
     set({
       sessions: get().sessions.map((s) => (s.id === id ? { ...s, model } : s)),
-    }),
+    });
+    persist(appendModel(id, model));
+  },
 
   cancel: async (id) => {
     const s = get().sessions.find((x) => x.id === id);
@@ -383,6 +447,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       // session lingers as a `kept` record you can resume later.
       await removeWorktree(s.repoPath, s.worktreePath, null, false);
       toast.success(`Kept on branch ${s.branch}`);
+      persist(setKept(id, true));
       set({
         busyId: null,
         sessions: get().sessions.map((x) =>
@@ -403,6 +468,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       // Re-create the worktree on the kept branch (which holds the work); the
       // conversation resumes via `--resume` on the next message.
       await resumeWorktree(s.repoPath, s.worktreePath, s.branch);
+      persist(setKept(id, false));
       set({
         busyId: null,
         sessions: get().sessions.map((x) =>
@@ -421,6 +487,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     set({ busyId: id });
     try {
       await removeWorktree(s.repoPath, s.worktreePath, s.branch, true);
+      persist(removeTranscript(id));
       removeSession(get, set, id);
     } catch (e) {
       toastError(e);
@@ -433,21 +500,14 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
   deleteSession: (id) => {
     const s = get().sessions.find((x) => x.id === id);
     if (!s || !s.kept) return;
+    persist(removeTranscript(id));
     removeSession(get, set, id);
   },
 }));
 
-// Persist the sessions list (debounced) whenever it changes — but only after
-// hydrate has loaded the existing ones, so a pre-hydrate change can't clobber
-// the store with an empty list before it's read.
-let persistTimer: ReturnType<typeof setTimeout> | null = null;
-useSessionsStore.subscribe((state) => {
-  if (!state.hydrated) return;
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    void persistSessions(useSessionsStore.getState().sessions);
-  }, 500);
-});
+// Persistence is now event-sourced: each action appends the one transcript
+// event it produced (see the `persist(...)` calls above), so there's no
+// whole-list debounced write to maintain.
 
 // Load persisted sessions + reconcile orphaned worktrees once at startup.
 // (Sessions survive a reload/restart: their worktrees + Claude transcripts live

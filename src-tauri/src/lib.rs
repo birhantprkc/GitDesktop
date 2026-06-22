@@ -7,6 +7,7 @@ mod health;
 mod hooks;
 mod instructions;
 mod secrets;
+mod sessions;
 mod state;
 mod tray;
 
@@ -81,6 +82,13 @@ pub fn run() {
             git::worktree::git_worktree_commit_all,
             git::worktree::git_worktree_squash,
             git::worktree::git_worktree_resume,
+            sessions::transcript_load_all,
+            sessions::transcript_create,
+            sessions::transcript_append_turn,
+            sessions::transcript_append_result,
+            sessions::transcript_append_meta,
+            sessions::transcript_set_kept,
+            sessions::transcript_remove,
             git::ops::git_checkout_commit,
             git::ops::git_revert,
             git::ops::git_cherry_pick,
