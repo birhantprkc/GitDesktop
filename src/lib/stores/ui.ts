@@ -12,7 +12,8 @@ export type RepoTab =
   | "discussions"
   | "actions"
   | "tags"
-  | "insights";
+  | "insights"
+  | "agent";
 /** A create dialog the command palette / New menus can request from any tab. */
 export type CreateKind =
   | "issue"

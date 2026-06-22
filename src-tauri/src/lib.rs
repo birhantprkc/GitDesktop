@@ -74,6 +74,12 @@ pub fn run() {
             git::ops::git_discard,
             git::ops::git_discard_untracked_lines,
             git::ops::git_reset,
+            git::worktree::git_worktree_create,
+            git::worktree::git_worktree_list,
+            git::worktree::git_worktree_remove,
+            git::worktree::git_worktree_prune,
+            git::worktree::git_worktree_commit_all,
+            git::worktree::git_worktree_squash,
             git::ops::git_checkout_commit,
             git::ops::git_revert,
             git::ops::git_cherry_pick,
@@ -267,6 +273,7 @@ pub fn run() {
             health::system_health,
             agent::agent_review,
             agent::agent_review_cancel,
+            agent::agent_session,
             tray::set_close_to_tray,
         ])
         .run(tauri::generate_context!())

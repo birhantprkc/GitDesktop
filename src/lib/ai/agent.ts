@@ -74,3 +74,45 @@ export async function runAgentReview(args: AgentReviewArgs): Promise<void> {
 /** Signals an in-flight review to stop (kills the subprocess). */
 export const cancelAgentReview = (reviewId: string) =>
   invoke<void>("agent_review_cancel", { reviewId });
+
+export interface AgentSessionArgs {
+  /** Explicit Claude binary path, or null to auto-detect. */
+  binPath: string | null;
+  model: string;
+  systemPrompt: string;
+  /** The task/message for this turn, fed to the CLI on stdin. */
+  userPrompt: string;
+  /** The throwaway worktree the agent runs (and writes) inside. */
+  worktreePath: string;
+  /** The session's stable uuid (sets `--session-id` on turn 1, `--resume` after);
+   *  also the cancel key for `cancelAgentSession`. */
+  sessionId: string;
+  /** false = first turn (start the session), true = a follow-up turn (resume it). */
+  resume: boolean;
+  onEvent: (event: ReviewEvent) => void;
+}
+
+/**
+ * Runs one turn of a write-capable agent session: the CLI implements
+ * `userPrompt` full-auto inside the worktree, streaming the same events as a
+ * review. Follow-up turns (`resume: true`) keep the full conversation + worktree
+ * state. Claude-only for now (Codex's workspace-write is trust-gated).
+ */
+export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
+  const channel = new Channel<ReviewEvent>();
+  channel.onmessage = args.onEvent;
+  await invoke<void>("agent_session", {
+    binPath: args.binPath,
+    model: args.model,
+    systemPrompt: args.systemPrompt,
+    userPrompt: args.userPrompt,
+    worktreePath: args.worktreePath,
+    sessionId: args.sessionId,
+    resume: args.resume,
+    onEvent: channel,
+  });
+}
+
+/** Signals an in-flight session to stop (shares the backend cancel registry). */
+export const cancelAgentSession = (sessionId: string) =>
+  invoke<void>("agent_review_cancel", { reviewId: sessionId });

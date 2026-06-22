@@ -44,11 +44,13 @@ import { LocalPrView } from "@/features/pulls/LocalPrView";
 import { PullRequestsPanel } from "@/features/pulls/PullRequestsPanel";
 import { RemotePrView } from "@/features/pulls/RemotePrView";
 import { useWatchPrHeads } from "@/features/pulls/useWatchPrHeads";
+import { SessionsPanel } from "@/features/sessions/SessionsPanel";
+import { SessionView } from "@/features/sessions/SessionView";
 import { TagDetailView } from "@/features/tags/TagDetailView";
 import { TagsPanel } from "@/features/tags/TagsPanel";
 import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
-import { useRepoAlias } from "@/lib/settings/queries";
+import { useAiEnabled, useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
 import { ChangesPanel } from "./ChangesPanel";
@@ -67,7 +69,8 @@ const InsightsBoard = lazy(() =>
 // Secondary surfaces live behind a "More ▾" overflow so the four primary tabs
 // keep their full labels in the fixed-width rail. The trigger shows the active
 // secondary tab's name (e.g. "Issues ▾") so the rail still says where you are.
-const SECONDARY_TABS: { tab: RepoTab; label: string }[] = [
+const SECONDARY_TABS: { tab: RepoTab; label: string; ai?: boolean }[] = [
+  { tab: "agent", label: "Agent", ai: true },
   { tab: "issues", label: "Issues" },
   { tab: "discussions", label: "Discussions" },
   { tab: "actions", label: "Actions" },
@@ -99,6 +102,8 @@ export function RepositoryView() {
   const deferredTag = useDeferredValue(selectedTag);
   const status = useRepoStatus(repoPath ?? "");
   const alias = useRepoAlias(repoPath);
+  // The write-capable agent is an AI feature — hide its tab when AI is hidden.
+  const aiEnabled = useAiEnabled();
   const currentName = status.data?.branch?.name ?? null;
   const gh = useGhStatus(repoPath ?? "");
   const canGh = Boolean(
@@ -181,7 +186,8 @@ export function RepositoryView() {
   // render/commit) — so a heavy tab like Insights must gate its queries on its
   // own visibility, not rely on being hidden. See `active` below.
   const mode = (tab: RepoTab) => (repoTab === tab ? "visible" : "hidden");
-  const activeSecondary = SECONDARY_TABS.find((t) => t.tab === repoTab);
+  const secondaryTabs = SECONDARY_TABS.filter((t) => aiEnabled || !t.ai);
+  const activeSecondary = secondaryTabs.find((t) => t.tab === repoTab);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -223,7 +229,7 @@ export function RepositoryView() {
                   <CaretDownIcon data-icon="inline-end" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-44">
-                  {SECONDARY_TABS.map(({ tab, label }) => (
+                  {secondaryTabs.map(({ tab, label }) => (
                     <DropdownMenuItem
                       key={tab}
                       onClick={() => changeTab(tab)}
@@ -269,6 +275,11 @@ export function RepositoryView() {
               active={repoTab === "insights"}
             />
           </Activity>
+          {aiEnabled && (
+            <Activity mode={mode("agent")}>
+              <SessionsPanel repoPath={repoPath} />
+            </Activity>
+          )}
         </aside>
         <main className="min-w-0 flex-1">
           <Activity mode={mode("changes")}>
@@ -376,6 +387,11 @@ export function RepositoryView() {
               </Suspense>
             )}
           </Activity>
+          {aiEnabled && (
+            <Activity mode={mode("agent")}>
+              <SessionView />
+            </Activity>
+          )}
         </main>
       </div>
     </div>

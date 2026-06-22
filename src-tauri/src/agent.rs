@@ -23,6 +23,9 @@ pub(crate) const DETECT_TIMEOUT: Duration = Duration::from_secs(20);
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(300);
 /// Repo-aware (Tier 2) runs explore the tree with tools and take longer.
 const REVIEW_TIMEOUT_AGENTIC: Duration = Duration::from_secs(600);
+/// A write-capable agent session implements a real task, so it gets a much
+/// longer budget than a review. Generous for the slice; configurable later.
+const SESSION_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// Which agent CLI to drive. Frontend sends `"claude"` / `"codex"`.
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -355,6 +358,51 @@ fn claude_review_args(model: &str, system_prompt: &str, repo_aware: bool) -> Vec
     args
 }
 
+/// Claude write-capable *session* invocation. Same streaming shape as a review,
+/// but with the write toolset and `bypassPermissions` so it runs full-auto and
+/// never hangs on a mid-run permission prompt — safe because the session runs in
+/// a throwaway worktree (the sandbox boundary; see `docs/agent-sessions.md`).
+/// The task prompt is fed on stdin; the worktree is the process `current_dir`.
+///
+/// Sessions are multi-turn: turn 1 (`resume = false`) starts a persisted session
+/// under `session_id`; each follow-up (`resume = true`) resumes it, so the agent
+/// keeps the full conversation AND the worktree's evolving state. Persistence is
+/// ON (no `--no-session-persistence`) so `--resume` can find the transcript; the
+/// system prompt is set only on turn 1 (the resumed session already carries it).
+fn claude_session_args(
+    model: &str,
+    system_prompt: &str,
+    session_id: &str,
+    resume: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "-p".into(),
+        "--output-format".into(),
+        "stream-json".into(),
+        "--include-partial-messages".into(),
+        "--verbose".into(),
+        "--tools".into(),
+        "Read,Grep,Glob,Edit,Write,Bash".into(),
+        "--permission-mode".into(),
+        "bypassPermissions".into(),
+        "--strict-mcp-config".into(),
+    ];
+    if resume {
+        args.push("--resume".into());
+        args.push(session_id.into());
+    } else {
+        args.push("--session-id".into());
+        args.push(session_id.into());
+        args.push("--system-prompt".into());
+        args.push(system_prompt.into());
+    }
+    if !model.trim().is_empty() {
+        args.push("--model".into());
+        args.push(model.into());
+    }
+    args
+}
+
 /// Friendly progress label for a Claude Tier-2 tool call.
 fn tool_status(name: &str) -> String {
     match name {
@@ -517,42 +565,27 @@ fn parse_claude_line(line: &str, saw_result: &mut bool) -> Option<ReviewEvent> {
     }
 }
 
-#[tauri::command]
-pub async fn agent_review(
-    state: tauri::State<'_, AppState>,
+/// Spawns an agent CLI, streams its stdout as `ReviewEvent`s until a terminal
+/// event / EOF / cancel / timeout, then emits a final `Error` if no terminal
+/// result arrived. Shared by `agent_review` (read-only) and `agent_session`
+/// (write-enabled, run in a worktree). `cwd` is the process working directory,
+/// `cancel_id` keys the cancel registry, and `noun` colors the failure copy.
+#[allow(clippy::too_many_arguments)]
+async fn stream_agent(
+    state: &AppState,
     kind: AgentKind,
-    bin_path: Option<String>,
-    model: String,
-    system_prompt: String,
-    user_prompt: String,
-    repo_path: String,
-    repo_aware: bool,
-    review_id: String,
-    on_event: Channel<ReviewEvent>,
+    binary: &Path,
+    args: Vec<String>,
+    stdin_text: String,
+    cwd: &str,
+    timeout: Duration,
+    cancel_id: &str,
+    noun: &str,
+    on_event: &Channel<ReviewEvent>,
 ) -> AppResult<()> {
-    let binary = resolve(kind, bin_path.as_deref()).await.ok_or_else(|| {
-        AppError::Command(format!(
-            "{} CLI not found. Install it or set its path in Settings.",
-            kind.label()
-        ))
-    })?;
-
-    // Per-kind invocation: Claude carries the system prompt as a flag and the
-    // diff on stdin; Codex has no system-prompt flag, so both go on stdin.
-    let (args, stdin_text) = match kind {
-        AgentKind::Claude => (
-            claude_review_args(&model, &system_prompt, repo_aware),
-            user_prompt,
-        ),
-        AgentKind::Codex => (
-            codex_review_args(&model, &repo_path),
-            format!("{system_prompt}\n\n{user_prompt}"),
-        ),
-    };
-
-    let mut cmd = Command::new(&binary);
+    let mut cmd = Command::new(binary);
     cmd.args(args)
-        .current_dir(&repo_path)
+        .current_dir(cwd)
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")
         .stdin(Stdio::piped())
@@ -579,7 +612,7 @@ pub async fn agent_review(
         });
     }
 
-    // Drain stderr concurrently; surfaced only if no `result` event arrives.
+    // Drain stderr concurrently; surfaced only if no terminal result arrives.
     let stderr = child.stderr.take();
     let stderr_task = tokio::spawn(async move {
         let mut buf = String::new();
@@ -592,19 +625,13 @@ pub async fn agent_review(
     let stdout = child.stdout.take().expect("stdout was piped");
     let mut lines = BufReader::new(stdout).lines();
 
-    let cancel = state.register_agent_cancel(&review_id).await;
+    let cancel = state.register_agent_cancel(cancel_id).await;
 
     let mut saw_result = false;
-    let mut last_message = String::new(); // codex: accumulates the final review
+    let mut last_message = String::new(); // codex: accumulates the final message
     let mut cancelled = false;
     let mut timed_out = false;
 
-    // Codex always explores the repo, so it gets the longer agentic budget too.
-    let timeout = if repo_aware || matches!(kind, AgentKind::Codex) {
-        REVIEW_TIMEOUT_AGENTIC
-    } else {
-        REVIEW_TIMEOUT
-    };
     let deadline = tokio::time::sleep(timeout);
     tokio::pin!(deadline);
 
@@ -640,7 +667,7 @@ pub async fn agent_review(
         }
     }
 
-    state.clear_agent_cancel(&review_id).await;
+    state.clear_agent_cancel(cancel_id).await;
     let _ = child.wait().await;
     let stderr_text = stderr_task.await.unwrap_or_default();
 
@@ -650,17 +677,17 @@ pub async fn agent_review(
     }
     if timed_out {
         let _ = on_event.send(ReviewEvent::Error {
-            message: format!("Review timed out after {}s.", timeout.as_secs()),
+            message: format!("The {noun} timed out after {}s.", timeout.as_secs()),
         });
         return Ok(());
     }
     if !saw_result {
-        // No terminal `result` event — surface stderr. Covers auth/quota
+        // No terminal result event — surface stderr. Covers auth/quota
         // failures and the empty-stdout-without-a-TTY class of CLI bugs.
         let msg = stderr_text.trim();
         let _ = on_event.send(ReviewEvent::Error {
             message: if msg.is_empty() {
-                "The review process ended without producing any output.".to_string()
+                format!("The {noun} process ended without producing any output.")
             } else {
                 msg.to_string()
             },
@@ -670,10 +697,98 @@ pub async fn agent_review(
 }
 
 #[tauri::command]
+pub async fn agent_review(
+    state: tauri::State<'_, AppState>,
+    kind: AgentKind,
+    bin_path: Option<String>,
+    model: String,
+    system_prompt: String,
+    user_prompt: String,
+    repo_path: String,
+    repo_aware: bool,
+    review_id: String,
+    on_event: Channel<ReviewEvent>,
+) -> AppResult<()> {
+    let binary = resolve(kind, bin_path.as_deref()).await.ok_or_else(|| {
+        AppError::Command(format!(
+            "{} CLI not found. Install it or set its path in Settings.",
+            kind.label()
+        ))
+    })?;
+
+    // Per-kind invocation: Claude carries the system prompt as a flag and the
+    // diff on stdin; Codex has no system-prompt flag, so both go on stdin.
+    let (args, stdin_text) = match kind {
+        AgentKind::Claude => (
+            claude_review_args(&model, &system_prompt, repo_aware),
+            user_prompt,
+        ),
+        AgentKind::Codex => (
+            codex_review_args(&model, &repo_path),
+            format!("{system_prompt}\n\n{user_prompt}"),
+        ),
+    };
+
+    // Codex always explores the repo, so it gets the longer agentic budget too.
+    let timeout = if repo_aware || matches!(kind, AgentKind::Codex) {
+        REVIEW_TIMEOUT_AGENTIC
+    } else {
+        REVIEW_TIMEOUT
+    };
+    stream_agent(
+        &state, kind, &binary, args, stdin_text, &repo_path, timeout, &review_id, "review",
+        &on_event,
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn agent_review_cancel(
     state: tauri::State<'_, AppState>,
     review_id: String,
 ) -> AppResult<()> {
     state.cancel_agent(&review_id).await;
     Ok(())
+}
+
+/// Runs one turn of a write-capable agent session: the CLI implements
+/// `user_prompt` full-auto inside `worktree_path` (a throwaway worktree — the
+/// sandbox boundary). `resume = false` starts the session under `session_id`;
+/// `resume = true` continues it (keeping context). Streams the same
+/// `ReviewEvent`s as a review; cancel via `agent_review_cancel` with the same
+/// `session_id`. Claude-only for now — Codex's `workspace-write` is trust-gated
+/// for fresh, non-interactive worktrees (see `docs/agent-sessions.md`).
+#[tauri::command]
+pub async fn agent_session(
+    state: tauri::State<'_, AppState>,
+    bin_path: Option<String>,
+    model: String,
+    system_prompt: String,
+    user_prompt: String,
+    worktree_path: String,
+    session_id: String,
+    resume: bool,
+    on_event: Channel<ReviewEvent>,
+) -> AppResult<()> {
+    let binary = resolve(AgentKind::Claude, bin_path.as_deref())
+        .await
+        .ok_or_else(|| {
+            AppError::Command(
+                "Claude CLI not found. Install it or set its path in Settings.".to_string(),
+            )
+        })?;
+    let args = claude_session_args(&model, &system_prompt, &session_id, resume);
+    stream_agent(
+        &state,
+        AgentKind::Claude,
+        &binary,
+        args,
+        user_prompt,
+        &worktree_path,
+        SESSION_TIMEOUT,
+        &session_id,
+        "session",
+        &on_event,
+    )
+    .await
 }
