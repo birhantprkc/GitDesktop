@@ -14,6 +14,7 @@ export type ActionCategory =
   | "Repository"
   | "Branches & stash"
   | "Changes"
+  | "Agent"
   | "Pull requests";
 
 export interface ActionDef {
@@ -404,6 +405,32 @@ export const ACTIONS = [
     defaultBinding: null,
   },
 
+  // Agent (only live on the Agent tab, which exists when AI features are on)
+  {
+    id: "agent-new-session",
+    label: "New agent session",
+    category: "Agent",
+    defaultBinding: null,
+  },
+  {
+    id: "agent-keep-session",
+    label: "Keep agent session",
+    category: "Agent",
+    defaultBinding: null,
+  },
+  {
+    id: "agent-discard-session",
+    label: "Discard agent session",
+    category: "Agent",
+    defaultBinding: null,
+  },
+  {
+    id: "agent-toggle-view",
+    label: "Toggle conversation / changes",
+    category: "Agent",
+    defaultBinding: null,
+  },
+
   // Pull requests
   {
     id: "create-pr",
@@ -427,6 +454,7 @@ export const CATEGORY_ORDER: ActionCategory[] = [
   "Repository",
   "Branches & stash",
   "Changes",
+  "Agent",
   "Pull requests",
 ];
 

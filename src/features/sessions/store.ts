@@ -54,6 +54,8 @@ const SYSTEM_PROMPT =
   "tree or branch. Implement the user's request directly by editing files in the " +
   "current directory. This is a continuing conversation: later messages refine or " +
   "build on your earlier work in this same worktree. Make focused, working changes. " +
+  "A token like `@path/to/file` in the user's message is a reference to that file " +
+  "in this worktree — read it for context (and edit it if the request implies). " +
   "Do NOT commit — the app commits each turn so the user can review it. When " +
   "finished with a turn, briefly summarize what you changed.";
 
