@@ -10,6 +10,7 @@ import {
   resumeWorktree,
   squashWorktree,
 } from "@/lib/git/worktree";
+import { notify } from "@/lib/notify";
 import { toastError } from "@/lib/toast";
 import {
   appendModel,
@@ -20,6 +21,7 @@ import {
   removeTranscript,
   setKept,
 } from "./persistence";
+import { sessionStatus } from "./status";
 
 /** Fire-and-forget a transcript write: persistence must never break a session,
  *  so swallow + log failures. Per-session append ordering is preserved by the
@@ -188,12 +190,13 @@ async function runTurn(
       turns[turns.length - 1] = { ...turns[turns.length - 1], ...p };
       return { ...s, turns };
     });
-  // Persist the now-terminal last turn (one append per turn, at its end).
-  const persistResult = () => {
+  // End of a turn: persist the now-terminal last turn (one append per turn) and,
+  // unless you're watching this session live, fire an OS notification.
+  const endTurn = () => {
     const s = find();
     const i = (s?.turns.length ?? 0) - 1;
     const t = s?.turns[i];
-    if (!t) return;
+    if (!s || !t) return;
     persist(
       appendResult(
         id,
@@ -205,6 +208,17 @@ async function runTurn(
         t.error,
       ),
     );
+    // "Watching" = window focused AND this is the session on screen; then the
+    // streamed result is already visible, so stay quiet. Notifying otherwise
+    // covers the multi-session case (working in another session, or away). A
+    // user Cancel is intentional, so it's never announced.
+    if (document.hasFocus() && get().activeId === id) return;
+    if (t.status === "error" && t.error === "Cancelled.") return;
+    const label =
+      s.turns[0]?.prompt.trim().replace(/\s+/g, " ").slice(0, 70) ||
+      "Agent session";
+    const failed = sessionStatus(s).kind === "error";
+    void notify(failed ? "Agent failed" : "Agent finished", label);
   };
 
   setSession((s) => ({ ...s, running: true }));
@@ -243,7 +257,7 @@ async function runTurn(
   } catch (e) {
     patchTurn({ status: "error", error: String(e), statusText: "" });
     setSession((s) => ({ ...s, running: false }));
-    persistResult();
+    endTurn();
     return;
   }
 
@@ -251,7 +265,7 @@ async function runTurn(
   if (!s1) return;
   if (s1.turns[s1.turns.length - 1]?.status === "error") {
     setSession((s) => ({ ...s, running: false }));
-    persistResult();
+    endTurn();
     return;
   }
   patchTurn({ status: "committing", statusText: "Committing this turn…" });
@@ -268,11 +282,11 @@ async function runTurn(
       };
       return { ...s, running: false, turns, headHash: hash ?? s.headHash };
     });
-    persistResult();
+    endTurn();
   } catch (e) {
     patchTurn({ status: "error", error: String(e), statusText: "" });
     setSession((s) => ({ ...s, running: false }));
-    persistResult();
+    endTurn();
   }
 }
 

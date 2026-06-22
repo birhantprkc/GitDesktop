@@ -32,7 +32,12 @@ commit list.
   go). **Run
   several sessions at once** — each gets its own worktree and runs independently,
   listed in the sidebar so you can start one, switch to another while it works
-  (arrow keys included), and come back. **Sessions are remembered across
+  (arrow keys included), and come back. The sidebar groups sessions into
+  **Active** and **Kept** tabs (with counts) so finalized work doesn't crowd
+  what's ready to review, and a **search** box filters by task, branch, or any
+  message. An **OS notification** fires when a turn finishes — unless you're
+  already watching that session — so you can start one and step away. **Sessions
+  are remembered across
   restarts** — close and reopen the app and your sessions are still there, ready
   to keep iterating (a follow-up picks up right where it left off). When you're
   happy, **Keep** the work — optionally squashing the per-turn commits into one —

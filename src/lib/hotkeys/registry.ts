@@ -442,6 +442,12 @@ export const ACTIONS = [
     category: "Agent",
     defaultBinding: null,
   },
+  {
+    id: "agent-toggle-list-tab",
+    label: "Toggle active / kept sessions",
+    category: "Agent",
+    defaultBinding: null,
+  },
 
   // Pull requests
   {
