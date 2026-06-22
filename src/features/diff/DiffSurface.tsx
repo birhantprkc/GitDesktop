@@ -127,7 +127,7 @@ const HIGHLIGHT_MAX_CHARS = 100_000;
 // we skip initSyntax ourselves rather than ask for work it won't do. rawLength
 // (the reconstructed file line count) is populated by initRaw but absent from
 // the public type.
-const HIGHLIGHT_MAX_LINES = 2000;
+export const HIGHLIGHT_MAX_LINES = 2000;
 
 /**
  * Build a parsed `DiffFile` from unified-diff text, with syntax highlighting
@@ -198,6 +198,77 @@ export function createDiffFile(
   }
 }
 
+/**
+ * Reads the full old/new file text for whole-file highlight context (the
+ * content-mode path) and returns `{old,new}` to hand {@link createDiffFile}, or
+ * `null` when content mode shouldn't apply (no revs, unreadable side, or a diff
+ * too big in lines/chars for the renderer to highlight). Gated to small,
+ * non-truncated diffs whose files fit the highlight budget. The rev pair MUST
+ * match the diff's own old/new. Shared by the read-only diff surface and the
+ * staging diff viewer. `diffText`/`filePath` should already be deferred values.
+ */
+export function useFileContent(
+  repoPath: string | undefined,
+  filePath: string,
+  diffText: string,
+  contentRevs?: DiffContentRevs,
+  // Max diff size before content mode (whole-file highlight + collapsible
+  // expand) engages. The read-only surface caps its render at DIFF_LINE_CAP and
+  // uses that default; the staging view renders every hunk regardless, so it
+  // passes the larger highlight budget — a big diff in a normal-size file then
+  // still highlights correctly instead of falling back to the hunk-only,
+  // mid-comment-leaking path.
+  maxDiffLines: number = DIFF_LINE_CAP,
+): { old: string; new: string } | null {
+  const oldRev = contentRevs?.oldRev;
+  const newRev = contentRevs?.newRev;
+  const wantContent =
+    !!repoPath && !!contentRevs && countLines(diffText) <= maxDiffLines;
+  const oldQ = useFileAtRev(
+    repoPath ?? "",
+    oldRev ?? null,
+    filePath,
+    wantContent && oldRev !== undefined,
+  );
+  const newQ = useFileAtRev(
+    repoPath ?? "",
+    newRev ?? null,
+    filePath,
+    wantContent && newRev !== undefined,
+  );
+  // An omitted side (undefined rev) has no version there → "" — gated on the
+  // rev, not just the data, because a disabled `null` read shares the worktree
+  // query key and would otherwise cache-hit the *other* side's content. A null
+  // read with a defined rev = the file is absent there (added/deleted) → "".
+  const oldText = useMemo(
+    () =>
+      oldRev !== undefined && oldQ.data ? decodeBase64Utf8(oldQ.data) : "",
+    [oldRev, oldQ.data],
+  );
+  const newText = useMemo(
+    () =>
+      newRev !== undefined && newQ.data ? decodeBase64Utf8(newQ.data) : "",
+    [newRev, newQ.data],
+  );
+  // Usable once the enabled side-reads settle and both files fit the highlight
+  // budget (a 1-line change in a huge file stays hunk-only, no whole-file walk).
+  const oldSettled = oldRev === undefined || !oldQ.isPending;
+  const newSettled = newRev === undefined || !newQ.isPending;
+  const fitsBudget = (s: string) =>
+    s.length <= HIGHLIGHT_MAX_CHARS && countLines(s) <= HIGHLIGHT_MAX_LINES;
+  const useContent =
+    wantContent &&
+    oldSettled &&
+    newSettled &&
+    (oldText !== "" || newText !== "") &&
+    fitsBudget(oldText) &&
+    fitsBudget(newText);
+  return useMemo(
+    () => (useContent ? { old: oldText, new: newText } : null),
+    [useContent, oldText, newText],
+  );
+}
+
 function RenderedDiff({
   filePath,
   text,
@@ -229,64 +300,24 @@ function RenderedDiff({
   const deferredText = useDeferredValue(text);
   const deferredPath = useDeferredValue(filePath);
 
-  // Whole-file highlight context (fixes mis-coloring when a hunk starts inside a
-  // block comment, and gives GitHub-style collapsible context). Only attempt it
-  // for small, non-truncated diffs (`contentRevs` is already cleared upstream
-  // when the diff was truncated) whose files we can read — big diffs keep the
-  // capped hunk-only path. The rev pair must match the diff's own old/new.
-  const oldRev = contentRevs?.oldRev;
-  const newRev = contentRevs?.newRev;
-  const wantContent =
-    !!repoPath && !!contentRevs && countLines(deferredText) <= DIFF_LINE_CAP;
-  const oldQ = useFileAtRev(
-    repoPath ?? "",
-    oldRev ?? null,
+  // Whole-file highlight context + collapsible expand for small diffs; null when
+  // it shouldn't apply (big file / unreadable / truncated → capped hunk-only).
+  const content = useFileContent(
+    repoPath,
     deferredPath,
-    wantContent && oldRev !== undefined,
+    deferredText,
+    contentRevs,
   );
-  const newQ = useFileAtRev(
-    repoPath ?? "",
-    newRev ?? null,
-    deferredPath,
-    wantContent && newRev !== undefined,
-  );
-  // An omitted side (undefined rev) has no version there → "" — gated on the
-  // rev, not just the data, because a disabled `null` read shares the worktree
-  // query key and would otherwise cache-hit the *other* side's content. A null
-  // read with a defined rev = the file is absent there (added/deleted) → "".
-  const oldText = useMemo(
-    () =>
-      oldRev !== undefined && oldQ.data ? decodeBase64Utf8(oldQ.data) : "",
-    [oldRev, oldQ.data],
-  );
-  const newText = useMemo(
-    () =>
-      newRev !== undefined && newQ.data ? decodeBase64Utf8(newQ.data) : "",
-    [newRev, newQ.data],
-  );
-  // Usable once the enabled side-reads settle and both files fit the highlight
-  // budget (a 1-line change in a huge file stays hunk-only, no whole-file walk).
-  const oldSettled = oldRev === undefined || !oldQ.isPending;
-  const newSettled = newRev === undefined || !newQ.isPending;
-  const fitsBudget = (s: string) =>
-    s.length <= HIGHLIGHT_MAX_CHARS && countLines(s) <= HIGHLIGHT_MAX_LINES;
-  const useContent =
-    wantContent &&
-    oldSettled &&
-    newSettled &&
-    (oldText !== "" || newText !== "") &&
-    fitsBudget(oldText) &&
-    fitsBudget(newText);
 
   const { shown, hidden } = useMemo(() => {
     // Content mode renders the full diff (the renderer collapses non-hunk
     // context into expandable gaps), so the cap doesn't apply there.
-    if (useContent) return { shown: deferredText, hidden: 0 };
+    if (content) return { shown: deferredText, hidden: 0 };
     const r = showFull
       ? { text: deferredText, hidden: 0 }
       : capDiffText(deferredText, DIFF_LINE_CAP);
     return { shown: r.text, hidden: r.hidden };
-  }, [deferredText, showFull, useContent]);
+  }, [deferredText, showFull, content]);
 
   // Syntax prefs follow the active repo (repo-scoped custom languages); the
   // active repo owns every surface that supplies content, so this matches.
@@ -298,17 +329,9 @@ function RenderedDiff({
         deferredPath,
         shown,
         { syntaxMap, customLanguages },
-        useContent ? { old: oldText, new: newText } : undefined,
+        content ?? undefined,
       ),
-    [
-      shown,
-      deferredPath,
-      syntaxMap,
-      customLanguages,
-      useContent,
-      oldText,
-      newText,
-    ],
+    [shown, deferredPath, syntaxMap, customLanguages, content],
   );
 
   if (!diffFile) return <DiffPlaceholder message="No changes to show" />;

@@ -5,7 +5,6 @@ import {
 } from "@git-diff-view/react";
 import { InfoIcon } from "@phosphor-icons/react";
 import {
-  memo,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -22,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Spinner } from "@/components/ui/spinner";
 import type { SelectedLine } from "@/lib/git/api";
 import {
   buildHunkPatch,
@@ -44,7 +42,14 @@ import { toastError } from "@/lib/toast";
 import { useIsDark } from "@/lib/use-is-dark";
 import { DiffLanguagePicker } from "./DiffLanguagePicker";
 import { DiffPlaceholder } from "./DiffPlaceholder";
-import { createDiffFile, DiffModeToggle, DiffSurface } from "./DiffSurface";
+import {
+  createDiffFile,
+  type DiffContentRevs,
+  DiffModeToggle,
+  DiffSurface,
+  HIGHLIGHT_MAX_LINES,
+  useFileContent,
+} from "./DiffSurface";
 import { ImagePanes } from "./ImageDiff";
 
 /** Working-tree diff for the file selected in the changes panel. */
@@ -80,15 +85,6 @@ export function DiffViewer({ repoPath }: { repoPath: string }) {
   );
 }
 
-/** A pending line-selection within one hunk (drag-selected in its diff). */
-interface Selection {
-  hunkKey: string;
-  lines: SelectedLine[];
-}
-
-/** Stable empty array for unselected hunks so `memo` skips re-rendering them. */
-const NO_LINES: SelectedLine[] = [];
-
 /**
  * The working-tree variant of the diff pane: hunks render as individual cards
  * with whole-hunk stage/unstage/discard actions, plus drag-to-select for
@@ -123,7 +119,9 @@ function WorkingTreeDiff({
     label: string;
     run: () => void;
   } | null>(null);
-  const [selection, setSelection] = useState<Selection | null>(null);
+  // The drag-selected lines to stage/unstage/discard — file-wide, since the
+  // single whole-file view lets a selection span multiple hunks.
+  const [selection, setSelection] = useState<SelectedLine[] | null>(null);
   const clearSelection = useCallback(() => setSelection(null), []);
 
   const parsed: ParsedDiff | null = useMemo(() => {
@@ -131,16 +129,6 @@ function WorkingTreeDiff({
     if (!data || data.isBinary || data.isTruncated) return null;
     return parseHunks(data.text);
   }, [diff.data]);
-
-  const onSelect = useCallback((hunkKey: string, lines: SelectedLine[]) => {
-    setSelection((prev) =>
-      lines.length > 0
-        ? { hunkKey, lines }
-        : prev?.hunkKey === hunkKey
-          ? null
-          : prev,
-    );
-  }, []);
 
   // A truncated parse could cut a hunk in half — never offer to apply one.
   // Untracked text files line-stage too: `git apply --cached` of a subset of a
@@ -185,16 +173,26 @@ function WorkingTreeDiff({
     );
   }
 
-  function applyLines(
-    hunk: DiffHunk,
-    lines: SelectedLine[],
-    opts: { cached: boolean; reverse: boolean },
-  ) {
-    if (!parsed) return;
+  // Stage/unstage/discard the file-wide line selection. `build_partial_patch`
+  // already distributes a multi-hunk selection, so hand it the WHOLE diff.
+  function applySelection(opts: { cached: boolean; reverse: boolean }) {
+    if (!selection || !diff.data) return;
     applyPartial.mutate(
-      { diffText: buildHunkPatch(parsed, hunk), selected: lines, ...opts },
+      { diffText: diff.data.text, selected: selection, ...opts },
       { onError, onSuccess: clearSelection },
     );
+  }
+
+  // A whole-hunk action, fired by the per-hunk overlay buttons.
+  function onHunkAction(hunk: DiffHunk, kind: "stage" | "unstage" | "discard") {
+    if (kind === "discard") {
+      setDiscard({
+        label: hunk.header,
+        run: () => applyHunk(hunk, { cached: false, reverse: true }),
+      });
+    } else {
+      applyHunk(hunk, { cached: true, reverse: kind === "unstage" });
+    }
   }
 
   return (
@@ -208,6 +206,60 @@ function WorkingTreeDiff({
           <DiffModeToggle />
         </span>
       </div>
+      {selection && (
+        <div className="flex items-center gap-2 border-b bg-primary/10 px-3 py-1 text-[11px]">
+          <span className="flex-1 font-medium">
+            {selection.length} {selection.length === 1 ? "line" : "lines"}{" "}
+            selected
+          </span>
+          {file.staged ? (
+            <Button
+              variant="secondary"
+              size="xs"
+              disabled={busy}
+              onClick={() => applySelection({ cached: true, reverse: true })}
+            >
+              Unstage
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="secondary"
+                size="xs"
+                disabled={busy}
+                onClick={() => applySelection({ cached: true, reverse: false })}
+              >
+                Stage
+              </Button>
+              {!untracked && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-destructive"
+                  disabled={busy}
+                  onClick={() =>
+                    setDiscard({
+                      label: `${selection.length} selected ${selection.length === 1 ? "line" : "lines"}`,
+                      run: () =>
+                        applySelection({ cached: false, reverse: true }),
+                    })
+                  }
+                >
+                  Discard…
+                </Button>
+              )}
+            </>
+          )}
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={busy}
+            onClick={clearSelection}
+          >
+            Clear
+          </Button>
+        </div>
+      )}
       <div className="ph-no-capture min-h-0 flex-1 overflow-auto">
         {file.path.toLowerCase().endsWith(".svg") && (
           <div className="border-b">
@@ -226,8 +278,8 @@ function WorkingTreeDiff({
           <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
             <InfoIcon className="size-3.5 shrink-0" />
             <span className="flex-1 leading-snug">
-              Drag across lines in a hunk to {file.staged ? "unstage" : "stage"}{" "}
-              just those lines.
+              Drag across the line numbers to{" "}
+              {file.staged ? "unstage" : "stage"} just those lines.
             </span>
             <button
               type="button"
@@ -244,146 +296,27 @@ function WorkingTreeDiff({
             </button>
           </div>
         )}
-        {parsed.hunks.map((hunk, i) => {
-          // Index is a stable, collision-free identity within one parsed diff
-          // (hunks don't reorder; the view remounts per file and selection is
-          // cleared on apply) — unlike header+length, which two hunks can share.
-          const key = String(i);
-          const sel =
-            selection && selection.hunkKey === key ? selection.lines : null;
-          const n = sel?.length ?? 0;
-          return (
-            <section key={key} className="border-b">
-              {/* Whole-hunk actions stay available even with a line selection. */}
-              <div className="flex items-center gap-2 bg-muted/40 px-3 py-1">
-                <code
-                  className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground"
-                  title={hunk.header}
-                >
-                  {hunk.header}
-                </code>
-                {busy && <Spinner className="size-3" />}
-                {file.staged ? (
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    disabled={busy}
-                    onClick={() =>
-                      applyHunk(hunk, { cached: true, reverse: true })
-                    }
-                  >
-                    Unstage hunk
-                  </Button>
-                ) : (
-                  <>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      disabled={busy}
-                      onClick={() =>
-                        applyHunk(hunk, { cached: true, reverse: false })
-                      }
-                    >
-                      Stage hunk
-                    </Button>
-                    {/* Discarding part of a brand-new file is ambiguous (delete
-                        vs. empty); new files are discarded whole via the recycle
-                        bin from the Changes list, so hide it while untracked. */}
-                    {!untracked && (
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        className="text-destructive"
-                        disabled={busy}
-                        onClick={() =>
-                          setDiscard({
-                            label: hunk.header,
-                            run: () =>
-                              applyHunk(hunk, { cached: false, reverse: true }),
-                          })
-                        }
-                      >
-                        Discard…
-                      </Button>
-                    )}
-                  </>
-                )}
-              </div>
-              {sel && (
-                <div className="flex items-center gap-2 border-b bg-primary/10 px-3 py-1 text-[11px]">
-                  <span className="flex-1 font-medium">
-                    {n} {n === 1 ? "line" : "lines"} selected
-                  </span>
-                  {file.staged ? (
-                    <Button
-                      variant="secondary"
-                      size="xs"
-                      disabled={busy}
-                      onClick={() =>
-                        applyLines(hunk, sel, { cached: true, reverse: true })
-                      }
-                    >
-                      Unstage
-                    </Button>
-                  ) : (
-                    <>
-                      <Button
-                        variant="secondary"
-                        size="xs"
-                        disabled={busy}
-                        onClick={() =>
-                          applyLines(hunk, sel, {
-                            cached: true,
-                            reverse: false,
-                          })
-                        }
-                      >
-                        Stage
-                      </Button>
-                      {!untracked && (
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          className="text-destructive"
-                          disabled={busy}
-                          onClick={() =>
-                            setDiscard({
-                              label: `${n} selected ${n === 1 ? "line" : "lines"}`,
-                              run: () =>
-                                applyLines(hunk, sel, {
-                                  cached: false,
-                                  reverse: true,
-                                }),
-                            })
-                          }
-                        >
-                          Discard…
-                        </Button>
-                      )}
-                    </>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    disabled={busy}
-                    onClick={clearSelection}
-                  >
-                    Clear
-                  </Button>
-                </div>
-              )}
-              <SelectableHunk
-                filePath={file.path}
-                hunkText={buildHunkPatch(parsed, hunk)}
-                hunkKey={key}
-                viewMode={viewMode}
-                isDark={isDark}
-                onSelect={onSelect}
-                selected={sel ?? NO_LINES}
-              />
-            </section>
-          );
-        })}
+        <StagingDiffView
+          repoPath={repoPath}
+          filePath={file.path}
+          diffText={diff.data?.text ?? ""}
+          contentRevs={
+            untracked
+              ? { newRev: null }
+              : file.staged
+                ? { oldRev: "HEAD", newRev: ":0" }
+                : { oldRev: ":0", newRev: null }
+          }
+          viewMode={viewMode}
+          isDark={isDark}
+          hunks={parsed.hunks}
+          staged={file.staged}
+          untracked={untracked}
+          busy={busy}
+          selection={selection}
+          onSelect={setSelection}
+          onHunkAction={onHunkAction}
+        />
       </div>
 
       <Dialog
@@ -469,42 +402,130 @@ function paintRange(
   }
 }
 
+/** A hunk's first old/new line number, from its `@@ -a,b +c,d @@` header. */
+function hunkStart(hunk: DiffHunk, side: "old" | "new"): number {
+  const m = hunk.header.match(/@@ -(\d+)(?:,\d+)? \+(\d+)/);
+  return m ? Number(side === "new" ? m[2] : m[1]) : 1;
+}
+
+interface HunkActionProps {
+  hunk: DiffHunk;
+  staged: boolean;
+  untracked: boolean;
+  busy: boolean;
+  onHunkAction: (hunk: DiffHunk, kind: "stage" | "unstage" | "discard") => void;
+}
+
+/** Stage/Unstage + Discard for one hunk — used both overlaid on a `@@` row and
+ *  inside the synthetic header a line-1 hunk gets (it has no `@@` row). */
+function HunkActionButtons({
+  hunk,
+  staged,
+  untracked,
+  busy,
+  onHunkAction,
+}: HunkActionProps) {
+  return (
+    <>
+      <Button
+        variant="secondary"
+        size="xs"
+        disabled={busy}
+        onClick={() => onHunkAction(hunk, staged ? "unstage" : "stage")}
+      >
+        {staged ? "Unstage" : "Stage"} hunk
+      </Button>
+      {!untracked && (
+        <Button
+          variant="ghost"
+          size="xs"
+          className="text-destructive"
+          disabled={busy}
+          onClick={() => onHunkAction(hunk, "discard")}
+        >
+          Discard…
+        </Button>
+      )}
+    </>
+  );
+}
+
 /**
- * Renders one hunk's diff and lets the user drag-select lines within it. The
- * library's selection manager handles the drag gesture; we paint the highlight
- * ourselves (its own class doesn't apply in this standalone setup) by toggling
- * `gd-line-selected` on the rows, driven by React state so it stays correct
- * across re-renders. Memoized so other hunks don't re-render on a selection.
+ * The working-tree diff as ONE whole-file view: syntax highlighting with
+ * full-file context + GitHub-style collapsible expand (content mode, small
+ * files), drag the line-number gutter to select lines to stage across the whole
+ * file, and one-click Stage/Unstage/Discard per hunk via buttons overlaid on
+ * each hunk header (the library exposes no hunk-header slot). The library's
+ * selection manager handles the drag; we paint the `gd-line-selected` highlight
+ * ourselves (its own class doesn't apply in this standalone setup).
  */
-const SelectableHunk = memo(function SelectableHunk({
+function StagingDiffView({
+  repoPath,
   filePath,
-  hunkText,
-  hunkKey,
+  diffText,
+  contentRevs,
   viewMode,
   isDark,
+  hunks,
+  staged,
+  untracked,
+  busy,
+  selection,
   onSelect,
-  selected,
+  onHunkAction,
 }: {
+  repoPath: string;
   filePath: string;
-  hunkText: string;
-  hunkKey: string;
+  diffText: string;
+  contentRevs: DiffContentRevs;
   viewMode: string;
   isDark: boolean;
-  onSelect: (hunkKey: string, lines: SelectedLine[]) => void;
-  selected: SelectedLine[];
+  hunks: DiffHunk[];
+  staged: boolean;
+  untracked: boolean;
+  busy: boolean;
+  selection: SelectedLine[] | null;
+  onSelect: (lines: SelectedLine[] | null) => void;
+  onHunkAction: (hunk: DiffHunk, kind: "stage" | "unstage" | "discard") => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const hunkRepoPath = useUiStore((s) => s.repoPath);
-  const { syntaxMap, customLanguages } = useEffectiveSyntax(hunkRepoPath);
-  const diffFile = useMemo(
-    () => createDiffFile(filePath, hunkText, { syntaxMap, customLanguages }),
-    [filePath, hunkText, syntaxMap, customLanguages],
+  const activeRepo = useUiStore((s) => s.repoPath);
+  const { syntaxMap, customLanguages } = useEffectiveSyntax(activeRepo);
+  const deferredText = useDeferredValue(diffText);
+  const deferredPath = useDeferredValue(filePath);
+  // Whole-file highlight context + expand. The staging view renders every hunk
+  // regardless, so let content mode engage for big diffs too — bounded by the
+  // file highlight budget, not the read-only surface's 200-line render cap.
+  const content = useFileContent(
+    repoPath,
+    deferredPath,
+    deferredText,
+    contentRevs,
+    HIGHLIGHT_MAX_LINES,
   );
+  // The whole-file diff (every hunk) — never capped, so all hunks stay stageable.
+  const diffFile = useMemo(
+    () =>
+      createDiffFile(
+        deferredPath,
+        deferredText,
+        { syntaxMap, customLanguages },
+        content ?? undefined,
+      ),
+    [deferredPath, deferredText, syntaxMap, customLanguages, content],
+  );
+
+  // The library can expand collapsed context but offers no way back; track when
+  // the user has expanded so we can show a Collapse control. Reset per diff.
+  const [expanded, setExpanded] = useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a fresh diff starts collapsed
+  useEffect(() => setExpanded(false), [diffFile]);
+
   // Keep latest callback/selection without re-creating the manager each render.
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
+  const selectedRef = useRef(selection);
+  selectedRef.current = selection;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -521,26 +542,118 @@ const SelectableHunk = memo(function SelectableHunk({
               line: l.lineNumber,
             }),
           );
-        onSelectRef.current(hunkKey, lines);
+        onSelectRef.current(lines.length ? lines : null);
       },
     });
-    paintLines(container, selectedRef.current); // re-assert after (re)mount
+    paintLines(container, selectedRef.current ?? []); // re-assert after (re)mount
     return () => manager.destroy();
-  }, [diffFile, viewMode, hunkKey]);
+  }, [diffFile, viewMode]);
 
   // Paint the committed selection from state (incl. cleared → []).
   useEffect(() => {
     const container = containerRef.current;
-    if (container) paintLines(container, selected);
-  }, [selected]);
+    if (container) paintLines(container, selection ?? []);
+  }, [selection]);
+
+  // Position each hunk's action overlay by anchoring to that hunk's OWN first
+  // row (found by line number), NOT to the Nth `@@` marker row: in content mode
+  // those rows mark collapsed gaps, not hunks 1:1 (a change at line 1 has no
+  // leading gap → no marker), so a positional map mis-places + mis-fires the
+  // buttons. The overlay lives inside the scrolled content, so it tracks scroll
+  // without a listener; re-measure only on rebuild/expand/collapse/resize.
+  const [anchors, setAnchors] = useState<{ top: number; sep: boolean }[]>([]);
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !diffFile) return;
+    let raf = 0;
+    const measure = () => {
+      const rootTop = container.getBoundingClientRect().top;
+      setAnchors(
+        hunks.map((h) => {
+          const row =
+            rowForLine(container, "new", hunkStart(h, "new")) ??
+            rowForLine(container, "old", hunkStart(h, "old"));
+          if (!row) return { top: -1, sep: false };
+          // A hunk normally has a `@@` separator row right above it (host the
+          // buttons there); a hunk at line 1 has none (sep=false) and instead
+          // gets a synthetic header bar.
+          const prev = row.previousElementSibling;
+          const sep = prev?.getAttribute("data-state") === "hunk";
+          const anchor = sep ? prev : row;
+          return { top: anchor.getBoundingClientRect().top - rootTop, sep };
+        }),
+      );
+    };
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
+    };
+    measure();
+    const ro = new ResizeObserver(schedule);
+    ro.observe(container);
+    const mo = new MutationObserver(schedule);
+    mo.observe(container, { childList: true, subtree: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, [diffFile, hunks]);
 
   if (!diffFile) return <DiffPlaceholder message="No changes to show" />;
+  // A hunk at line 1 has no `@@` separator row to host its buttons (sep=false),
+  // so give it a synthetic header bar at the very top instead of overlaying the
+  // buttons on its first code line.
+  const firstNeedsHeader =
+    !!anchors[0] && anchors[0].top >= 0 && !anchors[0].sep && !!hunks[0];
   return (
-    // gd-hunk-card: each card renders exactly one hunk and carries its own
-    // app-styled header bar above, so the renderer's duplicate `@@` row is
-    // suppressed here (see App.css). The whole-file diff keeps its `@@` rows
-    // since they separate multiple hunks.
-    <div ref={containerRef} className="gd-hunk-card">
+    <div
+      ref={containerRef}
+      className="relative"
+      onClick={(e) => {
+        // The library's expand controls carry the `diff-widget-tooltip` class; a
+        // click on one means the user just expanded context → offer Collapse.
+        if ((e.target as HTMLElement).closest(".diff-widget-tooltip")) {
+          setExpanded(true);
+        }
+      }}
+    >
+      {expanded && (
+        <div className="sticky top-0 z-20 flex justify-end border-b bg-muted/70 px-2 py-1 backdrop-blur-sm">
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => {
+              diffFile.onAllCollapse(
+                viewMode === "split" ? "split" : "unified",
+              );
+              setExpanded(false);
+            }}
+          >
+            Collapse expanded context
+          </Button>
+        </div>
+      )}
+      {firstNeedsHeader && (
+        <div
+          className="flex items-center gap-2 border-b bg-muted/40 px-3 py-1"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <code
+            className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground"
+            title={hunks[0].header}
+          >
+            {hunks[0].header}
+          </code>
+          <HunkActionButtons
+            hunk={hunks[0]}
+            staged={staged}
+            untracked={untracked}
+            busy={busy}
+            onHunkAction={onHunkAction}
+          />
+        </div>
+      )}
       <DiffView
         diffFile={diffFile}
         diffViewMode={
@@ -551,6 +664,27 @@ const SelectableHunk = memo(function SelectableHunk({
         diffViewWrap
         diffViewFontSize={12}
       />
+      {anchors.map((a, i) =>
+        hunks[i] && a.sep && a.top >= 0 ? (
+          // Buttons sit ON the `@@` separator row (never on code), right-aligned
+          // to clear the native expand controls. mousedown-stop so a button
+          // press never starts a drag-select.
+          <div
+            key={`${i}:${hunks[i].header}`}
+            className="absolute right-3 z-10 flex -translate-y-px gap-1"
+            style={{ top: a.top }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <HunkActionButtons
+              hunk={hunks[i]}
+              staged={staged}
+              untracked={untracked}
+              busy={busy}
+              onHunkAction={onHunkAction}
+            />
+          </div>
+        ) : null,
+      )}
     </div>
   );
-});
+}

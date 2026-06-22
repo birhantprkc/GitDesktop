@@ -176,17 +176,25 @@ commit list.
   bundled into the initial app load — they load on demand (the charts the first
   time you open Insights), so the app starts quicker.
 
+- **Staging is one whole-file view now.** The working-tree diff used to render
+  each hunk as a separate card; it's now a single scrollable file view with full
+  syntax highlighting and GitHub-style collapsible context — expand the unchanged
+  lines around a change, then a "Collapse expanded context" control restores the
+  original hunks. It keeps one-click Stage / Unstage / Discard per hunk and
+  drag-to-stage for individual lines — which now spans the whole file, not just
+  one hunk at a time.
+
 ### Fixed
 
 - **Diffs highlight with full-file context, and show expandable surrounding
   lines.** When a diff's first visible line landed in the middle of a multi-line
   comment, the code after the comment could be mis-colored (highlighted as if it
   were still inside the comment), because only the changed hunk — not the file
-  around it — was handed to the highlighter. Commit, stash, and new-file diffs
-  now read the whole file for context, so highlighting is correct, and you can
-  expand the unchanged lines above and below each change in place (GitHub-style),
-  instead of just a fixed "Show full diff." Large files and truncated diffs keep
-  the previous lightweight view.
+  around it — was handed to the highlighter. Commit, stash, new-file, and
+  working-tree staging diffs now read the whole file for context, so highlighting
+  is correct, and you can expand the unchanged lines above and below each change
+  in place (GitHub-style), instead of just a fixed "Show full diff." Only very
+  large files and truncated diffs keep the previous lightweight view.
 
 - **Links to external pages use the pointer cursor.** Buttons and link-styled
   text that open something in your browser — the "GitHub" / "View on GitHub"
