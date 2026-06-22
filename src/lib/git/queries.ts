@@ -103,6 +103,10 @@ export function useRepoOwners(paths: string[]) {
     queryFn: () => api.gitRepoOwners(sorted),
     enabled: sorted.length > 0,
     staleTime: 10 * 60 * 1000,
+    // Survive the switcher popover closing so the owners stay warm across opens
+    // (the stored owner on each RecentRepo is the primary anti-reflow path; this
+    // just avoids re-running the owner scan and keeps refreshes instant).
+    gcTime: Number.POSITIVE_INFINITY,
   });
 }
 

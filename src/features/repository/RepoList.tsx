@@ -21,7 +21,7 @@ import {
 import { useRepoOwners } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { type RecentRepo, repoDisplayName } from "@/lib/settings/api";
-import { useSettings } from "@/lib/settings/queries";
+import { usePersistRepoOwners, useSettings } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useOpenRepoByPath } from "./useOpenRepoByPath";
@@ -54,6 +54,7 @@ export function RepoList({
   const settings = useSettings();
   const recents = settings.data?.recentRepos ?? [];
   const owners = useRepoOwners(recents.map((r) => r.path));
+  const persistOwners = usePersistRepoOwners();
   const open = useOpenRepoByPath();
   const [filter, setFilter] = useState("");
   const [highlight, setHighlight] = useState(-1);
@@ -72,6 +73,26 @@ export function RepoList({
   const ownerByPath = new Map(
     (owners.data ?? []).map((o) => [o.path, o.owner]),
   );
+  // The owner each repo groups under. Prefer the value stored on the record
+  // (synchronous → no reflow on open); fall back to the async query result for
+  // a repo not yet backfilled. `OTHER_GROUP` only when neither is known.
+  const ownerOf = (r: RecentRepo) =>
+    r.owner || ownerByPath.get(r.path) || undefined;
+
+  // Backfill resolved owners onto the recent records so the NEXT open groups
+  // synchronously. Fires once whenever a record's stored owner is stale; the
+  // helper no-ops when nothing changed, so its settings refetch doesn't loop.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mutate() is stable; rerun only on resolved owners / records
+  useEffect(() => {
+    const resolved = owners.data;
+    if (!resolved?.length) return;
+    const stale = resolved.some(
+      (o) =>
+        (o.owner || undefined) !==
+        recents.find((r) => r.path === o.path)?.owner,
+    );
+    if (stale) persistOwners.mutate(resolved);
+  }, [owners.data, recents]);
 
   const q = filter.trim().toLowerCase();
   const filtered = recents.filter(
@@ -80,7 +101,7 @@ export function RepoList({
       r.name.toLowerCase().includes(q) ||
       (r.alias ?? "").toLowerCase().includes(q) ||
       r.path.toLowerCase().includes(q) ||
-      (ownerByPath.get(r.path) ?? "").toLowerCase().includes(q),
+      (ownerOf(r) ?? "").toLowerCase().includes(q),
   );
 
   // Recent shortcut (only when not filtering). Excluded from the owner groups
@@ -92,7 +113,7 @@ export function RepoList({
   const groups = new Map<string, RecentRepo[]>();
   for (const r of filtered) {
     if (recentPaths.has(r.path)) continue;
-    const owner = ownerByPath.get(r.path) || OTHER_GROUP;
+    const owner = ownerOf(r) || OTHER_GROUP;
     const list = groups.get(owner);
     if (list) list.push(r);
     else groups.set(owner, [r]);
@@ -221,7 +242,7 @@ export function RepoList({
             {menuRepo && (
               <RepoMenuItems
                 repo={menuRepo}
-                owner={ownerByPath.get(menuRepo.path) ?? null}
+                owner={ownerOf(menuRepo) ?? null}
                 editor={editor}
                 editorName={editorName}
                 terminal={settings.data?.terminal}

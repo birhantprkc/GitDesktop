@@ -8,6 +8,11 @@ export interface RecentRepo {
   lastOpenedAt: string;
   /** User-chosen display name shown in place of the folder name. */
   alias?: string;
+  /** Owner (from the origin remote) the repo list groups under. Stored so the
+   *  list can group synchronously and never reflows while the async owners
+   *  query resolves; backfilled from `gitRepoOwners` and refreshed in the
+   *  background. Absent until first resolved; empty remote clears it. */
+  owner?: string;
 }
 
 /** What to call a repo in the UI: its alias when set, else its name. */
@@ -211,6 +216,30 @@ export async function addRecentRepo(repo: {
     },
     ...settings.recentRepos.filter((r) => !samePath(r.path, repo.path)),
   ].slice(0, MAX_RECENT_REPOS);
+  await saveSettings({ ...settings, recentRepos });
+}
+
+/**
+ * Stores resolved repo owners onto the matching recent-repo records so the
+ * repo list groups synchronously (no async-driven reflow on open). Touches
+ * only records whose stored owner actually changed; an empty remote clears it.
+ * No-op when nothing changed, so it never loops with its own settings refetch.
+ */
+export async function persistRepoOwners(
+  owners: { path: string; owner: string | null }[],
+): Promise<void> {
+  if (owners.length === 0) return;
+  const settings = await loadSettings();
+  const ownerOf = new Map(owners.map((o) => [o.path, o.owner || undefined]));
+  let changed = false;
+  const recentRepos = settings.recentRepos.map((r) => {
+    if (!ownerOf.has(r.path)) return r;
+    const owner = ownerOf.get(r.path);
+    if (owner === r.owner) return r;
+    changed = true;
+    return { ...r, owner };
+  });
+  if (!changed) return;
   await saveSettings({ ...settings, recentRepos });
 }
 

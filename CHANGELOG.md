@@ -186,6 +186,13 @@ commit list.
 
 ### Fixed
 
+- **The repository switcher no longer jumps when you open it.** The list groups
+  your repositories by owner, and that grouping used to wait on a lookup that ran
+  fresh each time the menu opened — so the list would briefly show ungrouped and
+  then visibly reshuffle into its owner sections, occasionally moving a row out
+  from under your cursor. Each repo's owner is now remembered, so the menu opens
+  already grouped and stays put.
+
 - **Diffs highlight with full-file context, and show expandable surrounding
   lines.** When a diff's first visible line landed in the middle of a multi-line
   comment, the code after the comment could be mis-colored (highlighted as if it
