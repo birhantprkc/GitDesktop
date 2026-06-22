@@ -255,6 +255,16 @@ export const gitDiscard = (
   untracked: boolean,
 ) => invoke<void>("git_discard", { repoPath, path, untracked });
 
+/** Discards selected lines from an untracked (new) file — removes just those
+ *  1-based line numbers and rewrites it in place (the file stays untracked).
+ *  Used for line/hunk discard of a new file, where reverse-applying a patch
+ *  would delete the whole file instead. */
+export const gitDiscardUntrackedLines = (
+  repoPath: string,
+  path: string,
+  lines: number[],
+) => invoke<void>("git_discard_untracked_lines", { repoPath, path, lines });
+
 export const gitReset = (repoPath: string, hash: string) =>
   invoke<void>("git_reset", { repoPath, hash });
 

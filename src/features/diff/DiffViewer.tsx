@@ -31,6 +31,7 @@ import {
 import {
   useApplyPartial,
   useApplyPatch,
+  useDiscardUntrackedLines,
   useFileDiff,
   useRepoStatus,
 } from "@/lib/git/queries";
@@ -111,6 +112,7 @@ function WorkingTreeDiff({
   const diff = useFileDiff(repoPath, { ...file, untracked });
   const applyPatch = useApplyPatch(repoPath);
   const applyPartial = useApplyPartial(repoPath);
+  const discardUntracked = useDiscardUntrackedLines(repoPath);
   const settings = useSettings();
   const saveSettings = useSaveSettings();
   const isDark = useIsDark();
@@ -118,6 +120,9 @@ function WorkingTreeDiff({
   const [discard, setDiscard] = useState<{
     label: string;
     run: () => void;
+    // A new (untracked) file has no committed version to revert to — the
+    // confirm wording changes from "revert to last committed" to "remove".
+    newFile?: boolean;
   } | null>(null);
   // The drag-selected lines to stage/unstage/discard — file-wide, since the
   // single whole-file view lets a selection span multiple hunks.
@@ -160,7 +165,10 @@ function WorkingTreeDiff({
   }
 
   const onError = (e: unknown) => toastError(e);
-  const busy = applyPatch.isPending || applyPartial.isPending;
+  const busy =
+    applyPatch.isPending ||
+    applyPartial.isPending ||
+    discardUntracked.isPending;
 
   function applyHunk(
     hunk: DiffHunk,
@@ -183,12 +191,26 @@ function WorkingTreeDiff({
     );
   }
 
+  // Discard lines from an untracked (new) file: remove just those new-side line
+  // numbers from the file. A new file is all additions, so there's nothing to
+  // reverse-apply (reverse-applying its patch would delete the whole file).
+  function discardLines(lines: number[]) {
+    if (lines.length === 0) return;
+    discardUntracked.mutate(
+      { path: file.path, lines },
+      { onError, onSuccess: clearSelection },
+    );
+  }
+
   // A whole-hunk action, fired by the per-hunk overlay buttons.
   function onHunkAction(hunk: DiffHunk, kind: "stage" | "unstage" | "discard") {
     if (kind === "discard") {
       setDiscard({
         label: hunk.header,
-        run: () => applyHunk(hunk, { cached: false, reverse: true }),
+        newFile: untracked,
+        run: untracked
+          ? () => discardLines(hunkAddedNewLines(hunk))
+          : () => applyHunk(hunk, { cached: false, reverse: true }),
       });
     } else {
       applyHunk(hunk, { cached: true, reverse: kind === "unstage" });
@@ -231,23 +253,28 @@ function WorkingTreeDiff({
               >
                 Stage
               </Button>
-              {!untracked && (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="text-destructive"
-                  disabled={busy}
-                  onClick={() =>
-                    setDiscard({
-                      label: `${selection.length} selected ${selection.length === 1 ? "line" : "lines"}`,
-                      run: () =>
-                        applySelection({ cached: false, reverse: true }),
-                    })
-                  }
-                >
-                  Discard…
-                </Button>
-              )}
+              <Button
+                variant="ghost"
+                size="xs"
+                className="text-destructive"
+                disabled={busy}
+                onClick={() =>
+                  setDiscard({
+                    label: `${selection.length} selected ${selection.length === 1 ? "line" : "lines"}`,
+                    newFile: untracked,
+                    run: untracked
+                      ? () =>
+                          discardLines(
+                            selection
+                              .filter((s) => s.side === "new")
+                              .map((s) => s.line),
+                          )
+                      : () => applySelection({ cached: false, reverse: true }),
+                  })
+                }
+              >
+                Discard…
+              </Button>
             </>
           )}
           <Button
@@ -311,7 +338,6 @@ function WorkingTreeDiff({
           isDark={isDark}
           hunks={parsed.hunks}
           staged={file.staged}
-          untracked={untracked}
           busy={busy}
           selection={selection}
           onSelect={setSelection}
@@ -329,8 +355,18 @@ function WorkingTreeDiff({
           <DialogHeader>
             <DialogTitle>Discard changes?</DialogTitle>
             <DialogDescription>
-              Reverts <span className="font-mono">{discard?.label}</span> in{" "}
-              {file.path} to the last committed version. This cannot be undone.
+              {discard?.newFile ? (
+                <>
+                  Removes <span className="font-mono">{discard?.label}</span>{" "}
+                  from {file.path}. This cannot be undone.
+                </>
+              ) : (
+                <>
+                  Reverts <span className="font-mono">{discard?.label}</span> in{" "}
+                  {file.path} to the last committed version. This cannot be
+                  undone.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -408,10 +444,23 @@ function hunkStart(hunk: DiffHunk, side: "old" | "new"): number {
   return m ? Number(side === "new" ? m[2] : m[1]) : 1;
 }
 
+/** The new-side line numbers of a hunk's added (`+`) lines, walking its body
+ *  from the header's new start. Used to discard a new file's lines by number;
+ *  for an all-additions (untracked) hunk this is every body line. */
+function hunkAddedNewLines(hunk: DiffHunk): number[] {
+  let n = hunkStart(hunk, "new");
+  const out: number[] = [];
+  for (const line of hunk.text.split("\n").slice(1)) {
+    if (line === "" || line.startsWith("\\")) continue; // split artifact / "\ No newline"
+    if (line.startsWith("+")) out.push(n++);
+    else if (!line.startsWith("-")) n++; // context advances the new side; "-" doesn't
+  }
+  return out;
+}
+
 interface HunkActionProps {
   hunk: DiffHunk;
   staged: boolean;
-  untracked: boolean;
   busy: boolean;
   onHunkAction: (hunk: DiffHunk, kind: "stage" | "unstage" | "discard") => void;
 }
@@ -421,7 +470,6 @@ interface HunkActionProps {
 function HunkActionButtons({
   hunk,
   staged,
-  untracked,
   busy,
   onHunkAction,
 }: HunkActionProps) {
@@ -435,17 +483,15 @@ function HunkActionButtons({
       >
         {staged ? "Unstage" : "Stage"} hunk
       </Button>
-      {!untracked && (
-        <Button
-          variant="ghost"
-          size="xs"
-          className="text-destructive"
-          disabled={busy}
-          onClick={() => onHunkAction(hunk, "discard")}
-        >
-          Discard…
-        </Button>
-      )}
+      <Button
+        variant="ghost"
+        size="xs"
+        className="text-destructive"
+        disabled={busy}
+        onClick={() => onHunkAction(hunk, "discard")}
+      >
+        Discard…
+      </Button>
     </>
   );
 }
@@ -468,7 +514,6 @@ function StagingDiffView({
   isDark,
   hunks,
   staged,
-  untracked,
   busy,
   selection,
   onSelect,
@@ -482,7 +527,6 @@ function StagingDiffView({
   isDark: boolean;
   hunks: DiffHunk[];
   staged: boolean;
-  untracked: boolean;
   busy: boolean;
   selection: SelectedLine[] | null;
   onSelect: (lines: SelectedLine[] | null) => void;
@@ -648,7 +692,6 @@ function StagingDiffView({
           <HunkActionButtons
             hunk={hunks[0]}
             staged={staged}
-            untracked={untracked}
             busy={busy}
             onHunkAction={onHunkAction}
           />
@@ -678,7 +721,6 @@ function StagingDiffView({
             <HunkActionButtons
               hunk={hunks[i]}
               staged={staged}
-              untracked={untracked}
               busy={busy}
               onHunkAction={onHunkAction}
             />

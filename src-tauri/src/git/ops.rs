@@ -108,6 +108,47 @@ pub async fn git_discard(
     Ok(())
 }
 
+/// Discards selected lines from an untracked (new) file by removing just those
+/// 1-based line numbers and rewriting the file in place. A new file's diff is
+/// all additions, so "discard line N" means "delete physical line N" — there's
+/// no index/patch to reverse-apply (reverse-applying a new-file patch would
+/// delete the whole file). The file stays untracked; discarding every line
+/// leaves it empty (whole-file removal is `git_discard`'s recycle-bin path).
+/// `split_inclusive('\n')` keeps each kept line's exact terminator, so CRLF and
+/// a missing final newline are preserved.
+#[tauri::command]
+pub async fn git_discard_untracked_lines(
+    repo_path: String,
+    path: String,
+    lines: Vec<u32>,
+) -> AppResult<()> {
+    if lines.is_empty() {
+        return Err(AppError::InvalidArgument("no lines selected".into()));
+    }
+    let full = Path::new(&repo_path).join(&path);
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        let content = std::fs::read_to_string(&full)?;
+        let drop: std::collections::HashSet<u32> = lines.into_iter().collect();
+        std::fs::write(&full, remove_lines(&content, &drop))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))??;
+    Ok(())
+}
+
+/// Removes the given 1-based line numbers from `content`, keeping every other
+/// line byte-for-byte. `split_inclusive('\n')` keeps each line's terminator
+/// attached, so CRLF endings and a missing final newline are preserved.
+fn remove_lines(content: &str, drop: &std::collections::HashSet<u32>) -> String {
+    content
+        .split_inclusive('\n')
+        .enumerate()
+        .filter(|(i, _)| !drop.contains(&(*i as u32 + 1)))
+        .map(|(_, line)| line)
+        .collect()
+}
+
 /// Mixed reset: moves the branch pointer, keeps the working tree.
 #[tauri::command]
 pub async fn git_reset(
@@ -1258,6 +1299,36 @@ pub async fn git_list_tags(repo_path: String) -> AppResult<Vec<TagInfo>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dropping(content: &str, lines: &[u32]) -> String {
+        remove_lines(content, &lines.iter().copied().collect())
+    }
+
+    #[test]
+    fn remove_lines_drops_only_selected_and_keeps_the_rest() {
+        // 1-based line numbers; line 2 ("b") removed, others byte-identical.
+        assert_eq!(dropping("a\nb\nc\n", &[2]), "a\nc\n");
+        assert_eq!(dropping("a\nb\nc\n", &[1, 3]), "b\n");
+    }
+
+    #[test]
+    fn remove_lines_preserves_crlf_and_missing_final_newline() {
+        // CRLF: each kept line keeps its "\r\n".
+        assert_eq!(dropping("a\r\nb\r\nc\r\n", &[2]), "a\r\nc\r\n");
+        // No trailing newline: the last line ("c") has no terminator; removing a
+        // middle line leaves the rest exactly as they were.
+        assert_eq!(dropping("a\nb\nc", &[2]), "a\nc");
+        // Removing the unterminated last line keeps the prior line's "\n".
+        assert_eq!(dropping("a\nb\nc", &[3]), "a\nb\n");
+    }
+
+    #[test]
+    fn remove_lines_can_empty_the_file_and_ignores_unknown_numbers() {
+        // Discarding every line leaves an empty file (whole-file delete is a
+        // separate path), and out-of-range numbers are simply ignored.
+        assert_eq!(dropping("a\nb\n", &[1, 2]), "");
+        assert_eq!(dropping("a\nb\n", &[9]), "a\nb\n");
+    }
 
     async fn git(repo: &str, args: &[&str]) -> String {
         run_git(Some(repo), args, DEFAULT_TIMEOUT)

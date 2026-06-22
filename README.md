@@ -76,10 +76,10 @@ and force-add it or remove that rule.
 **Changes & commits** — unified/split diff with syntax highlighting,
 collapsible surrounding context, and image diffing; filter the changes list by
 path or category; the working-tree diff is one whole-file view with hunk- and
-line-level (drag-to-stage) staging — including committing only part of a
-brand-new (untracked) file;
+line-level staging and discarding (drag across the line numbers) — including
+committing or discarding only part of a brand-new (untracked) file;
 stage/unstage/discard single files or a multi-selection from the context menu;
-discarding an untracked file goes to the recycle bin. Commit with title + body,
+discarding a whole untracked file goes to the recycle bin. Commit with title + body,
 co-authors suggested from history, amend, undo, reset, and revert.
 
 **Branches** — switch (bring-changes / stash prompt), create, rename, delete,

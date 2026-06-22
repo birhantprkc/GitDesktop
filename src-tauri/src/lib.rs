@@ -72,6 +72,7 @@ pub fn run() {
             git::history::git_commit_file_diff,
             git::history::git_commit_diff,
             git::ops::git_discard,
+            git::ops::git_discard_untracked_lines,
             git::ops::git_reset,
             git::ops::git_checkout_commit,
             git::ops::git_revert,

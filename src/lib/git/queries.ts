@@ -1389,6 +1389,17 @@ export function useApplyPartial(repo: string) {
   );
 }
 
+/** Discards selected lines from an untracked (new) file (see
+ *  {@link api.gitDiscardUntrackedLines}) — line/hunk discard for a new file. */
+export function useDiscardUntrackedLines(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { path: string; lines: number[] }) =>
+      api.gitDiscardUntrackedLines(repo, args.path, args.lines),
+    { invalidate: workingTreeKeys(repo) },
+  );
+}
+
 export function useUnstage(repo: string) {
   return useRepoMutation(
     repo,
