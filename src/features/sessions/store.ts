@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 import { create } from "zustand";
 import { cancelAgentSession, runAgentSession } from "@/lib/ai/agent";
+import { cleanupContainerSandbox } from "@/lib/ai/sandbox";
 import {
   commitWorktreeAll,
   createWorktree,
@@ -11,6 +12,7 @@ import {
   squashWorktree,
 } from "@/lib/git/worktree";
 import { notify } from "@/lib/notify";
+import { loadSettings } from "@/lib/settings/api";
 import { toastError } from "@/lib/toast";
 import {
   appendModel,
@@ -60,6 +62,9 @@ export interface AgentSession {
   claudeSessionId: string;
   /** Current model for the next turn ("" = account default). Changeable mid-session. */
   model: string;
+  /** Isolation mode, fixed at creation: "worktree" (host, worktree-only) or
+   *  "container" (also inside a Docker/Podman container). */
+  isolation: "worktree" | "container";
   /** A turn is currently streaming for THIS session (sessions run independently). */
   running: boolean;
   /** Kept: the work was finalized onto `branch` and the worktree removed to free
@@ -177,7 +182,7 @@ async function runTurn(
   const find = () => get().sessions.find((s) => s.id === id);
   const s0 = find();
   if (!s0) return;
-  const { claudeSessionId, worktreePath, model } = s0;
+  const { claudeSessionId, worktreePath, model, isolation } = s0;
 
   const setSession = (updater: (s: AgentSession) => AgentSession) =>
     set({
@@ -231,6 +236,7 @@ async function runTurn(
       worktreePath,
       sessionId: claudeSessionId,
       resume,
+      isolation,
       onEvent: (ev) => {
         const s = find();
         if (!s) return;
@@ -354,6 +360,10 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     const task = prompt.trim();
     if (!task || get().creating) return;
     set({ creating: true });
+    // Isolation is fixed for the life of the session (every turn must run the
+    // same way), so resolve it from settings once, here at creation.
+    const isolation =
+      (await loadSettings().catch(() => null))?.agentIsolation ?? "worktree";
     let wt: Awaited<ReturnType<typeof createWorktree>>;
     try {
       wt = await createWorktree(repoPath);
@@ -371,6 +381,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       headHash: wt.base,
       claudeSessionId: crypto.randomUUID(),
       model,
+      isolation,
       running: false,
       kept: false,
       turns: [newTurn(task)],
@@ -389,6 +400,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
         base: session.base,
         claudeSessionId: session.claudeSessionId,
         model: session.model,
+        isolation: session.isolation,
       }),
     );
     persist(appendTurn(wt.id, 0, task, model));
@@ -499,6 +511,10 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     const s = get().sessions.find((x) => x.id === id);
     if (!s || s.kept || s.running || get().busyId) return;
     set({ busyId: id });
+    // The container home holds a credentials copy and is independent of the
+    // worktree, so clean it (idempotently) up front — a failed worktree removal
+    // shouldn't leave it behind.
+    if (s.isolation === "container") persist(cleanupContainerSandbox(id));
     try {
       await removeWorktree(s.repoPath, s.worktreePath, s.branch, true);
       persist(removeTranscript(id));
@@ -515,6 +531,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     const s = get().sessions.find((x) => x.id === id);
     if (!s || !s.kept) return;
     persist(removeTranscript(id));
+    if (s.isolation === "container") persist(cleanupContainerSandbox(id));
     removeSession(get, set, id);
   },
 }));

@@ -75,6 +75,11 @@ export interface AppSettings {
   /** Hide the app to the system tray on window close (so background work like
    *  AI reviews keeps running) instead of quitting. */
   closeToTray: boolean;
+  /** How write-capable agent sessions are isolated. "worktree" = the throwaway
+   *  git worktree only (host, full-auto); "container" = also run inside an
+   *  ephemeral Docker/Podman container for kernel-enforced filesystem
+   *  confinement (opt-in; needs Docker/Podman installed). */
+  agentIsolation: "worktree" | "container";
   globalInstructions: string;
   /** gitignore-style globs (one per line) excluded from AI context. */
   aiIgnorePatterns: string;
@@ -141,6 +146,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     actionRuns: true,
   },
   closeToTray: true,
+  agentIsolation: "worktree",
   globalInstructions: "",
   aiIgnorePatterns: "",
   externalEditor: "",

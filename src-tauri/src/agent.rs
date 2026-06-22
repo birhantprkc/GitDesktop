@@ -581,6 +581,10 @@ async fn stream_agent(
     timeout: Duration,
     cancel_id: &str,
     noun: &str,
+    // When the run is wrapped in a container (`binary` = docker/podman), the
+    // `(runtime, container name)` to force-remove on cancel/timeout — killing the
+    // `run` client alone leaves the engine's container running.
+    container_kill: Option<(PathBuf, String)>,
     on_event: &Channel<ReviewEvent>,
 ) -> AppResult<()> {
     let mut cmd = Command::new(binary);
@@ -669,6 +673,13 @@ async fn stream_agent(
 
     state.clear_agent_cancel(cancel_id).await;
     let _ = child.wait().await;
+    // A killed `docker/podman run` client doesn't stop the container — force-
+    // remove it so a cancelled/timed-out agent isn't left running detached.
+    if cancelled || timed_out {
+        if let Some((runtime, name)) = &container_kill {
+            let _ = run_capture(runtime, &["rm", "-f", name], DETECT_TIMEOUT).await;
+        }
+    }
     let stderr_text = stderr_task.await.unwrap_or_default();
 
     if cancelled {
@@ -736,7 +747,7 @@ pub async fn agent_review(
         REVIEW_TIMEOUT
     };
     stream_agent(
-        &state, kind, &binary, args, stdin_text, &repo_path, timeout, &review_id, "review",
+        &state, kind, &binary, args, stdin_text, &repo_path, timeout, &review_id, "review", None,
         &on_event,
     )
     .await
@@ -760,6 +771,7 @@ pub async fn agent_review_cancel(
 /// for fresh, non-interactive worktrees (see `docs/agent-sessions.md`).
 #[tauri::command]
 pub async fn agent_session(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     bin_path: Option<String>,
     model: String,
@@ -768,8 +780,63 @@ pub async fn agent_session(
     worktree_path: String,
     session_id: String,
     resume: bool,
+    // "container" runs the turn inside a Docker/Podman container (worktree-
+    // confined); anything else (incl. None) runs it on the host (worktree-only).
+    isolation: Option<String>,
     on_event: Channel<ReviewEvent>,
 ) -> AppResult<()> {
+    let inner = claude_session_args(&model, &system_prompt, &session_id, resume);
+
+    // Container isolation: wrap the same Claude invocation in an ephemeral,
+    // worktree-confined container. The agent CLI lives in the image, so we don't
+    // resolve a host binary; the runtime drives it.
+    if isolation.as_deref() == Some("container") {
+        let (runtime, runtime_name) = crate::agent_sandbox::detect_runtime().await.ok_or_else(|| {
+            AppError::Command(
+                "Container isolation is on, but Docker/Podman isn't available. Install/start it or turn isolation off in Settings.".to_string(),
+            )
+        })?;
+        if !crate::agent_sandbox::image_present(&runtime).await {
+            return Err(AppError::Command(
+                "The agent container image isn't built yet. Open Settings → AI and click \"Build image\", then try again.".to_string(),
+            ));
+        }
+        // Defense-in-depth: the worktree is bind-mounted, so never let a `..` in
+        // its path widen the mount beyond the intended directory.
+        if Path::new(&worktree_path)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(AppError::InvalidArgument(
+                "worktree path must not contain '..'".to_string(),
+            ));
+        }
+        let home = crate::agent_sandbox::seed_session_home(&app, &session_id)?;
+        let name = crate::agent_sandbox::container_name(&session_id);
+        let args = crate::agent_sandbox::build_run_args(
+            &runtime_name,
+            &worktree_path,
+            &home,
+            &name,
+            &inner,
+        );
+        return stream_agent(
+            &state,
+            AgentKind::Claude,
+            &runtime,
+            args,
+            user_prompt,
+            &worktree_path,
+            SESSION_TIMEOUT,
+            &session_id,
+            "session",
+            Some((runtime.clone(), name)),
+            &on_event,
+        )
+        .await;
+    }
+
+    // Host: run the CLI directly, confined only by the throwaway worktree.
     let binary = resolve(AgentKind::Claude, bin_path.as_deref())
         .await
         .ok_or_else(|| {
@@ -777,17 +844,17 @@ pub async fn agent_session(
                 "Claude CLI not found. Install it or set its path in Settings.".to_string(),
             )
         })?;
-    let args = claude_session_args(&model, &system_prompt, &session_id, resume);
     stream_agent(
         &state,
         AgentKind::Claude,
         &binary,
-        args,
+        inner,
         user_prompt,
         &worktree_path,
         SESSION_TIMEOUT,
         &session_id,
         "session",
+        None,
         &on_event,
     )
     .await

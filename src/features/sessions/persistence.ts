@@ -24,6 +24,7 @@ export const createTranscript = (session: {
   base: string;
   claudeSessionId: string;
   model: string;
+  isolation: string;
 }) => invoke<void>("transcript_create", { session });
 
 /** Record the start of a turn (`seq` = its index in the session). */

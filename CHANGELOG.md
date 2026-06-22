@@ -26,7 +26,11 @@ commit list.
   **Agent** tab lets you hand a coding task to an AI agent that writes the code for
   you. It runs full-auto inside an isolated, throwaway git worktree — a separate
   checkout, so your working tree, staged changes, and current branch are never
-  touched no matter what the agent does. It's a **conversation**: watch the agent
+  touched no matter what the agent does. For stronger confinement you can opt
+  into running each session inside an **ephemeral Docker/Podman container**
+  (Settings → AI), so the agent's filesystem writes are limited to the worktree
+  by the kernel — GitDesktop builds the small agent image for you. It's a
+  **conversation**: watch the agent
   work as its narration streams into the conversation, then send follow-ups ("now
   also handle the empty case", "undo that part") and it keeps going with full
   context — each turn becomes a reviewable checkpoint commit. The composer stays

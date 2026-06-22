@@ -89,6 +89,9 @@ export interface AgentSessionArgs {
   sessionId: string;
   /** false = first turn (start the session), true = a follow-up turn (resume it). */
   resume: boolean;
+  /** Isolation mode, fixed at session creation. "container" runs the turn inside
+   *  a Docker/Podman container; anything else runs on the host (worktree-only). */
+  isolation: string;
   onEvent: (event: ReviewEvent) => void;
 }
 
@@ -109,6 +112,7 @@ export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
     worktreePath: args.worktreePath,
     sessionId: args.sessionId,
     resume: args.resume,
+    isolation: args.isolation,
     onEvent: channel,
   });
 }

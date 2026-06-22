@@ -47,6 +47,7 @@ import { deleteSecret, setSecret } from "@/lib/git/api";
 import { settingsKeys, useSecretPreview } from "@/lib/settings/queries";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
+import { AgentSandboxField } from "./AgentSandboxField";
 import { settingsFormOpts } from "./settings-form";
 
 /** Typical key shapes per provider; used for a soft warning, never to block. */
@@ -246,6 +247,10 @@ export const AiProviderSection = withForm({
     const queryClient = useQueryClient();
     const ai = useSelector(form.store, (s) => s.values.ai);
     const reviewAi = useSelector(form.store, (s) => s.values.reviewAi);
+    const agentIsolation = useSelector(
+      form.store,
+      (s) => s.values.agentIsolation,
+    );
     const provider = ai.provider;
     const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
     const keyPreview = useSecretPreview(provider);
@@ -456,6 +461,19 @@ export const AiProviderSection = withForm({
               onChange={(next) => form.setFieldValue("reviewAi", next)}
             />
           )}
+        </div>
+
+        <div className="space-y-3 border-t pt-4">
+          <div>
+            <h3 className="text-sm font-medium">Agent session isolation</h3>
+            <p className="text-xs text-muted-foreground">
+              How the write-capable agent runs your delegated tasks.
+            </p>
+          </div>
+          <AgentSandboxField
+            value={agentIsolation}
+            onChange={(v) => form.setFieldValue("agentIsolation", v)}
+          />
         </div>
 
         <Dialog open={confirmClear} onOpenChange={setConfirmClear}>

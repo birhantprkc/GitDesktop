@@ -1,0 +1,375 @@
+//! Optional **container isolation** for write-capable agent sessions.
+//!
+//! By default a session runs the agent CLI full-auto on the host, confined only
+//! by its throwaway git worktree (a soft boundary). When the user opts into
+//! container isolation and Docker/Podman is available, we instead run the same
+//! CLI inside an ephemeral `--rm` container with **only** the worktree
+//! bind-mounted — so the agent's writes are confined to that mount by the kernel,
+//! and full-auto bypass is safe inside. The host still drives git (the worktree
+//! `.git` is a file-pointer that doesn't resolve in-container), so commit/diff/
+//! Keep-Discard are unchanged.
+//!
+//! Auth: the CLI's credentials are a file (`~/.claude/.credentials.json`), so we
+//! seed a **copy** into a per-session claude-home that's mounted read-write — the
+//! container authenticates with no API key, can refresh its own token, and never
+//! sees the host's real `~/.claude`. The home persists across a session's turns
+//! (so `--resume` finds the transcript) and is removed on discard/delete.
+//!
+//! Validated end-to-end by spike 2026-06-22; see docs/agent-sandbox-docker.md.
+
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use serde::Serialize;
+use tauri::{AppHandle, Manager};
+use tokio::process::Command;
+
+use crate::agent::{resolve_named, run_capture, DETECT_TIMEOUT};
+use crate::error::{AppError, AppResult};
+
+/// The managed image: a small Node base with the Claude Code CLI, run as the
+/// non-root `node` user (the CLI refuses `bypassPermissions` as root).
+pub const IMAGE: &str = "gitdesktop-agent:claude";
+const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
+
+const DOCKERFILE: &str = "\
+FROM node:22-slim
+RUN npm install -g @anthropic-ai/claude-code \
+ && mkdir -p /home/node/.claude && chown -R node:node /home/node/.claude
+USER node
+WORKDIR /workspace
+";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerStatus {
+    /// "docker" | "podman", or null if neither is on PATH.
+    pub runtime: Option<String>,
+    /// The runtime is installed AND its daemon answers (`<rt> version` exit 0).
+    pub ready: bool,
+    /// The managed agent image has been built.
+    pub image_present: bool,
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+}
+
+/// Finds Docker or Podman on PATH (Docker preferred). Returns (binary, name).
+pub(crate) async fn detect_runtime() -> Option<(PathBuf, String)> {
+    if let Some(bin) = resolve_named(&["docker"], None).await {
+        return Some((bin, "docker".to_string()));
+    }
+    if let Some(bin) = resolve_named(&["podman"], None).await {
+        return Some((bin, "podman".to_string()));
+    }
+    // Windows: Podman Desktop installs here but isn't on PATH until the app is
+    // relaunched after install — check the known location so a just-installed
+    // Podman is found without a restart.
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let p = PathBuf::from(local)
+            .join("Programs")
+            .join("Podman")
+            .join("podman.exe");
+        if p.is_file() {
+            return Some((p, "podman".to_string()));
+        }
+    }
+    None
+}
+
+/// True when `<rt> version` exits 0 (engine reachable, not just the client).
+async fn runtime_ready(bin: &Path) -> bool {
+    matches!(
+        run_capture(bin, &["version"], DETECT_TIMEOUT).await,
+        Ok((0, _))
+    )
+}
+
+pub(crate) async fn image_present(bin: &Path) -> bool {
+    matches!(
+        run_capture(bin, &["image", "inspect", IMAGE], DETECT_TIMEOUT).await,
+        Ok((0, _))
+    )
+}
+
+/// Reports whether container isolation is usable on this machine and whether the
+/// agent image still needs building. Drives the Settings affordance.
+#[tauri::command]
+pub async fn agent_container_detect() -> AppResult<ContainerStatus> {
+    let Some((bin, name)) = detect_runtime().await else {
+        return Ok(ContainerStatus {
+            runtime: None,
+            ready: false,
+            image_present: false,
+        });
+    };
+    let ready = runtime_ready(&bin).await;
+    // Only probe the image if the engine is up (inspect needs the daemon).
+    let image_present = ready && image_present(&bin).await;
+    Ok(ContainerStatus {
+        runtime: Some(name),
+        ready,
+        image_present,
+    })
+}
+
+/// Builds the managed agent image (`<rt> build -t IMAGE -`, Dockerfile on stdin,
+/// empty context). Idempotent + cached by the engine; a few minutes on first run.
+#[tauri::command]
+pub async fn agent_container_prepare() -> AppResult<()> {
+    let (bin, _) = detect_runtime()
+        .await
+        .ok_or_else(|| AppError::Command("Docker or Podman is not installed.".into()))?;
+    if !runtime_ready(&bin).await {
+        return Err(AppError::Command(
+            "Docker/Podman is installed but its engine isn't running. Start it and try again."
+                .into(),
+        ));
+    }
+
+    // Write the Dockerfile into an empty temp context dir and build from it,
+    // rather than piping it on stdin — `build -` reads stdin differently across
+    // Docker and Podman, so a real (tiny) context dir is the portable form.
+    let ctx = std::env::temp_dir().join(format!("gd-agent-build-{}", std::process::id()));
+    std::fs::create_dir_all(&ctx)?;
+    std::fs::write(ctx.join("Dockerfile"), DOCKERFILE)?;
+    let ctx_str = ctx.to_string_lossy().into_owned();
+
+    let mut cmd = Command::new(&bin);
+    cmd.args(["build", "-t", IMAGE, &ctx_str])
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd.kill_on_drop(true);
+
+    let result = tokio::time::timeout(BUILD_TIMEOUT, cmd.output()).await;
+    let _ = std::fs::remove_dir_all(&ctx); // clean the context regardless
+    let out = result
+        .map_err(|_| AppError::Timeout(BUILD_TIMEOUT.as_secs()))?
+        .map_err(AppError::Io)?;
+    if !out.status.success() {
+        let mut log = String::from_utf8_lossy(&out.stdout).into_owned();
+        log.push_str(&String::from_utf8_lossy(&out.stderr));
+        let tail: String = log
+            .lines()
+            .rev()
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(AppError::Command(format!(
+            "Building the agent image failed:\n{tail}"
+        )));
+    }
+    Ok(())
+}
+
+// --- per-session claude-home (mounted, holds creds + transcript) -------------
+
+fn agent_home_root(app: &AppHandle) -> AppResult<PathBuf> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?
+        .join("agent-home"))
+}
+
+/// `<app_data>/agent-home/<session>/claude` — mounted at the container's
+/// `/home/node/.claude`. Session ids are app-generated hex; validated upstream.
+fn session_home(app: &AppHandle, session_id: &str) -> AppResult<PathBuf> {
+    Ok(agent_home_root(app)?.join(session_id).join("claude"))
+}
+
+/// Ensures the per-session claude-home exists and (re-)seeds the host's current
+/// credentials into it, so the container authenticates with the user's live
+/// subscription and a refreshed token each run. Returns the home path to mount.
+pub(crate) fn seed_session_home(app: &AppHandle, session_id: &str) -> AppResult<PathBuf> {
+    crate::sessions::validate_id(session_id)?; // no path traversal into the home root
+    let home = session_home(app, session_id)?;
+    std::fs::create_dir_all(&home)?;
+    if let Some(creds) = home_dir().map(|h| h.join(".claude").join(".credentials.json")) {
+        if creds.is_file() {
+            // Re-copy every run so an expired in-home token is refreshed from the
+            // host's current one. Best-effort: auth simply fails loudly if absent.
+            let _ = std::fs::copy(&creds, home.join(".credentials.json"));
+        }
+    }
+    Ok(home)
+}
+
+/// Removes a session's claude-home (on discard / kept-record delete) and force-
+/// removes any lingering container. Best-effort.
+#[tauri::command]
+pub async fn agent_sandbox_cleanup(app: AppHandle, session_id: String) -> AppResult<()> {
+    // This deletes a directory by id, so reject any traversal before touching FS.
+    crate::sessions::validate_id(&session_id)?;
+    if let Ok(dir) = agent_home_root(&app).map(|r| r.join(&session_id)) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    if let Some((bin, _)) = detect_runtime().await {
+        let name = container_name(&session_id);
+        let _ = run_capture(&bin, &["rm", "-f", &name], DETECT_TIMEOUT).await;
+    }
+    Ok(())
+}
+
+// --- launch ------------------------------------------------------------------
+
+pub(crate) fn container_name(session_id: &str) -> String {
+    format!("gd-agent-{session_id}")
+}
+
+/// Converts a host path to the `-v` source form the engine expects. The Windows
+/// form is RUNTIME-SPECIFIC (validated 2026-06-22): Docker Desktop wants the
+/// MSYS-style `//c/a/b`, while Podman (a WSL machine) wants the WSL path
+/// `/mnt/c/a/b` and rejects `//c/...` with "no such file or directory".
+/// Elsewhere (Linux/macOS) both runtimes take the POSIX path as-is.
+pub(crate) fn to_mount_source(path: &str, runtime: &str) -> String {
+    #[cfg(windows)]
+    {
+        let bytes = path.as_bytes();
+        if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+            let drive = (bytes[0] as char).to_ascii_lowercase();
+            let rest = path[2..].replace('\\', "/");
+            let rest = rest.trim_start_matches('/');
+            return if runtime == "podman" {
+                format!("/mnt/{drive}/{rest}")
+            } else {
+                format!("//{drive}/{rest}")
+            };
+        }
+        path.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = runtime;
+        path.to_string()
+    }
+}
+
+/// Builds the full `run …` argv that wraps the inner agent invocation in an
+/// ephemeral, worktree-confined container. The agent runs as `node`, cwd
+/// `/workspace` (the bind-mounted worktree), with the seeded claude-home mounted;
+/// `--rm` tears it down, resource + capability limits harden it.
+pub(crate) fn build_run_args(
+    runtime: &str,
+    worktree_path: &str,
+    home_path: &Path,
+    container_name: &str,
+    inner: &[String],
+) -> Vec<String> {
+    let workspace_mount = format!("{}:/workspace", to_mount_source(worktree_path, runtime));
+    let home_mount = format!(
+        "{}:/home/node/.claude",
+        to_mount_source(&home_path.to_string_lossy(), runtime)
+    );
+    let mut args: Vec<String> = vec![
+        "run".into(),
+        "--rm".into(),
+        "-i".into(),
+        "--name".into(),
+        container_name.into(),
+    ];
+    // Rootless Podman on Linux maps the container's non-root `node` (uid 1000) to
+    // a host *subuid*, so it can't even write the host-user-owned worktree, and
+    // any files it does write aren't owned by the host user (its git can't touch
+    // them). `keep-id` maps the host user in as `node` so writes land owned by the
+    // host user. Validated 2026-06-22 (without it: EACCES; with it: files owned by
+    // the host uid, host git works). NOT needed for Docker, nor the Podman-machine
+    // VMs on Windows/macOS (NTFS/VirtioFS already present files as the host user) —
+    // and `keep-id` assumes the host login uid is 1000 (= our image's `node`),
+    // the overwhelmingly common Linux-desktop case.
+    if cfg!(target_os = "linux") && runtime == "podman" {
+        args.push("--userns=keep-id".into());
+    }
+    args.extend([
+        "--user".into(),
+        "node".into(),
+        "-w".into(),
+        "/workspace".into(),
+        "-v".into(),
+        workspace_mount,
+        "-v".into(),
+        home_mount,
+        // Hardening: drop Linux capabilities (a userland Node process needs
+        // none), block privilege escalation, and cap resources.
+        "--cap-drop".into(),
+        "ALL".into(),
+        "--security-opt".into(),
+        "no-new-privileges".into(),
+        "--memory".into(),
+        "4g".into(),
+        "--pids-limit".into(),
+        "1024".into(),
+        IMAGE.into(),
+    ]);
+    args.extend(inner.iter().cloned());
+    args
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mount_source_posix_is_unchanged() {
+        // On non-Windows this is identity for either runtime.
+        assert_eq!(to_mount_source("/home/u/wt", "docker"), "/home/u/wt");
+        assert_eq!(to_mount_source("/home/u/wt", "podman"), "/home/u/wt");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn mount_source_windows_form_is_runtime_specific() {
+        // Docker Desktop wants //c/..., Podman (WSL) wants /mnt/c/...
+        assert_eq!(to_mount_source("C:\\Temp\\x", "docker"), "//c/Temp/x");
+        assert_eq!(to_mount_source("C:\\Temp\\x", "podman"), "/mnt/c/Temp/x");
+        assert_eq!(to_mount_source("D:\\a\\b\\c", "podman"), "/mnt/d/a/b/c");
+    }
+
+    #[test]
+    fn build_run_args_mounts_workspace_and_home_then_inner() {
+        let home = PathBuf::from(if cfg!(windows) {
+            "C:\\data\\agent-home\\s1\\claude"
+        } else {
+            "/data/agent-home/s1/claude"
+        });
+        let inner = vec!["-p".to_string(), "--resume".to_string(), "s1".to_string()];
+        let args = build_run_args("docker", "/repos/wt", &home, "gd-agent-s1", &inner);
+        assert_eq!(args[0], "run");
+        assert!(args.contains(&"--rm".to_string()));
+        assert!(args.contains(&"node".to_string())); // runs as non-root
+        assert!(args.iter().any(|a| a.ends_with(":/workspace")));
+        assert!(args.iter().any(|a| a.ends_with(":/home/node/.claude")));
+        assert!(args.contains(&IMAGE.to_string()));
+        // inner args come last, after the image.
+        let img = args.iter().position(|a| a == IMAGE).unwrap();
+        assert_eq!(&args[img + 1..], &inner[..]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_podman_adds_keep_id_docker_does_not() {
+        let home = PathBuf::from("/data/agent-home/s1/claude");
+        let inner = vec!["-p".to_string()];
+        let podman = build_run_args("podman", "/repos/wt", &home, "n", &inner);
+        assert!(podman.iter().any(|a| a == "--userns=keep-id"));
+        let docker = build_run_args("docker", "/repos/wt", &home, "n", &inner);
+        assert!(!docker.iter().any(|a| a == "--userns=keep-id"));
+    }
+
+    #[test]
+    fn container_name_is_stable_and_prefixed() {
+        assert_eq!(container_name("abc123"), "gd-agent-abc123");
+    }
+}

@@ -1,4 +1,5 @@
 mod agent;
+mod agent_sandbox;
 mod error;
 mod fsops;
 mod git;
@@ -89,6 +90,9 @@ pub fn run() {
             sessions::transcript_append_meta,
             sessions::transcript_set_kept,
             sessions::transcript_remove,
+            agent_sandbox::agent_container_detect,
+            agent_sandbox::agent_container_prepare,
+            agent_sandbox::agent_sandbox_cleanup,
             git::ops::git_checkout_commit,
             git::ops::git_revert,
             git::ops::git_cherry_pick,

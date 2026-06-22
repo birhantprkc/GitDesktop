@@ -35,11 +35,12 @@ git works against any remote via system `git`.
 - **Debug failed CI with AI** — turn a failed job's logs into a streamed
   root-cause + fix, ending with a ready-to-paste prompt for a coding agent.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that writes
-  the code in an isolated worktree (your checkout is never touched), watch it work
-  live, then review its diff and keep it as a branch or discard it. Run several at
-  once — organized into **Active** and **Kept** tabs, searchable by task or
-  message, with a notification when each finishes. Runs on the CLI agent you
-  already have (Claude Code), no extra subscription.
+  the code in an isolated worktree (your checkout is never touched) — optionally
+  inside a **Docker/Podman container** for kernel-level filesystem confinement —
+  watch it work live, then review its diff and keep it as a branch or discard it.
+  Run several at once — organized into **Active** and **Kept** tabs, searchable by
+  task or message, with a notification when each finishes. Runs on the CLI agent
+  you already have (Claude Code), no extra subscription.
 - **AI where it helps** — commit messages, branch names, PR and issue
   titles/descriptions, repository descriptions and topics, and a streaming code
   review or security audit, from Anthropic, OpenAI, OpenRouter, **Ollama**

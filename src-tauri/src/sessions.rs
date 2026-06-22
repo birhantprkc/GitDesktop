@@ -29,6 +29,12 @@ use crate::error::{AppError, AppResult};
 /// model change races a turn result on the same file.
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
+/// Back-compat default for sessions persisted before isolation was a field:
+/// they ran on the host, confined only by the worktree.
+fn default_isolation() -> String {
+    "worktree".to_string()
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -62,6 +68,11 @@ struct Header {
     base: String,
     claude_session_id: String,
     model: String,
+    /// How the session runs: "worktree" (host, worktree-only) or "container".
+    /// Fixed at creation — every turn must run the same way (`--resume` keeps its
+    /// transcript in a mode-specific place).
+    #[serde(default = "default_isolation")]
+    isolation: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +141,7 @@ pub struct LoadedSession {
     head_hash: String,
     claude_session_id: String,
     model: String,
+    isolation: String,
     running: bool,
     kept: bool,
     turns: Vec<LoadedTurn>,
@@ -146,6 +158,7 @@ pub struct NewSession {
     base: String,
     claude_session_id: String,
     model: String,
+    isolation: String,
 }
 
 // ----------------------------------------------------------------- paths + io
@@ -162,7 +175,7 @@ fn sessions_dir(app: &AppHandle) -> AppResult<PathBuf> {
 /// Session ids are app-generated (`worktree.rs::new_session_id` → hex), but they
 /// arrive from the frontend, so guard against path traversal before using one in
 /// a filename.
-fn validate_id(id: &str) -> AppResult<()> {
+pub(crate) fn validate_id(id: &str) -> AppResult<()> {
     if id.is_empty()
         || !id
             .chars()
@@ -262,6 +275,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
         head_hash,
         claude_session_id: header.claude_session_id,
         model,
+        isolation: header.isolation,
         running: false,
         kept,
         turns,
@@ -345,6 +359,7 @@ fn migrate_legacy_if_needed(app: &AppHandle) -> AppResult<()> {
                 base: str_field(s, "base"),
                 claude_session_id: str_field(s, "claudeSessionId"),
                 model: str_field(s, "model"),
+                isolation: "worktree".into(),
             }),
         )?;
         let turns = s
@@ -430,6 +445,7 @@ pub async fn transcript_create(app: AppHandle, session: NewSession) -> AppResult
             base: session.base,
             claude_session_id: session.claude_session_id,
             model: session.model,
+            isolation: session.isolation,
         }),
     )
 }
@@ -545,6 +561,7 @@ mod tests {
             base: "base000".into(),
             claude_session_id: "uuid".into(),
             model: "opus".into(),
+            isolation: "worktree".into(),
         })
     }
 
