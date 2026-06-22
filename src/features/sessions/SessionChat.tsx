@@ -12,36 +12,44 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
 import { cn } from "@/lib/utils";
-import { type SessionTurn, useSessionsStore } from "./store";
+import { type AgentSession, type SessionTurn, useSessionsStore } from "./store";
 
 const CLAUDE_MODELS = MODEL_SUGGESTIONS["claude-cli"];
+// "" (account default) maps to a non-empty sentinel for the Select value.
+const DEFAULT_MODEL = "default";
 
 /**
- * The agent-session sidebar: a model picker, a scrolling conversation (your
- * messages + the agent's streamed replies, one per turn), and a composer to
- * start a session or send a follow-up. The diff + Keep/Discard live in the main
- * pane (SessionView) — conversation on one side, changes on the other.
+ * The conversation column of the agent canvas: a model picker, the turn-by-turn
+ * chat (your message + the agent's streamed reply), and a composer that starts a
+ * new session or sends a follow-up to the active one. Keyed on the session id by
+ * the parent, so the draft resets when you switch sessions.
  */
-export function SessionsPanel({ repoPath }: { repoPath: string }) {
-  const session = useSessionsStore((s) => s.session);
-  const busy = useSessionsStore((s) => s.busy);
-  const running = useSessionsStore((s) => s.running);
+export function SessionChat({
+  session,
+  repoPath,
+}: {
+  session: AgentSession | null;
+  repoPath: string;
+}) {
   const start = useSessionsStore((s) => s.start);
   const send = useSessionsStore((s) => s.send);
   const setModel = useSessionsStore((s) => s.setModel);
   const cancel = useSessionsStore((s) => s.cancel);
+  const creating = useSessionsStore((s) => s.creating);
   const [draft, setDraft] = useState("");
-  // Model selection before a session exists; once it does, it lives on the session.
   const [startModel, setStartModel] = useState("");
 
+  const running = session?.running ?? false;
   const model = session ? session.model : startModel;
-  const onModel = session ? setModel : setStartModel;
-  const canSubmit = !running && !busy && draft.trim().length > 0;
+  const onModel = session
+    ? (m: string) => setModel(session.id, m)
+    : setStartModel;
+  const canSubmit = !running && !creating && draft.trim().length > 0;
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || running || busy) return;
-    if (session) send(text);
+    if (!text || running || creating) return;
+    if (session) send(session.id, text);
     else start(repoPath, text, startModel);
     setDraft("");
   };
@@ -51,7 +59,7 @@ export function SessionsPanel({ repoPath }: { repoPath: string }) {
       <div className="flex shrink-0 items-center gap-2 border-b p-3">
         <div className="flex items-center gap-1.5 text-sm font-medium">
           <SparkleIcon className="size-4 text-primary" />
-          Agent session
+          {session ? "Session" : "New session"}
         </div>
         <ModelPicker value={model} onChange={onModel} className="ml-auto" />
       </div>
@@ -61,8 +69,8 @@ export function SessionsPanel({ repoPath }: { repoPath: string }) {
           <p className="text-xs leading-relaxed text-muted-foreground">
             Delegate a task to an AI agent. It runs full-auto in an isolated
             worktree — your working tree, index, and branch are never touched —
-            and you can keep iterating with it in this conversation before
-            keeping or discarding its work.
+            and you can keep iterating with it in this conversation. Run several
+            sessions at once; each gets its own worktree.
           </p>
         ) : (
           <div className="flex flex-col gap-3">
@@ -97,10 +105,14 @@ export function SessionsPanel({ repoPath }: { repoPath: string }) {
             onClick={submit}
             className="flex-1"
           >
-            {session ? "Send" : busy ? "Starting…" : "Start agent session"}
+            {session ? "Send" : creating ? "Starting…" : "Start agent session"}
           </Button>
           {running && (
-            <Button size="sm" variant="ghost" onClick={cancel}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => session && cancel(session.id)}
+            >
               Cancel
             </Button>
           )}
@@ -109,9 +121,6 @@ export function SessionsPanel({ repoPath }: { repoPath: string }) {
     </div>
   );
 }
-
-// "" (account default) maps to a non-empty sentinel for the Select value.
-const DEFAULT_MODEL = "default";
 
 function ModelPicker({
   value,

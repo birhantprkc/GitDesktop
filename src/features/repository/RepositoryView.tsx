@@ -44,7 +44,7 @@ import { LocalPrView } from "@/features/pulls/LocalPrView";
 import { PullRequestsPanel } from "@/features/pulls/PullRequestsPanel";
 import { RemotePrView } from "@/features/pulls/RemotePrView";
 import { useWatchPrHeads } from "@/features/pulls/useWatchPrHeads";
-import { SessionsPanel } from "@/features/sessions/SessionsPanel";
+import { SessionList } from "@/features/sessions/SessionList";
 import { SessionView } from "@/features/sessions/SessionView";
 import { TagDetailView } from "@/features/tags/TagDetailView";
 import { TagsPanel } from "@/features/tags/TagsPanel";
@@ -139,6 +139,8 @@ export function RepositoryView() {
   useHotkeyAction("tab-actions", () => changeTab("actions"));
   useHotkeyAction("tab-tags", () => changeTab("tags"));
   useHotkeyAction("tab-insights", () => changeTab("insights"));
+  // The Agent tab only exists when AI features are shown (palette-only binding).
+  useHotkeyAction("tab-agent", () => changeTab("agent"), aiEnabled);
   useHotkeyAction("back-to-repositories", closeRepo);
 
   // Create actions registered here (always mounted) so the command palette can
@@ -277,7 +279,7 @@ export function RepositoryView() {
           </Activity>
           {aiEnabled && (
             <Activity mode={mode("agent")}>
-              <SessionsPanel repoPath={repoPath} />
+              <SessionList />
             </Activity>
           )}
         </aside>
@@ -389,7 +391,7 @@ export function RepositoryView() {
           </Activity>
           {aiEnabled && (
             <Activity mode={mode("agent")}>
-              <SessionView />
+              <SessionView repoPath={repoPath} />
             </Activity>
           )}
         </main>

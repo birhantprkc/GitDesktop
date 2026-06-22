@@ -107,6 +107,14 @@ export const ACTIONS = [
     defaultBinding: "mod+9",
   },
   {
+    id: "tab-agent",
+    label: "Agent tab",
+    category: "Navigation",
+    // Palette-only by default: mod+1–9 are taken by the other tabs, and this
+    // tab only exists when AI features are enabled. Users can bind a key.
+    defaultBinding: null,
+  },
+  {
     id: "show-repositories",
     label: "Show repositories",
     category: "Navigation",

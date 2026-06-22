@@ -20,11 +20,13 @@ commit list.
   work, then send follow-ups ("now also handle the empty case", "undo that part")
   and it keeps going with full context — each turn becomes a reviewable checkpoint
   commit, and the diff shows everything so far. Pick the **model** for the session
-  (changeable as you go). When you're happy, **Keep** the work — optionally
-  squashing the per-turn commits into one — and it lands on its own branch ready
-  to open as a PR, or **Discard** it and the branch and worktree vanish. It builds
-  on the CLI agent you already have — currently Claude Code, no separate
-  subscription — and only appears when AI features are enabled.
+  (changeable as you go). **Run several sessions at once** — each gets its own
+  worktree and runs independently, listed in the sidebar so you can start one,
+  switch to another while it works, and come back. When you're happy, **Keep** the
+  work — optionally squashing the per-turn commits into one — and it lands on its
+  own branch ready to open as a PR, or **Discard** it and the branch and worktree
+  vanish. It builds on the CLI agent you already have — currently Claude Code, no
+  separate subscription — and only appears when AI features are enabled.
 - **Commit — or discard — part of a brand-new file.** Line- and hunk-level
   staging now works on untracked (new) files too, not just files git already
   tracks — drag across the lines you want in a new file's diff and stage just

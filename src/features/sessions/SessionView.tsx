@@ -3,34 +3,52 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
-import { useSessionsStore } from "./store";
+import { SessionChat } from "./SessionChat";
+import { type AgentSession, useSessionsStore } from "./store";
 
 /**
- * The main pane for an agent session: the cumulative diff of everything the
- * agent has done so far (the worktree's `base..HEAD`, refreshed after each
- * turn's checkpoint commit), with Keep / Discard. Keep optionally squashes the
- * per-turn commits into one; Discard removes the worktree and its branch.
+ * The agent "canvas": the active session's conversation on the left and the
+ * cumulative diff of its work (`base..HEAD`, refreshed after each turn's
+ * checkpoint commit) on the right, with Keep / Discard. When no session is
+ * selected, the chat column shows the new-session composer.
  */
-export function SessionView() {
-  const session = useSessionsStore((s) => s.session);
-  const busy = useSessionsStore((s) => s.busy);
-  const running = useSessionsStore((s) => s.running);
+export function SessionView({ repoPath }: { repoPath: string }) {
+  const sessions = useSessionsStore((s) => s.sessions);
+  const activeId = useSessionsStore((s) => s.activeId);
+  const active = sessions.find((s) => s.id === activeId) ?? null;
+
+  return (
+    <div className="flex h-full min-w-0">
+      <div className="flex min-h-0 w-[22rem] shrink-0 flex-col border-r">
+        <SessionChat
+          key={active?.id ?? "new"}
+          session={active}
+          repoPath={repoPath}
+        />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col">
+        {active ? (
+          <SessionDiff session={active} />
+        ) : (
+          <DiffPlaceholder
+            icon={SparkleIcon}
+            message="Start an agent session to see its changes here"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SessionDiff({ session }: { session: AgentSession }) {
+  const busyId = useSessionsStore((s) => s.busyId);
   const keep = useSessionsStore((s) => s.keep);
   const discard = useSessionsStore((s) => s.discard);
   const [squash, setSquash] = useState(true);
 
-  if (!session) {
-    return (
-      <DiffPlaceholder
-        icon={SparkleIcon}
-        message="Start an agent session to see its changes here"
-      />
-    );
-  }
-
   const hasCommits = session.headHash !== session.base;
   const commitCount = session.turns.filter((t) => t.commitHash).length;
-  const blocked = busy || running;
+  const blocked = session.running || busyId === session.id;
 
   return (
     <div className="flex h-full flex-col">
@@ -56,14 +74,14 @@ export function SessionView() {
           size="sm"
           variant="outline"
           disabled={blocked}
-          onClick={discard}
+          onClick={() => discard(session.id)}
         >
           Discard
         </Button>
         <Button
           size="sm"
           disabled={blocked || !hasCommits}
-          onClick={() => keep(squash)}
+          onClick={() => keep(session.id, squash)}
         >
           Keep
         </Button>
@@ -79,7 +97,7 @@ export function SessionView() {
           <DiffPlaceholder
             icon={SparkleIcon}
             message={
-              running
+              session.running
                 ? "The agent is working…"
                 : "No changes yet — send the agent a task."
             }
