@@ -23,6 +23,10 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        // Remembers the window's position, size, and maximized state across
+        // launches (and validates saved coords against the current monitors, so
+        // an unplugged display can't strand the window off-screen).
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             // Desktop-only auto-updater (GitHub Releases). No-op on mobile.
             #[cfg(desktop)]

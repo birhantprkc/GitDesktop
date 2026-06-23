@@ -168,7 +168,12 @@ executable), and tunable OS notifications for PR activity, checks, and CI runs.
 **Environment check** — a Settings → **About** panel reports your app/OS/Tauri
 versions and the status of every CLI GitDesktop uses (git, the GitHub & GitLab
 CLIs, Claude Code, Codex): installed?, version, resolved path, and sign-in
-state — with an Install link for anything that's missing.
+state — with an Install link for anything that's missing. It also shows a live
+readout of the window's current position, size, and display (with copy-coords).
+
+**Window memory** — GitDesktop reopens at the size and position you left it, and
+maximized if it was, validated against your current monitors so an unplugged
+display can't strand it off-screen.
 
 ## AI configuration
 

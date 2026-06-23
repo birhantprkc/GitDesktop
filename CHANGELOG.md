@@ -19,6 +19,11 @@ commit list.
   the box (point it at your own provider for paid models too). Sessions run on the
   host, confined to their throwaway worktree, and resume cleanly across turns and
   app restarts like the other agents.
+- **The window remembers where you left it.** GitDesktop now reopens at the size,
+  position, and maximized state from your last session, validated against your
+  current monitors so an unplugged display can't strand it off-screen. Settings →
+  About also gained a live readout of the window's current position, size, and
+  display, with a button to copy the coordinates.
 
 ### Fixed
 

@@ -6,12 +6,16 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-title",
+    "core:window:allow-outer-position",
+    "core:window:allow-outer-size",
+    "core:window:allow-current-monitor",
     "opener:default",
     "store:default",
     "dialog:default",
     "notification:default",
     "updater:default",
     "process:default",
+    "window-state:default",
     {
       "identifier": "http:default",
       "allow": [
