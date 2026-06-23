@@ -43,10 +43,10 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   or failed), cancel, dispatch a workflow, and read failed-step logs — none of
   which GitHub Desktop does.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works
-  in an isolated worktree, so your own checkout is never touched. Watch it work
-  live, then review its diff and keep it as a branch or discard it. Run several at
-  once, organized into **Active** and **Kept** tabs, searchable, with a
-  notification when each finishes. Uses the CLI agent you already have —
+  in an isolated worktree, so your own checkout is never touched. Watch its edits
+  land live as it works, then review the diff and keep it as a branch — or open a
+  local PR straight from it — or discard it. Run several at once, organized into
+  **Active** and **Kept** tabs, searchable, with a notification when each finishes. Uses the CLI agent you already have —
   **Claude Code**, **Codex**, **GitHub Copilot**, or **opencode** (whose free
   hosted models need no key at all), no extra subscription. Sandbox its writes in a
   **Docker/Podman container**, or rely on each CLI's own worktree confinement on

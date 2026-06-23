@@ -1,8 +1,16 @@
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, State, Window, WindowEvent};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use crate::state::AppState;
+
+/// What the window-state plugin persists/restores: geometry only. Visibility is
+/// deliberately excluded — the tray owns whether the window is shown, and a saved
+/// "hidden" state would otherwise reopen the window invisible.
+pub const WINDOW_STATE_FLAGS: StateFlags = StateFlags::SIZE
+    .union(StateFlags::POSITION)
+    .union(StateFlags::MAXIMIZED);
 
 /// Builds the system-tray icon + menu. Left-click restores the window; the
 /// menu (right-click on Windows) offers Open and a real Quit.
@@ -19,7 +27,12 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main_window(app),
-            "quit" => app.exit(0),
+            "quit" => {
+                // Capture geometry before exiting (the window may still be visible
+                // and moved since the last close).
+                let _ = app.save_window_state(WINDOW_STATE_FLAGS);
+                app.exit(0);
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -53,6 +66,11 @@ fn show_main_window(app: &AppHandle) {
 /// tray "Quit" bypasses this entirely via `app.exit`.
 pub fn handle_window_event(window: &Window, event: &WindowEvent) {
     if let WindowEvent::CloseRequested { api, .. } = event {
+        // Persist geometry NOW, while the window is still visible at its real
+        // position. This is the reliable save point: `tauri dev` is usually killed
+        // (so the plugin's save-on-exit never runs), and a close-to-tray hide isn't
+        // a real close, so nothing else would capture the position.
+        let _ = window.app_handle().save_window_state(WINDOW_STATE_FLAGS);
         if window.state::<AppState>().close_to_tray() {
             let _ = window.hide();
             api.prevent_close();

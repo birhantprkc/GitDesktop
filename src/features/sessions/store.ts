@@ -404,10 +404,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     // `-s workspace-write`); "container" wraps either in a kernel boundary.
     const setting =
       (await loadSettings().catch(() => null))?.agentIsolation ?? "worktree";
-    // Copilot and opencode have no container tier yet, so they always run on the
-    // host regardless of the isolation setting.
-    const isolation =
-      agent === "copilot" || agent === "opencode" ? "worktree" : setting;
+    // Copilot has no container tier yet (its creds aren't file-mountable), so it
+    // always runs on the host; Claude, Codex, and opencode honor the setting.
+    const isolation = agent === "copilot" ? "worktree" : setting;
     let wt: Awaited<ReturnType<typeof createWorktree>>;
     try {
       wt = await createWorktree(repoPath);

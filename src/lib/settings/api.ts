@@ -85,7 +85,7 @@ export interface AppSettings {
   agentImageNodeVersion: string;
   /** Which container-capable agents to bake into the image (Copilot is host-only,
    *  so it's not an option here). */
-  agentImageProviders: ("claude" | "codex")[];
+  agentImageProviders: ("claude" | "codex" | "opencode")[];
   globalInstructions: string;
   /** gitignore-style globs (one per line) excluded from AI context. */
   aiIgnorePatterns: string;

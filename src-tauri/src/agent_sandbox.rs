@@ -10,16 +10,18 @@
 //! Keep-Discard are unchanged.
 //!
 //! Auth: each agent CLI's credentials are a file (Claude `~/.claude/
-//! .credentials.json`, Codex `~/.codex/auth.json`), so we seed a **copy** into a
-//! per-session, per-agent home that's mounted read-write at the CLI's dotdir —
-//! the container authenticates with no API key, can refresh its own token, and
-//! never sees the host's real config. The home persists across a session's turns
-//! (so `--resume` finds the transcript) and is removed on discard/delete.
+//! .credentials.json`, Codex `~/.codex/auth.json`, opencode optionally
+//! `~/.local/share/opencode/auth.json`), so we seed a **copy** into a per-session,
+//! per-agent home that's mounted read-write at the CLI's dir — the container
+//! authenticates with no API key, can refresh its own token, and never sees the
+//! host's real config. The home persists across a session's turns (so `--resume`
+//! finds the transcript) and is removed on discard/delete. **opencode needs no
+//! creds for its free hosted models**, so its container runs keyless out of the box.
 //!
-//! Claude runs on the host or in a container; **Codex is container-only** (its
-//! host `workspace-write` is trust-gated, but full-bypass is safe in the box).
-//! Validated end-to-end by spike + live Codex run 2026-06-22; see
-//! docs/agent-sandbox-docker.md.
+//! Claude and opencode run on the host or in a container; **Codex is
+//! container-only** (its host `workspace-write` is trust-gated, but full-bypass is
+//! safe in the box). Validated end-to-end by spike + live runs (Codex 2026-06-22,
+//! opencode 2026-06-23); see docs/agent-sandbox-docker.md.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -46,16 +48,19 @@ fn agent_npm_package(agent: &str) -> Option<&'static str> {
     match agent {
         "claude" => Some("@anthropic-ai/claude-code"),
         "codex" => Some("@openai/codex"),
+        "opencode" => Some("opencode-ai"),
         _ => None,
     }
 }
 
-/// The container dotdir an agent's seeded home mounts at.
+/// The container dir an agent's seeded home mounts at — where it keeps its creds +
+/// session store. opencode uses an XDG data dir (its SQLite session db + optional
+/// auth.json live in `~/.local/share/opencode`), not a top-level dotdir.
 fn agent_dotdir(agent: &str) -> &'static str {
-    if agent == "codex" {
-        "/home/node/.codex"
-    } else {
-        "/home/node/.claude"
+    match agent {
+        "codex" => "/home/node/.codex",
+        "opencode" => "/home/node/.local/share/opencode",
+        _ => "/home/node/.claude",
     }
 }
 
@@ -105,8 +110,14 @@ fn render_dockerfile(node_version: &str, providers: &[String]) -> AppResult<Stri
     }
     let pkgs = pkgs.join(" ");
     let dirs = dirs.join(" ");
+    // `chown` the WHOLE home, not just `{dirs}`: opencode's dotdir is several levels
+    // deep (`~/.local/share/opencode`), so `mkdir -p` leaves the intermediate
+    // `~/.local` root-owned — and then `node` can't create the sibling XDG dirs
+    // opencode needs at runtime (`~/.local/state`), failing with EACCES. Chowning
+    // `/home/node` (nearly empty in the slim image) is a harmless superset for the
+    // top-level Claude/Codex dotdirs and fixes the deep opencode case. Verified live.
     Ok(format!(
-        "FROM node:{node_version}-slim\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends ca-certificates \\\n && rm -rf /var/lib/apt/lists/* \\\n && npm install -g {pkgs} \\\n && mkdir -p {dirs} \\\n && chown -R node:node {dirs}\nUSER node\nWORKDIR /workspace\n"
+        "FROM node:{node_version}-slim\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends ca-certificates \\\n && rm -rf /var/lib/apt/lists/* \\\n && npm install -g {pkgs} \\\n && mkdir -p {dirs} \\\n && chown -R node:node /home/node\nUSER node\nWORKDIR /workspace\n"
     ))
 }
 
@@ -132,12 +143,14 @@ fn home_dir() -> Option<PathBuf> {
 
 /// The host credentials file an agent's container home is seeded from.
 fn host_creds(agent: &str) -> Option<PathBuf> {
-    home_dir().map(|h| {
-        if agent == "codex" {
-            h.join(".codex").join("auth.json")
-        } else {
-            h.join(".claude").join(".credentials.json")
-        }
+    home_dir().map(|h| match agent {
+        "codex" => h.join(".codex").join("auth.json"),
+        "opencode" => h
+            .join(".local")
+            .join("share")
+            .join("opencode")
+            .join("auth.json"),
+        _ => h.join(".claude").join(".credentials.json"),
     })
 }
 
@@ -519,6 +532,11 @@ mod tests {
         // Codex mounts its home at ~/.codex instead.
         let codex = build_run_args("docker", "codex", "/repos/wt", &home, "n", &inner);
         assert!(codex.iter().any(|a| a.ends_with(":/home/node/.codex")));
+        // opencode mounts its XDG data dir.
+        let oc = build_run_args("docker", "opencode", "/repos/wt", &home, "n", &inner);
+        assert!(oc
+            .iter()
+            .any(|a| a.ends_with(":/home/node/.local/share/opencode")));
         assert!(args.contains(&IMAGE.to_string()));
         // inner args come last, after the image.
         let img = args.iter().position(|a| a == IMAGE).unwrap();
@@ -553,6 +571,12 @@ mod tests {
         assert!(codex_only.contains("FROM node:22-slim"));
         assert!(codex_only.contains("@openai/codex"));
         assert!(!codex_only.contains("claude-code"));
+        // opencode is container-capable: its npm package + deep XDG dotdir, and the
+        // whole-home chown that makes that deep dir usable by the `node` user.
+        let oc = render_dockerfile("24", &["opencode".into()]).unwrap();
+        assert!(oc.contains("opencode-ai"));
+        assert!(oc.contains("/home/node/.local/share/opencode"));
+        assert!(oc.contains("chown -R node:node /home/node"));
         // Bad inputs rejected: non-numeric version, empty set, host-only agent.
         assert!(render_dockerfile("24; rm -rf /", &["claude".into()]).is_err());
         assert!(render_dockerfile("24", &[]).is_err());

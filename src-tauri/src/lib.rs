@@ -25,8 +25,17 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         // Remembers the window's position, size, and maximized state across
         // launches (and validates saved coords against the current monitors, so
-        // an unplugged display can't strand the window off-screen).
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // an unplugged display can't strand the window off-screen). We persist
+        // GEOMETRY only — not visibility: the tray logic owns whether the window is
+        // shown, and a saved "hidden" would reopen it invisible. The save itself is
+        // driven from the window-close handler (tray.rs), since `tauri dev` is
+        // usually killed rather than cleanly exited and close-to-tray isn't a real
+        // close — so the plugin's own save-on-exit can't be relied on.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(tray::WINDOW_STATE_FLAGS)
+                .build(),
+        )
         .setup(|app| {
             // Desktop-only auto-updater (GitHub Releases). No-op on mobile.
             #[cfg(desktop)]

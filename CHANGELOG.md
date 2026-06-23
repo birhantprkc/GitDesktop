@@ -24,6 +24,19 @@ commit list.
   current monitors so an unplugged display can't strand it off-screen. Settings →
   About also gained a live readout of the window's current position, size, and
   display, with a button to copy the coordinates.
+- **Watch an agent session work, live.** The Changes tab now reflects the worktree's
+  uncommitted edits *as the agent makes them*, before each turn's checkpoint commit
+  — so you can follow along instead of waiting for the commit to land.
+- **Promote a kept session to a local PR.** A kept agent session gained a **Create
+  PR** button (and command-palette action) that opens a local pull request from its
+  branch, prefilled and ready — a one-click hand-off from "agent finished" to review.
+- **opencode runs in the container sandbox too.** opencode joins Claude and Codex as
+  a container-isolated agent (kernel-enforced filesystem confinement) — add it under
+  Settings → AI → agent image and rebuild. Its free hosted models need no key, so the
+  container runs keyless.
+- **Deeper opencode reviews.** Turn on "Read repo files for context" for an opencode
+  review and it explores surrounding files (via opencode's read-only plan agent — it
+  can read but never write), not just the diff.
 
 ### Fixed
 

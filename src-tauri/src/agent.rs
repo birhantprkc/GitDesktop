@@ -645,12 +645,21 @@ fn opencode_session_args(
 /// opencode **read-only** review invocation. The prompt (system + diff) goes on
 /// **stdin**, not as an argument — besides the argv-length ceiling, on Windows
 /// `opencode` is a `.cmd` and Rust refuses to pass a newline-bearing argument to a
-/// batch file ("batch file arguments are invalid"), which every diff prompt is. No
-/// `--dangerously-skip-permissions` and no tool need — a diff-in-the-prompt analysis
-/// completes without invoking tools, so it never blocks on a permission prompt
-/// (verified). Repo-aware (Tier 2) reads would need opencode's `plan` agent, a follow-up.
-fn opencode_review_args(model: &str) -> Vec<String> {
+/// batch file ("batch file arguments are invalid"), which every diff prompt is.
+///
+/// `repo_aware` (Tier 2) lets it read surrounding files for context via opencode's
+/// built-in read-only **`plan`** agent — it can glob/read but has no write/edit/bash
+/// tools, so it's a hard read-only guarantee even when the review runs in the live
+/// repo. `--dangerously-skip-permissions` only auto-approves the *reads* (writes stay
+/// impossible in plan mode), so an in-project read doesn't hang or auto-reject.
+/// Verified live 2026-06-23. The plain (diff-only) mode invokes no tools at all.
+fn opencode_review_args(model: &str, repo_aware: bool) -> Vec<String> {
     let mut args: Vec<String> = vec!["run".into(), "--format".into(), "json".into()];
+    if repo_aware {
+        args.push("--agent".into());
+        args.push("plan".into());
+        args.push("--dangerously-skip-permissions".into());
+    }
     if !model.trim().is_empty() {
         args.push("-m".into());
         args.push(model.into());
@@ -1183,7 +1192,7 @@ pub async fn agent_review(
         // opencode review: prompt on stdin (no positional message), so a large or
         // newline-bearing diff prompt doesn't hit the argv / batch-file-arg limits.
         AgentKind::Opencode => (
-            opencode_review_args(&model),
+            opencode_review_args(&model, repo_aware),
             format!("{system_prompt}\n\n{user_prompt}"),
         ),
     };
@@ -1268,14 +1277,13 @@ pub async fn agent_session(
     };
     let container = isolation.as_deref() == Some("container");
 
-    // Copilot and opencode run on the host only for now, so the container tier is
-    // a follow-up (Copilot's creds live in the OS keychain, not a mountable file;
-    // opencode's container image just isn't built yet).
-    if matches!(kind, AgentKind::Copilot | AgentKind::Opencode) && container {
-        return Err(AppError::Command(format!(
-            "{} sessions don't support container isolation yet. Turn isolation off in Settings → AI to run on the host.",
-            kind.label()
-        )));
+    // Copilot runs on the host only for now (its creds live in the OS keychain, not
+    // a mountable file), so its container tier is a follow-up. Claude, Codex, and
+    // opencode all support the container.
+    if kind == AgentKind::Copilot && container {
+        return Err(AppError::Command(
+            "Copilot sessions don't support container isolation yet (its login isn't a mountable file). Turn isolation off in Settings → AI to run Copilot on the host.".to_string(),
+        ));
     }
 
     // The inner CLI invocation + the stdin for this turn. Claude carries the
@@ -1360,12 +1368,13 @@ pub async fn agent_session(
                 kind.label()
             )));
         }
-        // Fail early with a clear message if the agent isn't logged in on the
-        // host (its creds are what we mount into the container).
-        if !crate::agent_sandbox::host_logged_in(agent_name) {
+        // Fail early with a clear message if the agent isn't logged in on the host
+        // (its creds are what we mount into the container). opencode is exempt — its
+        // free hosted models need no credentials, so a container runs keyless.
+        if kind != AgentKind::Opencode && !crate::agent_sandbox::host_logged_in(agent_name) {
             return Err(AppError::Command(format!(
                 "{} isn't logged in on this machine. Sign in with its CLI first, then start the session.",
-                if matches!(kind, AgentKind::Codex) { "Codex" } else { "Claude" }
+                kind.label()
             )));
         }
         // Defense-in-depth: the worktree is bind-mounted, so never let a `..` in

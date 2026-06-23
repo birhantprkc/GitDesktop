@@ -437,6 +437,12 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "agent-create-pr",
+    label: "Create local PR from agent session",
+    category: "Agent",
+    defaultBinding: null,
+  },
+  {
     id: "agent-toggle-view",
     label: "Toggle conversation / changes",
     category: "Agent",

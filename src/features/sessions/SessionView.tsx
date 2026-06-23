@@ -13,11 +13,13 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
+import { CreateLocalPrDialog } from "@/features/pulls/CreateLocalPrDialog";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { SessionActivation } from "./SessionActivation";
 import { SessionConversation } from "./SessionConversation";
 import { StatusIndicator } from "./status";
 import { type AgentSession, useSessionsStore } from "./store";
+import { WorktreeChangesView } from "./WorktreeChangesView";
 
 type Segment = "conversation" | "changes";
 
@@ -54,6 +56,7 @@ function SessionCanvas({
   const [squash, setSquash] = useState(true);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [createPr, setCreatePr] = useState(false);
 
   const kept = session.kept;
   const hasCommits = kept || session.headHash !== session.base;
@@ -78,6 +81,11 @@ function SessionCanvas({
   const doDelete = () => {
     if (!blocked && kept) setConfirmDelete(true);
   };
+  // Promote a kept session: open a local PR from its (finalized) branch. Gated on
+  // `kept` so the branch is squashed/settled before it's proposed for merge.
+  const doCreatePr = () => {
+    if (!blocked && kept) setCreatePr(true);
+  };
   const toggleView = () =>
     setSegment((s) => (s === "conversation" ? "changes" : "conversation"));
 
@@ -89,6 +97,7 @@ function SessionCanvas({
   useHotkeyAction("agent-discard-session", doDiscard, !blocked && !kept);
   useHotkeyAction("agent-resume-session", doResume, !blocked && kept);
   useHotkeyAction("agent-delete-session", doDelete, !blocked && kept);
+  useHotkeyAction("agent-create-pr", doCreatePr, !blocked && kept);
   useHotkeyAction("agent-toggle-view", toggleView);
 
   return (
@@ -122,6 +131,14 @@ function SessionCanvas({
                   onClick={doDelete}
                 >
                   Delete
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={blocked}
+                  onClick={doCreatePr}
+                >
+                  Create PR
                 </Button>
                 <Button size="sm" disabled={blocked} onClick={doResume}>
                   Resume
@@ -163,13 +180,17 @@ function SessionCanvas({
               <TabsTrigger value="conversation">Conversation</TabsTrigger>
               <TabsTrigger value="changes">
                 Changes
-                {hasCommits && (
+                {(hasCommits || session.running) && (
                   <>
                     <span
                       className="ml-1.5 size-1.5 rounded-full bg-current"
                       aria-hidden
                     />
-                    <span className="sr-only"> (changes ready to review)</span>
+                    <span className="sr-only">
+                      {session.running
+                        ? " (agent is making changes)"
+                        : " (changes ready to review)"}
+                    </span>
                   </>
                 )}
               </TabsTrigger>
@@ -241,21 +262,33 @@ function SessionCanvas({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Promote a kept session into a local PR — head is its branch, base
+          defaults to the repo's default branch. The dialog navigates to the new
+          PR on success. */}
+      <CreateLocalPrDialog
+        repoPath={session.repoPath}
+        defaultHead={session.branch}
+        open={createPr}
+        onOpenChange={setCreatePr}
+      />
     </div>
   );
 }
 
 function SessionChanges({ session }: { session: AgentSession }) {
   const hasCommits = session.kept || session.headHash !== session.base;
+  // While a turn is running, reflect the worktree's uncommitted changes live so
+  // you can watch the agent work before the checkpoint commit lands. (A kept
+  // session has no worktree, so it always shows the committed diff.)
+  if (session.running && !session.kept) {
+    return <WorktreeChangesView repoPath={session.worktreePath} />;
+  }
   if (!hasCommits) {
     return (
       <DiffPlaceholder
         icon={SparkleIcon}
-        message={
-          session.running
-            ? "The agent is working — changes appear here once a turn commits."
-            : "No changes yet. Send the agent a task in Conversation."
-        }
+        message="No changes yet. Send the agent a task in Conversation."
       />
     );
   }

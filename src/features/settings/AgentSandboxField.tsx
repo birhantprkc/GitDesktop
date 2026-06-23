@@ -21,7 +21,7 @@ import { toastError } from "@/lib/toast";
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-type AgentId = "claude" | "codex";
+type AgentId = "claude" | "codex" | "opencode";
 
 /** Node base-image versions offered (current LTS first). */
 const NODE_VERSIONS = ["24", "22", "20"];
@@ -29,6 +29,7 @@ const NODE_VERSIONS = ["24", "22", "20"];
 const IMAGE_AGENTS: { id: AgentId; label: string }[] = [
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
+  { id: "opencode", label: "opencode" },
 ];
 
 /**
