@@ -48,6 +48,24 @@ export interface CustomLanguage {
   tmGrammar?: Record<string, unknown>;
 }
 
+/**
+ * A user-defined agent slash command, surfaced in the agent composer's `/`
+ * menu alongside the built-ins and the repo's own `.claude/commands`. The
+ * `prompt` is a template — `$ARGUMENTS` (and `$1`..`$9`) are substituted with
+ * whatever the user types after the command, expanded client-side before the
+ * prompt reaches the agent.
+ */
+export interface CustomCommand {
+  /** Stable id (uuid) used for list keys. */
+  id: string;
+  /** Name typed after `/` — letters, digits, `-`, `_` (no spaces). */
+  name: string;
+  /** Short description shown in the slash menu. */
+  description: string;
+  /** Prompt template; `$ARGUMENTS`/`$1..` expanded on use. */
+  prompt: string;
+}
+
 export interface NotificationSettings {
   /** Automation results (review posted / ready / failed). */
   automations: boolean;
@@ -127,6 +145,8 @@ export interface AppSettings {
   syntaxMap: Record<string, string>;
   /** User-defined grammars referenced by `syntaxMap`. */
   customLanguages: CustomLanguage[];
+  /** User-defined agent slash commands for the agent composer's `/` menu. */
+  customCommands: CustomCommand[];
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -174,6 +194,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lastSeenVersion: "",
   syntaxMap: {},
   customLanguages: [],
+  customCommands: [],
   recentRepos: [],
   diffViewMode: "unified",
 };

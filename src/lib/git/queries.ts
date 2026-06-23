@@ -1467,6 +1467,17 @@ export function useTrackedFiles(repo: string, enabled: boolean) {
   });
 }
 
+/** Repo-local agent slash commands (`.claude/commands/*.md`). Fetched lazily,
+ *  only while a slash command is being typed in the agent composer. */
+export function useRepoCommands(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "agent-commands"] as const,
+    queryFn: () => api.readRepoCommands(repo),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
 /** Files git ignores, with the rule responsible for each. Fetched lazily. */
 export function useIgnoredFiles(repo: string, enabled: boolean) {
   return useQuery({

@@ -16,8 +16,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
-import { useTrackedFiles } from "@/lib/git/queries";
+import {
+  expandCommand,
+  filterCommands,
+  findCommand,
+  mergeCommands,
+  parseSlashInvocation,
+  type SlashCommand,
+} from "@/lib/ai/slash";
+import { useRepoCommands, useTrackedFiles } from "@/lib/git/queries";
 import { quickTransition } from "@/lib/motion";
+import { useSettings } from "@/lib/settings/queries";
 import { cn } from "@/lib/utils";
 import { type AgentSession, useSessionsStore } from "./store";
 
@@ -28,6 +37,7 @@ const OPENCODE_MODELS = MODEL_SUGGESTIONS["opencode-cli"];
 // "" (account default) maps to a non-empty sentinel for the Select value.
 const DEFAULT_MODEL = "default";
 const MAX_MENTIONS = 8;
+const MAX_SLASH = 8;
 
 /** An in-progress `@file` mention: the query typed after `@` and the index of
  *  the `@` in the draft (so it can be replaced on selection). */
@@ -79,6 +89,10 @@ export function SessionComposer({
   >("claude");
   const [mention, setMention] = useState<Mention | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
+  // An in-progress `/command` (the query typed after the leading `/`). Only
+  // ever set when `/` opens the draft, so it owns the whole draft on selection.
+  const [slash, setSlash] = useState<{ query: string } | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
   // Prompt-history navigation (terminal-style Up/Down recall). `histIndex` null
   // = showing the live draft; `histStash` holds that draft while browsing.
   const [histIndex, setHistIndex] = useState<number | null>(null);
@@ -178,13 +192,60 @@ export function SessionComposer({
     return hits.slice(0, MAX_MENTIONS);
   }, [mention, tracked.data]);
 
+  // `/command` menu: built-ins + the repo's own `.claude/commands` + the user's
+  // custom commands (Settings → Slash commands). Repo commands are fetched
+  // lazily once the draft is a slash invocation, and keyed on the repo ROOT
+  // (not the worktree) — they're repo-wide metadata, so the query stays cached
+  // across the session's worktree transition and is ready by submit time.
+  const settings = useSettings();
+  const customCommands = settings.data?.customCommands;
+  const repoCommands = useRepoCommands(
+    repoPath,
+    draft.startsWith("/") && !!repoPath,
+  );
+  const commands = useMemo(
+    () => mergeCommands(repoCommands.data ?? [], customCommands ?? []),
+    [repoCommands.data, customCommands],
+  );
+  const slashMatches = useMemo(
+    () =>
+      slash ? filterCommands(commands, slash.query).slice(0, MAX_SLASH) : [],
+    [slash, commands],
+  );
+
+  const clearDraft = () => {
+    setDraft("");
+    setMention(null);
+    setSlash(null);
+    setHistIndex(null);
+  };
+
+  const dispatch = (text: string) => {
+    if (session) send(session.id, text);
+    else start(repoPath, text, startModel, startAgent, startEffort);
+  };
+
   const submit = () => {
     const text = draft.trim();
     if (!text || running || creating) return;
-    if (session) send(session.id, text);
-    else start(repoPath, text, startModel, startAgent, startEffort);
-    setDraft("");
-    setMention(null);
+    // Expand a known `/command` client-side (no CLI parses `/cmd` headless), so
+    // the agent and the transcript see the final prompt. An unknown command
+    // falls through and is sent literally.
+    const invocation = parseSlashInvocation(text);
+    if (invocation) {
+      const cmd = findCommand(commands, invocation.name);
+      if (cmd?.action === "clear") {
+        clearDraft();
+        return;
+      }
+      if (cmd) {
+        dispatch(expandCommand(cmd, invocation.args));
+        clearDraft();
+        return;
+      }
+    }
+    dispatch(text);
+    clearDraft();
   };
 
   // Recompute the active mention from the text up to the caret: an `@` at the
@@ -199,13 +260,26 @@ export function SessionComposer({
     }
   };
 
+  // The slash menu only opens at the very start of the draft, before any space
+  // (it autocompletes the command NAME — arguments come after). Once a space is
+  // typed the menu closes and the args phase begins.
+  const syncSlash = (value: string, caret: number) => {
+    const m = value.slice(0, caret).match(/^\/([a-zA-Z0-9][\w-]*)?$/);
+    if (m) {
+      setSlash({ query: m[1] ?? "" });
+      setSlashIndex(0);
+    } else {
+      setSlash(null);
+    }
+  };
+
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setDraft(e.target.value);
+    const value = e.target.value;
+    const caret = e.target.selectionStart ?? value.length;
+    setDraft(value);
     setHistIndex(null); // typing detaches from history browsing
-    syncMention(
-      e.target.value,
-      e.target.selectionStart ?? e.target.value.length,
-    );
+    syncMention(value, caret);
+    syncSlash(value, caret);
   };
 
   const insertMention = (path: string) => {
@@ -225,7 +299,52 @@ export function SessionComposer({
     });
   };
 
+  // Picking a command from the `/` menu. Actions (e.g. /clear) run immediately;
+  // prompt commands complete the name with a trailing space so the user can
+  // type arguments, then Enter expands and sends.
+  const selectSlash = (cmd: SlashCommand) => {
+    if (cmd.action === "clear") {
+      clearDraft();
+      requestAnimationFrame(() => ref.current?.focus());
+      return;
+    }
+    setSlash(null);
+    setDraftCaretEnd(`/${cmd.name} `);
+  };
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // While the `/` menu is open it owns Up/Down/Enter/Tab/Esc (when there are
+    // matches), so Enter completes a command instead of sending. With no
+    // matches, Enter falls through and sends the literal text.
+    if (slash) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlash(null);
+        return;
+      }
+      if (slashMatches.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSlashIndex((i) => (i + 1) % slashMatches.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSlashIndex(
+            (i) => (i - 1 + slashMatches.length) % slashMatches.length,
+          );
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          selectSlash(slashMatches[slashIndex]);
+          return;
+        }
+      } else if (e.key === "Tab") {
+        e.preventDefault(); // nothing to complete
+        return;
+      }
+    }
     // While a mention is being typed it owns Up/Down/Enter/Tab/Esc, so Enter
     // never submits half-typed `@text` (even when nothing matches yet).
     if (mention) {
@@ -260,7 +379,7 @@ export function SessionComposer({
     // Terminal-style history: recall previous prompts with Up/Down — but only
     // when the caret is on the first/last line, so multi-line editing still
     // moves the caret normally.
-    if (!mention && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+    if (!mention && !slash && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
       const ta = ref.current;
       const collapsed = ta?.selectionStart === ta?.selectionEnd;
       const start = ta?.selectionStart ?? 0;
@@ -319,6 +438,16 @@ export function SessionComposer({
             onHover={setMentionIndex}
           />
         )}
+        {slash && (
+          <SlashList
+            matches={slashMatches}
+            index={slashIndex}
+            loading={repoCommands.isPending && draft.startsWith("/")}
+            query={slash.query}
+            onPick={selectSlash}
+            onHover={setSlashIndex}
+          />
+        )}
         <div className="flex flex-col border border-input bg-transparent transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50 dark:bg-input/30">
           <textarea
             ref={ref}
@@ -331,17 +460,25 @@ export function SessionComposer({
               session ? "Reply to the agent" : "Describe a task for the agent"
             }
             aria-autocomplete="list"
-            aria-expanded={mention !== null}
-            aria-controls={mention ? "session-mention-list" : undefined}
+            aria-expanded={mention !== null || slash !== null}
+            aria-controls={
+              mention
+                ? "session-mention-list"
+                : slash
+                  ? "session-slash-list"
+                  : undefined
+            }
             aria-activedescendant={
               mention && matches.length > 0
                 ? `session-mention-${mentionIndex}`
-                : undefined
+                : slash && slashMatches.length > 0
+                  ? `session-slash-${slashIndex}`
+                  : undefined
             }
             placeholder={
               session
-                ? "Reply to the agent…  (@ to add a file)"
-                : "Describe a task for the agent…  (@ to add a file)"
+                ? "Reply to the agent…  (@ file, / command)"
+                : "Describe a task for the agent…  (@ file, / command)"
             }
             className="max-h-40 min-h-9 w-full resize-none overflow-y-auto bg-transparent px-3 py-2.5 text-xs leading-relaxed outline-none placeholder:text-muted-foreground"
           />
@@ -466,6 +603,77 @@ function MentionList({
             </button>
           );
         })
+      )}
+    </div>
+  );
+}
+
+/** The `/command` autocomplete popover. Mirrors MentionList: a keyboard-driven
+ *  listbox above the composer, mouse hover/select via mousedown (so the textarea
+ *  keeps focus). Repo/custom commands carry a small source badge. */
+function SlashList({
+  matches,
+  index,
+  loading,
+  query,
+  onPick,
+  onHover,
+}: {
+  matches: SlashCommand[];
+  index: number;
+  loading: boolean;
+  query: string;
+  onPick: (cmd: SlashCommand) => void;
+  onHover: (i: number) => void;
+}) {
+  return (
+    <div
+      id="session-slash-list"
+      role="listbox"
+      aria-label="Slash commands"
+      className="absolute bottom-full left-0 z-20 mb-1 max-h-56 w-full overflow-y-auto border bg-popover shadow-md ring-1 ring-foreground/10"
+    >
+      {matches.length === 0 ? (
+        <p className="px-2.5 py-2 text-[11px] text-muted-foreground">
+          {loading ? "Loading commands…" : `No command matches “/${query}”.`}
+        </p>
+      ) : (
+        matches.map((c, i) => (
+          <button
+            key={`${c.source}:${c.name}`}
+            id={`session-slash-${i}`}
+            role="option"
+            aria-selected={i === index}
+            type="button"
+            // mousedown (not click) so the textarea doesn't blur before select
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onPick(c);
+            }}
+            onMouseMove={() => onHover(i)}
+            className={cn(
+              "flex w-full min-w-0 items-baseline gap-1.5 px-2.5 py-1.5 text-left text-xs",
+              i === index
+                ? "bg-accent text-accent-foreground"
+                : "hover:bg-muted/60",
+            )}
+          >
+            <span className="shrink-0 font-medium">/{c.name}</span>
+            {c.argumentHint && (
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {c.argumentHint}
+              </span>
+            )}
+            <span className="truncate text-[11px] text-muted-foreground">
+              {c.description}
+            </span>
+            {c.source !== "builtin" && (
+              <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                {c.source}
+              </span>
+            )}
+          </button>
+        ))
       )}
     </div>
   );

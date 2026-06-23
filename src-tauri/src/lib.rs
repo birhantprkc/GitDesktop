@@ -289,6 +289,7 @@ pub fn run() {
             instructions::write_repo_branch_rules,
             instructions::read_repo_syntax,
             instructions::write_repo_syntax,
+            instructions::read_repo_commands,
             hooks::git_hooks_list,
             hooks::git_hook_read,
             hooks::git_hook_write,

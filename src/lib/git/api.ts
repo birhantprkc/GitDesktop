@@ -1270,6 +1270,19 @@ export const readRepoSyntax = (repoPath: string) =>
 export const writeRepoSyntax = (repoPath: string, contents: string) =>
   invoke<void>("write_repo_syntax", { repoPath, contents });
 
+/** A repo-local agent slash command from `<repo>/.claude/commands/*.md`. */
+export interface RepoCommand {
+  name: string;
+  description: string;
+  prompt: string;
+  argumentHint: string;
+}
+
+/** Repo-local agent slash commands from `<repo>/.claude/commands/*.md`
+ *  (Claude Code's custom-command format, reused as-is). Empty when absent. */
+export const readRepoCommands = (repoPath: string) =>
+  invoke<RepoCommand[]>("read_repo_commands", { repoPath });
+
 /** Reads a small text file the user picked (for importing a language config). */
 export const readTextFile = (path: string) =>
   invoke<string>("read_text_file", { path });

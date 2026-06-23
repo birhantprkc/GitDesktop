@@ -12,6 +12,13 @@ commit list.
 
 ### Added
 
+- **Slash commands in the agent composer.** Type `/` to insert a reusable prompt —
+  built-in starters (`/review`, `/test`, `/fix`, `/explain`, `/refactor`, plus
+  `/clear`), your repository's own `.claude/commands/*.md` (Claude Code's format,
+  reused as-is), and custom commands you define under **Settings → Slash commands**.
+  Templates support `$ARGUMENTS` (and `$1`, `$2`…) so a command can take what you
+  type after it; everything is expanded in-app before it reaches the agent. The
+  menu is keyboard-driven, like `@file` mentions.
 - **opencode joins the agent line-up.** You can now drive agent sessions and AI
   reviews with [opencode](https://opencode.ai) alongside Claude Code, Codex, and
   GitHub Copilot — pick it in the agent composer or as a review provider. opencode's
