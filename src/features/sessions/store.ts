@@ -16,6 +16,7 @@ import { loadSettings } from "@/lib/settings/api";
 import { toastError } from "@/lib/toast";
 import {
   appendCodexThread,
+  appendEffort,
   appendModel,
   appendResult,
   appendTurn,
@@ -63,6 +64,9 @@ export interface AgentSession {
   claudeSessionId: string;
   /** Current model for the next turn ("" = account default). Changeable mid-session. */
   model: string;
+  /** Reasoning/effort level for the next turn ("" = provider default; else
+   *  low/medium/high/xhigh). Changeable mid-session; mapped per-CLI in Rust. */
+  effort: string;
   /** Isolation mode, fixed at creation: "worktree" (host, worktree-confined by the
    *  CLI's own OS sandbox) or "container" (also inside a Docker/Podman container). */
   isolation: "worktree" | "container";
@@ -109,9 +113,11 @@ interface SessionsState {
     prompt: string,
     model: string,
     agent: "claude" | "codex" | "copilot",
+    effort: string,
   ) => Promise<void>;
   send: (id: string, prompt: string) => Promise<void>;
   setModel: (id: string, model: string) => void;
+  setEffort: (id: string, effort: string) => void;
   cancel: (id: string) => Promise<void>;
   keep: (id: string, squash: boolean) => Promise<void>;
   resume: (id: string) => Promise<void>;
@@ -197,6 +203,7 @@ async function runTurn(
     claudeSessionId,
     worktreePath,
     model,
+    effort,
     isolation,
     agent,
     codexThreadId,
@@ -249,6 +256,7 @@ async function runTurn(
     await runAgentSession({
       binPath: null,
       model,
+      effort,
       systemPrompt: SYSTEM_PROMPT,
       userPrompt: prompt,
       worktreePath,
@@ -384,7 +392,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 
   setActive: (id) => set({ activeId: id }),
 
-  start: async (repoPath, prompt, model, agent) => {
+  start: async (repoPath, prompt, model, agent, effort) => {
     const task = prompt.trim();
     if (!task || get().creating) return;
     set({ creating: true });
@@ -414,6 +422,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       headHash: wt.base,
       claudeSessionId: crypto.randomUUID(),
       model,
+      effort,
       isolation,
       agent,
       running: false,
@@ -436,6 +445,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
         model: session.model,
         isolation: session.isolation,
         agent: session.agent,
+        effort: session.effort,
       }),
     );
     persist(appendTurn(wt.id, 0, task, model));
@@ -463,6 +473,13 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       sessions: get().sessions.map((s) => (s.id === id ? { ...s, model } : s)),
     });
     persist(appendModel(id, model));
+  },
+
+  setEffort: (id, effort) => {
+    set({
+      sessions: get().sessions.map((s) => (s.id === id ? { ...s, effort } : s)),
+    });
+    persist(appendEffort(id, effort));
   },
 
   cancel: async (id) => {

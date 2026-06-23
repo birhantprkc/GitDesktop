@@ -443,6 +443,7 @@ fn codex_session_args(
     resume: bool,
     container: bool,
     thread_id: Option<&str>,
+    effort: &str,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec!["exec".into()];
     if resume {
@@ -477,6 +478,10 @@ fn codex_session_args(
     }
     args.push("--skip-git-repo-check".into());
     args.push("--json".into());
+    if let Some(e) = codex_effort(effort) {
+        args.push("-c".into());
+        args.push(format!("model_reasoning_effort=\"{e}\""));
+    }
     if !model.trim().is_empty() {
         args.push("-m".into());
         args.push(model.into());
@@ -502,6 +507,7 @@ fn copilot_session_args(
     resume: bool,
     worktree: &str,
     prompt: &str,
+    effort: &str,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-p".into(),
@@ -524,7 +530,46 @@ fn copilot_session_args(
         args.push("--model".into());
         args.push(model.into());
     }
+    if let Some(e) = copilot_effort(effort) {
+        args.push("--effort".into());
+        args.push(e.into());
+    }
     args
+}
+
+/// App effort level → Codex `model_reasoning_effort` config value. "" / unknown =
+/// provider default (omit). Codex tops out at "high".
+fn codex_effort(level: &str) -> Option<&'static str> {
+    match level {
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" | "xhigh" => Some("high"),
+        _ => None,
+    }
+}
+
+/// App effort level → Copilot CLI `--effort` value (it supports the full scale).
+fn copilot_effort(level: &str) -> Option<&'static str> {
+    match level {
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
+        _ => None,
+    }
+}
+
+/// App effort level → a Claude "thinking" keyword. The Claude CLI has no effort
+/// flag; including one of these phrases in the user turn raises the thinking
+/// budget (think < think hard < think harder < ultrathink). "" = none.
+fn claude_thinking_keyword(level: &str) -> Option<&'static str> {
+    match level {
+        "low" => Some("think"),
+        "medium" => Some("think hard"),
+        "high" => Some("think harder"),
+        "xhigh" => Some("ultrathink"),
+        _ => None,
+    }
 }
 
 /// GitHub Copilot CLI **read-only** review invocation. Like the session, the prompt
@@ -1015,6 +1060,10 @@ pub async fn agent_session(
     // "claude" (default), "codex", or "copilot" ("opencode" is a recognized stub).
     agent: String,
     model: String,
+    // Reasoning/effort level ("" = provider default; else low/medium/high/xhigh).
+    // Mapped per-CLI: Codex `-c model_reasoning_effort`, Copilot `--effort`, Claude
+    // a "thinking" keyword appended to the user turn.
+    effort: String,
     system_prompt: String,
     user_prompt: String,
     worktree_path: String,
@@ -1066,12 +1115,20 @@ pub async fn agent_session(
     // system prompt as a flag; Codex has none, so it's prepended on stdin (turn
     // 1 only — a resumed Codex session already has it in context).
     let (inner, stdin_text) = match kind {
-        AgentKind::Claude => (
-            claude_session_args(&model, &system_prompt, &session_id, resume),
-            user_prompt,
-        ),
+        AgentKind::Claude => {
+            // Claude has no effort flag — raise the thinking budget by appending a
+            // keyword to the user turn (applies per-turn, so on resume too).
+            let prompt = match claude_thinking_keyword(&effort) {
+                Some(kw) => format!("{user_prompt}\n\n{kw}"),
+                None => user_prompt,
+            };
+            (
+                claude_session_args(&model, &system_prompt, &session_id, resume),
+                prompt,
+            )
+        }
         AgentKind::Codex => (
-            codex_session_args(&model, resume, container, codex_thread_id.as_deref()),
+            codex_session_args(&model, resume, container, codex_thread_id.as_deref(), &effort),
             if resume {
                 user_prompt
             } else {
@@ -1086,7 +1143,7 @@ pub async fn agent_session(
                 format!("{system_prompt}\n\n{user_prompt}")
             };
             (
-                copilot_session_args(&model, &session_id, resume, &worktree_path, &prompt),
+                copilot_session_args(&model, &session_id, resume, &worktree_path, &prompt, &effort),
                 String::new(),
             )
         }

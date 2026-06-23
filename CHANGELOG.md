@@ -66,8 +66,10 @@ commit list.
   Type **`@` to reference a repo file**, and **file paths the agent mentions are
   clickable** — they open in your editor. Flip
   between the **Conversation** and a dedicated **Changes** view (the full diff so
-  far) right in the session. Pick the **model** for the session (changeable as you
-  go). **Run
+  far) right in the session. Pick the **provider** (Claude, Codex, or Copilot),
+  the **model**, and a **reasoning-effort level** for the session — model and
+  effort are changeable as you go (effort maps to each CLI's own mechanism, so it
+  applies where the provider supports it). **Run
   several sessions at once** — each gets its own worktree and runs independently,
   listed in the sidebar so you can start one, switch to another while it works
   (arrow keys included), and come back. The sidebar groups sessions into

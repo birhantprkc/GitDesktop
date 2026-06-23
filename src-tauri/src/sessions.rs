@@ -81,6 +81,11 @@ struct Header {
     /// Which CLI drives the session: "claude" or "codex". Fixed at creation.
     #[serde(default = "default_agent")]
     agent: String,
+    /// Reasoning/effort level ("" = provider default; else low/medium/high/xhigh).
+    /// Mapped per-CLI at invocation. Changeable mid-session (folded last-wins like
+    /// `model`); the header carries the creation value. New field → defaults "".
+    #[serde(default)]
+    effort: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +130,9 @@ struct MetaEvent {
     /// container / a model-only meta event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     codex_thread_id: Option<String>,
+    /// A mid-session effort change. Absent on a model/thread-id-only meta event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
 }
 
 // ----------------------------------------------------------------- folded (read) view
@@ -158,6 +166,7 @@ pub struct LoadedSession {
     model: String,
     isolation: String,
     agent: String,
+    effort: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     codex_thread_id: Option<String>,
     running: bool,
@@ -178,6 +187,8 @@ pub struct NewSession {
     model: String,
     isolation: String,
     agent: String,
+    #[serde(default)]
+    effort: String,
 }
 
 // ----------------------------------------------------------------- paths + io
@@ -246,6 +257,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
     };
     let mut turns: Vec<LoadedTurn> = Vec::new();
     let mut model = header.model.clone();
+    let mut effort = header.effort.clone();
     let mut kept = false;
     let mut head_hash = header.base.clone();
     let mut codex_thread_id: Option<String> = None;
@@ -286,6 +298,9 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
                 if let Some(mm) = &m.model {
                     model = mm.clone();
                 }
+                if let Some(ef) = &m.effort {
+                    effort = ef.clone();
+                }
                 if let Some(tid) = &m.codex_thread_id {
                     codex_thread_id = Some(tid.clone());
                 }
@@ -304,6 +319,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
         model,
         isolation: header.isolation,
         agent: header.agent,
+        effort,
         codex_thread_id,
         running: false,
         kept,
@@ -390,6 +406,7 @@ fn migrate_legacy_if_needed(app: &AppHandle) -> AppResult<()> {
                 model: str_field(s, "model"),
                 isolation: "worktree".into(),
                 agent: "claude".into(),
+                effort: String::new(),
             }),
         )?;
         let turns = s
@@ -477,6 +494,7 @@ pub async fn transcript_create(app: AppHandle, session: NewSession) -> AppResult
             model: session.model,
             isolation: session.isolation,
             agent: session.agent,
+            effort: session.effort,
         }),
     )
 }
@@ -537,6 +555,7 @@ pub async fn transcript_append_meta(
     id: String,
     model: Option<String>,
     codex_thread_id: Option<String>,
+    effort: Option<String>,
 ) -> AppResult<()> {
     append_to_dir(
         &sessions_dir(&app)?,
@@ -545,6 +564,7 @@ pub async fn transcript_append_meta(
             ts: now_ms(),
             model,
             codex_thread_id,
+            effort,
         }),
     )
 }
@@ -601,6 +621,7 @@ mod tests {
             model: "opus".into(),
             isolation: "worktree".into(),
             agent: "claude".into(),
+            effort: String::new(),
         })
     }
 
@@ -635,11 +656,13 @@ mod tests {
                 ts: 3,
                 model: Some("sonnet".into()),
                 codex_thread_id: None,
+                effort: Some("high".into()),
             }),
             Event::Meta(MetaEvent {
                 ts: 4,
                 model: None,
                 codex_thread_id: Some("thread-xyz".into()),
+                effort: None,
             }),
             Event::Status(StatusEvent {
                 ts: 5,
@@ -653,6 +676,7 @@ mod tests {
         assert_eq!(s.turns[0].commit_hash.as_deref(), Some("c1"));
         assert_eq!(s.head_hash, "c1");
         assert_eq!(s.model, "sonnet"); // meta last-wins
+        assert_eq!(s.effort, "high"); // effort meta folds like model
         // a model-only meta then a thread-only meta each apply their own field
         assert_eq!(s.codex_thread_id.as_deref(), Some("thread-xyz"));
         assert!(s.kept);

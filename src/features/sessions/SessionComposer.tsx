@@ -1,4 +1,4 @@
-import { StopIcon } from "@phosphor-icons/react";
+import { GaugeIcon, StopIcon } from "@phosphor-icons/react";
 import { AnimatePresence, m } from "motion/react";
 import {
   useImperativeHandle,
@@ -67,10 +67,12 @@ export function SessionComposer({
   const start = useSessionsStore((s) => s.start);
   const send = useSessionsStore((s) => s.send);
   const setModel = useSessionsStore((s) => s.setModel);
+  const setEffort = useSessionsStore((s) => s.setEffort);
   const cancel = useSessionsStore((s) => s.cancel);
   const creating = useSessionsStore((s) => s.creating);
   const [draft, setDraft] = useState("");
   const [startModel, setStartModel] = useState("");
+  const [startEffort, setStartEffort] = useState("");
   const [startAgent, setStartAgent] = useState<"claude" | "codex" | "copilot">(
     "claude",
   );
@@ -95,6 +97,12 @@ export function SessionComposer({
   const onModel = session
     ? (m: string) => setModel(session.id, m)
     : setStartModel;
+  // Effort is changeable mid-session (like model). Supported for all three CLIs
+  // (mapped per-CLI in Rust); opencode isn't selectable so the picker always shows.
+  const effort = session ? session.effort : startEffort;
+  const onEffort = session
+    ? (e: string) => setEffort(session.id, e)
+    : setStartEffort;
   const canSubmit = !running && !creating && draft.trim().length > 0;
   // Your sent prompts, oldest→newest, for Up/Down recall.
   const history = session ? session.turns.map((t) => t.prompt) : [];
@@ -171,7 +179,7 @@ export function SessionComposer({
     const text = draft.trim();
     if (!text || running || creating) return;
     if (session) send(session.id, text);
-    else start(repoPath, text, startModel, startAgent);
+    else start(repoPath, text, startModel, startAgent, startEffort);
     setDraft("");
     setMention(null);
   };
@@ -345,6 +353,7 @@ export function SessionComposer({
               />
             )}
             <ModelPicker value={model} onChange={onModel} models={models} />
+            <EffortPicker value={effort} onChange={onEffort} />
             <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
               ↵ send · ⇧↵ newline
             </span>
@@ -485,6 +494,49 @@ function ModelPicker({
         {models.map((m) => (
           <SelectItem key={m} value={m}>
             {m}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+const DEFAULT_EFFORT = "default";
+const EFFORT_LEVELS = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Max" },
+] as const;
+
+/** Reasoning/effort level for the next turn. Mapped per-CLI in Rust (Codex
+ *  `model_reasoning_effort`, Copilot `--effort`, Claude a thinking keyword). The
+ *  gauge icon marks it as effort so the collapsed value isn't mistaken for a model. */
+function EffortPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (e: string) => void;
+}) {
+  return (
+    <Select
+      value={value || DEFAULT_EFFORT}
+      onValueChange={(v) => onChange(v === DEFAULT_EFFORT ? "" : String(v))}
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label="Reasoning effort"
+        className="w-auto gap-1 border-0 text-muted-foreground shadow-none hover:bg-muted dark:bg-transparent"
+      >
+        <GaugeIcon className="size-3.5" />
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={DEFAULT_EFFORT}>Default</SelectItem>
+        {EFFORT_LEVELS.map((l) => (
+          <SelectItem key={l.value} value={l.value}>
+            {l.label}
           </SelectItem>
         ))}
       </SelectContent>

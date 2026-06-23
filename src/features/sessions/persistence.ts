@@ -26,6 +26,7 @@ export const createTranscript = (session: {
   model: string;
   isolation: string;
   agent: string;
+  effort: string;
 }) => invoke<void>("transcript_create", { session });
 
 /** Record the start of a turn (`seq` = its index in the session). */
@@ -59,6 +60,10 @@ export const appendResult = (
 /** Record a mid-session model change (folded last-wins). */
 export const appendModel = (id: string, model: string) =>
   invoke<void>("transcript_append_meta", { id, model });
+
+/** Record a mid-session effort/reasoning-level change (folded last-wins). */
+export const appendEffort = (id: string, effort: string) =>
+  invoke<void>("transcript_append_meta", { id, effort });
 
 /** Record Codex's thread id (captured from turn 1), so a host session resumes the
  *  right thread after a reload. Folded last-wins, same `meta` event as the model. */

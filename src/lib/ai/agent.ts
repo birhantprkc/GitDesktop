@@ -86,6 +86,9 @@ export interface AgentSessionArgs {
   /** Explicit Claude binary path, or null to auto-detect. */
   binPath: string | null;
   model: string;
+  /** Reasoning/effort level ("" = provider default; else low/medium/high/xhigh).
+   *  Mapped per-CLI in Rust (Codex flag, Copilot flag, Claude thinking keyword). */
+  effort: string;
   systemPrompt: string;
   /** The task/message for this turn, fed to the CLI on stdin. */
   userPrompt: string;
@@ -121,6 +124,7 @@ export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
     agent: args.agent,
     binPath: args.binPath,
     model: args.model,
+    effort: args.effort,
     systemPrompt: args.systemPrompt,
     userPrompt: args.userPrompt,
     worktreePath: args.worktreePath,
