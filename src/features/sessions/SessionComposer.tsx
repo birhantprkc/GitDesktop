@@ -17,14 +17,14 @@ import {
 } from "@/components/ui/select";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
 import {
-  expandCommand,
+  buildPrompt,
   filterCommands,
   findCommand,
   mergeCommands,
   parseSlashInvocation,
   type SlashCommand,
 } from "@/lib/ai/slash";
-import { useRepoCommands, useTrackedFiles } from "@/lib/git/queries";
+import { useAgentCommands, useTrackedFiles } from "@/lib/git/queries";
 import { quickTransition } from "@/lib/motion";
 import { useSettings } from "@/lib/settings/queries";
 import { cn } from "@/lib/utils";
@@ -192,20 +192,22 @@ export function SessionComposer({
     return hits.slice(0, MAX_MENTIONS);
   }, [mention, tracked.data]);
 
-  // `/command` menu: built-ins + the repo's own `.claude/commands` + the user's
-  // custom commands (Settings → Slash commands). Repo commands are fetched
-  // lazily once the draft is a slash invocation, and keyed on the repo ROOT
-  // (not the worktree) — they're repo-wide metadata, so the query stays cached
-  // across the session's worktree transition and is ready by submit time.
+  // `/` menu: built-ins + the SELECTED agent's discovered commands AND skills
+  // (project + global, incl. the canonical `.agents/skills`) + the user's custom
+  // commands (Settings → Slash commands). Discovery is fetched lazily once the
+  // draft is a slash invocation, keyed on the repo ROOT (not the worktree) so it
+  // stays cached across the session's worktree transition, and on the agent
+  // (each CLI reads different dirs).
   const settings = useSettings();
   const customCommands = settings.data?.customCommands;
-  const repoCommands = useRepoCommands(
+  const discovered = useAgentCommands(
     repoPath,
+    agent,
     draft.startsWith("/") && !!repoPath,
   );
   const commands = useMemo(
-    () => mergeCommands(repoCommands.data ?? [], customCommands ?? []),
-    [repoCommands.data, customCommands],
+    () => mergeCommands(discovered.data ?? [], customCommands ?? []),
+    [discovered.data, customCommands],
   );
   const slashMatches = useMemo(
     () =>
@@ -239,7 +241,7 @@ export function SessionComposer({
         return;
       }
       if (cmd) {
-        dispatch(expandCommand(cmd, invocation.args));
+        dispatch(buildPrompt(cmd, invocation.args));
         clearDraft();
         return;
       }
@@ -442,7 +444,7 @@ export function SessionComposer({
           <SlashList
             matches={slashMatches}
             index={slashIndex}
-            loading={repoCommands.isPending && draft.startsWith("/")}
+            loading={discovered.isPending && draft.startsWith("/")}
             query={slash.query}
             onPick={selectSlash}
             onHover={setSlashIndex}
@@ -635,45 +637,64 @@ function SlashList({
     >
       {matches.length === 0 ? (
         <p className="px-2.5 py-2 text-[11px] text-muted-foreground">
-          {loading ? "Loading commands…" : `No command matches “/${query}”.`}
+          {loading ? "Loading…" : `No commands or skills match “/${query}”.`}
         </p>
       ) : (
-        matches.map((c, i) => (
-          <button
-            key={`${c.source}:${c.name}`}
-            id={`session-slash-${i}`}
-            role="option"
-            aria-selected={i === index}
-            type="button"
-            // mousedown (not click) so the textarea doesn't blur before select
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onPick(c);
-            }}
-            onMouseMove={() => onHover(i)}
-            className={cn(
-              "flex w-full min-w-0 items-baseline gap-1.5 px-2.5 py-1.5 text-left text-xs",
-              i === index
-                ? "bg-accent text-accent-foreground"
-                : "hover:bg-muted/60",
-            )}
-          >
-            <span className="shrink-0 font-medium">/{c.name}</span>
-            {c.argumentHint && (
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                {c.argumentHint}
+        matches.map((c, i) => {
+          // One small right-aligned tag: skills stand out, then custom, then
+          // global scope. Project-scoped agent commands get none (the default).
+          const badge =
+            c.kind === "skill"
+              ? "skill"
+              : c.source === "custom"
+                ? "custom"
+                : c.scope === "global"
+                  ? "global"
+                  : null;
+          return (
+            <button
+              key={`${c.kind}:${c.name}`}
+              id={`session-slash-${i}`}
+              role="option"
+              aria-selected={i === index}
+              type="button"
+              // mousedown (not click) so the textarea doesn't blur before select
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onPick(c);
+              }}
+              onMouseMove={() => onHover(i)}
+              className={cn(
+                "flex w-full min-w-0 items-baseline gap-1.5 px-2.5 py-1.5 text-left text-xs",
+                i === index
+                  ? "bg-accent text-accent-foreground"
+                  : "hover:bg-muted/60",
+              )}
+            >
+              <span className="shrink-0 font-medium">/{c.name}</span>
+              {c.argumentHint && (
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  {c.argumentHint}
+                </span>
+              )}
+              <span className="truncate text-[11px] text-muted-foreground">
+                {c.description}
               </span>
-            )}
-            <span className="truncate text-[11px] text-muted-foreground">
-              {c.description}
-            </span>
-            {c.source !== "builtin" && (
-              <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground/70">
-                {c.source}
-              </span>
-            )}
-          </button>
-        ))
+              {badge && (
+                <span
+                  className={cn(
+                    "ml-auto shrink-0 text-[10px] uppercase tracking-wide",
+                    c.kind === "skill"
+                      ? "text-primary/80"
+                      : "text-muted-foreground/70",
+                  )}
+                >
+                  {badge}
+                </span>
+              )}
+            </button>
+          );
+        })
       )}
     </div>
   );

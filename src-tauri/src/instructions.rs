@@ -1,6 +1,8 @@
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use tauri::Manager;
 
 use crate::error::{AppError, AppResult};
 
@@ -93,107 +95,248 @@ pub fn parse_patterns(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// One repo-local agent slash command, read from `<repo>/.claude/commands/`.
+/// One discovered agent slash-command or skill, surfaced in the composer's `/`
+/// menu for the selected agent.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RepoCommand {
-    /// Command name (the file stem), typed after `/` in the composer.
+pub struct AgentCommand {
+    /// Name typed after `/` (a command's file stem, or a skill's frontmatter
+    /// `name`/dir name).
     pub name: String,
     /// Short description from frontmatter (may be empty).
     pub description: String,
-    /// Prompt body; `$ARGUMENTS`/`$1..` are expanded on the frontend.
+    /// Prompt body for commands (`$ARGUMENTS`/`$1..` expanded on the frontend);
+    /// empty for skills, which are invoked by name so the CLI loads the real
+    /// skill (scripts/references and all) rather than us inlining it.
     pub prompt: String,
     /// Frontmatter `argument-hint` shown after the name (may be empty).
     pub argument_hint: String,
+    /// "command" or "skill".
+    pub kind: String,
+    /// "project" (repo) or "global" (home).
+    pub scope: String,
 }
 
-/// Repo-local agent slash commands from `<repo>/.claude/commands/*.md`
-/// (Claude Code's custom-command format, reused as-is). Each file's stem is the
-/// command name; an optional leading `--- … ---` block supplies `description`
-/// and `argument-hint`; the rest is the prompt template. Returns an empty list
-/// when the directory is absent. Nested/namespaced subfolders are not walked yet.
+/// Discovers the slash-commands and skills available to `agent`, from both the
+/// repo (project) and the user's home (global), following each CLI's own
+/// conventions plus the vendor-neutral `.agents/skills` canonical store (into
+/// which the per-agent skill dirs are typically symlinked). Skills come back
+/// with an empty `prompt` (invoked by name, not inlined). Deduped by (kind,
+/// lowercased name): the first dir in priority order wins, so project beats
+/// global and the canonical `.agents` dir beats a vendor mirror (junction).
 #[tauri::command]
-pub fn read_repo_commands(repo_path: String) -> AppResult<Vec<RepoCommand>> {
-    let dir = Path::new(&repo_path).join(".claude").join("commands");
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(AppError::Io(e)),
+pub fn read_agent_commands(
+    app: tauri::AppHandle,
+    repo_path: String,
+    agent: String,
+) -> AppResult<Vec<AgentCommand>> {
+    let repo = Path::new(&repo_path);
+    let home = app.path().home_dir().ok();
+    let home = home.as_deref();
+
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut out: Vec<AgentCommand> = Vec::new();
+
+    // Commands: a prompt template per `*.md`. We expand the body on the frontend,
+    // so execution is provider-agnostic — the dirs are just where each CLI looks.
+    for (dir, scope) in command_dirs(&agent, repo, home) {
+        for path in md_files(&dir) {
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let key = ("command".to_string(), stem.to_lowercase());
+            // Already emitted by a higher-priority dir — don't re-read.
+            if seen.contains(&key) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let (front, body) = split_frontmatter(&text);
+            if body.trim().is_empty() {
+                continue;
+            }
+            // Mark seen only once VALID, so an empty/unreadable file in a higher
+            // dir doesn't suppress a real same-named command in a lower one.
+            seen.insert(key);
+            let meta = parse_meta(front);
+            out.push(AgentCommand {
+                name: stem.to_string(),
+                description: meta.description,
+                prompt: body.to_string(),
+                argument_hint: meta.argument_hint,
+                kind: "command".to_string(),
+                scope: scope.clone(),
+            });
+        }
+    }
+
+    // Skills: each is a `<name>/SKILL.md` directory. Surfaced for display + a
+    // by-name nudge; the body isn't sent (the CLI already loaded the real skill).
+    for (dir, scope) in skill_dirs(&agent, repo, home) {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut skill_dirs: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        skill_dirs.sort();
+        for skill_dir in skill_dirs {
+            let Ok(text) = std::fs::read_to_string(skill_dir.join("SKILL.md")) else {
+                continue;
+            };
+            let (front, _) = split_frontmatter(&text);
+            let meta = parse_meta(front);
+            let name = if meta.name.is_empty() {
+                skill_dir
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            } else {
+                meta.name
+            };
+            if name.is_empty() {
+                continue;
+            }
+            if !seen.insert(("skill".to_string(), name.to_lowercase())) {
+                continue;
+            }
+            out.push(AgentCommand {
+                name,
+                description: meta.description,
+                prompt: String::new(),
+                argument_hint: meta.argument_hint,
+                kind: "skill".to_string(),
+                scope: scope.clone(),
+            });
+        }
+    }
+
+    Ok(out)
+}
+
+/// Per-agent custom-command directories, project before global (project wins
+/// dedup). The dirs are just where each CLI's own commands live; we expand them
+/// the same way regardless.
+fn command_dirs(agent: &str, repo: &Path, home: Option<&Path>) -> Vec<(PathBuf, String)> {
+    let mut dirs: Vec<(PathBuf, String)> = Vec::new();
+    match agent {
+        "opencode" => dirs.push((repo.join(".opencode").join("commands"), "project".to_string())),
+        // Codex has no project-level prompts — only the global dir below.
+        "codex" => {}
+        // Claude, Copilot (which reuses Claude's `.claude/commands`), and default.
+        _ => dirs.push((repo.join(".claude").join("commands"), "project".to_string())),
+    }
+    if let Some(h) = home {
+        match agent {
+            "codex" => dirs.push((h.join(".codex").join("prompts"), "global".to_string())),
+            "opencode" => dirs.push((
+                h.join(".config").join("opencode").join("commands"),
+                "global".to_string(),
+            )),
+            _ => dirs.push((h.join(".claude").join("commands"), "global".to_string())),
+        }
+    }
+    dirs
+}
+
+/// Per-agent skill directories. The vendor-neutral `.agents/skills` canonical
+/// store is listed first so it wins dedup over a vendor mirror; the agent's own
+/// vendor dir(s) follow, to catch skills defined only there.
+fn skill_dirs(agent: &str, repo: &Path, home: Option<&Path>) -> Vec<(PathBuf, String)> {
+    let mut dirs: Vec<(PathBuf, String)> = Vec::new();
+    dirs.push((repo.join(".agents").join("skills"), "project".to_string()));
+    match agent {
+        "opencode" => dirs.push((repo.join(".opencode").join("skills"), "project".to_string())),
+        "copilot" => dirs.push((repo.join(".github").join("skills"), "project".to_string())),
+        _ => {}
+    }
+    // `.claude/skills` is also read by opencode/copilot and is the Claude store.
+    if agent != "codex" {
+        dirs.push((repo.join(".claude").join("skills"), "project".to_string()));
+    }
+    if let Some(h) = home {
+        dirs.push((h.join(".agents").join("skills"), "global".to_string()));
+        match agent {
+            "codex" => dirs.push((h.join(".codex").join("skills"), "global".to_string())),
+            "opencode" => dirs.push((
+                h.join(".config").join("opencode").join("skills"),
+                "global".to_string(),
+            )),
+            "copilot" => dirs.push((h.join(".copilot").join("skills"), "global".to_string())),
+            _ => {}
+        }
+        if agent != "codex" {
+            dirs.push((h.join(".claude").join("skills"), "global".to_string()));
+        }
+    }
+    dirs
+}
+
+/// Sorted `*.md` files directly in `dir` (empty if the dir is absent/unreadable).
+fn md_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
     };
-    let mut paths: Vec<_> = entries
+    let mut paths: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
         .collect();
     paths.sort();
-
-    let mut out = Vec::new();
-    for path in paths {
-        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let parsed = parse_command_md(&text);
-        if parsed.prompt.trim().is_empty() {
-            continue;
-        }
-        out.push(RepoCommand {
-            name: name.to_string(),
-            description: parsed.description,
-            prompt: parsed.prompt,
-            argument_hint: parsed.argument_hint,
-        });
-    }
-    Ok(out)
+    paths
 }
 
-struct ParsedCommand {
+struct Meta {
+    name: String,
     description: String,
     argument_hint: String,
-    prompt: String,
 }
 
-/// Splits an optional Claude Code frontmatter block (a leading `--- … ---` of
-/// `key: value` lines) from the prompt body. Only `description` and
-/// `argument-hint` are recognized; everything else in the block is ignored.
-/// Files without frontmatter are treated as a pure prompt body.
-fn parse_command_md(text: &str) -> ParsedCommand {
+/// Pulls `name`/`description`/`argument-hint` from a frontmatter block, scanning
+/// lines flatly so an `argument-hint` nested under `metadata:` is still found.
+/// Unknown keys are ignored.
+fn parse_meta(front: &str) -> Meta {
+    let mut meta = Meta {
+        name: String::new(),
+        description: String::new(),
+        argument_hint: String::new(),
+    };
+    for line in front.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("name:") {
+            meta.name = unquote(v);
+        } else if let Some(v) = line.strip_prefix("description:") {
+            meta.description = unquote(v);
+        } else if let Some(v) = line.strip_prefix("argument-hint:") {
+            meta.argument_hint = unquote(v);
+        }
+    }
+    meta
+}
+
+/// Splits a leading `--- … ---` frontmatter block from the body. Returns
+/// (frontmatter_inner, body); ("", whole-trimmed-text) when there's no
+/// frontmatter. Skips the entire closing-fence LINE (whatever its dash count),
+/// so a body that itself starts with `-` (a markdown list) is preserved.
+fn split_frontmatter(text: &str) -> (&str, &str) {
     let trimmed = text.trim_start_matches(['\u{feff}', '\n', '\r', ' ']);
     if let Some(rest) = trimmed.strip_prefix("---") {
         if let Some(end) = rest.find("\n---") {
             let front = &rest[..end];
-            let mut description = String::new();
-            let mut argument_hint = String::new();
-            for line in front.lines() {
-                let line = line.trim();
-                if let Some(v) = line.strip_prefix("description:") {
-                    description = unquote(v);
-                } else if let Some(v) = line.strip_prefix("argument-hint:") {
-                    argument_hint = unquote(v);
-                }
-            }
-            // Skip the entire closing-fence LINE (whatever its dash count), so a
-            // body that itself starts with `-` (a markdown list) is preserved.
             // `end` indexes the "\n" before the closing fence.
             let after_fence = &rest[end + 1..];
             let body = match after_fence.find('\n') {
                 Some(nl) => after_fence[nl + 1..].trim(),
                 None => "",
             };
-            return ParsedCommand {
-                description,
-                argument_hint,
-                prompt: body.to_string(),
-            };
+            return (front, body);
         }
     }
-    ParsedCommand {
-        description: String::new(),
-        argument_hint: String::new(),
-        prompt: text.trim().to_string(),
-    }
+    ("", text.trim())
 }
 
 /// Trims a frontmatter value and strips one layer of matching quotes.
@@ -216,42 +359,56 @@ mod tests {
     #[test]
     fn parses_frontmatter_and_body() {
         let md = "---\ndescription: Review the diff\nargument-hint: [focus]\n---\nReview $ARGUMENTS now.\n";
-        let p = parse_command_md(md);
-        assert_eq!(p.description, "Review the diff");
-        assert_eq!(p.argument_hint, "[focus]");
-        assert_eq!(p.prompt, "Review $ARGUMENTS now.");
+        let (front, body) = split_frontmatter(md);
+        let meta = parse_meta(front);
+        assert_eq!(meta.description, "Review the diff");
+        assert_eq!(meta.argument_hint, "[focus]");
+        assert_eq!(body, "Review $ARGUMENTS now.");
     }
 
     #[test]
     fn strips_quotes_from_values() {
         let md = "---\ndescription: \"Quoted desc\"\nargument-hint: '[x]'\n---\nBody\n";
-        let p = parse_command_md(md);
-        assert_eq!(p.description, "Quoted desc");
-        assert_eq!(p.argument_hint, "[x]");
-        assert_eq!(p.prompt, "Body");
+        let (front, body) = split_frontmatter(md);
+        let meta = parse_meta(front);
+        assert_eq!(meta.description, "Quoted desc");
+        assert_eq!(meta.argument_hint, "[x]");
+        assert_eq!(body, "Body");
     }
 
     #[test]
     fn body_only_without_frontmatter() {
-        let p = parse_command_md("Just a prompt body.\n");
-        assert_eq!(p.description, "");
-        assert_eq!(p.argument_hint, "");
-        assert_eq!(p.prompt, "Just a prompt body.");
+        let (front, body) = split_frontmatter("Just a prompt body.\n");
+        let meta = parse_meta(front);
+        assert_eq!(meta.description, "");
+        assert_eq!(meta.argument_hint, "");
+        assert_eq!(body, "Just a prompt body.");
     }
 
     #[test]
     fn ignores_unknown_frontmatter_keys() {
-        let md = "---\nmodel: opus\ndescription: D\n---\nBody";
-        let p = parse_command_md(md);
-        assert_eq!(p.description, "D");
-        assert_eq!(p.prompt, "Body");
+        let (front, body) = split_frontmatter("---\nmodel: opus\ndescription: D\n---\nBody");
+        let meta = parse_meta(front);
+        assert_eq!(meta.description, "D");
+        assert_eq!(body, "Body");
     }
 
     #[test]
     fn preserves_body_starting_with_dash() {
-        let md = "---\ndescription: D\n---\n- first\n- second\n";
-        let p = parse_command_md(md);
-        assert_eq!(p.description, "D");
-        assert_eq!(p.prompt, "- first\n- second");
+        let (front, body) = split_frontmatter("---\ndescription: D\n---\n- first\n- second\n");
+        let meta = parse_meta(front);
+        assert_eq!(meta.description, "D");
+        assert_eq!(body, "- first\n- second");
+    }
+
+    #[test]
+    fn parses_skill_name_and_nested_argument_hint() {
+        // `argument-hint` nested under `metadata:` is still found by the flat scan.
+        let md = "---\nname: writing-guidelines\ndescription: Review docs\nmetadata:\n  author: vercel\n  argument-hint: <file>\n---\n# Writing\n";
+        let (front, _) = split_frontmatter(md);
+        let meta = parse_meta(front);
+        assert_eq!(meta.name, "writing-guidelines");
+        assert_eq!(meta.description, "Review docs");
+        assert_eq!(meta.argument_hint, "<file>");
     }
 }

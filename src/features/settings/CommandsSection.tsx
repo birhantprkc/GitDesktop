@@ -205,12 +205,14 @@ export const CommandsSection = withForm({
             <h2 className="text-sm font-medium">Slash commands</h2>
             <p className="text-xs text-muted-foreground">
               Reusable prompts for the agent composer — type{" "}
-              <code className="font-mono">/</code> to pick one. These appear
-              alongside the built-ins and any{" "}
+              <code className="font-mono">/</code> to pick one. They appear
+              alongside the built-ins and the selected agent's own commands and{" "}
+              <strong className="font-medium">skills</strong> — project and
+              global, including the shared{" "}
               <code className="rounded bg-muted px-1 py-0.5">
-                .claude/commands
+                .agents/skills
               </code>{" "}
-              a repository defines.
+              store.
             </p>
           </div>
           <Button

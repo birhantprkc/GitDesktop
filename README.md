@@ -50,9 +50,11 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   **Claude Code**, **Codex**, **GitHub Copilot**, or **opencode** (whose free
   hosted models need no key at all), no extra subscription. Sandbox its writes in a
   **Docker/Podman container**, or rely on each CLI's own worktree confinement on
-  the host. Drive each turn with **slash commands** — built-in starters,
-  your repo's own `.claude/commands`, and custom ones you define — plus `@file`
-  mentions, a model/reasoning-effort picker, and terminal-style prompt history.
+  the host. Drive each turn with **slash commands and skills** — built-in
+  starters, custom commands you define, and the selected agent's own commands and
+  **Agent Skills** (project *and* global, including the shared `.agents/skills`) —
+  plus `@file` mentions, a model/reasoning-effort picker, and terminal-style
+  prompt history.
 - **AI where it helps** — commit messages, branch names, PR and issue
   titles/descriptions, repository descriptions and topics, and a streaming code
   review or security audit. Bring your own provider: cloud APIs, local **Ollama**,

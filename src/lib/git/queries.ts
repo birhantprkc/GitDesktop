@@ -1467,12 +1467,17 @@ export function useTrackedFiles(repo: string, enabled: boolean) {
   });
 }
 
-/** Repo-local agent slash commands (`.claude/commands/*.md`). Fetched lazily,
- *  only while a slash command is being typed in the agent composer. */
-export function useRepoCommands(repo: string, enabled: boolean) {
+/** Slash-commands + skills available to `agent` (project + global). Fetched
+ *  lazily while a slash command is being typed in the agent composer; keyed on
+ *  the agent too, since each CLI reads different command/skill directories. */
+export function useAgentCommands(
+  repo: string,
+  agent: string,
+  enabled: boolean,
+) {
   return useQuery({
-    queryKey: ["repo", repo, "agent-commands"] as const,
-    queryFn: () => api.readRepoCommands(repo),
+    queryKey: ["repo", repo, "agent-commands", agent] as const,
+    queryFn: () => api.readAgentCommands(repo, agent),
     enabled,
     staleTime: 30_000,
   });

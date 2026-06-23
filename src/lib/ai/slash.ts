@@ -1,26 +1,30 @@
-import type { RepoCommand } from "@/lib/git/api";
+import type { AgentCommand } from "@/lib/git/api";
 import type { CustomCommand } from "@/lib/settings/api";
 
 /**
- * A slash command available in the agent composer's `/` menu. No agent CLI
- * parses `/command` in headless (`-p`/`exec`) mode, so commands are expanded
- * entirely on the client — `prompt` is a template whose `$ARGUMENTS` (and
- * `$1`..`$9`) placeholders are substituted with whatever the user types after
- * the command before it's sent to the agent.
+ * An item in the agent composer's `/` menu. Two kinds:
+ * - `command` — a prompt template. No agent CLI parses `/command` in headless
+ *   (`-p`/`exec`) mode, so we expand its body client-side (`$ARGUMENTS` and
+ *   `$1`..`$9` substituted with what the user typed) and send the result.
+ * - `skill` — an Agent Skill (a multi-file `SKILL.md` dir with progressive
+ *   disclosure). We DON'T inline its body — the CLI already loaded the real
+ *   skill from disk, so we nudge it by name and let the model invoke it.
  *
- * Commands come from three sources, merged by name (custom > repo > builtin):
- * - `builtin` — the handful of starters defined below;
- * - `repo` — the repo's own `.claude/commands/*.md` (Claude Code's format);
+ * Sources, merged by (kind, name) with custom > discovered > builtin:
+ * - `builtin` — the starters below;
+ * - `agent` — discovered from the SELECTED CLI's command/skill dirs (project +
+ *   global), including the vendor-neutral `.agents/skills` canonical store;
  * - `custom` — user-defined, edited under Settings → Slash commands.
  */
 export interface SlashCommand {
-  /** Name typed after `/` (no leading slash). */
   name: string;
-  /** Short description shown in the menu. */
   description: string;
-  /** Prompt template; `$ARGUMENTS`/`$1..` expanded on use. Empty for actions. */
+  /** Template body for commands; empty for skills (and actions). */
   prompt: string;
-  source: "builtin" | "repo" | "custom";
+  kind: "command" | "skill";
+  source: "builtin" | "agent" | "custom";
+  /** Where a discovered command/skill lives. */
+  scope?: "project" | "global";
   /** Hint shown after the name in the menu, e.g. `[file]`. */
   argumentHint?: string;
   /** Built-in actions run instead of sending a prompt. */
@@ -33,6 +37,7 @@ export interface SlashCommand {
 export const BUILTIN_COMMANDS: SlashCommand[] = [
   {
     name: "review",
+    kind: "command",
     source: "builtin",
     argumentHint: "[optional focus]",
     description: "Review the working changes for bugs and clarity",
@@ -41,6 +46,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: "test",
+    kind: "command",
     source: "builtin",
     argumentHint: "[file or behavior]",
     description: "Write tests covering edge cases",
@@ -49,6 +55,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: "fix",
+    kind: "command",
     source: "builtin",
     argumentHint: "[describe the issue]",
     description: "Diagnose and fix an issue",
@@ -57,6 +64,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: "explain",
+    kind: "command",
     source: "builtin",
     argumentHint: "[file or symbol]",
     description: "Explain how something works",
@@ -65,6 +73,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: "refactor",
+    kind: "command",
     source: "builtin",
     argumentHint: "[file or symbol]",
     description: "Refactor without changing behavior",
@@ -73,6 +82,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: "clear",
+    kind: "command",
     source: "builtin",
     description: "Clear the message box",
     prompt: "",
@@ -94,7 +104,7 @@ export function parseSlashInvocation(
   return { name: m[1], args: m[2] ?? "" };
 }
 
-/** Finds a command by name, case-insensitively. */
+/** Finds a command/skill by name, case-insensitively (first match wins). */
 export function findCommand(
   commands: SlashCommand[],
   name: string,
@@ -104,7 +114,21 @@ export function findCommand(
 }
 
 /**
- * Expands a command's template against the user's argument string. Substitutes
+ * Builds the final prompt sent to the agent for a picked command/skill.
+ * - Skills: a by-name nudge (+ any args) — the CLI loads the real skill.
+ * - Commands: the template, expanded (see `expandCommand`).
+ */
+export function buildPrompt(cmd: SlashCommand, args: string): string {
+  if (cmd.kind === "skill") {
+    const nudge = `Use the "${cmd.name}" skill.`;
+    const trimmed = args.trim();
+    return trimmed ? `${nudge}\n\n${trimmed}` : nudge;
+  }
+  return expandCommand(cmd, args);
+}
+
+/**
+ * Expands a command template against the user's argument string. Substitutes
  * `$ARGUMENTS` (the full args) and `$1`..`$9` (whitespace-split tokens). If the
  * template has no placeholder, non-empty args are appended as a trailing
  * paragraph so a bare `/cmd extra text` still carries the extra instruction.
@@ -127,39 +151,44 @@ export function expandCommand(cmd: SlashCommand, args: string): string {
   return out.trim();
 }
 
-/** Merges the three command sources into one list, deduped by name with
- *  custom > repo > builtin precedence (a user override wins). */
+/** Merges built-ins + the agent's discovered commands/skills + the user's
+ *  custom commands, deduped by (kind, name) with custom > discovered > builtin
+ *  (so a user's own command and the canonical skill win their slot). */
 export function mergeCommands(
-  repo: RepoCommand[],
+  discovered: AgentCommand[],
   custom: CustomCommand[],
 ): SlashCommand[] {
-  const byName = new Map<string, SlashCommand>();
-  for (const c of BUILTIN_COMMANDS) byName.set(c.name.toLowerCase(), c);
-  for (const c of repo) {
+  const byKey = new Map<string, SlashCommand>();
+  const key = (kind: string, name: string) => `${kind}:${name.toLowerCase()}`;
+  for (const c of BUILTIN_COMMANDS) byKey.set(key(c.kind, c.name), c);
+  for (const c of discovered) {
     if (!c.name.trim()) continue;
-    byName.set(c.name.toLowerCase(), {
+    byKey.set(key(c.kind, c.name), {
       name: c.name,
       description: c.description,
       prompt: c.prompt,
-      source: "repo",
+      kind: c.kind,
+      source: "agent",
+      scope: c.scope,
       argumentHint: c.argumentHint || undefined,
     });
   }
   for (const c of custom) {
     const name = c.name.trim();
     if (!name) continue;
-    byName.set(name.toLowerCase(), {
+    byKey.set(key("command", name), {
       name,
       description: c.description,
       prompt: c.prompt,
+      kind: "command",
       source: "custom",
     });
   }
-  return [...byName.values()];
+  return [...byKey.values()];
 }
 
-/** Filters + ranks commands for the menu: name-prefix matches first, then
- *  substring matches, each group keeping its original order. */
+/** Filters + ranks for the menu: name-prefix matches first, then substring
+ *  matches, each group keeping its original order. */
 export function filterCommands(
   commands: SlashCommand[],
   query: string,
