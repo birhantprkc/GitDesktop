@@ -2,8 +2,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { invoke } from "@/lib/tauri/invoke";
 import type { AiProviderId } from "./types";
 
-/** Which agent CLI the Rust backend should drive. ("opencode" is a recognized
- *  stub — detected in About, but not yet a usable session/review agent.) */
+/** Which agent CLI the Rust backend should drive. */
 export type AgentKind = "claude" | "codex" | "copilot" | "opencode";
 
 export type AuthStatus = "authed" | "notAuthed" | "unknown";
@@ -21,15 +20,17 @@ export type ReviewEvent =
   | { kind: "status"; text: string }
   | { kind: "done"; text: string; isError: boolean; costUsd: number | null }
   | { kind: "error"; message: string }
-  /** Codex's thread id (turn 1) — persisted so a host session resumes the right
-   *  thread. Only sessions care; reviews ignore it. */
-  | { kind: "codexThread"; threadId: string };
+  /** The CLI's own resume id captured on turn 1 (Codex thread / opencode session)
+   *  — persisted so a host session resumes the right conversation. Only sessions
+   *  care; reviews ignore it. */
+  | { kind: "nativeSession"; id: string };
 
 /** Maps a review provider id to its backend agent kind, or null if not a CLI. */
 export function providerKind(provider: AiProviderId): AgentKind | null {
   if (provider === "claude-cli") return "claude";
   if (provider === "codex-cli") return "codex";
   if (provider === "copilot-cli") return "copilot";
+  if (provider === "opencode-cli") return "opencode";
   return null;
 }
 
@@ -82,7 +83,7 @@ export const cancelAgentReview = (reviewId: string) =>
 
 export interface AgentSessionArgs {
   /** Which CLI drives the session. */
-  agent: "claude" | "codex" | "copilot";
+  agent: "claude" | "codex" | "copilot" | "opencode";
   /** Explicit Claude binary path, or null to auto-detect. */
   binPath: string | null;
   model: string;
@@ -103,9 +104,10 @@ export interface AgentSessionArgs {
    *  a Docker/Podman container; anything else runs on the host (worktree-confined
    *  by each CLI's own OS sandbox). */
   isolation: string;
-  /** Codex's thread id from turn 1 (the `codexThread` event), passed back on
-   *  resume so a host session continues the right thread; null otherwise. */
-  codexThreadId: string | null;
+  /** The CLI's native resume id from turn 1 (the `nativeSession` event), passed
+   *  back on resume so a host session continues the right conversation (Codex
+   *  thread / opencode session); null otherwise. */
+  nativeSessionId: string | null;
   onEvent: (event: ReviewEvent) => void;
 }
 
@@ -113,9 +115,10 @@ export interface AgentSessionArgs {
  * Runs one turn of a write-capable agent session: the CLI implements
  * `userPrompt` full-auto inside the worktree, streaming the same events as a
  * review. Follow-up turns (`resume: true`) keep the full conversation + worktree
- * state. Both agents run worktree-confined on the host (Claude via
- * `bypassPermissions`; Codex via its own OS sandbox, `-s workspace-write`) or in a
- * container (kernel boundary).
+ * state. On the host each CLI is worktree-confined — Codex via its own OS sandbox
+ * (`-s workspace-write`), the others "soft" (Claude `bypassPermissions`, Copilot
+ * `--add-dir`, opencode `--dangerously-skip-permissions`); Claude and Codex can
+ * also run in a container (kernel boundary).
  */
 export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
   const channel = new Channel<ReviewEvent>();
@@ -131,7 +134,7 @@ export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
     sessionId: args.sessionId,
     resume: args.resume,
     isolation: args.isolation,
-    codexThreadId: args.codexThreadId,
+    nativeSessionId: args.nativeSessionId,
     onEvent: channel,
   });
 }

@@ -24,6 +24,7 @@ import { type AgentSession, useSessionsStore } from "./store";
 const CLAUDE_MODELS = MODEL_SUGGESTIONS["claude-cli"];
 const CODEX_MODELS = MODEL_SUGGESTIONS["codex-cli"];
 const COPILOT_MODELS = MODEL_SUGGESTIONS["copilot-cli"];
+const OPENCODE_MODELS = MODEL_SUGGESTIONS["opencode-cli"];
 // "" (account default) maps to a non-empty sentinel for the Select value.
 const DEFAULT_MODEL = "default";
 const MAX_MENTIONS = 8;
@@ -73,9 +74,9 @@ export function SessionComposer({
   const [draft, setDraft] = useState("");
   const [startModel, setStartModel] = useState("");
   const [startEffort, setStartEffort] = useState("");
-  const [startAgent, setStartAgent] = useState<"claude" | "codex" | "copilot">(
-    "claude",
-  );
+  const [startAgent, setStartAgent] = useState<
+    "claude" | "codex" | "copilot" | "opencode"
+  >("claude");
   const [mention, setMention] = useState<Mention | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   // Prompt-history navigation (terminal-style Up/Down recall). `histIndex` null
@@ -93,12 +94,14 @@ export function SessionComposer({
       ? CODEX_MODELS
       : agent === "copilot"
         ? COPILOT_MODELS
-        : CLAUDE_MODELS;
+        : agent === "opencode"
+          ? OPENCODE_MODELS
+          : CLAUDE_MODELS;
   const onModel = session
     ? (m: string) => setModel(session.id, m)
     : setStartModel;
-  // Effort is changeable mid-session (like model). Supported for all three CLIs
-  // (mapped per-CLI in Rust); opencode isn't selectable so the picker always shows.
+  // Effort is changeable mid-session (like model). Mapped per-CLI in Rust (Codex
+  // config, Copilot/opencode flags, Claude thinking keyword).
   const effort = session ? session.effort : startEffort;
   const onEffort = session
     ? (e: string) => setEffort(session.id, e)
@@ -544,21 +547,28 @@ function EffortPicker({
   );
 }
 
-/** Picks the CLI for a NEW session (fixed once it starts). Both agents honor the
- *  isolation setting — on the host each is worktree-confined by its own OS sandbox. */
+/** Picks the CLI for a NEW session (fixed once it starts). Claude and Codex honor
+ *  the isolation setting; Copilot and opencode are host-only for now (worktree-
+ *  confined, soft). */
 function AgentPicker({
   value,
   onChange,
 }: {
-  value: "claude" | "codex" | "copilot";
-  onChange: (a: "claude" | "codex" | "copilot") => void;
+  value: "claude" | "codex" | "copilot" | "opencode";
+  onChange: (a: "claude" | "codex" | "copilot" | "opencode") => void;
 }) {
   return (
     <Select
       value={value}
       onValueChange={(v) =>
         onChange(
-          v === "copilot" ? "copilot" : v === "codex" ? "codex" : "claude",
+          v === "copilot"
+            ? "copilot"
+            : v === "codex"
+              ? "codex"
+              : v === "opencode"
+                ? "opencode"
+                : "claude",
         )
       }
     >
@@ -573,6 +583,7 @@ function AgentPicker({
         <SelectItem value="claude">Claude</SelectItem>
         <SelectItem value="codex">Codex</SelectItem>
         <SelectItem value="copilot">GitHub Copilot</SelectItem>
+        <SelectItem value="opencode">opencode</SelectItem>
       </SelectContent>
     </Select>
   );

@@ -65,10 +65,11 @@ export const appendModel = (id: string, model: string) =>
 export const appendEffort = (id: string, effort: string) =>
   invoke<void>("transcript_append_meta", { id, effort });
 
-/** Record Codex's thread id (captured from turn 1), so a host session resumes the
- *  right thread after a reload. Folded last-wins, same `meta` event as the model. */
-export const appendCodexThread = (id: string, codexThreadId: string) =>
-  invoke<void>("transcript_append_meta", { id, codexThreadId });
+/** Record the CLI's native resume id (captured from turn 1 — Codex thread / opencode
+ *  session), so a host session resumes the right conversation after a reload. Folded
+ *  last-wins, same `meta` event as the model. */
+export const appendNativeSession = (id: string, nativeSessionId: string) =>
+  invoke<void>("transcript_append_meta", { id, nativeSessionId });
 
 /** Record a Keep (`kept=true`) or Resume (`kept=false`). */
 export const setKept = (id: string, kept: boolean) =>

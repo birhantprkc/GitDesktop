@@ -108,6 +108,8 @@ export function PrReviewPanel({
     mode,
     model,
     deltaState,
+    phase,
+    error,
   } = useReviewRun(target);
 
   // Prior reviews for this PR, used for the per-mode context banner. Read-only —
@@ -278,7 +280,9 @@ export function PrReviewPanel({
                   ? "copilot login"
                   : cliKind === "codex"
                     ? "codex login"
-                    : "claude login"}
+                    : cliKind === "opencode"
+                      ? "opencode auth login"
+                      : "claude login"}
               </code>{" "}
               in a terminal.
             </p>
@@ -426,7 +430,18 @@ export function PrReviewPanel({
                 {DELTA_NOTE[deltaState]}
               </p>
             )}
-          {text.trim() ? (
+          {phase === "error" ? (
+            <div className="space-y-2">
+              <p className="flex items-start gap-1.5 text-xs text-destructive">
+                <WarningIcon className="mt-0.5 size-3.5 shrink-0" />
+                <span>
+                  {error || "The review failed. Check the model and try again."}
+                </span>
+              </p>
+              {/* Keep any partial output that streamed before it failed. */}
+              {text.trim() && <Markdown>{text}</Markdown>}
+            </div>
+          ) : text.trim() ? (
             <Markdown>{text}</Markdown>
           ) : generating ? (
             <p className="flex items-center gap-2 text-xs text-muted-foreground">

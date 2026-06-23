@@ -15,6 +15,7 @@ export const PROVIDER_LABELS: Record<AiProviderId, string> = {
   "claude-cli": "Claude Code (CLI)",
   "codex-cli": "Codex (CLI)",
   "copilot-cli": "GitHub Copilot (CLI)",
+  "opencode-cli": "opencode (CLI)",
 };
 
 /** Host for Ollama's hosted models, reached with an API key (vs the local
@@ -35,6 +36,7 @@ export const CLI_PROVIDERS: AiProviderId[] = [
   "claude-cli",
   "codex-cli",
   "copilot-cli",
+  "opencode-cli",
 ];
 
 export const isCliProvider = (id: AiProviderId): boolean =>
@@ -78,6 +80,19 @@ export const MODEL_SUGGESTIONS: Record<AiProviderId, string[]> = {
     "gpt-5.4",
     "gpt-5.3-codex",
     "mai-code-1-flash-picker",
+    "gpt-5.5",
+    "claude-opus-4.8",
+    "claude-opus-4.7",
+    "claude-opus-4.6",
+  ],
+  // opencode takes `provider/model`. These hosted models run keyless (no API key,
+  // cost $0) — handy defaults. With a configured provider, type e.g.
+  // `anthropic/claude-sonnet-4-6`; blank = opencode's own default.
+  "opencode-cli": [
+    "opencode/north-mini-code-free",
+    "opencode/deepseek-v4-flash-free",
+    "opencode/mimo-v2.5-free",
+    "opencode/nemotron-3-ultra-free",
   ],
 };
 
@@ -109,6 +124,7 @@ export function createModel(
     case "claude-cli":
     case "codex-cli":
     case "copilot-cli":
+    case "opencode-cli":
       // CLI agents run as a subprocess, not through the AI SDK. Callers must
       // route these through the agent-CLI path before reaching createModel.
       throw new Error("CLI providers do not use the AI SDK model path");

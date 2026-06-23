@@ -220,7 +220,9 @@ function CliReviewConfig({
                 ? "copilot login"
                 : kind === "codex"
                   ? "codex login"
-                  : "claude login"}
+                  : kind === "opencode"
+                    ? "opencode auth login"
+                    : "claude login"}
             </code>
             .
           </span>

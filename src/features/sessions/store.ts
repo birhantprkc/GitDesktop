@@ -13,11 +13,12 @@ import {
 } from "@/lib/git/worktree";
 import { notify } from "@/lib/notify";
 import { loadSettings } from "@/lib/settings/api";
+import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
 import {
-  appendCodexThread,
   appendEffort,
   appendModel,
+  appendNativeSession,
   appendResult,
   appendTurn,
   createTranscript,
@@ -71,10 +72,11 @@ export interface AgentSession {
    *  CLI's own OS sandbox) or "container" (also inside a Docker/Podman container). */
   isolation: "worktree" | "container";
   /** Which CLI drives the session, fixed at creation. */
-  agent: "claude" | "codex" | "copilot";
-  /** Codex's thread id, captured from turn 1 — lets a host session resume the
-   *  right thread (it shares ~/.codex). Unset for Claude / container / pre-turn-1. */
-  codexThreadId?: string;
+  agent: "claude" | "codex" | "copilot" | "opencode";
+  /** The CLI's native resume id, captured from turn 1 (Codex thread / opencode
+   *  session) — lets a host session resume the right conversation (each shares its
+   *  CLI home). Unset for Claude / Copilot / container / pre-turn-1. */
+  nativeSessionId?: string;
   /** A turn is currently streaming for THIS session (sessions run independently). */
   running: boolean;
   /** Kept: the work was finalized onto `branch` and the worktree removed to free
@@ -112,7 +114,7 @@ interface SessionsState {
     repoPath: string,
     prompt: string,
     model: string,
-    agent: "claude" | "codex" | "copilot",
+    agent: "claude" | "codex" | "copilot" | "opencode",
     effort: string,
   ) => Promise<void>;
   send: (id: string, prompt: string) => Promise<void>;
@@ -206,7 +208,7 @@ async function runTurn(
     effort,
     isolation,
     agent,
-    codexThreadId,
+    nativeSessionId,
   } = s0;
 
   const setSession = (updater: (s: AgentSession) => AgentSession) =>
@@ -264,15 +266,15 @@ async function runTurn(
       resume,
       isolation,
       agent,
-      codexThreadId: codexThreadId ?? null,
+      nativeSessionId: nativeSessionId ?? null,
       onEvent: (ev) => {
         const s = find();
         if (!s) return;
-        if (ev.kind === "codexThread") {
-          // Capture once (turn 1) + persist, so a host resume targets this thread.
-          if (!s.codexThreadId) {
-            setSession((x) => ({ ...x, codexThreadId: ev.threadId }));
-            persist(appendCodexThread(id, ev.threadId));
+        if (ev.kind === "nativeSession") {
+          // Capture once (turn 1) + persist, so a host resume targets this session.
+          if (!s.nativeSessionId) {
+            setSession((x) => ({ ...x, nativeSessionId: ev.id }));
+            persist(appendNativeSession(id, ev.id));
           }
           return;
         }
@@ -297,7 +299,7 @@ async function runTurn(
       },
     });
   } catch (e) {
-    patchTurn({ status: "error", error: String(e), statusText: "" });
+    patchTurn({ status: "error", error: errorMessage(e), statusText: "" });
     setSession((s) => ({ ...s, running: false }));
     endTurn();
     return;
@@ -326,7 +328,7 @@ async function runTurn(
     });
     endTurn();
   } catch (e) {
-    patchTurn({ status: "error", error: String(e), statusText: "" });
+    patchTurn({ status: "error", error: errorMessage(e), statusText: "" });
     setSession((s) => ({ ...s, running: false }));
     endTurn();
   }
@@ -402,9 +404,10 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     // `-s workspace-write`); "container" wraps either in a kernel boundary.
     const setting =
       (await loadSettings().catch(() => null))?.agentIsolation ?? "worktree";
-    // Copilot has no container tier yet (its creds aren't file-mountable), so it
-    // always runs on the host regardless of the isolation setting.
-    const isolation = agent === "copilot" ? "worktree" : setting;
+    // Copilot and opencode have no container tier yet, so they always run on the
+    // host regardless of the isolation setting.
+    const isolation =
+      agent === "copilot" || agent === "opencode" ? "worktree" : setting;
     let wt: Awaited<ReturnType<typeof createWorktree>>;
     try {
       wt = await createWorktree(repoPath);

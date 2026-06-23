@@ -16,6 +16,7 @@ import { notifyIfUnfocused } from "@/lib/notify";
 import { saveReview } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
+import { errorMessage } from "@/lib/tauri/invoke";
 
 export interface ReviewContext {
   title: string;
@@ -427,7 +428,9 @@ export async function startReview(
       patch({
         phase: "error",
         status: "",
-        error: e instanceof Error ? e.message : String(e),
+        // CLI failures reject with a plain AppError object (not an Error), so
+        // `String(e)` would print "[object Object]" — use the shared extractor.
+        error: errorMessage(e),
       });
       void notifyReviewDone(title, mode, false);
     }
@@ -526,11 +529,16 @@ export function useReviewRun(target: ReviewTarget) {
     generate,
     cancel,
     reset,
-    generating: entry.phase === "running",
+    generating: entry.phase === "running" || entry.phase === "queued",
     text,
     status: entry.status,
     mode: entry.mode,
     model: entry.model,
     deltaState: entry.deltaState,
+    /** Run phase, so the panel can show a failed run instead of silently
+     *  reverting to the idle placeholder. */
+    phase: entry.phase,
+    /** Failure message when `phase === "error"`. */
+    error: entry.error,
   };
 }

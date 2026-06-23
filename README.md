@@ -47,9 +47,10 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   live, then review its diff and keep it as a branch or discard it. Run several at
   once, organized into **Active** and **Kept** tabs, searchable, with a
   notification when each finishes. Uses the CLI agent you already have —
-  **Claude Code**, **Codex**, or **GitHub Copilot**, no extra subscription.
-  Sandbox its writes in a **Docker/Podman container**, or rely on Codex's and
-  Copilot's own worktree confinement on the host.
+  **Claude Code**, **Codex**, **GitHub Copilot**, or **opencode** (whose free
+  hosted models need no key at all), no extra subscription. Sandbox its writes in a
+  **Docker/Podman container**, or rely on each CLI's own worktree confinement on
+  the host.
 - **AI where it helps** — commit messages, branch names, PR and issue
   titles/descriptions, repository descriptions and topics, and a streaming code
   review or security audit. Bring your own provider: cloud APIs, local **Ollama**,
@@ -173,8 +174,8 @@ state — with an Install link for anything that's missing.
 
 - **Providers** — Anthropic, OpenAI, OpenRouter, local **Ollama**, **Ollama
   Cloud** (hosted models via an API key), and the **Claude Code / Codex / GitHub
-  Copilot CLIs** (keyless, via your subscription). Separate models for generation
-  vs. review;
+  Copilot / opencode CLIs** (keyless, via your subscription — or opencode's free
+  hosted models). Separate models for generation vs. review;
   live model lists in a searchable picker.
 - **Custom instructions** (included in every generation):
   - **Global** — Settings → AI instructions (e.g. "Follow Conventional Commits").
@@ -223,8 +224,8 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   GitHub Actions (`actions.rs`).
 - `src-tauri/src/{hooks,secrets,instructions}.rs` — git-hook management, OS
   keychain storage, and repo instruction/rule files.
-- `src-tauri/src/agent.rs` — drives local coding-agent CLIs (Claude Code / Codex)
-  for keyless AI review and CI debugging.
+- `src-tauri/src/agent.rs` — drives local coding-agent CLIs (Claude Code / Codex /
+  GitHub Copilot / opencode) for keyless AI review, sessions, and CI debugging.
 - `src/lib/` — invoke bindings + TanStack Query hooks (`git/`, `github/`),
   the AI layer (`ai/`, Vercel AI SDK over the Tauri HTTP plugin so requests
   bypass webview CORS), settings, and the hotkey registry.

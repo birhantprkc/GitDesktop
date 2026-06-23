@@ -27,9 +27,9 @@ const REVIEW_TIMEOUT_AGENTIC: Duration = Duration::from_secs(600);
 /// longer budget than a review. Generous for the slice; configurable later.
 const SESSION_TIMEOUT: Duration = Duration::from_secs(1800);
 
-/// Which agent CLI to drive. Frontend sends `"claude"` / `"codex"` / `"copilot"`.
-/// `Opencode` is a recognized **stub** — detected in About, but its session/review
-/// paths aren't wired yet (they return a clear "not yet supported" error).
+/// Which agent CLI to drive. Frontend sends `"claude"` / `"codex"` / `"copilot"` /
+/// `"opencode"`. All four are fully wired for sessions + reviews; opencode runs
+/// host-only for now (its container tier is a follow-up).
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentKind {
@@ -103,11 +103,12 @@ pub enum ReviewEvent {
     },
     /// Terminal failure with a message to surface to the user.
     Error { message: String },
-    /// Codex emitted its thread id (turn 1's `thread.started`). The frontend
-    /// persists it so a **host** session resumes the *right* thread
-    /// (`exec resume <id>`) instead of `--last`, which could grab a concurrent
-    /// session sharing `~/.codex`. Ignored for reviews / Claude / container.
-    CodexThread { thread_id: String },
+    /// The CLI's own generated resume id, captured on turn 1 — Codex's thread id
+    /// (`thread.started`) or opencode's `sessionID`. The frontend persists it so a
+    /// **host** session resumes the *right* conversation (Codex `exec resume <id>`,
+    /// opencode `--session <id>`) instead of "continue last", which could grab a
+    /// concurrent session sharing the CLI's home. Ignored for reviews / Claude / container.
+    NativeSession { id: String },
 }
 
 // --- binary resolution -----------------------------------------------------
@@ -129,6 +130,9 @@ fn candidate_dirs() -> Vec<PathBuf> {
         dirs.push(home.join(".local").join("bin"));
         dirs.push(home.join(".claude").join("bin"));
         dirs.push(home.join(".codex").join("bin"));
+        // opencode's native installer (curl | bash) defaults here; its npm/scoop/
+        // winget installs land on PATH, but this covers the standalone binary.
+        dirs.push(home.join(".opencode").join("bin"));
         #[cfg(not(windows))]
         {
             // npm with a custom prefix, plus the package/version managers that
@@ -593,6 +597,93 @@ fn copilot_review_args(model: &str, prompt: &str) -> Vec<String> {
     args
 }
 
+/// opencode write-capable *session* invocation (host only for now — its creds
+/// live in a file, `~/.local/share/opencode/auth.json`, so a container tier is
+/// feasible later but unbuilt). The prompt goes on **stdin** (`opencode run` with no
+/// positional message reads it), not as an argument — a large turn (with prior
+/// context / @file mentions) would otherwise blow the Windows ~32 KB argv limit
+/// ("Argument list too long"). This also matches Claude/Codex.
+///
+/// Confinement is "soft" (like Claude): `--dangerously-skip-permissions` auto-approves
+/// tools so the non-interactive run doesn't hang on a permission prompt; the worktree's
+/// git isolation is the hard guarantee. opencode generates its **own** `sessionID`
+/// (there's no flag to set it on turn 1), so turn 1 omits `--session` and we capture
+/// the id from the stream; resume passes it back as `--session <id>` — exactly the
+/// host-Codex thread-id dance, since opencode shares `~/.local/share/opencode` too.
+fn opencode_session_args(
+    model: &str,
+    session_id: &str,
+    resume: bool,
+    effort: &str,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "run".into(),
+        "--format".into(),
+        "json".into(),
+        "--dangerously-skip-permissions".into(),
+    ];
+    if resume && !session_id.trim().is_empty() {
+        // opencode generated the id on turn 1; we captured it from the stream.
+        // (If capture somehow failed, fall through to "continue last" rather than
+        // passing an empty `--session`.)
+        args.push("--session".into());
+        args.push(session_id.into());
+    } else if resume {
+        args.push("--continue".into());
+    }
+    if !model.trim().is_empty() {
+        args.push("-m".into());
+        args.push(model.into());
+    }
+    if let Some(v) = opencode_variant(effort) {
+        args.push("--variant".into());
+        args.push(v.into());
+    }
+    args
+}
+
+/// opencode **read-only** review invocation. The prompt (system + diff) goes on
+/// **stdin**, not as an argument — besides the argv-length ceiling, on Windows
+/// `opencode` is a `.cmd` and Rust refuses to pass a newline-bearing argument to a
+/// batch file ("batch file arguments are invalid"), which every diff prompt is. No
+/// `--dangerously-skip-permissions` and no tool need — a diff-in-the-prompt analysis
+/// completes without invoking tools, so it never blocks on a permission prompt
+/// (verified). Repo-aware (Tier 2) reads would need opencode's `plan` agent, a follow-up.
+fn opencode_review_args(model: &str) -> Vec<String> {
+    let mut args: Vec<String> = vec!["run".into(), "--format".into(), "json".into()];
+    if !model.trim().is_empty() {
+        args.push("-m".into());
+        args.push(model.into());
+    }
+    args
+}
+
+/// App effort level → opencode `--variant` (provider-specific reasoning effort).
+/// opencode documents `minimal` / `high` / `max`; "medium" / "" use the model's
+/// default (omit).
+fn opencode_variant(level: &str) -> Option<&'static str> {
+    match level {
+        "low" => Some("minimal"),
+        "high" => Some("high"),
+        "xhigh" => Some("max"),
+        _ => None,
+    }
+}
+
+/// Friendly progress label for an opencode tool call (`part.tool`).
+fn opencode_tool_status(tool: &str) -> String {
+    match tool {
+        "write" => "Writing files…".to_string(),
+        "edit" | "patch" => "Editing files…".to_string(),
+        "read" => "Reading files…".to_string(),
+        "grep" => "Searching code…".to_string(),
+        "glob" | "list" | "ls" => "Listing files…".to_string(),
+        "bash" => "Running a command…".to_string(),
+        "webfetch" | "fetch" => "Fetching a page…".to_string(),
+        other => format!("Using {other}…"),
+    }
+}
+
 /// Friendly progress label for a Claude Tier-2 tool call.
 fn tool_status(name: &str) -> String {
     match name {
@@ -660,9 +751,7 @@ fn parse_codex_line(
         "thread.started" => v
             .get("thread_id")
             .and_then(|t| t.as_str())
-            .map(|id| ReviewEvent::CodexThread {
-                thread_id: id.to_string(),
-            }),
+            .map(|id| ReviewEvent::NativeSession { id: id.to_string() }),
         "item.started" => {
             let item = v.get("item")?;
             if item.get("type")?.as_str()? == "command_execution" {
@@ -769,6 +858,86 @@ fn parse_copilot_line(
                 text: std::mem::take(last_message),
                 is_error,
                 cost_usd: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Parses one line of opencode `run --format json` (JSONL). opencode has **no**
+/// single terminal event — a turn is a sequence of steps; `step_finish` with
+/// `reason == "stop"` ends it (`"tool-calls"` means another step follows). It emits
+/// whole `text` parts (not token deltas), each a distinct segment, so we stream them
+/// as deltas *and* accumulate them; the final `Done` carries the full text. The
+/// generated `sessionID` (on every event) is surfaced once as `NativeSession` so a
+/// host resume targets the right session — the store de-dups, so re-emitting is fine.
+fn parse_opencode_line(
+    line: &str,
+    saw_terminal: &mut bool,
+    last_message: &mut String,
+) -> Option<ReviewEvent> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    match v.get("type")?.as_str()? {
+        // First event of the run carries the session id we need for resume.
+        "step_start" => v
+            .get("sessionID")
+            .and_then(|s| s.as_str())
+            .map(|id| ReviewEvent::NativeSession { id: id.to_string() }),
+        "text" => {
+            let text = v.get("part")?.get("text")?.as_str()?;
+            if text.is_empty() {
+                return None;
+            }
+            // Separate consecutive segments so multi-step narration stays readable;
+            // the delta mirrors what we append, so the buffer == last_message.
+            let chunk = if last_message.is_empty() {
+                text.to_string()
+            } else {
+                format!("\n\n{text}")
+            };
+            last_message.push_str(&chunk);
+            Some(ReviewEvent::Delta { text: chunk })
+        }
+        "tool_use" => {
+            let tool = v
+                .get("part")
+                .and_then(|p| p.get("tool"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("a tool");
+            Some(ReviewEvent::Status {
+                text: opencode_tool_status(tool),
+            })
+        }
+        "step_finish" => {
+            let reason = v
+                .get("part")
+                .and_then(|p| p.get("reason"))
+                .and_then(|r| r.as_str())
+                .unwrap_or("stop");
+            // More steps follow a tool call; only a non-tool finish ends the turn.
+            if reason == "tool-calls" {
+                return None;
+            }
+            *saw_terminal = true;
+            Some(ReviewEvent::Done {
+                text: std::mem::take(last_message),
+                is_error: false,
+                cost_usd: None,
+            })
+        }
+        "error" => {
+            *saw_terminal = true;
+            Some(ReviewEvent::Error {
+                message: v
+                    .get("error")
+                    .and_then(|e| e.get("message").or(Some(e)))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("opencode reported an error.")
+                    .to_string(),
             })
         }
         _ => None,
@@ -923,8 +1092,9 @@ async fn stream_agent(
                             AgentKind::Copilot => {
                                 parse_copilot_line(&l, &mut saw_result, &mut last_message)
                             }
-                            // Unreachable: opencode errors before it ever streams.
-                            AgentKind::Opencode => None,
+                            AgentKind::Opencode => {
+                                parse_opencode_line(&l, &mut saw_result, &mut last_message)
+                            }
                         };
                         if let Some(ev) = ev {
                             let _ = on_event.send(ev);
@@ -1010,12 +1180,12 @@ pub async fn agent_review(
             copilot_review_args(&model, &format!("{system_prompt}\n\n{user_prompt}")),
             String::new(),
         ),
-        // opencode review isn't wired yet (recognized stub).
-        AgentKind::Opencode => {
-            return Err(AppError::Command(
-                "opencode isn't available for AI review yet — coming soon.".to_string(),
-            ));
-        }
+        // opencode review: prompt on stdin (no positional message), so a large or
+        // newline-bearing diff prompt doesn't hit the argv / batch-file-arg limits.
+        AgentKind::Opencode => (
+            opencode_review_args(&model),
+            format!("{system_prompt}\n\n{user_prompt}"),
+        ),
     };
 
     // Codex always explores the repo, so it gets the longer agentic budget too.
@@ -1057,7 +1227,7 @@ pub async fn agent_session(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     bin_path: Option<String>,
-    // "claude" (default), "codex", or "copilot" ("opencode" is a recognized stub).
+    // "claude" (default), "codex", "copilot", or "opencode".
     agent: String,
     model: String,
     // Reasoning/effort level ("" = provider default; else low/medium/high/xhigh).
@@ -1072,9 +1242,10 @@ pub async fn agent_session(
     // "container" runs the turn inside a Docker/Podman container (worktree-
     // confined); anything else (incl. None) runs it on the host (worktree-only).
     isolation: Option<String>,
-    // Codex's thread id captured from turn 1 (`thread.started`), so a *host*
-    // session resumes the right thread; None on turn 1 / Claude / container.
-    codex_thread_id: Option<String>,
+    // The CLI's native resume id captured from turn 1 (Codex thread / opencode
+    // sessionID), so a *host* session resumes the right conversation; None on turn
+    // 1 / Claude / Copilot / container.
+    native_session_id: Option<String>,
     on_event: Channel<ReviewEvent>,
 ) -> AppResult<()> {
     // Strict: reject an unknown agent rather than silently coercing it.
@@ -1097,18 +1268,14 @@ pub async fn agent_session(
     };
     let container = isolation.as_deref() == Some("container");
 
-    // opencode is a recognized stub — its session path isn't wired yet.
-    if kind == AgentKind::Opencode {
-        return Err(AppError::Command(
-            "opencode agent sessions aren't supported yet — coming soon.".to_string(),
-        ));
-    }
-    // Copilot runs on the host only for now: its credentials live in the OS
-    // keychain (not a mountable file), so the container tier is a follow-up.
-    if kind == AgentKind::Copilot && container {
-        return Err(AppError::Command(
-            "Copilot sessions don't support container isolation yet (its login isn't file-mountable). Turn isolation off in Settings → AI to run Copilot on the host.".to_string(),
-        ));
+    // Copilot and opencode run on the host only for now, so the container tier is
+    // a follow-up (Copilot's creds live in the OS keychain, not a mountable file;
+    // opencode's container image just isn't built yet).
+    if matches!(kind, AgentKind::Copilot | AgentKind::Opencode) && container {
+        return Err(AppError::Command(format!(
+            "{} sessions don't support container isolation yet. Turn isolation off in Settings → AI to run on the host.",
+            kind.label()
+        )));
     }
 
     // The inner CLI invocation + the stdin for this turn. Claude carries the
@@ -1128,7 +1295,7 @@ pub async fn agent_session(
             )
         }
         AgentKind::Codex => (
-            codex_session_args(&model, resume, container, codex_thread_id.as_deref(), &effort),
+            codex_session_args(&model, resume, container, native_session_id.as_deref(), &effort),
             if resume {
                 user_prompt
             } else {
@@ -1147,8 +1314,25 @@ pub async fn agent_session(
                 String::new(),
             )
         }
-        // Rejected above (stub).
-        AgentKind::Opencode => unreachable!("opencode session rejected above"),
+        // opencode reads the prompt on stdin (no positional message), avoiding the
+        // argv / batch-file-arg limits. It generates its own session id, so on
+        // resume we pass the captured one.
+        AgentKind::Opencode => {
+            let prompt = if resume {
+                user_prompt
+            } else {
+                format!("{system_prompt}\n\n{user_prompt}")
+            };
+            (
+                opencode_session_args(
+                    &model,
+                    native_session_id.as_deref().unwrap_or(""),
+                    resume,
+                    &effort,
+                ),
+                prompt,
+            )
+        }
     };
 
     // Container isolation: wrap the same invocation in an ephemeral,
@@ -1243,4 +1427,67 @@ pub async fn agent_session(
         &on_event,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Real opencode `run --format json` lines (captured 2026-06-23, v1.17.9).
+    const STEP_START: &str = r#"{"type":"step_start","sessionID":"ses_abc","part":{"type":"step-start"}}"#;
+    const TEXT_A: &str = r#"{"type":"text","sessionID":"ses_abc","part":{"id":"p1","type":"text","text":"First."}}"#;
+    const TOOL: &str = r#"{"type":"tool_use","sessionID":"ses_abc","part":{"type":"tool","tool":"write","state":{"status":"completed"}}}"#;
+    const TEXT_B: &str = r#"{"type":"text","sessionID":"ses_abc","part":{"id":"p2","type":"text","text":"Second."}}"#;
+    const FINISH_TOOLS: &str = r#"{"type":"step_finish","sessionID":"ses_abc","part":{"type":"step-finish","reason":"tool-calls"}}"#;
+    const FINISH_STOP: &str = r#"{"type":"step_finish","sessionID":"ses_abc","part":{"type":"step-finish","reason":"stop"}}"#;
+
+    #[test]
+    fn opencode_step_start_yields_native_session_id() {
+        let (mut term, mut msg) = (false, String::new());
+        let ev = parse_opencode_line(STEP_START, &mut term, &mut msg).unwrap();
+        match ev {
+            ReviewEvent::NativeSession { id } => assert_eq!(id, "ses_abc"),
+            other => panic!("expected NativeSession, got {other:?}"),
+        }
+        assert!(!term);
+    }
+
+    #[test]
+    fn opencode_text_parts_stream_as_separated_deltas() {
+        let (mut term, mut msg) = (false, String::new());
+        // First segment: emitted verbatim, no leading separator.
+        let ev = parse_opencode_line(TEXT_A, &mut term, &mut msg).unwrap();
+        assert!(matches!(ev, ReviewEvent::Delta { text } if text == "First."));
+        // Second segment: separated so multi-step narration stays readable, and the
+        // delta mirrors exactly what we appended (buffer == last_message).
+        let ev = parse_opencode_line(TEXT_B, &mut term, &mut msg).unwrap();
+        assert!(matches!(ev, ReviewEvent::Delta { text } if text == "\n\nSecond."));
+        assert_eq!(msg, "First.\n\nSecond.");
+    }
+
+    #[test]
+    fn opencode_tool_use_is_status_only() {
+        let (mut term, mut msg) = (false, String::new());
+        let ev = parse_opencode_line(TOOL, &mut term, &mut msg).unwrap();
+        assert!(matches!(ev, ReviewEvent::Status { text } if text == "Writing files…"));
+        assert!(!term, "a tool call doesn't end the turn");
+    }
+
+    #[test]
+    fn opencode_tool_calls_finish_is_not_terminal_but_stop_is() {
+        let (mut term, mut msg) = (false, "hello".to_string());
+        // `reason: tool-calls` means another step follows — not the turn's end.
+        assert!(parse_opencode_line(FINISH_TOOLS, &mut term, &mut msg).is_none());
+        assert!(!term);
+        // `reason: stop` ends the turn and carries the accumulated text.
+        let ev = parse_opencode_line(FINISH_STOP, &mut term, &mut msg).unwrap();
+        match ev {
+            ReviewEvent::Done { text, is_error, .. } => {
+                assert_eq!(text, "hello");
+                assert!(!is_error);
+            }
+            other => panic!("expected Done, got {other:?}"),
+        }
+        assert!(term);
+    }
 }

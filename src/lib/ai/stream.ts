@@ -91,7 +91,7 @@ export async function runCliStream({
             settled = true;
             reject(new Error(event.message));
           }
-          // codexThread (Codex's turn-1 thread id) is session-only — reviews ignore it.
+          // nativeSession (the CLI's turn-1 resume id) is session-only — reviews ignore it.
         },
       })
         // Backend returned without a terminal event — the cancel path.

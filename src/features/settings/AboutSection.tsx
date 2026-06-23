@@ -59,8 +59,9 @@ const TOOL_META: Record<
   opencode: {
     name: "opencode",
     install: "https://opencode.ai",
+    // No non-interactive auth-status command, so login state stays Unknown.
     auth: false,
-    role: "Coding-agent CLI — support coming soon.",
+    role: "Agent sessions + review; keyless via opencode's free hosted models.",
   },
 };
 

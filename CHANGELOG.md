@@ -10,6 +10,23 @@ commit list.
 
 ## [Unreleased]
 
+### Added
+
+- **opencode joins the agent line-up.** You can now drive agent sessions and AI
+  reviews with [opencode](https://opencode.ai) alongside Claude Code, Codex, and
+  GitHub Copilot — pick it in the agent composer or as a review provider. opencode's
+  **free hosted models need no API key**, so it's a genuinely keyless option out of
+  the box (point it at your own provider for paid models too). Sessions run on the
+  host, confined to their throwaway worktree, and resume cleanly across turns and
+  app restarts like the other agents.
+
+### Fixed
+
+- **AI reviews now show why they failed.** A failed PR/local review used to revert
+  silently to the empty "Run a review…" placeholder with no explanation; it now
+  displays the actual error (and keeps any partial output that streamed first).
+  CLI-agent failures also no longer surface as a useless `[object Object]`.
+
 ### Changed
 
 - **Configure and rebuild the agent container image.** Settings → AI now lets you

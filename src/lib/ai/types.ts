@@ -6,7 +6,8 @@ export type AiProviderId =
   | "ollama-cloud"
   | "claude-cli"
   | "codex-cli"
-  | "copilot-cli";
+  | "copilot-cli"
+  | "opencode-cli";
 
 export interface AiSettings {
   provider: AiProviderId;

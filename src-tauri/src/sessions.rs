@@ -122,15 +122,20 @@ struct StatusEvent {
 #[serde(rename_all = "camelCase")]
 struct MetaEvent {
     ts: i64,
-    /// A mid-session model change. Absent on a thread-id-only meta event.
+    /// A mid-session model change. Absent on a resume-id-only meta event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
-    /// Codex's thread id, captured from turn 1's `thread.started` — lets a host
-    /// session resume the right thread (it shares `~/.codex`). Absent for Claude /
-    /// container / a model-only meta event.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    codex_thread_id: Option<String>,
-    /// A mid-session effort change. Absent on a model/thread-id-only meta event.
+    /// The CLI's native resume id, captured from turn 1 (Codex thread / opencode
+    /// sessionID) — lets a host session resume the right conversation (the CLI
+    /// shares its home across sessions). Absent for Claude / container / a model-only
+    /// meta event. The `codexThreadId` alias reads sessions persisted before the rename.
+    #[serde(
+        default,
+        alias = "codexThreadId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    native_session_id: Option<String>,
+    /// A mid-session effort change. Absent on a model/resume-id-only meta event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     effort: Option<String>,
 }
@@ -168,7 +173,7 @@ pub struct LoadedSession {
     agent: String,
     effort: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    codex_thread_id: Option<String>,
+    native_session_id: Option<String>,
     running: bool,
     kept: bool,
     turns: Vec<LoadedTurn>,
@@ -260,7 +265,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
     let mut effort = header.effort.clone();
     let mut kept = false;
     let mut head_hash = header.base.clone();
-    let mut codex_thread_id: Option<String> = None;
+    let mut native_session_id: Option<String> = None;
 
     for e in events {
         match e {
@@ -301,8 +306,8 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
                 if let Some(ef) = &m.effort {
                     effort = ef.clone();
                 }
-                if let Some(tid) = &m.codex_thread_id {
-                    codex_thread_id = Some(tid.clone());
+                if let Some(sid) = &m.native_session_id {
+                    native_session_id = Some(sid.clone());
                 }
             }
         }
@@ -320,7 +325,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
         isolation: header.isolation,
         agent: header.agent,
         effort,
-        codex_thread_id,
+        native_session_id,
         running: false,
         kept,
         turns,
@@ -548,13 +553,14 @@ pub async fn transcript_append_result(
 }
 
 /// Records a mid-session `meta` change (folded last-wins): a model switch and/or
-/// Codex's captured thread id. Pass only the field that changed.
+/// the CLI's captured native resume id (Codex thread / opencode session). Pass only
+/// the field that changed.
 #[tauri::command]
 pub async fn transcript_append_meta(
     app: AppHandle,
     id: String,
     model: Option<String>,
-    codex_thread_id: Option<String>,
+    native_session_id: Option<String>,
     effort: Option<String>,
 ) -> AppResult<()> {
     append_to_dir(
@@ -563,7 +569,7 @@ pub async fn transcript_append_meta(
         &Event::Meta(MetaEvent {
             ts: now_ms(),
             model,
-            codex_thread_id,
+            native_session_id,
             effort,
         }),
     )
@@ -655,13 +661,13 @@ mod tests {
             Event::Meta(MetaEvent {
                 ts: 3,
                 model: Some("sonnet".into()),
-                codex_thread_id: None,
+                native_session_id: None,
                 effort: Some("high".into()),
             }),
             Event::Meta(MetaEvent {
                 ts: 4,
                 model: None,
-                codex_thread_id: Some("thread-xyz".into()),
+                native_session_id: Some("thread-xyz".into()),
                 effort: None,
             }),
             Event::Status(StatusEvent {
@@ -677,8 +683,8 @@ mod tests {
         assert_eq!(s.head_hash, "c1");
         assert_eq!(s.model, "sonnet"); // meta last-wins
         assert_eq!(s.effort, "high"); // effort meta folds like model
-        // a model-only meta then a thread-only meta each apply their own field
-        assert_eq!(s.codex_thread_id.as_deref(), Some("thread-xyz"));
+        // a model-only meta then a resume-id-only meta each apply their own field
+        assert_eq!(s.native_session_id.as_deref(), Some("thread-xyz"));
         assert!(s.kept);
         assert!(!s.running);
     }
@@ -715,6 +721,19 @@ mod tests {
         assert_eq!(s.turns[0].error.as_deref(), Some("Interrupted by restart."));
         assert_eq!(s.turns[1].status, "done");
         assert_eq!(s.head_hash, "c2");
+    }
+
+    #[test]
+    fn meta_reads_legacy_codex_thread_id_key() {
+        // Sessions persisted before the rename wrote `codexThreadId`; the serde
+        // alias must still fold it into `native_session_id` so a host Codex session
+        // created earlier still resumes the right thread.
+        let line = r#"{"t":"meta","ts":7,"codexThreadId":"thread-legacy"}"#;
+        let ev: Event = serde_json::from_str(line).unwrap();
+        match ev {
+            Event::Meta(m) => assert_eq!(m.native_session_id.as_deref(), Some("thread-legacy")),
+            other => panic!("expected Meta, got {other:?}"),
+        }
     }
 
     #[test]
