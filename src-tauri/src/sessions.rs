@@ -117,7 +117,14 @@ struct StatusEvent {
 #[serde(rename_all = "camelCase")]
 struct MetaEvent {
     ts: i64,
-    model: String,
+    /// A mid-session model change. Absent on a thread-id-only meta event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    /// Codex's thread id, captured from turn 1's `thread.started` — lets a host
+    /// session resume the right thread (it shares `~/.codex`). Absent for Claude /
+    /// container / a model-only meta event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex_thread_id: Option<String>,
 }
 
 // ----------------------------------------------------------------- folded (read) view
@@ -151,6 +158,8 @@ pub struct LoadedSession {
     model: String,
     isolation: String,
     agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex_thread_id: Option<String>,
     running: bool,
     kept: bool,
     turns: Vec<LoadedTurn>,
@@ -239,6 +248,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
     let mut model = header.model.clone();
     let mut kept = false;
     let mut head_hash = header.base.clone();
+    let mut codex_thread_id: Option<String> = None;
 
     for e in events {
         match e {
@@ -272,7 +282,14 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
                 "active" => kept = false,
                 _ => {}
             },
-            Event::Meta(m) => model = m.model.clone(),
+            Event::Meta(m) => {
+                if let Some(mm) = &m.model {
+                    model = mm.clone();
+                }
+                if let Some(tid) = &m.codex_thread_id {
+                    codex_thread_id = Some(tid.clone());
+                }
+            }
         }
     }
 
@@ -287,6 +304,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
         model,
         isolation: header.isolation,
         agent: header.agent,
+        codex_thread_id,
         running: false,
         kept,
         turns,
@@ -511,15 +529,22 @@ pub async fn transcript_append_result(
     )
 }
 
-/// Records a mid-session model change (folded last-wins).
+/// Records a mid-session `meta` change (folded last-wins): a model switch and/or
+/// Codex's captured thread id. Pass only the field that changed.
 #[tauri::command]
-pub async fn transcript_append_meta(app: AppHandle, id: String, model: String) -> AppResult<()> {
+pub async fn transcript_append_meta(
+    app: AppHandle,
+    id: String,
+    model: Option<String>,
+    codex_thread_id: Option<String>,
+) -> AppResult<()> {
     append_to_dir(
         &sessions_dir(&app)?,
         &id,
         &Event::Meta(MetaEvent {
             ts: now_ms(),
             model,
+            codex_thread_id,
         }),
     )
 }
@@ -608,10 +633,16 @@ mod tests {
             }),
             Event::Meta(MetaEvent {
                 ts: 3,
-                model: "sonnet".into(),
+                model: Some("sonnet".into()),
+                codex_thread_id: None,
+            }),
+            Event::Meta(MetaEvent {
+                ts: 4,
+                model: None,
+                codex_thread_id: Some("thread-xyz".into()),
             }),
             Event::Status(StatusEvent {
-                ts: 4,
+                ts: 5,
                 status: "kept".into(),
             }),
         ];
@@ -622,6 +653,8 @@ mod tests {
         assert_eq!(s.turns[0].commit_hash.as_deref(), Some("c1"));
         assert_eq!(s.head_hash, "c1");
         assert_eq!(s.model, "sonnet"); // meta last-wins
+        // a model-only meta then a thread-only meta each apply their own field
+        assert_eq!(s.codex_thread_id.as_deref(), Some("thread-xyz"));
         assert!(s.kept);
         assert!(!s.running);
     }

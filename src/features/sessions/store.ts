@@ -15,6 +15,7 @@ import { notify } from "@/lib/notify";
 import { loadSettings } from "@/lib/settings/api";
 import { toastError } from "@/lib/toast";
 import {
+  appendCodexThread,
   appendModel,
   appendResult,
   appendTurn,
@@ -62,11 +63,14 @@ export interface AgentSession {
   claudeSessionId: string;
   /** Current model for the next turn ("" = account default). Changeable mid-session. */
   model: string;
-  /** Isolation mode, fixed at creation: "worktree" (host, worktree-only) or
-   *  "container" (also inside a Docker/Podman container). */
+  /** Isolation mode, fixed at creation: "worktree" (host, worktree-confined by the
+   *  CLI's own OS sandbox) or "container" (also inside a Docker/Podman container). */
   isolation: "worktree" | "container";
-  /** Which CLI drives the session, fixed at creation. "codex" is container-only. */
+  /** Which CLI drives the session, fixed at creation. */
   agent: "claude" | "codex";
+  /** Codex's thread id, captured from turn 1 — lets a host session resume the
+   *  right thread (it shares ~/.codex). Unset for Claude / container / pre-turn-1. */
+  codexThreadId?: string;
   /** A turn is currently streaming for THIS session (sessions run independently). */
   running: boolean;
   /** Kept: the work was finalized onto `branch` and the worktree removed to free
@@ -189,7 +193,14 @@ async function runTurn(
   const find = () => get().sessions.find((s) => s.id === id);
   const s0 = find();
   if (!s0) return;
-  const { claudeSessionId, worktreePath, model, isolation, agent } = s0;
+  const {
+    claudeSessionId,
+    worktreePath,
+    model,
+    isolation,
+    agent,
+    codexThreadId,
+  } = s0;
 
   const setSession = (updater: (s: AgentSession) => AgentSession) =>
     set({
@@ -245,9 +256,18 @@ async function runTurn(
       resume,
       isolation,
       agent,
+      codexThreadId: codexThreadId ?? null,
       onEvent: (ev) => {
         const s = find();
         if (!s) return;
+        if (ev.kind === "codexThread") {
+          // Capture once (turn 1) + persist, so a host resume targets this thread.
+          if (!s.codexThreadId) {
+            setSession((x) => ({ ...x, codexThreadId: ev.threadId }));
+            persist(appendCodexThread(id, ev.threadId));
+          }
+          return;
+        }
         const last = s.turns[s.turns.length - 1];
         if (!last) return;
         if (ev.kind === "delta")
@@ -369,11 +389,12 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     if (!task || get().creating) return;
     set({ creating: true });
     // Isolation is fixed for the life of the session (every turn must run the
-    // same way), so resolve it once here. Codex is container-only; Claude honors
-    // the setting.
+    // same way), so resolve it once here. Both agents honor the setting: on the
+    // host each runs worktree-confined by its own OS sandbox (Codex via
+    // `-s workspace-write`); "container" wraps either in a kernel boundary.
     const setting =
       (await loadSettings().catch(() => null))?.agentIsolation ?? "worktree";
-    const isolation = agent === "codex" ? "container" : setting;
+    const isolation = setting;
     let wt: Awaited<ReturnType<typeof createWorktree>>;
     try {
       wt = await createWorktree(repoPath);

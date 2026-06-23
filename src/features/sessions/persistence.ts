@@ -60,6 +60,11 @@ export const appendResult = (
 export const appendModel = (id: string, model: string) =>
   invoke<void>("transcript_append_meta", { id, model });
 
+/** Record Codex's thread id (captured from turn 1), so a host session resumes the
+ *  right thread after a reload. Folded last-wins, same `meta` event as the model. */
+export const appendCodexThread = (id: string, codexThreadId: string) =>
+  invoke<void>("transcript_append_meta", { id, codexThreadId });
+
 /** Record a Keep (`kept=true`) or Resume (`kept=false`). */
 export const setKept = (id: string, kept: boolean) =>
   invoke<void>("transcript_set_kept", { id, kept });

@@ -338,9 +338,7 @@ export function SessionComposer({
             )}
             <ModelPicker value={model} onChange={onModel} models={models} />
             <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
-              {!session && agent === "codex"
-                ? "Codex runs in a Docker/Podman container"
-                : "↵ send · ⇧↵ newline"}
+              ↵ send · ⇧↵ newline
             </span>
             <AnimatePresence mode="wait" initial={false}>
               {running ? (
@@ -486,8 +484,8 @@ function ModelPicker({
   );
 }
 
-/** Picks the CLI for a NEW session (fixed once it starts). Codex runs only in a
- *  container — the store forces container isolation for it. */
+/** Picks the CLI for a NEW session (fixed once it starts). Both agents honor the
+ *  isolation setting — on the host each is worktree-confined by its own OS sandbox. */
 function AgentPicker({
   value,
   onChange,

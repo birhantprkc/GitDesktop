@@ -99,9 +99,9 @@ function StatusLine({
   if (!status || !status.runtime) {
     return (
       <Row tone="warn">
-        No Docker or Podman found. Claude sessions still run on the host, but
-        Codex sessions (which require a container) will fail until you install
-        one.
+        No Docker or Podman found. Sessions still run on the host
+        (worktree-confined — Codex via its own OS sandbox); container isolation
+        needs Docker or Podman installed.
       </Row>
     );
   }

@@ -19,7 +19,10 @@ export type ReviewEvent =
   | { kind: "delta"; text: string }
   | { kind: "status"; text: string }
   | { kind: "done"; text: string; isError: boolean; costUsd: number | null }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  /** Codex's thread id (turn 1) — persisted so a host session resumes the right
+   *  thread. Only sessions care; reviews ignore it. */
+  | { kind: "codexThread"; threadId: string };
 
 /** Maps a review provider id to its backend agent kind, or null if not a CLI. */
 export function providerKind(provider: AiProviderId): AgentKind | null {
@@ -76,7 +79,7 @@ export const cancelAgentReview = (reviewId: string) =>
   invoke<void>("agent_review_cancel", { reviewId });
 
 export interface AgentSessionArgs {
-  /** Which CLI drives the session. "codex" is container-only. */
+  /** Which CLI drives the session. */
   agent: "claude" | "codex";
   /** Explicit Claude binary path, or null to auto-detect. */
   binPath: string | null;
@@ -92,8 +95,12 @@ export interface AgentSessionArgs {
   /** false = first turn (start the session), true = a follow-up turn (resume it). */
   resume: boolean;
   /** Isolation mode, fixed at session creation. "container" runs the turn inside
-   *  a Docker/Podman container; anything else runs on the host (worktree-only). */
+   *  a Docker/Podman container; anything else runs on the host (worktree-confined
+   *  by each CLI's own OS sandbox). */
   isolation: string;
+  /** Codex's thread id from turn 1 (the `codexThread` event), passed back on
+   *  resume so a host session continues the right thread; null otherwise. */
+  codexThreadId: string | null;
   onEvent: (event: ReviewEvent) => void;
 }
 
@@ -101,8 +108,9 @@ export interface AgentSessionArgs {
  * Runs one turn of a write-capable agent session: the CLI implements
  * `userPrompt` full-auto inside the worktree, streaming the same events as a
  * review. Follow-up turns (`resume: true`) keep the full conversation + worktree
- * state. Claude runs on the host or in a container; Codex is **container-only**
- * (its host workspace-write is trust-gated; full-bypass is safe in the box).
+ * state. Both agents run worktree-confined on the host (Claude via
+ * `bypassPermissions`; Codex via its own OS sandbox, `-s workspace-write`) or in a
+ * container (kernel boundary).
  */
 export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
   const channel = new Channel<ReviewEvent>();
@@ -117,6 +125,7 @@ export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
     sessionId: args.sessionId,
     resume: args.resume,
     isolation: args.isolation,
+    codexThreadId: args.codexThreadId,
     onEvent: channel,
   });
 }

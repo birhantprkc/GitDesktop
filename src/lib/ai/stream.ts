@@ -87,10 +87,11 @@ export async function runCliStream({
             if (event.isError)
               reject(new Error("The run ended with an error."));
             else resolve();
-          } else {
+          } else if (event.kind === "error") {
             settled = true;
             reject(new Error(event.message));
           }
+          // codexThread (Codex's turn-1 thread id) is session-only — reviews ignore it.
         },
       })
         // Backend returned without a terminal event — the cancel path.

@@ -92,6 +92,11 @@ pub enum ReviewEvent {
     },
     /// Terminal failure with a message to surface to the user.
     Error { message: String },
+    /// Codex emitted its thread id (turn 1's `thread.started`). The frontend
+    /// persists it so a **host** session resumes the *right* thread
+    /// (`exec resume <id>`) instead of `--last`, which could grab a concurrent
+    /// session sharing `~/.codex`. Ignored for reviews / Claude / container.
+    CodexThread { thread_id: String },
 }
 
 // --- binary resolution -----------------------------------------------------
@@ -403,23 +408,59 @@ fn claude_session_args(
     args
 }
 
-/// Codex write-capable *session* invocation — **container-only**. On the host
-/// Codex's `workspace-write` is trust-gated for a fresh, non-interactive worktree
-/// (resolves read-only); inside a container the kernel is the boundary, so the
-/// full-bypass flag is safe and is the only mode that actually writes. The task
-/// goes on stdin (`-`); `--skip-git-repo-check` because the mounted worktree's
-/// `.git` is a dangling pointer in-container (the host drives git).
+/// Codex write-capable *session* invocation. Two confinement shapes:
 ///
-/// Multi-turn: each session has its own dedicated container home + cwd, so it's
-/// the only recorded session there — `exec resume --last` continues it without us
-/// tracking a thread id.
-fn codex_session_args(model: &str, resume: bool) -> Vec<String> {
+/// - **Host (`container=false`):** confine the agent's writes to the worktree with
+///   Codex's *own* OS sandbox — `-s workspace-write` (macOS/Linux enforce it via
+///   Seatbelt/Landlock; Windows needs the unelevated restricted-token sandbox, so
+///   `-c windows.sandbox="unelevated"`, which needs no admin/reboot). `exec` is
+///   non-interactive so approval is already "never". Verified 2026-06-22:
+///   in-worktree writes land, out-of-worktree escapes are denied.
+/// - **Container (`container=true`):** the kernel is the boundary, so the full-bypass
+///   flag is safe and is the only mode that writes (the host workspace-write sandbox
+///   inside the container would just confine to the bind-mount anyway).
+///
+/// The task goes on stdin (`-`); `--skip-git-repo-check` because the worktree's
+/// `.git` is a pointer file (in-container it's dangling; on host the main repo
+/// drives git either way). Multi-turn: each session has its own dedicated home +
+/// cwd, so `exec resume --last` continues it without us tracking a thread id.
+fn codex_session_args(
+    model: &str,
+    resume: bool,
+    container: bool,
+    thread_id: Option<&str>,
+) -> Vec<String> {
     let mut args: Vec<String> = vec!["exec".into()];
     if resume {
         args.push("resume".into());
-        args.push("--last".into());
+        // A container session has a dedicated home, so `--last` is unambiguous. A
+        // host session shares `~/.codex`, so resume the *specific* thread captured
+        // from turn 1 — `--last` could grab a concurrent session.
+        match (container, thread_id) {
+            (false, Some(id)) => args.push(id.into()),
+            _ => args.push("--last".into()),
+        }
     }
-    args.push("--dangerously-bypass-approvals-and-sandbox".into());
+    if container {
+        args.push("--dangerously-bypass-approvals-and-sandbox".into());
+    } else {
+        // Host: confine writes to the worktree via Codex's own OS sandbox. `exec`
+        // is non-interactive, so approval is already "never" (no `-a` flag exists).
+        args.push("-s".into());
+        args.push("workspace-write".into());
+        // Let the agent's shell commands reach the network (npm/pip/git fetch);
+        // filesystem confinement is the property we enforce here. Default-on also
+        // keeps platforms consistent (Windows `unelevated` is filesystem-only, so
+        // network is open there regardless).
+        args.push("-c".into());
+        args.push("sandbox_workspace_write.network_access=true".into());
+        if cfg!(target_os = "windows") {
+            // Select the unelevated restricted-token sandbox, else `workspace-write`
+            // silently degrades to read-only on Windows.
+            args.push("-c".into());
+            args.push("windows.sandbox=\"unelevated\"".into());
+        }
+    }
     args.push("--skip-git-repo-check".into());
     args.push("--json".into());
     if !model.trim().is_empty() {
@@ -494,6 +535,12 @@ fn parse_codex_line(
     }
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     match v.get("type")?.as_str()? {
+        "thread.started" => v
+            .get("thread_id")
+            .and_then(|t| t.as_str())
+            .map(|id| ReviewEvent::CodexThread {
+                thread_id: id.to_string(),
+            }),
         "item.started" => {
             let item = v.get("item")?;
             if item.get("type")?.as_str()? == "command_execution" {
@@ -795,10 +842,11 @@ pub async fn agent_review_cancel(
 /// continues it (keeping context). Streams the same `ReviewEvent`s as a review;
 /// cancel via `agent_review_cancel` with the same `session_id`.
 ///
-/// `agent` picks the CLI. **Claude** runs on the host (full-auto via
-/// `bypassPermissions`) or in a container. **Codex** is **container-only**: on
-/// the host its `workspace-write` is trust-gated for a fresh non-interactive
-/// worktree (read-only), but inside a container the full-bypass flag is safe.
+/// `agent` picks the CLI. Both run on the **host** (worktree-confined: Claude
+/// full-auto via `bypassPermissions` — a soft FS boundary until its permission
+/// prompt lands; Codex via its own OS sandbox, `-s workspace-write`, which really
+/// confines writes to the worktree) or in a **container** (kernel boundary, both
+/// full-bypass).
 #[tauri::command]
 pub async fn agent_session(
     app: tauri::AppHandle,
@@ -815,6 +863,9 @@ pub async fn agent_session(
     // "container" runs the turn inside a Docker/Podman container (worktree-
     // confined); anything else (incl. None) runs it on the host (worktree-only).
     isolation: Option<String>,
+    // Codex's thread id captured from turn 1 (`thread.started`), so a *host*
+    // session resumes the right thread; None on turn 1 / Claude / container.
+    codex_thread_id: Option<String>,
     on_event: Channel<ReviewEvent>,
 ) -> AppResult<()> {
     // Strict: reject an unknown agent rather than silently coercing it.
@@ -833,14 +884,6 @@ pub async fn agent_session(
     };
     let container = isolation.as_deref() == Some("container");
 
-    // Codex only writes safely inside a container.
-    if matches!(kind, AgentKind::Codex) && !container {
-        return Err(AppError::Command(
-            "Codex agent sessions run only in container isolation — enable it in Settings → AI."
-                .to_string(),
-        ));
-    }
-
     // The inner CLI invocation + the stdin for this turn. Claude carries the
     // system prompt as a flag; Codex has none, so it's prepended on stdin (turn
     // 1 only — a resumed Codex session already has it in context).
@@ -850,7 +893,7 @@ pub async fn agent_session(
             user_prompt,
         ),
         AgentKind::Codex => (
-            codex_session_args(&model, resume),
+            codex_session_args(&model, resume, container, codex_thread_id.as_deref()),
             if resume {
                 user_prompt
             } else {
@@ -920,23 +963,18 @@ pub async fn agent_session(
         .await;
     }
 
-    // Host: Claude only. Codex was rejected above (container-only); re-check here
-    // as belt-and-suspenders so no future refactor lets it run unconfined.
-    if matches!(kind, AgentKind::Codex) {
-        return Err(AppError::Command(
-            "Codex agent sessions run only in a container.".to_string(),
-        ));
-    }
-    let binary = resolve(AgentKind::Claude, bin_path.as_deref())
-        .await
-        .ok_or_else(|| {
-            AppError::Command(
-                "Claude CLI not found. Install it or set its path in Settings.".to_string(),
-            )
-        })?;
+    // Host: both agents run worktree-confined — Claude via `bypassPermissions`
+    // (soft FS boundary until its permission prompt lands), Codex via its own OS
+    // sandbox (`-s workspace-write`; really confines writes — see codex_session_args).
+    let binary = resolve(kind, bin_path.as_deref()).await.ok_or_else(|| {
+        AppError::Command(format!(
+            "{} CLI not found. Install it or set its path in Settings.",
+            kind.label()
+        ))
+    })?;
     stream_agent(
         &state,
-        AgentKind::Claude,
+        kind,
         &binary,
         inner,
         stdin_text,
