@@ -18,7 +18,9 @@ commit list.
   **Settings → Slash commands**; and — tailored to the **selected agent** — its own
   commands and **Agent Skills**, discovered from both the project and your home
   directory, including the shared `.agents/skills` store (so your **global skills**
-  show up too). Commands support `$ARGUMENTS` (and `$1`, `$2`…) and are expanded in-app
+  show up too), plus a curated set of the CLI's own **built-in commands** (like
+  `/init`). Type `/` to browse the whole list — it's scrollable, no narrowing
+  needed. Commands support `$ARGUMENTS` (and `$1`, `$2`…) and are expanded in-app
   before reaching the agent; picking a **skill** nudges the agent to use it by name, so
   the CLI loads the real skill (scripts, references and all) instead of pasting it in.
   The menu is keyboard-driven, like `@file` mentions.

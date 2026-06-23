@@ -2,16 +2,20 @@ import type { AgentCommand } from "@/lib/git/api";
 import type { CustomCommand } from "@/lib/settings/api";
 
 /**
- * An item in the agent composer's `/` menu. Two kinds:
+ * An item in the agent composer's `/` menu. Three kinds:
  * - `command` — a prompt template. No agent CLI parses `/command` in headless
  *   (`-p`/`exec`) mode, so we expand its body client-side (`$ARGUMENTS` and
  *   `$1`..`$9` substituted with what the user typed) and send the result.
  * - `skill` — an Agent Skill (a multi-file `SKILL.md` dir with progressive
  *   disclosure). We DON'T inline its body — the CLI already loaded the real
  *   skill from disk, so we nudge it by name and let the model invoke it.
+ * - `native` — a built-in command of the SELECTED CLI (e.g. `/init`). Delivery
+ *   is per-CLI (see NATIVE_COMMANDS): passed through verbatim where the CLI
+ *   resolves `/name` headlessly (Claude/Copilot), else sent as an NL template.
  *
- * Sources, merged by (kind, name) with custom > discovered > builtin:
- * - `builtin` — the starters below;
+ * Sources, merged by NAME (one entry per `/name`) with precedence
+ * custom > discovered (`agent`) > native > builtin:
+ * - `builtin` — the starters + curated native commands below;
  * - `agent` — discovered from the SELECTED CLI's command/skill dirs (project +
  *   global), including the vendor-neutral `.agents/skills` canonical store;
  * - `custom` — user-defined, edited under Settings → Slash commands.
@@ -19,9 +23,9 @@ import type { CustomCommand } from "@/lib/settings/api";
 export interface SlashCommand {
   name: string;
   description: string;
-  /** Template body for commands; empty for skills (and actions). */
+  /** Template body for commands; empty for skills, native and actions. */
   prompt: string;
-  kind: "command" | "skill";
+  kind: "command" | "skill" | "native";
   source: "builtin" | "agent" | "custom";
   /** Where a discovered command/skill lives. */
   scope?: "project" | "global";
@@ -90,6 +94,90 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
 ];
 
+/**
+ * A curated, relevant subset of each CLI's OWN commands (the full lists are
+ * large and mostly interactive-TUI only). DELIVERY differs per CLI because not
+ * all resolve `/name` in headless mode:
+ * - **Claude, Copilot** parse `/name` in `-p`, so we pass `/name args` through
+ *   verbatim (no `prompt`) and the CLI runs its real command — incl. ones that
+ *   invoke a dedicated agent like Copilot's `/review`/`/security-review`.
+ * - **Codex** (`codex exec`) and **opencode** (`opencode run`) do NOT resolve
+ *   `/name` (it's sent to the model as plain text), so those entries carry a
+ *   `prompt` template we expand and send as a normal instruction instead.
+ *   (opencode's own `--command` flag would run them natively — deferred.)
+ * Entries override a same-named builtin template for that agent (e.g. Copilot's
+ * `/review` supersedes ours), but a user's own command/skill still wins.
+ */
+const NATIVE_COMMANDS: Record<
+  string,
+  {
+    name: string;
+    description: string;
+    argumentHint?: string;
+    prompt?: string;
+  }[]
+> = {
+  claude: [
+    {
+      name: "init",
+      description: "Generate an AGENTS.md / CLAUDE.md for this project",
+    },
+    {
+      name: "security-review",
+      description: "Review the changes for security issues",
+      argumentHint: "[optional focus]",
+    },
+    {
+      name: "pr-comments",
+      description: "Fetch and summarize this PR's review comments",
+    },
+  ],
+  copilot: [
+    {
+      name: "review",
+      description: "Run Copilot's code-review agent on the changes",
+      argumentHint: "[optional focus]",
+    },
+    {
+      name: "security-review",
+      description: "Run Copilot's security-review agent",
+    },
+    {
+      name: "init",
+      description: "Generate .github/copilot-instructions.md from the codebase",
+    },
+    {
+      name: "plan",
+      description: "Produce an implementation plan before coding",
+      argumentHint: "[task]",
+    },
+  ],
+  // Codex/opencode don't resolve `/name` headlessly → send an NL template.
+  codex: [
+    {
+      name: "init",
+      description: "Generate an AGENTS.md for this project",
+      prompt:
+        "Create an AGENTS.md for this project: summarize the build, test, and lint commands, the layout, and the key conventions a coding agent should follow. Keep it concise.\n\n$ARGUMENTS",
+    },
+    {
+      name: "plan",
+      description: "Produce an implementation plan before coding",
+      argumentHint: "[task]",
+      prompt:
+        "Produce a detailed, step-by-step implementation plan for the following before writing any code — list the files to touch and the order of changes.\n\n$ARGUMENTS",
+    },
+  ],
+  opencode: [
+    {
+      name: "init",
+      description: "Generate an AGENTS.md for this project",
+      prompt:
+        "Create an AGENTS.md for this project: summarize the build, test, and lint commands, the layout, and the key conventions a coding agent should follow. Keep it concise.\n\n$ARGUMENTS",
+    },
+  ],
+};
+
 // A `/name` invocation: the name, then (after whitespace) the rest as args.
 // Names are letters/digits then word chars or hyphens; `/etc/hosts …` won't
 // match (no whitespace after the name), so genuine paths are sent literally.
@@ -119,10 +207,17 @@ export function findCommand(
  * - Commands: the template, expanded (see `expandCommand`).
  */
 export function buildPrompt(cmd: SlashCommand, args: string): string {
+  const trimmed = args.trim();
   if (cmd.kind === "skill") {
     const nudge = `Use the "${cmd.name}" skill.`;
-    const trimmed = args.trim();
     return trimmed ? `${nudge}\n\n${trimmed}` : nudge;
+  }
+  if (cmd.kind === "native") {
+    // With a template, deliver as a normal instruction (Codex/opencode, which
+    // don't resolve `/name` headlessly); otherwise pass the CLI's own command
+    // through verbatim for it to run (Claude/Copilot).
+    if (cmd.prompt) return expandCommand(cmd, args);
+    return trimmed ? `/${cmd.name} ${trimmed}` : `/${cmd.name}`;
   }
   return expandCommand(cmd, args);
 }
@@ -151,19 +246,31 @@ export function expandCommand(cmd: SlashCommand, args: string): string {
   return out.trim();
 }
 
-/** Merges built-ins + the agent's discovered commands/skills + the user's
- *  custom commands, deduped by (kind, name) with custom > discovered > builtin
- *  (so a user's own command and the canonical skill win their slot). */
+/** Merges built-ins + the agent's native commands + the agent's discovered
+ *  commands/skills + the user's custom commands into one menu, deduped by NAME
+ *  (one entry per `/name`) with precedence custom > discovered > native >
+ *  builtin. Inserting low→high means a later same-name entry wins while the
+ *  Map keeps the original menu position. */
 export function mergeCommands(
   discovered: AgentCommand[],
   custom: CustomCommand[],
+  agent: string,
 ): SlashCommand[] {
-  const byKey = new Map<string, SlashCommand>();
-  const key = (kind: string, name: string) => `${kind}:${name.toLowerCase()}`;
-  for (const c of BUILTIN_COMMANDS) byKey.set(key(c.kind, c.name), c);
+  const byName = new Map<string, SlashCommand>();
+  for (const c of BUILTIN_COMMANDS) byName.set(c.name.toLowerCase(), c);
+  for (const n of NATIVE_COMMANDS[agent] ?? []) {
+    byName.set(n.name.toLowerCase(), {
+      name: n.name,
+      description: n.description,
+      prompt: n.prompt ?? "",
+      kind: "native",
+      source: "builtin",
+      argumentHint: n.argumentHint,
+    });
+  }
   for (const c of discovered) {
     if (!c.name.trim()) continue;
-    byKey.set(key(c.kind, c.name), {
+    byName.set(c.name.toLowerCase(), {
       name: c.name,
       description: c.description,
       prompt: c.prompt,
@@ -176,7 +283,7 @@ export function mergeCommands(
   for (const c of custom) {
     const name = c.name.trim();
     if (!name) continue;
-    byKey.set(key("command", name), {
+    byName.set(name.toLowerCase(), {
       name,
       description: c.description,
       prompt: c.prompt,
@@ -184,7 +291,7 @@ export function mergeCommands(
       source: "custom",
     });
   }
-  return [...byKey.values()];
+  return [...byName.values()];
 }
 
 /** Filters + ranks for the menu: name-prefix matches first, then substring

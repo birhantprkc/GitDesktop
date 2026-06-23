@@ -1,6 +1,7 @@
 import { GaugeIcon, StopIcon } from "@phosphor-icons/react";
 import { AnimatePresence, m } from "motion/react";
 import {
+  useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -37,7 +38,6 @@ const OPENCODE_MODELS = MODEL_SUGGESTIONS["opencode-cli"];
 // "" (account default) maps to a non-empty sentinel for the Select value.
 const DEFAULT_MODEL = "default";
 const MAX_MENTIONS = 8;
-const MAX_SLASH = 8;
 
 /** An in-progress `@file` mention: the query typed after `@` and the index of
  *  the `@` in the draft (so it can be replaced on selection). */
@@ -206,12 +206,12 @@ export function SessionComposer({
     draft.startsWith("/") && !!repoPath,
   );
   const commands = useMemo(
-    () => mergeCommands(discovered.data ?? [], customCommands ?? []),
-    [discovered.data, customCommands],
+    () => mergeCommands(discovered.data ?? [], customCommands ?? [], agent),
+    [discovered.data, customCommands, agent],
   );
+  // Show the full set (scrollable) — no narrowing required to browse.
   const slashMatches = useMemo(
-    () =>
-      slash ? filterCommands(commands, slash.query).slice(0, MAX_SLASH) : [],
+    () => (slash ? filterCommands(commands, slash.query) : []),
     [slash, commands],
   );
 
@@ -628,6 +628,14 @@ function SlashList({
   onPick: (cmd: SlashCommand) => void;
   onHover: (i: number) => void;
 }) {
+  // Keep the keyboard-highlighted row visible as you arrow through the full,
+  // un-narrowed (scrollable) list.
+  useEffect(() => {
+    document
+      .getElementById(`session-slash-${index}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [index]);
+
   return (
     <div
       id="session-slash-list"
@@ -641,16 +649,19 @@ function SlashList({
         </p>
       ) : (
         matches.map((c, i) => {
-          // One small right-aligned tag: skills stand out, then custom, then
-          // global scope. Project-scoped agent commands get none (the default).
+          // One small right-aligned tag: skills and native CLI commands stand
+          // out, then custom, then global scope. Project-scoped agent commands
+          // get none (the default).
           const badge =
             c.kind === "skill"
               ? "skill"
-              : c.source === "custom"
-                ? "custom"
-                : c.scope === "global"
-                  ? "global"
-                  : null;
+              : c.kind === "native"
+                ? "built-in"
+                : c.source === "custom"
+                  ? "custom"
+                  : c.scope === "global"
+                    ? "global"
+                    : null;
           return (
             <button
               key={`${c.kind}:${c.name}`}
