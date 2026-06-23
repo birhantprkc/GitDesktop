@@ -1,74 +1,78 @@
-# GitDesktop
+<p align="center">
+  <img src="src-tauri/icons/128x128@2x.png" alt="GitDesktop logo" width="88" height="88">
+</p>
 
-**An AI-native, keyboard-first Git desktop client.** GitDesktop takes GitHub
-Desktop's approachable model further: the entire pull-request lifecycle in the
-app (including offline "local" PRs), a GitHub Actions cockpit, AI woven through
-commits, reviews, and CI debugging with your choice of provider — including
-fully-local models — and a completely rebindable keyboard layer.
+<h1 align="center">GitDesktop</h1>
+
+<p align="center"><strong>An AI-native, keyboard-first Git desktop client</strong></p>
+
+<p align="center">
+  <a href="https://github.com/theBGuy/GitDesktop/releases/latest"><img alt="Download the latest release" src="https://img.shields.io/badge/Download-latest_release-4FE0C4?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache_2.0-555?style=flat-square"></a>
+  <img alt="Platforms: Windows, macOS, Linux" src="https://img.shields.io/badge/platforms-Windows_%7C_macOS_%7C_Linux-555?style=flat-square">
+</p>
+
+GitDesktop keeps GitHub Desktop's approachable model and goes further: the full
+pull-request lifecycle in the app (including offline "local" PRs), a GitHub
+Actions cockpit, and AI woven through commits, reviews, and CI debugging — with
+the provider you choose, local models included.
 
 Built with **Tauri 2 + React 19**. All GitHub access goes through the **GitHub
-CLI (`gh`)** — there's no OAuth app and the app never stores your tokens. Core
-git works against any remote via system `git`.
+CLI (`gh`)**: no OAuth app, and the app never stores your tokens. Core git runs
+against any remote via system `git`.
 
-> Runs on Windows, macOS, and Linux.
-<!-- See
-> [github-desktop.md](github-desktop.md) for a full, honest feature-by-feature
-> comparison with GitHub Desktop. -->
+![GitDesktop's Changes view: a split, syntax-highlighted diff on the right; the changes list, a stash browser, and an AI-generated commit message with co-authors on the left.](site/src/assets/app-staging.png)
+
+## Install
+
+**[Download the latest release →](https://github.com/theBGuy/GitDesktop/releases/latest)**
+Pick the installer for your OS under **Assets**. Builds are signed and keep
+themselves up to date (see [Updates](#updates)). Prefer to build from source? See
+[Development](#development).
 
 ## Highlights
 
-- **The whole PR lifecycle, in-app** — review, comment, label, approve, edit,
-  and merge (merge/squash/rebase) GitHub PRs without the browser. Plus **local
-  PRs**: the same workflow against any two branches with no remote at all,
-  promotable to a real GitHub PR — comments and all — in one click.
+- **The whole PR lifecycle, in-app** — review, comment, label, approve, edit, and
+  merge (merge/squash/rebase) GitHub PRs without the browser. Plus **local PRs**:
+  the same workflow against any two branches with no remote, promotable to a real
+  GitHub PR (comments and all) in one click.
 - **Issues & Discussions, in-app** — triage GitHub issues (types, sub-issues,
-  dependencies, linked PRs and branches) and Discussions without the browser,
-  plus private **local to-dos** that need no remote.
-- **Markdown editor everywhere you write** — Write/Preview tabs and a formatting
-  toolbar (bold, italic, headings, quote, code, links, and bulleted / numbered /
-  task lists, with Ctrl+B / I / K) on every comment, reply, and release-notes
-  field — and rendered markdown that mirrors GitHub's heading hierarchy, spacing,
-  task lists, and syntax-highlighted code blocks (~190 languages, light + dark).
-- **GitHub Actions cockpit** — browse workflow runs, drill into jobs and steps,
-  re-run (all or failed), cancel, manually dispatch a workflow, and read
-  failed-step logs — none of which GitHub Desktop does.
-- **Debug failed CI with AI** — turn a failed job's logs into a streamed
-  root-cause + fix, ending with a ready-to-paste prompt for a coding agent.
-- **Delegate a task to an agent** — hand a coding task to an AI agent that writes
-  the code in an isolated worktree (your checkout is never touched) — optionally
-  inside a **Docker/Podman container** for a kernel-level filesystem boundary —
-  watch it work live, then review its diff and keep it as a branch or discard it.
-  Run several at once — organized into **Active** and **Kept** tabs, searchable by
-  task or message, with a notification when each finishes. Runs on the CLI agent
-  you already have — **Claude Code**, **Codex**, or **GitHub Copilot** — no extra
-  subscription. Codex confines its own writes to the worktree via its OS sandbox
-  even without a container; Copilot runs worktree-confined on the host.
+  dependencies, linked PRs and branches) and Discussions without the browser, plus
+  private **local to-dos** that need no remote.
+- **GitHub Actions cockpit** — browse runs, drill into jobs and steps, re-run (all
+  or failed), cancel, dispatch a workflow, and read failed-step logs — none of
+  which GitHub Desktop does.
+- **Delegate a task to an agent** — hand a coding task to an AI agent that works
+  in an isolated worktree, so your own checkout is never touched. Watch it work
+  live, then review its diff and keep it as a branch or discard it. Run several at
+  once, organized into **Active** and **Kept** tabs, searchable, with a
+  notification when each finishes. Uses the CLI agent you already have —
+  **Claude Code**, **Codex**, or **GitHub Copilot**, no extra subscription.
+  Sandbox its writes in a **Docker/Podman container**, or rely on Codex's and
+  Copilot's own worktree confinement on the host.
 - **AI where it helps** — commit messages, branch names, PR and issue
   titles/descriptions, repository descriptions and topics, and a streaming code
-  review or security audit, from Anthropic, OpenAI, OpenRouter, **Ollama**
-  (local or cloud), or **keyless CLI agents**
-  (Claude Code, Codex, or GitHub Copilot via your existing subscription — no API key).
-- **Reviews that don't get interrupted** — an AI review keeps running while you
-  navigate between PRs, and even after you close the window (GitDesktop stays in
-  the tray, finishes it, and notifies you). A small activity indicator tracks
-  what's running, with a cancel and a concurrency-capped queue.
-- **Iterative reviews that remember the last round** — re-running a review or
-  security audit feeds back the previous findings and what changed since as soft,
-  re-verifiable context, so it confirms what you fixed and stops re-raising the
-  same points (the current diff is always the source of truth). Ignore the prior
-  review for a clean pass, or trim a false finding before re-running.
-- **Builds on other AI reviewers** — if GitHub Copilot, CodeRabbit, or another
-  bot has already reviewed a GitHub pull request, your review folds their
-  findings in as the same soft, re-verifiable context — so it starts from what's
-  already been flagged instead of cold. Opt out per PR.
-- **Privacy-first** — API keys live in the OS keychain (never in app files),
-  local models keep code on your machine, AI-ignore patterns keep sensitive
-  files out of context, and a single switch hides every AI surface.
+  review or security audit. Bring your own provider: cloud APIs, local **Ollama**,
+  or a **keyless CLI agent** you already pay for — the full list is under
+  [AI configuration](#ai-configuration).
+- **AI review that doesn't quit or repeat itself** — it keeps running while you
+  move between PRs, and finishes in the tray even after you close the window.
+  Re-runs remember the last round and fold in other reviewers' findings, so it
+  builds on what's already been flagged instead of re-raising it.
+- **Debug failed CI with AI** — turn a failed job's logs into a streamed
+  root-cause + fix, ending with a ready-to-paste prompt for a coding agent.
+- **Markdown everywhere you write** — Write/Preview tabs and a formatting toolbar
+  (with Ctrl+B / I / K) on every comment, reply, and release-notes field, rendered
+  to match GitHub's own styling: task lists, heading hierarchy, and
+  syntax-highlighted code in ~190 languages (light and dark).
+- **Privacy-first** — API keys live in the OS keychain (never in app files), local
+  models keep code on your machine, AI-ignore patterns keep sensitive files out of
+  context, and a single switch hides every AI surface.
 - **Keyboard-first** — rebindable shortcuts with GitHub-Desktop-compatible
   defaults, a generated cheat sheet (Ctrl+/), a command palette (Ctrl+K), and
   arrow-key navigation everywhere.
-- **Self-updating** — signed, verified auto-updates from GitHub Releases, with
-  install always on your consent.
+- **Self-updating** — signed, verified auto-updates from GitHub Releases, always on
+  your consent.
 
 ## Features
 
@@ -110,17 +114,26 @@ browser, tag management, and submodule management.
 `--force-with-lease`. In-progress merge/rebase/cherry-pick get a conflict banner
 with gated Continue / Abort.
 
-**Pull requests** — full read + write for GitHub PRs and local PRs (see
-Highlights), AI review + security audit on any PR, and a Write/Preview markdown
-editor — formatting toolbar and live preview — everywhere you author.
+**Pull requests** — full read + write for GitHub PRs, plus **local PRs**: the full
+PR workflow against any two branches with no remote at all. AI review + security
+audit on any PR, with an activity indicator, a cancel, and a concurrency-capped
+queue. Re-runs are iterative — they feed back the previous round and fold in other
+bots' findings as soft, re-verifiable context (the current diff is always the
+source of truth); per PR, ignore the prior review, trim a false finding, or opt out
+of the external-bot folding. Write/Preview markdown editor (formatting toolbar and
+live preview) everywhere you author.
+
+![A pull request open in GitDesktop with an inline AI review summarizing the diff; the left sidebar lists both local and GitHub pull requests, and the footer offers Approve, Comment, and Publish-to-GitHub actions.](site/src/assets/app-review.png)
 
 **Issues & to-dos** — a dedicated tab for GitHub issues and private **local
 to-dos** (no remote needed; publishable to GitHub in one click). Browse, create,
-and edit — drafting with AI from your repo's issue templates — react with emoji,
+and edit (drafting with AI from your repo's issue templates), react with emoji,
 and manage the full metadata: labels, assignees, milestones, issue type,
 sub-issues, dependencies (blocked-by / blocking), and development links (linked
 and closing PRs and branches, plus create-a-branch). Duplicate, transfer,
 pin/unpin, lock/unlock, or delete.
+
+![An issue open in GitDesktop with its description, labels, assignees, milestone, sub-issues, and a linked development branch and pull request; local and GitHub issues appear together in the sidebar.](site/src/assets/app-issues.png)
 
 **Discussions** — browse and read a repository's GitHub Discussions, create and
 edit them, and react or upvote, with Write/Preview markdown throughout.
@@ -128,6 +141,8 @@ edit them, and react or upvote, with Write/Preview markdown throughout.
 **GitHub Actions** — a dedicated tab with live run status, run detail, re-run /
 cancel / manual dispatch, inline failed-step logs, **Debug with AI**, a current-branch
 CI badge in the header, and run-completion notifications.
+
+![GitDesktop's GitHub Actions tab: a workflow run with its Lint, Unit tests, and Build jobs listed, the Build job expanded into individual steps and durations, plus Re-run all jobs and View on GitHub controls.](site/src/assets/app-actions.png)
 
 **Insights** — a repository-graphs tab (Ctrl/Cmd-9): commit activity, code
 frequency (additions vs. deletions), contributor churn, and a commit punch card —
@@ -216,9 +231,6 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 - `src/features/` — the screens: repository, changes/diff, commit, history,
   compare, pulls, actions, hooks, branch-rules, settings, and updates.
 
-<!-- For the full GitHub Desktop comparison and remaining gaps, see
-[github-desktop.md](github-desktop.md). -->
-
 ## Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the
@@ -227,6 +239,14 @@ entry), and how to open a good PR. Please also read the
 [Code of Conduct](CODE_OF_CONDUCT.md). For questions, see
 [SUPPORT.md](.github/SUPPORT.md); to report a vulnerability, follow
 [SECURITY.md](SECURITY.md).
+
+## Sponsor
+
+GitDesktop is free and open source under Apache 2.0. If it earns a place in your
+daily workflow, you can support continued development:
+
+- **[GitHub Sponsors](https://github.com/sponsors/theBGuy)**
+- **[Buy Me a Coffee](https://buymeacoffee.com/theBGuy)**
 
 ## Privacy
 
