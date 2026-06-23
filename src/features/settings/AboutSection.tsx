@@ -49,6 +49,19 @@ const TOOL_META: Record<
     auth: true,
     role: "Keyless AI review via your ChatGPT plan.",
   },
+  copilot: {
+    name: "GitHub Copilot CLI",
+    install: "https://github.com/github/copilot-cli",
+    // No non-interactive auth-status command, so login state stays Unknown.
+    auth: false,
+    role: "Keyless agent sessions via your Copilot subscription.",
+  },
+  opencode: {
+    name: "opencode",
+    install: "https://opencode.ai",
+    auth: false,
+    role: "Coding-agent CLI — support coming soon.",
+  },
 };
 
 function AuthState({ authed }: { authed: AuthStatus }) {

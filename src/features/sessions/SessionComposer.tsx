@@ -23,6 +23,7 @@ import { type AgentSession, useSessionsStore } from "./store";
 
 const CLAUDE_MODELS = MODEL_SUGGESTIONS["claude-cli"];
 const CODEX_MODELS = MODEL_SUGGESTIONS["codex-cli"];
+const COPILOT_MODELS = MODEL_SUGGESTIONS["copilot-cli"];
 // "" (account default) maps to a non-empty sentinel for the Select value.
 const DEFAULT_MODEL = "default";
 const MAX_MENTIONS = 8;
@@ -70,7 +71,9 @@ export function SessionComposer({
   const creating = useSessionsStore((s) => s.creating);
   const [draft, setDraft] = useState("");
   const [startModel, setStartModel] = useState("");
-  const [startAgent, setStartAgent] = useState<"claude" | "codex">("claude");
+  const [startAgent, setStartAgent] = useState<"claude" | "codex" | "copilot">(
+    "claude",
+  );
   const [mention, setMention] = useState<Mention | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   // Prompt-history navigation (terminal-style Up/Down recall). `histIndex` null
@@ -83,7 +86,12 @@ export function SessionComposer({
   const model = session ? session.model : startModel;
   // Agent is fixed once a session exists; while starting, it's user-selectable.
   const agent = session ? session.agent : startAgent;
-  const models = agent === "codex" ? CODEX_MODELS : CLAUDE_MODELS;
+  const models =
+    agent === "codex"
+      ? CODEX_MODELS
+      : agent === "copilot"
+        ? COPILOT_MODELS
+        : CLAUDE_MODELS;
   const onModel = session
     ? (m: string) => setModel(session.id, m)
     : setStartModel;
@@ -490,13 +498,17 @@ function AgentPicker({
   value,
   onChange,
 }: {
-  value: "claude" | "codex";
-  onChange: (a: "claude" | "codex") => void;
+  value: "claude" | "codex" | "copilot";
+  onChange: (a: "claude" | "codex" | "copilot") => void;
 }) {
   return (
     <Select
       value={value}
-      onValueChange={(v) => onChange(v === "codex" ? "codex" : "claude")}
+      onValueChange={(v) =>
+        onChange(
+          v === "copilot" ? "copilot" : v === "codex" ? "codex" : "claude",
+        )
+      }
     >
       <SelectTrigger
         size="sm"
@@ -508,6 +520,7 @@ function AgentPicker({
       <SelectContent>
         <SelectItem value="claude">Claude</SelectItem>
         <SelectItem value="codex">Codex</SelectItem>
+        <SelectItem value="copilot">GitHub Copilot</SelectItem>
       </SelectContent>
     </Select>
   );

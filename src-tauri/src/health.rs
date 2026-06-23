@@ -93,15 +93,19 @@ async fn detect(id: &str, names: &[&str], auth_args: Option<&[&str]>) -> ToolSta
 /// per-tool detections (each spawns subprocesses) run concurrently.
 #[tauri::command]
 pub async fn system_health() -> AppResult<SystemHealth> {
-    let (git, gh, glab, claude, codex) = tokio::join!(
+    // Copilot has no non-interactive auth-status command (it authenticates via the
+    // OS credential store / a token env var), so its login state stays Unknown.
+    let (git, gh, glab, claude, codex, copilot, opencode) = tokio::join!(
         detect("git", &["git"], None),
         detect("gh", &["gh"], Some(&["auth", "status"])),
         detect("glab", &["glab"], Some(&["auth", "status"])),
         detect("claude", &["claude"], Some(&["auth", "status"])),
         detect("codex", &["codex"], Some(&["login", "status"])),
+        detect("copilot", &["copilot"], None),
+        detect("opencode", &["opencode"], None),
     );
     Ok(SystemHealth {
         system: system_info(),
-        tools: vec![git, gh, glab, claude, codex],
+        tools: vec![git, gh, glab, claude, codex, copilot, opencode],
     })
 }

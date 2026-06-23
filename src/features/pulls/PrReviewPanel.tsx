@@ -274,7 +274,11 @@ export function PrReviewPanel({
             <p className="text-xs text-amber-600 dark:text-amber-400">
               {PROVIDER_LABELS[provider]} is installed but not signed in — run{" "}
               <code className="font-mono">
-                {cliKind === "codex" ? "codex login" : "claude login"}
+                {cliKind === "copilot"
+                  ? "copilot login"
+                  : cliKind === "codex"
+                    ? "codex login"
+                    : "claude login"}
               </code>{" "}
               in a terminal.
             </p>

@@ -31,6 +31,13 @@ commit list.
 
 ### Added
 
+- **GitHub Copilot CLI joins Claude Code and Codex as an agent.** Pick **GitHub
+  Copilot** in the agent-session composer to delegate a task to it — keyless, via
+  your Copilot subscription. It runs worktree-confined on the host (its file edits
+  are limited to the worktree), and multi-turn follow-ups resume the same session.
+  Copilot is also available as a code-review provider, and it appears in Settings →
+  About alongside the other CLIs. (Container isolation and repo-aware review for
+  Copilot are coming next; an `opencode` slot is recognized for a future release.)
 - **Delegate a task to an AI agent, and iterate with it (agent sessions).** A new
   **Agent** tab lets you hand a coding task to an AI agent that writes the code for
   you. It runs full-auto inside an isolated, throwaway git worktree — a separate

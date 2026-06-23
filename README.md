@@ -40,14 +40,14 @@ git works against any remote via system `git`.
   watch it work live, then review its diff and keep it as a branch or discard it.
   Run several at once — organized into **Active** and **Kept** tabs, searchable by
   task or message, with a notification when each finishes. Runs on the CLI agent
-  you already have — **Claude Code** or **Codex**, no extra subscription; Codex
-  confines its own writes to the worktree via its OS sandbox even without a
-  container.
+  you already have — **Claude Code**, **Codex**, or **GitHub Copilot** — no extra
+  subscription. Codex confines its own writes to the worktree via its OS sandbox
+  even without a container; Copilot runs worktree-confined on the host.
 - **AI where it helps** — commit messages, branch names, PR and issue
   titles/descriptions, repository descriptions and topics, and a streaming code
   review or security audit, from Anthropic, OpenAI, OpenRouter, **Ollama**
   (local or cloud), or **keyless CLI agents**
-  (Claude Code / Codex via your existing subscription — no API key).
+  (Claude Code, Codex, or GitHub Copilot via your existing subscription — no API key).
 - **Reviews that don't get interrupted** — an AI review keeps running while you
   navigate between PRs, and even after you close the window (GitDesktop stays in
   the tray, finishes it, and notifies you). A small activity indicator tracks
@@ -157,8 +157,9 @@ state — with an Install link for anything that's missing.
 ## AI configuration
 
 - **Providers** — Anthropic, OpenAI, OpenRouter, local **Ollama**, **Ollama
-  Cloud** (hosted models via an API key), and the **Claude Code / Codex CLIs**
-  (keyless, via your subscription). Separate models for generation vs. review;
+  Cloud** (hosted models via an API key), and the **Claude Code / Codex / GitHub
+  Copilot CLIs** (keyless, via your subscription). Separate models for generation
+  vs. review;
   live model lists in a searchable picker.
 - **Custom instructions** (included in every generation):
   - **Global** — Settings → AI instructions (e.g. "Follow Conventional Commits").

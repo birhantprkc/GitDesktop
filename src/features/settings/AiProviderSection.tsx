@@ -216,7 +216,11 @@ function CliReviewConfig({
             <XCircleIcon className="size-4 shrink-0" />
             Found{version} but not signed in — run{" "}
             <code className="font-mono">
-              {kind === "codex" ? "codex login" : "claude login"}
+              {kind === "copilot"
+                ? "copilot login"
+                : kind === "codex"
+                  ? "codex login"
+                  : "claude login"}
             </code>
             .
           </span>

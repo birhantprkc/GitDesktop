@@ -27,12 +27,16 @@ const REVIEW_TIMEOUT_AGENTIC: Duration = Duration::from_secs(600);
 /// longer budget than a review. Generous for the slice; configurable later.
 const SESSION_TIMEOUT: Duration = Duration::from_secs(1800);
 
-/// Which agent CLI to drive. Frontend sends `"claude"` / `"codex"`.
-#[derive(Debug, Clone, Copy, Deserialize)]
+/// Which agent CLI to drive. Frontend sends `"claude"` / `"codex"` / `"copilot"`.
+/// `Opencode` is a recognized **stub** — detected in About, but its session/review
+/// paths aren't wired yet (they return a clear "not yet supported" error).
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentKind {
     Claude,
     Codex,
+    Copilot,
+    Opencode,
 }
 
 impl AgentKind {
@@ -40,14 +44,19 @@ impl AgentKind {
         match self {
             AgentKind::Claude => &["claude"],
             AgentKind::Codex => &["codex"],
+            AgentKind::Copilot => &["copilot"],
+            AgentKind::Opencode => &["opencode"],
         }
     }
 
-    /// Args for a non-interactive "am I logged in?" check (exit 0 = authed).
-    fn auth_status_args(self) -> &'static [&'static str] {
+    /// Args for a non-interactive "am I logged in?" check (exit 0 = authed), or
+    /// `None` for a CLI with no such command — Copilot authenticates via the OS
+    /// credential store / a token env var, with no status subcommand.
+    fn auth_status_args(self) -> Option<&'static [&'static str]> {
         match self {
-            AgentKind::Claude => &["auth", "status"],
-            AgentKind::Codex => &["login", "status"],
+            AgentKind::Claude => Some(&["auth", "status"]),
+            AgentKind::Codex => Some(&["login", "status"]),
+            AgentKind::Copilot | AgentKind::Opencode => None,
         }
     }
 
@@ -55,6 +64,8 @@ impl AgentKind {
         match self {
             AgentKind::Claude => "Claude Code",
             AgentKind::Codex => "Codex",
+            AgentKind::Copilot => "GitHub Copilot",
+            AgentKind::Opencode => "opencode",
         }
     }
 }
@@ -317,10 +328,13 @@ pub async fn agent_detect(kind: AgentKind, bin_path: Option<String>) -> AppResul
         .map(|(_, out)| out.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    let authed = match run_capture(&binary, kind.auth_status_args(), DETECT_TIMEOUT).await {
-        Ok((0, _)) => AuthStatus::Authed,
-        Ok(_) => AuthStatus::NotAuthed,
-        Err(_) => AuthStatus::Unknown,
+    let authed = match kind.auth_status_args() {
+        None => AuthStatus::Unknown,
+        Some(args) => match run_capture(&binary, args, DETECT_TIMEOUT).await {
+            Ok((0, _)) => AuthStatus::Authed,
+            Ok(_) => AuthStatus::NotAuthed,
+            Err(_) => AuthStatus::Unknown,
+        },
     };
 
     Ok(AgentInfo {
@@ -471,6 +485,69 @@ fn codex_session_args(
     args
 }
 
+/// GitHub Copilot CLI write-capable *session* invocation (host only for now —
+/// Copilot's creds live in the OS keychain, not a mountable file, so the container
+/// tier is a follow-up). Unlike Claude/Codex the prompt is an **argument**
+/// (`-p <text>`), not stdin, so the caller passes it here and feeds empty stdin.
+///
+/// Confinement: `--add-dir <worktree>` (with NO `--allow-all-paths`) restricts the
+/// file tools to the worktree — verified: in-worktree writes land, escapes denied.
+/// `--allow-all-tools` is required for non-interactive (`-p`) runs. A shell command
+/// could still escape, so the host tier is "soft" (like Claude); the worktree's git
+/// isolation is the hard guarantee. Multi-turn is deterministic: `--session-id
+/// <uuid>` sets the id on turn 1, `--resume <uuid>` continues it (context retained).
+fn copilot_session_args(
+    model: &str,
+    session_id: &str,
+    resume: bool,
+    worktree: &str,
+    prompt: &str,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-p".into(),
+        prompt.into(),
+        "--output-format".into(),
+        "json".into(),
+        "--no-color".into(),
+        "--allow-all-tools".into(),
+        "--add-dir".into(),
+        worktree.into(),
+    ];
+    if resume {
+        args.push("--resume".into());
+        args.push(session_id.into());
+    } else {
+        args.push("--session-id".into());
+        args.push(session_id.into());
+    }
+    if !model.trim().is_empty() {
+        args.push("--model".into());
+        args.push(model.into());
+    }
+    args
+}
+
+/// GitHub Copilot CLI **read-only** review invocation. Like the session, the prompt
+/// (system + diff) is an argument (`-p`), not stdin. No tool flags (so no
+/// `--allow-all-tools`) → the agent analyzes the diff carried in the prompt without
+/// writing or running commands — verified: a no-tools `-p` review completes cleanly.
+/// Repo-aware (Tier 2) reads of surrounding files would need a read-tool allowlist,
+/// a follow-up; for now Copilot review is always diff-only.
+fn copilot_review_args(model: &str, prompt: &str) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-p".into(),
+        prompt.into(),
+        "--output-format".into(),
+        "json".into(),
+        "--no-color".into(),
+    ];
+    if !model.trim().is_empty() {
+        args.push("--model".into());
+        args.push(model.into());
+    }
+    args
+}
+
 /// Friendly progress label for a Claude Tier-2 tool call.
 fn tool_status(name: &str) -> String {
     match name {
@@ -582,6 +659,71 @@ fn parse_codex_line(
                     .and_then(|m| m.as_str())
                     .unwrap_or("Codex reported an error.")
                     .to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Parses one line of GitHub Copilot CLI `--output-format json` (JSONL). Streams
+/// `assistant.message_delta.deltaContent` as narration, keeps the latest
+/// `assistant.message.content` as the authoritative final text, and emits `Done` at
+/// the terminal `result` (whose `exitCode` decides success). Setup / MCP / skills /
+/// reasoning / turn-marker events are ignored.
+fn parse_copilot_line(
+    line: &str,
+    saw_terminal: &mut bool,
+    last_message: &mut String,
+) -> Option<ReviewEvent> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    match v.get("type")?.as_str()? {
+        "assistant.message_delta" => v
+            .get("data")
+            .and_then(|d| d.get("deltaContent"))
+            .and_then(|t| t.as_str())
+            .map(|t| ReviewEvent::Delta { text: t.to_string() }),
+        "assistant.message" => {
+            if let Some(text) = v
+                .get("data")
+                .and_then(|d| d.get("content"))
+                .and_then(|t| t.as_str())
+            {
+                *last_message = text.to_string();
+            }
+            None
+        }
+        "tool.execution_start" => {
+            let name = v
+                .get("data")
+                .and_then(|d| d.get("name").or_else(|| d.get("tool")))
+                .and_then(|t| t.as_str())
+                .unwrap_or("a tool");
+            Some(ReviewEvent::Status {
+                text: format!("Running {name}…"),
+            })
+        }
+        "session.error" => {
+            let msg = v
+                .get("data")
+                .and_then(|d| d.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("Copilot reported an error.");
+            if last_message.is_empty() {
+                *last_message = msg.to_string();
+            }
+            None // the terminal `result` carries the exit code; surface there
+        }
+        "result" => {
+            *saw_terminal = true;
+            let is_error = v.get("exitCode").and_then(|c| c.as_i64()).unwrap_or(0) != 0;
+            Some(ReviewEvent::Done {
+                text: std::mem::take(last_message),
+                is_error,
+                cost_usd: None,
             })
         }
         _ => None,
@@ -733,6 +875,11 @@ async fn stream_agent(
                             AgentKind::Codex => {
                                 parse_codex_line(&l, &mut saw_result, &mut last_message)
                             }
+                            AgentKind::Copilot => {
+                                parse_copilot_line(&l, &mut saw_result, &mut last_message)
+                            }
+                            // Unreachable: opencode errors before it ever streams.
+                            AgentKind::Opencode => None,
                         };
                         if let Some(ev) = ev {
                             let _ = on_event.send(ev);
@@ -812,6 +959,18 @@ pub async fn agent_review(
             codex_review_args(&model, &repo_path),
             format!("{system_prompt}\n\n{user_prompt}"),
         ),
+        // Copilot: read-only diff review (no tools). The prompt (system + diff) is
+        // an argument, not stdin.
+        AgentKind::Copilot => (
+            copilot_review_args(&model, &format!("{system_prompt}\n\n{user_prompt}")),
+            String::new(),
+        ),
+        // opencode review isn't wired yet (recognized stub).
+        AgentKind::Opencode => {
+            return Err(AppError::Command(
+                "opencode isn't available for AI review yet — coming soon.".to_string(),
+            ));
+        }
     };
 
     // Codex always explores the repo, so it gets the longer agentic budget too.
@@ -842,17 +1001,18 @@ pub async fn agent_review_cancel(
 /// continues it (keeping context). Streams the same `ReviewEvent`s as a review;
 /// cancel via `agent_review_cancel` with the same `session_id`.
 ///
-/// `agent` picks the CLI. Both run on the **host** (worktree-confined: Claude
-/// full-auto via `bypassPermissions` — a soft FS boundary until its permission
-/// prompt lands; Codex via its own OS sandbox, `-s workspace-write`, which really
-/// confines writes to the worktree) or in a **container** (kernel boundary, both
-/// full-bypass).
+/// `agent` picks the CLI. Claude/Codex run on the **host** (worktree-confined:
+/// Claude full-auto via `bypassPermissions` — soft until its permission prompt
+/// lands; Codex via its own OS sandbox, `-s workspace-write`) or in a **container**
+/// (kernel boundary). **Copilot** runs host-only for now (`--add-dir` confines its
+/// file tools to the worktree; its creds aren't file-mountable, so the container
+/// tier is a follow-up). **opencode** is a recognized stub (errors until wired).
 #[tauri::command]
 pub async fn agent_session(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     bin_path: Option<String>,
-    // "claude" (default) or "codex".
+    // "claude" (default), "codex", or "copilot" ("opencode" is a recognized stub).
     agent: String,
     model: String,
     system_prompt: String,
@@ -872,6 +1032,8 @@ pub async fn agent_session(
     let kind = match agent.as_str() {
         "claude" => AgentKind::Claude,
         "codex" => AgentKind::Codex,
+        "copilot" => AgentKind::Copilot,
+        "opencode" => AgentKind::Opencode,
         other => {
             return Err(AppError::InvalidArgument(format!(
                 "unknown agent: {other:?}"
@@ -881,8 +1043,24 @@ pub async fn agent_session(
     let agent_name = match kind {
         AgentKind::Codex => "codex",
         AgentKind::Claude => "claude",
+        AgentKind::Copilot => "copilot",
+        AgentKind::Opencode => "opencode",
     };
     let container = isolation.as_deref() == Some("container");
+
+    // opencode is a recognized stub — its session path isn't wired yet.
+    if kind == AgentKind::Opencode {
+        return Err(AppError::Command(
+            "opencode agent sessions aren't supported yet — coming soon.".to_string(),
+        ));
+    }
+    // Copilot runs on the host only for now: its credentials live in the OS
+    // keychain (not a mountable file), so the container tier is a follow-up.
+    if kind == AgentKind::Copilot && container {
+        return Err(AppError::Command(
+            "Copilot sessions don't support container isolation yet (its login isn't file-mountable). Turn isolation off in Settings → AI to run Copilot on the host.".to_string(),
+        ));
+    }
 
     // The inner CLI invocation + the stdin for this turn. Claude carries the
     // system prompt as a flag; Codex has none, so it's prepended on stdin (turn
@@ -900,6 +1078,20 @@ pub async fn agent_session(
                 format!("{system_prompt}\n\n{user_prompt}")
             },
         ),
+        // Copilot takes the prompt as an arg (`-p`), not stdin, so stdin is empty.
+        AgentKind::Copilot => {
+            let prompt = if resume {
+                user_prompt
+            } else {
+                format!("{system_prompt}\n\n{user_prompt}")
+            };
+            (
+                copilot_session_args(&model, &session_id, resume, &worktree_path, &prompt),
+                String::new(),
+            )
+        }
+        // Rejected above (stub).
+        AgentKind::Opencode => unreachable!("opencode session rejected above"),
     };
 
     // Container isolation: wrap the same invocation in an ephemeral,

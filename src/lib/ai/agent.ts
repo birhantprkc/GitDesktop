@@ -2,8 +2,9 @@ import { Channel } from "@tauri-apps/api/core";
 import { invoke } from "@/lib/tauri/invoke";
 import type { AiProviderId } from "./types";
 
-/** Which agent CLI the Rust backend should drive. */
-export type AgentKind = "claude" | "codex";
+/** Which agent CLI the Rust backend should drive. ("opencode" is a recognized
+ *  stub — detected in About, but not yet a usable session/review agent.) */
+export type AgentKind = "claude" | "codex" | "copilot" | "opencode";
 
 export type AuthStatus = "authed" | "notAuthed" | "unknown";
 
@@ -28,6 +29,7 @@ export type ReviewEvent =
 export function providerKind(provider: AiProviderId): AgentKind | null {
   if (provider === "claude-cli") return "claude";
   if (provider === "codex-cli") return "codex";
+  if (provider === "copilot-cli") return "copilot";
   return null;
 }
 
@@ -80,7 +82,7 @@ export const cancelAgentReview = (reviewId: string) =>
 
 export interface AgentSessionArgs {
   /** Which CLI drives the session. */
-  agent: "claude" | "codex";
+  agent: "claude" | "codex" | "copilot";
   /** Explicit Claude binary path, or null to auto-detect. */
   binPath: string | null;
   model: string;

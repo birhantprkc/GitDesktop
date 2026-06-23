@@ -67,7 +67,7 @@ export interface AgentSession {
    *  CLI's own OS sandbox) or "container" (also inside a Docker/Podman container). */
   isolation: "worktree" | "container";
   /** Which CLI drives the session, fixed at creation. */
-  agent: "claude" | "codex";
+  agent: "claude" | "codex" | "copilot";
   /** Codex's thread id, captured from turn 1 — lets a host session resume the
    *  right thread (it shares ~/.codex). Unset for Claude / container / pre-turn-1. */
   codexThreadId?: string;
@@ -108,7 +108,7 @@ interface SessionsState {
     repoPath: string,
     prompt: string,
     model: string,
-    agent: "claude" | "codex",
+    agent: "claude" | "codex" | "copilot",
   ) => Promise<void>;
   send: (id: string, prompt: string) => Promise<void>;
   setModel: (id: string, model: string) => void;
@@ -394,7 +394,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     // `-s workspace-write`); "container" wraps either in a kernel boundary.
     const setting =
       (await loadSettings().catch(() => null))?.agentIsolation ?? "worktree";
-    const isolation = setting;
+    // Copilot has no container tier yet (its creds aren't file-mountable), so it
+    // always runs on the host regardless of the isolation setting.
+    const isolation = agent === "copilot" ? "worktree" : setting;
     let wt: Awaited<ReturnType<typeof createWorktree>>;
     try {
       wt = await createWorktree(repoPath);

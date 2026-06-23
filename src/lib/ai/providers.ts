@@ -14,6 +14,7 @@ export const PROVIDER_LABELS: Record<AiProviderId, string> = {
   "ollama-cloud": "Ollama Cloud",
   "claude-cli": "Claude Code (CLI)",
   "codex-cli": "Codex (CLI)",
+  "copilot-cli": "GitHub Copilot (CLI)",
 };
 
 /** Host for Ollama's hosted models, reached with an API key (vs the local
@@ -30,7 +31,11 @@ export const PROVIDERS_REQUIRING_KEY: AiProviderId[] = [
 /** Providers backed by a locally-installed coding-agent CLI rather than an
  *  HTTP API — they authenticate via the CLI's own login, not an API key, and
  *  run only on the review path (not commit/PR generation). */
-export const CLI_PROVIDERS: AiProviderId[] = ["claude-cli", "codex-cli"];
+export const CLI_PROVIDERS: AiProviderId[] = [
+  "claude-cli",
+  "codex-cli",
+  "copilot-cli",
+];
 
 export const isCliProvider = (id: AiProviderId): boolean =>
   CLI_PROVIDERS.includes(id);
@@ -62,6 +67,18 @@ export const MODEL_SUGGESTIONS: Record<AiProviderId, string[]> = {
   "claude-cli": ["sonnet", "opus", "haiku", "fable"],
   // Codex: blank uses the account default (proven to work); user can type one.
   "codex-cli": [],
+  // Copilot: a curated subset of the `/model` catalog (the picker still free-types
+  // any id; blank = Copilot's own default). Slugs are the lowercased display names —
+  // verified pattern from "Claude Haiku 4.5" → claude-haiku-4.5.
+  "copilot-cli": [
+    "auto",
+    "gpt-5-mini",
+    "claude-haiku-4.5",
+    "claude-sonnet-4.6",
+    "gpt-5.4",
+    "gpt-5.3-codex",
+    "mai-code-1-flash",
+  ],
 };
 
 // All providers get the Tauri fetch, which proxies through Rust and so
@@ -91,6 +108,7 @@ export function createModel(
       })(settings.model);
     case "claude-cli":
     case "codex-cli":
+    case "copilot-cli":
       // CLI agents run as a subprocess, not through the AI SDK. Callers must
       // route these through the agent-CLI path before reaching createModel.
       throw new Error("CLI providers do not use the AI SDK model path");
