@@ -12,6 +12,14 @@ commit list.
 
 ### Changed
 
+- **Configure and rebuild the agent container image.** Settings → AI now lets you
+  pick the image's **Node version** (default 24 LTS, or 22 / 20) and **which agents**
+  to install (Claude / Codex), and adds **Rebuild** — which pulls a fresh base image
+  and reinstalls the CLIs so newer releases are picked up. Previously the image was
+  built once with a fixed Node version and every agent baked in, with no way to
+  update it. A stale image (built for a different Node/agent selection) is flagged
+  for rebuild, and starting an agent the image wasn't built with now fails with a
+  clear message instead of a cryptic in-container error.
 - **Subtle, calm transitions in a few spots.** A handful of state changes now ease
   in instead of popping: the Send/Stop, Generate/Cancel, and Review/Cancel buttons
   when an AI task starts or stops; agent sessions sliding in and out of the list as

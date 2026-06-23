@@ -77,7 +77,7 @@ export const MODEL_SUGGESTIONS: Record<AiProviderId, string[]> = {
     "claude-sonnet-4.6",
     "gpt-5.4",
     "gpt-5.3-codex",
-    "mai-code-1-flash",
+    "mai-code-1-flash-picker",
   ],
 };
 

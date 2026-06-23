@@ -32,26 +32,83 @@ use tokio::process::Command;
 use crate::agent::{resolve_named, run_capture, DETECT_TIMEOUT};
 use crate::error::{AppError, AppResult};
 
-/// The managed image: a small Node base with the Claude Code and Codex CLIs, run
-/// as the non-root `node` user (the CLIs refuse full-bypass as root). The tag is
-/// versioned so changing the Dockerfile (e.g. adding a CLI) forces a rebuild —
-/// `agent_container_detect` reports the image as missing until it's rebuilt.
-pub const IMAGE: &str = "gitdesktop-agent:3";
+/// The managed image: a small Node base with the user-selected agent CLIs, run as
+/// the non-root `node` user (the CLIs refuse full-bypass as root). A single fixed
+/// tag, rebuilt in place when the user changes the Node version or providers; the
+/// built config is recorded as the `gdconfig` image LABEL so detect can tell
+/// whether the image matches the current selection (else the UI prompts a rebuild).
+pub const IMAGE: &str = "gitdesktop-agent:latest";
 const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 
-// `node:22-slim` ships without ca-certificates, so the agents can't establish TLS
-// to their APIs ("no native root CA certificates found") — install them.
-const DOCKERFILE: &str = "\
-FROM node:22-slim
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
- && rm -rf /var/lib/apt/lists/* \
- && npm install -g @anthropic-ai/claude-code @openai/codex \
- && mkdir -p /home/node/.claude /home/node/.codex \
- && chown -R node:node /home/node/.claude /home/node/.codex
-USER node
-WORKDIR /workspace
-";
+/// npm package for a **container-capable** agent. `None` for one that can't run in
+/// the container (Copilot is host-only — its creds aren't a mountable file).
+fn agent_npm_package(agent: &str) -> Option<&'static str> {
+    match agent {
+        "claude" => Some("@anthropic-ai/claude-code"),
+        "codex" => Some("@openai/codex"),
+        _ => None,
+    }
+}
+
+/// The container dotdir an agent's seeded home mounts at.
+fn agent_dotdir(agent: &str) -> &'static str {
+    if agent == "codex" {
+        "/home/node/.codex"
+    } else {
+        "/home/node/.claude"
+    }
+}
+
+/// Digits-only Node major version (e.g. "24"), guarded so it can't inject into the
+/// Dockerfile or the image label.
+fn valid_node_version(v: &str) -> bool {
+    !v.is_empty() && v.len() <= 3 && v.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A deterministic signature of the image config, stored as the `gdconfig` image
+/// label — detect compares it to the current selection to decide "matches" vs
+/// "rebuild needed". Providers are sorted + de-duped so order doesn't matter.
+fn config_signature(node_version: &str, providers: &[String]) -> String {
+    let mut p: Vec<&str> = providers.iter().map(String::as_str).collect();
+    p.sort_unstable();
+    p.dedup();
+    format!("node{node_version}-{}", p.join("-"))
+}
+
+/// Renders the Dockerfile for the chosen Node version + agent providers. Validates
+/// inputs (digits-only version; every provider container-capable; ≥1 provider).
+/// `node:<ver>-slim` lacks ca-certificates, so the agents' TLS to their APIs fails
+/// ("no native root CA certificates found") — install them.
+fn render_dockerfile(node_version: &str, providers: &[String]) -> AppResult<String> {
+    if !valid_node_version(node_version) {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid Node version: {node_version:?}"
+        )));
+    }
+    let mut pkgs: Vec<&str> = Vec::new();
+    let mut dirs: Vec<&str> = Vec::new();
+    for a in providers {
+        let pkg = agent_npm_package(a).ok_or_else(|| {
+            AppError::InvalidArgument(format!("agent can't run in a container: {a:?}"))
+        })?;
+        pkgs.push(pkg);
+        dirs.push(agent_dotdir(a));
+    }
+    pkgs.sort_unstable();
+    pkgs.dedup();
+    dirs.sort_unstable();
+    dirs.dedup();
+    if pkgs.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "select at least one agent to install in the image".into(),
+        ));
+    }
+    let pkgs = pkgs.join(" ");
+    let dirs = dirs.join(" ");
+    Ok(format!(
+        "FROM node:{node_version}-slim\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends ca-certificates \\\n && rm -rf /var/lib/apt/lists/* \\\n && npm install -g {pkgs} \\\n && mkdir -p {dirs} \\\n && chown -R node:node {dirs}\nUSER node\nWORKDIR /workspace\n"
+    ))
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,8 +117,11 @@ pub struct ContainerStatus {
     pub runtime: Option<String>,
     /// The runtime is installed AND its daemon answers (`<rt> version` exit 0).
     pub ready: bool,
-    /// The managed agent image has been built.
+    /// The managed agent image has been built (any config).
     pub image_present: bool,
+    /// The built image's `gdconfig` label matches the requested Node version +
+    /// providers — `false` while `image_present` is true means "rebuild to apply".
+    pub image_matches: bool,
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -127,31 +187,73 @@ pub(crate) async fn image_present(bin: &Path) -> bool {
     )
 }
 
+/// Reads the built image's `gdconfig` label (`None` if the image/label is absent).
+async fn image_config_label(bin: &Path) -> Option<String> {
+    match run_capture(
+        bin,
+        &[
+            "image",
+            "inspect",
+            "--format",
+            "{{index .Config.Labels \"gdconfig\"}}",
+            IMAGE,
+        ],
+        DETECT_TIMEOUT,
+    )
+    .await
+    {
+        Ok((0, out)) => Some(out.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// Whether the built image includes `agent` (per its `gdconfig` label) — lets a
+/// container session fail clearly if the user left that agent out of the image. An
+/// old image with no label is treated as "has it" (don't block; the run will tell).
+pub(crate) async fn image_has_agent(bin: &Path, agent: &str) -> bool {
+    match image_config_label(bin).await {
+        Some(sig) if !sig.is_empty() => sig.split('-').any(|t| t == agent),
+        _ => true,
+    }
+}
+
 /// Reports whether container isolation is usable on this machine and whether the
 /// agent image still needs building. Drives the Settings affordance.
 #[tauri::command]
-pub async fn agent_container_detect() -> AppResult<ContainerStatus> {
+pub async fn agent_container_detect(
+    node_version: String,
+    providers: Vec<String>,
+) -> AppResult<ContainerStatus> {
     let Some((bin, name)) = detect_runtime().await else {
         return Ok(ContainerStatus {
             runtime: None,
             ready: false,
             image_present: false,
+            image_matches: false,
         });
     };
     let ready = runtime_ready(&bin).await;
     // Only probe the image if the engine is up (inspect needs the daemon).
     let image_present = ready && image_present(&bin).await;
+    let image_matches = image_present
+        && image_config_label(&bin).await.as_deref()
+            == Some(config_signature(&node_version, &providers).as_str());
     Ok(ContainerStatus {
         runtime: Some(name),
         ready,
         image_present,
+        image_matches,
     })
 }
 
 /// Builds the managed agent image (`<rt> build -t IMAGE <ctx>` from a tiny temp
 /// context dir). Idempotent + cached by the engine; a few minutes on first run.
 #[tauri::command]
-pub async fn agent_container_prepare() -> AppResult<()> {
+pub async fn agent_container_prepare(
+    node_version: String,
+    providers: Vec<String>,
+    force: bool,
+) -> AppResult<()> {
     let (bin, _) = detect_runtime()
         .await
         .ok_or_else(|| AppError::Command("Docker or Podman is not installed.".into()))?;
@@ -162,16 +264,31 @@ pub async fn agent_container_prepare() -> AppResult<()> {
         ));
     }
 
+    // Render + validate the Dockerfile for the selected Node version + providers,
+    // and stamp the config as a label so detect can spot a stale image.
+    let dockerfile = render_dockerfile(&node_version, &providers)?;
+    let label = format!("gdconfig={}", config_signature(&node_version, &providers));
+
     // Write the Dockerfile into an empty temp context dir and build from it,
     // rather than piping it on stdin — `build -` reads stdin differently across
     // Docker and Podman, so a real (tiny) context dir is the portable form.
     let ctx = std::env::temp_dir().join(format!("gd-agent-build-{}", std::process::id()));
     std::fs::create_dir_all(&ctx)?;
-    std::fs::write(ctx.join("Dockerfile"), DOCKERFILE)?;
+    std::fs::write(ctx.join("Dockerfile"), &dockerfile)?;
     let ctx_str = ctx.to_string_lossy().into_owned();
 
+    let mut build_args: Vec<String> =
+        vec!["build".into(), "-t".into(), IMAGE.into(), "--label".into(), label];
+    // Rebuild ("update") pulls a fresh base + reinstalls the CLIs rather than
+    // reusing cached layers, so newer CLI / Node releases are actually picked up.
+    if force {
+        build_args.push("--no-cache".into());
+        build_args.push("--pull".into());
+    }
+    build_args.push(ctx_str);
+
     let mut cmd = Command::new(&bin);
-    cmd.args(["build", "-t", IMAGE, &ctx_str])
+    cmd.args(&build_args)
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -308,11 +425,7 @@ pub(crate) fn build_run_args(
     let workspace_mount = format!("{}:/workspace", to_mount_source(worktree_path, runtime));
     // The agent-home mounts at the CLI's own dotdir so it finds its creds +
     // session transcript (Codex resumes via `--last` from its mounted ~/.codex).
-    let home_target = if agent == "codex" {
-        "/home/node/.codex"
-    } else {
-        "/home/node/.claude"
-    };
+    let home_target = agent_dotdir(agent);
     let home_mount = format!(
         "{}:{}",
         to_mount_source(&home_path.to_string_lossy(), runtime),
@@ -426,5 +539,35 @@ mod tests {
     #[test]
     fn container_name_is_stable_and_prefixed() {
         assert_eq!(container_name("abc123"), "gd-agent-abc123");
+    }
+
+    #[test]
+    fn render_dockerfile_selects_node_and_providers() {
+        let df = render_dockerfile("24", &["claude".into(), "codex".into()]).unwrap();
+        assert!(df.contains("FROM node:24-slim"));
+        assert!(df.contains("@anthropic-ai/claude-code"));
+        assert!(df.contains("@openai/codex"));
+        assert!(df.contains("ca-certificates")); // TLS roots, else the agents fail
+        // A codex-only image omits the claude package + its dotdir.
+        let codex_only = render_dockerfile("22", &["codex".into()]).unwrap();
+        assert!(codex_only.contains("FROM node:22-slim"));
+        assert!(codex_only.contains("@openai/codex"));
+        assert!(!codex_only.contains("claude-code"));
+        // Bad inputs rejected: non-numeric version, empty set, host-only agent.
+        assert!(render_dockerfile("24; rm -rf /", &["claude".into()]).is_err());
+        assert!(render_dockerfile("24", &[]).is_err());
+        assert!(render_dockerfile("24", &["copilot".into()]).is_err());
+    }
+
+    #[test]
+    fn config_signature_is_order_independent() {
+        assert_eq!(
+            config_signature("24", &["codex".into(), "claude".into()]),
+            config_signature("24", &["claude".into(), "codex".into()])
+        );
+        assert_eq!(
+            config_signature("24", &["claude".into(), "codex".into()]),
+            "node24-claude-codex"
+        );
     }
 }

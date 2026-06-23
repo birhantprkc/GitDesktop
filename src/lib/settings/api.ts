@@ -80,6 +80,12 @@ export interface AppSettings {
    *  ephemeral Docker/Podman container for kernel-enforced filesystem
    *  confinement (opt-in; needs Docker/Podman installed). */
   agentIsolation: "worktree" | "container";
+  /** Node base-image major version for the agent container image (digits, e.g.
+   *  "24"). */
+  agentImageNodeVersion: string;
+  /** Which container-capable agents to bake into the image (Copilot is host-only,
+   *  so it's not an option here). */
+  agentImageProviders: ("claude" | "codex")[];
   globalInstructions: string;
   /** gitignore-style globs (one per line) excluded from AI context. */
   aiIgnorePatterns: string;
@@ -147,6 +153,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   closeToTray: true,
   agentIsolation: "worktree",
+  agentImageNodeVersion: "24",
+  agentImageProviders: ["claude", "codex"],
   globalInstructions: "",
   aiIgnorePatterns: "",
   externalEditor: "",

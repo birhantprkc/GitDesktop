@@ -4,6 +4,13 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import {
   type ContainerStatus,
@@ -14,34 +21,58 @@ import { toastError } from "@/lib/toast";
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+type AgentId = "claude" | "codex";
+
+/** Node base-image versions offered (current LTS first). */
+const NODE_VERSIONS = ["24", "22", "20"];
+/** Container-capable agents (Copilot is host-only, so it's not installable here). */
+const IMAGE_AGENTS: { id: AgentId; label: string }[] = [
+  { id: "claude", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+];
+
 /**
  * Opt-in control for running agent sessions inside a Docker/Podman container
- * (kernel-enforced filesystem confinement) instead of the host. Shows live
- * runtime status and offers a one-time image build when the engine is ready but
- * the agent image hasn't been built yet. The value is the `agentIsolation`
- * setting ("worktree" | "container").
+ * (kernel-enforced filesystem confinement) instead of the host. When enabled it
+ * also configures the managed image — the Node base version and which agent CLIs
+ * to install — and offers Build / Rebuild (Rebuild pulls a fresh base + CLIs to
+ * pick up updates). The image is stamped with its config so a stale one is
+ * flagged for rebuild.
  */
 export function AgentSandboxField({
   value,
   onChange,
+  nodeVersion,
+  onNodeVersion,
+  providers,
+  onProviders,
 }: {
   value: "worktree" | "container";
   onChange: (value: "worktree" | "container") => void;
+  nodeVersion: string;
+  onNodeVersion: (v: string) => void;
+  providers: AgentId[];
+  onProviders: (v: AgentId[]) => void;
 }) {
   const enabled = value === "container";
   const status = useQuery({
-    queryKey: ["agentContainerStatus"],
-    queryFn: detectContainerSandbox,
+    queryKey: [
+      "agentContainerStatus",
+      nodeVersion,
+      [...providers].sort().join(","),
+    ],
+    queryFn: () => detectContainerSandbox(nodeVersion, providers),
     staleTime: 30_000,
+    enabled,
   });
   const queryClient = useQueryClient();
   const [building, setBuilding] = useState(false);
 
-  async function buildImage() {
+  async function buildImage(force: boolean) {
     setBuilding(true);
     try {
-      await prepareContainerSandbox();
-      toast.success("Agent container image built");
+      await prepareContainerSandbox(nodeVersion, providers, force);
+      toast.success(force ? "Agent image rebuilt" : "Agent image built");
       await queryClient.invalidateQueries({
         queryKey: ["agentContainerStatus"],
       });
@@ -51,6 +82,14 @@ export function AgentSandboxField({
       setBuilding(false);
     }
   }
+
+  const toggleProvider = (id: AgentId, on: boolean) => {
+    const next = on
+      ? Array.from(new Set([...providers, id]))
+      : providers.filter((p) => p !== id);
+    if (next.length === 0) return; // keep at least one agent in the image
+    onProviders(next);
+  };
 
   return (
     <div className="space-y-1.5">
@@ -68,15 +107,61 @@ export function AgentSandboxField({
         to also run each session inside an ephemeral Docker/Podman container, so
         the agent's file writes are confined to the worktree by the kernel — the
         strongest isolation. Applies to sessions started afterward; needs Docker
-        or Podman installed.
+        or Podman installed. (Copilot is host-only and ignores this.)
       </p>
       {enabled && (
-        <StatusLine
-          status={status.data}
-          loading={status.isLoading}
-          building={building}
-          onBuild={buildImage}
-        />
+        <div className="space-y-2 pt-1">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+            <label className="flex items-center gap-1.5">
+              <span className="text-muted-foreground">Node version</span>
+              <Select
+                value={nodeVersion}
+                onValueChange={(v) => v && onNodeVersion(v)}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label="Node version"
+                  className="w-auto"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {NODE_VERSIONS.map((v) => (
+                    <SelectItem key={v} value={v}>
+                      {v === "24" ? `${v} (LTS)` : v}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+            <div className="flex items-center gap-3">
+              <span className="text-muted-foreground">Agents</span>
+              {IMAGE_AGENTS.map((a) => {
+                const on = providers.includes(a.id);
+                return (
+                  <label
+                    key={a.id}
+                    className="flex cursor-pointer items-center gap-1.5"
+                  >
+                    <Checkbox
+                      checked={on}
+                      // Can't uncheck the last remaining agent.
+                      disabled={on && providers.length === 1}
+                      onCheckedChange={(c) => toggleProvider(a.id, c === true)}
+                    />
+                    {a.label}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          <StatusLine
+            status={status.data}
+            loading={status.isLoading}
+            building={building}
+            onBuild={buildImage}
+          />
+        </div>
       )}
     </div>
   );
@@ -91,8 +176,28 @@ function StatusLine({
   status: ContainerStatus | undefined;
   loading: boolean;
   building: boolean;
-  onBuild: () => void;
+  onBuild: (force: boolean) => void;
 }) {
+  const buildBtn = (label: string, force: boolean) => (
+    <Button
+      type="button"
+      size="xs"
+      variant="outline"
+      disabled={building}
+      onClick={() => onBuild(force)}
+      className="ml-2"
+    >
+      {building ? (
+        <>
+          <Spinner className="size-3" />
+          {force ? "Rebuilding…" : "Building…"}
+        </>
+      ) : (
+        label
+      )}
+    </Button>
+  );
+
   if (loading) {
     return <Row tone="muted">Checking for Docker / Podman…</Row>;
   }
@@ -116,24 +221,17 @@ function StatusLine({
   if (!status.imagePresent) {
     return (
       <Row tone="muted">
-        {cap(status.runtime)} ready — the agent image needs building once.
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          disabled={building}
-          onClick={onBuild}
-          className="ml-2"
-        >
-          {building ? (
-            <>
-              <Spinner className="size-3" />
-              Building…
-            </>
-          ) : (
-            "Build image"
-          )}
-        </Button>
+        {cap(status.runtime)} ready — build the agent image once.
+        {buildBtn("Build image", false)}
+      </Row>
+    );
+  }
+  if (!status.imageMatches) {
+    return (
+      <Row tone="warn">
+        The built image doesn't match this Node version / agent selection —
+        rebuild to apply.
+        {buildBtn("Rebuild", true)}
       </Row>
     );
   }
@@ -141,6 +239,7 @@ function StatusLine({
     <Row tone="ok">
       {cap(status.runtime)} ready, image built — new sessions run in a
       container.
+      {buildBtn("Rebuild to update", true)}
     </Row>
   );
 }

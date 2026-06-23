@@ -255,6 +255,14 @@ export const AiProviderSection = withForm({
       form.store,
       (s) => s.values.agentIsolation,
     );
+    const agentImageNodeVersion = useSelector(
+      form.store,
+      (s) => s.values.agentImageNodeVersion,
+    );
+    const agentImageProviders = useSelector(
+      form.store,
+      (s) => s.values.agentImageProviders,
+    );
     const provider = ai.provider;
     const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
     const keyPreview = useSecretPreview(provider);
@@ -477,6 +485,12 @@ export const AiProviderSection = withForm({
           <AgentSandboxField
             value={agentIsolation}
             onChange={(v) => form.setFieldValue("agentIsolation", v)}
+            nodeVersion={agentImageNodeVersion}
+            onNodeVersion={(v) =>
+              form.setFieldValue("agentImageNodeVersion", v)
+            }
+            providers={agentImageProviders}
+            onProviders={(v) => form.setFieldValue("agentImageProviders", v)}
           />
         </div>
 

@@ -1111,6 +1111,14 @@ pub async fn agent_session(
                 "The agent container image isn't built yet. Open Settings → AI and click \"Build image\", then try again.".to_string(),
             ));
         }
+        // The image may have been built without this agent (provider selection) —
+        // fail clearly instead of a cryptic in-container "command not found".
+        if !crate::agent_sandbox::image_has_agent(&runtime, agent_name).await {
+            return Err(AppError::Command(format!(
+                "The agent image wasn't built with {}. Open Settings → AI, add it under the image's agents, and rebuild.",
+                kind.label()
+            )));
+        }
         // Fail early with a clear message if the agent isn't logged in on the
         // host (its creds are what we mount into the container).
         if !crate::agent_sandbox::host_logged_in(agent_name) {
