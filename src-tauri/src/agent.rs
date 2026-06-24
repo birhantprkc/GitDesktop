@@ -1444,12 +1444,16 @@ pub async fn agent_session(
         }
         let home = crate::agent_sandbox::seed_session_home(&app, &session_id, agent_name)?;
         let name = crate::agent_sandbox::container_name(&session_id);
+        // Mount the user's global skills read-only so a skill nudged by name resolves
+        // in-container (the worktree only carries project skills). None if absent.
+        let skills = crate::agent_sandbox::global_skills_dir();
         let args = crate::agent_sandbox::build_run_args(
             &runtime_name,
             agent_name,
             &worktree_path,
             &home,
             &name,
+            skills.as_deref().and_then(Path::to_str),
             &inner,
         );
         return stream_agent(

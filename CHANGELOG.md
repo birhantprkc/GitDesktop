@@ -58,6 +58,10 @@ commit list.
 - **Deeper Copilot reviews.** "Read repo files for context" now works with Copilot
   too: it reads surrounding files for context while a hard deny on the write and shell
   tools keeps it strictly read-only, even when reviewing in your live repo.
+- **Global skills reach container sessions.** A container-isolated agent session now
+  mounts your global skills (`~/.agents/skills`) read-only, so a skill invoked by name
+  resolves inside the container just as it does for a host session — previously only
+  skills committed to the repo were visible there.
 
 ### Fixed
 

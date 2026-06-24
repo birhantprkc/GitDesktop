@@ -75,6 +75,16 @@ fn agent_dotdir(agent: &str) -> &'static str {
     }
 }
 
+/// Where the in-container CLI reads GLOBAL skills — Claude reads only
+/// `~/.claude/skills` (the host junctions it to the canonical store), every other
+/// agent reads the vendor-neutral `~/.agents/skills` directly.
+fn skills_target(agent: &str) -> &'static str {
+    match agent {
+        "claude" => "/home/node/.claude/skills",
+        _ => "/home/node/.agents/skills",
+    }
+}
+
 /// Digits-only Node major version (e.g. "24"), guarded so it can't inject into the
 /// Dockerfile or the image label.
 fn valid_node_version(v: &str) -> bool {
@@ -177,6 +187,18 @@ fn host_creds(agent: &str) -> Option<PathBuf> {
 /// of a cryptic in-container auth error.
 pub(crate) fn host_logged_in(agent: &str) -> bool {
     host_creds(agent).is_some_and(|p| p.is_file())
+}
+
+/// The host's GLOBAL skills store — the vendor-neutral canonical `~/.agents/skills`
+/// — if it exists, to bind-mount read-only into a container session. Without it, a
+/// container only sees PROJECT skills carried in the mounted worktree, so a nudge to
+/// a global skill (which the host CLI would auto-load from home) can't resolve. We
+/// source the canonical dir (all real subdirs); a Claude-only skill living solely in
+/// a real `~/.claude/skills` entry isn't covered (a follow-up if it's ever needed).
+pub(crate) fn global_skills_dir() -> Option<PathBuf> {
+    home_dir()
+        .map(|h| h.join(".agents").join("skills"))
+        .filter(|p| p.is_dir())
 }
 
 /// Finds Docker or Podman on PATH (Docker preferred). Returns (binary, name).
@@ -443,14 +465,17 @@ pub(crate) fn to_mount_source(path: &str, runtime: &str) -> String {
 
 /// Builds the full `run …` argv that wraps the inner agent invocation in an
 /// ephemeral, worktree-confined container. The agent runs as `node`, cwd
-/// `/workspace` (the bind-mounted worktree), with the seeded claude-home mounted;
-/// `--rm` tears it down, resource + capability limits harden it.
+/// `/workspace` (the bind-mounted worktree), with the seeded claude-home mounted +
+/// (when present) the user's global skills mounted read-only so a nudged skill
+/// resolves; `--rm` tears it down, resource + capability limits harden it.
 pub(crate) fn build_run_args(
     runtime: &str,
     agent: &str,
     worktree_path: &str,
     home_path: &Path,
     container_name: &str,
+    // Host path to the global skills store to mount read-only (None = don't mount).
+    skills_src: Option<&str>,
     inner: &[String],
 ) -> Vec<String> {
     let workspace_mount = format!("{}:/workspace", to_mount_source(worktree_path, runtime));
@@ -498,6 +523,21 @@ pub(crate) fn build_run_args(
         workspace_mount,
         "-v".into(),
         home_mount,
+    ]);
+    // Mount the user's GLOBAL skills read-only so a skill nudged by name resolves
+    // in-container like it does on the host (the worktree only carries PROJECT
+    // skills). Target is per-agent (`skills_target`); for Claude it nests under the
+    // `~/.claude` home mount, so it MUST be added after it. `:ro` — the agent reads
+    // skills, never edits the user's store.
+    if let Some(src) = skills_src {
+        args.push("-v".into());
+        args.push(format!(
+            "{}:{}:ro",
+            to_mount_source(src, runtime),
+            skills_target(agent)
+        ));
+    }
+    args.extend([
         // Hardening: drop Linux capabilities (a userland Node process needs
         // none), block privilege escalation, and cap resources.
         "--cap-drop".into(),
@@ -555,6 +595,7 @@ mod tests {
             "/repos/wt",
             &home,
             "gd-agent-s1",
+            None,
             &inner,
         );
         assert_eq!(args[0], "run");
@@ -563,10 +604,10 @@ mod tests {
         assert!(args.iter().any(|a| a.ends_with(":/workspace")));
         assert!(args.iter().any(|a| a.ends_with(":/home/node/.claude")));
         // Codex mounts its home at ~/.codex instead.
-        let codex = build_run_args("docker", "codex", "/repos/wt", &home, "n", &inner);
+        let codex = build_run_args("docker", "codex", "/repos/wt", &home, "n", None, &inner);
         assert!(codex.iter().any(|a| a.ends_with(":/home/node/.codex")));
         // opencode mounts its XDG data dir.
-        let oc = build_run_args("docker", "opencode", "/repos/wt", &home, "n", &inner);
+        let oc = build_run_args("docker", "opencode", "/repos/wt", &home, "n", None, &inner);
         assert!(oc
             .iter()
             .any(|a| a.ends_with(":/home/node/.local/share/opencode")));
@@ -582,7 +623,7 @@ mod tests {
     fn copilot_passes_token_env_by_name_only() {
         let home = PathBuf::from("/data/agent-home/s1/copilot");
         let inner = vec!["-p".to_string(), "hi".to_string()];
-        let cp = build_run_args("docker", "copilot", "/repos/wt", &home, "n", &inner);
+        let cp = build_run_args("docker", "copilot", "/repos/wt", &home, "n", None, &inner);
         // Token is passed through by NAME (no `=value`) so it never lands in argv.
         let e = cp.iter().position(|a| a == "-e").expect("has -e");
         assert_eq!(cp[e + 1], "COPILOT_GITHUB_TOKEN");
@@ -593,8 +634,32 @@ mod tests {
         let img = cp.iter().position(|a| a == IMAGE).unwrap();
         assert_eq!(cp[img + 1], "copilot");
         // Other agents get no token env passthrough.
-        let claude = build_run_args("docker", "claude", "/repos/wt", &home, "n", &inner);
+        let claude = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, &inner);
         assert!(!claude.iter().any(|a| a == "COPILOT_GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn mounts_global_skills_read_only_at_agent_dir() {
+        let home = PathBuf::from("/data/agent-home/s1/x");
+        let inner = vec!["-p".to_string()];
+        let src = if cfg!(windows) {
+            "C:\\Users\\u\\.agents\\skills"
+        } else {
+            "/home/u/.agents/skills"
+        };
+        // Claude reads only ~/.claude/skills; the mount is read-only.
+        let cl = build_run_args("docker", "claude", "/repos/wt", &home, "n", Some(src), &inner);
+        assert!(cl
+            .iter()
+            .any(|a| a.ends_with(":/home/node/.claude/skills:ro")));
+        // Every other agent reads the vendor-neutral ~/.agents/skills.
+        let cx = build_run_args("docker", "codex", "/repos/wt", &home, "n", Some(src), &inner);
+        assert!(cx
+            .iter()
+            .any(|a| a.ends_with(":/home/node/.agents/skills:ro")));
+        // No source → no skills mount at all.
+        let none = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, &inner);
+        assert!(!none.iter().any(|a| a.contains("/skills:ro")));
     }
 
     #[cfg(target_os = "linux")]
@@ -602,9 +667,9 @@ mod tests {
     fn linux_podman_adds_keep_id_docker_does_not() {
         let home = PathBuf::from("/data/agent-home/s1/claude");
         let inner = vec!["-p".to_string()];
-        let podman = build_run_args("podman", "claude", "/repos/wt", &home, "n", &inner);
+        let podman = build_run_args("podman", "claude", "/repos/wt", &home, "n", None, &inner);
         assert!(podman.iter().any(|a| a == "--userns=keep-id"));
-        let docker = build_run_args("docker", "claude", "/repos/wt", &home, "n", &inner);
+        let docker = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, &inner);
         assert!(!docker.iter().any(|a| a == "--userns=keep-id"));
     }
 
