@@ -576,13 +576,23 @@ fn claude_thinking_keyword(level: &str) -> Option<&'static str> {
     }
 }
 
-/// GitHub Copilot CLI **read-only** review invocation. Like the session, the prompt
-/// (system + diff) is an argument (`-p`), not stdin. No tool flags (so no
-/// `--allow-all-tools`) → the agent analyzes the diff carried in the prompt without
-/// writing or running commands — verified: a no-tools `-p` review completes cleanly.
-/// Repo-aware (Tier 2) reads of surrounding files would need a read-tool allowlist,
-/// a follow-up; for now Copilot review is always diff-only.
-fn copilot_review_args(model: &str, prompt: &str) -> Vec<String> {
+/// GitHub Copilot CLI **read-only** review invocation. The prompt (system + diff) is
+/// an argument (`-p`), not stdin (Copilot has no stdin prompt form; `copilot.exe` is a
+/// real binary, exempt from the batch-file-arg limit).
+///
+/// Diff-only (`repo_aware = false`): no tool flags, so the agent just analyzes the diff
+/// carried in the prompt without invoking tools — verified clean.
+///
+/// Repo-aware (`repo_aware = true`, Tier 2): the agent may read surrounding files for
+/// context. `--allow-all-tools` auto-approves tools so the non-interactive run doesn't
+/// hang on a permission prompt, but `--deny-tool` denies the write paths — `write` (all
+/// file create/modify tools) and `shell` (arbitrary commands, incl. redirects). Denial
+/// takes precedence over allow-all (per `copilot help permissions`), so reads/search are
+/// auto-approved while writes stay impossible: a hard read-only guarantee even in the
+/// live repo — the same shape as opencode's `plan` agent. `--disable-builtin-mcps` drops
+/// the GitHub MCP server too, keeping it to local repo reads (no remote GitHub calls).
+/// Reads are path-allowed because the review runs with the repo as cwd.
+fn copilot_review_args(model: &str, prompt: &str, repo_aware: bool) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-p".into(),
         prompt.into(),
@@ -590,6 +600,12 @@ fn copilot_review_args(model: &str, prompt: &str) -> Vec<String> {
         "json".into(),
         "--no-color".into(),
     ];
+    if repo_aware {
+        args.push("--allow-all-tools".into());
+        args.push("--deny-tool=write".into());
+        args.push("--deny-tool=shell".into());
+        args.push("--disable-builtin-mcps".into());
+    }
     if !model.trim().is_empty() {
         args.push("--model".into());
         args.push(model.into());
@@ -1024,6 +1040,11 @@ async fn stream_agent(
     // `(runtime, container name)` to force-remove on cancel/timeout — killing the
     // `run` client alone leaves the engine's container running.
     container_kill: Option<(PathBuf, String)>,
+    // Extra environment for the spawned process — used to pass a Copilot container's
+    // `COPILOT_GITHUB_TOKEN` to the docker/podman client by name (the run args carry
+    // `-e COPILOT_GITHUB_TOKEN` with no value, so the token is inherited here and
+    // never appears in argv / `docker inspect`).
+    extra_env: &[(&str, String)],
     on_event: &Channel<ReviewEvent>,
 ) -> AppResult<()> {
     let mut cmd = Command::new(binary);
@@ -1031,6 +1052,7 @@ async fn stream_agent(
         .current_dir(cwd)
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")
+        .envs(extra_env.iter().map(|(k, v)| (*k, v.as_str())))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1183,10 +1205,15 @@ pub async fn agent_review(
             codex_review_args(&model, &repo_path),
             format!("{system_prompt}\n\n{user_prompt}"),
         ),
-        // Copilot: read-only diff review (no tools). The prompt (system + diff) is
-        // an argument, not stdin.
+        // Copilot: read-only review. The prompt (system + diff) is an argument, not
+        // stdin. `repo_aware` adds a deny-write/deny-shell tool allowlist so it can
+        // read surrounding files without being able to modify the repo.
         AgentKind::Copilot => (
-            copilot_review_args(&model, &format!("{system_prompt}\n\n{user_prompt}")),
+            copilot_review_args(
+                &model,
+                &format!("{system_prompt}\n\n{user_prompt}"),
+                repo_aware,
+            ),
             String::new(),
         ),
         // opencode review: prompt on stdin (no positional message), so a large or
@@ -1205,7 +1232,7 @@ pub async fn agent_review(
     };
     stream_agent(
         &state, kind, &binary, args, stdin_text, &repo_path, timeout, &review_id, "review", None,
-        &on_event,
+        &[], &on_event,
     )
     .await
 }
@@ -1225,12 +1252,12 @@ pub async fn agent_review_cancel(
 /// continues it (keeping context). Streams the same `ReviewEvent`s as a review;
 /// cancel via `agent_review_cancel` with the same `session_id`.
 ///
-/// `agent` picks the CLI. Claude/Codex run on the **host** (worktree-confined:
-/// Claude full-auto via `bypassPermissions` — soft until its permission prompt
-/// lands; Codex via its own OS sandbox, `-s workspace-write`) or in a **container**
-/// (kernel boundary). **Copilot** runs host-only for now (`--add-dir` confines its
-/// file tools to the worktree; its creds aren't file-mountable, so the container
-/// tier is a follow-up). **opencode** is a recognized stub (errors until wired).
+/// `agent` picks the CLI. Each runs worktree-confined on the **host** (Claude full-
+/// auto via `bypassPermissions` — soft until its permission prompt lands; Codex via
+/// its own OS sandbox, `-s workspace-write`; Copilot via `--add-dir`; opencode via
+/// `--dangerously-skip-permissions`) or in a **container** (kernel boundary; Codex is
+/// container-only). Copilot's container authenticates from a `gh auth token` passed by
+/// env, since its login isn't a mountable creds file like the others'.
 #[tauri::command]
 pub async fn agent_session(
     app: tauri::AppHandle,
@@ -1277,15 +1304,6 @@ pub async fn agent_session(
     };
     let container = isolation.as_deref() == Some("container");
 
-    // Copilot runs on the host only for now (its creds live in the OS keychain, not
-    // a mountable file), so its container tier is a follow-up. Claude, Codex, and
-    // opencode all support the container.
-    if kind == AgentKind::Copilot && container {
-        return Err(AppError::Command(
-            "Copilot sessions don't support container isolation yet (its login isn't a mountable file). Turn isolation off in Settings → AI to run Copilot on the host.".to_string(),
-        ));
-    }
-
     // The inner CLI invocation + the stdin for this turn. Claude carries the
     // system prompt as a flag; Codex has none, so it's prepended on stdin (turn
     // 1 only — a resumed Codex session already has it in context).
@@ -1317,8 +1335,17 @@ pub async fn agent_session(
             } else {
                 format!("{system_prompt}\n\n{user_prompt}")
             };
+            // `--add-dir` must point at where the worktree actually is for this run:
+            // the bind-mount `/workspace` in a container, or the real host path on the
+            // host. Passing the host path into the container would name a nonexistent
+            // dir (live-verified: the container confines to /workspace either way).
+            let add_dir = if container {
+                "/workspace"
+            } else {
+                worktree_path.as_str()
+            };
             (
-                copilot_session_args(&model, &session_id, resume, &worktree_path, &prompt, &effort),
+                copilot_session_args(&model, &session_id, resume, add_dir, &prompt, &effort),
                 String::new(),
             )
         }
@@ -1370,13 +1397,41 @@ pub async fn agent_session(
         }
         // Fail early with a clear message if the agent isn't logged in on the host
         // (its creds are what we mount into the container). opencode is exempt — its
-        // free hosted models need no credentials, so a container runs keyless.
-        if kind != AgentKind::Opencode && !crate::agent_sandbox::host_logged_in(agent_name) {
+        // free hosted models need no credentials, so a container runs keyless. Copilot
+        // is exempt too: it has no mountable creds file, so it authenticates from a
+        // GitHub token passed by env (sourced from `gh auth token`, fetched below).
+        if !matches!(kind, AgentKind::Opencode | AgentKind::Copilot)
+            && !crate::agent_sandbox::host_logged_in(agent_name)
+        {
             return Err(AppError::Command(format!(
                 "{} isn't logged in on this machine. Sign in with its CLI first, then start the session.",
                 kind.label()
             )));
         }
+        // Copilot's login lives in the OS keychain (not a mountable file), so a
+        // containerized session authenticates with a GitHub token instead. The CLI
+        // reads `COPILOT_GITHUB_TOKEN`; we source it from the GitHub CLI the app
+        // already drives. Passed by-name to the runtime client (see `extra_env`) so
+        // the token never lands in argv / `docker inspect`.
+        let extra_env: Vec<(&str, String)> = if kind == AgentKind::Copilot {
+            let token = crate::github::runner::run_gh(
+                None,
+                &["auth", "token"],
+                crate::github::runner::GH_TIMEOUT,
+            )
+            .await
+            .ok()
+            .map(|o| o.stdout_lossy().trim().to_string())
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| {
+                AppError::Command(
+                    "Copilot in a container authenticates with your GitHub CLI token, but `gh auth token` returned nothing. Run `gh auth login` (or turn isolation off in Settings → AI to use the host Copilot login).".to_string(),
+                )
+            })?;
+            vec![("COPILOT_GITHUB_TOKEN", token)]
+        } else {
+            Vec::new()
+        };
         // Defense-in-depth: the worktree is bind-mounted, so never let a `..` in
         // its path widen the mount beyond the intended directory.
         if Path::new(&worktree_path)
@@ -1408,6 +1463,7 @@ pub async fn agent_session(
             &session_id,
             "session",
             Some((runtime.clone(), name)),
+            &extra_env,
             &on_event,
         )
         .await;
@@ -1433,6 +1489,7 @@ pub async fn agent_session(
         &session_id,
         "session",
         None,
+        &[],
         &on_event,
     )
     .await

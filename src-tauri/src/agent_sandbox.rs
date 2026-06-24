@@ -17,8 +17,11 @@
 //! host's real config. The home persists across a session's turns (so `--resume`
 //! finds the transcript) and is removed on discard/delete. **opencode needs no
 //! creds for its free hosted models**, so its container runs keyless out of the box.
+//! **Copilot has no mountable creds file** (its login lives in the OS keychain), so
+//! its container authenticates from a GitHub token (`gh auth token`) passed by env
+//! (`COPILOT_GITHUB_TOKEN`), never a file.
 //!
-//! Claude and opencode run on the host or in a container; **Codex is
+//! Claude, opencode, and Copilot run on the host or in a container; **Codex is
 //! container-only** (its host `workspace-write` is trust-gated, but full-bypass is
 //! safe in the box). Validated end-to-end by spike + live runs (Codex 2026-06-22,
 //! opencode 2026-06-23); see docs/agent-sandbox-docker.md.
@@ -42,13 +45,17 @@ use crate::error::{AppError, AppResult};
 pub const IMAGE: &str = "gitdesktop-agent:latest";
 const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// npm package for a **container-capable** agent. `None` for one that can't run in
-/// the container (Copilot is host-only — its creds aren't a mountable file).
+/// npm package for a **container-capable** agent. `None` for an agent we can't run
+/// in the container.
 fn agent_npm_package(agent: &str) -> Option<&'static str> {
     match agent {
         "claude" => Some("@anthropic-ai/claude-code"),
         "codex" => Some("@openai/codex"),
         "opencode" => Some("opencode-ai"),
+        // Copilot has no mountable creds file (its login lives in the OS keychain),
+        // so a container session authenticates from a `gh auth token` passed by env
+        // — see `build_run_args` / the `agent_session` container branch.
+        "copilot" => Some("@github/copilot"),
         _ => None,
     }
 }
@@ -60,6 +67,10 @@ fn agent_dotdir(agent: &str) -> &'static str {
     match agent {
         "codex" => "/home/node/.codex",
         "opencode" => "/home/node/.local/share/opencode",
+        // Copilot keeps its session-store.db (for `--resume`) + config here; no creds
+        // file (it authenticates from the env token), but the dir still mounts so the
+        // session db survives across a session's turns.
+        "copilot" => "/home/node/.copilot",
         _ => "/home/node/.claude",
     }
 }
@@ -141,8 +152,15 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// The host credentials file an agent's container home is seeded from.
+/// The host credentials file an agent's container home is seeded from. `None` for an
+/// agent with no mountable creds file — Copilot (login is in the OS keychain; it auths
+/// from an env token instead) and opencode when it has no `auth.json` (free models).
 fn host_creds(agent: &str) -> Option<PathBuf> {
+    // Copilot has no creds file to seed — its container authenticates from a GitHub
+    // token passed by env, not a mounted file.
+    if agent == "copilot" {
+        return None;
+    }
     home_dir().map(|h| match agent {
         "codex" => h.join(".codex").join("auth.json"),
         "opencode" => h
@@ -451,6 +469,14 @@ pub(crate) fn build_run_args(
         "--name".into(),
         container_name.into(),
     ];
+    // Copilot authenticates from a GitHub token instead of a mounted creds file. Pass
+    // it through to the container BY NAME (no `=value`): the runtime client inherits
+    // `COPILOT_GITHUB_TOKEN` from its own env (set in the `agent_session` container
+    // branch), so the token never appears in this argv / `docker inspect`.
+    if agent == "copilot" {
+        args.push("-e".into());
+        args.push("COPILOT_GITHUB_TOKEN".into());
+    }
     // Rootless Podman on Linux maps the container's non-root `node` (uid 1000) to
     // a host *subuid*, so it can't even write the host-user-owned worktree, and
     // any files it does write aren't owned by the host user (its git can't touch
@@ -484,6 +510,13 @@ pub(crate) fn build_run_args(
         "1024".into(),
         IMAGE.into(),
     ]);
+    // Name the agent CLI as the in-container command. The image inherits the `node`
+    // base entrypoint, which execs its args directly BUT prepends `node` to a leading
+    // `-flag` — so a bare `-p …` / `exec …` (what the `*_session_args` builders emit,
+    // since the host path supplies the binary separately) would run `node`, not the
+    // CLI. The CLIs install on PATH under exactly these names
+    // (`claude`/`codex`/`opencode`/`copilot`), so prepend `agent` here.
+    args.push(agent.into());
     args.extend(inner.iter().cloned());
     args
 }
@@ -538,9 +571,30 @@ mod tests {
             .iter()
             .any(|a| a.ends_with(":/home/node/.local/share/opencode")));
         assert!(args.contains(&IMAGE.to_string()));
-        // inner args come last, after the image.
+        // After IMAGE: the agent CLI command name, then its inner args (the node base
+        // entrypoint would otherwise run `node` on a bare `-p …`).
         let img = args.iter().position(|a| a == IMAGE).unwrap();
-        assert_eq!(&args[img + 1..], &inner[..]);
+        assert_eq!(args[img + 1], "claude");
+        assert_eq!(&args[img + 2..], &inner[..]);
+    }
+
+    #[test]
+    fn copilot_passes_token_env_by_name_only() {
+        let home = PathBuf::from("/data/agent-home/s1/copilot");
+        let inner = vec!["-p".to_string(), "hi".to_string()];
+        let cp = build_run_args("docker", "copilot", "/repos/wt", &home, "n", &inner);
+        // Token is passed through by NAME (no `=value`) so it never lands in argv.
+        let e = cp.iter().position(|a| a == "-e").expect("has -e");
+        assert_eq!(cp[e + 1], "COPILOT_GITHUB_TOKEN");
+        assert!(!cp.iter().any(|a| a.contains("COPILOT_GITHUB_TOKEN=")));
+        // Copilot's home mounts at ~/.copilot (for its session-store.db).
+        assert!(cp.iter().any(|a| a.ends_with(":/home/node/.copilot")));
+        // The CLI command name is prepended after IMAGE.
+        let img = cp.iter().position(|a| a == IMAGE).unwrap();
+        assert_eq!(cp[img + 1], "copilot");
+        // Other agents get no token env passthrough.
+        let claude = build_run_args("docker", "claude", "/repos/wt", &home, "n", &inner);
+        assert!(!claude.iter().any(|a| a == "COPILOT_GITHUB_TOKEN"));
     }
 
     #[cfg(target_os = "linux")]
@@ -577,10 +631,15 @@ mod tests {
         assert!(oc.contains("opencode-ai"));
         assert!(oc.contains("/home/node/.local/share/opencode"));
         assert!(oc.contains("chown -R node:node /home/node"));
-        // Bad inputs rejected: non-numeric version, empty set, host-only agent.
+        // Copilot is now container-capable too (npm package + its dotdir); it auths
+        // from an env token rather than a mounted creds file.
+        let cp = render_dockerfile("24", &["copilot".into()]).unwrap();
+        assert!(cp.contains("@github/copilot"));
+        assert!(cp.contains("/home/node/.copilot"));
+        // Bad inputs rejected: non-numeric version, empty set, unknown agent.
         assert!(render_dockerfile("24; rm -rf /", &["claude".into()]).is_err());
         assert!(render_dockerfile("24", &[]).is_err());
-        assert!(render_dockerfile("24", &["copilot".into()]).is_err());
+        assert!(render_dockerfile("24", &["cursor".into()]).is_err());
     }
 
     #[test]

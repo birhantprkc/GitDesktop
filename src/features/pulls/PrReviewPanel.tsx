@@ -394,7 +394,9 @@ export function PrReviewPanel({
             </button>
           </div>
         )}
-        {(cliKind === "claude" || cliKind === "opencode") && (
+        {(cliKind === "claude" ||
+          cliKind === "opencode" ||
+          cliKind === "copilot") && (
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <Switch
               size="sm"

@@ -787,9 +787,9 @@ function EffortPicker({
   );
 }
 
-/** Picks the CLI for a NEW session (fixed once it starts). Claude and Codex honor
- *  the isolation setting; Copilot and opencode are host-only for now (worktree-
- *  confined, soft). */
+/** Picks the CLI for a NEW session (fixed once it starts). Every agent honors the
+ *  isolation setting — host (worktree-confined, soft) or container — provided that
+ *  agent is baked into the image (Codex is container-only). */
 function AgentPicker({
   value,
   onChange,

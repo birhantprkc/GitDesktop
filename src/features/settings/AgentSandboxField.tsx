@@ -21,15 +21,16 @@ import { toastError } from "@/lib/toast";
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-type AgentId = "claude" | "codex" | "opencode";
+type AgentId = "claude" | "codex" | "opencode" | "copilot";
 
 /** Node base-image versions offered (current LTS first). */
 const NODE_VERSIONS = ["24", "22", "20"];
-/** Container-capable agents (Copilot is host-only, so it's not installable here). */
+/** Container-capable agents installed into the managed image. */
 const IMAGE_AGENTS: { id: AgentId; label: string }[] = [
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
   { id: "opencode", label: "opencode" },
+  { id: "copilot", label: "GitHub Copilot" },
 ];
 
 /**
@@ -108,7 +109,7 @@ export function AgentSandboxField({
         to also run each session inside an ephemeral Docker/Podman container, so
         the agent's file writes are confined to the worktree by the kernel — the
         strongest isolation. Applies to sessions started afterward; needs Docker
-        or Podman installed. (Copilot is host-only and ignores this.)
+        or Podman installed, and each agent added to the image below.
       </p>
       {enabled && (
         <div className="space-y-2 pt-1">

@@ -49,9 +49,22 @@ commit list.
 - **Deeper opencode reviews.** Turn on "Read repo files for context" for an opencode
   review and it explores surrounding files (via opencode's read-only plan agent — it
   can read but never write), not just the diff.
+- **GitHub Copilot runs in the container sandbox too.** Copilot joins Claude, Codex,
+  and opencode as a container-isolated agent — add it under Settings → AI → agent
+  image and rebuild. Copilot has no credentials file to mount (its login lives in the
+  OS keychain), so its container authenticates from your GitHub CLI token (`gh auth
+  token`), passed securely by environment — never written to disk or visible in the
+  container's arguments.
+- **Deeper Copilot reviews.** "Read repo files for context" now works with Copilot
+  too: it reads surrounding files for context while a hard deny on the write and shell
+  tools keeps it strictly read-only, even when reviewing in your live repo.
 
 ### Fixed
 
+- **Container agent sessions now actually run the agent.** A container-isolated
+  session was launching `node` instead of the agent CLI inside the container (the CLI
+  name wasn't passed as the command), so Claude/Codex/opencode sessions failed to
+  start in container mode. They now run correctly. (Host sessions were unaffected.)
 - **AI reviews now show why they failed.** A failed PR/local review used to revert
   silently to the empty "Run a review…" placeholder with no explanation; it now
   displays the actual error (and keeps any partial output that streamed first).
