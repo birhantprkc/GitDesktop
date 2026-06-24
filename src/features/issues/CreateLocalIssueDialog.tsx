@@ -22,10 +22,13 @@ export function CreateLocalIssueDialog({
   repoPath,
   open,
   onOpenChange,
+  initialDraft,
 }: {
   repoPath: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Seed the form when opened (e.g. from a generated plan). */
+  initialDraft?: { title: string; body: string };
 }) {
   const createIssue = useCreateLocalIssue(repoPath);
   const selectIssue = useUiStore((s) => s.selectIssue);
@@ -58,7 +61,10 @@ export function CreateLocalIssueDialog({
   // keepDefaultValues: otherwise the per-render options sync clobbers the
   // reset values back to empty on an untouched form.
   const seedOnOpen = useEffectEvent(() => {
-    form.reset({ title: "", body: "" }, { keepDefaultValues: true });
+    form.reset(
+      { title: initialDraft?.title ?? "", body: initialDraft?.body ?? "" },
+      { keepDefaultValues: true },
+    );
   });
   useEffect(() => {
     if (open) seedOnOpen();

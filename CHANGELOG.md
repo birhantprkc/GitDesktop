@@ -12,6 +12,14 @@ commit list.
 
 ### Added
 
+- **Plan a task before you build it.** A new read-only **Plan** mode in the Agent
+  surface: describe a task (or start from an existing issue with the new **Plan**
+  button on any issue) and a repo-aware agent explores your actual code, then drafts
+  an agent-ready issue — problem, proposed approach, affected files, acceptance
+  criteria, and a verify plan — **without changing anything**. Cited file paths are
+  checked against your repo, so hallucinated references are flagged before you file.
+  Review it, then create a local or GitHub issue from it in one click. Reach it from
+  the Agent tab's "Plan a task" mode, the command palette, or an issue's Plan button.
 - **Bring any OpenAI-compatible provider.** A new "OpenAI-compatible" provider lets
   you point GitDesktop at any OpenAI-compatible `/chat/completions` endpoint with your
   own API key. One-click presets cover the **Vercel AI Gateway** (one key, many

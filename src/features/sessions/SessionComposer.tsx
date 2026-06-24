@@ -711,7 +711,7 @@ function SlashList({
   );
 }
 
-function ModelPicker({
+export function ModelPicker({
   value,
   onChange,
   models,
@@ -789,8 +789,9 @@ function EffortPicker({
 
 /** Picks the CLI for a NEW session (fixed once it starts). Every agent honors the
  *  isolation setting — host (worktree-confined, soft) or container — provided that
- *  agent is baked into the image (Codex is container-only). */
-function AgentPicker({
+ *  agent is baked into the image (Codex is container-only). Also reused by the
+ *  read-only Plan composer (which needs a repo-aware CLI agent). */
+export function AgentPicker({
   value,
   onChange,
 }: {

@@ -13,6 +13,8 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BranchDiffView } from "@/features/compare/BranchDiffView";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
+import { PlanView } from "@/features/plan/PlanView";
+import { usePlanStore } from "@/features/plan/store";
 import { CreateLocalPrDialog } from "@/features/pulls/CreateLocalPrDialog";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { SessionActivation } from "./SessionActivation";
@@ -32,10 +34,14 @@ type Segment = "conversation" | "changes";
 export function SessionView({ repoPath }: { repoPath: string }) {
   const sessions = useSessionsStore((s) => s.sessions);
   const activeId = useSessionsStore((s) => s.activeId);
+  // The read-only plan canvas takes over the surface when open (mutually
+  // exclusive with a selected session — selecting one closes the plan).
+  const planActive = usePlanStore((s) => s.active && s.repoPath === repoPath);
   // activeId is global; only adopt it when the session belongs to this repo.
   const active =
     sessions.find((s) => s.id === activeId && s.repoPath === repoPath) ?? null;
 
+  if (planActive) return <PlanView repoPath={repoPath} />;
   if (!active) return <SessionActivation repoPath={repoPath} />;
   return <SessionCanvas key={active.id} session={active} repoPath={repoPath} />;
 }

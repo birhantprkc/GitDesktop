@@ -55,6 +55,12 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   **Agent Skills** (project *and* global, including the shared `.agents/skills`) —
   plus `@file` mentions, a model/reasoning-effort picker, and terminal-style
   prompt history.
+- **Plan before you build** — a read-only **Plan** mode drafts an agent-ready
+  issue from a task (or an existing issue): a repo-aware agent explores your code
+  and writes the problem, approach, affected files, acceptance criteria, and verify
+  plan, with cited paths validated against your tree so hallucinations are flagged.
+  Review it, then file it as a local or GitHub issue — ready to hand to an agent.
+  Nothing is changed; it never writes.
 - **AI where it helps** — commit messages, branch names, PR and issue
   titles/descriptions, repository descriptions and topics, and a streaming code
   review or security audit. Bring your own provider: cloud APIs, local **Ollama**,

@@ -64,6 +64,7 @@ import {
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
+import { PlanIssueButton } from "../plan/PlanIssueButton";
 import { IssueSubIssues } from "./IssueRelations";
 import {
   DeleteIssueDialog,
@@ -269,6 +270,11 @@ export function RemoteIssueView({
             </span>
           </h2>
           <span className="flex-1" />
+          <PlanIssueButton
+            repoPath={repoPath}
+            title={issue.title}
+            body={issue.body}
+          />
           {isOpen && (
             <Button
               variant="outline"

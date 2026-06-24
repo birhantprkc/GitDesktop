@@ -13,6 +13,7 @@ import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { usePlanStore } from "@/features/plan/store";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { cn } from "@/lib/utils";
@@ -40,7 +41,14 @@ function sessionHaystack(s: AgentSession): string {
 export function SessionList({ repoPath }: { repoPath: string }) {
   const allSessions = useSessionsStore((s) => s.sessions);
   const activeId = useSessionsStore((s) => s.activeId);
-  const setActive = useSessionsStore((s) => s.setActive);
+  const setActiveSession = useSessionsStore((s) => s.setActive);
+  const planClose = usePlanStore((s) => s.close);
+  // Selecting a session (or "New") leaves the plan canvas if it's open — the two
+  // share the agent surface and are mutually exclusive.
+  const setActive = (id: string | null) => {
+    planClose();
+    setActiveSession(id);
+  };
 
   const [tab, setTab] = useState<SessionTab>("active");
   const [query, setQuery] = useState("");
@@ -67,7 +75,9 @@ export function SessionList({ repoPath }: { repoPath: string }) {
   }, [repoSessions, tab, query]);
 
   const newSession = () => setActive(null);
+  const planOpen = usePlanStore((s) => s.open);
   useHotkeyAction("agent-new-session", newSession);
+  useHotkeyAction("agent-plan", () => planOpen(repoPath));
   useHotkeyAction("agent-toggle-list-tab", () =>
     setTab((t) => (t === "active" ? "kept" : "active")),
   );

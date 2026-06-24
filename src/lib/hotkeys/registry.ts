@@ -413,6 +413,12 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "agent-plan",
+    label: "Plan a task (read-only)",
+    category: "Agent",
+    defaultBinding: null,
+  },
+  {
     id: "agent-keep-session",
     label: "Keep agent session",
     category: "Agent",
