@@ -38,6 +38,7 @@ import {
   GENERATION_PROVIDER_IDS,
   isCliProvider,
   MODEL_SUGGESTIONS,
+  OPENAI_COMPATIBLE_PRESETS,
   PROVIDER_LABELS,
   PROVIDERS_REQUIRING_KEY,
 } from "@/lib/ai/providers";
@@ -247,6 +248,83 @@ function CliReviewConfig({
   );
 }
 
+const PRESET_ITEMS: Record<string, string> = {
+  ...Object.fromEntries(OPENAI_COMPATIBLE_PRESETS.map((p) => [p.id, p.label])),
+  custom: "Custom…",
+};
+
+/**
+ * Base-URL + preset picker for the `openai-compatible` provider. Choosing a preset
+ * fills the base URL (and a default model); the URL stays editable for any other
+ * OpenAI-compatible endpoint. The host must be in the app's network allowlist.
+ */
+function OpenAiCompatibleConfig({
+  value,
+  onChange,
+}: {
+  value: AiSettings;
+  onChange: (next: AiSettings) => void;
+}) {
+  const base = value.openaiCompatibleBaseUrl.replace(/\/$/, "");
+  const current = OPENAI_COMPATIBLE_PRESETS.find((p) => p.baseUrl === base);
+  const presetId = current?.id ?? "custom";
+
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <div className="space-y-2">
+        <Label htmlFor="oai-compat-preset">Service</Label>
+        <Select
+          items={PRESET_ITEMS}
+          value={presetId}
+          onValueChange={(id) => {
+            const p = OPENAI_COMPATIBLE_PRESETS.find((x) => x.id === id);
+            if (p) {
+              onChange({
+                ...value,
+                openaiCompatibleBaseUrl: p.baseUrl,
+                model: p.models[0] ?? value.model,
+              });
+            }
+          }}
+        >
+          <SelectTrigger id="oai-compat-preset" className="w-full">
+            <SelectValue placeholder="Custom" />
+          </SelectTrigger>
+          <SelectContent>
+            {OPENAI_COMPATIBLE_PRESETS.map((p) => (
+              <SelectItem key={p.id} value={p.id}>
+                {p.label}
+              </SelectItem>
+            ))}
+            <SelectItem value="custom">Custom…</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="oai-compat-url">Base URL</Label>
+        <Input
+          id="oai-compat-url"
+          autoComplete="off"
+          placeholder="https://…/v1"
+          value={value.openaiCompatibleBaseUrl}
+          onChange={(e) =>
+            onChange({ ...value, openaiCompatibleBaseUrl: e.target.value })
+          }
+        />
+      </div>
+
+      <p className="col-span-2 text-xs text-muted-foreground">
+        Any OpenAI-compatible{" "}
+        <code className="font-mono">/chat/completions</code> endpoint.{" "}
+        {current?.keysUrl
+          ? `Get an API key at ${current.keysUrl}.`
+          : "A host outside the built-in presets must be added to the app's network allowlist."}
+      </p>
+    </div>
+  );
+}
+
 export const AiProviderSection = withForm({
   ...settingsFormOpts,
   render: function AiProviderSectionRender({ form }) {
@@ -361,6 +439,10 @@ export const AiProviderSection = withForm({
               Only localhost is allowed by the app's network policy.
             </p>
           </div>
+        )}
+
+        {provider === "openai-compatible" && (
+          <OpenAiCompatibleConfig value={ai} onChange={setAi} />
         )}
 
         {needsKey && (

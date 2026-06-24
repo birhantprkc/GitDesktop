@@ -9,6 +9,7 @@ import type { AiProviderId, AiSettings } from "./types";
 export const PROVIDER_LABELS: Record<AiProviderId, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
+  "openai-compatible": "OpenAI-compatible",
   openrouter: "OpenRouter",
   ollama: "Ollama (local)",
   "ollama-cloud": "Ollama Cloud",
@@ -22,9 +23,72 @@ export const PROVIDER_LABELS: Record<AiProviderId, string> = {
  *  server). Native API at `/api`, OpenAI-compatible model list at `/v1/models`. */
 export const OLLAMA_CLOUD_HOST = "https://ollama.com";
 
+/** Presets for the `openai-compatible` provider — each is an OpenAI-compatible
+ *  `/chat/completions` endpoint. The Vercel AI Gateway is an aggregator (one host,
+ *  many models). Each `baseUrl`'s host MUST be in the network allowlist
+ *  (`src-tauri/capabilities/default.json`); a base URL outside these presets needs
+ *  its host added there too, else requests are silently blocked. */
+export interface OpenAiCompatiblePreset {
+  id: string;
+  label: string;
+  baseUrl: string;
+  /** Fallback model ids when the live `/models` list is unavailable. */
+  models: string[];
+  /** Where to get an API key, shown as a Settings hint. */
+  keysUrl?: string;
+}
+
+export const OPENAI_COMPATIBLE_PRESETS: OpenAiCompatiblePreset[] = [
+  {
+    id: "vercel-gateway",
+    label: "Vercel AI Gateway",
+    baseUrl: "https://ai-gateway.vercel.sh/v1",
+    models: [
+      "anthropic/claude-sonnet-4.5",
+      "openai/gpt-5",
+      "google/gemini-2.5-pro",
+      "deepseek/deepseek-v3.1",
+    ],
+    keysUrl: "https://vercel.com/dashboard/ai-gateway",
+  },
+  {
+    id: "gemini",
+    label: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    models: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+    keysUrl: "https://aistudio.google.com/apikey",
+  },
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    baseUrl: "https://api.deepseek.com",
+    models: ["deepseek-chat", "deepseek-reasoner"],
+    keysUrl: "https://platform.deepseek.com/api_keys",
+  },
+  {
+    id: "mistral",
+    label: "Mistral",
+    baseUrl: "https://api.mistral.ai/v1",
+    models: [
+      "mistral-large-latest",
+      "mistral-small-latest",
+      "codestral-latest",
+    ],
+    keysUrl: "https://console.mistral.ai/api-keys",
+  },
+  {
+    id: "zai",
+    label: "Z.ai (GLM)",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    models: ["glm-4.6", "glm-4.5-air"],
+    keysUrl: "https://z.ai/manage-apikey/apikey-list",
+  },
+];
+
 export const PROVIDERS_REQUIRING_KEY: AiProviderId[] = [
   "anthropic",
   "openai",
+  "openai-compatible",
   "openrouter",
   "ollama-cloud",
 ];
@@ -58,6 +122,8 @@ export const GENERATION_PROVIDER_IDS = ALL_PROVIDER_IDS.filter(
 export const MODEL_SUGGESTIONS: Record<AiProviderId, string[]> = {
   anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"],
   openai: ["gpt-4.1-mini", "gpt-4.1", "o4-mini"],
+  // Generic fallback only; the picked preset's own models drive the live list.
+  "openai-compatible": OPENAI_COMPATIBLE_PRESETS[0].models,
   openrouter: [
     "anthropic/claude-haiku-4.5",
     "openai/gpt-4.1-mini",
@@ -108,6 +174,15 @@ export function createModel(
       return createAnthropic({ apiKey: apiKey ?? "", fetch })(settings.model);
     case "openai":
       return createOpenAI({ apiKey: apiKey ?? "", fetch })(settings.model);
+    case "openai-compatible":
+      // Any OpenAI-compatible endpoint (custom base URL). `.chat()` forces the
+      // `/chat/completions` API — third-party endpoints don't implement OpenAI's
+      // Responses API that the default `openai(model)` would target.
+      return createOpenAI({
+        baseURL: settings.openaiCompatibleBaseUrl.replace(/\/$/, ""),
+        apiKey: apiKey ?? "",
+        fetch,
+      }).chat(settings.model);
     case "openrouter":
       return createOpenRouter({ apiKey: apiKey ?? "", fetch })(settings.model);
     case "ollama":

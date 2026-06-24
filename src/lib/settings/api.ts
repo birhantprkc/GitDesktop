@@ -155,11 +155,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
     provider: "anthropic",
     model: "claude-haiku-4-5",
     ollamaBaseUrl: "http://localhost:11434",
+    openaiCompatibleBaseUrl: "https://ai-gateway.vercel.sh/v1",
   },
   reviewAi: {
     provider: "anthropic",
     model: "claude-sonnet-4-6",
     ollamaBaseUrl: "http://localhost:11434",
+    openaiCompatibleBaseUrl: "https://ai-gateway.vercel.sh/v1",
   },
   hideAi: false,
   notifications: {

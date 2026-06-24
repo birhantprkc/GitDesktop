@@ -1,6 +1,7 @@
 export type AiProviderId =
   | "anthropic"
   | "openai"
+  | "openai-compatible"
   | "openrouter"
   | "ollama"
   | "ollama-cloud"
@@ -13,6 +14,10 @@ export interface AiSettings {
   provider: AiProviderId;
   model: string;
   ollamaBaseUrl: string;
+  /** Base URL for the `openai-compatible` provider (any OpenAI-compatible
+   *  `/chat/completions` endpoint — set via a preset or typed). The host must be
+   *  in the app's network allowlist (`capabilities/default.json`). */
+  openaiCompatibleBaseUrl: string;
   /** Explicit path to the agent CLI binary (CLI providers only); empty/omitted
    *  means auto-detect on PATH and the known install locations. */
   cliPath?: string;

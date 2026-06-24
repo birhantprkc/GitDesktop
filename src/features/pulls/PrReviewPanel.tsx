@@ -157,7 +157,12 @@ export function PrReviewPanel({
     staleTime: 60_000,
   });
   const available = useAvailableModels(
-    reviewAi ?? { provider, model: "", ollamaBaseUrl: "" },
+    reviewAi ?? {
+      provider,
+      model: "",
+      ollamaBaseUrl: "",
+      openaiCompatibleBaseUrl: "",
+    },
     Boolean(keyPreview.data),
   );
   const models = available.data?.models ?? [];

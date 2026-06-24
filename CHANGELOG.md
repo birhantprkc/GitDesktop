@@ -12,6 +12,13 @@ commit list.
 
 ### Added
 
+- **Bring any OpenAI-compatible provider.** A new "OpenAI-compatible" provider lets
+  you point GitDesktop at any OpenAI-compatible `/chat/completions` endpoint with your
+  own API key. One-click presets cover the **Vercel AI Gateway** (one key, many
+  models), **Google Gemini**, **DeepSeek**, **Mistral**, and **Z.ai** — or type any
+  base URL. Live model lists and "Test connection" work just like the built-in
+  providers. (A custom host outside the presets must be added to the app's network
+  allowlist.)
 - **Slash commands _and skills_ in the agent composer.** Type `/` to pick a reusable
   prompt or a skill. The menu pulls together built-in starters (`/review`, `/test`,
   `/fix`, `/explain`, `/refactor`, plus `/clear`); custom commands you define under

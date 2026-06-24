@@ -1,8 +1,25 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { getSecret } from "@/lib/git/api";
-import { MODEL_SUGGESTIONS, OLLAMA_CLOUD_HOST } from "./providers";
+import {
+  MODEL_SUGGESTIONS,
+  OLLAMA_CLOUD_HOST,
+  OPENAI_COMPATIBLE_PRESETS,
+} from "./providers";
 import type { AiSettings } from "./types";
+
+/** Static fallback model list when the live catalog is unavailable. For the
+ *  openai-compatible provider it's the matching preset's own models (not the
+ *  generic default), so e.g. picking DeepSeek without a key still suggests
+ *  DeepSeek models. */
+function fallbackModels(settings: AiSettings): string[] {
+  if (settings.provider === "openai-compatible") {
+    const base = settings.openaiCompatibleBaseUrl.replace(/\/$/, "");
+    const preset = OPENAI_COMPATIBLE_PRESETS.find((p) => p.baseUrl === base);
+    if (preset) return preset.models;
+  }
+  return MODEL_SUGGESTIONS[settings.provider];
+}
 
 export interface AvailableModels {
   models: string[];
@@ -47,6 +64,16 @@ async function fetchProviderModels(settings: AiSettings): Promise<string[]> {
       );
       return (json.data as { id: string }[]).map((m) => m.id);
     }
+    case "openai-compatible": {
+      const key = await getSecret("openai-compatible");
+      const base = settings.openaiCompatibleBaseUrl.replace(/\/$/, "");
+      if (!key || !base) return [];
+      // OpenAI-compatible catalog endpoint on the configured base URL.
+      const json = await fetchJson(`${base}/models`, {
+        Authorization: `Bearer ${key}`,
+      });
+      return (json.data as { id: string }[]).map((m) => m.id).sort();
+    }
     case "openrouter": {
       // public endpoint, no key required
       const json = await fetchJson("https://openrouter.ai/api/v1/models");
@@ -88,6 +115,7 @@ export function useAvailableModels(settings: AiSettings, keySaved: boolean) {
       settings.provider,
       keySaved,
       settings.ollamaBaseUrl,
+      settings.openaiCompatibleBaseUrl,
     ] as const,
     queryFn: async (): Promise<AvailableModels> => {
       try {
@@ -98,7 +126,7 @@ export function useAvailableModels(settings: AiSettings, keySaved: boolean) {
       } catch {
         // fall through to suggestions
       }
-      return { models: MODEL_SUGGESTIONS[settings.provider], live: false };
+      return { models: fallbackModels(settings), live: false };
     },
     staleTime: 5 * 60 * 1000,
   });
