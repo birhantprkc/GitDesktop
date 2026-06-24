@@ -106,6 +106,7 @@ pub fn run() {
             agent_sandbox::agent_container_detect,
             agent_sandbox::agent_container_prepare,
             agent_sandbox::agent_sandbox_cleanup,
+            agent_sandbox::agent_open_container_shell,
             git::ops::git_checkout_commit,
             git::ops::git_revert,
             git::ops::git_cherry_pick,

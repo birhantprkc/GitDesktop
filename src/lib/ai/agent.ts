@@ -46,6 +46,9 @@ export interface AgentReviewArgs {
   /** Explicit binary path, or null to auto-detect. */
   binPath: string | null;
   model: string;
+  /** Reasoning/effort level ("" = provider default; else low/medium/high/xhigh).
+   *  Mapped per-CLI in Rust (Codex/Copilot/opencode flags, Claude thinking keyword). */
+  effort: string;
   systemPrompt: string;
   /** The diff-bearing prompt, fed to the CLI on stdin. */
   userPrompt: string;
@@ -68,6 +71,7 @@ export async function runAgentReview(args: AgentReviewArgs): Promise<void> {
     kind: args.kind,
     binPath: args.binPath,
     model: args.model,
+    effort: args.effort,
     systemPrompt: args.systemPrompt,
     userPrompt: args.userPrompt,
     repoPath: args.repoPath,
@@ -93,13 +97,17 @@ export interface AgentSessionArgs {
   systemPrompt: string;
   /** The task/message for this turn, fed to the CLI on stdin. */
   userPrompt: string;
-  /** The throwaway worktree the agent runs (and writes) inside. */
+  /** The directory the agent runs in — a throwaway worktree for a write session,
+   *  or the live repo for a read-only Plan conversation. */
   worktreePath: string;
   /** The session's stable uuid (sets `--session-id` on turn 1, `--resume` after);
    *  also the cancel key for `cancelAgentSession`. */
   sessionId: string;
   /** false = first turn (start the session), true = a follow-up turn (resume it). */
   resume: boolean;
+  /** Read-only mode (a Plan conversation): swaps each CLI's write toolset for its
+   *  read-only one, so the resumable turn can explore but never write. */
+  readOnly: boolean;
   /** Isolation mode, fixed at session creation. "container" runs the turn inside
    *  a Docker/Podman container; anything else runs on the host (worktree-confined
    *  by each CLI's own OS sandbox). */
@@ -133,6 +141,7 @@ export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
     worktreePath: args.worktreePath,
     sessionId: args.sessionId,
     resume: args.resume,
+    readOnly: args.readOnly,
     isolation: args.isolation,
     nativeSessionId: args.nativeSessionId,
     onEvent: channel,

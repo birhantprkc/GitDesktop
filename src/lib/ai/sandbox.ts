@@ -32,3 +32,11 @@ export const prepareContainerSandbox = (
 /** Removes a session's container claude-home + any lingering container. */
 export const cleanupContainerSandbox = (sessionId: string) =>
   invoke<void>("agent_sandbox_cleanup", { sessionId });
+
+/** Opens an interactive shell in a throwaway container with the session's worktree
+ *  mounted, so a container session can be tested in its matching Linux env.
+ *  `ports` are the dev-server ports to publish to the host loopback — each a bare
+ *  `"5173"` or a `"host:container"` remap (e.g. `"5174:5173"`) when a host port is
+ *  busy. Empty = publish nothing. */
+export const openContainerShell = (worktreePath: string, ports: string[]) =>
+  invoke<void>("agent_open_container_shell", { worktreePath, ports });

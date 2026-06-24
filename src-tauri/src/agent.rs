@@ -397,7 +397,11 @@ fn claude_session_args(
     system_prompt: &str,
     session_id: &str,
     resume: bool,
+    read_only: bool,
 ) -> Vec<String> {
+    // Read-only (a Plan conversation): only read tools and no bypass — there's
+    // nothing to permit, and writes are impossible by construction (the hard
+    // guarantee, same as a review). Write sessions get the full toolset + bypass.
     let mut args = vec![
         "-p".into(),
         "--output-format".into(),
@@ -405,11 +409,17 @@ fn claude_session_args(
         "--include-partial-messages".into(),
         "--verbose".into(),
         "--tools".into(),
-        "Read,Grep,Glob,Edit,Write,Bash".into(),
-        "--permission-mode".into(),
-        "bypassPermissions".into(),
+        if read_only {
+            "Read,Grep,Glob".into()
+        } else {
+            "Read,Grep,Glob,Edit,Write,Bash".into()
+        },
         "--strict-mcp-config".into(),
     ];
+    if !read_only {
+        args.push("--permission-mode".into());
+        args.push("bypassPermissions".into());
+    }
     if resume {
         args.push("--resume".into());
         args.push(session_id.into());
@@ -448,6 +458,7 @@ fn codex_session_args(
     container: bool,
     thread_id: Option<&str>,
     effort: &str,
+    read_only: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec!["exec".into()];
     if resume {
@@ -460,7 +471,12 @@ fn codex_session_args(
             _ => args.push("--last".into()),
         }
     }
-    if container {
+    if read_only {
+        // A Plan conversation: the read-only sandbox denies every write (the hard
+        // guarantee). Never the container full-bypass, which would allow writes.
+        args.push("-s".into());
+        args.push("read-only".into());
+    } else if container {
         args.push("--dangerously-bypass-approvals-and-sandbox".into());
     } else {
         // Host: confine writes to the worktree via Codex's own OS sandbox. `exec`
@@ -512,6 +528,7 @@ fn copilot_session_args(
     worktree: &str,
     prompt: &str,
     effort: &str,
+    read_only: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-p".into(),
@@ -520,9 +537,18 @@ fn copilot_session_args(
         "json".into(),
         "--no-color".into(),
         "--allow-all-tools".into(),
-        "--add-dir".into(),
-        worktree.into(),
     ];
+    if read_only {
+        // Read-only Plan conversation: deny every write path (denial takes
+        // precedence over allow-all), so reads/search auto-approve but writes are
+        // impossible — no worktree write-dir needed.
+        args.push("--deny-tool=write".into());
+        args.push("--deny-tool=shell".into());
+        args.push("--disable-builtin-mcps".into());
+    } else {
+        args.push("--add-dir".into());
+        args.push(worktree.into());
+    }
     if resume {
         args.push("--resume".into());
         args.push(session_id.into());
@@ -592,7 +618,7 @@ fn claude_thinking_keyword(level: &str) -> Option<&'static str> {
 /// live repo — the same shape as opencode's `plan` agent. `--disable-builtin-mcps` drops
 /// the GitHub MCP server too, keeping it to local repo reads (no remote GitHub calls).
 /// Reads are path-allowed because the review runs with the repo as cwd.
-fn copilot_review_args(model: &str, prompt: &str, repo_aware: bool) -> Vec<String> {
+fn copilot_review_args(model: &str, prompt: &str, repo_aware: bool, effort: &str) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-p".into(),
         prompt.into(),
@@ -609,6 +635,10 @@ fn copilot_review_args(model: &str, prompt: &str, repo_aware: bool) -> Vec<Strin
     if !model.trim().is_empty() {
         args.push("--model".into());
         args.push(model.into());
+    }
+    if let Some(e) = copilot_effort(effort) {
+        args.push("--effort".into());
+        args.push(e.into());
     }
     args
 }
@@ -631,6 +661,7 @@ fn opencode_session_args(
     session_id: &str,
     resume: bool,
     effort: &str,
+    read_only: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "run".into(),
@@ -638,6 +669,12 @@ fn opencode_session_args(
         "json".into(),
         "--dangerously-skip-permissions".into(),
     ];
+    if read_only {
+        // A Plan conversation: opencode's built-in `plan` agent can glob/read but
+        // has no write/edit/bash tools — a hard read-only guarantee.
+        args.push("--agent".into());
+        args.push("plan".into());
+    }
     if resume && !session_id.trim().is_empty() {
         // opencode generated the id on turn 1; we captured it from the stream.
         // (If capture somehow failed, fall through to "continue last" rather than
@@ -669,7 +706,7 @@ fn opencode_session_args(
 /// repo. `--dangerously-skip-permissions` only auto-approves the *reads* (writes stay
 /// impossible in plan mode), so an in-project read doesn't hang or auto-reject.
 /// Verified live 2026-06-23. The plain (diff-only) mode invokes no tools at all.
-fn opencode_review_args(model: &str, repo_aware: bool) -> Vec<String> {
+fn opencode_review_args(model: &str, repo_aware: bool, effort: &str) -> Vec<String> {
     let mut args: Vec<String> = vec!["run".into(), "--format".into(), "json".into()];
     if repo_aware {
         args.push("--agent".into());
@@ -679,6 +716,10 @@ fn opencode_review_args(model: &str, repo_aware: bool) -> Vec<String> {
     if !model.trim().is_empty() {
         args.push("-m".into());
         args.push(model.into());
+    }
+    if let Some(v) = opencode_variant(effort) {
+        args.push("--variant".into());
+        args.push(v.into());
     }
     args
 }
@@ -722,7 +763,7 @@ fn tool_status(name: &str) -> String {
 /// Codex `exec` runs as a read-only agent — there is no diff-only mode, it
 /// always explores via shell read commands. Globals (`--cd`/`-a`/`-s`/`-m`)
 /// must precede `exec`; the prompt is read from stdin via the `-` sentinel.
-fn codex_review_args(model: &str, repo_path: &str) -> Vec<String> {
+fn codex_review_args(model: &str, repo_path: &str, effort: &str) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "--cd".into(),
         repo_path.into(),
@@ -737,6 +778,10 @@ fn codex_review_args(model: &str, repo_path: &str) -> Vec<String> {
     }
     args.push("exec".into());
     args.push("--json".into());
+    if let Some(e) = codex_effort(effort) {
+        args.push("-c".into());
+        args.push(format!("model_reasoning_effort=\"{e}\""));
+    }
     args.push("-".into());
     args
 }
@@ -1180,6 +1225,10 @@ pub async fn agent_review(
     kind: AgentKind,
     bin_path: Option<String>,
     model: String,
+    // Reasoning/effort level ("" = provider default; else low/medium/high/xhigh).
+    // Mapped per-CLI: Codex `-c model_reasoning_effort`, Copilot `--effort`,
+    // opencode `--variant`, Claude a "thinking" keyword appended to the prompt.
+    effort: String,
     system_prompt: String,
     user_prompt: String,
     repo_path: String,
@@ -1197,12 +1246,17 @@ pub async fn agent_review(
     // Per-kind invocation: Claude carries the system prompt as a flag and the
     // diff on stdin; Codex has no system-prompt flag, so both go on stdin.
     let (args, stdin_text) = match kind {
-        AgentKind::Claude => (
-            claude_review_args(&model, &system_prompt, repo_aware),
-            user_prompt,
-        ),
+        AgentKind::Claude => {
+            // Claude has no effort flag — raise the thinking budget by appending a
+            // keyword to the user turn (same as a session).
+            let prompt = match claude_thinking_keyword(&effort) {
+                Some(kw) => format!("{user_prompt}\n\n{kw}"),
+                None => user_prompt,
+            };
+            (claude_review_args(&model, &system_prompt, repo_aware), prompt)
+        }
         AgentKind::Codex => (
-            codex_review_args(&model, &repo_path),
+            codex_review_args(&model, &repo_path, &effort),
             format!("{system_prompt}\n\n{user_prompt}"),
         ),
         // Copilot: read-only review. The prompt (system + diff) is an argument, not
@@ -1213,13 +1267,14 @@ pub async fn agent_review(
                 &model,
                 &format!("{system_prompt}\n\n{user_prompt}"),
                 repo_aware,
+                &effort,
             ),
             String::new(),
         ),
         // opencode review: prompt on stdin (no positional message), so a large or
         // newline-bearing diff prompt doesn't hit the argv / batch-file-arg limits.
         AgentKind::Opencode => (
-            opencode_review_args(&model, repo_aware),
+            opencode_review_args(&model, repo_aware, &effort),
             format!("{system_prompt}\n\n{user_prompt}"),
         ),
     };
@@ -1275,6 +1330,11 @@ pub async fn agent_session(
     worktree_path: String,
     session_id: String,
     resume: bool,
+    // Read-only mode: a Plan conversation. Swaps every CLI's write toolset/sandbox
+    // for its read-only one (Claude read tools + no bypass, Codex `-s read-only`,
+    // Copilot deny-write/shell, opencode `--agent plan`), so the turn can explore
+    // but can NEVER write — even though it runs in the live repo, not a worktree.
+    read_only: bool,
     // "container" runs the turn inside a Docker/Podman container (worktree-
     // confined); anything else (incl. None) runs it on the host (worktree-only).
     isolation: Option<String>,
@@ -1316,12 +1376,25 @@ pub async fn agent_session(
                 None => user_prompt,
             };
             (
-                claude_session_args(&model, &system_prompt, &session_id, resume),
+                claude_session_args(
+                    &model,
+                    &system_prompt,
+                    &session_id,
+                    resume,
+                    read_only,
+                ),
                 prompt,
             )
         }
         AgentKind::Codex => (
-            codex_session_args(&model, resume, container, native_session_id.as_deref(), &effort),
+            codex_session_args(
+                &model,
+                resume,
+                container,
+                native_session_id.as_deref(),
+                &effort,
+                read_only,
+            ),
             if resume {
                 user_prompt
             } else {
@@ -1345,7 +1418,15 @@ pub async fn agent_session(
                 worktree_path.as_str()
             };
             (
-                copilot_session_args(&model, &session_id, resume, add_dir, &prompt, &effort),
+                copilot_session_args(
+                    &model,
+                    &session_id,
+                    resume,
+                    add_dir,
+                    &prompt,
+                    &effort,
+                    read_only,
+                ),
                 String::new(),
             )
         }
@@ -1364,6 +1445,7 @@ pub async fn agent_session(
                     native_session_id.as_deref().unwrap_or(""),
                     resume,
                     &effort,
+                    read_only,
                 ),
                 prompt,
             )

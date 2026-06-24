@@ -23,6 +23,12 @@ export interface CliStreamOpts {
   setText: (text: string) => void;
   setStatus: (status: string) => void;
   registerId: (id: string) => void;
+  /** The run's reported cost (USD), delivered with the terminal `done` event.
+   *  Null when the CLI doesn't report one. Optional — most callers ignore it. */
+  onCost?: (costUsd: number | null) => void;
+  /** Reasoning/effort level for the run ("" = provider default). Optional — only
+   *  the repo-aware flows that expose a picker (e.g. Plan) set it. */
+  effort?: string;
 }
 
 /**
@@ -38,6 +44,8 @@ export async function runCliStream({
   setText,
   setStatus,
   registerId,
+  onCost,
+  effort,
 }: CliStreamOpts): Promise<void> {
   const kind = providerKind(ai.provider);
   if (!kind) throw new Error(`Unsupported CLI provider: ${ai.provider}`);
@@ -68,6 +76,7 @@ export async function runCliStream({
         kind,
         binPath: ai.cliPath?.trim() || null,
         model: ai.model,
+        effort: effort ?? "",
         systemPrompt: system,
         userPrompt: prompt,
         repoPath: cwd,
@@ -81,6 +90,7 @@ export async function runCliStream({
             setStatus(event.text);
           } else if (event.kind === "done") {
             settled = true;
+            onCost?.(event.costUsd);
             // The terminal event carries the authoritative full text; prefer it
             // if the partial stream fell short (e.g. deltas were coalesced).
             if (event.text.length > buffer.length) setText(event.text);

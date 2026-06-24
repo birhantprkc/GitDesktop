@@ -2,19 +2,34 @@ import {
   ArrowLeftIcon,
   SparkleIcon,
   StopIcon,
+  TrashIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AgentNarration } from "@/features/sessions/AgentNarration";
-import { AgentPicker, ModelPicker } from "@/features/sessions/SessionComposer";
+import { selectSession } from "@/features/sessions/agentSelect";
+import {
+  AgentPicker,
+  EffortPicker,
+  ModelPicker,
+} from "@/features/sessions/SessionComposer";
+import { useSessionsStore } from "@/features/sessions/store";
 import type { AgentKind } from "@/lib/ai/agent";
+import { extractPlanQuestions } from "@/lib/ai/prompt";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
 import { useGhStatus } from "@/lib/git/queries";
 import { isMac } from "@/lib/hotkeys/binding";
 import { useUiStore } from "@/lib/stores/ui";
 import { CreateLocalIssueDialog } from "../issues/CreateLocalIssueDialog";
-import { type PlanSeed, usePlanStore } from "./store";
+import { ImplementPlanButton } from "./ImplementPlanButton";
+import { PlanQuestions } from "./PlanQuestions";
+import {
+  type PlanRun,
+  type PlanSeed,
+  useActivePlanRun,
+  usePlanStore,
+} from "./store";
 
 const MODELS: Record<AgentKind, string[]> = {
   claude: MODEL_SUGGESTIONS["claude-cli"],
@@ -25,46 +40,68 @@ const MODELS: Record<AgentKind, string[]> = {
 
 /**
  * The read-only planning canvas — peer of the session canvas in the agent
- * surface. Empty/seeded: a composer that runs a Tier-2 repo-aware agent to draft
- * an agent-ready issue. Running/done: the streamed plan + a human gate to file
- * it as a local or GitHub issue (with a warning for any cited path that doesn't
- * resolve to a real file).
+ * surface. Shows the *selected* plan run's streamed result + a human gate to
+ * file it as a local or GitHub issue, refine it, or implement it. Several plan
+ * runs can be open at once (the composer that starts them lives in the activation
+ * surface); this renders whichever is selected.
  */
 export function PlanView({ repoPath }: { repoPath: string }) {
-  const generating = usePlanStore((s) => s.generating);
-  const text = usePlanStore((s) => s.text);
-  const draft = usePlanStore((s) => s.draft);
-  const error = usePlanStore((s) => s.error);
-  const seed = usePlanStore((s) => s.seed);
-  const close = usePlanStore((s) => s.close);
-
-  const started =
-    generating || text.length > 0 || draft !== null || error !== null;
-
+  const run = useActivePlanRun();
+  // SessionView only routes here when a plan for this repo is selected.
+  if (!run) return null;
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-1.5 border-b p-3 text-sm font-medium">
-        <SparkleIcon className="size-4 text-primary" />
-        Plan a task
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ml-auto gap-1.5 text-muted-foreground"
-          onClick={close}
-        >
-          <ArrowLeftIcon className="size-3.5" />
-          Back to sessions
-        </Button>
-      </div>
-      {started ? (
-        <PlanResult repoPath={repoPath} />
-      ) : (
-        <PlanComposer repoPath={repoPath} seed={seed} />
-      )}
+      <PlanHeader run={run} />
+      <PlanResult run={run} repoPath={repoPath} />
     </div>
   );
 }
 
+/** The plan canvas header: what's being planned, plus Back (deselect, keep the
+ *  run) and Dismiss (drop it). */
+function PlanHeader({ run }: { run: PlanRun }) {
+  const setActivePlan = usePlanStore((s) => s.setActivePlan);
+  const remove = usePlanStore((s) => s.remove);
+  const label =
+    run.origin?.issueTitle?.trim() || run.origin?.goal?.trim() || "Plan";
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2.5">
+      <SparkleIcon className="size-4 shrink-0 text-primary" />
+      <span
+        className="min-w-0 flex-1 truncate text-sm font-medium"
+        title={label}
+      >
+        {label}
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="shrink-0 gap-1.5 text-muted-foreground"
+        onClick={() => setActivePlan(null)}
+        title="Back to the agent surface (keeps this plan)"
+      >
+        <ArrowLeftIcon className="size-3.5" />
+        Back
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        className="shrink-0 text-muted-foreground"
+        aria-label="Dismiss this plan"
+        title="Dismiss this plan"
+        onClick={() => remove(run.id)}
+      >
+        <TrashIcon className="size-4" />
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * The new-plan composer (lives in the activation surface, beside "Delegate a
+ * task"). Submitting starts a keyed plan run and selects it. `seed` prefills it
+ * from an issue's Plan button or a "Re-plan".
+ */
 export function PlanComposer({
   repoPath,
   seed,
@@ -72,23 +109,25 @@ export function PlanComposer({
   repoPath: string;
   seed: PlanSeed | null;
 }) {
-  const generate = usePlanStore((s) => s.generate);
+  const start = usePlanStore((s) => s.start);
   const [goal, setGoal] = useState(seed?.goal ?? "");
   const [agent, setAgent] = useState<AgentKind>("claude");
   const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("");
 
   const planningIssue = Boolean(seed?.issueTitle || seed?.issueBody);
   const canPlan = goal.trim().length > 0 || planningIssue;
 
   const submit = () => {
     if (!canPlan) return;
-    generate({
+    start({
       repoPath,
       goal,
       issueTitle: seed?.issueTitle,
       issueBody: seed?.issueBody,
       agent,
       model,
+      effort,
     });
   };
 
@@ -103,7 +142,7 @@ export function PlanComposer({
             A read-only agent explores the repo and drafts an agent-ready issue
             — problem, approach, affected files, acceptance criteria, and a
             verify plan. Nothing is changed; review it, then file it as an
-            issue.
+            issue. Start several — they run side by side.
           </p>
         </div>
 
@@ -114,7 +153,7 @@ export function PlanComposer({
           </div>
         )}
 
-        <div className="flex flex-col gap-2 border p-3">
+        <div className="flex flex-col gap-2 border border-input bg-transparent p-3 transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50 dark:bg-input/30">
           <textarea
             value={goal}
             onChange={(e) => setGoal(e.target.value)}
@@ -147,6 +186,7 @@ export function PlanComposer({
               onChange={setModel}
               models={MODELS[agent]}
             />
+            <EffortPicker value={effort} onChange={setEffort} />
             <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
               {isMac ? "⌘↵" : "Ctrl+↵"} to plan
             </span>
@@ -165,15 +205,11 @@ export function PlanComposer({
   );
 }
 
-function PlanResult({ repoPath }: { repoPath: string }) {
-  const generating = usePlanStore((s) => s.generating);
-  const text = usePlanStore((s) => s.text);
-  const status = usePlanStore((s) => s.status);
-  const draft = usePlanStore((s) => s.draft);
-  const error = usePlanStore((s) => s.error);
+function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
+  const refine = usePlanStore((s) => s.refine);
+  const remove = usePlanStore((s) => s.remove);
   const cancel = usePlanStore((s) => s.cancel);
-  const back = usePlanStore((s) => s.back);
-  const close = usePlanStore((s) => s.close);
+  const setPendingPlanSeed = usePlanStore((s) => s.setPendingPlanSeed);
 
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
@@ -182,12 +218,53 @@ function PlanResult({ repoPath }: { repoPath: string }) {
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );
   const [localOpen, setLocalOpen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const { generating, text, status, draft, costUsd, error } = run;
+
+  // Once a session is implementing this plan, the plan becomes a read-only
+  // reference (editing it would drift from what the session is building). Locked
+  // while that session exists; if it's later discarded, the plan is editable again.
+  const implementSession = useSessionsStore((s) =>
+    run.implementedSessionId
+      ? s.sessions.find((x) => x.id === run.implementedSessionId)
+      : undefined,
+  );
+  const locked = Boolean(implementSession);
+  const keptImpl = implementSession?.kept ?? false;
+  const goToSession = () => {
+    if (implementSession) selectSession(implementSession.id);
+  };
+
+  // Questions the plan left open ([NEEDS CLARIFICATION: …]), with the candidate
+  // answers it suggested — the human gate answers these to refine the spec.
+  const questions = useMemo(
+    () => (draft ? extractPlanQuestions(draft.body) : []),
+    [draft],
+  );
+
+  // When a plan lands with open questions, scroll its body to the end so the
+  // answer panel comes into view — the user needs to act on them, not hunt.
+  useEffect(() => {
+    if (draft && questions.length > 0) {
+      scrollRef.current?.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [draft, questions.length]);
 
   const createGithub = () => {
     if (!draft) return;
     setPendingIssueDraft({ title: draft.title, body: draft.body });
     setRepoTab("issues");
-    close();
+  };
+
+  // Reopen the composer seeded from this plan to tweak the goal and try again —
+  // dropping this result (the new attempt is its own run).
+  const replan = () => {
+    setPendingPlanSeed(run.seed ?? { goal: run.origin?.goal ?? "" });
+    remove(run.id);
   };
 
   return (
@@ -205,7 +282,7 @@ function PlanResult({ repoPath }: { repoPath: string }) {
               size="sm"
               variant="outline"
               className="ml-auto"
-              onClick={cancel}
+              onClick={() => cancel(run.id)}
             >
               <StopIcon weight="fill" />
               Stop
@@ -214,7 +291,7 @@ function PlanResult({ repoPath }: { repoPath: string }) {
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {error ? (
           <div className="flex items-start gap-2 text-xs text-destructive">
             <WarningIcon className="mt-0.5 size-4 shrink-0" />
@@ -227,11 +304,19 @@ function PlanResult({ repoPath }: { repoPath: string }) {
         ) : (
           <p className="text-xs text-muted-foreground">Starting…</p>
         )}
+        {!generating && !locked && questions.length > 0 && (
+          <PlanQuestions
+            key={questions.map((q) => q.question).join("|")}
+            questions={questions}
+            generating={generating}
+            onRefine={(d) => refine(run.id, d)}
+          />
+        )}
       </div>
 
       {(draft || error) && (
         <div className="shrink-0 border-t">
-          {draft && draft.unverified.length > 0 && (
+          {draft && !locked && draft.unverified.length > 0 && (
             <div className="flex items-start gap-2 border-b bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
               <WarningIcon className="mt-0.5 size-3.5 shrink-0" />
               <span>
@@ -242,27 +327,67 @@ function PlanResult({ repoPath }: { repoPath: string }) {
               </span>
             </div>
           )}
-          <div className="flex items-center gap-2 px-3 py-2.5">
-            <Button variant="outline" size="sm" onClick={back}>
-              Re-plan
-            </Button>
-            {draft && (
-              <div className="ml-auto flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setLocalOpen(true)}
-                >
-                  Create local issue
-                </Button>
-                {ghReady && (
-                  <Button size="sm" onClick={createGithub}>
-                    Create GitHub issue
+          {locked ? (
+            <div className="flex items-center gap-2 px-3 py-2.5">
+              <span className="min-w-0 text-[11px] text-muted-foreground">
+                {keptImpl
+                  ? "Implemented and kept."
+                  : "Being implemented by a session."}{" "}
+                Read-only.
+              </span>
+              {draft && (
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setLocalOpen(true)}
+                  >
+                    Create local issue
                   </Button>
-                )}
-              </div>
-            )}
-          </div>
+                  <Button size="sm" onClick={goToSession}>
+                    View session
+                  </Button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-2.5">
+              <Button variant="outline" size="sm" onClick={replan}>
+                Re-plan
+              </Button>
+              {costUsd != null && (
+                <span
+                  className="text-[11px] text-muted-foreground tabular-nums"
+                  title="Estimated cost of this planning run"
+                >
+                  ${costUsd.toFixed(3)}
+                </span>
+              )}
+              {draft && (
+                <div className="ml-auto flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setLocalOpen(true)}
+                  >
+                    Create local issue
+                  </Button>
+                  {ghReady && (
+                    <Button variant="outline" size="sm" onClick={createGithub}>
+                      Create GitHub issue
+                    </Button>
+                  )}
+                  <ImplementPlanButton run={run} />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {draft && !locked && (
+        <div className="shrink-0 border-t p-2">
+          <PlanFollowUp run={run} />
         </div>
       )}
 
@@ -274,6 +399,68 @@ function PlanResult({ repoPath }: { repoPath: string }) {
           draft ? { title: draft.title, body: draft.body } : undefined
         }
       />
+    </div>
+  );
+}
+
+/**
+ * The plan's follow-up composer — a chat input pinned below the result so you can
+ * keep refining after the questions are answered (or accepted). Each message
+ * resumes the conversation, so the agent revises the plan with full context.
+ * Styled to match the session (Delegate) composer.
+ */
+function PlanFollowUp({ run }: { run: PlanRun }) {
+  const sendFollowUp = usePlanStore((s) => s.sendFollowUp);
+  const [text, setText] = useState("");
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  const submit = () => {
+    if (!text.trim() || run.generating) return;
+    sendFollowUp(run.id, text);
+    setText("");
+  };
+
+  // Auto-grow the textarea with its content (JS, not CSS field-sizing, for webview
+  // portability — see SessionComposer).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resize on text change
+  useLayoutEffect(() => {
+    const ta = ref.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
+  }, [text]);
+
+  return (
+    <div className="flex flex-col gap-2 border border-input bg-transparent p-3 transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50 dark:bg-input/30">
+      <textarea
+        ref={ref}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        rows={1}
+        disabled={run.generating}
+        placeholder="Refine the plan, or ask for a change…"
+        aria-label="Refine the plan"
+        className="max-h-32 min-h-9 w-full resize-none overflow-y-auto bg-transparent text-xs leading-relaxed outline-none placeholder:text-muted-foreground disabled:opacity-60"
+      />
+      <div className="flex items-center gap-2 border-t pt-2">
+        <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
+          ↵ send · ⇧↵ newline
+        </span>
+        <Button
+          size="sm"
+          className="ml-auto min-w-16"
+          disabled={!text.trim() || run.generating}
+          onClick={submit}
+        >
+          Send
+        </Button>
+      </div>
     </div>
   );
 }

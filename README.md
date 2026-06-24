@@ -59,8 +59,13 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   issue from a task (or an existing issue): a repo-aware agent explores your code
   and writes the problem, approach, affected files, acceptance criteria, and verify
   plan, with cited paths validated against your tree so hallucinations are flagged.
-  Review it, then file it as a local or GitHub issue — ready to hand to an agent.
-  Nothing is changed; it never writes.
+  If the plan leaves decisions open, answer them in an inline panel (pick a
+  suggestion or write your own) and **refine** the plan with your choices. Then file
+  it as a local or GitHub issue — or hand it **straight to a write-capable agent
+  session** to implement. Nothing is changed during planning; it never writes.
+- **From issue to implementation** — an **Implement** button on any local or
+  GitHub issue (and on a finished plan) seeds the agent composer with the spec, so
+  you pick the agent and confirm — then it builds it in an isolated worktree.
 - **AI where it helps** — commit messages, branch names, PR and issue
   titles/descriptions, repository descriptions and topics, and a streaming code
   review or security audit. Bring your own provider: cloud APIs, local **Ollama**,

@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PlanComposer } from "@/features/plan/PlanView";
+import { type PlanSeed, usePlanStore } from "@/features/plan/store";
 import { SessionComposer } from "./SessionComposer";
+import { useSessionsStore } from "./store";
 
 const EXAMPLES = [
   "Add input validation to the login form",
@@ -12,18 +14,49 @@ const EXAMPLES = [
 type Mode = "delegate" | "plan";
 
 /**
- * The new-session state of the canvas (shown when no session is selected): a
- * calm, centered panel with two modes — "Delegate a task" hands a write-capable
- * agent a job in an isolated worktree; "Plan a task" runs a read-only agent that
+ * The new-task state of the canvas (shown when nothing is selected): a calm,
+ * centered panel with two modes — "Delegate a task" hands a write-capable agent a
+ * job in an isolated worktree; "Plan a task" starts a read-only plan run that
  * explores the repo and drafts an agent-ready issue (no worktree, no writes).
  */
 export function SessionActivation({ repoPath }: { repoPath: string }) {
   const [mode, setMode] = useState<Mode>("delegate");
+  const [planSeed, setPlanSeed] = useState<PlanSeed | null>(null);
+  // Bumped when a seed is consumed, so PlanComposer remounts and re-initializes
+  // its fields from the new seed.
+  const [seedNonce, setSeedNonce] = useState(0);
+
+  const pendingTask = useSessionsStore((s) => s.pendingTask);
+  const pendingPlanSeed = usePlanStore((s) => s.pendingPlanSeed);
+  const setPendingPlanSeed = usePlanStore((s) => s.setPendingPlanSeed);
+
+  // A handoff ("Implement this issue") seeds the Delegate composer.
+  useEffect(() => {
+    if (pendingTask) setMode("delegate");
+  }, [pendingTask]);
+
+  // The agent-plan hotkey or an issue's Plan button switches to (and seeds) the
+  // Plan composer. Snapshot the seed locally so it survives clearing the store.
+  useEffect(() => {
+    if (!pendingPlanSeed) return;
+    setMode("plan");
+    setPlanSeed(pendingPlanSeed);
+    setSeedNonce((n) => n + 1);
+    setPendingPlanSeed(null);
+  }, [pendingPlanSeed, setPendingPlanSeed]);
 
   return (
     <div className="flex h-full flex-col">
       <div className="shrink-0 border-b px-3 py-2.5">
-        <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)}>
+        <Tabs
+          value={mode}
+          onValueChange={(v) => {
+            setMode(v as Mode);
+            // A manual tab switch starts a blank composer (a pending seed comes
+            // in via the effect above, not through user interaction).
+            setPlanSeed(null);
+          }}
+        >
           <TabsList>
             <TabsTrigger value="delegate">Delegate a task</TabsTrigger>
             <TabsTrigger value="plan">Plan a task</TabsTrigger>
@@ -44,18 +77,16 @@ export function SessionActivation({ repoPath }: { repoPath: string }) {
                 and keep them when you're happy. Run several at once.
               </p>
             </div>
-            <div className="border p-3">
-              <SessionComposer
-                repoPath={repoPath}
-                session={null}
-                examples={EXAMPLES}
-                autoFocus
-              />
-            </div>
+            <SessionComposer
+              repoPath={repoPath}
+              session={null}
+              examples={EXAMPLES}
+              autoFocus
+            />
           </div>
         </div>
       ) : (
-        <PlanComposer repoPath={repoPath} seed={null} />
+        <PlanComposer key={seedNonce} repoPath={repoPath} seed={planSeed} />
       )}
     </div>
   );

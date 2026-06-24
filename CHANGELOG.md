@@ -18,8 +18,28 @@ commit list.
   an agent-ready issue — problem, proposed approach, affected files, acceptance
   criteria, and a verify plan — **without changing anything**. Cited file paths are
   checked against your repo, so hallucinated references are flagged before you file.
-  Review it, then create a local or GitHub issue from it in one click. Reach it from
-  the Agent tab's "Plan a task" mode, the command palette, or an issue's Plan button.
+  The planning run's cost is shown when reported. If the plan left any decisions
+  open, they appear as an **answerable panel** (modeled on Claude Code's clarifying
+  questions): pick from the suggested answers or write your own, and **Refine plan**
+  *continues the same planning conversation* with your answers — the agent keeps its
+  exploration in context and refines incrementally instead of starting over. A
+  **follow-up composer** lets you keep chatting to revise the plan anytime, and the
+  whole thing **persists across restarts** — close the app and your plans (and their
+  conversation) are right where you left them, still resumable. (Plans are a read-only
+  agent conversation: read tools only, no worktree, never a write.) Review it, then
+  create a local or GitHub issue from it in one click. Plans live in the **Agent
+  sidebar** alongside your sessions and **run several at once** — start one, switch to
+  another, and come back; none are lost. Reach it from the Agent tab's "Plan a task"
+  mode, the command palette, or an issue's Plan button.
+- **Hand a plan or issue straight to an agent.** A finished plan gets an **Implement**
+  button that **starts a write-capable session directly** (a quick popover sets the
+  agent / model / effort first); any open local or GitHub issue gets **Solve with
+  agent** (it's a problem to investigate → diagnose → fix), which seeds the Delegate
+  composer to confirm. Either way the agent works in an isolated worktree, the way
+  every agent session does. Once a plan is being implemented it becomes a **read-only
+  reference** (its row tracks the session's live status), and it **archives to its own
+  Archived tab** once that session is accepted. Closes the loop from planning to a
+  working change.
 - **Bring any OpenAI-compatible provider.** A new "OpenAI-compatible" provider lets
   you point GitDesktop at any OpenAI-compatible `/chat/completions` endpoint with your
   own API key. One-click presets cover the **Vercel AI Gateway** (one key, many
@@ -54,6 +74,17 @@ commit list.
 - **Watch an agent session work, live.** The Changes tab now reflects the worktree's
   uncommitted edits *as the agent makes them*, before each turn's checkpoint commit
   — so you can follow along instead of waiting for the commit to land.
+- **Test a session's changes before you keep them.** Every active session gained an
+  **Open** menu — open its worktree in your editor or a terminal (or reveal it in the
+  file manager) and run it for real before you Keep or Discard. The worktree is a full
+  checkout on the session's branch, isolated from your working tree. For a
+  **container** session, whose dependencies were installed for Linux, a separate
+  **Test** button opens an interactive shell in the same image with the worktree
+  mounted, so `pnpm install` and running it happen in the matching environment rather
+  than failing against host-incompatible deps. You choose which dev-server port(s) to
+  publish to your localhost (pre-filled with `5173`, overridable) — so a server you
+  start in the container (bound to `0.0.0.0`, e.g. Vite `--host`) is reachable in your
+  browser, and you can remap a busy host port with `host:container` (e.g. `5174:5173`).
 - **Promote a kept session to a local PR.** A kept agent session gained a **Create
   PR** button (and command-palette action) that opens a local pull request from its
   branch, prefilled and ready — a one-click hand-off from "agent finished" to review.

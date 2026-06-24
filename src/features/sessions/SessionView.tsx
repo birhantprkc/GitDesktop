@@ -19,6 +19,7 @@ import { CreateLocalPrDialog } from "@/features/pulls/CreateLocalPrDialog";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { SessionActivation } from "./SessionActivation";
 import { SessionConversation } from "./SessionConversation";
+import { SessionOpenMenu } from "./SessionOpenMenu";
 import { StatusIndicator } from "./status";
 import { type AgentSession, useSessionsStore } from "./store";
 import { WorktreeChangesView } from "./WorktreeChangesView";
@@ -34,9 +35,13 @@ type Segment = "conversation" | "changes";
 export function SessionView({ repoPath }: { repoPath: string }) {
   const sessions = useSessionsStore((s) => s.sessions);
   const activeId = useSessionsStore((s) => s.activeId);
-  // The read-only plan canvas takes over the surface when open (mutually
-  // exclusive with a selected session — selecting one closes the plan).
-  const planActive = usePlanStore((s) => s.active && s.repoPath === repoPath);
+  // The read-only plan canvas takes over the surface when a plan run for this
+  // repo is selected (mutually exclusive with a selected session — see
+  // agentSelect.ts). Plans and sessions both live in the Agent sidebar.
+  const planActive = usePlanStore((s) => {
+    const run = s.runs.find((r) => r.id === s.activePlanId);
+    return Boolean(run && run.repoPath === repoPath);
+  });
   // activeId is global; only adopt it when the session belongs to this repo.
   const active =
     sessions.find((s) => s.id === activeId && s.repoPath === repoPath) ?? null;
@@ -152,6 +157,10 @@ function SessionCanvas({
               </>
             ) : (
               <>
+                <SessionOpenMenu
+                  worktreePath={session.worktreePath}
+                  isolation={session.isolation}
+                />
                 {commitCount > 1 && (
                   <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground select-none">
                     <Checkbox

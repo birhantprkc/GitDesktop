@@ -11,8 +11,5 @@
       "Bash(pnpm lint *)"
     ]
   },
-  "enabledMcpjsonServers": [
-    "shadcn",
-    "Astro docs"
-  ]
+  "enabledMcpjsonServers": ["shadcn", "Astro docs"]
 }

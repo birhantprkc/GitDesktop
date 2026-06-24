@@ -463,6 +463,179 @@ pub(crate) fn to_mount_source(path: &str, runtime: &str) -> String {
     }
 }
 
+/// Validates a single user-supplied port spec — either a bare `PORT` (published
+/// host→container 1:1) or a `HOST:CONTAINER` remap — returning the parsed
+/// `(host, container)` pair. Everything is parsed as a `u16` (1..=65535), so
+/// nothing non-numeric the user typed can reach the engine argv unchecked, and a
+/// busy host port can be sidestepped by remapping (e.g. `5174:5173` when host 5173
+/// is taken). `u16::parse` already rejects empty / non-digit / out-of-range.
+fn parse_port_spec(spec: &str) -> AppResult<(u16, u16)> {
+    let spec = spec.trim();
+    let (h, c) = spec.split_once(':').unwrap_or((spec, spec));
+    let parse = |p: &str| p.trim().parse::<u16>().ok().filter(|&n| n > 0);
+    match (parse(h), parse(c)) {
+        (Some(host), Some(container)) => Ok((host, container)),
+        _ => Err(AppError::InvalidArgument(format!(
+            "invalid port {spec:?} — use a port like 5173, or host:container like 5174:5173"
+        ))),
+    }
+}
+
+/// Opens an **interactive shell inside a throwaway container** with a session's
+/// worktree bind-mounted at `/workspace`, so the user can test a container
+/// session's changes in the *matching* Linux environment (its host deps would be
+/// Linux builds — wrong on Windows/macOS). Reuses the session image + the
+/// runtime-specific mount form; runs as the default user so `pnpm`/`npm`/build all
+/// work the way they did for the agent. Launches a real terminal window because
+/// `run -it` needs a TTY.
+///
+/// `ports` are the user-chosen dev-server ports to publish to the host loopback
+/// (each a bare `PORT` or a `HOST:CONTAINER` remap). A fixed list used to be
+/// published, but that fails hard (`ports are not available`) when *any* one of
+/// them is already bound on the host — so the port set is now the user's call,
+/// defaulted in the UI but fully overridable, and a busy host port can be remapped.
+#[tauri::command]
+pub async fn agent_open_container_shell(
+    worktree_path: String,
+    ports: Vec<String>,
+) -> AppResult<()> {
+    if !Path::new(&worktree_path).is_dir() {
+        return Err(AppError::InvalidArgument(format!(
+            "not a directory: {worktree_path}"
+        )));
+    }
+    let (bin, rt) = detect_runtime().await.ok_or_else(|| {
+        AppError::Command(
+            "Docker or Podman not found on PATH — install one to test a container session."
+                .into(),
+        )
+    })?;
+    let mount = format!("{}:/workspace", to_mount_source(&worktree_path, &rt));
+    let bin = bin.to_string_lossy().to_string();
+    let mut args: Vec<String> = vec!["run".into(), "-it".into(), "--rm".into()];
+    // Publish the user's chosen dev-server ports to the host's loopback so a server
+    // started in the container is reachable at `localhost:<host>` from the host
+    // browser. (It must bind `0.0.0.0` inside — e.g. Vite `--host` — since Docker
+    // forwards to the container's interface, not its loopback.) Bound to 127.0.0.1
+    // so nothing is exposed to the LAN. Validated up front: a bad spec fails before
+    // we spawn a terminal, with a message that names the offending value.
+    let mut host_ports: Vec<u16> = Vec::new();
+    for spec in &ports {
+        let (host, container) = parse_port_spec(spec)?;
+        args.push("-p".into());
+        args.push(format!("127.0.0.1:{host}:{container}"));
+        host_ports.push(host);
+    }
+    args.push("-v".into());
+    args.push(mount);
+    args.push("-w".into());
+    args.push("/workspace".into());
+    args.push(IMAGE.into());
+    args.push("bash".into());
+    // The tip names the actual published host ports so the user knows where to
+    // browse (no apostrophes/parens — it is echoed unquoted on Windows and
+    // single-quoted on unix).
+    let tip = if host_ports.is_empty() {
+        "Tip: no ports were published - re-open with a port to reach a dev server from your browser."
+            .to_string()
+    } else {
+        let urls = host_ports
+            .iter()
+            .map(|p| format!("localhost:{p}"))
+            .collect::<Vec<_>>()
+            .join(" / ");
+        format!(
+            "Tip: bind your dev server to 0.0.0.0 - e.g. pnpm dev --host - then open {urls} in your browser."
+        )
+    };
+    launch_container_shell(&bin, &args, &tip)
+}
+
+/// POSIX single-quote a token (mac/Linux launch scripts).
+#[cfg(unix)]
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Windows: write a temp `.cmd` that runs the (double-quoted) command and pauses,
+/// then `start` it. A temp script avoids cmd's nested-quoting traps, and `start`
+/// gives the `docker run -it` a fresh, fully-wired console (spawning a console
+/// directly leaves stdio bound to ours, so it can't take keyboard input).
+#[cfg(windows)]
+fn launch_container_shell(bin: &str, args: &[String], tip: &str) -> AppResult<()> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let mut line = format!("\"{bin}\"");
+    for a in args {
+        line.push_str(&format!(" \"{a}\""));
+    }
+    let script = format!(
+        "@echo off\r\ntitle GitDesktop - container test shell\r\necho {tip}\r\necho.\r\n{line}\r\necho.\r\necho (container exited) Press any key to close...\r\npause >nul\r\n"
+    );
+    let path = std::env::temp_dir()
+        .join(format!("gd-container-shell-{}.cmd", std::process::id()));
+    std::fs::write(&path, script).map_err(AppError::Io)?;
+    let mut c = Command::new("cmd");
+    c.raw_arg(format!("/c start \"GitDesktop\" \"{}\"", path.display()));
+    c.creation_flags(CREATE_NO_WINDOW);
+    c.spawn().map(|_| ()).map_err(AppError::Io)
+}
+
+/// macOS: write a temp `.command` (Terminal.app runs it on `open`).
+#[cfg(target_os = "macos")]
+fn launch_container_shell(bin: &str, args: &[String], tip: &str) -> AppResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let mut line = shell_quote(bin);
+    for a in args {
+        line.push(' ');
+        line.push_str(&shell_quote(a));
+    }
+    let script = format!(
+        "#!/bin/bash\necho 'GitDesktop — container test shell'\necho '{tip}'\n{line}\necho\necho '(container exited)'\n"
+    );
+    let path = std::env::temp_dir()
+        .join(format!("gd-container-shell-{}.command", std::process::id()));
+    std::fs::write(&path, script).map_err(AppError::Io)?;
+    let mut perm = std::fs::metadata(&path).map_err(AppError::Io)?.permissions();
+    perm.set_mode(0o755);
+    std::fs::set_permissions(&path, perm).map_err(AppError::Io)?;
+    Command::new("open")
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(AppError::Io)
+}
+
+/// Linux: run the command in the first available terminal emulator (`-e bash -c`),
+/// dropping into a shell afterwards so the window stays open.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn launch_container_shell(bin: &str, args: &[String], tip: &str) -> AppResult<()> {
+    use std::process::Command;
+
+    let mut line = shell_quote(bin);
+    for a in args {
+        line.push(' ');
+        line.push_str(&shell_quote(a));
+    }
+    let cmd = format!("echo '{tip}'; {line}; echo; echo '(container exited)'; exec bash");
+    for term in ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"] {
+        if Command::new(term)
+            .args(["-e", "bash", "-c", &cmd])
+            .spawn()
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    Err(AppError::Io(std::io::Error::other(
+        "no terminal emulator found",
+    )))
+}
+
 /// Builds the full `run …` argv that wraps the inner agent invocation in an
 /// ephemeral, worktree-confined container. The agent runs as `node`, cwd
 /// `/workspace` (the bind-mounted worktree), with the seeded claude-home mounted +
@@ -676,6 +849,21 @@ mod tests {
     #[test]
     fn container_name_is_stable_and_prefixed() {
         assert_eq!(container_name("abc123"), "gd-agent-abc123");
+    }
+
+    #[test]
+    fn parse_port_spec_accepts_port_and_mapping() {
+        // A bare port publishes host→container 1:1.
+        assert_eq!(parse_port_spec("5173").unwrap(), (5173, 5173));
+        // host:container remaps a busy host port; surrounding whitespace is trimmed.
+        assert_eq!(parse_port_spec(" 5174:5173 ").unwrap(), (5174, 5173));
+        // Reject port 0, out-of-range, non-numeric, and a half-bad mapping — none of
+        // these may reach the engine argv.
+        assert!(parse_port_spec("0").is_err());
+        assert!(parse_port_spec("99999").is_err());
+        assert!(parse_port_spec("abc").is_err());
+        assert!(parse_port_spec("5173:abc").is_err());
+        assert!(parse_port_spec("").is_err());
     }
 
     #[test]

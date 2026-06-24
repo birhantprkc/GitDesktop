@@ -631,7 +631,11 @@ The repo's REAL commands to prove it works — read them from the project's docs
 Terse: off-limits files/areas and invariants to preserve.
 
 ## Open questions
-ONLY if genuinely ambiguous: list each as \`[NEEDS CLARIFICATION: …]\`. Omit this section entirely if there are none.
+ONLY if genuinely ambiguous — a decision you cannot safely make from the code alone. Format each as a question line followed by its candidate answers as an indented bullet list:
+- [NEEDS CLARIFICATION: <the question>]
+  - <a concrete candidate answer — make the first one your recommended default>
+  - <another concrete candidate answer>
+Give 2–4 concrete options per question whenever you can suggest them (the user will pick one or write their own); only omit the options sub-list if you truly can't propose any. Omit this whole section if there are no open questions.
 
 Rules:
 - Stay at what/why. Do NOT write the full implementation, and do NOT invent specifics (exact code, version numbers, error text) the repo doesn't support.
@@ -683,6 +687,89 @@ export function buildPlanPrompt(input: {
  *  so it can seed the Create Issue dialogs directly. */
 export const extractPlanDraft = extractIssueDraft;
 
+/**
+ * Builds the first-turn prompt that hands an agent-ready spec (a plan draft or a
+ * filed issue) to a write-capable agent session. The session's own system prompt
+ * already frames the agent as an autonomous coder in a throwaway worktree, so
+ * this only carries the task: implement the spec faithfully, follow the repo's
+ * conventions, satisfy the acceptance criteria, and self-verify. The user sees
+ * (and can edit) this in the composer before delegating — the human gate — so the
+ * spec is the thing to act on, not untrusted instructions to defend against.
+ */
+export function buildImplementPrompt(input: {
+  title: string;
+  body: string;
+}): string {
+  const title = input.title.trim();
+  const heading = title ? `# ${title}\n\n` : "";
+  return (
+    "Implement the following specification in this repository. Follow the " +
+    "repository's existing conventions and patterns, satisfy every acceptance " +
+    "criterion, and run the spec's verify steps (build / lint / tests) before " +
+    `you finish.\n\n${heading}${input.body.trim()}`
+  );
+}
+
+/**
+ * Builds the first-turn prompt that assigns an **issue** to a write-capable agent
+ * session. Unlike a plan (a vetted spec → {@link buildImplementPrompt}), an issue
+ * is a problem statement that may be under-specified, so this frames the work as
+ * investigate → diagnose → fix/build → verify rather than "implement this spec".
+ */
+export function buildSolveIssuePrompt(input: {
+  title: string;
+  body: string;
+}): string {
+  const title = input.title.trim();
+  const heading = title ? `# ${title}\n\n` : "";
+  return (
+    "Investigate and resolve the following issue in this repository. Diagnose the " +
+    "root cause, then implement a fix that follows the repository's conventions, " +
+    "and verify it (build / lint / tests). If it's a feature request rather than a " +
+    `bug, design and build it.\n\n${heading}${input.body.trim()}`
+  );
+}
+
+export interface PlanQuestion {
+  /** The question text (the `[NEEDS CLARIFICATION: …]` body). */
+  question: string;
+  /** Candidate answers the plan suggested, in order (first = recommended). May be
+   *  empty if the model proposed none — the UI then offers only a free-text answer. */
+  options: string[];
+}
+
+/**
+ * Pulls the open questions a plan flagged as `[NEEDS CLARIFICATION: …]` out of a
+ * draft body, with the candidate answers the model listed as indented bullets
+ * beneath each one. A non-empty result means the spec is still ambiguous — the
+ * human gate can answer them and refine the plan before it's implemented.
+ * Tolerant of the bracket spelling; options are the deeper-indented `-`/`*` bullets
+ * that immediately follow a question (until a blank line or a shallower line).
+ */
+export function extractPlanQuestions(body: string): PlanQuestion[] {
+  const lines = body.split("\n");
+  const out: PlanQuestion[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/\[NEEDS\s+CLARIFICATION:?\s*([^\]]*)\]/i);
+    if (!m) continue;
+    const question = m[1].trim().replace(/\s+/g, " ");
+    if (!question) continue;
+    const baseIndent = lines[i].search(/\S/);
+    const options: string[] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      if (!lines[j].trim()) break; // blank line ends the option list
+      const indent = lines[j].search(/\S/);
+      const bullet = lines[j].match(/^\s*[-*]\s+(.*)$/);
+      if (!bullet || indent <= baseIndent) break; // shallower / non-bullet ends it
+      const opt = bullet[1].trim().replace(/^[`'"]+|[`'"]+$/g, "");
+      // A nested clarification is its own question, not an option for this one.
+      if (opt && !/\[NEEDS\s+CLARIFICATION/i.test(opt)) options.push(opt);
+    }
+    out.push({ question, options });
+  }
+  return out;
+}
+
 /** Source-ish extensions that mark a bare `name.ext` token as a likely file. */
 const PLAN_FILE_EXT =
   /\.(?:ts|tsx|js|jsx|mjs|cjs|json|jsonc|rs|go|py|rb|java|kt|swift|c|h|cc|cpp|cs|css|scss|sass|less|html|htm|xml|vue|svelte|astro|md|mdx|txt|toml|yaml|yml|ini|cfg|conf|env|lock|sh|bash|zsh|sql|graphql|proto|gradle|bat|ps1|lua|dart|ex|exs)$/i;
@@ -696,14 +783,12 @@ function normalizePlanPath(raw: string): string {
     .replace(/\/+$/, ""); // a trailing /
 }
 
-/** Whether a normalized token is plausibly a repo file path at all — conservative
- *  on purpose, so command snippets (`pnpm build`), identifiers (`apiGet`), HTML
- *  (`<title>…`), globs/branch examples (`feat/…`) and prose don't get flagged. */
-function looksLikePath(p: string): boolean {
-  if (!p || p.length > 200) return false;
-  if (!/^[\w.\-/@]+$/.test(p)) return false; // path characters only
-  if (p.includes("..")) return false; // not a real cited path
-  return p.includes("/") || PLAN_FILE_EXT.test(p);
+/** A real file extension *with a basename in front* is the strongest signal a
+ *  token names a file. A bare `.ts` (an extension referenced generically) or a
+ *  dotfile-shaped `.env` (dot + word, no name) is NOT a cited file — requiring a
+ *  basename keeps those out. (`foo.ts` → yes; `.ts` / `.env` → no.) */
+function hasFileExtension(p: string): boolean {
+  return p.lastIndexOf(".") > 0 && PLAN_FILE_EXT.test(p);
 }
 
 /**
@@ -748,12 +833,27 @@ export function validatePlanPaths(
     created.has(p) ||
     trackedArr.some((f) => f === p || f.endsWith(`/${p}`));
 
+  // Is this token even *trying* to name a repo file? Structural first (path chars,
+  // no traversal, sane length), then: it either carries a real file extension, or
+  // it lives under a directory the repo actually has. That directory gate is what
+  // keeps git branch names (`feat/contact-form`, `chore/update-readme-again`) and
+  // prose slugs (`and/or`, `client/server`) out — their lead segment isn't a real
+  // tracked dir — while still flagging a hallucinated file under a real root.
+  const isPathish = (p: string): boolean => {
+    if (!p || p.length > 200) return false;
+    if (!/^[\w.\-/@]+$/.test(p)) return false; // path characters only
+    if (p.includes("..")) return false; // not a real cited path
+    if (hasFileExtension(p)) return true;
+    if (!p.includes("/")) return false;
+    return dirs.has(p.slice(0, p.indexOf("/")));
+  };
+
   const unverified = new Set<string>();
   for (const m of body.matchAll(/`([^`]+)`/g)) {
     const raw = m[1];
     if (raw.includes("://")) continue; // a URL, not a repo path
     const p = normalizePlanPath(raw);
-    if (!looksLikePath(p) || isReal(p)) continue;
+    if (!isPathish(p) || isReal(p)) continue;
     unverified.add(p);
   }
   return [...unverified];

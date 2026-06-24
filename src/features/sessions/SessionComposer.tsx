@@ -81,6 +81,8 @@ export function SessionComposer({
   const setEffort = useSessionsStore((s) => s.setEffort);
   const cancel = useSessionsStore((s) => s.cancel);
   const creating = useSessionsStore((s) => s.creating);
+  const pendingTask = useSessionsStore((s) => s.pendingTask);
+  const setPendingTask = useSessionsStore((s) => s.setPendingTask);
   const [draft, setDraft] = useState("");
   const [startModel, setStartModel] = useState("");
   const [startEffort, setStartEffort] = useState("");
@@ -147,6 +149,21 @@ export function SessionComposer({
     }),
     [],
   );
+
+  // Seed the new-session composer from a handoff ("Implement this issue" / the
+  // plan canvas's "Implement now"). Only the activation composer (no session)
+  // consumes it; clear it once loaded so it doesn't re-seed. The Agent tab lives
+  // under <Activity>, so this effect runs when the tab becomes visible — by which
+  // point SessionActivation has forced "Delegate" mode and mounted this composer.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stable setters/ref only
+  useEffect(() => {
+    if (session || !pendingTask || pendingTask.repoPath !== repoPath) return;
+    setMention(null);
+    setSlash(null);
+    setHistIndex(null);
+    setDraftCaretEnd(pendingTask.prompt);
+    setPendingTask(null);
+  }, [session, pendingTask, repoPath]);
 
   const recallOlder = () => {
     if (history.length === 0) return;
@@ -450,7 +467,7 @@ export function SessionComposer({
             onHover={setSlashIndex}
           />
         )}
-        <div className="flex flex-col border border-input bg-transparent transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50 dark:bg-input/30">
+        <div className="flex flex-col gap-2 border border-input bg-transparent p-3 transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50 dark:bg-input/30">
           <textarea
             ref={ref}
             autoFocus={autoFocus}
@@ -482,9 +499,9 @@ export function SessionComposer({
                 ? "Reply to the agent…  (@ file, / command)"
                 : "Describe a task for the agent…  (@ file, / command)"
             }
-            className="max-h-40 min-h-9 w-full resize-none overflow-y-auto bg-transparent px-3 py-2.5 text-xs leading-relaxed outline-none placeholder:text-muted-foreground"
+            className="max-h-40 min-h-9 w-full resize-none overflow-y-auto bg-transparent text-xs leading-relaxed outline-none placeholder:text-muted-foreground"
           />
-          <div className="flex items-center gap-2 px-2 pb-2">
+          <div className="flex items-center gap-2 border-t pt-2">
             {!session && (
               <AgentPicker
                 value={startAgent}
@@ -754,8 +771,9 @@ const EFFORT_LEVELS = [
 
 /** Reasoning/effort level for the next turn. Mapped per-CLI in Rust (Codex
  *  `model_reasoning_effort`, Copilot `--effort`, Claude a thinking keyword). The
- *  gauge icon marks it as effort so the collapsed value isn't mistaken for a model. */
-function EffortPicker({
+ *  gauge icon marks it as effort so the collapsed value isn't mistaken for a model.
+ *  Reused by the read-only Plan composer. */
+export function EffortPicker({
   value,
   onChange,
 }: {

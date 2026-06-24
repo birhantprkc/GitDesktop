@@ -108,15 +108,22 @@ interface SessionsState {
   busyId: string | null;
   /** Whether persisted sessions have been loaded + reconciled (gates persisting). */
   hydrated: boolean;
+  /** A task to seed the new-session ("Delegate") composer with — set by a handoff
+   *  ("Implement this issue" / "Implement now" from the plan canvas), consumed and
+   *  cleared by the activation composer once it loads it. Lets the handoff cross
+   *  the tab/Activity boundary without an imperative ref. `repoPath` scopes it so
+   *  only that repo's composer picks it up. */
+  pendingTask: { repoPath: string; prompt: string } | null;
   hydrate: () => Promise<void>;
   setActive: (id: string | null) => void;
+  setPendingTask: (task: { repoPath: string; prompt: string } | null) => void;
   start: (
     repoPath: string,
     prompt: string,
     model: string,
     agent: "claude" | "codex" | "copilot" | "opencode",
     effort: string,
-  ) => Promise<void>;
+  ) => Promise<string | null>;
   send: (id: string, prompt: string) => Promise<void>;
   setModel: (id: string, model: string) => void;
   setEffort: (id: string, effort: string) => void;
@@ -264,6 +271,7 @@ async function runTurn(
       worktreePath,
       sessionId: claudeSessionId,
       resume,
+      readOnly: false,
       isolation,
       agent,
       nativeSessionId: nativeSessionId ?? null,
@@ -346,6 +354,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
   creating: false,
   busyId: null,
   hydrated: false,
+  pendingTask: null,
 
   hydrate: async () => {
     if (get().hydrated) return;
@@ -394,9 +403,11 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 
   setActive: (id) => set({ activeId: id }),
 
+  setPendingTask: (pendingTask) => set({ pendingTask }),
+
   start: async (repoPath, prompt, model, agent, effort) => {
     const task = prompt.trim();
-    if (!task || get().creating) return;
+    if (!task || get().creating) return null;
     set({ creating: true });
     // Isolation is fixed for the life of the session (every turn must run the
     // same way), so resolve it once here. Both agents honor the setting: on the
@@ -413,7 +424,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     } catch (e) {
       toastError(e);
       set({ creating: false });
-      return;
+      return null;
     }
     const session: AgentSession = {
       id: wt.id,
@@ -451,7 +462,11 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       }),
     );
     persist(appendTurn(wt.id, 0, task, model));
-    await runTurn(get, set, wt.id, task, false);
+    // Fire the first turn in the background (don't block the caller on it) and
+    // return the new session id so a caller — e.g. the plan "Implement" — can link
+    // to it.
+    void runTurn(get, set, wt.id, task, false);
+    return wt.id;
   },
 
   send: async (id, prompt) => {
