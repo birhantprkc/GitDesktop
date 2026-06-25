@@ -435,6 +435,10 @@ export interface RepoSettings {
   webCommitSignoffRequired: boolean;
   /** Read-only — the repo's GitHub URL, for "manage on GitHub" deep links. */
   htmlUrl: string;
+  /** Read-only — "public" | "private" | "internal". */
+  visibility: string;
+  /** Read-only — "owner/repo". */
+  fullName: string;
   isTemplate: boolean;
   allowForking: boolean;
   /** Forking is only changeable on an org-owned private repo; the toggle hides
@@ -452,7 +456,13 @@ export interface RepoSettings {
  *  and `allowForking` nullable (null = leave forking untouched). */
 export type RepoSettingsInput = Omit<
   RepoSettings,
-  "description" | "homepage" | "htmlUrl" | "canChangeForking" | "allowForking"
+  | "description"
+  | "homepage"
+  | "htmlUrl"
+  | "visibility"
+  | "fullName"
+  | "canChangeForking"
+  | "allowForking"
 > & {
   description: string;
   homepage: string;
@@ -501,6 +511,29 @@ export interface Invitation {
   avatarUrl: string;
   permission: RepoRole;
   createdAt: string;
+}
+
+/** A "Code security and analysis" toggle. */
+export type SecurityFeature =
+  | "advanced_security"
+  | "secret_scanning"
+  | "secret_scanning_push_protection"
+  | "code_scanning"
+  | "dependabot_alerts"
+  | "dependabot_security_updates"
+  | "private_vulnerability_reporting";
+
+/** State of the repo's security toggles. The three `security_and_analysis`
+ *  fields are null when not applicable (e.g. a public repo has no GHAS toggle). */
+export interface SecurityStatus {
+  isPrivate: boolean;
+  advancedSecurity: boolean | null;
+  secretScanning: boolean | null;
+  secretScanningPushProtection: boolean | null;
+  dependabotAlerts: boolean;
+  dependabotSecurityUpdates: boolean;
+  privateVulnerabilityReporting: boolean;
+  codeScanning: boolean;
 }
 
 /** A GitHub (classic) branch protection rule, for importing into branch rules. */

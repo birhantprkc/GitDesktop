@@ -12,6 +12,23 @@ commit list.
 
 ### Added
 
+- **Repository danger zone, in the app.** The General tab of repository settings gained a
+  **Danger zone**: **change visibility** (public / private / internal), **transfer
+  ownership**, and **delete** the repository — each behind a type-the-`owner/repo`-name
+  confirmation that spells out the irreversible consequences first. Deleting detects when
+  your `gh` sign-in lacks the `delete_repo` scope and shows the exact
+  `gh auth refresh` command to run. Your local clone is never touched. Part of the
+  org/repo governance buildout ([docs](docs/github-governance-expansion.md)).
+
+- **Code security & analysis toggles, in the app.** A new **Security** tab in repository
+  settings collects secret scanning, push protection, code scanning (CodeQL default
+  setup), Dependabot alerts and security updates, and private vulnerability reporting
+  behind a **save/discard bar** — flip what you want and save once (changes apply in the
+  right dependency order). On private repos it notes which features need GitHub Advanced
+  Security. The Dependabot/dependency-graph options GitHub exposes to no API (dependency
+  graph, grouped security updates, version updates, self-hosted runners) appear as
+  **"Manage on GitHub"** links rather than dead toggles.
+
 - **Manage repo collaborators & invitations, in the app.** A new **Access** tab in
   repository settings lists your collaborators with their role, lets you **invite**
   someone by username at any level (Read / Triage / Write / Maintain / Admin), **change**

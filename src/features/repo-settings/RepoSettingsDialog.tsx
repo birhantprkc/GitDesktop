@@ -51,9 +51,11 @@ import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { CollaboratorsSection } from "./CollaboratorsSection";
+import { DangerZone } from "./DangerZone";
 import { FundingSection } from "./FundingSection";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { SecretsSection } from "./SecretsSection";
+import { SecuritySection } from "./SecuritySection";
 
 // A curated set of the events people wire webhooks to, plus the "everything"
 // option. Not GitHub's full ~30 — the long tail can be added later.
@@ -108,8 +110,9 @@ export function RepoSettingsDialog({
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="access">Access</TabsTrigger>
+            <TabsTrigger value="security">Security</TabsTrigger>
             <TabsTrigger value="sponsor">Sponsor</TabsTrigger>
-            <TabsTrigger value="secrets">Secrets &amp; variables</TabsTrigger>
+            <TabsTrigger value="secrets">Secrets</TabsTrigger>
             <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
           </TabsList>
           <TabsContent
@@ -117,12 +120,19 @@ export function RepoSettingsDialog({
             className="min-h-0 min-w-0 overflow-y-auto pr-1"
           >
             <GeneralSettingsSection repoPath={repoPath} open={open} />
+            <DangerZone repoPath={repoPath} open={open} />
           </TabsContent>
           <TabsContent
             value="access"
             className="min-h-0 min-w-0 overflow-y-auto pr-1"
           >
             <CollaboratorsSection repoPath={repoPath} open={open} />
+          </TabsContent>
+          <TabsContent
+            value="security"
+            className="min-h-0 min-w-0 overflow-y-auto pr-1"
+          >
+            <SecuritySection repoPath={repoPath} open={open} />
           </TabsContent>
           <TabsContent
             value="sponsor"

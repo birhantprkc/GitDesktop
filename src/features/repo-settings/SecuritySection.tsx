@@ -1,0 +1,251 @@
+import { ArrowSquareOutIcon } from "@phosphor-icons/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import {
+  useApplySecurity,
+  useRepoSettings,
+  useSecurity,
+} from "@/lib/git/queries";
+import type { SecurityFeature, SecurityStatus } from "@/lib/git/types";
+import { toastError } from "@/lib/toast";
+
+/** Dependabot / dependency-graph options GitHub exposes to NO repo-level API —
+ *  they're web-UI-only (version updates is `dependabot.yml`-driven). */
+const WEB_ONLY_SECURITY = [
+  "Dependency graph",
+  "Grouped security updates",
+  "Dependabot version updates (via dependabot.yml)",
+  "Dependabot on self-hosted runners",
+];
+
+/** The toggles, in dependency-safe APPLY order (parents before children) — the
+ *  save sends changes in this order so a parent is enabled before its child. */
+const FEATURES: {
+  key: SecurityFeature;
+  field: keyof SecurityStatus;
+  label: string;
+  desc: string;
+  dependsOn?: SecurityFeature;
+  privateOnly?: boolean;
+}[] = [
+  {
+    key: "advanced_security",
+    field: "advancedSecurity",
+    label: "GitHub Advanced Security",
+    desc: "Required for secret and code scanning on a private repo (uses a seat).",
+    privateOnly: true,
+  },
+  {
+    key: "secret_scanning",
+    field: "secretScanning",
+    label: "Secret scanning",
+    desc: "Detect secrets pushed to the repository.",
+  },
+  {
+    key: "secret_scanning_push_protection",
+    field: "secretScanningPushProtection",
+    label: "Push protection",
+    desc: "Block pushes that contain a detected secret.",
+    dependsOn: "secret_scanning",
+  },
+  {
+    key: "dependabot_alerts",
+    field: "dependabotAlerts",
+    label: "Dependabot alerts",
+    desc: "Get alerted to vulnerable dependencies.",
+  },
+  {
+    key: "dependabot_security_updates",
+    field: "dependabotSecurityUpdates",
+    label: "Dependabot security updates",
+    desc: "Open pull requests to fix vulnerable dependencies.",
+    dependsOn: "dependabot_alerts",
+  },
+  {
+    key: "code_scanning",
+    field: "codeScanning",
+    label: "Code scanning (default setup)",
+    desc: "Run CodeQL analysis on pushes and pull requests.",
+  },
+  {
+    key: "private_vulnerability_reporting",
+    field: "privateVulnerabilityReporting",
+    label: "Private vulnerability reporting",
+    desc: "Let people privately report security issues to you.",
+  },
+];
+
+type Draft = Record<SecurityFeature, boolean>;
+
+function toDraft(status: SecurityStatus): Draft {
+  const d = {} as Draft;
+  for (const f of FEATURES) d[f.key] = status[f.field] === true;
+  return d;
+}
+
+export function SecuritySection({
+  repoPath,
+  open,
+}: {
+  repoPath: string;
+  open: boolean;
+}) {
+  const security = useSecurity(repoPath, open);
+
+  if (security.isLoading) {
+    return (
+      <div className="min-w-0 space-y-3">
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-12 w-full" />
+      </div>
+    );
+  }
+  if (security.isError || !security.data) {
+    return (
+      <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
+        <p className="font-medium text-destructive">Couldn't load security.</p>
+        <p className="mt-1 text-muted-foreground">
+          {security.error instanceof Error ? security.error.message : null}
+        </p>
+        <p className="mt-2 text-muted-foreground">
+          These settings need repo-admin access.
+        </p>
+      </div>
+    );
+  }
+
+  // Remount on refetch so the draft reseeds after a save.
+  return (
+    <div className="min-w-0 space-y-4">
+      <SecurityForm
+        key={security.dataUpdatedAt}
+        repoPath={repoPath}
+        status={security.data}
+      />
+      <MoreOnGitHub repoPath={repoPath} open={open} />
+    </div>
+  );
+}
+
+/** The Dependabot / dependency-graph options with no API → "manage on GitHub". */
+function MoreOnGitHub({ repoPath, open }: { repoPath: string; open: boolean }) {
+  const settings = useRepoSettings(repoPath, open);
+  const url = settings.data?.htmlUrl;
+  if (!url) return null;
+  return (
+    <div className="space-y-2 border-t pt-3">
+      <Label>Only on GitHub</Label>
+      <p className="text-[11px] text-muted-foreground">
+        GitHub exposes no API for these — manage them in your browser.
+      </p>
+      <ul className="space-y-1">
+        {WEB_ONLY_SECURITY.map((label) => (
+          <li key={label}>
+            <button
+              type="button"
+              className="flex cursor-pointer items-center gap-1 text-left text-xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
+              onClick={() => openUrl(`${url}/settings/security_analysis`)}
+            >
+              {label}
+              <ArrowSquareOutIcon className="size-3 shrink-0" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SecurityForm({
+  repoPath,
+  status,
+}: {
+  repoPath: string;
+  status: SecurityStatus;
+}) {
+  const apply = useApplySecurity(repoPath);
+  const seed = useMemo(() => toDraft(status), [status]);
+  const [draft, setDraft] = useState(seed);
+
+  const dirty = FEATURES.some((f) => draft[f.key] !== seed[f.key]);
+
+  function set(key: SecurityFeature, value: boolean) {
+    setDraft((d) => {
+      const next = { ...d, [key]: value };
+      // Turning a parent off turns its dependents off too.
+      if (!value) {
+        for (const f of FEATURES) if (f.dependsOn === key) next[f.key] = false;
+      }
+      return next;
+    });
+  }
+
+  function save() {
+    const changes = FEATURES.filter((f) => draft[f.key] !== seed[f.key]).map(
+      (f) => ({ feature: f.key, enabled: draft[f.key] }),
+    );
+    apply.mutate(changes, {
+      onSuccess: () => toast.success("Security settings saved"),
+      onError: toastError,
+    });
+  }
+
+  return (
+    <div className="min-w-0 space-y-2">
+      {FEATURES.map((f) => {
+        if (f.privateOnly && !status.isPrivate) return null;
+        const blocked = f.dependsOn ? !draft[f.dependsOn] : false;
+        return (
+          <label
+            key={f.key}
+            className={`flex items-start justify-between gap-3 rounded-md border p-3 ${
+              blocked ? "opacity-60" : "cursor-pointer"
+            }`}
+          >
+            <div className="min-w-0">
+              <p className="text-xs font-medium">{f.label}</p>
+              <p className="text-[11px] text-muted-foreground">{f.desc}</p>
+            </div>
+            <Switch
+              checked={draft[f.key]}
+              disabled={blocked || apply.isPending}
+              onCheckedChange={(next) => set(f.key, next)}
+            />
+          </label>
+        );
+      })}
+
+      {status.isPrivate && (
+        <p className="pt-1 text-[11px] text-muted-foreground">
+          On private repositories, secret and code scanning require GitHub
+          Advanced Security (and may use paid seats). Dependabot alerts,
+          security updates, and private vulnerability reporting are free.
+        </p>
+      )}
+
+      {dirty && (
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setDraft(seed)}
+            disabled={apply.isPending}
+          >
+            Discard
+          </Button>
+          <Button size="sm" onClick={save} disabled={apply.isPending}>
+            {apply.isPending && <Spinner data-icon="inline-start" />}
+            Save changes
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -24,6 +24,7 @@ import type {
   RepoSettingsInput,
   RewriteStep,
   SecretApp,
+  SecurityFeature,
   UnignoreRule,
   WebhookInput,
 } from "./types";
@@ -2376,6 +2377,50 @@ export function useCancelInvitation(repo: string) {
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: invitationsKey(repo) }),
   });
+}
+
+const securityKey = (repo: string) => ["repo", repo, "security"] as const;
+
+export function useSecurity(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: securityKey(repo),
+    queryFn: () => api.ghSecurityGet(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useApplySecurity(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (changes: { feature: SecurityFeature; enabled: boolean }[]) =>
+      api.ghSecurityApply(repo, changes),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: securityKey(repo) }),
+  });
+}
+
+export function useSetVisibility(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (visibility: string) =>
+      api.ghRepoSetVisibility(repo, visibility),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: repoSettingsKey(repo) });
+      queryClient.invalidateQueries({ queryKey: securityKey(repo) });
+    },
+  });
+}
+
+export function useTransferRepo(repo: string) {
+  return useMutation({
+    mutationFn: (a: { newOwner: string; newName: string | null }) =>
+      api.ghRepoTransfer(repo, a.newOwner, a.newName),
+  });
+}
+
+export function useDeleteRepo(repo: string) {
+  return useMutation({ mutationFn: () => api.ghRepoDelete(repo) });
 }
 
 export function useReadyPr(repo: string) {

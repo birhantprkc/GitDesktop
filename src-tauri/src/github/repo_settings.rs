@@ -415,9 +415,15 @@ pub struct RepoSettings {
     #[serde(default, alias = "web_commit_signoff_required")]
     pub web_commit_signoff_required: bool,
     /// Read-only — the repo's GitHub URL, for "manage on GitHub" deep links to
-    /// the web-only settings (sponsorships, LFS-in-archives, push limits, …).
+    /// the web-only settings (LFS-in-archives, push limits, …).
     #[serde(default, alias = "html_url")]
     pub html_url: String,
+    /// Read-only — "public" | "private" | "internal" (for the danger zone).
+    #[serde(default)]
+    pub visibility: String,
+    /// Read-only — "owner/repo", for the type-to-confirm destructive actions.
+    #[serde(default, alias = "full_name")]
+    pub full_name: String,
     #[serde(default, alias = "is_template")]
     pub is_template: bool,
     #[serde(default, alias = "allow_forking")]

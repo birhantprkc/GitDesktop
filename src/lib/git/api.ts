@@ -70,6 +70,8 @@ import type {
   RepoTraffic,
   RewriteStep,
   SecretApp,
+  SecurityFeature,
+  SecurityStatus,
   StagedDiff,
   StashEntry,
   StashFile,
@@ -1267,6 +1269,26 @@ export const ghInvitationUpdate = (
 
 export const ghInvitationCancel = (repoPath: string, id: string) =>
   invoke<void>("gh_invitation_cancel", { repoPath, id });
+
+export const ghSecurityGet = (repoPath: string) =>
+  invoke<SecurityStatus>("gh_security_get", { repoPath });
+
+export const ghSecurityApply = (
+  repoPath: string,
+  changes: { feature: SecurityFeature; enabled: boolean }[],
+) => invoke<void>("gh_security_apply", { repoPath, changes });
+
+export const ghRepoSetVisibility = (repoPath: string, visibility: string) =>
+  invoke<void>("gh_repo_set_visibility", { repoPath, visibility });
+
+export const ghRepoTransfer = (
+  repoPath: string,
+  newOwner: string,
+  newName: string | null,
+) => invoke<void>("gh_repo_transfer", { repoPath, newOwner, newName });
+
+export const ghRepoDelete = (repoPath: string) =>
+  invoke<void>("gh_repo_delete", { repoPath });
 
 /** The repo's local `.github/FUNDING.yml` text (null when absent). */
 export const fundingGet = (repoPath: string) =>
