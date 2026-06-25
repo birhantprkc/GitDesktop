@@ -17,6 +17,8 @@ import { PlanView } from "@/features/plan/PlanView";
 import { usePlanStore } from "@/features/plan/store";
 import { CreateLocalPrDialog } from "@/features/pulls/CreateLocalPrDialog";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { usePrAuditByBranch } from "@/lib/pulls/audit";
+import { PrAuditChip } from "./PrAuditChip";
 import { SessionActivation } from "./SessionActivation";
 import { SessionConversation } from "./SessionConversation";
 import { SessionOpenMenu } from "./SessionOpenMenu";
@@ -72,6 +74,12 @@ function SessionCanvas({
   const kept = session.kept;
   const hasCommits = kept || session.headHash !== session.base;
   const commitCount = session.turns.filter((t) => t.commitHash).length;
+  // PR/merge audit for this branch (local + GitHub) — surfaced beside the branch
+  // so you can confirm the work landed before deleting it. Remote PRs are only
+  // fetched for a kept session; a working one has no PR yet.
+  const prAudit = usePrAuditByBranch(session.repoPath, kept).get(
+    session.branch,
+  );
   // Actions are disabled while the agent runs or a keep/resume/discard is mid-flight.
   const blocked = session.running || busyId === session.id;
   const title = session.turns[0]?.prompt.trim() || "Agent session";
@@ -130,6 +138,14 @@ function SessionCanvas({
               >
                 {session.branch}
               </span>
+              {prAudit && (
+                <>
+                  <span className="text-muted-foreground" aria-hidden>
+                    ·
+                  </span>
+                  <PrAuditChip audit={prAudit} />
+                </>
+              )}
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">

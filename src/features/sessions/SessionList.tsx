@@ -14,10 +14,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type PlanRun, usePlanStore } from "@/features/plan/store";
+import { useReconcileLocalPrs } from "@/features/pulls/useReconcileLocalPrs";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
+import { type PrAudit, usePrAuditByBranch } from "@/lib/pulls/audit";
 import { cn } from "@/lib/utils";
 import { clearAgentSelection, selectPlan, selectSession } from "./agentSelect";
+import { PrAuditChip } from "./PrAuditChip";
 import { StatusIndicator, sessionStatus } from "./status";
 import { type AgentSession, useSessionsStore } from "./store";
 
@@ -101,6 +104,13 @@ export function SessionList({ repoPath }: { repoPath: string }) {
     activeSessionCount + (repoPlans.length - archivedPlanCount);
   const keptCount = repoSessions.length - activeSessionCount;
   const archivedCount = archivedPlanCount;
+
+  // Audit: link each session's branch to its pull request and merge state. Keep
+  // local PRs honest with git while the agent tab is open, then look up by branch
+  // (local + GitHub). Remote PRs are only fetched once something's been kept —
+  // before that, no session has a PR to show.
+  useReconcileLocalPrs(repoPath);
+  const prAudit = usePrAuditByBranch(repoPath, keptCount > 0);
 
   // The visible rows: the current tab, narrowed by the search query. Sessions show
   // on Active (working) / Kept (finalized); plans show on Active (in-progress) /
@@ -259,6 +269,7 @@ export function SessionList({ repoPath }: { repoPath: string }) {
                   <PlanRow
                     key={`plan:${r.id}`}
                     run={r}
+                    audit={prAudit}
                     active={r.id === activePlanId}
                     tabIndex={i === rovingIndex ? 0 : -1}
                     motionProps={rowMotion}
@@ -274,6 +285,7 @@ export function SessionList({ repoPath }: { repoPath: string }) {
                     <SessionRow
                       key={`session:${s.id}`}
                       session={s}
+                      audit={prAudit.get(s.branch)}
                       active={s.id === activeId}
                       tabIndex={idx === rovingIndex ? 0 : -1}
                       motionProps={rowMotion}
@@ -351,7 +363,13 @@ function ListEmpty({ tab, hasQuery }: { tab: SessionTab; hasQuery: boolean }) {
 }
 
 /** Status line for a plan row — mirrors a session's StatusIndicator. */
-function PlanStatus({ run }: { run: PlanRun }) {
+function PlanStatus({
+  run,
+  audit,
+}: {
+  run: PlanRun;
+  audit: Map<string, PrAudit>;
+}) {
   // Subscribe to the spawned session (if any) so the row tracks its status live.
   const session = useSessionsStore((s) =>
     run.implementedSessionId
@@ -381,8 +399,16 @@ function PlanStatus({ run }: { run: PlanRun }) {
     if (st.kind === "error") {
       return <span className="text-destructive">Implement failed</span>;
     }
+    // Audit trail: once the implementing session has a pull request, surface it
+    // (its merge is the real "done") instead of the redundant "Kept".
+    const merge = audit.get(session.branch);
     return (
-      <span className="text-muted-foreground">Implemented · {st.label}</span>
+      <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+        <span className="truncate">
+          {merge ? "Implemented" : `Implemented · ${st.label}`}
+        </span>
+        {merge && <PrAuditChip audit={merge} />}
+      </span>
     );
   }
   if (run.error) return <span className="text-destructive">Plan failed</span>;
@@ -393,12 +419,14 @@ function PlanStatus({ run }: { run: PlanRun }) {
 
 function PlanRow({
   run,
+  audit,
   active,
   tabIndex,
   motionProps,
   onClick,
 }: {
   run: PlanRun;
+  audit: Map<string, PrAudit>;
   active: boolean;
   tabIndex: number;
   motionProps: Pick<MotionProps, "initial" | "animate" | "exit">;
@@ -422,7 +450,7 @@ function PlanRow({
         {planLabel(run)}
       </span>
       <span className="flex w-full items-center gap-2 text-[11px]">
-        <PlanStatus run={run} />
+        <PlanStatus run={run} audit={audit} />
         {run.costUsd != null && (
           <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
             ${run.costUsd.toFixed(2)}
@@ -435,12 +463,14 @@ function PlanRow({
 
 function SessionRow({
   session,
+  audit,
   active,
   tabIndex,
   motionProps,
   onClick,
 }: {
   session: AgentSession;
+  audit: PrAudit | undefined;
   active: boolean;
   tabIndex: number;
   motionProps: Pick<MotionProps, "initial" | "animate" | "exit">;
@@ -467,6 +497,7 @@ function SessionRow({
       </span>
       <span className="flex w-full items-center gap-2 text-[11px]">
         <StatusIndicator session={session} className="min-w-0" />
+        {audit && <PrAuditChip audit={audit} />}
         {cost > 0 && (
           <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
             ${cost.toFixed(2)}

@@ -88,6 +88,13 @@ commit list.
 - **Promote a kept session to a local PR.** A kept agent session gained a **Create
   PR** button (and command-palette action) that opens a local pull request from its
   branch, prefilled and ready — a one-click hand-off from "agent finished" to review.
+- **See a session's pull-request and merge state on its row.** Agent session and plan
+  rows now show a pull-request audit chip — **PR open**, **PR closed**, or **Merged** —
+  derived from the session branch's local *and* GitHub pull request, so you can tell at
+  a glance whether the agent's work actually landed. An implemented plan reads
+  "Implemented · Merged" once its session's PR is merged. Merge status is read from the
+  pull request itself (not `git merge-base`), so it stays correct through squash and
+  rebase merges, including a local PR you've promoted to GitHub.
 - **opencode runs in the container sandbox too.** opencode joins Claude and Codex as
   a container-isolated agent (kernel-enforced filesystem confinement) — add it under
   Settings → AI → agent image and rebuild. Its free hosted models need no key, so the
