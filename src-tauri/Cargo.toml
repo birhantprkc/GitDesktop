@@ -35,8 +35,17 @@ thiserror = "2"
 base64 = "0.22.1"
 tauri-plugin-notification = "2.3.3"
 os_info = "3"
+portable-pty = "0.9"
 
 # Desktop-only: the updater plugin doesn't build for mobile.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+
+# Vendored portable-pty carrying a 1-line Windows ConPTY fix: pass NULL (not
+# INVALID_HANDLE_VALUE) std handles when spawning the pty child, so it attaches to
+# the pseudoconsole instead of allocating its own console window (which left the
+# in-app terminal's output empty and "exited" immediately). See the patch comment in
+# vendor/portable-pty/src/win/psuedocon.rs. Drop this when fixed upstream (wezterm).
+[patch.crates-io]
+portable-pty = { path = "vendor/portable-pty" }
 

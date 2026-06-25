@@ -21,6 +21,16 @@ commit list.
   one click, and both apply immediately. They join the global identity and
   default-branch fields already in that panel.
 
+- **Integrated terminal.** Every agent session gained a built-in terminal — toggle it
+  with the terminal hotkey (`Ctrl`/`⌘`+`` ` ``) or the **Terminal** button — so you can
+  run commands right inside GitDesktop instead of opening a separate window. It's a real
+  shell (a PTY) in a resizable bottom dock that keeps running while hidden, so a dev
+  server you start stays up. For a **container** session the terminal runs *inside* the
+  session's Docker/Podman container — clicking **Terminal** opens a small popover to
+  choose which dev-server port(s) to publish *before* it spins up (so a busy host port
+  doesn't kill the launch), where you can also **reconnect** to or **stop** a container
+  that's still running; for a host session it's a shell in the worktree.
+
 - **Run a task several ways at once (best-of-N).** The Delegate composer gained a
   **Best-of-N** button: run the same task across 2–5 arms, **each with its own agent,
   model, and effort** — mix Claude, Codex, Copilot, and opencode so different providers
@@ -95,20 +105,15 @@ commit list.
   uncommitted edits *as the agent makes them*, before each turn's checkpoint commit
   — so you can follow along instead of waiting for the commit to land.
 - **Test a session's changes before you keep them.** Every active session gained an
-  **Open** menu — open its worktree in your editor or a terminal (or reveal it in the
-  file manager) and run it for real before you Keep or Discard. The worktree is a full
-  checkout on the session's branch, isolated from your working tree. For a
-  **container** session, whose dependencies were installed for Linux, a separate
-  **Test** button opens an interactive shell in the same image with the worktree
-  mounted, so `pnpm install` and running it happen in the matching environment rather
-  than failing against host-incompatible deps. You choose which dev-server port(s) to
-  publish to your localhost (pre-filled with `5173`, overridable) — so a server you
-  start in the container (bound to `0.0.0.0`, e.g. Vite `--host`) is reachable in your
-  browser, and you can remap a busy host port with `host:container` (e.g. `5174:5173`).
-  Because closing the terminal leaves the container (and its server) running in the
-  daemon, the **Test** popover notices when one is already running and lets you
-  **reconnect** a new shell into it or **stop** it to free the ports — and keeping or
-  discarding the session shuts its test container down for you.
+  **Open** menu — open its worktree in your editor, a terminal, or the file manager and
+  run it for real before you Keep or Discard. The worktree is a full checkout on the
+  session's branch, isolated from your working tree. For a **container** session, whose
+  dependencies were installed for Linux, the live shell is the integrated **terminal**
+  (above) — a shell *inside* the same image with the worktree mounted, so `pnpm install`
+  and running it happen in the matching environment rather than failing against
+  host-incompatible deps; that's where you choose the dev-server ports to publish and
+  reconnect to or stop a still-running container. Keeping or discarding the session
+  shuts its test container down for you.
 - **Promote a kept session to a local PR.** A kept agent session gained a **Create
   PR** button (and command-palette action) that opens a local pull request from its
   branch, prefilled and ready — a one-click hand-off from "agent finished" to review.

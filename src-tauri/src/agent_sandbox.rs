@@ -544,13 +544,28 @@ pub async fn agent_open_container_shell(
             "not a directory: {worktree_path}"
         )));
     }
+    let (bin, args, tip) = container_shell_command(&worktree_path, &ports).await?;
+    launch_container_shell(&bin, &args, &tip)
+}
+
+/// Builds the docker/podman command (binary + args) that opens a shell for a
+/// worktree's test container — `exec` into it if it's already running, else `run`
+/// a fresh named container publishing `ports` with the worktree mounted (clearing
+/// any stale same-name container first). Returns `(binary, args, tip)`; the tip
+/// names the reachable `localhost:<port>` URLs (or the reconnect note). Shared by
+/// the external terminal launcher (above) and the in-app PTY terminal so both use
+/// the identical run-or-exec, port, and cleanup logic.
+pub(crate) async fn container_shell_command(
+    worktree_path: &str,
+    ports: &[String],
+) -> AppResult<(String, Vec<String>, String)> {
     let (bin_path, rt) = detect_runtime().await.ok_or_else(|| {
         AppError::Command(
             "Docker or Podman not found on PATH — install one to test a container session."
                 .into(),
         )
     })?;
-    let name = test_container_name(&worktree_path);
+    let name = test_container_name(worktree_path);
     let bin = bin_path.to_string_lossy().to_string();
 
     // Already running (its terminal was closed without `exit`) → reconnect a fresh
@@ -559,32 +574,30 @@ pub async fn agent_open_container_shell(
     if container_running(&bin_path, &name).await {
         let args = vec!["exec".into(), "-it".into(), name, "bash".into()];
         let tip = "Tip: reconnected to the container that is still running - your server and ports are unchanged. Use Stop test container to shut it down.".to_string();
-        return launch_container_shell(&bin, &args, &tip);
+        return Ok((bin, args, tip));
     }
 
     // Validate the ports before touching anything, so a bad spec fails before we
-    // remove/start a container or spawn a terminal.
+    // remove/start a container.
     let mut port_args: Vec<String> = Vec::new();
     let mut host_ports: Vec<u16> = Vec::new();
-    for spec in &ports {
+    for spec in ports {
         let (host, container) = parse_port_spec(spec)?;
         port_args.push("-p".into());
         port_args.push(format!("127.0.0.1:{host}:{container}"));
         host_ports.push(host);
     }
 
-    // Not running: clear any stale stopped container with this name so `--name`
-    // can't collide, then start a fresh one.
+    // Clear any stale stopped container with this name so `--name` can't collide.
     let _ = run_capture(&bin_path, &["rm", "-f", &name], DETECT_TIMEOUT).await;
 
-    let mount = format!("{}:/workspace", to_mount_source(&worktree_path, &rt));
+    let mount = format!("{}:/workspace", to_mount_source(worktree_path, &rt));
     let mut args: Vec<String> =
         vec!["run".into(), "-it".into(), "--rm".into(), "--name".into(), name];
     // Publish the user's chosen dev-server ports to the host's loopback so a server
     // started in the container is reachable at `localhost:<host>` from the host
-    // browser. (It must bind `0.0.0.0` inside — e.g. Vite `--host` — since Docker
-    // forwards to the container's interface, not its loopback.) Bound to 127.0.0.1
-    // so nothing is exposed to the LAN.
+    // browser (it must bind `0.0.0.0` inside — e.g. Vite `--host`). Bound to
+    // 127.0.0.1 so nothing is exposed to the LAN.
     args.extend(port_args);
     args.push("-v".into());
     args.push(mount);
@@ -592,12 +605,8 @@ pub async fn agent_open_container_shell(
     args.push("/workspace".into());
     args.push(IMAGE.into());
     args.push("bash".into());
-    // The tip names the actual published host ports so the user knows where to
-    // browse (no apostrophes/parens — it is echoed unquoted on Windows and
-    // single-quoted on unix).
     let tip = if host_ports.is_empty() {
-        "Tip: no ports were published - re-open with a port to reach a dev server from your browser."
-            .to_string()
+        "Tip: no ports were published - re-open with a port to reach a dev server from your browser.".to_string()
     } else {
         let urls = host_ports
             .iter()
@@ -608,7 +617,7 @@ pub async fn agent_open_container_shell(
             "Tip: bind your dev server to 0.0.0.0 - e.g. pnpm dev --host - then open {urls} in your browser."
         )
     };
-    launch_container_shell(&bin, &args, &tip)
+    Ok((bin, args, tip))
 }
 
 /// Whether this worktree's test-shell container is currently running — lets the UI

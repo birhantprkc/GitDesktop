@@ -55,6 +55,12 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   **Agent Skills** (project *and* global, including the shared `.agents/skills`) —
   plus `@file` mentions, a model/reasoning-effort picker, and terminal-style
   prompt history.
+- **Run commands without leaving the app** — every agent session has an integrated
+  terminal: a real shell in a resizable bottom dock, toggled with `Ctrl`/`⌘`+`` ` ``. For a
+  container session it runs *inside* the session's container — you pick which dev-server
+  ports to publish *before* it starts, and can reconnect to or stop one that's still
+  running; for a host session it's a shell in the worktree. A hidden terminal keeps
+  running, so a dev server you start stays up.
 - **Run a task several ways and keep the best** — fan one task out across 2–5 arms
   (best-of-N), **each with its own agent, model, and effort** so different providers
   (Claude, Codex, Copilot, opencode) attack it differently. Each runs in its own

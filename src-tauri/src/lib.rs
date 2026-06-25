@@ -7,6 +7,7 @@ mod github;
 mod health;
 mod hooks;
 mod instructions;
+mod pty;
 mod secrets;
 mod sessions;
 mod state;
@@ -48,6 +49,7 @@ pub fn run() {
         })
         .on_window_event(tray::handle_window_event)
         .manage(AppState::default())
+        .manage(pty::PtyState::default())
         .invoke_handler(tauri::generate_handler![
             git::repo::check_git_installed,
             git::repo::validate_repo,
@@ -75,8 +77,14 @@ pub fn run() {
             git::commit::git_commit,
             git::commit::git_commit_authors,
             git::commit::git_user_identity,
+            git::commit::git_local_identity,
+            git::commit::git_set_local_identity,
             git::commit::git_global_identity,
             git::commit::git_set_global_identity,
+            git::commit::git_global_default_branch,
+            git::commit::git_set_global_default_branch,
+            git::config::git_global_autocrlf,
+            git::config::git_set_global_autocrlf,
             git::commit::git_undo_commit,
             git::commit::git_recent_commits,
             git::history::git_log,
@@ -109,6 +117,10 @@ pub fn run() {
             agent_sandbox::agent_open_container_shell,
             agent_sandbox::agent_test_container_running,
             agent_sandbox::agent_stop_test_container,
+            pty::pty_open,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_close,
             git::ops::git_checkout_commit,
             git::ops::git_revert,
             git::ops::git_cherry_pick,

@@ -1,4 +1,9 @@
-import { SparkleIcon, UsersThreeIcon } from "@phosphor-icons/react";
+import { Popover } from "@base-ui/react/popover";
+import {
+  SparkleIcon,
+  TerminalWindowIcon,
+  UsersThreeIcon,
+} from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,9 +21,16 @@ import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { PlanView } from "@/features/plan/PlanView";
 import { usePlanStore } from "@/features/plan/store";
 import { CreateLocalPrDialog } from "@/features/pulls/CreateLocalPrDialog";
+import {
+  TerminalDock,
+  type TerminalLaunch,
+} from "@/features/terminal/TerminalDock";
 import { formatUsd } from "@/lib/ai/cost";
+import { openContainerShell, stopTestContainer } from "@/lib/ai/sandbox";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { usePrAuditByBranch } from "@/lib/pulls/audit";
+import { toastError } from "@/lib/toast";
+import { ContainerLaunchPanel } from "./ContainerLaunchPanel";
 import { PrAuditChip } from "./PrAuditChip";
 import { SessionActivation } from "./SessionActivation";
 import { SessionConversation } from "./SessionConversation";
@@ -72,6 +84,15 @@ function SessionCanvas({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmKeepEnsemble, setConfirmKeepEnsemble] = useState(false);
   const [createPr, setCreatePr] = useState(false);
+  // Integrated terminal: `terminalOpen` is the dock's visibility; `launch` is what
+  // it renders (null until launched). A host shell launches immediately; a
+  // container shell launches from the Terminal button's port popover so the ports
+  // are chosen before the container spins up. `launchPopoverOpen` lets the hotkey
+  // open that popover too (not just a click on the trigger).
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [launch, setLaunch] = useState<TerminalLaunch | null>(null);
+  const [launchPopoverOpen, setLaunchPopoverOpen] = useState(false);
+  const isContainer = session.isolation === "container";
 
   const kept = session.kept;
   const hasCommits = kept || session.headHash !== session.base;
@@ -141,6 +162,33 @@ function SessionCanvas({
   const toggleView = () =>
     setSegment((s) => (s === "conversation" ? "changes" : "conversation"));
 
+  // Launch (host shell, or a container shell with the popover-chosen ports) and
+  // reveal the dock. `[]` ports = reconnect into an already-running container.
+  const launchTerminal = (ports: string[]) => {
+    setLaunch({ ports, token: 0 });
+    setLaunchPopoverOpen(false);
+    setTerminalOpen(true);
+  };
+  const restartTerminal = () =>
+    setLaunch((l) => (l ? { ...l, token: l.token + 1 } : l));
+  // Stop the container, drop the terminal (it unmounts → kills the shell client),
+  // and close the dock; relaunching goes back through the port popover.
+  const stopTerminal = () => {
+    stopTestContainer(session.worktreePath).catch(toastError);
+    setLaunch(null);
+    setTerminalOpen(false);
+  };
+  // The button/hotkey: a container needs the port popover for its first launch;
+  // once launched (or for a host shell) it just toggles the dock's visibility.
+  const toggleTerminal = () => {
+    if (isContainer && !launch) {
+      setLaunchPopoverOpen((o) => !o);
+    } else {
+      if (!isContainer && !launch) setLaunch({ ports: [], token: 0 });
+      setTerminalOpen((o) => !o);
+    }
+  };
+
   useHotkeyAction(
     "agent-keep-session",
     doKeep,
@@ -151,6 +199,7 @@ function SessionCanvas({
   useHotkeyAction("agent-delete-session", doDelete, !blocked && kept);
   useHotkeyAction("agent-create-pr", doCreatePr, !blocked && kept);
   useHotkeyAction("agent-toggle-view", toggleView);
+  useHotkeyAction("agent-toggle-terminal", toggleTerminal);
 
   return (
     <div className="flex h-full flex-col">
@@ -248,7 +297,7 @@ function SessionCanvas({
             </span>
           </div>
         )}
-        <div className="px-3 py-2.5">
+        <div className="flex items-center justify-between gap-2 px-3 py-2.5">
           <Tabs value={segment} onValueChange={(v) => setSegment(v as Segment)}>
             <TabsList>
               <TabsTrigger value="conversation">Conversation</TabsTrigger>
@@ -270,6 +319,73 @@ function SessionCanvas({
               </TabsTrigger>
             </TabsList>
           </Tabs>
+          {isContainer && !launch ? (
+            // A container terminal needs ports chosen before it spins up — the
+            // Terminal button opens a popover (same flow as the old Test button)
+            // to pick them, then mounts the in-app shell in the dock.
+            <Popover.Root
+              open={launchPopoverOpen}
+              onOpenChange={setLaunchPopoverOpen}
+            >
+              <Popover.Trigger
+                render={
+                  <Button
+                    size="xs"
+                    variant={launchPopoverOpen ? "secondary" : "ghost"}
+                  />
+                }
+                title="Open a terminal in the session's container"
+              >
+                <TerminalWindowIcon className="size-3.5" />
+                Terminal
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Positioner
+                  align="end"
+                  sideOffset={6}
+                  className="isolate z-50"
+                >
+                  <Popover.Popup className="w-80 bg-popover p-3 text-popover-foreground shadow-md ring-1 ring-foreground/10">
+                    <p className="mb-2 text-xs font-medium">
+                      Open container terminal
+                    </p>
+                    {/* Remount on open so it re-checks whether one is up. */}
+                    {launchPopoverOpen && (
+                      <ContainerLaunchPanel
+                        worktreePath={session.worktreePath}
+                        onStart={launchTerminal}
+                        onReconnect={() => launchTerminal([])}
+                        // Dev-only escape hatch: the in-app PTY needs a release
+                        // build on Windows, so in dev keep the (working) external
+                        // shell reachable. Tree-shaken from release builds.
+                        onOpenExternal={
+                          import.meta.env.DEV
+                            ? (ports) => {
+                                openContainerShell(
+                                  session.worktreePath,
+                                  ports,
+                                ).catch(toastError);
+                                setLaunchPopoverOpen(false);
+                              }
+                            : undefined
+                        }
+                      />
+                    )}
+                  </Popover.Popup>
+                </Popover.Positioner>
+              </Popover.Portal>
+            </Popover.Root>
+          ) : (
+            <Button
+              size="xs"
+              variant={terminalOpen ? "secondary" : "ghost"}
+              onClick={toggleTerminal}
+              title="Toggle the terminal"
+            >
+              <TerminalWindowIcon className="size-3.5" />
+              Terminal
+            </Button>
+          )}
         </div>
       </div>
 
@@ -280,6 +396,15 @@ function SessionCanvas({
           <SessionChanges session={session} />
         )}
       </div>
+
+      <TerminalDock
+        session={session}
+        open={terminalOpen}
+        onOpenChange={setTerminalOpen}
+        launch={launch}
+        onRestart={restartTerminal}
+        onStop={stopTerminal}
+      />
 
       <Dialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
         <DialogContent>

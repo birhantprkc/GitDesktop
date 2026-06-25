@@ -455,6 +455,12 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "agent-toggle-terminal",
+    label: "Toggle terminal",
+    category: "Agent",
+    defaultBinding: "mod+`",
+  },
+  {
     id: "agent-toggle-list-tab",
     label: "Toggle active / kept sessions",
     category: "Agent",
