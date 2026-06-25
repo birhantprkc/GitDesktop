@@ -51,6 +51,7 @@ import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
+import { SecretsSection } from "./SecretsSection";
 
 // A curated set of the events people wire webhooks to, plus the "everything"
 // option. Not GitHub's full ~30 — the long tail can be added later.
@@ -104,6 +105,7 @@ export function RepoSettingsDialog({
         <Tabs defaultValue="general" className="flex min-h-0 min-w-0 flex-col">
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
+            <TabsTrigger value="secrets">Secrets &amp; variables</TabsTrigger>
             <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
           </TabsList>
           <TabsContent
@@ -111,6 +113,12 @@ export function RepoSettingsDialog({
             className="min-h-0 min-w-0 overflow-y-auto pr-1"
           >
             <GeneralSettingsSection repoPath={repoPath} open={open} />
+          </TabsContent>
+          <TabsContent
+            value="secrets"
+            className="min-h-0 min-w-0 overflow-y-auto pr-1"
+          >
+            <SecretsSection repoPath={repoPath} open={open} />
           </TabsContent>
           <TabsContent
             value="webhooks"

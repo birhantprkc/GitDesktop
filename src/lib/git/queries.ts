@@ -22,6 +22,7 @@ import type {
   RepoOp,
   RepoSettingsInput,
   RewriteStep,
+  SecretApp,
   UnignoreRule,
   WebhookInput,
 } from "./types";
@@ -2188,6 +2189,98 @@ export function useUpdateRepoSettings(repo: string) {
     onSuccess: (data) => queryClient.setQueryData(repoSettingsKey(repo), data),
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: repoSettingsKey(repo) }),
+  });
+}
+
+// Secrets & variables. `env: null` = repository scope; a string = that
+// environment (Actions only). Keyed by app + scope so each list caches apart.
+const secretsKey = (repo: string, app: SecretApp, env: string | null) =>
+  ["repo", repo, "secrets", app, env ?? "$repo"] as const;
+const variablesKey = (repo: string, env: string | null) =>
+  ["repo", repo, "variables", env ?? "$repo"] as const;
+
+export function useSecrets(
+  repo: string,
+  app: SecretApp,
+  env: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: secretsKey(repo, app, env),
+    queryFn: () => api.ghSecretsList(repo, app, env),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useSetSecret(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: {
+      app: SecretApp;
+      env: string | null;
+      name: string;
+      value: string;
+    }) => api.ghSecretSet(repo, a.app, a.env, a.name, a.value),
+    onSettled: (_d, _e, a) =>
+      queryClient.invalidateQueries({
+        queryKey: secretsKey(repo, a.app, a.env),
+      }),
+  });
+}
+
+export function useDeleteSecret(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { app: SecretApp; env: string | null; name: string }) =>
+      api.ghSecretDelete(repo, a.app, a.env, a.name),
+    onSettled: (_d, _e, a) =>
+      queryClient.invalidateQueries({
+        queryKey: secretsKey(repo, a.app, a.env),
+      }),
+  });
+}
+
+export function useVariables(
+  repo: string,
+  env: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: variablesKey(repo, env),
+    queryFn: () => api.ghVariablesList(repo, env),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useSetVariable(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { env: string | null; name: string; value: string }) =>
+      api.ghVariableSet(repo, a.env, a.name, a.value),
+    onSettled: (_d, _e, a) =>
+      queryClient.invalidateQueries({ queryKey: variablesKey(repo, a.env) }),
+  });
+}
+
+export function useDeleteVariable(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { env: string | null; name: string }) =>
+      api.ghVariableDelete(repo, a.env, a.name),
+    onSettled: (_d, _e, a) =>
+      queryClient.invalidateQueries({ queryKey: variablesKey(repo, a.env) }),
+  });
+}
+
+export function useEnvironments(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "environments"] as const,
+    queryFn: () => api.ghEnvironmentsList(repo),
+    enabled,
+    retry: false,
+    staleTime: 60_000,
   });
 }
 

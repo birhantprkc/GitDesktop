@@ -12,6 +12,14 @@ commit list.
 
 ### Added
 
+- **Manage GitHub secrets & variables, in the app.** A new **Secrets & variables** tab
+  in repository settings lists and edits **Actions, Dependabot, and Codespaces secrets**
+  and **Actions variables**, at **repository or environment** scope. Secret values are
+  encrypted on your machine before they're sent (GitDesktop never handles the raw
+  encryption), and — as on GitHub — can't be read back, only replaced or removed; a
+  reused name updates the existing variable. Part of the broader org/repo governance
+  buildout ([docs/github-governance-expansion.md](docs/github-governance-expansion.md)).
+
 - **More GitHub repo settings, in the app.** The repository-settings dialog gained
   **template repository** and **allow forking** toggles and **default squash/merge
   commit message** pickers — plus an **"Only on GitHub"** list that deep-links the five

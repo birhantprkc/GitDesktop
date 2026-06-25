@@ -30,7 +30,9 @@ import type {
   GhBranchProtection,
   GhRepoList,
   GhScopes,
+  GhSecret,
   GhStatus,
+  GhVariable,
   GitInfo,
   HookDelivery,
   HookDeliveryDetail,
@@ -64,6 +66,7 @@ import type {
   RepoStatus,
   RepoTraffic,
   RewriteStep,
+  SecretApp,
   StagedDiff,
   StashEntry,
   StashFile,
@@ -1196,6 +1199,46 @@ export const ghRepoSettingsUpdate = (
   repoPath: string,
   input: RepoSettingsInput,
 ) => invoke<RepoSettings>("gh_repo_settings_update", { repoPath, input });
+
+export const ghSecretsList = (
+  repoPath: string,
+  app: SecretApp,
+  env: string | null,
+) => invoke<GhSecret[]>("gh_secrets_list", { repoPath, app, env });
+
+export const ghSecretSet = (
+  repoPath: string,
+  app: SecretApp,
+  env: string | null,
+  name: string,
+  value: string,
+) => invoke<void>("gh_secret_set", { repoPath, app, env, name, value });
+
+export const ghSecretDelete = (
+  repoPath: string,
+  app: SecretApp,
+  env: string | null,
+  name: string,
+) => invoke<void>("gh_secret_delete", { repoPath, app, env, name });
+
+export const ghVariablesList = (repoPath: string, env: string | null) =>
+  invoke<GhVariable[]>("gh_variables_list", { repoPath, env });
+
+export const ghVariableSet = (
+  repoPath: string,
+  env: string | null,
+  name: string,
+  value: string,
+) => invoke<void>("gh_variable_set", { repoPath, env, name, value });
+
+export const ghVariableDelete = (
+  repoPath: string,
+  env: string | null,
+  name: string,
+) => invoke<void>("gh_variable_delete", { repoPath, env, name });
+
+export const ghEnvironmentsList = (repoPath: string) =>
+  invoke<string[]>("gh_environments_list", { repoPath });
 
 export const ghPrReady = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_ready", { repoPath, number });

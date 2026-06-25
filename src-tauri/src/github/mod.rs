@@ -7,3 +7,4 @@ pub mod pr;
 pub mod release;
 pub mod repo_settings;
 pub mod runner;
+pub mod secrets;

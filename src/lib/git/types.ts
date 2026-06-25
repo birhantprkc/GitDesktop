@@ -462,6 +462,22 @@ export interface GhScopes {
   classic: boolean;
 }
 
+/** Which secret store a name lives in. Variables are Actions-only. */
+export type SecretApp = "actions" | "dependabot" | "codespaces";
+
+/** A secret's metadata — GitHub never returns the value, only set/delete. */
+export interface GhSecret {
+  name: string;
+  updatedAt: string;
+}
+
+/** An Actions variable. Unlike a secret, its value is readable and editable. */
+export interface GhVariable {
+  name: string;
+  value: string;
+  updatedAt: string;
+}
+
 /** A GitHub (classic) branch protection rule, for importing into branch rules. */
 export interface GhBranchProtection {
   /** fnmatch-style branch name pattern the rule targets. */
