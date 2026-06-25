@@ -2,12 +2,12 @@ import { Popover } from "@base-ui/react/popover";
 import { PlayIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { clearAgentSelection } from "@/features/sessions/agentSelect";
 import {
   AgentPicker,
   EffortPicker,
   ModelPicker,
-} from "@/features/sessions/SessionComposer";
+} from "@/features/sessions/AgentPickers";
+import { clearAgentSelection } from "@/features/sessions/agentSelect";
 import { useSessionsStore } from "@/features/sessions/store";
 import type { AgentKind } from "@/lib/ai/agent";
 import { buildImplementPrompt } from "@/lib/ai/prompt";

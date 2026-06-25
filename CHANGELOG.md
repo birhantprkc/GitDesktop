@@ -12,6 +12,17 @@ commit list.
 
 ### Added
 
+- **Run a task several ways at once (best-of-N).** The Delegate composer gained a
+  **Best-of-N** button: run the same task across 2–5 arms, **each with its own agent,
+  model, and effort** — mix Claude, Codex, Copilot, and opencode so different providers
+  attack the problem from different angles. Each arm runs in its own worktree; review
+  them side by side and **keep the best one** with a single click (it discards the
+  rest). Because fanning out multiple agents costs real money, a confirmation first
+  shows an **upfront estimate** drawn from what your own recent sessions actually cost
+  (scaling with the arm count), and the ensemble's **running total** is shown while it
+  works. It's opt-in and never the default — best for open-ended tasks with several
+  good approaches.
+
 - **Plan a task before you build it.** A new read-only **Plan** mode in the Agent
   surface: describe a task (or start from an existing issue with the new **Plan**
   button on any issue) and a repo-aware agent explores your actual code, then drafts
@@ -85,6 +96,10 @@ commit list.
   publish to your localhost (pre-filled with `5173`, overridable) — so a server you
   start in the container (bound to `0.0.0.0`, e.g. Vite `--host`) is reachable in your
   browser, and you can remap a busy host port with `host:container` (e.g. `5174:5173`).
+  Because closing the terminal leaves the container (and its server) running in the
+  daemon, the **Test** popover notices when one is already running and lets you
+  **reconnect** a new shell into it or **stop** it to free the ports — and keeping or
+  discarding the session shuts its test container down for you.
 - **Promote a kept session to a local PR.** A kept agent session gained a **Create
   PR** button (and command-palette action) that opens a local pull request from its
   branch, prefilled and ready — a one-click hand-off from "agent finished" to review.

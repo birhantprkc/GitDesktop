@@ -8,12 +8,12 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AgentNarration } from "@/features/sessions/AgentNarration";
-import { selectSession } from "@/features/sessions/agentSelect";
 import {
   AgentPicker,
   EffortPicker,
   ModelPicker,
-} from "@/features/sessions/SessionComposer";
+} from "@/features/sessions/AgentPickers";
+import { selectSession } from "@/features/sessions/agentSelect";
 import { useSessionsStore } from "@/features/sessions/store";
 import type { AgentKind } from "@/lib/ai/agent";
 import { extractPlanQuestions } from "@/lib/ai/prompt";

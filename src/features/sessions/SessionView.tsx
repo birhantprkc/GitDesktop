@@ -1,5 +1,5 @@
-import { SparkleIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import { SparkleIcon, UsersThreeIcon } from "@phosphor-icons/react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -16,6 +16,7 @@ import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { PlanView } from "@/features/plan/PlanView";
 import { usePlanStore } from "@/features/plan/store";
 import { CreateLocalPrDialog } from "@/features/pulls/CreateLocalPrDialog";
+import { formatUsd } from "@/lib/ai/cost";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { usePrAuditByBranch } from "@/lib/pulls/audit";
 import { PrAuditChip } from "./PrAuditChip";
@@ -69,6 +70,7 @@ function SessionCanvas({
   const [squash, setSquash] = useState(true);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmKeepEnsemble, setConfirmKeepEnsemble] = useState(false);
   const [createPr, setCreatePr] = useState(false);
 
   const kept = session.kept;
@@ -80,12 +82,43 @@ function SessionCanvas({
   const prAudit = usePrAuditByBranch(session.repoPath, kept).get(
     session.branch,
   );
+  // Best-of-N: this session's ensemble arms (incl. itself), their combined live
+  // cost (the running-aggregate half of the cost guardrail), and how many idle
+  // arms a "keep this" would discard.
+  const keepWinner = useSessionsStore((s) => s.keepWinner);
+  const allSessions = useSessionsStore((s) => s.sessions);
+  const ensemble = useMemo(
+    () =>
+      session.ensembleId
+        ? allSessions.filter((x) => x.ensembleId === session.ensembleId)
+        : [],
+    [allSessions, session.ensembleId],
+  );
+  const ensembleCost = useMemo(
+    () =>
+      ensemble.reduce(
+        (sum, s) => sum + s.turns.reduce((a, t) => a + (t.costUsd ?? 0), 0),
+        0,
+      ),
+    [ensemble],
+  );
+  const idleSiblings = ensemble.filter(
+    (x) => x.id !== session.id && !x.kept && !x.running,
+  ).length;
   // Actions are disabled while the agent runs or a keep/resume/discard is mid-flight.
   const blocked = session.running || busyId === session.id;
   const title = session.turns[0]?.prompt.trim() || "Agent session";
 
   const doKeep = () => {
-    if (!blocked && !kept && hasCommits) keep(session.id, squash);
+    if (blocked || kept || !hasCommits) return;
+    // Best-of-N: keeping a winner should clear the losers. Confirm, since
+    // discarding the other arms deletes their branches (and let you keep more
+    // than one if you really want).
+    if (ensemble.length > 1 && idleSiblings > 0) {
+      setConfirmKeepEnsemble(true);
+      return;
+    }
+    keep(session.id, squash);
   };
   // Discarding deletes the worktree AND branch — confirm when there's work to
   // lose; an empty session (no commits) is a harmless cleanup, so skip the gate.
@@ -205,6 +238,16 @@ function SessionCanvas({
             )}
           </div>
         </div>
+        {ensemble.length > 1 && (
+          <div className="flex items-center gap-2 border-t bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">
+            <UsersThreeIcon className="size-3.5 shrink-0" />
+            <span>
+              Best of {ensemble.length}
+              {ensembleCost > 0 && ` · ${formatUsd(ensembleCost)} so far`}
+              {!kept && idleSiblings > 0 && " · Keep discards the other arms"}
+            </span>
+          </div>
+        )}
         <div className="px-3 py-2.5">
           <Tabs value={segment} onValueChange={(v) => setSegment(v as Segment)}>
             <TabsList>
@@ -289,6 +332,48 @@ function SessionCanvas({
               }}
             >
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Best-of-N: keeping a winner offers to discard the other arms (the losers).
+          "Keep only" leaves them if you want to keep more than one. */}
+      <Dialog open={confirmKeepEnsemble} onOpenChange={setConfirmKeepEnsemble}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Keep this arm and discard the rest?</DialogTitle>
+            <DialogDescription>
+              Keeping on branch{" "}
+              <span className="font-mono">{session.branch}</span>. This is one
+              of {ensemble.length} best-of-N arms — discarding the other{" "}
+              {idleSiblings} permanently deletes their worktrees and branches.
+              This can't be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmKeepEnsemble(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setConfirmKeepEnsemble(false);
+                keep(session.id, squash);
+              }}
+            >
+              Keep only
+            </Button>
+            <Button
+              onClick={() => {
+                setConfirmKeepEnsemble(false);
+                keepWinner(session.id, squash);
+              }}
+            >
+              Keep & discard {idleSiblings}
             </Button>
           </DialogFooter>
         </DialogContent>

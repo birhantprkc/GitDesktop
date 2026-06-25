@@ -2,6 +2,7 @@ import {
   MagnifyingGlassIcon,
   PlusIcon,
   SparkleIcon,
+  UsersThreeIcon,
 } from "@phosphor-icons/react";
 import {
   AnimatePresence,
@@ -497,6 +498,14 @@ function SessionRow({
       </span>
       <span className="flex w-full items-center gap-2 text-[11px]">
         <StatusIndicator session={session} className="min-w-0" />
+        {session.ensembleId && (
+          <span
+            className="inline-flex shrink-0 items-center text-muted-foreground"
+            title="One arm of a best-of-N ensemble"
+          >
+            <UsersThreeIcon className="size-3.5" />
+          </span>
+        )}
         {audit && <PrAuditChip audit={audit} />}
         {cost > 0 && (
           <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">

@@ -1,7 +1,7 @@
 import { toast } from "sonner";
 import { create } from "zustand";
 import { cancelAgentSession, runAgentSession } from "@/lib/ai/agent";
-import { cleanupContainerSandbox } from "@/lib/ai/sandbox";
+import { cleanupContainerSandbox, stopTestContainer } from "@/lib/ai/sandbox";
 import {
   commitWorktreeAll,
   createWorktree,
@@ -77,6 +77,11 @@ export interface AgentSession {
    *  session) — lets a host session resume the right conversation (each shares its
    *  CLI home). Unset for Claude / Copilot / container / pre-turn-1. */
   nativeSessionId?: string;
+  /** If this session is one arm of a best-of-N ensemble (the same task run several
+   *  ways), the shared id of that ensemble — set at creation, identical across
+   *  members. In-memory only for now: siblings group within a run, not across an
+   *  app restart (the sessions themselves persist; only the grouping is ephemeral). */
+  ensembleId?: string;
   /** A turn is currently streaming for THIS session (sessions run independently). */
   running: boolean;
   /** Kept: the work was finalized onto `branch` and the worktree removed to free
@@ -123,12 +128,30 @@ interface SessionsState {
     model: string,
     agent: "claude" | "codex" | "copilot" | "opencode",
     effort: string,
+    ensembleId?: string,
   ) => Promise<string | null>;
+  /** Best-of-N: start one session per `arm` on the SAME task, sharing one ensemble
+   *  id, so they can be reviewed side by side and the best one kept. Each arm runs
+   *  its own agent/model/effort — diversity is the point (different providers attack
+   *  a task differently). Returns the new session ids (selects the first). The cost
+   *  guardrail is the caller's job. */
+  startEnsemble: (
+    repoPath: string,
+    prompt: string,
+    arms: {
+      agent: "claude" | "codex" | "copilot" | "opencode";
+      model: string;
+      effort: string;
+    }[],
+  ) => Promise<string[]>;
   send: (id: string, prompt: string) => Promise<void>;
   setModel: (id: string, model: string) => void;
   setEffort: (id: string, effort: string) => void;
   cancel: (id: string) => Promise<void>;
   keep: (id: string, squash: boolean) => Promise<void>;
+  /** Best-of-N resolution: keep session `id` (the winner), then discard its idle,
+   *  non-kept ensemble siblings. Plain keep for a session with no ensemble. */
+  keepWinner: (id: string, squash: boolean) => Promise<void>;
   resume: (id: string) => Promise<void>;
   discard: (id: string) => Promise<void>;
   /** Remove a kept session's record (its branch is preserved). */
@@ -405,7 +428,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 
   setPendingTask: (pendingTask) => set({ pendingTask }),
 
-  start: async (repoPath, prompt, model, agent, effort) => {
+  start: async (repoPath, prompt, model, agent, effort, ensembleId) => {
     const task = prompt.trim();
     if (!task || get().creating) return null;
     set({ creating: true });
@@ -438,6 +461,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       effort,
       isolation,
       agent,
+      ensembleId,
       running: false,
       kept: false,
       turns: [newTurn(task)],
@@ -467,6 +491,32 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     // to it.
     void runTurn(get, set, wt.id, task, false);
     return wt.id;
+  },
+
+  startEnsemble: async (repoPath, prompt, arms) => {
+    const task = prompt.trim();
+    if (!task || arms.length === 0) return [];
+    // One shared id ties the arms together; each is otherwise a normal session
+    // with its own worktree/branch so there's no shared state and no merge.
+    const ensembleId = crypto.randomUUID();
+    const ids: string[] = [];
+    // Sequential, not Promise.all: start() guards on `creating` and each
+    // createWorktree must settle before the next (they'd otherwise race the
+    // worktree name counter). N is small (≤ a handful), so this is fine.
+    for (const arm of arms) {
+      const id = await get().start(
+        repoPath,
+        task,
+        arm.model,
+        arm.agent,
+        arm.effort,
+        ensembleId,
+      );
+      if (id) ids.push(id);
+    }
+    // Land on the first arm so the ensemble is visible immediately.
+    if (ids[0]) set({ activeId: ids[0] });
+    return ids;
   },
 
   send: async (id, prompt) => {
@@ -532,6 +582,10 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     if (!s || s.kept || s.running || get().busyId) return;
     set({ busyId: id });
     try {
+      // A running test container bind-mounts this worktree; stop it first so its
+      // mount can't block removing the dir and doesn't linger after Keep.
+      if (s.isolation === "container")
+        await stopTestContainer(s.worktreePath).catch(() => undefined);
       if (squash && s.headHash !== s.base) {
         const msg =
           s.turns[0]?.prompt.split("\n")[0].slice(0, 72).trim() ||
@@ -553,6 +607,23 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       toastError(e);
       set({ busyId: null });
     }
+  },
+
+  keepWinner: async (id, squash) => {
+    const me = get().sessions.find((x) => x.id === id);
+    if (!me) return;
+    await get().keep(id, squash);
+    // Only drop the siblings if the keep actually landed (it no-ops while busy).
+    if (!get().sessions.find((x) => x.id === id)?.kept || !me.ensembleId)
+      return;
+    // Discard the other arms — idle, non-kept members of the same ensemble.
+    // Sequential because discard() serializes on busyId; running arms are left
+    // for the user to stop, kept arms are independent records.
+    const siblings = get().sessions.filter(
+      (x) =>
+        x.ensembleId === me.ensembleId && x.id !== id && !x.kept && !x.running,
+    );
+    for (const s of siblings) await get().discard(s.id);
   },
 
   resume: async (id) => {
@@ -582,8 +653,12 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     set({ busyId: id });
     // The container home holds a credentials copy and is independent of the
     // worktree, so clean it (idempotently) up front — a failed worktree removal
-    // shouldn't leave it behind.
-    if (s.isolation === "container") persist(cleanupContainerSandbox(id));
+    // shouldn't leave it behind. A running test container bind-mounts the worktree,
+    // so stop it (awaited) before removing the dir so its mount can't block removal.
+    if (s.isolation === "container") {
+      persist(cleanupContainerSandbox(id));
+      await stopTestContainer(s.worktreePath).catch(() => undefined);
+    }
     try {
       await removeWorktree(s.repoPath, s.worktreePath, s.branch, true);
       persist(removeTranscript(id));

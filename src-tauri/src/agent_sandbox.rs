@@ -481,13 +481,53 @@ fn parse_port_spec(spec: &str) -> AppResult<(u16, u16)> {
     }
 }
 
-/// Opens an **interactive shell inside a throwaway container** with a session's
-/// worktree bind-mounted at `/workspace`, so the user can test a container
-/// session's changes in the *matching* Linux environment (its host deps would be
-/// Linux builds — wrong on Windows/macOS). Reuses the session image + the
-/// runtime-specific mount form; runs as the default user so `pnpm`/`npm`/build all
-/// work the way they did for the agent. Launches a real terminal window because
-/// `run -it` needs a TTY.
+/// A stable container name for a worktree's test shell — `gd-test-<hash>`, an
+/// FNV-1a of the normalized path. Stable so re-opening **Test** finds (and can
+/// reconnect to / stop) the same container instead of spawning a second one.
+fn test_container_name(worktree_path: &str) -> String {
+    let norm = worktree_path.replace('\\', "/").to_lowercase();
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in norm.bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("gd-test-{hash:016x}")
+}
+
+/// Whether a container named `name` is currently *running* (not just present).
+async fn container_running(bin: &Path, name: &str) -> bool {
+    match run_capture(
+        bin,
+        &[
+            "ps",
+            "--filter",
+            &format!("name=^{name}$"),
+            "--filter",
+            "status=running",
+            "-q",
+        ],
+        DETECT_TIMEOUT,
+    )
+    .await
+    {
+        Ok((0, out)) => !out.trim().is_empty(),
+        _ => false,
+    }
+}
+
+/// Opens an **interactive shell inside a container** with a session's worktree
+/// bind-mounted at `/workspace`, so the user can test a container session's changes
+/// in the *matching* Linux environment (its host deps would be Linux builds — wrong
+/// on Windows/macOS). Reuses the session image + the runtime-specific mount form;
+/// runs as the default user so `pnpm`/`npm`/build all work the way they did for the
+/// agent. Launches a real terminal window because `run -it` needs a TTY.
+///
+/// The container is **named per-worktree** and `run -it` (not detached): if its
+/// terminal is closed without `exit`, the container — and any dev server in it —
+/// keeps running in the daemon, holding the published ports. So on re-open we
+/// **reconnect** a new shell (`exec`) into the still-running container instead of
+/// starting a second one (which would collide on the name and ports). An explicit
+/// `agent_stop_test_container` shuts it down when you're done.
 ///
 /// `ports` are the user-chosen dev-server ports to publish to the host loopback
 /// (each a bare `PORT` or a `HOST:CONTAINER` remap). A fixed list used to be
@@ -504,28 +544,48 @@ pub async fn agent_open_container_shell(
             "not a directory: {worktree_path}"
         )));
     }
-    let (bin, rt) = detect_runtime().await.ok_or_else(|| {
+    let (bin_path, rt) = detect_runtime().await.ok_or_else(|| {
         AppError::Command(
             "Docker or Podman not found on PATH — install one to test a container session."
                 .into(),
         )
     })?;
+    let name = test_container_name(&worktree_path);
+    let bin = bin_path.to_string_lossy().to_string();
+
+    // Already running (its terminal was closed without `exit`) → reconnect a fresh
+    // shell into it; its server + published ports are untouched. `exec` takes no
+    // ports/mount — those belong to the original `run`.
+    if container_running(&bin_path, &name).await {
+        let args = vec!["exec".into(), "-it".into(), name, "bash".into()];
+        let tip = "Tip: reconnected to the container that is still running - your server and ports are unchanged. Use Stop test container to shut it down.".to_string();
+        return launch_container_shell(&bin, &args, &tip);
+    }
+
+    // Validate the ports before touching anything, so a bad spec fails before we
+    // remove/start a container or spawn a terminal.
+    let mut port_args: Vec<String> = Vec::new();
+    let mut host_ports: Vec<u16> = Vec::new();
+    for spec in &ports {
+        let (host, container) = parse_port_spec(spec)?;
+        port_args.push("-p".into());
+        port_args.push(format!("127.0.0.1:{host}:{container}"));
+        host_ports.push(host);
+    }
+
+    // Not running: clear any stale stopped container with this name so `--name`
+    // can't collide, then start a fresh one.
+    let _ = run_capture(&bin_path, &["rm", "-f", &name], DETECT_TIMEOUT).await;
+
     let mount = format!("{}:/workspace", to_mount_source(&worktree_path, &rt));
-    let bin = bin.to_string_lossy().to_string();
-    let mut args: Vec<String> = vec!["run".into(), "-it".into(), "--rm".into()];
+    let mut args: Vec<String> =
+        vec!["run".into(), "-it".into(), "--rm".into(), "--name".into(), name];
     // Publish the user's chosen dev-server ports to the host's loopback so a server
     // started in the container is reachable at `localhost:<host>` from the host
     // browser. (It must bind `0.0.0.0` inside — e.g. Vite `--host` — since Docker
     // forwards to the container's interface, not its loopback.) Bound to 127.0.0.1
-    // so nothing is exposed to the LAN. Validated up front: a bad spec fails before
-    // we spawn a terminal, with a message that names the offending value.
-    let mut host_ports: Vec<u16> = Vec::new();
-    for spec in &ports {
-        let (host, container) = parse_port_spec(spec)?;
-        args.push("-p".into());
-        args.push(format!("127.0.0.1:{host}:{container}"));
-        host_ports.push(host);
-    }
+    // so nothing is exposed to the LAN.
+    args.extend(port_args);
     args.push("-v".into());
     args.push(mount);
     args.push("-w".into());
@@ -549,6 +609,31 @@ pub async fn agent_open_container_shell(
         )
     };
     launch_container_shell(&bin, &args, &tip)
+}
+
+/// Whether this worktree's test-shell container is currently running — lets the UI
+/// offer to reconnect to it or stop it instead of starting a new one.
+#[tauri::command]
+pub async fn agent_test_container_running(worktree_path: String) -> AppResult<bool> {
+    let Some((bin, _)) = detect_runtime().await else {
+        return Ok(false);
+    };
+    Ok(container_running(&bin, &test_container_name(&worktree_path)).await)
+}
+
+/// Force-stops + removes this worktree's test-shell container, freeing its
+/// published ports. Best-effort — a no-op if it isn't running / doesn't exist.
+#[tauri::command]
+pub async fn agent_stop_test_container(worktree_path: String) -> AppResult<()> {
+    if let Some((bin, _)) = detect_runtime().await {
+        let _ = run_capture(
+            &bin,
+            &["rm", "-f", &test_container_name(&worktree_path)],
+            DETECT_TIMEOUT,
+        )
+        .await;
+    }
+    Ok(())
 }
 
 /// POSIX single-quote a token (mac/Linux launch scripts).
@@ -849,6 +934,19 @@ mod tests {
     #[test]
     fn container_name_is_stable_and_prefixed() {
         assert_eq!(container_name("abc123"), "gd-agent-abc123");
+    }
+
+    #[test]
+    fn test_container_name_is_stable_prefixed_and_path_normalized() {
+        let a = test_container_name("C:\\repos\\wt");
+        assert!(a.starts_with("gd-test-"));
+        assert_eq!(a.len(), "gd-test-".len() + 16); // 16 hex chars
+        // Deterministic across calls, and Windows/POSIX + case variants collapse
+        // to the same name (so re-opening Test finds the same container).
+        assert_eq!(a, test_container_name("C:\\repos\\wt"));
+        assert_eq!(a, test_container_name("c:/repos/wt"));
+        // Different worktrees get different names.
+        assert_ne!(a, test_container_name("C:\\repos\\other"));
     }
 
     #[test]

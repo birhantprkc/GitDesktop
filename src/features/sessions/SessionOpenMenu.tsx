@@ -4,7 +4,7 @@ import {
   FlaskIcon,
   FolderOpenIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,7 +13,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { openContainerShell } from "@/lib/ai/sandbox";
+import {
+  openContainerShell,
+  stopTestContainer,
+  testContainerRunning,
+} from "@/lib/ai/sandbox";
 import {
   openInTerminal,
   openWithDefault,
@@ -122,14 +126,48 @@ export function SessionOpenMenu({
  * before launching: pre-filled with Vite's `5173`, but overridable because a fixed
  * list dies when any one port is already bound on the host. Use `host:container`
  * (e.g. `5174:5173`) to reach the container on a free host port.
+ *
+ * The container outlives a *closed* terminal (closing the window kills the shell
+ * client, not the container), so on open we check whether one is already running:
+ * if so the popover offers to **reconnect** a new shell into it or **stop** it
+ * (freeing the ports) rather than vainly starting a second one.
  */
 function ContainerTestButton({ worktreePath }: { worktreePath: string }) {
   const [open, setOpen] = useState(false);
   const [ports, setPorts] = useState(DEFAULT_PORTS);
+  // null = haven't checked yet (popover closed or check in flight).
+  const [running, setRunning] = useState<boolean | null>(null);
+  const [stopping, setStopping] = useState(false);
+
+  // Re-check each time the popover opens (the container may have been started or
+  // stopped since last time).
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setRunning(null);
+    testContainerRunning(worktreePath)
+      .then((r) => active && setRunning(r))
+      .catch(() => active && setRunning(false));
+    return () => {
+      active = false;
+    };
+  }, [open, worktreePath]);
 
   const launch = () => {
     setOpen(false);
     openContainerShell(worktreePath, parsePorts(ports)).catch(toastError);
+  };
+  // Rust reconnects into the running container (ignoring ports), so just launch.
+  const reconnect = () => {
+    setOpen(false);
+    openContainerShell(worktreePath, []).catch(toastError);
+  };
+  const stop = () => {
+    setStopping(true);
+    stopTestContainer(worktreePath)
+      .then(() => setRunning(false))
+      .catch(toastError)
+      .finally(() => setStopping(false));
   };
 
   return (
@@ -145,37 +183,69 @@ function ContainerTestButton({ worktreePath }: { worktreePath: string }) {
         <Popover.Positioner align="end" sideOffset={6} className="isolate z-50">
           <Popover.Popup className="w-80 bg-popover p-3 text-popover-foreground shadow-md ring-1 ring-foreground/10">
             <p className="text-xs font-medium">Test in container shell</p>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              Opens a shell in the same image with this session's worktree
-              mounted, so its Linux deps and build match.
-            </p>
-            <label className="mt-2.5 block text-[11px] font-medium">
-              Publish ports
-              <Input
-                className="mt-1 font-mono"
-                value={ports}
-                onChange={(e) => setPorts(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    launch();
-                  }
-                }}
-                placeholder="5173"
-                spellCheck={false}
-              />
-            </label>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-              Space/comma separated. Use{" "}
-              <code className="font-mono">host:container</code> (e.g.{" "}
-              <code className="font-mono">5174:5173</code>) if a host port is
-              busy. Bind your dev server to{" "}
-              <code className="font-mono">0.0.0.0</code> (
-              <code className="font-mono">pnpm dev --host</code>).
-            </p>
-            <Button size="sm" className="mt-2.5 w-full" onClick={launch}>
-              Open shell
-            </Button>
+            {running === null ? (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Checking…
+              </p>
+            ) : running ? (
+              <>
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                  A container for this session is{" "}
+                  <span className="text-foreground">already running</span> — its
+                  server and published ports are still up (closing the terminal
+                  doesn't stop it). Reconnect a new shell, or stop it to free
+                  the ports.
+                </p>
+                <div className="mt-2.5 flex gap-2">
+                  <Button size="sm" className="flex-1" onClick={reconnect}>
+                    Reconnect
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1"
+                    disabled={stopping}
+                    onClick={stop}
+                  >
+                    {stopping ? "Stopping…" : "Stop container"}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                  Opens a shell in the same image with this session's worktree
+                  mounted, so its Linux deps and build match.
+                </p>
+                <label className="mt-2.5 block text-[11px] font-medium">
+                  Publish ports
+                  <Input
+                    className="mt-1 font-mono"
+                    value={ports}
+                    onChange={(e) => setPorts(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        launch();
+                      }
+                    }}
+                    placeholder="5173"
+                    spellCheck={false}
+                  />
+                </label>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                  Space/comma separated. Use{" "}
+                  <code className="font-mono">host:container</code> (e.g.{" "}
+                  <code className="font-mono">5174:5173</code>) if a host port
+                  is busy. Bind your dev server to{" "}
+                  <code className="font-mono">0.0.0.0</code> (
+                  <code className="font-mono">pnpm dev --host</code>).
+                </p>
+                <Button size="sm" className="mt-2.5 w-full" onClick={launch}>
+                  Open shell
+                </Button>
+              </>
+            )}
           </Popover.Popup>
         </Popover.Positioner>
       </Popover.Portal>

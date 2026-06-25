@@ -55,6 +55,13 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   **Agent Skills** (project *and* global, including the shared `.agents/skills`) —
   plus `@file` mentions, a model/reasoning-effort picker, and terminal-style
   prompt history.
+- **Run a task several ways and keep the best** — fan one task out across 2–5 arms
+  (best-of-N), **each with its own agent, model, and effort** so different providers
+  (Claude, Codex, Copilot, opencode) attack it differently. Each runs in its own
+  worktree; compare them and keep the winner with a single **keep this, discard the
+  rest**. Because fanning out multiple agents costs more, a confirmation first shows an
+  **upfront estimate** drawn from your own recent sessions, and the ensemble's
+  **running total** as it works — opt-in, never the default.
 - **Plan before you build** — a read-only **Plan** mode drafts an agent-ready
   issue from a task (or an existing issue): a repo-aware agent explores your code
   and writes the problem, approach, affected files, acceptance criteria, and verify

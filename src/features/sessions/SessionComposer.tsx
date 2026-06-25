@@ -1,4 +1,4 @@
-import { GaugeIcon, StopIcon } from "@phosphor-icons/react";
+import { StopIcon } from "@phosphor-icons/react";
 import { AnimatePresence, m } from "motion/react";
 import {
   useEffect,
@@ -9,14 +9,8 @@ import {
   useState,
 } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
+import type { AgentKind } from "@/lib/ai/agent";
+import { estimateRunCost } from "@/lib/ai/cost";
 import {
   buildPrompt,
   filterCommands,
@@ -29,14 +23,17 @@ import { useAgentCommands, useTrackedFiles } from "@/lib/git/queries";
 import { quickTransition } from "@/lib/motion";
 import { useSettings } from "@/lib/settings/queries";
 import { cn } from "@/lib/utils";
+import {
+  AgentPicker,
+  EffortPicker,
+  ModelPicker,
+  modelsForAgent,
+  type RunMode,
+  RunModePicker,
+} from "./AgentPickers";
+import { EnsembleRunDialog } from "./EnsembleRunDialog";
 import { type AgentSession, useSessionsStore } from "./store";
 
-const CLAUDE_MODELS = MODEL_SUGGESTIONS["claude-cli"];
-const CODEX_MODELS = MODEL_SUGGESTIONS["codex-cli"];
-const COPILOT_MODELS = MODEL_SUGGESTIONS["copilot-cli"];
-const OPENCODE_MODELS = MODEL_SUGGESTIONS["opencode-cli"];
-// "" (account default) maps to a non-empty sentinel for the Select value.
-const DEFAULT_MODEL = "default";
 const MAX_MENTIONS = 8;
 
 /** An in-progress `@file` mention: the query typed after `@` and the index of
@@ -76,6 +73,7 @@ export function SessionComposer({
   handleRef?: React.Ref<SessionComposerHandle>;
 }) {
   const start = useSessionsStore((s) => s.start);
+  const startEnsemble = useSessionsStore((s) => s.startEnsemble);
   const send = useSessionsStore((s) => s.send);
   const setModel = useSessionsStore((s) => s.setModel);
   const setEffort = useSessionsStore((s) => s.setEffort);
@@ -83,12 +81,23 @@ export function SessionComposer({
   const creating = useSessionsStore((s) => s.creating);
   const pendingTask = useSessionsStore((s) => s.pendingTask);
   const setPendingTask = useSessionsStore((s) => s.setPendingTask);
+  const sessions = useSessionsStore((s) => s.sessions);
   const [draft, setDraft] = useState("");
   const [startModel, setStartModel] = useState("");
   const [startEffort, setStartEffort] = useState("");
   const [startAgent, setStartAgent] = useState<
     "claude" | "codex" | "copilot" | "opencode"
   >("claude");
+  // Run mode for a NEW task: a single session, or best-of-N. The mode picker is
+  // always clickable (the Send button isn't, until you type), so you can choose
+  // best-of-N first; Send then follows the mode.
+  const [mode, setMode] = useState<RunMode>("single");
+  // Best-of-N: the resolved prompt held while the arm/cost dialog is open (the
+  // dialog picks how many arms and each arm's agent/model/effort).
+  const [ensembleOpen, setEnsembleOpen] = useState(false);
+  const [pendingEnsemble, setPendingEnsemble] = useState("");
+  // Honest upfront estimate from what past sessions actually cost (see cost.ts).
+  const costEstimate = useMemo(() => estimateRunCost(sessions), [sessions]);
   const [mention, setMention] = useState<Mention | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   // An in-progress `/command` (the query typed after the leading `/`). Only
@@ -105,14 +114,7 @@ export function SessionComposer({
   const model = session ? session.model : startModel;
   // Agent is fixed once a session exists; while starting, it's user-selectable.
   const agent = session ? session.agent : startAgent;
-  const models =
-    agent === "codex"
-      ? CODEX_MODELS
-      : agent === "copilot"
-        ? COPILOT_MODELS
-        : agent === "opencode"
-          ? OPENCODE_MODELS
-          : CLAUDE_MODELS;
+  const models = modelsForAgent(agent);
   const onModel = session
     ? (m: string) => setModel(session.id, m)
     : setStartModel;
@@ -244,27 +246,56 @@ export function SessionComposer({
     else start(repoPath, text, startModel, startAgent, startEffort);
   };
 
-  const submit = () => {
-    const text = draft.trim();
-    if (!text || running || creating) return;
-    // Expand a known `/command` client-side (no CLI parses `/cmd` headless), so
-    // the agent and the transcript see the final prompt. An unknown command
-    // falls through and is sent literally.
+  // Expand a known `/command` client-side (no CLI parses `/cmd` headless) so the
+  // agent and transcript see the final prompt. Returns null when the input was a
+  // client-only command already handled here (e.g. /clear), so submit stops.
+  const resolvePrompt = (text: string): string | null => {
     const invocation = parseSlashInvocation(text);
     if (invocation) {
       const cmd = findCommand(commands, invocation.name);
       if (cmd?.action === "clear") {
         clearDraft();
-        return;
+        return null;
       }
-      if (cmd) {
-        dispatch(buildPrompt(cmd, invocation.args));
-        clearDraft();
-        return;
-      }
+      if (cmd) return buildPrompt(cmd, invocation.args);
     }
-    dispatch(text);
+    return text; // unknown command falls through and is sent literally
+  };
+
+  const submit = () => {
+    // Best-of-N mode: the primary action opens the arm/cost dialog instead of
+    // starting one session (the dialog runs the fan-out).
+    if (!session && mode === "ensemble") {
+      openEnsemble();
+      return;
+    }
+    const text = draft.trim();
+    if (!text || running || creating) return;
+    const prompt = resolvePrompt(text);
+    if (prompt === null) return;
+    dispatch(prompt);
     clearDraft();
+  };
+
+  // Best-of-N (activation only): resolve the draft, then open the arm/cost dialog
+  // to pick how many ways and each arm's agent/model/effort before spending.
+  const openEnsemble = () => {
+    const text = draft.trim();
+    if (!text || running || creating) return;
+    const prompt = resolvePrompt(text);
+    if (prompt === null) return;
+    setPendingEnsemble(prompt);
+    setEnsembleOpen(true);
+  };
+
+  // Approved in the dialog: fan out one session per arm on the same task.
+  const runEnsemble = (
+    arms: { agent: AgentKind; model: string; effort: string }[],
+  ) => {
+    if (!pendingEnsemble) return;
+    void startEnsemble(repoPath, pendingEnsemble, arms);
+    clearDraft();
+    setPendingEnsemble("");
   };
 
   // Recompute the active mention from the text up to the caret: an `@` at the
@@ -431,134 +462,151 @@ export function SessionComposer({
   };
 
   return (
-    <div className="flex flex-col gap-2">
-      {examples && draft.length === 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {examples.map((ex) => (
-            <button
-              key={ex}
-              type="button"
-              onClick={() => setDraft(ex)}
-              className="border px-2 py-1 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-            >
-              {ex}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="relative">
-        {mention && (
-          <MentionList
-            matches={matches}
-            index={mentionIndex}
-            loading={tracked.isPending}
-            query={mention.query}
-            onPick={insertMention}
-            onHover={setMentionIndex}
-          />
+    <>
+      <div className="flex flex-col gap-2">
+        {examples && draft.length === 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {examples.map((ex) => (
+              <button
+                key={ex}
+                type="button"
+                onClick={() => setDraft(ex)}
+                className="border px-2 py-1 text-[11px] text-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                {ex}
+              </button>
+            ))}
+          </div>
         )}
-        {slash && (
-          <SlashList
-            matches={slashMatches}
-            index={slashIndex}
-            loading={discovered.isPending && draft.startsWith("/")}
-            query={slash.query}
-            onPick={selectSlash}
-            onHover={setSlashIndex}
-          />
-        )}
-        <div className="flex flex-col gap-2 border border-input bg-transparent p-3 transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50 dark:bg-input/30">
-          <textarea
-            ref={ref}
-            autoFocus={autoFocus}
-            value={draft}
-            onChange={onChange}
-            onKeyDown={onKeyDown}
-            rows={1}
-            aria-label={
-              session ? "Reply to the agent" : "Describe a task for the agent"
-            }
-            aria-autocomplete="list"
-            aria-expanded={mention !== null || slash !== null}
-            aria-controls={
-              mention
-                ? "session-mention-list"
-                : slash
-                  ? "session-slash-list"
-                  : undefined
-            }
-            aria-activedescendant={
-              mention && matches.length > 0
-                ? `session-mention-${mentionIndex}`
-                : slash && slashMatches.length > 0
-                  ? `session-slash-${slashIndex}`
-                  : undefined
-            }
-            placeholder={
-              session
-                ? "Reply to the agent…  (@ file, / command)"
-                : "Describe a task for the agent…  (@ file, / command)"
-            }
-            className="max-h-40 min-h-9 w-full resize-none overflow-y-auto bg-transparent text-xs leading-relaxed outline-none placeholder:text-muted-foreground"
-          />
-          <div className="flex items-center gap-2 border-t pt-2">
-            {!session && (
-              <AgentPicker
-                value={startAgent}
-                onChange={(a) => {
-                  setStartAgent(a);
-                  setStartModel(""); // model lists differ between agents
-                }}
-              />
-            )}
-            <ModelPicker value={model} onChange={onModel} models={models} />
-            <EffortPicker value={effort} onChange={onEffort} />
-            <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
-              ↵ send · ⇧↵ newline
-            </span>
-            <AnimatePresence mode="wait" initial={false}>
-              {running ? (
-                <m.div
-                  key="stop"
-                  className="ml-auto"
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.96 }}
-                  transition={quickTransition}
-                >
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => session && cancel(session.id)}
-                  >
-                    <StopIcon weight="fill" />
-                    Stop
-                  </Button>
-                </m.div>
-              ) : (
-                <m.div
-                  key="send"
-                  className="ml-auto"
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.96 }}
-                  transition={quickTransition}
-                >
-                  <Button
-                    size="sm"
-                    className="min-w-20"
-                    disabled={!canSubmit}
-                    onClick={submit}
-                  >
-                    {creating && !session ? "Starting…" : "Send"}
-                  </Button>
-                </m.div>
+        <div className="relative">
+          {mention && (
+            <MentionList
+              matches={matches}
+              index={mentionIndex}
+              loading={tracked.isPending}
+              query={mention.query}
+              onPick={insertMention}
+              onHover={setMentionIndex}
+            />
+          )}
+          {slash && (
+            <SlashList
+              matches={slashMatches}
+              index={slashIndex}
+              loading={discovered.isPending && draft.startsWith("/")}
+              query={slash.query}
+              onPick={selectSlash}
+              onHover={setSlashIndex}
+            />
+          )}
+          <div className="flex flex-col gap-2 border border-input bg-transparent p-3 transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50 dark:bg-input/30">
+            <textarea
+              ref={ref}
+              autoFocus={autoFocus}
+              value={draft}
+              onChange={onChange}
+              onKeyDown={onKeyDown}
+              rows={1}
+              aria-label={
+                session ? "Reply to the agent" : "Describe a task for the agent"
+              }
+              aria-autocomplete="list"
+              aria-expanded={mention !== null || slash !== null}
+              aria-controls={
+                mention
+                  ? "session-mention-list"
+                  : slash
+                    ? "session-slash-list"
+                    : undefined
+              }
+              aria-activedescendant={
+                mention && matches.length > 0
+                  ? `session-mention-${mentionIndex}`
+                  : slash && slashMatches.length > 0
+                    ? `session-slash-${slashIndex}`
+                    : undefined
+              }
+              placeholder={
+                session
+                  ? "Reply to the agent…  (@ file, / command)"
+                  : "Describe a task for the agent…  (@ file, / command)"
+              }
+              className="max-h-40 min-h-9 w-full resize-none overflow-y-auto bg-transparent text-xs leading-relaxed outline-none placeholder:text-muted-foreground"
+            />
+            <div className="flex items-center gap-2 border-t pt-2">
+              {/* Single run: agent/model/effort here. Best-of-N: hidden — each
+                  arm sets its own in the dialog, so this bar stays uncluttered. */}
+              {!session && mode === "single" && (
+                <AgentPicker
+                  value={startAgent}
+                  onChange={(a) => {
+                    setStartAgent(a);
+                    setStartModel(""); // model lists differ between agents
+                  }}
+                />
               )}
-            </AnimatePresence>
+              {(session || mode === "single") && (
+                <ModelPicker value={model} onChange={onModel} models={models} />
+              )}
+              {(session || mode === "single") && (
+                <EffortPicker value={effort} onChange={onEffort} />
+              )}
+              {!session && <RunModePicker value={mode} onChange={setMode} />}
+              <AnimatePresence mode="wait" initial={false}>
+                {running ? (
+                  <m.div
+                    key="stop"
+                    className="ml-auto"
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.96 }}
+                    transition={quickTransition}
+                  >
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => session && cancel(session.id)}
+                    >
+                      <StopIcon weight="fill" />
+                      Stop
+                    </Button>
+                  </m.div>
+                ) : (
+                  <m.div
+                    key="send"
+                    className="ml-auto"
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.96 }}
+                    transition={quickTransition}
+                  >
+                    <Button
+                      size="sm"
+                      className="min-w-20"
+                      disabled={!canSubmit}
+                      onClick={submit}
+                    >
+                      {creating && !session
+                        ? "Starting…"
+                        : !session && mode === "ensemble"
+                          ? "Best-of-N…"
+                          : "Send"}
+                    </Button>
+                  </m.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+      <EnsembleRunDialog
+        open={ensembleOpen}
+        onOpenChange={setEnsembleOpen}
+        seed={{ agent: startAgent, model: startModel, effort: startEffort }}
+        estimate={costEstimate}
+        onRun={runEnsemble}
+      />
+    </>
   );
 }
 
@@ -725,125 +773,5 @@ function SlashList({
         })
       )}
     </div>
-  );
-}
-
-export function ModelPicker({
-  value,
-  onChange,
-  models,
-}: {
-  value: string;
-  onChange: (m: string) => void;
-  models: string[];
-}) {
-  return (
-    <Select
-      value={value || DEFAULT_MODEL}
-      onValueChange={(v) => onChange(v === DEFAULT_MODEL ? "" : String(v))}
-    >
-      <SelectTrigger
-        size="sm"
-        aria-label="Agent model"
-        className="w-auto border-0 text-muted-foreground shadow-none hover:bg-muted dark:bg-transparent"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={DEFAULT_MODEL}>Default model</SelectItem>
-        {models.map((m) => (
-          <SelectItem key={m} value={m}>
-            {m}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-const DEFAULT_EFFORT = "default";
-const EFFORT_LEVELS = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Max" },
-] as const;
-
-/** Reasoning/effort level for the next turn. Mapped per-CLI in Rust (Codex
- *  `model_reasoning_effort`, Copilot `--effort`, Claude a thinking keyword). The
- *  gauge icon marks it as effort so the collapsed value isn't mistaken for a model.
- *  Reused by the read-only Plan composer. */
-export function EffortPicker({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (e: string) => void;
-}) {
-  return (
-    <Select
-      value={value || DEFAULT_EFFORT}
-      onValueChange={(v) => onChange(v === DEFAULT_EFFORT ? "" : String(v))}
-    >
-      <SelectTrigger
-        size="sm"
-        aria-label="Reasoning effort"
-        className="w-auto gap-1 border-0 text-muted-foreground shadow-none hover:bg-muted dark:bg-transparent"
-      >
-        <GaugeIcon className="size-3.5" />
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={DEFAULT_EFFORT}>Default</SelectItem>
-        {EFFORT_LEVELS.map((l) => (
-          <SelectItem key={l.value} value={l.value}>
-            {l.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-/** Picks the CLI for a NEW session (fixed once it starts). Every agent honors the
- *  isolation setting — host (worktree-confined, soft) or container — provided that
- *  agent is baked into the image (Codex is container-only). Also reused by the
- *  read-only Plan composer (which needs a repo-aware CLI agent). */
-export function AgentPicker({
-  value,
-  onChange,
-}: {
-  value: "claude" | "codex" | "copilot" | "opencode";
-  onChange: (a: "claude" | "codex" | "copilot" | "opencode") => void;
-}) {
-  return (
-    <Select
-      value={value}
-      onValueChange={(v) =>
-        onChange(
-          v === "copilot"
-            ? "copilot"
-            : v === "codex"
-              ? "codex"
-              : v === "opencode"
-                ? "opencode"
-                : "claude",
-        )
-      }
-    >
-      <SelectTrigger
-        size="sm"
-        aria-label="Agent"
-        className="w-auto border-0 text-muted-foreground shadow-none hover:bg-muted dark:bg-transparent"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="claude">Claude</SelectItem>
-        <SelectItem value="codex">Codex</SelectItem>
-        <SelectItem value="copilot">GitHub Copilot</SelectItem>
-        <SelectItem value="opencode">opencode</SelectItem>
-      </SelectContent>
-    </Select>
   );
 }

@@ -33,10 +33,22 @@ export const prepareContainerSandbox = (
 export const cleanupContainerSandbox = (sessionId: string) =>
   invoke<void>("agent_sandbox_cleanup", { sessionId });
 
-/** Opens an interactive shell in a throwaway container with the session's worktree
- *  mounted, so a container session can be tested in its matching Linux env.
- *  `ports` are the dev-server ports to publish to the host loopback — each a bare
- *  `"5173"` or a `"host:container"` remap (e.g. `"5174:5173"`) when a host port is
- *  busy. Empty = publish nothing. */
+/** Opens an interactive shell in a container with the session's worktree mounted,
+ *  so a container session can be tested in its matching Linux env. `ports` are the
+ *  dev-server ports to publish to the host loopback — each a bare `"5173"` or a
+ *  `"host:container"` remap (e.g. `"5174:5173"`) when a host port is busy. Empty =
+ *  publish nothing. If a container for this worktree is **already running** (its
+ *  terminal was closed without exiting), this reconnects a new shell into it and
+ *  `ports` are ignored (they belong to the original run). */
 export const openContainerShell = (worktreePath: string, ports: string[]) =>
   invoke<void>("agent_open_container_shell", { worktreePath, ports });
+
+/** Whether this worktree's test-shell container is currently running — so the UI
+ *  can offer to reconnect to it or stop it instead of starting a new one. */
+export const testContainerRunning = (worktreePath: string) =>
+  invoke<boolean>("agent_test_container_running", { worktreePath });
+
+/** Force-stops + removes this worktree's test-shell container, freeing its
+ *  published ports. Best-effort (a no-op if it isn't running). */
+export const stopTestContainer = (worktreePath: string) =>
+  invoke<void>("agent_stop_test_container", { worktreePath });
