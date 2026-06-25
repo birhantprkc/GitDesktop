@@ -1,5 +1,5 @@
 import { PlusIcon, TrashIcon } from "@phosphor-icons/react";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import {
   useDeleteSecret,
@@ -26,6 +25,7 @@ import type { SecretApp } from "@/lib/git/types";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { AsyncListBody, InlineConfirm } from "./parts";
 
 const APPS: { value: SecretApp; label: string }[] = [
   { value: "actions", label: "Actions" },
@@ -209,11 +209,12 @@ function SecretsList({
         </p>
       </div>
 
-      <ListBody
+      <AsyncListBody
         loading={secrets.isLoading}
         error={secrets.error}
         empty={secrets.data?.length === 0}
         emptyLabel="No secrets here yet."
+        errorScope="repo"
       >
         {secrets.data?.map((s) => (
           <Row
@@ -240,7 +241,7 @@ function SecretsList({
             }
           />
         ))}
-      </ListBody>
+      </AsyncListBody>
     </div>
   );
 }
@@ -315,11 +316,12 @@ function VariablesList({
         </p>
       </div>
 
-      <ListBody
+      <AsyncListBody
         loading={variables.isLoading}
         error={variables.error}
         empty={variables.data?.length === 0}
         emptyLabel="No variables here yet."
+        errorScope="repo"
       >
         {variables.data?.map((v) => (
           <Row
@@ -349,58 +351,9 @@ function VariablesList({
             }
           />
         ))}
-      </ListBody>
+      </AsyncListBody>
     </div>
   );
-}
-
-function ListBody({
-  loading,
-  error,
-  empty,
-  emptyLabel,
-  children,
-}: {
-  loading: boolean;
-  error: unknown;
-  empty: boolean;
-  emptyLabel: string;
-  children: ReactNode;
-}) {
-  if (loading) {
-    return (
-      <div className="space-y-2">
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-      </div>
-    );
-  }
-  if (error) {
-    return (
-      <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
-        <p className="font-medium text-destructive">Couldn't load these.</p>
-        <p className="mt-1 text-muted-foreground">
-          {error instanceof Error ? error.message : null}
-        </p>
-        <p className="mt-2 text-muted-foreground">
-          If this is a permissions error, your GitHub sign-in may need a broader
-          scope — run{" "}
-          <span className="font-mono">
-            gh auth refresh -h github.com -s repo
-          </span>{" "}
-          and reopen this dialog.
-        </p>
-      </div>
-    );
-  }
-  if (empty) {
-    return (
-      <p className="rounded-md border border-dashed py-8 text-center text-xs text-muted-foreground">
-        {emptyLabel}
-      </p>
-    );
-  }
-  return <div className="space-y-2">{children}</div>;
 }
 
 function Row({
@@ -440,21 +393,13 @@ function Row({
         )}
       </div>
       {confirming ? (
-        <>
-          <span className="text-muted-foreground">Delete?</span>
-          <Button size="sm" variant="ghost" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            disabled={pending}
-            onClick={onDelete}
-          >
-            {pending && <Spinner data-icon="inline-start" />}
-            Delete
-          </Button>
-        </>
+        <InlineConfirm
+          prompt="Delete?"
+          actLabel="Delete"
+          pending={pending}
+          onCancel={onCancel}
+          onAct={onDelete}
+        />
       ) : (
         <>
           {onEdit && (

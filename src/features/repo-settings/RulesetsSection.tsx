@@ -26,6 +26,7 @@ import {
 } from "@/lib/git/queries";
 import type { RulesetEnforcement, RulesetFull } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
+import { AsyncListBody, InlineConfirm } from "./parts";
 
 const ENFORCEMENTS: { value: RulesetEnforcement; label: string }[] = [
   { value: "active", label: "Active" },
@@ -235,63 +236,40 @@ function RulesetList({
         </Button>
       </div>
 
-      {rulesets.isLoading && (
-        <div className="space-y-2">
-          <Skeleton className="h-12 w-full" />
-          <Skeleton className="h-12 w-full" />
-        </div>
-      )}
-      {rulesets.isError && (
-        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
-          <p className="font-medium text-destructive">
-            Couldn't load rulesets.
-          </p>
-          <p className="mt-1 text-muted-foreground">
-            {rulesets.error instanceof Error
-              ? rulesets.error.message
-              : "Managing rulesets needs repo-admin access."}
-          </p>
-        </div>
-      )}
-      {rulesets.data?.length === 0 && (
-        <p className="rounded-md border border-dashed py-8 text-center text-xs text-muted-foreground">
-          No rulesets yet.
-        </p>
-      )}
-
-      {rulesets.data?.map((rs) => {
-        const org = rs.sourceType === "Organization";
-        return (
-          <div
-            key={rs.id}
-            className="flex items-center gap-2 rounded-md border p-2.5 text-xs"
-          >
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-medium">{rs.name}</p>
-              <p className="text-[11px] text-muted-foreground">
-                {rs.target}
-                {org && " · from organization"}
-              </p>
-            </div>
-            {org ? (
-              <Badge variant="secondary" className="capitalize">
-                {rs.enforcement}
-              </Badge>
-            ) : confirming === rs.id ? (
-              <>
-                <span className="text-muted-foreground">Delete?</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setConfirming(null)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  disabled={del.isPending}
-                  onClick={() =>
+      <AsyncListBody
+        loading={rulesets.isLoading}
+        error={rulesets.error}
+        empty={rulesets.data?.length === 0}
+        emptyLabel="No rulesets yet."
+        skeletonClassName="h-12 w-full"
+        errorTitle="Couldn't load rulesets."
+        errorHint="Managing rulesets needs repo-admin access."
+      >
+        {rulesets.data?.map((rs) => {
+          const org = rs.sourceType === "Organization";
+          return (
+            <div
+              key={rs.id}
+              className="flex items-center gap-2 rounded-md border p-2.5 text-xs"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-medium">{rs.name}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {rs.target}
+                  {org && " · from organization"}
+                </p>
+              </div>
+              {org ? (
+                <Badge variant="secondary" className="capitalize">
+                  {rs.enforcement}
+                </Badge>
+              ) : confirming === rs.id ? (
+                <InlineConfirm
+                  prompt="Delete?"
+                  actLabel="Delete"
+                  pending={del.isPending}
+                  onCancel={() => setConfirming(null)}
+                  onAct={() =>
                     del.mutate(rs.id, {
                       onSuccess: () => {
                         toast.success("Ruleset deleted");
@@ -300,52 +278,53 @@ function RulesetList({
                       onError: toastError,
                     })
                   }
-                >
-                  {del.isPending && <Spinner data-icon="inline-start" />}
-                  Delete
-                </Button>
-              </>
-            ) : (
-              <>
-                <Select
-                  value={rs.enforcement}
-                  disabled={setEnforcement.isPending}
-                  onValueChange={(v) =>
-                    v &&
-                    setEnforcement.mutate(
-                      { id: rs.id, enforcement: v as RulesetEnforcement },
-                      { onError: toastError },
-                    )
-                  }
-                >
-                  <SelectTrigger size="sm" className="w-28">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ENFORCEMENTS.map((e) => (
-                      <SelectItem key={e.value} value={e.value}>
-                        {e.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button size="sm" variant="ghost" onClick={() => onEdit(rs.id)}>
-                  Edit
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-muted-foreground hover:text-destructive"
-                  title="Delete"
-                  onClick={() => setConfirming(rs.id)}
-                >
-                  <TrashIcon />
-                </Button>
-              </>
-            )}
-          </div>
-        );
-      })}
+                />
+              ) : (
+                <>
+                  <Select
+                    value={rs.enforcement}
+                    disabled={setEnforcement.isPending}
+                    onValueChange={(v) =>
+                      v &&
+                      setEnforcement.mutate(
+                        { id: rs.id, enforcement: v as RulesetEnforcement },
+                        { onError: toastError },
+                      )
+                    }
+                  >
+                    <SelectTrigger size="sm" className="w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ENFORCEMENTS.map((e) => (
+                        <SelectItem key={e.value} value={e.value}>
+                          {e.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onEdit(rs.id)}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-muted-foreground hover:text-destructive"
+                    title="Delete"
+                    onClick={() => setConfirming(rs.id)}
+                  >
+                    <TrashIcon />
+                  </Button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </AsyncListBody>
     </div>
   );
 }

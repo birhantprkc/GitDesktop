@@ -56,7 +56,7 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   plus `@file` mentions, a model/reasoning-effort picker, and terminal-style
   prompt history.
 - **Run commands without leaving the app** — every agent session has an integrated
-  terminal: a real shell in a resizable bottom dock, toggled with `Ctrl`/`⌘`+`` ` ``. For a
+  terminal: a real shell in a resizable bottom dock, toggled with `Ctrl`/`⌘`+`J`. For a
   container session it runs *inside* the session's container — you pick which dev-server
   ports to publish *before* it starts, and can reconnect to or stop one that's still
   running; for a host session it's a shell in the worktree. A hidden terminal keeps

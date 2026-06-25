@@ -55,6 +55,7 @@ import { DangerZone } from "./DangerZone";
 import { FundingSection } from "./FundingSection";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { PagesSection } from "./PagesSection";
+import { AsyncListBody, InlineConfirm } from "./parts";
 import { RulesetsSection } from "./RulesetsSection";
 import { SecretsSection } from "./SecretsSection";
 import { SecuritySection } from "./SecuritySection";
@@ -222,47 +223,25 @@ function WebhooksSection({
         </Button>
       </div>
 
-      {hooks.isLoading && (
-        <div className="space-y-2">
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
-        </div>
-      )}
-
-      {hooks.isError && (
-        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
-          <p className="font-medium text-destructive">
-            Couldn't load webhooks.
-          </p>
-          <p className="mt-1 text-muted-foreground">
-            {hooks.error instanceof Error ? hooks.error.message : null}
-          </p>
-          <p className="mt-2 text-muted-foreground">
-            If this is a permissions error, your GitHub sign-in may be missing
-            the <span className="font-mono">admin:repo_hook</span> scope. Run{" "}
-            <span className="font-mono">
-              gh auth refresh -h github.com -s admin:repo_hook
-            </span>{" "}
-            in a terminal, then reopen this dialog.
-          </p>
-        </div>
-      )}
-
-      {hooks.data?.length === 0 && (
-        <p className="rounded-md border border-dashed py-8 text-center text-xs text-muted-foreground">
-          No webhooks yet.
-        </p>
-      )}
-
-      {hooks.data?.map((hook) => (
-        <WebhookRow
-          key={hook.id}
-          repoPath={repoPath}
-          hook={hook}
-          onEdit={() => setEditing(hook)}
-          onDeliveries={() => setDeliveriesFor(hook)}
-        />
-      ))}
+      <AsyncListBody
+        loading={hooks.isLoading}
+        error={hooks.error}
+        empty={hooks.data?.length === 0}
+        emptyLabel="No webhooks yet."
+        skeletonClassName="h-16 w-full"
+        errorTitle="Couldn't load webhooks."
+        errorScope="admin:repo_hook"
+      >
+        {hooks.data?.map((hook) => (
+          <WebhookRow
+            key={hook.id}
+            repoPath={repoPath}
+            hook={hook}
+            onEdit={() => setEditing(hook)}
+            onDeliveries={() => setDeliveriesFor(hook)}
+          />
+        ))}
+      </AsyncListBody>
     </div>
   );
 }
@@ -328,32 +307,19 @@ function WebhookRow({
 
       <div className="mt-2 flex items-center justify-end gap-1">
         {confirmingDelete ? (
-          <>
-            <span className="mr-auto text-muted-foreground">
-              Remove this webhook?
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setConfirmingDelete(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={del.isPending}
-              onClick={() =>
-                del.mutate(hook.id, {
-                  onSuccess: () => toast.success("Webhook removed"),
-                  onError: toastError,
-                })
-              }
-            >
-              {del.isPending && <Spinner data-icon="inline-start" />}
-              Remove
-            </Button>
-          </>
+          <InlineConfirm
+            prompt="Remove this webhook?"
+            promptClassName="mr-auto"
+            actLabel="Remove"
+            pending={del.isPending}
+            onCancel={() => setConfirmingDelete(false)}
+            onAct={() =>
+              del.mutate(hook.id, {
+                onSuccess: () => toast.success("Webhook removed"),
+                onError: toastError,
+              })
+            }
+          />
         ) : (
           <>
             <Button

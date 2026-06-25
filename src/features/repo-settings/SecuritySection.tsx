@@ -33,6 +33,7 @@ import {
 } from "@/lib/git/queries";
 import type { SecurityFeature, SecurityStatus } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
+import { InlineConfirm } from "./parts";
 
 /** Dependabot / dependency-graph options GitHub exposes to NO repo-level API —
  *  they're web-UI-only. (Version updates is handled by the dependabot.yml
@@ -227,18 +228,11 @@ function DependabotVersionUpdates({
         {exists ? (
           confirmingRemove ? (
             <div className="flex shrink-0 items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirmingRemove(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={del.isPending}
-                onClick={() =>
+              <InlineConfirm
+                actLabel="Remove"
+                pending={del.isPending}
+                onCancel={() => setConfirmingRemove(false)}
+                onAct={() =>
                   del.mutate(undefined, {
                     onSuccess: () => {
                       toast.success(
@@ -249,10 +243,7 @@ function DependabotVersionUpdates({
                     onError: toastError,
                   })
                 }
-              >
-                {del.isPending && <Spinner data-icon="inline-start" />}
-                Remove
-              </Button>
+              />
             </div>
           ) : (
             <Button

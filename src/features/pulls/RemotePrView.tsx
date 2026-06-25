@@ -10,6 +10,7 @@ import {
   PencilSimpleIcon,
   XCircleIcon,
 } from "@phosphor-icons/react";
+import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -48,14 +49,14 @@ import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
-import {
-  ghPrDiff,
-  type MergeStrategy,
-  type MinimizeReason,
-  type ReviewAction,
+import type {
+  MergeStrategy,
+  MinimizeReason,
+  ReviewAction,
 } from "@/lib/git/api";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
+  prDiffOptions,
   useCheckoutPr,
   useClosePr,
   useCommentPr,
@@ -126,6 +127,7 @@ export function RemotePrView({
   repoPath: string;
   number: number;
 }) {
+  const queryClient = useQueryClient();
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
@@ -465,17 +467,21 @@ export function RemotePrView({
             repoPath,
             // gh GraphQL returns commits oldest-first, so the head is the last.
             headSha: pr.commits.at(-1)?.oid,
+            // Reuse the diff already cached by usePrDiff (mounted above) instead of
+            // re-fetching it — PR diffs are among the slowest loads in the app.
             loadDiff: () =>
-              ghPrDiff(repoPath, number).then((text) => ({
-                text,
-                truncated: false,
-                files: pr.files.map((f) => ({
-                  path: f.path,
-                  added: f.additions,
-                  deleted: f.deletions,
-                  isBinary: false,
+              queryClient
+                .ensureQueryData(prDiffOptions(repoPath, number))
+                .then((text) => ({
+                  text,
+                  truncated: false,
+                  files: pr.files.map((f) => ({
+                    path: f.path,
+                    added: f.additions,
+                    deleted: f.deletions,
+                    isBinary: false,
+                  })),
                 })),
-              })),
           }}
           posting={comment.isPending}
           onPost={(body) =>

@@ -9,6 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useDeleteFunding, useFunding, useSetFunding } from "@/lib/git/queries";
 import { toastError } from "@/lib/toast";
+import { InlineConfirm } from "./parts";
 
 const GITHUB_KEY = "github";
 const CUSTOM_KEY = "custom";
@@ -233,27 +234,15 @@ function FundingForm({
       <div className="flex items-center justify-end gap-3 pt-1">
         {exists &&
           (confirmingRemove ? (
-            <>
-              <span className="mr-auto text-xs text-muted-foreground">
-                Remove the Sponsor button?
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setConfirmingRemove(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={del.isPending}
-                onClick={remove}
-              >
-                {del.isPending && <Spinner data-icon="inline-start" />}
-                Remove
-              </Button>
-            </>
+            <InlineConfirm
+              prompt="Remove the Sponsor button?"
+              promptClassName="mr-auto text-xs"
+              cancelVariant="outline"
+              actLabel="Remove"
+              pending={del.isPending}
+              onCancel={() => setConfirmingRemove(false)}
+              onAct={remove}
+            />
           ) : (
             <Button
               variant="ghost"

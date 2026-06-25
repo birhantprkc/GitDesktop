@@ -1,5 +1,5 @@
 import { UserPlusIcon, XIcon } from "@phosphor-icons/react";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import {
   useAddCollaborator,
@@ -24,6 +23,7 @@ import {
 import type { RepoRole } from "@/lib/git/types";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
+import { AsyncListBody, InlineConfirm } from "./parts";
 
 const ROLES: { value: RepoRole; label: string }[] = [
   { value: "read", label: "Read" },
@@ -110,11 +110,14 @@ export function CollaboratorsSection({
         </div>
       </div>
 
-      <ListBody
+      <AsyncListBody
         loading={collaborators.isLoading}
         error={collaborators.error}
         empty={collaborators.data?.length === 0}
         emptyLabel="No collaborators yet."
+        skeletonClassName="h-11 w-full"
+        errorTitle="Couldn't load collaborators."
+        errorHint="Managing collaborators needs repo-admin access."
       >
         {collaborators.data?.map((c) => {
           const key = `collab:${c.login}`;
@@ -150,7 +153,7 @@ export function CollaboratorsSection({
             />
           );
         })}
-      </ListBody>
+      </AsyncListBody>
 
       {invitations.data && invitations.data.length > 0 && (
         <div className="space-y-2">
@@ -207,52 +210,6 @@ export function CollaboratorsSection({
   );
 }
 
-function ListBody({
-  loading,
-  error,
-  empty,
-  emptyLabel,
-  children,
-}: {
-  loading: boolean;
-  error: unknown;
-  empty: boolean;
-  emptyLabel: string;
-  children: ReactNode;
-}) {
-  if (loading) {
-    return (
-      <div className="space-y-2">
-        <Skeleton className="h-11 w-full" />
-        <Skeleton className="h-11 w-full" />
-      </div>
-    );
-  }
-  if (error) {
-    return (
-      <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
-        <p className="font-medium text-destructive">
-          Couldn't load collaborators.
-        </p>
-        <p className="mt-1 text-muted-foreground">
-          {error instanceof Error ? error.message : null}
-        </p>
-        <p className="mt-2 text-muted-foreground">
-          Managing collaborators needs repo-admin access.
-        </p>
-      </div>
-    );
-  }
-  if (empty) {
-    return (
-      <p className="rounded-md border border-dashed py-8 text-center text-xs text-muted-foreground">
-        {emptyLabel}
-      </p>
-    );
-  }
-  return <div className="space-y-2">{children}</div>;
-}
-
 function PersonRow({
   login,
   avatarUrl,
@@ -292,21 +249,13 @@ function PersonRow({
         {meta && <p className="truncate text-muted-foreground">{meta}</p>}
       </div>
       {confirming ? (
-        <>
-          <span className="text-muted-foreground">Remove?</span>
-          <Button size="sm" variant="ghost" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            disabled={pending}
-            onClick={onRemove}
-          >
-            {pending && <Spinner data-icon="inline-start" />}
-            Remove
-          </Button>
-        </>
+        <InlineConfirm
+          prompt="Remove?"
+          actLabel="Remove"
+          pending={pending}
+          onCancel={onCancel}
+          onAct={onRemove}
+        />
       ) : (
         <>
           <Select

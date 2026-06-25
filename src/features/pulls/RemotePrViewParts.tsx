@@ -13,6 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffContent } from "@/features/diff/DiffSurface";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { cn } from "@/lib/utils";
 
 type PrFile = { path: string; additions: number; deletions: number };
@@ -34,36 +35,48 @@ export function PrFilesPane({
   isPending: boolean;
   isError: boolean;
 }) {
+  // Arrow keys walk the file list, mirroring the app's other diff lists.
+  const onFilesKeyDown = listKeyboardNav({
+    items: files,
+    activeIndex: files.findIndex((f) => f.path === effectivePath),
+    onActivate: (file) => onSelectPath(file.path),
+    rowKey: (file) => file.path,
+    rowAttr: "data-path",
+  });
+
   return (
     <div className="flex min-h-0 flex-1">
       <aside className="flex w-72 shrink-0 flex-col border-r">
         <ScrollArea className="min-h-0 flex-1">
-          {files.map((file) => (
-            <button
-              type="button"
-              key={file.path}
-              className={cn(
-                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
-                effectivePath === file.path
-                  ? "bg-accent text-accent-foreground"
-                  : "hover:bg-muted/60",
-              )}
-              onClick={() => onSelectPath(file.path)}
-              title={file.path}
-            >
-              <span className="min-w-0 flex-1 truncate font-mono">
-                {file.path}
-              </span>
-              <span className="shrink-0 tabular-nums">
-                <span className="text-green-600 dark:text-green-400">
-                  +{file.additions}
-                </span>{" "}
-                <span className="text-red-600 dark:text-red-400">
-                  -{file.deletions}
+          <div onKeyDown={onFilesKeyDown}>
+            {files.map((file) => (
+              <button
+                type="button"
+                key={file.path}
+                data-path={file.path}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
+                  effectivePath === file.path
+                    ? "bg-accent text-accent-foreground"
+                    : "hover:bg-muted/60",
+                )}
+                onClick={() => onSelectPath(file.path)}
+                title={file.path}
+              >
+                <span className="min-w-0 flex-1 truncate font-mono">
+                  {file.path}
                 </span>
-              </span>
-            </button>
-          ))}
+                <span className="shrink-0 tabular-nums">
+                  <span className="text-green-600 dark:text-green-400">
+                    +{file.additions}
+                  </span>{" "}
+                  <span className="text-red-600 dark:text-red-400">
+                    -{file.deletions}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
         </ScrollArea>
       </aside>
       <main className="min-w-0 flex-1">

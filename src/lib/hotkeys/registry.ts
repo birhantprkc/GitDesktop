@@ -458,7 +458,10 @@ export const ACTIONS = [
     id: "agent-toggle-terminal",
     label: "Toggle terminal",
     category: "Agent",
-    defaultBinding: "mod+`",
+    // `mod+\`` is already taken by `open-in-terminal` (the OS terminal) and the
+    // listener is first-wins, so this needs its own binding. `mod+j` mirrors the
+    // "toggle bottom panel" convention.
+    defaultBinding: "mod+j",
   },
   {
     id: "agent-toggle-list-tab",

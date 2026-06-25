@@ -93,7 +93,7 @@ commit list.
   default-branch fields already in that panel.
 
 - **Integrated terminal.** Every agent session gained a built-in terminal — toggle it
-  with the terminal hotkey (`Ctrl`/`⌘`+`` ` ``) or the **Terminal** button — so you can
+  with the terminal hotkey (`Ctrl`/`⌘`+`J`) or the **Terminal** button — so you can
   run commands right inside GitDesktop instead of opening a separate window. It's a real
   shell (a PTY) in a resizable bottom dock that keeps running while hidden, so a dev
   server you start stays up. For a **container** session the terminal runs *inside* the

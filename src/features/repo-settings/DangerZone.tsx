@@ -29,6 +29,7 @@ import {
 } from "@/lib/git/queries";
 import type { RepoSettings } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
+import { InlineConfirm } from "./parts";
 import { ScopeRefreshHint } from "./ScopeRefreshHint";
 
 /** A guarded destructive dialog: the confirm button stays disabled until the
@@ -186,18 +187,12 @@ function ArchiveAction({
     >
       {confirming ? (
         <div className="flex shrink-0 items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setConfirming(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            variant={archived ? "default" : "destructive"}
-            size="sm"
-            disabled={setArchived.isPending}
-            onClick={() =>
+          <InlineConfirm
+            actLabel={archived ? "Unarchive" : "Archive"}
+            actVariant={archived ? "default" : "destructive"}
+            pending={setArchived.isPending}
+            onCancel={() => setConfirming(false)}
+            onAct={() =>
               setArchived.mutate(!archived, {
                 onSuccess: () => {
                   toast.success(
@@ -208,10 +203,7 @@ function ArchiveAction({
                 onError: toastError,
               })
             }
-          >
-            {setArchived.isPending && <Spinner data-icon="inline-start" />}
-            {archived ? "Unarchive" : "Archive"}
-          </Button>
+          />
         </div>
       ) : (
         <Button

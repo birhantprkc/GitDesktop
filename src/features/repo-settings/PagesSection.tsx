@@ -25,6 +25,7 @@ import {
 } from "@/lib/git/queries";
 import type { PagesInfo } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
+import { InlineConfirm } from "./parts";
 
 const PATHS = ["/", "/docs"];
 
@@ -313,35 +314,22 @@ function PagesEnabled({
 
       <div className="flex items-center justify-end gap-2 border-t pt-3">
         {confirmingDisable ? (
-          <>
-            <span className="mr-auto text-xs text-muted-foreground">
-              Take the site down?
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setConfirmingDisable(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={disable.isPending}
-              onClick={() =>
-                disable.mutate(undefined, {
-                  onSuccess: () => {
-                    toast.success("GitHub Pages disabled");
-                    setConfirmingDisable(false);
-                  },
-                  onError: toastError,
-                })
-              }
-            >
-              {disable.isPending && <Spinner data-icon="inline-start" />}
-              Disable Pages
-            </Button>
-          </>
+          <InlineConfirm
+            prompt="Take the site down?"
+            promptClassName="mr-auto text-xs"
+            actLabel="Disable Pages"
+            pending={disable.isPending}
+            onCancel={() => setConfirmingDisable(false)}
+            onAct={() =>
+              disable.mutate(undefined, {
+                onSuccess: () => {
+                  toast.success("GitHub Pages disabled");
+                  setConfirmingDisable(false);
+                },
+                onError: toastError,
+              })
+            }
+          />
         ) : (
           <Button
             variant="ghost"

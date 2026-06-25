@@ -620,7 +620,7 @@ const prDetailsOptions = (repo: string, number: number) =>
     staleTime: 30_000,
   });
 
-const prDiffOptions = (repo: string, number: number) =>
+export const prDiffOptions = (repo: string, number: number) =>
   queryOptions({
     queryKey: ["repo", repo, "pr", number, "diff"] as const,
     queryFn: () => api.ghPrDiff(repo, number),
