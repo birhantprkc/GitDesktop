@@ -2063,6 +2063,17 @@ export function useRepoAdmin(repo: string, enabled: boolean) {
   });
 }
 
+/** The active gh token's OAuth scopes — for "this needs gh auth refresh -s X"
+ *  prompts on governance controls. Account-wide, so not repo-keyed. */
+export function useGhScopes() {
+  return useQuery({
+    queryKey: ["gh", "token-scopes"] as const,
+    queryFn: api.ghTokenScopes,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
 const webhooksKey = (repo: string) => ["repo", repo, "webhooks"] as const;
 
 export function useWebhooks(repo: string, enabled: boolean) {

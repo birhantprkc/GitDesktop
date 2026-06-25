@@ -414,6 +414,24 @@ pub struct RepoSettings {
     pub allow_auto_merge: bool,
     #[serde(default, alias = "web_commit_signoff_required")]
     pub web_commit_signoff_required: bool,
+    /// Read-only — the repo's GitHub URL, for "manage on GitHub" deep links to
+    /// the web-only settings (sponsorships, LFS-in-archives, push limits, …).
+    #[serde(default, alias = "html_url")]
+    pub html_url: String,
+    #[serde(default, alias = "is_template")]
+    pub is_template: bool,
+    #[serde(default, alias = "allow_forking")]
+    pub allow_forking: bool,
+    /// Default squash-merge commit title/message. The two are a constrained
+    /// enum pair (see `validate_merge_message_pairs`).
+    #[serde(default, alias = "squash_merge_commit_title")]
+    pub squash_merge_commit_title: String,
+    #[serde(default, alias = "squash_merge_commit_message")]
+    pub squash_merge_commit_message: String,
+    #[serde(default, alias = "merge_commit_title")]
+    pub merge_commit_title: String,
+    #[serde(default, alias = "merge_commit_message")]
+    pub merge_commit_message: String,
 }
 
 /// Edited settings from the UI (camelCase from the frontend).
@@ -435,6 +453,49 @@ pub struct RepoSettingsInput {
     pub delete_branch_on_merge: bool,
     pub allow_auto_merge: bool,
     pub web_commit_signoff_required: bool,
+    pub is_template: bool,
+    pub allow_forking: bool,
+    pub squash_merge_commit_title: String,
+    pub squash_merge_commit_message: String,
+    pub merge_commit_title: String,
+    pub merge_commit_message: String,
+}
+
+/// GitHub 422s an invalid squash/merge title+message combination, which would
+/// fail the whole settings PATCH. The UI only produces valid pairs; this guards
+/// the boundary anyway.
+fn validate_merge_message_pairs(input: &RepoSettingsInput) -> AppResult<()> {
+    const SQUASH: &[(&str, &str)] = &[
+        ("PR_TITLE", "PR_BODY"),
+        ("PR_TITLE", "BLANK"),
+        ("COMMIT_OR_PR_TITLE", "COMMIT_MESSAGES"),
+    ];
+    const MERGE: &[(&str, &str)] = &[
+        ("PR_TITLE", "PR_BODY"),
+        ("PR_TITLE", "BLANK"),
+        ("MERGE_MESSAGE", "PR_TITLE"),
+    ];
+    let squash = (
+        input.squash_merge_commit_title.as_str(),
+        input.squash_merge_commit_message.as_str(),
+    );
+    if !SQUASH.contains(&squash) {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid squash merge message: {}/{}",
+            squash.0, squash.1
+        )));
+    }
+    let merge = (
+        input.merge_commit_title.as_str(),
+        input.merge_commit_message.as_str(),
+    );
+    if !MERGE.contains(&merge) {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid merge commit message: {}/{}",
+            merge.0, merge.1
+        )));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -460,6 +521,7 @@ pub async fn gh_repo_settings_update(
             "enable at least one merge method".into(),
         ));
     }
+    validate_merge_message_pairs(&input)?;
     let body = json!({
         "description": input.description.trim(),
         "homepage": input.homepage.trim(),
@@ -475,6 +537,12 @@ pub async fn gh_repo_settings_update(
         "delete_branch_on_merge": input.delete_branch_on_merge,
         "allow_auto_merge": input.allow_auto_merge,
         "web_commit_signoff_required": input.web_commit_signoff_required,
+        "is_template": input.is_template,
+        "allow_forking": input.allow_forking,
+        "squash_merge_commit_title": input.squash_merge_commit_title,
+        "squash_merge_commit_message": input.squash_merge_commit_message,
+        "merge_commit_title": input.merge_commit_title,
+        "merge_commit_message": input.merge_commit_message,
     });
     let out = run_gh_input(
         Some(&repo_path),

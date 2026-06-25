@@ -12,6 +12,16 @@ commit list.
 
 ### Added
 
+- **More GitHub repo settings, in the app.** The repository-settings dialog gained
+  **template repository** and **allow forking** toggles and **default squash/merge
+  commit message** pickers — plus an **"Only on GitHub"** list that deep-links the five
+  settings GitHub exposes to no app (sponsor button, commenting on commits,
+  LFS-in-archives, per-push branch/tag limit, auto-close issues on merge), so they're
+  discoverable instead of silently missing. This is the first slice of a broader
+  org/repo governance plan ([docs/github-governance-expansion.md](docs/github-governance-expansion.md));
+  the app can now also read your `gh` token's OAuth scopes, groundwork for features that
+  prompt for the exact `gh auth refresh -s <scope>` they need.
+
 - **More of your git config, editable in the app.** Settings → **Git** gained two
   controls that write straight to your global git config: **line endings**
   (`core.autocrlf`) — with a note on the right choice per OS — and, when a repository

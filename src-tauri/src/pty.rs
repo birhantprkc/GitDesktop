@@ -8,6 +8,18 @@
 //! to the UI over a Tauri `Channel` (base64 chunks, so binary + partial-UTF-8 are
 //! safe); input/resize/close come back as commands. PTYs are held in app state
 //! keyed by a frontend id and torn down on close (or when the shell exits).
+//!
+//! **Windows dev caveat (known limitation, not a bug — do not re-chase):** the
+//! in-app terminal works in a RELEASE install but NOT under `pnpm tauri dev`. The
+//! dev launcher runs the app as a child of the terminal, so it inherits a console;
+//! that inherited console makes the ConPTY child spawn fail (empty output, child
+//! exits immediately). Three fixes were tried and reverted — `FreeConsole()`,
+//! `CREATE_NO_WINDOW` on the child, and making the binary windowless
+//! (`windows_subsystem = "windows"` in dev too) — none worked, because a windowless
+//! subsystem only stops Windows *allocating* a console, it doesn't shed an
+//! *inherited* one. In dev, use the UI's "Open in external terminal" escape hatch
+//! instead; don't reopen this without a real diagnostic build (instrument the spawn
+//! to see the child's actual std handles), not another guess.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};

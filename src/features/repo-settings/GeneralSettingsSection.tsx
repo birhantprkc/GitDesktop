@@ -1,4 +1,5 @@
-import { SparkleIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, SparkleIcon } from "@phosphor-icons/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import {
   useBranches,
+  useGhScopes,
   useRepoSettings,
   useUpdateRepoSettings,
 } from "@/lib/git/queries";
@@ -83,7 +85,103 @@ function toInput(s: RepoSettings): RepoSettingsInput {
     deleteBranchOnMerge: s.deleteBranchOnMerge,
     allowAutoMerge: s.allowAutoMerge,
     webCommitSignoffRequired: s.webCommitSignoffRequired,
+    isTemplate: s.isTemplate,
+    allowForking: s.allowForking,
+    squashMergeCommitTitle: s.squashMergeCommitTitle,
+    squashMergeCommitMessage: s.squashMergeCommitMessage,
+    mergeCommitTitle: s.mergeCommitTitle,
+    mergeCommitMessage: s.mergeCommitMessage,
   };
+}
+
+/** Valid squash/merge title+message pairs (GitHub 422s an invalid combo). Each
+ *  encodes its `title/message` enum pair; the UI offers them as one choice. */
+const SQUASH_DEFAULTS = [
+  {
+    value: "COMMIT_OR_PR_TITLE/COMMIT_MESSAGES",
+    label: "Default (commit messages)",
+  },
+  { value: "PR_TITLE/PR_BODY", label: "Pull request title and description" },
+  { value: "PR_TITLE/BLANK", label: "Pull request title" },
+] as const;
+const MERGE_DEFAULTS = [
+  { value: "MERGE_MESSAGE/PR_TITLE", label: "Default merge message" },
+  { value: "PR_TITLE/PR_BODY", label: "Pull request title and description" },
+  { value: "PR_TITLE/BLANK", label: "Pull request title" },
+] as const;
+
+/** Repo settings that have NO GitHub API — only manageable in the browser. */
+const WEB_ONLY_SETTINGS = [
+  "Display a Sponsor button",
+  "Allow commenting on individual commits",
+  "Include Git LFS objects in archives",
+  "Limit branches and tags updated in a single push",
+  "Auto-close issues with merged linked pull requests",
+];
+
+/** A muted readout of the gh token's OAuth scopes — context for what governance
+ *  actions are available. Hidden for fine-grained/App tokens (no classic scopes). */
+function GhScopesNote() {
+  const scopes = useGhScopes();
+  if (!scopes.data?.classic || scopes.data.scopes.length === 0) return null;
+  return (
+    <p className="text-[11px] text-muted-foreground">
+      Your GitHub sign-in grants:{" "}
+      <span className="font-mono">{scopes.data.scopes.join(", ")}</span>
+    </p>
+  );
+}
+
+/** A single dropdown for a default commit title+message pair. Keeps the current
+ *  (possibly non-standard) value selectable so the picker never shows blank. */
+function CommitMessageSelect({
+  id,
+  label,
+  disabled,
+  options,
+  title,
+  message,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  disabled: boolean;
+  options: readonly { value: string; label: string }[];
+  title: string;
+  message: string;
+  onChange: (title: string, message: string) => void;
+}) {
+  const value = `${title}/${message}`;
+  const opts = options.some((o) => o.value === value)
+    ? options
+    : [{ value, label: `${title} / ${message}` }, ...options];
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id} className={disabled ? "text-muted-foreground" : ""}>
+        {label}
+      </Label>
+      <Select
+        value={value}
+        disabled={disabled}
+        onValueChange={(v) => {
+          if (!v) return;
+          const [t, m] = v.split("/");
+          onChange(t, m);
+        }}
+      >
+        <SelectTrigger id={id} className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className="max-w-[min(22rem,80vw)]">
+          {opts.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              <span className="block truncate">{o.label}</span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
 }
 
 /** Space/comma-separated text → GitHub's lowercase, deduped, capped topic list. */
@@ -319,6 +417,38 @@ function GeneralForm({
             Rebase merging
           </label>
         </div>
+        <div className="grid grid-cols-2 gap-4 pt-1">
+          <CommitMessageSelect
+            id="squash-default"
+            label="Squash merge message"
+            disabled={!form.allowSquashMerge}
+            options={SQUASH_DEFAULTS}
+            title={form.squashMergeCommitTitle}
+            message={form.squashMergeCommitMessage}
+            onChange={(t, m) =>
+              setForm((f) => ({
+                ...f,
+                squashMergeCommitTitle: t,
+                squashMergeCommitMessage: m,
+              }))
+            }
+          />
+          <CommitMessageSelect
+            id="merge-default"
+            label="Merge commit message"
+            disabled={!form.allowMergeCommit}
+            options={MERGE_DEFAULTS}
+            title={form.mergeCommitTitle}
+            message={form.mergeCommitMessage}
+            onChange={(t, m) =>
+              setForm((f) => ({
+                ...f,
+                mergeCommitTitle: t,
+                mergeCommitMessage: m,
+              }))
+            }
+          />
+        </div>
         <label className="flex cursor-pointer items-center gap-2 pt-1 text-xs">
           <Switch
             checked={form.allowUpdateBranch}
@@ -352,6 +482,49 @@ function GeneralForm({
           Require contributors to sign off on web-based commits
         </label>
       </div>
+
+      <div className="space-y-2">
+        <Label>Repository</Label>
+        <label className="flex cursor-pointer items-center gap-2 text-xs">
+          <Switch
+            checked={form.isTemplate}
+            onCheckedChange={(c) => set("isTemplate", c)}
+          />
+          Template repository
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 text-xs">
+          <Switch
+            checked={form.allowForking}
+            onCheckedChange={(c) => set("allowForking", c)}
+          />
+          Allow forking
+        </label>
+      </div>
+
+      {settings.htmlUrl && (
+        <div className="space-y-2">
+          <Label>Only on GitHub</Label>
+          <p className="text-xs text-muted-foreground">
+            GitHub doesn't expose these to apps — manage them in your browser.
+          </p>
+          <ul className="space-y-1">
+            {WEB_ONLY_SETTINGS.map((label) => (
+              <li key={label}>
+                <button
+                  type="button"
+                  className="flex cursor-pointer items-center gap-1 text-left text-xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
+                  onClick={() => openUrl(`${settings.htmlUrl}/settings`)}
+                >
+                  {label}
+                  <ArrowSquareOutIcon className="size-3 shrink-0" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <GhScopesNote />
 
       <div className="flex items-center justify-end gap-3 pt-2">
         {!mergeValid && (

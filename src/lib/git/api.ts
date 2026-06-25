@@ -29,6 +29,7 @@ import type {
   GhAccounts,
   GhBranchProtection,
   GhRepoList,
+  GhScopes,
   GhStatus,
   GitInfo,
   HookDelivery,
@@ -1143,6 +1144,9 @@ export const ghRepoSetStar = (repoPath: string, starred: boolean) =>
 /** Whether the signed-in user is an admin on this repo (gates settings UI). */
 export const ghRepoAdmin = (repoPath: string) =>
   invoke<boolean>("gh_repo_admin", { repoPath });
+
+/** The active gh token's OAuth scopes (for "needs gh auth refresh -s …" hints). */
+export const ghTokenScopes = () => invoke<GhScopes>("gh_token_scopes");
 
 export const ghHooksList = (repoPath: string) =>
   invoke<Webhook[]>("gh_hooks_list", { repoPath });

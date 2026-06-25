@@ -241,6 +241,7 @@ pub fn run() {
             github::discussion::gh_discussion_reopen,
             github::discussion::gh_discussion_delete,
             github::repo_settings::gh_repo_admin,
+            github::auth::gh_token_scopes,
             github::insights::gh_community_insights,
             github::insights::gh_repo_traffic,
             github::insights::gh_repo_dependencies,

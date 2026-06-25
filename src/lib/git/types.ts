@@ -433,17 +433,34 @@ export interface RepoSettings {
   deleteBranchOnMerge: boolean;
   allowAutoMerge: boolean;
   webCommitSignoffRequired: boolean;
+  /** Read-only — the repo's GitHub URL, for "manage on GitHub" deep links. */
+  htmlUrl: string;
+  isTemplate: boolean;
+  allowForking: boolean;
+  /** Default squash/merge commit title+message (a constrained enum pair). */
+  squashMergeCommitTitle: string;
+  squashMergeCommitMessage: string;
+  mergeCommitTitle: string;
+  mergeCommitMessage: string;
 }
 
-/** Edited settings sent to the backend — {@link RepoSettings} with
- *  description/homepage as plain (possibly empty) strings rather than nullable. */
+/** Edited settings sent to the backend — {@link RepoSettings} minus the
+ *  read-only `htmlUrl`, with description/homepage as plain (possibly empty)
+ *  strings rather than nullable. */
 export type RepoSettingsInput = Omit<
   RepoSettings,
-  "description" | "homepage"
+  "description" | "homepage" | "htmlUrl"
 > & {
   description: string;
   homepage: string;
 };
+
+/** The active gh token's OAuth scopes. `classic: false` = a fine-grained PAT /
+ *  App token (no readable scopes — don't treat "missing scope" as a problem). */
+export interface GhScopes {
+  scopes: string[];
+  classic: boolean;
+}
 
 /** A GitHub (classic) branch protection rule, for importing into branch rules. */
 export interface GhBranchProtection {
