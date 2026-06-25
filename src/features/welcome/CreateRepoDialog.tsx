@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { required, useAppForm } from "@/lib/form";
 import { createRepo, validateRepo } from "@/lib/git/api";
-import { useAddRecentRepo, useSettings } from "@/lib/settings/queries";
+import { useGlobalDefaultBranch } from "@/lib/git/queries";
+import { useAddRecentRepo } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 
@@ -42,11 +43,10 @@ export function CreateRepoDialog({
 }) {
   const openRepo = useUiStore((s) => s.openRepo);
   const addRecent = useAddRecentRepo();
-  const settings = useSettings();
+  const globalDefaultBranch = useGlobalDefaultBranch();
 
-  // tolerate cached settings predating this field (e.g. right after update)
-  const defaultBranch =
-    (settings.data?.defaultBranch ?? "main").trim() || "main";
+  // The branch `git init` uses, from global git config; "main" when unset.
+  const defaultBranch = (globalDefaultBranch.data ?? "").trim() || "main";
 
   const form = useAppForm({
     defaultValues: DEFAULTS,

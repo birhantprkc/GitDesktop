@@ -178,6 +178,12 @@ a GitHub Actions success-rate / duration trend, a community-health card,
 network, dependents, Actions metrics, stars over time). Charts ship one-line
 captions, data-table fallbacks, and keyboard navigation.
 
+**Git settings** — Settings → **Git** configures your global git config from the
+app: the **default branch** for new repos (`init.defaultBranch`, honored by a
+command-line `git init` too), **line endings** (`core.autocrlf`), and your **commit
+identity** — plus a **per-repository override** (`git config --local`) so you can
+commit as a different author in one repo without changing your global identity.
+
 **Git hooks** — view, edit, enable/disable, and template `.git/hooks`, with
 husky / pre-commit / lefthook detection and install integration.
 

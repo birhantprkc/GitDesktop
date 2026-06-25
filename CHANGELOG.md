@@ -12,6 +12,15 @@ commit list.
 
 ### Added
 
+- **More of your git config, editable in the app.** Settings → **Git** gained two
+  controls that write straight to your global git config: **line endings**
+  (`core.autocrlf`) — with a note on the right choice per OS — and, when a repository
+  is open, a **per-repository identity override** (`git config --local user.name` /
+  `user.email`) so you can commit as a different author in just that repo without
+  touching your global identity. The override clears back to the global identity with
+  one click, and both apply immediately. They join the global identity and
+  default-branch fields already in that panel.
+
 - **Run a task several ways at once (best-of-N).** The Delegate composer gained a
   **Best-of-N** button: run the same task across 2–5 arms, **each with its own agent,
   model, and effort** — mix Claude, Codex, Copilot, and opencode so different providers
@@ -133,6 +142,13 @@ commit list.
 
 ### Fixed
 
+- **The "default branch for new repositories" setting now updates git itself.**
+  Settings → Git's default-branch field used to be a GitDesktop-only preference: it
+  changed what the app's *Create repository* dialog did, but never touched your global
+  git config — so `git config --global init.defaultBranch` (and a command-line
+  `git init`) still used the old branch. The setting now reads from and writes to your
+  global git config (`init.defaultBranch`), with its own **Save**, the same as the Git
+  identity field beside it — so GitDesktop and the command line finally agree.
 - **Container agent sessions now actually run the agent.** A container-isolated
   session was launching `node` instead of the agent CLI inside the container (the CLI
   name wasn't passed as the command), so Claude/Codex/opencode sessions failed to

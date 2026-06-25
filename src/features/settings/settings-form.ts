@@ -6,10 +6,15 @@ import { type AppSettings, DEFAULT_SETTINGS } from "@/lib/settings/api";
  * TanStack form and written once via the Save bar; recents and diff view
  * mode are app state owned by other surfaces.
  */
-export type SettingsDraft = Omit<AppSettings, "recentRepos" | "diffViewMode">;
+export type SettingsDraft = Omit<
+  AppSettings,
+  "recentRepos" | "diffViewMode" | "defaultBranch"
+>;
 
 export function toDraft(settings: AppSettings): SettingsDraft {
-  const { recentRepos, diffViewMode, ...draft } = settings;
+  // defaultBranch is dropped: it now lives in global git config, edited by its
+  // own form in GitSection, not the bulk Save bar.
+  const { recentRepos, diffViewMode, defaultBranch, ...draft } = settings;
   return draft;
 }
 

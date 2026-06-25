@@ -1,6 +1,7 @@
 pub mod branches;
 pub mod commit;
 pub mod compare;
+pub mod config;
 pub mod diff;
 pub mod history;
 pub mod ops;

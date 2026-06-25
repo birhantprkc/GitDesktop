@@ -24,6 +24,74 @@ pub async fn git_user_identity(repo_path: String) -> AppResult<CommitAuthor> {
     })
 }
 
+/// The repo-local identity override (`git config --local user.name/email`),
+/// empty strings when there's no override — the repo then uses the global one.
+#[tauri::command]
+pub async fn git_local_identity(repo_path: String) -> AppResult<CommitAuthor> {
+    async fn get(repo: &str, key: &str) -> String {
+        run_git_raw(
+            Some(repo),
+            &["config", "--local", "--get", key],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .ok()
+        .filter(|o| o.code == 0)
+        .map(|o| o.stdout_lossy().trim().to_string())
+        .unwrap_or_default()
+    }
+    Ok(CommitAuthor {
+        name: get(&repo_path, "user.name").await,
+        email: get(&repo_path, "user.email").await,
+    })
+}
+
+/// Sets or clears the repo-local identity override. A blank name and email
+/// clears it (the repo falls back to the global identity); otherwise both are
+/// required, so commits never get a half-set author.
+#[tauri::command]
+pub async fn git_set_local_identity(
+    repo_path: String,
+    name: String,
+    email: String,
+) -> AppResult<()> {
+    let name = name.trim();
+    let email = email.trim();
+    if name.is_empty() && email.is_empty() {
+        // `--unset` exits 5 when the key isn't set; ignore so clearing is idempotent.
+        for key in ["user.name", "user.email"] {
+            run_git_raw(
+                Some(&repo_path),
+                &["config", "--local", "--unset", key],
+                DEFAULT_TIMEOUT,
+            )
+            .await
+            .ok();
+        }
+        return Ok(());
+    }
+    for (value, what) in [(name, "name"), (email, "email")] {
+        if value.is_empty() || value.starts_with('-') {
+            return Err(crate::error::AppError::InvalidArgument(format!(
+                "invalid {what}: {value}"
+            )));
+        }
+    }
+    run_git(
+        Some(&repo_path),
+        &["config", "--local", "user.name", name],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    run_git(
+        Some(&repo_path),
+        &["config", "--local", "user.email", email],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 /// The global git identity (`git config --global`), empty strings when unset.
 #[tauri::command]
 pub async fn git_global_identity() -> AppResult<CommitAuthor> {
@@ -58,6 +126,42 @@ pub async fn git_set_global_identity(name: String, email: String) -> AppResult<(
     run_git(
         None,
         &["config", "--global", "user.email", email],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// The global default branch (`git config --global init.defaultBranch`) — the
+/// name `git init` gives the first branch of a new repo, here and on the command
+/// line. Empty when unset (git then uses its built-in default).
+#[tauri::command]
+pub async fn git_global_default_branch() -> AppResult<String> {
+    Ok(run_git_raw(
+        None,
+        &["config", "--global", "--get", "init.defaultBranch"],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    .ok()
+    .filter(|o| o.code == 0)
+    .map(|o| o.stdout_lossy().trim().to_string())
+    .unwrap_or_default())
+}
+
+/// Writes the global default branch — the branch `git init` gives new
+/// repositories, so GitDesktop and a command-line `git init` agree.
+#[tauri::command]
+pub async fn git_set_global_default_branch(branch: String) -> AppResult<()> {
+    let branch = branch.trim();
+    if branch.is_empty() || branch.starts_with('-') || branch.contains(' ') {
+        return Err(crate::error::AppError::InvalidArgument(format!(
+            "invalid branch name: {branch}"
+        )));
+    }
+    run_git(
+        None,
+        &["config", "--global", "init.defaultBranch", branch],
         DEFAULT_TIMEOUT,
     )
     .await?;

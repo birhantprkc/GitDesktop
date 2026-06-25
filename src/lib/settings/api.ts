@@ -114,7 +114,9 @@ export interface AppSettings {
   terminal: string;
   /** Executable path for the chosen terminal (empty for default/built-ins). */
   terminalPath: string;
-  /** Branch name used by `git init` for newly created repositories. */
+  /** @deprecated No longer read. The default branch for new repos now lives in
+   *  global git config (`init.defaultBranch`), edited in Settings → Git. Kept so
+   *  existing settings.json files round-trip without churn. */
   defaultBranch: string;
   /** Hotkey overrides by action id; null = explicitly unbound. Actions not
    *  present use their registry default. */

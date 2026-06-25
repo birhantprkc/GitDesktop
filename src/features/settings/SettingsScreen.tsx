@@ -25,7 +25,12 @@ import { AiProviderSection } from "./AiProviderSection";
 import { CommandsSection } from "./CommandsSection";
 import { EditorSection } from "./EditorSection";
 import { GeneralSection } from "./GeneralSection";
-import { GitIdentitySection, GitSection } from "./GitSection";
+import {
+  GitIdentitySection,
+  GitSection,
+  LineEndingsSection,
+  RepoIdentitySection,
+} from "./GitSection";
 import { InstructionsSection } from "./InstructionsSection";
 import { KeyboardSection } from "./KeyboardSection";
 import { NotificationsSection } from "./NotificationsSection";
@@ -75,6 +80,7 @@ export function SettingsScreen() {
   const closeSettings = useUiStore((s) => s.closeSettings);
   const settingsTarget = useUiStore((s) => s.settingsTarget);
   const clearSettingsTarget = useUiStore((s) => s.clearSettingsTarget);
+  const repoPath = useUiStore((s) => s.repoPath);
   const settings = useSettings();
   const saveSettings = useSaveSettings();
   const [panel, setPanel] = useState<PanelId>(
@@ -106,20 +112,12 @@ export function SettingsScreen() {
     onSubmit: async ({ value }) => {
       const current = settings.data;
       if (!current) return;
-      const branch = value.defaultBranch.trim() || "main";
-      if (branch.startsWith("-") || branch.includes(" ")) {
-        toast.error(`"${branch}" is not a valid branch name`);
-        setPanel("git");
-        closeAfterSave.current = false;
-        return;
-      }
-      const cleaned = { ...value, defaultBranch: branch };
-      await saveSettings.mutateAsync({ ...current, ...cleaned });
+      await saveSettings.mutateAsync({ ...current, ...value });
       // keepDefaultValues everywhere we reset-with-values: otherwise reset
       // rewrites the form's defaultValues and the per-render options sync
       // (which still sees settingsFormOpts' static defaults) clobbers the
       // values right back on the next render.
-      form.reset(cleaned, { keepDefaultValues: true });
+      form.reset(value, { keepDefaultValues: true });
       toast.success("Settings saved");
       if (closeAfterSave.current) {
         closeAfterSave.current = false;
@@ -235,8 +233,10 @@ export function SettingsScreen() {
               {activePanel === "accounts" && <AccountsSection />}
               {activePanel === "git" && (
                 <>
-                  <GitSection form={form} />
+                  <GitSection />
+                  <LineEndingsSection />
                   <GitIdentitySection />
+                  {repoPath && <RepoIdentitySection repoPath={repoPath} />}
                 </>
               )}
               {activePanel === "syntax" && <SyntaxSection form={form} />}
