@@ -513,6 +513,29 @@ export interface Invitation {
   createdAt: string;
 }
 
+export type RulesetEnforcement = "active" | "evaluate" | "disabled";
+
+/** A repo ruleset in the list view. */
+export interface RulesetSummary {
+  id: number;
+  name: string;
+  target: string;
+  enforcement: string;
+  /** "Repository" | "Organization" — org rulesets are read-only from a repo. */
+  sourceType: string;
+}
+
+/** The full ruleset object (raw GitHub schema, snake_case) for the editor. */
+export interface RulesetFull {
+  id: number;
+  name: string;
+  target?: string;
+  enforcement: string;
+  conditions?: { ref_name?: { include?: string[]; exclude?: string[] } };
+  bypass_actors?: unknown[];
+  rules?: { type: string; parameters?: Record<string, unknown> }[];
+}
+
 /** A "Code security and analysis" toggle. */
 export type SecurityFeature =
   | "advanced_security"

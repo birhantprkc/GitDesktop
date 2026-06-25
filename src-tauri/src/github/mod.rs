@@ -8,6 +8,7 @@ pub mod lifecycle;
 pub mod pr;
 pub mod release;
 pub mod repo_settings;
+pub mod rulesets;
 pub mod runner;
 pub mod secrets;
 pub mod security;

@@ -23,6 +23,7 @@ import type {
   RepoRole,
   RepoSettingsInput,
   RewriteStep,
+  RulesetEnforcement,
   SecretApp,
   SecurityFeature,
   UnignoreRule,
@@ -2451,6 +2452,70 @@ export function useTransferRepo(repo: string) {
 
 export function useDeleteRepo(repo: string) {
   return useMutation({ mutationFn: () => api.ghRepoDelete(repo) });
+}
+
+const rulesetsKey = (repo: string) => ["repo", repo, "rulesets"] as const;
+const rulesetKey = (repo: string, id: number | null) =>
+  ["repo", repo, "ruleset", id] as const;
+
+export function useRulesets(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: rulesetsKey(repo),
+    queryFn: () => api.ghRulesetsList(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+/** The full ruleset for the editor; only fetches once an id is set. */
+export function useRuleset(repo: string, id: number | null) {
+  return useQuery({
+    queryKey: rulesetKey(repo, id),
+    queryFn: () => api.ghRulesetGet(repo, id as number),
+    enabled: id != null,
+    retry: false,
+  });
+}
+
+export function useCreateRuleset(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      api.ghRulesetCreate(repo, body),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: rulesetsKey(repo) }),
+  });
+}
+
+export function useUpdateRuleset(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { id: number; body: Record<string, unknown> }) =>
+      api.ghRulesetUpdate(repo, a.id, a.body),
+    onSettled: (_d, _e, a) => {
+      queryClient.invalidateQueries({ queryKey: rulesetsKey(repo) });
+      queryClient.invalidateQueries({ queryKey: rulesetKey(repo, a.id) });
+    },
+  });
+}
+
+export function useDeleteRuleset(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.ghRulesetDelete(repo, id),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: rulesetsKey(repo) }),
+  });
+}
+
+export function useSetRulesetEnforcement(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { id: number; enforcement: RulesetEnforcement }) =>
+      api.ghRulesetSetEnforcement(repo, a.id, a.enforcement),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: rulesetsKey(repo) }),
+  });
 }
 
 export function useReadyPr(repo: string) {

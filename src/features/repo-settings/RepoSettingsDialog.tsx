@@ -54,6 +54,7 @@ import { CollaboratorsSection } from "./CollaboratorsSection";
 import { DangerZone } from "./DangerZone";
 import { FundingSection } from "./FundingSection";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
+import { RulesetsSection } from "./RulesetsSection";
 import { SecretsSection } from "./SecretsSection";
 import { SecuritySection } from "./SecuritySection";
 
@@ -110,6 +111,7 @@ export function RepoSettingsDialog({
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="access">Access</TabsTrigger>
+            <TabsTrigger value="rules">Rules</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
             <TabsTrigger value="sponsor">Sponsor</TabsTrigger>
             <TabsTrigger value="secrets">Secrets</TabsTrigger>
@@ -127,6 +129,12 @@ export function RepoSettingsDialog({
             className="min-h-0 min-w-0 overflow-y-auto pr-1"
           >
             <CollaboratorsSection repoPath={repoPath} open={open} />
+          </TabsContent>
+          <TabsContent
+            value="rules"
+            className="min-h-0 min-w-0 overflow-y-auto pr-1"
+          >
+            <RulesetsSection repoPath={repoPath} open={open} />
           </TabsContent>
           <TabsContent
             value="security"

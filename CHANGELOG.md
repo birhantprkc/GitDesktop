@@ -12,6 +12,16 @@ commit list.
 
 ### Added
 
+- **Branch rulesets, in the app.** A new **Rules** tab in repository settings manages
+  GitHub's modern branch rulesets: list them, flip **enforcement** (Active / Evaluate /
+  Disabled) right from the list — including the **reversible "disabled" soft-off** that
+  keeps the ruleset instead of deleting it — and create or edit one with a focused editor
+  (target branches, require a PR with approvals / code-owner review / stale-dismissal,
+  require status checks, block force pushes, restrict deletions, require linear history,
+  require signed commits). Editing preserves any advanced rules the editor doesn't
+  surface, and org-level rulesets show read-only. Part of the org/repo governance
+  buildout ([docs](docs/github-governance-expansion.md)).
+
 - **Repository danger zone, in the app.** The General tab of repository settings gained a
   **Danger zone**: **change visibility** (public / private / internal), **transfer
   ownership**, and **delete** the repository — each behind a type-the-`owner/repo`-name

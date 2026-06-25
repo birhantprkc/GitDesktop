@@ -69,6 +69,9 @@ import type {
   RepoStatus,
   RepoTraffic,
   RewriteStep,
+  RulesetEnforcement,
+  RulesetFull,
+  RulesetSummary,
   SecretApp,
   SecurityFeature,
   SecurityStatus,
@@ -1289,6 +1292,32 @@ export const ghRepoTransfer = (
 
 export const ghRepoDelete = (repoPath: string) =>
   invoke<void>("gh_repo_delete", { repoPath });
+
+export const ghRulesetsList = (repoPath: string) =>
+  invoke<RulesetSummary[]>("gh_rulesets_list", { repoPath });
+
+export const ghRulesetGet = (repoPath: string, id: number) =>
+  invoke<RulesetFull>("gh_ruleset_get", { repoPath, id });
+
+export const ghRulesetCreate = (
+  repoPath: string,
+  body: Record<string, unknown>,
+) => invoke<void>("gh_ruleset_create", { repoPath, body });
+
+export const ghRulesetUpdate = (
+  repoPath: string,
+  id: number,
+  body: Record<string, unknown>,
+) => invoke<void>("gh_ruleset_update", { repoPath, id, body });
+
+export const ghRulesetDelete = (repoPath: string, id: number) =>
+  invoke<void>("gh_ruleset_delete", { repoPath, id });
+
+export const ghRulesetSetEnforcement = (
+  repoPath: string,
+  id: number,
+  enforcement: RulesetEnforcement,
+) => invoke<void>("gh_ruleset_set_enforcement", { repoPath, id, enforcement });
 
 /** The repo's local `.github/dependabot.yml` text (null when absent). */
 export const dependabotGet = (repoPath: string) =>

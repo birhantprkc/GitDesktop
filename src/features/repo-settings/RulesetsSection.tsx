@@ -1,0 +1,597 @@
+import { CaretLeftIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  useCreateRuleset,
+  useDeleteRuleset,
+  useRuleset,
+  useRulesets,
+  useSetRulesetEnforcement,
+  useUpdateRuleset,
+} from "@/lib/git/queries";
+import type { RulesetEnforcement, RulesetFull } from "@/lib/git/types";
+import { toastError } from "@/lib/toast";
+
+const ENFORCEMENTS: { value: RulesetEnforcement; label: string }[] = [
+  { value: "active", label: "Active" },
+  { value: "evaluate", label: "Evaluate" },
+  { value: "disabled", label: "Disabled" },
+];
+
+/** Rule types we model in the editor. Any others on an edited ruleset are
+ *  preserved untouched (so advanced rules aren't dropped). */
+const MANAGED_RULE_TYPES = [
+  "pull_request",
+  "required_status_checks",
+  "non_fast_forward",
+  "deletion",
+  "required_linear_history",
+  "required_signatures",
+];
+
+interface Draft {
+  name: string;
+  enforcement: RulesetEnforcement;
+  refScope: "default" | "all" | "custom";
+  customPatterns: string;
+  requirePr: boolean;
+  approvals: number;
+  dismissStale: boolean;
+  codeOwner: boolean;
+  lastPush: boolean;
+  requireChecks: boolean;
+  checkContexts: string;
+  strictChecks: boolean;
+  blockForcePush: boolean;
+  restrictDeletions: boolean;
+  linearHistory: boolean;
+  requireSignatures: boolean;
+}
+
+const BLANK: Draft = {
+  name: "",
+  enforcement: "active",
+  refScope: "default",
+  customPatterns: "",
+  requirePr: false,
+  approvals: 1,
+  dismissStale: false,
+  codeOwner: false,
+  lastPush: false,
+  requireChecks: false,
+  checkContexts: "",
+  strictChecks: false,
+  blockForcePush: false,
+  restrictDeletions: false,
+  linearHistory: false,
+  requireSignatures: false,
+};
+
+const splitLines = (s: string) =>
+  s
+    .split(/[\n,]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+function rulesetToDraft(rs: RulesetFull): Draft {
+  const include = rs.conditions?.ref_name?.include ?? [];
+  const refScope = include.includes("~DEFAULT_BRANCH")
+    ? "default"
+    : include.includes("~ALL")
+      ? "all"
+      : "custom";
+  const byType = (t: string) => rs.rules?.find((r) => r.type === t);
+  const pr = byType("pull_request")?.parameters ?? {};
+  const checks = byType("required_status_checks")?.parameters ?? {};
+  const contexts =
+    (checks.required_status_checks as { context: string }[] | undefined) ?? [];
+  return {
+    name: rs.name ?? "",
+    enforcement: (rs.enforcement as RulesetEnforcement) ?? "active",
+    refScope,
+    customPatterns:
+      refScope === "custom"
+        ? include.map((p) => p.replace(/^refs\/heads\//, "")).join("\n")
+        : "",
+    requirePr: !!byType("pull_request"),
+    approvals: Number(pr.required_approving_review_count ?? 1),
+    dismissStale: !!pr.dismiss_stale_reviews_on_push,
+    codeOwner: !!pr.require_code_owner_review,
+    lastPush: !!pr.require_last_push_approval,
+    requireChecks: !!byType("required_status_checks"),
+    checkContexts: contexts.map((c) => c.context).join("\n"),
+    strictChecks: !!checks.strict_required_status_checks_policy,
+    blockForcePush: !!byType("non_fast_forward"),
+    restrictDeletions: !!byType("deletion"),
+    linearHistory: !!byType("required_linear_history"),
+    requireSignatures: !!byType("required_signatures"),
+  };
+}
+
+function draftToBody(
+  d: Draft,
+  original?: RulesetFull,
+): Record<string, unknown> {
+  const include =
+    d.refScope === "default"
+      ? ["~DEFAULT_BRANCH"]
+      : d.refScope === "all"
+        ? ["~ALL"]
+        : splitLines(d.customPatterns).map((p) =>
+            p.startsWith("refs/") ? p : `refs/heads/${p}`,
+          );
+  const rules: Record<string, unknown>[] = [];
+  if (d.requirePr) {
+    rules.push({
+      type: "pull_request",
+      parameters: {
+        required_approving_review_count: d.approvals,
+        dismiss_stale_reviews_on_push: d.dismissStale,
+        require_code_owner_review: d.codeOwner,
+        require_last_push_approval: d.lastPush,
+        required_review_thread_resolution: false,
+      },
+    });
+  }
+  if (d.requireChecks) {
+    rules.push({
+      type: "required_status_checks",
+      parameters: {
+        strict_required_status_checks_policy: d.strictChecks,
+        do_not_enforce_on_create: false,
+        required_status_checks: splitLines(d.checkContexts).map((context) => ({
+          context,
+        })),
+      },
+    });
+  }
+  if (d.blockForcePush) rules.push({ type: "non_fast_forward" });
+  if (d.restrictDeletions) rules.push({ type: "deletion" });
+  if (d.linearHistory) rules.push({ type: "required_linear_history" });
+  if (d.requireSignatures) rules.push({ type: "required_signatures" });
+  // Preserve rule types the editor doesn't model.
+  const extra = (original?.rules ?? []).filter(
+    (r) => !MANAGED_RULE_TYPES.includes(r.type),
+  );
+  return {
+    name: d.name.trim(),
+    target: "branch",
+    enforcement: d.enforcement,
+    bypass_actors: original?.bypass_actors ?? [],
+    conditions: { ref_name: { include, exclude: [] } },
+    rules: [...rules, ...extra],
+  };
+}
+
+export function RulesetsSection({
+  repoPath,
+  open,
+}: {
+  repoPath: string;
+  open: boolean;
+}) {
+  const [editing, setEditing] = useState<number | "new" | null>(null);
+
+  if (editing !== null) {
+    return (
+      <RulesetEditor
+        repoPath={repoPath}
+        id={editing === "new" ? null : editing}
+        onDone={() => setEditing(null)}
+      />
+    );
+  }
+  return (
+    <RulesetList
+      repoPath={repoPath}
+      open={open}
+      onNew={() => setEditing("new")}
+      onEdit={setEditing}
+    />
+  );
+}
+
+function RulesetList({
+  repoPath,
+  open,
+  onNew,
+  onEdit,
+}: {
+  repoPath: string;
+  open: boolean;
+  onNew: () => void;
+  onEdit: (id: number) => void;
+}) {
+  const rulesets = useRulesets(repoPath, open);
+  const setEnforcement = useSetRulesetEnforcement(repoPath);
+  const del = useDeleteRuleset(repoPath);
+  const [confirming, setConfirming] = useState<number | null>(null);
+
+  return (
+    <div className="min-w-0 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          Layered branch protection — the modern replacement for classic
+          protection.
+        </p>
+        <Button size="sm" variant="outline" onClick={onNew}>
+          <PlusIcon data-icon="inline-start" />
+          New ruleset
+        </Button>
+      </div>
+
+      {rulesets.isLoading && (
+        <div className="space-y-2">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      )}
+      {rulesets.isError && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
+          <p className="font-medium text-destructive">
+            Couldn't load rulesets.
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            {rulesets.error instanceof Error
+              ? rulesets.error.message
+              : "Managing rulesets needs repo-admin access."}
+          </p>
+        </div>
+      )}
+      {rulesets.data?.length === 0 && (
+        <p className="rounded-md border border-dashed py-8 text-center text-xs text-muted-foreground">
+          No rulesets yet.
+        </p>
+      )}
+
+      {rulesets.data?.map((rs) => {
+        const org = rs.sourceType === "Organization";
+        return (
+          <div
+            key={rs.id}
+            className="flex items-center gap-2 rounded-md border p-2.5 text-xs"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-medium">{rs.name}</p>
+              <p className="text-[11px] text-muted-foreground">
+                {rs.target}
+                {org && " · from organization"}
+              </p>
+            </div>
+            {org ? (
+              <Badge variant="secondary" className="capitalize">
+                {rs.enforcement}
+              </Badge>
+            ) : confirming === rs.id ? (
+              <>
+                <span className="text-muted-foreground">Delete?</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setConfirming(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={del.isPending}
+                  onClick={() =>
+                    del.mutate(rs.id, {
+                      onSuccess: () => {
+                        toast.success("Ruleset deleted");
+                        setConfirming(null);
+                      },
+                      onError: toastError,
+                    })
+                  }
+                >
+                  {del.isPending && <Spinner data-icon="inline-start" />}
+                  Delete
+                </Button>
+              </>
+            ) : (
+              <>
+                <Select
+                  value={rs.enforcement}
+                  disabled={setEnforcement.isPending}
+                  onValueChange={(v) =>
+                    v &&
+                    setEnforcement.mutate(
+                      { id: rs.id, enforcement: v as RulesetEnforcement },
+                      { onError: toastError },
+                    )
+                  }
+                >
+                  <SelectTrigger size="sm" className="w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ENFORCEMENTS.map((e) => (
+                      <SelectItem key={e.value} value={e.value}>
+                        {e.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button size="sm" variant="ghost" onClick={() => onEdit(rs.id)}>
+                  Edit
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-muted-foreground hover:text-destructive"
+                  title="Delete"
+                  onClick={() => setConfirming(rs.id)}
+                >
+                  <TrashIcon />
+                </Button>
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RulesetEditor({
+  repoPath,
+  id,
+  onDone,
+}: {
+  repoPath: string;
+  id: number | null;
+  onDone: () => void;
+}) {
+  const existing = useRuleset(repoPath, id);
+  if (id != null && existing.isLoading) {
+    return <Skeleton className="h-64 w-full" />;
+  }
+  return (
+    <RulesetForm
+      repoPath={repoPath}
+      id={id}
+      original={id != null ? existing.data : undefined}
+      onDone={onDone}
+    />
+  );
+}
+
+function RulesetForm({
+  repoPath,
+  id,
+  original,
+  onDone,
+}: {
+  repoPath: string;
+  id: number | null;
+  original?: RulesetFull;
+  onDone: () => void;
+}) {
+  const create = useCreateRuleset(repoPath);
+  const update = useUpdateRuleset(repoPath);
+  const pending = create.isPending || update.isPending;
+  const seed = useMemo(
+    () => (original ? rulesetToDraft(original) : BLANK),
+    [original],
+  );
+  const [d, setD] = useState<Draft>(seed);
+  const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
+    setD((p) => ({ ...p, [key]: value }));
+
+  function save() {
+    const body = draftToBody(d, original);
+    const opts = {
+      onSuccess: () => {
+        toast.success(id != null ? "Ruleset updated" : "Ruleset created");
+        onDone();
+      },
+      onError: toastError,
+    };
+    if (id != null) update.mutate({ id, body }, opts);
+    else create.mutate(body, opts);
+  }
+
+  return (
+    <div className="min-w-0 space-y-4">
+      <button
+        type="button"
+        onClick={onDone}
+        className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <CaretLeftIcon />
+        Back to rulesets
+      </button>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="ruleset-name">Name</Label>
+          <Input
+            id="ruleset-name"
+            value={d.name}
+            onChange={(e) => set("name", e.target.value)}
+            placeholder="e.g. Protect main"
+            autoComplete="off"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="ruleset-enforcement">Enforcement</Label>
+          <Select
+            value={d.enforcement}
+            onValueChange={(v) =>
+              v && set("enforcement", v as RulesetEnforcement)
+            }
+          >
+            <SelectTrigger id="ruleset-enforcement" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ENFORCEMENTS.map((e) => (
+                <SelectItem key={e.value} value={e.value}>
+                  {e.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="ruleset-scope">Target branches</Label>
+        <Select
+          value={d.refScope}
+          onValueChange={(v) => v && set("refScope", v as Draft["refScope"])}
+        >
+          <SelectTrigger id="ruleset-scope" className="w-56">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="default">Default branch</SelectItem>
+            <SelectItem value="all">All branches</SelectItem>
+            <SelectItem value="custom">Custom patterns…</SelectItem>
+          </SelectContent>
+        </Select>
+        {d.refScope === "custom" && (
+          <Textarea
+            value={d.customPatterns}
+            onChange={(e) => set("customPatterns", e.target.value)}
+            placeholder={"main\nrelease/*  (one fnmatch pattern per line)"}
+            rows={2}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label>Rules</Label>
+
+        <RuleToggle
+          label="Require a pull request before merging"
+          checked={d.requirePr}
+          onChange={(v) => set("requirePr", v)}
+        />
+        {d.requirePr && (
+          <div className="ml-6 space-y-2 border-l pl-3">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="ruleset-approvals" className="text-xs">
+                Required approvals
+              </Label>
+              <Input
+                id="ruleset-approvals"
+                type="number"
+                min={0}
+                max={10}
+                value={d.approvals}
+                onChange={(e) => set("approvals", Number(e.target.value))}
+                className="h-7 w-16"
+              />
+            </div>
+            <RuleToggle
+              label="Dismiss stale approvals on new pushes"
+              checked={d.dismissStale}
+              onChange={(v) => set("dismissStale", v)}
+            />
+            <RuleToggle
+              label="Require review from Code Owners"
+              checked={d.codeOwner}
+              onChange={(v) => set("codeOwner", v)}
+            />
+            <RuleToggle
+              label="Require approval of the most recent push"
+              checked={d.lastPush}
+              onChange={(v) => set("lastPush", v)}
+            />
+          </div>
+        )}
+
+        <RuleToggle
+          label="Require status checks to pass"
+          checked={d.requireChecks}
+          onChange={(v) => set("requireChecks", v)}
+        />
+        {d.requireChecks && (
+          <div className="ml-6 space-y-2 border-l pl-3">
+            <Textarea
+              value={d.checkContexts}
+              onChange={(e) => set("checkContexts", e.target.value)}
+              placeholder="check names, one per line (e.g. build, test)"
+              rows={2}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <RuleToggle
+              label="Require branches to be up to date before merging"
+              checked={d.strictChecks}
+              onChange={(v) => set("strictChecks", v)}
+            />
+          </div>
+        )}
+
+        <RuleToggle
+          label="Block force pushes"
+          checked={d.blockForcePush}
+          onChange={(v) => set("blockForcePush", v)}
+        />
+        <RuleToggle
+          label="Restrict deletions"
+          checked={d.restrictDeletions}
+          onChange={(v) => set("restrictDeletions", v)}
+        />
+        <RuleToggle
+          label="Require linear history"
+          checked={d.linearHistory}
+          onChange={(v) => set("linearHistory", v)}
+        />
+        <RuleToggle
+          label="Require signed commits"
+          checked={d.requireSignatures}
+          onChange={(v) => set("requireSignatures", v)}
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-2 pt-1">
+        <Button variant="outline" onClick={onDone} disabled={pending}>
+          Cancel
+        </Button>
+        <Button onClick={save} disabled={pending || !d.name.trim()}>
+          {pending && <Spinner data-icon="inline-start" />}
+          {id != null ? "Save ruleset" : "Create ruleset"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function RuleToggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center justify-between gap-3 text-xs">
+      <span>{label}</span>
+      <Switch checked={checked} onCheckedChange={onChange} />
+    </label>
+  );
+}
