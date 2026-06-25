@@ -12,6 +12,7 @@ import type {
   BranchDivergence,
   BranchStats,
   CodeFreqPoint,
+  Collaborator,
   CommitAuthor,
   CommitDetails,
   CommitResult,
@@ -38,6 +39,7 @@ import type {
   HookDeliveryDetail,
   HooksInfo,
   IgnoredFile,
+  Invitation,
   IssueDependencies,
   IssueDetails,
   IssueDevelopment,
@@ -60,6 +62,7 @@ import type {
   RepoOp,
   RepoOpState,
   RepoOwner,
+  RepoRole,
   RepoSettings,
   RepoSettingsInput,
   RepoStats,
@@ -1239,6 +1242,31 @@ export const ghVariableDelete = (
 
 export const ghEnvironmentsList = (repoPath: string) =>
   invoke<string[]>("gh_environments_list", { repoPath });
+
+export const ghCollaboratorsList = (repoPath: string) =>
+  invoke<Collaborator[]>("gh_collaborators_list", { repoPath });
+
+/** Returns true when GitHub created a pending invitation, false on an immediate grant. */
+export const ghCollaboratorAdd = (
+  repoPath: string,
+  username: string,
+  role: RepoRole,
+) => invoke<boolean>("gh_collaborator_add", { repoPath, username, role });
+
+export const ghCollaboratorRemove = (repoPath: string, username: string) =>
+  invoke<void>("gh_collaborator_remove", { repoPath, username });
+
+export const ghInvitationsList = (repoPath: string) =>
+  invoke<Invitation[]>("gh_invitations_list", { repoPath });
+
+export const ghInvitationUpdate = (
+  repoPath: string,
+  id: string,
+  permission: RepoRole,
+) => invoke<void>("gh_invitation_update", { repoPath, id, permission });
+
+export const ghInvitationCancel = (repoPath: string, id: string) =>
+  invoke<void>("gh_invitation_cancel", { repoPath, id });
 
 /** The repo's local `.github/FUNDING.yml` text (null when absent). */
 export const fundingGet = (repoPath: string) =>

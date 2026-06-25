@@ -482,6 +482,27 @@ export interface GhVariable {
   updatedAt: string;
 }
 
+/** A repo permission level (the invitation/role vocabulary). */
+export type RepoRole = "read" | "triage" | "write" | "maintain" | "admin";
+
+/** A repo collaborator. (GitHub can't reliably distinguish a direct grant from
+ *  one inherited via a team/org, so we just show the effective role.) */
+export interface Collaborator {
+  login: string;
+  avatarUrl: string;
+  /** read | triage | write | maintain | admin */
+  roleName: string;
+}
+
+/** A pending repo invitation (not yet accepted). */
+export interface Invitation {
+  id: string;
+  login: string;
+  avatarUrl: string;
+  permission: RepoRole;
+  createdAt: string;
+}
+
 /** A GitHub (classic) branch protection rule, for importing into branch rules. */
 export interface GhBranchProtection {
   /** fnmatch-style branch name pattern the rule targets. */

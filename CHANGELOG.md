@@ -12,6 +12,14 @@ commit list.
 
 ### Added
 
+- **Manage repo collaborators & invitations, in the app.** A new **Access** tab in
+  repository settings lists your collaborators with their role, lets you **invite**
+  someone by username at any level (Read / Triage / Write / Maintain / Admin), **change**
+  a collaborator's role inline, and **remove** them — plus a **pending invitations** list
+  you can re-role or cancel. (Removing someone revokes only their direct access; team/org
+  access is managed at the org level, coming later.) Part of the org/repo governance
+  buildout ([docs/github-governance-expansion.md](docs/github-governance-expansion.md)).
+
 - **Edit the Sponsor button, in the app.** A new **Sponsor** tab in repository settings
   edits `.github/FUNDING.yml` — the file that powers your repo's **Sponsor** button —
   with fields for GitHub Sponsors, Patreon, Open Collective, Ko-fi, Liberapay, Buy Me a

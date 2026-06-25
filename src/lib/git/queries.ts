@@ -20,6 +20,7 @@ import type {
   IssueType,
   Reaction,
   RepoOp,
+  RepoRole,
   RepoSettingsInput,
   RewriteStep,
   SecretApp,
@@ -2311,6 +2312,69 @@ export function useDeleteFunding(repo: string) {
     mutationFn: () => api.fundingDelete(repo),
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: fundingKey(repo) }),
+  });
+}
+
+const collaboratorsKey = (repo: string) =>
+  ["repo", repo, "collaborators"] as const;
+const invitationsKey = (repo: string) => ["repo", repo, "invitations"] as const;
+
+export function useCollaborators(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: collaboratorsKey(repo),
+    queryFn: () => api.ghCollaboratorsList(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useAddCollaborator(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { username: string; role: RepoRole }) =>
+      api.ghCollaboratorAdd(repo, a.username, a.role),
+    // An add can land as an immediate grant OR a pending invitation.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: collaboratorsKey(repo) });
+      queryClient.invalidateQueries({ queryKey: invitationsKey(repo) });
+    },
+  });
+}
+
+export function useRemoveCollaborator(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (username: string) => api.ghCollaboratorRemove(repo, username),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: collaboratorsKey(repo) }),
+  });
+}
+
+export function useInvitations(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: invitationsKey(repo),
+    queryFn: () => api.ghInvitationsList(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useUpdateInvitation(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { id: string; permission: RepoRole }) =>
+      api.ghInvitationUpdate(repo, a.id, a.permission),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: invitationsKey(repo) }),
+  });
+}
+
+export function useCancelInvitation(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.ghInvitationCancel(repo, id),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: invitationsKey(repo) }),
   });
 }
 
