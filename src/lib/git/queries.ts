@@ -2284,6 +2284,36 @@ export function useEnvironments(repo: string, enabled: boolean) {
   });
 }
 
+const fundingKey = (repo: string) => ["repo", repo, "funding"] as const;
+
+/** The repo's local `.github/FUNDING.yml` text (null when there is none). */
+export function useFunding(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: fundingKey(repo),
+    queryFn: () => api.fundingGet(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useSetFunding(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (content: string) => api.fundingSet(repo, content),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: fundingKey(repo) }),
+  });
+}
+
+export function useDeleteFunding(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.fundingDelete(repo),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: fundingKey(repo) }),
+  });
+}
+
 export function useReadyPr(repo: string) {
   return useRepoMutation(repo, (number: number) => api.ghPrReady(repo, number));
 }

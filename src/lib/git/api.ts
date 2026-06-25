@@ -1240,6 +1240,16 @@ export const ghVariableDelete = (
 export const ghEnvironmentsList = (repoPath: string) =>
   invoke<string[]>("gh_environments_list", { repoPath });
 
+/** The repo's local `.github/FUNDING.yml` text (null when absent). */
+export const fundingGet = (repoPath: string) =>
+  invoke<string | null>("funding_get", { repoPath });
+
+export const fundingSet = (repoPath: string, content: string) =>
+  invoke<void>("funding_set", { repoPath, content });
+
+export const fundingDelete = (repoPath: string) =>
+  invoke<void>("funding_delete", { repoPath });
+
 export const ghPrReady = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_ready", { repoPath, number });
 

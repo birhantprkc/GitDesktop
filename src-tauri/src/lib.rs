@@ -2,6 +2,7 @@ mod agent;
 mod agent_sandbox;
 mod error;
 mod fsops;
+mod funding;
 mod git;
 mod github;
 mod health;
@@ -249,6 +250,9 @@ pub fn run() {
             github::secrets::gh_variable_set,
             github::secrets::gh_variable_delete,
             github::secrets::gh_environments_list,
+            funding::funding_get,
+            funding::funding_set,
+            funding::funding_delete,
             github::insights::gh_community_insights,
             github::insights::gh_repo_traffic,
             github::insights::gh_repo_dependencies,

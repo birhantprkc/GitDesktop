@@ -437,6 +437,9 @@ export interface RepoSettings {
   htmlUrl: string;
   isTemplate: boolean;
   allowForking: boolean;
+  /** Forking is only changeable on an org-owned private repo; the toggle hides
+   *  otherwise (and `allowForking` is sent as null so the PATCH doesn't 422). */
+  canChangeForking: boolean;
   /** Default squash/merge commit title+message (a constrained enum pair). */
   squashMergeCommitTitle: string;
   squashMergeCommitMessage: string;
@@ -445,14 +448,15 @@ export interface RepoSettings {
 }
 
 /** Edited settings sent to the backend — {@link RepoSettings} minus the
- *  read-only `htmlUrl`, with description/homepage as plain (possibly empty)
- *  strings rather than nullable. */
+ *  read-only fields, with description/homepage as plain (possibly empty) strings
+ *  and `allowForking` nullable (null = leave forking untouched). */
 export type RepoSettingsInput = Omit<
   RepoSettings,
-  "description" | "homepage" | "htmlUrl"
+  "description" | "homepage" | "htmlUrl" | "canChangeForking" | "allowForking"
 > & {
   description: string;
   homepage: string;
+  allowForking: boolean | null;
 };
 
 /** The active gh token's OAuth scopes. `classic: false` = a fine-grained PAT /

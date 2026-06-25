@@ -50,6 +50,7 @@ import type { HookDelivery, Webhook, WebhookInput } from "@/lib/git/types";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { FundingSection } from "./FundingSection";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { SecretsSection } from "./SecretsSection";
 
@@ -105,6 +106,7 @@ export function RepoSettingsDialog({
         <Tabs defaultValue="general" className="flex min-h-0 min-w-0 flex-col">
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
+            <TabsTrigger value="sponsor">Sponsor</TabsTrigger>
             <TabsTrigger value="secrets">Secrets &amp; variables</TabsTrigger>
             <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
           </TabsList>
@@ -113,6 +115,12 @@ export function RepoSettingsDialog({
             className="min-h-0 min-w-0 overflow-y-auto pr-1"
           >
             <GeneralSettingsSection repoPath={repoPath} open={open} />
+          </TabsContent>
+          <TabsContent
+            value="sponsor"
+            className="min-h-0 min-w-0 overflow-y-auto pr-1"
+          >
+            <FundingSection repoPath={repoPath} open={open} />
           </TabsContent>
           <TabsContent
             value="secrets"

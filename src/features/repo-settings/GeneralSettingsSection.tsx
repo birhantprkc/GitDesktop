@@ -86,7 +86,8 @@ function toInput(s: RepoSettings): RepoSettingsInput {
     allowAutoMerge: s.allowAutoMerge,
     webCommitSignoffRequired: s.webCommitSignoffRequired,
     isTemplate: s.isTemplate,
-    allowForking: s.allowForking,
+    // null = don't send allow_forking (only mutable on org-owned private repos).
+    allowForking: s.canChangeForking ? s.allowForking : null,
     squashMergeCommitTitle: s.squashMergeCommitTitle,
     squashMergeCommitMessage: s.squashMergeCommitMessage,
     mergeCommitTitle: s.mergeCommitTitle,
@@ -110,9 +111,9 @@ const MERGE_DEFAULTS = [
   { value: "PR_TITLE/BLANK", label: "Pull request title" },
 ] as const;
 
-/** Repo settings that have NO GitHub API — only manageable in the browser. */
+/** Repo settings that have NO GitHub API — only manageable in the browser.
+ *  (The Sponsor button is editable in the Sponsor tab — it's `.github/FUNDING.yml`.) */
 const WEB_ONLY_SETTINGS = [
-  "Display a Sponsor button",
   "Allow commenting on individual commits",
   "Include Git LFS objects in archives",
   "Limit branches and tags updated in a single push",
@@ -492,13 +493,16 @@ function GeneralForm({
           />
           Template repository
         </label>
-        <label className="flex cursor-pointer items-center gap-2 text-xs">
-          <Switch
-            checked={form.allowForking}
-            onCheckedChange={(c) => set("allowForking", c)}
-          />
-          Allow forking
-        </label>
+        {/* GitHub only allows changing this on org-owned private repos. */}
+        {settings.canChangeForking && (
+          <label className="flex cursor-pointer items-center gap-2 text-xs">
+            <Switch
+              checked={form.allowForking ?? false}
+              onCheckedChange={(c) => set("allowForking", c)}
+            />
+            Allow forking
+          </label>
+        )}
       </div>
 
       {settings.htmlUrl && (

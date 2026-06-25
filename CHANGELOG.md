@@ -12,6 +12,14 @@ commit list.
 
 ### Added
 
+- **Edit the Sponsor button, in the app.** A new **Sponsor** tab in repository settings
+  edits `.github/FUNDING.yml` — the file that powers your repo's **Sponsor** button —
+  with fields for GitHub Sponsors, Patreon, Open Collective, Ko-fi, Liberapay, Buy Me a
+  Coffee, Polar, Tidelift, and custom URLs. Saving writes `.github/FUNDING.yml` to your
+  working tree — review and commit it like any other change to publish; one click removes
+  it. (GitHub has no API for the "Sponsorships" *feature* toggle, but it's on by default —
+  the file is what matters, which is why this is the right lever.)
+
 - **Manage GitHub secrets & variables, in the app.** A new **Secrets & variables** tab
   in repository settings lists and edits **Actions, Dependabot, and Codespaces secrets**
   and **Actions variables**, at **repository or environment** scope. Secret values are
@@ -20,9 +28,10 @@ commit list.
   reused name updates the existing variable. Part of the broader org/repo governance
   buildout ([docs/github-governance-expansion.md](docs/github-governance-expansion.md)).
 
-- **More GitHub repo settings, in the app.** The repository-settings dialog gained
-  **template repository** and **allow forking** toggles and **default squash/merge
-  commit message** pickers — plus an **"Only on GitHub"** list that deep-links the five
+- **More GitHub repo settings, in the app.** The repository-settings dialog gained a
+  **template repository** toggle, **default squash/merge commit message** pickers, and
+  an **allow forking** toggle (shown only on org-owned private repos, the one place
+  GitHub lets it change) — plus an **"Only on GitHub"** list that deep-links the five
   settings GitHub exposes to no app (sponsor button, commenting on commits,
   LFS-in-archives, per-push branch/tag limit, auto-close issues on merge), so they're
   discoverable instead of silently missing. This is the first slice of a broader

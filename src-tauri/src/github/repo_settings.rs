@@ -422,6 +422,11 @@ pub struct RepoSettings {
     pub is_template: bool,
     #[serde(default, alias = "allow_forking")]
     pub allow_forking: bool,
+    /// Computed, not from the API: GitHub only lets `allow_forking` change on an
+    /// org-owned PRIVATE repo — sending it for any other repo 422s the whole
+    /// PATCH. The UI hides the toggle (and we omit the field) when this is false.
+    #[serde(default, skip_deserializing)]
+    pub can_change_forking: bool,
     /// Default squash-merge commit title/message. The two are a constrained
     /// enum pair (see `validate_merge_message_pairs`).
     #[serde(default, alias = "squash_merge_commit_title")]
@@ -454,7 +459,9 @@ pub struct RepoSettingsInput {
     pub allow_auto_merge: bool,
     pub web_commit_signoff_required: bool,
     pub is_template: bool,
-    pub allow_forking: bool,
+    /// `None` when the repo can't change forking (org-owned private only) — the
+    /// field is then omitted from the PATCH so it doesn't 422 the whole save.
+    pub allow_forking: Option<bool>,
     pub squash_merge_commit_title: String,
     pub squash_merge_commit_message: String,
     pub merge_commit_title: String,
@@ -498,6 +505,15 @@ fn validate_merge_message_pairs(input: &RepoSettingsInput) -> AppResult<()> {
     Ok(())
 }
 
+/// `allow_forking` is only mutable on an org-owned PRIVATE repo. Read that from
+/// the raw repo JSON (`private` + `owner.type`).
+fn can_change_forking(repo_json: &str) -> bool {
+    let v: serde_json::Value = serde_json::from_str(repo_json).unwrap_or_default();
+    let is_private = v.get("private").and_then(|p| p.as_bool()).unwrap_or(false);
+    let is_org = v.pointer("/owner/type").and_then(|t| t.as_str()) == Some("Organization");
+    is_private && is_org
+}
+
 #[tauri::command]
 pub async fn gh_repo_settings_get(repo_path: String) -> AppResult<RepoSettings> {
     let out = run_gh(
@@ -506,8 +522,11 @@ pub async fn gh_repo_settings_get(repo_path: String) -> AppResult<RepoSettings> 
         GH_NETWORK_TIMEOUT,
     )
     .await?;
-    serde_json::from_str(&out.stdout_lossy())
-        .map_err(|e| AppError::Gh(format!("could not parse repo settings: {e}")))
+    let text = out.stdout_lossy();
+    let mut settings: RepoSettings = serde_json::from_str(&text)
+        .map_err(|e| AppError::Gh(format!("could not parse repo settings: {e}")))?;
+    settings.can_change_forking = can_change_forking(&text);
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -522,7 +541,7 @@ pub async fn gh_repo_settings_update(
         ));
     }
     validate_merge_message_pairs(&input)?;
-    let body = json!({
+    let mut body = json!({
         "description": input.description.trim(),
         "homepage": input.homepage.trim(),
         "default_branch": input.default_branch,
@@ -538,12 +557,16 @@ pub async fn gh_repo_settings_update(
         "allow_auto_merge": input.allow_auto_merge,
         "web_commit_signoff_required": input.web_commit_signoff_required,
         "is_template": input.is_template,
-        "allow_forking": input.allow_forking,
         "squash_merge_commit_title": input.squash_merge_commit_title,
         "squash_merge_commit_message": input.squash_merge_commit_message,
         "merge_commit_title": input.merge_commit_title,
         "merge_commit_message": input.merge_commit_message,
     });
+    // Only send allow_forking where it's actually mutable (org-owned private);
+    // including it elsewhere 422s the entire PATCH.
+    if let Some(allow_forking) = input.allow_forking {
+        body["allow_forking"] = json!(allow_forking);
+    }
     let out = run_gh_input(
         Some(&repo_path),
         &[
@@ -558,8 +581,10 @@ pub async fn gh_repo_settings_update(
         GH_NETWORK_TIMEOUT,
     )
     .await?;
-    let mut settings: RepoSettings = serde_json::from_str(&out.stdout_lossy())
+    let text = out.stdout_lossy();
+    let mut settings: RepoSettings = serde_json::from_str(&text)
         .map_err(|e| AppError::Gh(format!("could not parse repo settings: {e}")))?;
+    settings.can_change_forking = can_change_forking(&text);
 
     // Topics aren't part of the repo PATCH — they have their own endpoint.
     // Lowercase + strip to GitHub's allowed alphabet so a stray character
