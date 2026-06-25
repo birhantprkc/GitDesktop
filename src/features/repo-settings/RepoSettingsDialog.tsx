@@ -54,6 +54,7 @@ import { CollaboratorsSection } from "./CollaboratorsSection";
 import { DangerZone } from "./DangerZone";
 import { FundingSection } from "./FundingSection";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
+import { PagesSection } from "./PagesSection";
 import { RulesetsSection } from "./RulesetsSection";
 import { SecretsSection } from "./SecretsSection";
 import { SecuritySection } from "./SecuritySection";
@@ -108,11 +109,12 @@ export function RepoSettingsDialog({
           </DialogDescription>
         </DialogHeader>
         <Tabs defaultValue="general" className="flex min-h-0 min-w-0 flex-col">
-          <TabsList>
+          <TabsList className="h-auto flex-wrap">
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="access">Access</TabsTrigger>
             <TabsTrigger value="rules">Rules</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
+            <TabsTrigger value="pages">Pages</TabsTrigger>
             <TabsTrigger value="sponsor">Sponsor</TabsTrigger>
             <TabsTrigger value="secrets">Secrets</TabsTrigger>
             <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
@@ -141,6 +143,12 @@ export function RepoSettingsDialog({
             className="min-h-0 min-w-0 overflow-y-auto pr-1"
           >
             <SecuritySection repoPath={repoPath} open={open} />
+          </TabsContent>
+          <TabsContent
+            value="pages"
+            className="min-h-0 min-w-0 overflow-y-auto pr-1"
+          >
+            <PagesSection repoPath={repoPath} open={open} />
           </TabsContent>
           <TabsContent
             value="sponsor"

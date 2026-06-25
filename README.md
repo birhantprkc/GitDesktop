@@ -114,8 +114,9 @@ default commit messages, template & forking, **collaborators & invitations**,
 **branch rulesets** (create/edit, reversible enable/disable), **code security &
 analysis** toggles, **Actions/Dependabot/Codespaces secrets & variables** (repo
 and environment scope), the **Sponsor button** (`.github/FUNDING.yml`), webhooks
-with delivery history, a **danger zone** (change visibility, transfer, delete),
-and deep links to the settings GitHub keeps browser-only — without leaving the app. **Manage files** git
+with delivery history, **GitHub Pages** config, a **danger zone** (rename,
+archive, change visibility, transfer, delete), and deep links to the settings
+GitHub keeps browser-only — without leaving the app. **Manage files** git
 tracks or ignores beyond your pending changes: untrack a file committed by
 mistake (kept on disk), or surface every ignored file with the rule responsible
 and force-add it or remove that rule.

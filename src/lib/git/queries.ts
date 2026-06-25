@@ -2454,6 +2454,70 @@ export function useDeleteRepo(repo: string) {
   return useMutation({ mutationFn: () => api.ghRepoDelete(repo) });
 }
 
+export function useSetArchived(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (archived: boolean) => api.ghRepoSetArchived(repo, archived),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: repoSettingsKey(repo) }),
+  });
+}
+
+export function useRenameRepo(repo: string) {
+  return useMutation({
+    mutationFn: (newName: string) => api.ghRepoRename(repo, newName),
+  });
+}
+
+const pagesKey = (repo: string) => ["repo", repo, "pages"] as const;
+
+/** GitHub Pages config (null when Pages is disabled). */
+export function usePages(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: pagesKey(repo),
+    queryFn: () => api.ghPagesGet(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useEnablePages(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: {
+      buildType: string;
+      branch: string | null;
+      path: string | null;
+    }) => api.ghPagesEnable(repo, a.buildType, a.branch, a.path),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: pagesKey(repo) }),
+  });
+}
+
+export function useUpdatePages(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      buildType?: string;
+      branch?: string;
+      path?: string;
+      cname?: string;
+      httpsEnforced?: boolean;
+    }) => api.ghPagesUpdate(repo, args),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: pagesKey(repo) }),
+  });
+}
+
+export function useDisablePages(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.ghPagesDisable(repo),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: pagesKey(repo) }),
+  });
+}
+
 const rulesetsKey = (repo: string) => ["repo", repo, "rulesets"] as const;
 const rulesetKey = (repo: string, id: number | null) =>
   ["repo", repo, "ruleset", id] as const;

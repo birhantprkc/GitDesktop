@@ -21,7 +21,9 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import {
   useDeleteRepo,
+  useRenameRepo,
   useRepoSettings,
+  useSetArchived,
   useSetVisibility,
   useTransferRepo,
 } from "@/lib/git/queries";
@@ -116,6 +118,112 @@ function Row({
       </div>
       {children}
     </div>
+  );
+}
+
+function RenameAction({
+  repoPath,
+  repo,
+}: {
+  repoPath: string;
+  repo: RepoSettings;
+}) {
+  const rename = useRenameRepo(repoPath);
+  const current = repo.fullName.split("/").pop() ?? "";
+  const [name, setName] = useState(current);
+  const valid = /^[A-Za-z0-9._-]+$/.test(name.trim());
+  const changed = name.trim() !== current;
+
+  return (
+    <Row title="Rename repository" desc="Old links and clones keep working.">
+      <div className="flex shrink-0 items-center gap-2">
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="h-8 w-44 font-mono"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!valid || !changed || rename.isPending}
+          onClick={() =>
+            rename.mutate(name.trim(), {
+              onSuccess: () =>
+                toast.success(`Renamed to ${name.trim()} — links redirect`),
+              onError: toastError,
+            })
+          }
+        >
+          {rename.isPending && <Spinner data-icon="inline-start" />}
+          Rename
+        </Button>
+      </div>
+    </Row>
+  );
+}
+
+function ArchiveAction({
+  repoPath,
+  repo,
+}: {
+  repoPath: string;
+  repo: RepoSettings;
+}) {
+  const setArchived = useSetArchived(repoPath);
+  const [confirming, setConfirming] = useState(false);
+  const archived = repo.archived;
+
+  return (
+    <Row
+      title={archived ? "Unarchive repository" : "Archive repository"}
+      desc={
+        archived
+          ? "Make the repository writable again."
+          : "Make the repository read-only. Reversible."
+      }
+    >
+      {confirming ? (
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setConfirming(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant={archived ? "default" : "destructive"}
+            size="sm"
+            disabled={setArchived.isPending}
+            onClick={() =>
+              setArchived.mutate(!archived, {
+                onSuccess: () => {
+                  toast.success(
+                    archived ? "Repository unarchived" : "Repository archived",
+                  );
+                  setConfirming(false);
+                },
+                onError: toastError,
+              })
+            }
+          >
+            {setArchived.isPending && <Spinner data-icon="inline-start" />}
+            {archived ? "Unarchive" : "Archive"}
+          </Button>
+        </div>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          onClick={() => setConfirming(true)}
+        >
+          {archived ? "Unarchive" : "Archive"}
+        </Button>
+      )}
+    </Row>
   );
 }
 
@@ -308,6 +416,10 @@ export function DangerZone({
   return (
     <div className="mt-6 space-y-3 rounded-md border border-destructive/40 p-3">
       <h3 className="text-xs font-semibold text-destructive">Danger zone</h3>
+      <RenameAction repoPath={repoPath} repo={repo} />
+      <div className="border-t" />
+      <ArchiveAction repoPath={repoPath} repo={repo} />
+      <div className="border-t" />
       <VisibilityAction repoPath={repoPath} repo={repo} />
       <div className="border-t" />
       <TransferAction repoPath={repoPath} repo={repo} />

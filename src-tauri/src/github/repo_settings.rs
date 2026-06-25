@@ -424,6 +424,9 @@ pub struct RepoSettings {
     /// Read-only — "owner/repo", for the type-to-confirm destructive actions.
     #[serde(default, alias = "full_name")]
     pub full_name: String,
+    /// Read-only — whether the repo is archived (for the danger zone).
+    #[serde(default)]
+    pub archived: bool,
     #[serde(default, alias = "is_template")]
     pub is_template: bool,
     #[serde(default, alias = "allow_forking")]

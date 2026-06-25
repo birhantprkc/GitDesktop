@@ -12,6 +12,11 @@ commit list.
 
 ### Added
 
+- **GitHub Pages config, in the app.** A new **Pages** tab in repository settings: enable
+  Pages from a branch + folder or via **GitHub Actions**, see the live URL and build
+  status, change the source, set a **custom domain**, **enforce HTTPS**, and disable the
+  site. Part of the org/repo governance buildout.
+
 - **Branch rulesets, in the app.** A new **Rules** tab in repository settings manages
   GitHub's modern branch rulesets: list them, flip **enforcement** (Active / Evaluate /
   Disabled) right from the list — including the **reversible "disabled" soft-off** that
@@ -23,10 +28,11 @@ commit list.
   buildout ([docs](docs/github-governance-expansion.md)).
 
 - **Repository danger zone, in the app.** The General tab of repository settings gained a
-  **Danger zone**: **change visibility** (public / private / internal), **transfer
-  ownership**, and **delete** the repository — each behind a type-the-`owner/repo`-name
-  confirmation that spells out the irreversible consequences first. Deleting detects when
-  your `gh` sign-in lacks the `delete_repo` scope and shows the exact
+  **Danger zone**: **rename**, **archive / unarchive** (reversible), **change visibility**
+  (public / private / internal), **transfer ownership**, and **delete** the repository.
+  The three irreversible actions (visibility, transfer, delete) are each behind a
+  type-the-`owner/repo`-name confirmation that spells out the consequences first. Deleting
+  detects when your `gh` sign-in lacks the `delete_repo` scope and shows the exact
   `gh auth refresh` command to run. Your local clone is never touched. Part of the
   org/repo governance buildout ([docs](docs/github-governance-expansion.md)).
 

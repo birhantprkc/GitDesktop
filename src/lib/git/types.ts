@@ -439,6 +439,8 @@ export interface RepoSettings {
   visibility: string;
   /** Read-only — "owner/repo". */
   fullName: string;
+  /** Read-only — whether the repo is archived. */
+  archived: boolean;
   isTemplate: boolean;
   allowForking: boolean;
   /** Forking is only changeable on an org-owned private repo; the toggle hides
@@ -461,6 +463,7 @@ export type RepoSettingsInput = Omit<
   | "htmlUrl"
   | "visibility"
   | "fullName"
+  | "archived"
   | "canChangeForking"
   | "allowForking"
 > & {
@@ -511,6 +514,19 @@ export interface Invitation {
   avatarUrl: string;
   permission: RepoRole;
   createdAt: string;
+}
+
+/** GitHub Pages site config (null when Pages is disabled). */
+export interface PagesInfo {
+  htmlUrl: string;
+  /** "built" | "building" | "errored" | "" */
+  status: string;
+  /** "legacy" (deploy from a branch) | "workflow" (GitHub Actions) */
+  buildType: string;
+  sourceBranch: string;
+  sourcePath: string;
+  cname: string;
+  httpsEnforced: boolean;
 }
 
 export type RulesetEnforcement = "active" | "evaluate" | "disabled";

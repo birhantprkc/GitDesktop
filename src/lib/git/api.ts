@@ -49,6 +49,7 @@ import type {
   IssueRelations,
   IssueType,
   Milestone,
+  PagesInfo,
   PrDetails,
   PrInfo,
   PrPollInfo,
@@ -1292,6 +1293,44 @@ export const ghRepoTransfer = (
 
 export const ghRepoDelete = (repoPath: string) =>
   invoke<void>("gh_repo_delete", { repoPath });
+
+export const ghRepoSetArchived = (repoPath: string, archived: boolean) =>
+  invoke<void>("gh_repo_set_archived", { repoPath, archived });
+
+export const ghRepoRename = (repoPath: string, newName: string) =>
+  invoke<void>("gh_repo_rename", { repoPath, newName });
+
+export const ghPagesGet = (repoPath: string) =>
+  invoke<PagesInfo | null>("gh_pages_get", { repoPath });
+
+export const ghPagesEnable = (
+  repoPath: string,
+  buildType: string,
+  branch: string | null,
+  path: string | null,
+) => invoke<void>("gh_pages_enable", { repoPath, buildType, branch, path });
+
+export const ghPagesUpdate = (
+  repoPath: string,
+  args: {
+    buildType?: string;
+    branch?: string;
+    path?: string;
+    cname?: string;
+    httpsEnforced?: boolean;
+  },
+) =>
+  invoke<void>("gh_pages_update", {
+    repoPath,
+    buildType: args.buildType ?? null,
+    branch: args.branch ?? null,
+    path: args.path ?? null,
+    cname: args.cname ?? null,
+    httpsEnforced: args.httpsEnforced ?? null,
+  });
+
+export const ghPagesDisable = (repoPath: string) =>
+  invoke<void>("gh_pages_disable", { repoPath });
 
 export const ghRulesetsList = (repoPath: string) =>
   invoke<RulesetSummary[]>("gh_rulesets_list", { repoPath });

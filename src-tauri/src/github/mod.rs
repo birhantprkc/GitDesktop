@@ -5,6 +5,7 @@ pub mod discussion;
 pub mod insights;
 pub mod issue;
 pub mod lifecycle;
+pub mod pages;
 pub mod pr;
 pub mod release;
 pub mod repo_settings;

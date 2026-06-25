@@ -1,8 +1,6 @@
-//! Destructive repo lifecycle: change visibility, transfer ownership, delete.
-//! Deliberately separate from the curated settings PATCH — each is irreversible
-//! enough to demand its own confirmed call. The UI gates these behind a
-//! type-the-name confirmation; delete additionally needs the `delete_repo`
-//! OAuth scope (a refresh hint guides the user when it's missing).
+//! Repo lifecycle: change visibility, transfer, delete (irreversible — gated
+//! behind a type-the-name confirmation; delete needs the `delete_repo` scope),
+//! plus the reversible archive/unarchive and rename.
 
 use serde_json::json;
 
@@ -21,6 +19,65 @@ fn validate_owner(login: &str) -> AppResult<()> {
             "invalid owner: {login}"
         )));
     }
+    Ok(())
+}
+
+/// A repository name: letters, digits, `.`, `-`, `_`; non-empty, ≤100.
+fn validate_repo_name(name: &str) -> AppResult<()> {
+    let ok = !name.is_empty()
+        && name.len() <= 100
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    if !ok {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid repository name: {name}"
+        )));
+    }
+    Ok(())
+}
+
+/// Archives or unarchives the repo. Archiving makes it read-only (reversible).
+#[tauri::command]
+pub async fn gh_repo_set_archived(repo_path: String, archived: bool) -> AppResult<()> {
+    let body = json!({ "archived": archived });
+    run_gh_input(
+        Some(&repo_path),
+        &[
+            "api",
+            "--method",
+            "PATCH",
+            "repos/{owner}/{repo}",
+            "--input",
+            "-",
+        ],
+        &body.to_string(),
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Renames the repo. GitHub auto-redirects old links/clones to the new name.
+#[tauri::command]
+pub async fn gh_repo_rename(repo_path: String, new_name: String) -> AppResult<()> {
+    let new_name = new_name.trim();
+    validate_repo_name(new_name)?;
+    let body = json!({ "name": new_name });
+    run_gh_input(
+        Some(&repo_path),
+        &[
+            "api",
+            "--method",
+            "PATCH",
+            "repos/{owner}/{repo}",
+            "--input",
+            "-",
+        ],
+        &body.to_string(),
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
     Ok(())
 }
 
