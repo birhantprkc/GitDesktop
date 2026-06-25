@@ -2286,6 +2286,36 @@ export function useEnvironments(repo: string, enabled: boolean) {
   });
 }
 
+const dependabotKey = (repo: string) => ["repo", repo, "dependabot"] as const;
+
+/** The repo's local `.github/dependabot.yml` text (null when there is none). */
+export function useDependabotConfig(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: dependabotKey(repo),
+    queryFn: () => api.dependabotGet(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useSetDependabot(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (content: string) => api.dependabotSet(repo, content),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: dependabotKey(repo) }),
+  });
+}
+
+export function useDeleteDependabot(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.dependabotDelete(repo),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: dependabotKey(repo) }),
+  });
+}
+
 const fundingKey = (repo: string) => ["repo", repo, "funding"] as const;
 
 /** The repo's local `.github/FUNDING.yml` text (null when there is none). */

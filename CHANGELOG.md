@@ -21,13 +21,16 @@ commit list.
   org/repo governance buildout ([docs](docs/github-governance-expansion.md)).
 
 - **Code security & analysis toggles, in the app.** A new **Security** tab in repository
-  settings collects secret scanning, push protection, code scanning (CodeQL default
-  setup), Dependabot alerts and security updates, and private vulnerability reporting
-  behind a **save/discard bar** — flip what you want and save once (changes apply in the
-  right dependency order). On private repos it notes which features need GitHub Advanced
-  Security. The Dependabot/dependency-graph options GitHub exposes to no API (dependency
-  graph, grouped security updates, version updates, self-hosted runners) appear as
-  **"Manage on GitHub"** links rather than dead toggles.
+  settings collects secret scanning (and its **AI-detection** and **non-provider-pattern**
+  sub-toggles), push protection, code scanning (CodeQL default setup), Dependabot alerts
+  and security updates, and private vulnerability reporting behind a **save/discard bar**
+  — flip what you want and save once (changes apply in the right dependency order). On
+  private repos it notes which features need GitHub Advanced Security. **Dependabot
+  version updates** — which GitHub only configures through `.github/dependabot.yml` — gets
+  a **scaffold**: pick your package ecosystems and schedule and it writes the file to your
+  working tree for you to commit (it won't overwrite an existing one). The remaining
+  API-less options (dependency graph, grouped security updates, self-hosted runners)
+  appear as **"Manage on GitHub"** links rather than dead toggles.
 
 - **Manage repo collaborators & invitations, in the app.** A new **Access** tab in
   repository settings lists your collaborators with their role, lets you **invite**

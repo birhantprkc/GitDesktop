@@ -518,6 +518,8 @@ export type SecurityFeature =
   | "advanced_security"
   | "secret_scanning"
   | "secret_scanning_push_protection"
+  | "secret_scanning_ai_detection"
+  | "secret_scanning_non_provider_patterns"
   | "code_scanning"
   | "dependabot_alerts"
   | "dependabot_security_updates"
@@ -530,6 +532,8 @@ export interface SecurityStatus {
   advancedSecurity: boolean | null;
   secretScanning: boolean | null;
   secretScanningPushProtection: boolean | null;
+  secretScanningAiDetection: boolean | null;
+  secretScanningNonProviderPatterns: boolean | null;
   dependabotAlerts: boolean;
   dependabotSecurityUpdates: boolean;
   privateVulnerabilityReporting: boolean;

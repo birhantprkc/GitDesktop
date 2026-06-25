@@ -1290,6 +1290,16 @@ export const ghRepoTransfer = (
 export const ghRepoDelete = (repoPath: string) =>
   invoke<void>("gh_repo_delete", { repoPath });
 
+/** The repo's local `.github/dependabot.yml` text (null when absent). */
+export const dependabotGet = (repoPath: string) =>
+  invoke<string | null>("dependabot_get", { repoPath });
+
+export const dependabotSet = (repoPath: string, content: string) =>
+  invoke<void>("dependabot_set", { repoPath, content });
+
+export const dependabotDelete = (repoPath: string) =>
+  invoke<void>("dependabot_delete", { repoPath });
+
 /** The repo's local `.github/FUNDING.yml` text (null when absent). */
 export const fundingGet = (repoPath: string) =>
   invoke<string | null>("funding_get", { repoPath });

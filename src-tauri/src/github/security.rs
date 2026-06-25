@@ -23,6 +23,8 @@ pub struct SecurityStatus {
     pub advanced_security: Option<bool>,
     pub secret_scanning: Option<bool>,
     pub secret_scanning_push_protection: Option<bool>,
+    pub secret_scanning_ai_detection: Option<bool>,
+    pub secret_scanning_non_provider_patterns: Option<bool>,
     pub dependabot_alerts: bool,
     pub dependabot_security_updates: bool,
     pub private_vulnerability_reporting: bool,
@@ -112,6 +114,10 @@ pub async fn gh_security_get(repo_path: String) -> AppResult<SecurityStatus> {
         advanced_security: status_on("advanced_security"),
         secret_scanning: status_on("secret_scanning"),
         secret_scanning_push_protection: status_on("secret_scanning_push_protection"),
+        secret_scanning_ai_detection: status_on("secret_scanning_ai_detection"),
+        secret_scanning_non_provider_patterns: status_on(
+            "secret_scanning_non_provider_patterns",
+        ),
         dependabot_alerts: alerts,
         dependabot_security_updates: fixes,
         private_vulnerability_reporting: pvr,
@@ -160,7 +166,11 @@ pub async fn gh_security_apply(
 
 async fn apply_feature(repo_path: &str, feature: &str, enabled: bool) -> AppResult<()> {
     match feature {
-        "advanced_security" | "secret_scanning" | "secret_scanning_push_protection" => {
+        "advanced_security"
+        | "secret_scanning"
+        | "secret_scanning_push_protection"
+        | "secret_scanning_ai_detection"
+        | "secret_scanning_non_provider_patterns" => {
             let status = if enabled { "enabled" } else { "disabled" };
             let mut obj = serde_json::Map::new();
             obj.insert(feature.to_string(), json!({ "status": status }));

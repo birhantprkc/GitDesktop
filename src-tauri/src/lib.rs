@@ -1,5 +1,6 @@
 mod agent;
 mod agent_sandbox;
+mod dependabot;
 mod error;
 mod fsops;
 mod funding;
@@ -264,6 +265,9 @@ pub fn run() {
             funding::funding_get,
             funding::funding_set,
             funding::funding_delete,
+            dependabot::dependabot_get,
+            dependabot::dependabot_set,
+            dependabot::dependabot_delete,
             github::insights::gh_community_insights,
             github::insights::gh_repo_traffic,
             github::insights::gh_repo_dependencies,
