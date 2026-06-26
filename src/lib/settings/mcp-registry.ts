@@ -241,12 +241,14 @@ export function toRegistryCandidate(
   s: RegistryServer | undefined,
   meta?: RegistryMeta,
 ): RegistryCandidate | null {
-  if (!s?.name) return null;
+  // `s` may come from an untrusted GitHub `server.json`, so type-check the
+  // string fields rather than trusting the declared shape.
+  if (!s || typeof s.name !== "string" || !s.name) return null;
   const name = shortName(s.name);
   const base = {
     id: crypto.randomUUID(),
     name,
-    description: s.description ?? "",
+    description: typeof s.description === "string" ? s.description : "",
     enabled: false,
     scope: MCP_SCOPE_GLOBAL,
   };
@@ -295,7 +297,7 @@ export function toRegistryCandidate(
   return {
     server,
     registryName: s.name,
-    title: s.title?.trim() || name,
+    title: (typeof s.title === "string" ? s.title.trim() : "") || name,
     needsSetup,
     repo: parseGithubRepo(s.repository),
     npmPackage,
@@ -343,8 +345,11 @@ export function repoKey(owner: string, name: string): string {
  *  unknown. Best-effort: scoped names work as-is; failures degrade to null. */
 export async function npmWeeklyDownloads(pkg: string): Promise<number | null> {
   try {
+    // Encode each path segment (keeping the `/` between @scope and name) so an
+    // odd package id can't rewrite the request path/query.
+    const encoded = pkg.split("/").map(encodeURIComponent).join("/");
     const res = await tauriFetch(
-      `https://api.npmjs.org/downloads/point/last-week/${pkg}`,
+      `https://api.npmjs.org/downloads/point/last-week/${encoded}`,
       { method: "GET", headers: { Accept: "application/json" } },
     );
     if (!res.ok) return null;
@@ -366,4 +371,210 @@ export async function npmWeeklyDownloadsBatch(
   const out: Record<string, number> = {};
   for (const [p, n] of results) if (n != null) out[p] = n;
   return out;
+}
+
+// ── GitHub as a second discovery source ──────────────────────────────────────
+//
+// Search GitHub for MCP-server repos and derive an addable server from each:
+// a `server.json` is the registry manifest shape (reused verbatim); a
+// `package.json` that looks like an MCP server becomes `npx -y <name>`; anything
+// else lands as a manual-setup stub. Rougher than the curated registry, so more
+// rows show "needs setup" — but they still carry stars / source / what-it-runs.
+
+/** One repo hit from the Rust `gh_github_mcp_search` command. */
+interface GithubMcpHit {
+  nameWithOwner: string;
+  description: string | null;
+  url: string;
+  serverJson: string | null;
+  packageJson: string | null;
+}
+
+interface GithubMcpSearchPage {
+  repos: GithubMcpHit[];
+  nextCursor: string | null;
+}
+
+const ghGithubMcpSearch = (query: string, cursor?: string) =>
+  invoke<GithubMcpSearchPage>("gh_github_mcp_search", {
+    query,
+    cursor: cursor ?? null,
+  });
+
+/** Owner/name/url from a "owner/name" hit, or null when malformed. */
+function repoFromHit(hit: GithubMcpHit): {
+  owner: string;
+  name: string;
+  url: string;
+} | null {
+  const slash = hit.nameWithOwner.indexOf("/");
+  if (slash <= 0) return null;
+  const owner = hit.nameWithOwner.slice(0, slash);
+  const name = hit.nameWithOwner.slice(slash + 1);
+  if (!owner || !name) return null;
+  return { owner, name, url: hit.url };
+}
+
+/** Strict npm package-name grammar. `package.json` comes from an arbitrary repo,
+ *  and the name becomes an `npx` spec — so anything that isn't a plain package
+ *  name (a URL / git remote / tarball / a leading-`-` flag) must be rejected, or
+ *  npx could be steered to fetch and run attacker code. */
+const NPM_NAME_RE = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+function isValidNpmName(name: string): boolean {
+  return name.length > 0 && name.length <= 214 && NPM_NAME_RE.test(name);
+}
+
+/** Build a candidate from a repo's `package.json` IF it looks like an MCP server
+ *  (depends on the MCP SDK, or says so in its name/keywords). Returns null
+ *  otherwise, so we never fabricate an `npx` command for an unrelated project.
+ *  Treats the parsed JSON as untrusted: every field is type-checked. */
+function deriveFromPackageJson(
+  text: string,
+  repo: { owner: string; name: string; url: string },
+  description: string | null,
+): RegistryCandidate | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const pkg = parsed as {
+    name?: unknown;
+    description?: unknown;
+    private?: unknown;
+    bin?: unknown;
+    keywords?: unknown;
+    dependencies?: Record<string, unknown>;
+    devDependencies?: Record<string, unknown>;
+  };
+  // Untrusted: only a real npm package name (not a URL / git / flag) may become
+  // an `npx -y <name>` spec; otherwise fall through to the manual-setup stub.
+  if (typeof pkg.name !== "string" || pkg.private || !isValidNpmName(pkg.name))
+    return null;
+
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  const keywords = Array.isArray(pkg.keywords) ? pkg.keywords.map(String) : [];
+  const hasSdk = "@modelcontextprotocol/sdk" in deps;
+  const looksMcp =
+    hasSdk ||
+    keywords.some((k) => /mcp|model.?context/i.test(k)) ||
+    /(^|[-/])mcp([-/]|$)/i.test(pkg.name);
+  if (!looksMcp) return null;
+
+  // The SDK dependency (or a declared bin) is a strong "this really runs as a
+  // server" signal → trust the npx command. A name/keyword-only match is a guess,
+  // so flag it "needs setup" rather than asserting an unverified command.
+  const strong = hasSdk || Boolean(pkg.bin);
+  const pkgDescription =
+    typeof pkg.description === "string" ? pkg.description : "";
+
+  const server: McpServer = {
+    id: crypto.randomUUID(),
+    name: normalizeMcpName(pkg.name.split("/").pop() ?? "server"),
+    description: description ?? pkgDescription,
+    enabled: false,
+    scope: MCP_SCOPE_GLOBAL,
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", pkg.name],
+    env: [],
+    url: "",
+    headers: [],
+    secretKeys: [],
+  };
+  return {
+    server,
+    registryName: `${repo.owner}/${repo.name}`,
+    title: pkg.name,
+    needsSetup: !strong,
+    repo,
+    npmPackage: pkg.name,
+    status: "active",
+    publishedAt: null,
+    updatedAt: null,
+  };
+}
+
+/** A manual-setup stub for a repo we couldn't derive a config from (no manifest /
+ *  not recognizably a server). It lands disabled with an empty command for the
+ *  user to fill in — honest rather than guessing a wrong command. */
+function githubStub(
+  repo: { owner: string; name: string; url: string },
+  description: string | null,
+): RegistryCandidate {
+  const server: McpServer = {
+    id: crypto.randomUUID(),
+    name: normalizeMcpName(repo.name),
+    description: description ?? "",
+    enabled: false,
+    scope: MCP_SCOPE_GLOBAL,
+    transport: "stdio",
+    command: "",
+    args: [],
+    env: [],
+    url: "",
+    headers: [],
+    secretKeys: [],
+  };
+  return {
+    server,
+    registryName: `${repo.owner}/${repo.name}`,
+    title: repo.name,
+    needsSetup: true,
+    repo,
+    npmPackage: null,
+    status: "active",
+    publishedAt: null,
+    updatedAt: null,
+  };
+}
+
+/** Turn a GitHub repo hit into an addable candidate: server.json (clean) →
+ *  package.json (npx) → manual-setup stub. `repo` always comes from the hit so
+ *  stars/activity resolve against the repo we actually found. */
+export function deriveGithubCandidate(
+  hit: GithubMcpHit,
+): RegistryCandidate | null {
+  const repo = repoFromHit(hit);
+  if (!repo) return null;
+
+  if (hit.serverJson) {
+    try {
+      const cand = toRegistryCandidate(
+        JSON.parse(hit.serverJson) as RegistryServer,
+      );
+      // Key the row on the repo we actually found (not the manifest's name), so
+      // two distinct repos shipping the same manifest name stay separate rows.
+      if (cand)
+        return { ...cand, repo, registryName: `${repo.owner}/${repo.name}` };
+    } catch {
+      // fall through to the package.json / stub paths
+    }
+  }
+  if (hit.packageJson) {
+    const cand = deriveFromPackageJson(hit.packageJson, repo, hit.description);
+    if (cand) return cand;
+  }
+  return githubStub(repo, hit.description);
+}
+
+/** Search GitHub (the second Browse source). Same `RegistryPage` shape as the
+ *  registry, so the dialog renders both identically. */
+export async function searchGithub(opts: {
+  search?: string;
+  cursor?: string;
+}): Promise<RegistryPage> {
+  const page = await ghGithubMcpSearch(opts.search?.trim() ?? "", opts.cursor);
+  const candidates: RegistryCandidate[] = [];
+  for (const hit of page.repos) {
+    try {
+      const c = deriveGithubCandidate(hit);
+      if (c) candidates.push(c);
+    } catch {
+      // A single hostile/malformed repo must not collapse the whole page.
+    }
+  }
+  return { candidates, nextCursor: page.nextCursor ?? null };
 }

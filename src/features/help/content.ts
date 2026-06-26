@@ -492,7 +492,10 @@ panel — search it and add a server in a click; it arrives **disabled** for you
 and enable. You can also reach it from the command palette (*Browse MCP registry*). Each
 result carries signals to vet a server first — **GitHub stars** and last-updated, weekly
 **npm installs**, deprecation status, and (when you expand it) the source repo plus exactly
-**what it runs or connects to** and which secrets it needs.
+**what it runs or connects to** and which secrets it needs. Toggle between two sources: the
+**official registry** and **GitHub** (repositories tagged \`mcp-server\`, ranked by stars).
+GitHub results are rougher — ones with a manifest add cleanly, the rest arrive marked
+*needs setup* for you to finish.
 
 Already have servers configured? Use **Import** in that panel to pull them in from the
 open repo's \`.mcp.json\` or your global Claude config — you pick which ones, they arrive

@@ -286,6 +286,7 @@ pub fn run() {
             github::insights::gh_repo_traffic,
             github::insights::gh_repo_dependencies,
             github::insights::gh_repo_stats,
+            github::mcp_search::gh_github_mcp_search,
             github::repo_settings::gh_hooks_list,
             github::repo_settings::gh_hook_create,
             github::repo_settings::gh_hook_update,

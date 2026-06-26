@@ -22,7 +22,10 @@ commit list.
   registry right in the panel — search it and add a server in a click. Each result shows
   signals to **vet a server before adding it**: GitHub **stars** and activity, weekly **npm
   installs**, deprecation status, the source repo, and — expanded — exactly **what it runs
-  or connects to** and which secrets it needs. Added servers still land disabled for review.
+  or connects to** and which secrets it needs. Browse has two sources you can toggle
+  between — the **official registry** and **GitHub** (repositories tagged `mcp-server`,
+  ranked by stars, with the same vetting signals; ones with a manifest add cleanly, others
+  arrive marked *needs setup*). Added servers still land disabled for review.
   Already have servers set up? **Import** pulls them in from the open repo's
   `.mcp.json` or your global Claude config — reviewed, started disabled, with any secret
   values moved to your keychain (the source files aren't touched). Each server is **scoped

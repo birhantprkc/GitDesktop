@@ -68,6 +68,7 @@ import {
   type RegistryCandidate,
   type RepoStat,
   repoKey,
+  searchGithub,
   searchRegistry,
   uniqueServerName,
 } from "@/lib/settings/mcp-registry";
@@ -511,10 +512,12 @@ function EntryEditor({
 function PerRepoStateControl({
   server,
   repoPath,
+  disabled,
   onChange,
 }: {
   server: McpServer;
   repoPath: string;
+  disabled?: boolean;
   onChange: (state: McpRepoState | null) => void;
 }) {
   const override = server.repoOverrides?.[repoPath];
@@ -522,6 +525,7 @@ function PerRepoStateControl({
   return (
     <Select
       value={override ?? "default"}
+      disabled={disabled}
       onValueChange={(v) =>
         v && onChange(v === "default" ? null : (v as McpRepoState))
       }
@@ -686,7 +690,7 @@ export const McpServersSection = withForm({
               variant="ghost"
               size="sm"
               onClick={() => setBrowseOpen(true)}
-              title="Browse the public MCP registry"
+              title="Browse the MCP registry and GitHub for servers"
             >
               <MagnifyingGlassIcon data-icon="inline-start" /> Browse
             </Button>
@@ -738,6 +742,12 @@ export const McpServersSection = withForm({
                 {g.servers.map((server) => {
                   const i = indexById.get(server.id) ?? 0;
                   const isGlobal = serverScope(server) === MCP_SCOPE_GLOBAL;
+                  // A server with no command/url (e.g. a GitHub stub added
+                  // without a manifest) can't run — surface it and block enabling.
+                  const incomplete =
+                    server.transport === "stdio"
+                      ? !server.command.trim()
+                      : !server.url.trim();
                   return (
                     <div
                       key={server.id}
@@ -768,6 +778,14 @@ export const McpServersSection = withForm({
                       <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground uppercase">
                         {server.transport}
                       </span>
+                      {incomplete && (
+                        <span
+                          className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-warning"
+                          title={`Set the ${server.transport === "stdio" ? "command" : "URL"} before enabling — edit this server.`}
+                        >
+                          needs setup
+                        </span>
+                      )}
                       {server.description && (
                         <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                           {server.description}
@@ -778,6 +796,7 @@ export const McpServersSection = withForm({
                           <PerRepoStateControl
                             server={server}
                             repoPath={repoPath}
+                            disabled={incomplete}
                             onChange={(state) =>
                               setRepoOverride(server, repoPath, state)
                             }
@@ -786,6 +805,7 @@ export const McpServersSection = withForm({
                           <Switch
                             size="sm"
                             checked={server.enabled}
+                            disabled={incomplete}
                             onCheckedChange={(v) => toggleEnabled(server, v)}
                             aria-label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
                           />
@@ -1077,6 +1097,7 @@ function BrowseRegistryDialog({
   onAdd: (server: McpServer) => void;
   onClose: () => void;
 }) {
+  const [source, setSource] = useState<"registry" | "github">("registry");
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -1110,14 +1131,16 @@ function BrowseRegistryDialog({
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ["mcp-registry", debounced],
+    queryKey: ["mcp-browse", source, debounced],
     queryFn: ({ pageParam, signal }) =>
-      searchRegistry({
-        search: debounced,
-        cursor: pageParam ?? undefined,
-        limit: 30,
-        signal,
-      }),
+      source === "github"
+        ? searchGithub({ search: debounced, cursor: pageParam ?? undefined })
+        : searchRegistry({
+            search: debounced,
+            cursor: pageParam ?? undefined,
+            limit: 30,
+            signal,
+          }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextCursor,
   });
@@ -1179,9 +1202,9 @@ function BrowseRegistryDialog({
       return next;
     });
 
-  // Reset roving focus when the query changes the result set out from under it.
+  // Reset roving focus when the query/source changes the result set under it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset on new search
-  useEffect(() => setActiveIndex(-1), [debounced]);
+  useEffect(() => setActiveIndex(-1), [debounced, source]);
 
   function add(c: RegistryCandidate) {
     const taken = new Set(
@@ -1196,7 +1219,9 @@ function BrowseRegistryDialog({
   const errorMessage = isError
     ? error instanceof Error
       ? error.message
-      : "Couldn't reach the MCP registry."
+      : source === "github"
+        ? "Couldn't search GitHub. Is the GitHub CLI signed in?"
+        : "Couldn't reach the MCP registry."
     : null;
 
   // Clamp a stale active index after the result set shrinks (search/retry).
@@ -1214,14 +1239,45 @@ function BrowseRegistryDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Browse MCP registry</DialogTitle>
+          <DialogTitle>Browse MCP servers</DialogTitle>
           <DialogDescription>
-            Public servers from the official Model Context Protocol registry.
+            {source === "github" ? (
+              <>
+                MCP-server repositories on GitHub, ranked by stars. Rougher than
+                the registry — some need manual setup after adding.
+              </>
+            ) : (
+              <>
+                Public servers from the official Model Context Protocol
+                registry.
+              </>
+            )}{" "}
             Added servers start{" "}
             <strong className="font-medium">disabled</strong> — review what each
             one runs, add any secret, then enable it.
           </DialogDescription>
         </DialogHeader>
+
+        <div className="flex gap-1">
+          {(
+            [
+              ["registry", "Official registry"],
+              ["github", "GitHub"],
+            ] as const
+          ).map(([value, label]) => (
+            <Button
+              key={value}
+              type="button"
+              size="sm"
+              variant={source === value ? "default" : "outline"}
+              aria-pressed={source === value}
+              className="flex-1"
+              onClick={() => setSource(value)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
 
         <div className="relative">
           <MagnifyingGlassIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -1229,7 +1285,11 @@ function BrowseRegistryDialog({
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search servers…"
+            placeholder={
+              source === "github"
+                ? "Search GitHub MCP repos…"
+                : "Search servers…"
+            }
             className="pl-8"
             spellCheck={false}
           />
@@ -1241,7 +1301,10 @@ function BrowseRegistryDialog({
         >
           {isLoading ? (
             <p className="flex items-center gap-2 py-6 text-xs text-muted-foreground">
-              <Spinner /> Searching the registry…
+              <Spinner />{" "}
+              {source === "github"
+                ? "Searching GitHub…"
+                : "Searching the registry…"}
             </p>
           ) : errorMessage ? (
             <div className="space-y-2 py-6 text-xs">
@@ -1253,8 +1316,8 @@ function BrowseRegistryDialog({
           ) : candidates.length === 0 ? (
             <p className="py-6 text-xs text-muted-foreground">
               {debounced
-                ? `No servers match “${debounced}”.`
-                : "No servers found."}
+                ? `No ${source === "github" ? "repositories" : "servers"} match “${debounced}”.`
+                : "No results found."}
             </p>
           ) : (
             <>
@@ -1379,17 +1442,25 @@ function BrowseRegistryDialog({
 
                       {isOpen && (
                         <div className="mt-1.5 space-y-1 rounded bg-muted/40 p-2 text-[10px] leading-relaxed">
-                          <div>
-                            <span className="font-medium">
-                              {c.server.transport === "stdio"
-                                ? "Runs locally"
-                                : "Connects to"}
-                              :{" "}
-                            </span>
-                            <span className="font-mono break-all">
-                              {runSummary(c.server)}
-                            </span>
-                          </div>
+                          {c.server.transport === "stdio" &&
+                          !c.server.command ? (
+                            <div className="text-muted-foreground">
+                              No manifest found — you'll set the command after
+                              adding.
+                            </div>
+                          ) : (
+                            <div>
+                              <span className="font-medium">
+                                {c.server.transport === "stdio"
+                                  ? "Runs locally"
+                                  : "Connects to"}
+                                :{" "}
+                              </span>
+                              <span className="font-mono break-all">
+                                {runSummary(c.server)}
+                              </span>
+                            </div>
+                          )}
                           {entries.length > 0 && (
                             <div>
                               <span className="font-medium">
