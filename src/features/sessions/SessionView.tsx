@@ -5,6 +5,7 @@ import {
   UsersThreeIcon,
 } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -21,12 +22,9 @@ import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { PlanView } from "@/features/plan/PlanView";
 import { usePlanStore } from "@/features/plan/store";
 import { CreateLocalPrDialog } from "@/features/pulls/CreateLocalPrDialog";
-import {
-  TerminalDock,
-  type TerminalLaunch,
-} from "@/features/terminal/TerminalDock";
+import { TerminalDock } from "@/features/terminal/TerminalDock";
 import { formatUsd } from "@/lib/ai/cost";
-import { openContainerShell, stopTestContainer } from "@/lib/ai/sandbox";
+import { openContainerShell } from "@/lib/ai/sandbox";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { usePrAuditByBranch } from "@/lib/pulls/audit";
 import { toastError } from "@/lib/toast";
@@ -37,6 +35,7 @@ import { SessionConversation } from "./SessionConversation";
 import { SessionOpenMenu } from "./SessionOpenMenu";
 import { StatusIndicator } from "./status";
 import { type AgentSession, useSessionsStore } from "./store";
+import { useSessionTerminal } from "./useSessionTerminal";
 import { WorktreeChangesView } from "./WorktreeChangesView";
 
 type Segment = "conversation" | "changes";
@@ -84,15 +83,20 @@ function SessionCanvas({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmKeepEnsemble, setConfirmKeepEnsemble] = useState(false);
   const [createPr, setCreatePr] = useState(false);
-  // Integrated terminal: `terminalOpen` is the dock's visibility; `launch` is what
-  // it renders (null until launched). A host shell launches immediately; a
-  // container shell launches from the Terminal button's port popover so the ports
-  // are chosen before the container spins up. `launchPopoverOpen` lets the hotkey
-  // open that popover too (not just a click on the trigger).
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [launch, setLaunch] = useState<TerminalLaunch | null>(null);
-  const [launchPopoverOpen, setLaunchPopoverOpen] = useState(false);
-  const isContainer = session.isolation === "container";
+  // Integrated terminal state + actions (dock visibility, launch, the container
+  // port popover) live in their own hook.
+  const {
+    isContainer,
+    terminalOpen,
+    setTerminalOpen,
+    launch,
+    launchPopoverOpen,
+    setLaunchPopoverOpen,
+    launchTerminal,
+    restartTerminal,
+    stopTerminal,
+    toggleTerminal,
+  } = useSessionTerminal(session);
 
   const kept = session.kept;
   const hasCommits = kept || session.headHash !== session.base;
@@ -161,33 +165,6 @@ function SessionCanvas({
   };
   const toggleView = () =>
     setSegment((s) => (s === "conversation" ? "changes" : "conversation"));
-
-  // Launch (host shell, or a container shell with the popover-chosen ports) and
-  // reveal the dock. `[]` ports = reconnect into an already-running container.
-  const launchTerminal = (ports: string[]) => {
-    setLaunch({ ports, token: 0 });
-    setLaunchPopoverOpen(false);
-    setTerminalOpen(true);
-  };
-  const restartTerminal = () =>
-    setLaunch((l) => (l ? { ...l, token: l.token + 1 } : l));
-  // Stop the container, drop the terminal (it unmounts → kills the shell client),
-  // and close the dock; relaunching goes back through the port popover.
-  const stopTerminal = () => {
-    stopTestContainer(session.worktreePath).catch(toastError);
-    setLaunch(null);
-    setTerminalOpen(false);
-  };
-  // The button/hotkey: a container needs the port popover for its first launch;
-  // once launched (or for a host shell) it just toggles the dock's visibility.
-  const toggleTerminal = () => {
-    if (isContainer && !launch) {
-      setLaunchPopoverOpen((o) => !o);
-    } else {
-      if (!isContainer && !launch) setLaunch({ ports: [], token: 0 });
-      setTerminalOpen((o) => !o);
-    }
-  };
 
   useHotkeyAction(
     "agent-keep-session",
@@ -406,61 +383,44 @@ function SessionCanvas({
         onStop={stopTerminal}
       />
 
-      <Dialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Discard this session?</DialogTitle>
-            <DialogDescription>
-              The agent's work on{" "}
-              <span className="font-mono">{session.branch}</span> will be
-              permanently deleted — its worktree and branch are removed. This
-              can't be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDiscard(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setConfirmDiscard(false);
-                discard(session.id);
-              }}
-            >
-              Discard
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirmDiscard}
+        onCancel={() => setConfirmDiscard(false)}
+        title="Discard this session?"
+        body={
+          <>
+            The agent's work on{" "}
+            <span className="font-mono">{session.branch}</span> will be
+            permanently deleted — its worktree and branch are removed. This
+            can't be undone.
+          </>
+        }
+        confirmLabel="Discard"
+        confirmVariant="destructive"
+        onConfirm={() => {
+          setConfirmDiscard(false);
+          discard(session.id);
+        }}
+      />
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete this session?</DialogTitle>
-            <DialogDescription>
-              This removes the session and its conversation from the app. The
-              work stays on branch{" "}
-              <span className="font-mono">{session.branch}</span> — delete that
-              from Branches if you no longer need it.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setConfirmDelete(false);
-                deleteSession(session.id);
-              }}
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onCancel={() => setConfirmDelete(false)}
+        title="Delete this session?"
+        body={
+          <>
+            This removes the session and its conversation from the app. The work
+            stays on branch <span className="font-mono">{session.branch}</span>{" "}
+            — delete that from Branches if you no longer need it.
+          </>
+        }
+        confirmLabel="Delete"
+        confirmVariant="destructive"
+        onConfirm={() => {
+          setConfirmDelete(false);
+          deleteSession(session.id);
+        }}
+      />
 
       {/* Best-of-N: keeping a winner offers to discard the other arms (the losers).
           "Keep only" leaves them if you want to keep more than one. */}

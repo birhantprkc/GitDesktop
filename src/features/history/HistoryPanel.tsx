@@ -282,6 +282,14 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     );
   }
 
+  // Shift-extend the selection to a contiguous range of the rendered (possibly
+  // filtered) list — shared by the mouse and keyboard paths. Indices are positions
+  // in `visibleCommits`.
+  function selectRange(from: number, to: number) {
+    const [a, b] = [from, to].sort((x, y) => x - y);
+    setSelected(new Set(visibleCommits.slice(a, b + 1).map((c) => c.hash)));
+  }
+
   function onRowClick(e: React.MouseEvent, index: number, hash: string) {
     // Keep the diff panel on the clicked commit regardless of modifiers.
     selectCommit(hash);
@@ -292,9 +300,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
       return;
     }
     if (e.shiftKey && anchorIndex !== null) {
-      // Indices are positions in the rendered (possibly filtered) list.
-      const [a, b] = [anchorIndex, index].sort((x, y) => x - y);
-      setSelected(new Set(visibleCommits.slice(a, b + 1).map((c) => c.hash)));
+      selectRange(anchorIndex, index);
     } else if (e.ctrlKey || e.metaKey) {
       const next = new Set(selected);
       if (next.has(hash)) {
@@ -330,8 +336,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     onActivate: (commit, to, shift) => {
       selectCommit(commit.hash);
       if (shift && anchorIndex !== null) {
-        const [a, b] = [anchorIndex, to].sort((x, y) => x - y);
-        setSelected(new Set(visibleCommits.slice(a, b + 1).map((c) => c.hash)));
+        selectRange(anchorIndex, to);
       } else {
         setSelected(new Set([commit.hash]));
         setAnchorIndex(to);
@@ -354,13 +359,22 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   // Squash: the selection must be >1, contiguous in real history (not the
   // filtered view), entirely unpushed, and have a commit below it as base.
   const squashMax = selectedIndices.at(-1) ?? -1;
-  const canSquash =
+  const contiguousInHistory =
     selectedIndices.length > 1 &&
-    squashMax - (selectedIndices[0] ?? 0) + 1 === selectedIndices.length &&
+    squashMax - (selectedIndices[0] ?? 0) + 1 === selectedIndices.length;
+  const canSquash =
+    contiguousInHistory &&
     squashMax < unpushedCount &&
     squashMax + 1 < commits.length &&
     // The replayed range (everything above the base) must be merge-free.
     commits.slice(0, squashMax + 1).every((c) => !c.isMerge);
+  // Why squash is unavailable — in particular the easy-to-miss case where a client
+  // filter hides commits between the selected ones, so a range that looks adjacent
+  // in the filtered view isn't adjacent in real history.
+  const squashDisabledHint =
+    query && !contiguousInHistory
+      ? " (clear the filter — a squash range must be adjacent in history)"
+      : " (must be adjacent and unpushed)";
 
   function openSquash() {
     if (!canSquash) return;
@@ -494,7 +508,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
           </ContextMenuItem>
           <ContextMenuItem disabled={!canSquash} onClick={openSquash}>
             Squash {selected.size} commits…
-            {!canSquash && " (must be adjacent and unpushed)"}
+            {!canSquash && squashDisabledHint}
           </ContextMenuItem>
           <ContextMenuItem
             disabled={!canReorder}

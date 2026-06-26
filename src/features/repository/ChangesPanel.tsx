@@ -8,6 +8,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -15,14 +16,6 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BlameDialog } from "@/features/history/BlameDialog";
@@ -924,56 +917,26 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
         />
       )}
 
-      <Dialog
+      <ConfirmDialog
         open={discardScope !== null}
-        onOpenChange={(open) => {
-          if (!open) setDiscardScope(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{discardTitle}</DialogTitle>
-            <DialogDescription>{discardBody}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDiscardScope(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={discardPaths.isPending || discardAll.isPending}
-              onClick={confirmDiscard}
-            >
-              {discardScope?.kind === "all" ? "Discard all" : "Discard"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onCancel={() => setDiscardScope(null)}
+        title={discardTitle}
+        body={discardBody}
+        confirmLabel={discardScope?.kind === "all" ? "Discard all" : "Discard"}
+        confirmVariant="destructive"
+        pending={discardPaths.isPending || discardAll.isPending}
+        onConfirm={confirmDiscard}
+      />
 
-      <Dialog
+      <ConfirmDialog
         open={stashScope !== null}
-        onOpenChange={(open) => {
-          if (!open) setStashScope(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{stashTitle}</DialogTitle>
-            <DialogDescription>{stashBody}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStashScope(null)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={stashPaths.isPending || stashAll.isPending}
-              onClick={confirmStash}
-            >
-              {stashScope?.kind === "all" ? "Stash all" : "Stash"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onCancel={() => setStashScope(null)}
+        title={stashTitle}
+        body={stashBody}
+        confirmLabel={stashScope?.kind === "all" ? "Stash all" : "Stash"}
+        pending={stashPaths.isPending || stashAll.isPending}
+        onConfirm={confirmStash}
+      />
     </div>
   );
 }

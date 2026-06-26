@@ -11,6 +11,7 @@ import {
 import { useSelector } from "@tanstack/react-store";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -1072,36 +1073,23 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <ConfirmDialog
         open={deleteTarget !== null}
-        onOpenChange={(o) => {
-          if (!o) setDeleteTarget(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete branch?</DialogTitle>
-            <DialogDescription>
-              Deletes {deleteTarget} locally, including commits that exist only
-              on it.
-              {deleteTarget === currentName &&
-                " You'll be switched to another branch first."}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={deleteBranch.isPending || checkout.isPending}
-              onClick={doDelete}
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onCancel={() => setDeleteTarget(null)}
+        title="Delete branch?"
+        body={
+          <>
+            Deletes {deleteTarget} locally, including commits that exist only on
+            it.
+            {deleteTarget === currentName &&
+              " You'll be switched to another branch first."}
+          </>
+        }
+        confirmLabel="Delete"
+        confirmVariant="destructive"
+        pending={deleteBranch.isPending || checkout.isPending}
+        onConfirm={doDelete}
+      />
 
       <StashesDialog
         repoPath={repoPath}
@@ -1109,109 +1097,71 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         onOpenChange={setStashesOpen}
       />
 
-      <Dialog open={discardAllOpen} onOpenChange={setDiscardAllOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Discard all changes?</DialogTitle>
-            <DialogDescription>
-              All uncommitted changes are discarded: tracked files reset to the
-              last commit, untracked files move to the recycle bin.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDiscardAllOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={discardAll.isPending}
-              onClick={() =>
-                discardAll.mutate(undefined, {
-                  onSuccess: () => {
-                    toast.success("All changes discarded");
-                    setDiscardAllOpen(false);
-                  },
-                  onError: (e) => {
-                    onError(e);
-                    setDiscardAllOpen(false);
-                  },
-                })
-              }
-            >
-              Discard all
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={discardAllOpen}
+        onCancel={() => setDiscardAllOpen(false)}
+        title="Discard all changes?"
+        body="All uncommitted changes are discarded: tracked files reset to the last commit, untracked files move to the recycle bin."
+        confirmLabel="Discard all"
+        confirmVariant="destructive"
+        pending={discardAll.isPending}
+        onConfirm={() =>
+          discardAll.mutate(undefined, {
+            onSuccess: () => {
+              toast.success("All changes discarded");
+              setDiscardAllOpen(false);
+            },
+            onError: (e) => {
+              onError(e);
+              setDiscardAllOpen(false);
+            },
+          })
+        }
+      />
 
-      <Dialog open={stashAllOpen} onOpenChange={setStashAllOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Stash all changes?</DialogTitle>
-            <DialogDescription>
-              Sets your working tree back to the last commit and saves all
-              uncommitted changes — including untracked files — to the stash.
-              "Pop latest stash" restores them.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStashAllOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={stashAll.isPending}
-              onClick={() =>
-                stashAll.mutate(undefined, {
-                  onSuccess: () => {
-                    toast.success("Changes stashed");
-                    setStashAllOpen(false);
-                  },
-                  onError: (e) => {
-                    onError(e);
-                    setStashAllOpen(false);
-                  },
-                })
-              }
-            >
-              Stash changes
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={stashAllOpen}
+        onCancel={() => setStashAllOpen(false)}
+        title="Stash all changes?"
+        body={
+          'Sets your working tree back to the last commit and saves all uncommitted changes — including untracked files — to the stash. "Pop latest stash" restores them.'
+        }
+        confirmLabel="Stash changes"
+        pending={stashAll.isPending}
+        onConfirm={() =>
+          stashAll.mutate(undefined, {
+            onSuccess: () => {
+              toast.success("Changes stashed");
+              setStashAllOpen(false);
+            },
+            onError: (e) => {
+              onError(e);
+              setStashAllOpen(false);
+            },
+          })
+        }
+      />
 
-      <Dialog open={stashPopOpen} onOpenChange={setStashPopOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Pop latest stash?</DialogTitle>
-            <DialogDescription>
-              Applies the most recent stash to your working tree and removes it
-              from the stash list. If applying conflicts, the stash is kept.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStashPopOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={stashPop.isPending}
-              onClick={() =>
-                stashPop.mutate(undefined, {
-                  onSuccess: () => {
-                    toast.success("Stash restored");
-                    setStashPopOpen(false);
-                  },
-                  onError: (e) => {
-                    onError(e);
-                    setStashPopOpen(false);
-                  },
-                })
-              }
-            >
-              Pop stash
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={stashPopOpen}
+        onCancel={() => setStashPopOpen(false)}
+        title="Pop latest stash?"
+        body="Applies the most recent stash to your working tree and removes it from the stash list. If applying conflicts, the stash is kept."
+        confirmLabel="Pop stash"
+        pending={stashPop.isPending}
+        onConfirm={() =>
+          stashPop.mutate(undefined, {
+            onSuccess: () => {
+              toast.success("Stash restored");
+              setStashPopOpen(false);
+            },
+            onError: (e) => {
+              onError(e);
+              setStashPopOpen(false);
+            },
+          })
+        }
+      />
 
       <Dialog
         open={pickerMode !== null}
