@@ -245,7 +245,9 @@ function PersonRow({
         }
       />
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium">{login}</p>
+        <p className="truncate font-medium" title={login}>
+          {login}
+        </p>
         {meta && <p className="truncate text-muted-foreground">{meta}</p>}
       </div>
       {confirming ? (

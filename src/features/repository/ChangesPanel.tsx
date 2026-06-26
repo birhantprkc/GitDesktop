@@ -36,7 +36,7 @@ import {
   useUntrack,
 } from "@/lib/git/queries";
 import type { ChangeKind, FileEntry } from "@/lib/git/types";
-import { isMac } from "@/lib/hotkeys/binding";
+import { formatBinding } from "@/lib/hotkeys/binding";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
@@ -718,7 +718,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
               <div className="flex items-center gap-2 border-b bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
                 <InfoIcon className="size-3.5 shrink-0" />
                 <span className="flex-1 leading-snug">
-                  {isMac ? "⌘" : "Ctrl"}-click to select files individually,
+                  {formatBinding("mod")}-click to select files individually,
                   Shift-click for a range.
                 </span>
                 <button

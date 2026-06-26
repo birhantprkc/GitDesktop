@@ -12,6 +12,7 @@ import { requiresPullRequest } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { coAuthorTrailers } from "@/lib/git/co-authors";
 import { useCommit, useRepoStatus } from "@/lib/git/queries";
+import { formatBinding } from "@/lib/hotkeys/binding";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { quickTransition } from "@/lib/motion";
 import { useAiConfigured, useAiEnabled } from "@/lib/settings/queries";
@@ -257,7 +258,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
           className="min-w-0 flex-1"
           disabled={!canCommit || generating}
           onClick={doCommit}
-          title="Ctrl+Enter"
+          title={formatBinding("mod+enter")}
         >
           {commit.isPending && <Spinner data-icon="inline-start" />}
           <span className="truncate">

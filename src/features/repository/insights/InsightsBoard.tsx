@@ -47,7 +47,9 @@ function ContributorsList({ data }: { data: ContributorChurn[] }) {
       {top.map((c) => (
         <li key={c.name} className="space-y-1">
           <div className="flex items-baseline justify-between gap-2 text-xs">
-            <span className="truncate font-medium">{c.name}</span>
+            <span className="truncate font-medium" title={c.name}>
+              {c.name}
+            </span>
             <span className="shrink-0 tabular-nums text-muted-foreground">
               {fmt(c.commits)} {c.commits === 1 ? "commit" : "commits"} ·{" "}
               <span className="text-success">+{fmt(c.additions)}</span>{" "}

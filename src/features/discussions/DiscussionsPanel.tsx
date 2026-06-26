@@ -88,7 +88,16 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <Button variant="outline" size="xs" disabled={!listEnabled} />
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={!listEnabled}
+                title={
+                  listEnabled
+                    ? undefined
+                    : "Sign in to GitHub to browse discussions"
+                }
+              />
             }
           >
             {activeCat
@@ -124,6 +133,11 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
           size="xs"
           className="ml-auto"
           disabled={!listEnabled}
+          title={
+            listEnabled
+              ? "New discussion"
+              : "Sign in to GitHub to start a discussion"
+          }
           onClick={() => setCreateOpen(true)}
         >
           <PlusIcon data-icon="inline-start" />

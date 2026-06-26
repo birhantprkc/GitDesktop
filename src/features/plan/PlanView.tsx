@@ -19,7 +19,7 @@ import type { AgentKind } from "@/lib/ai/agent";
 import { extractPlanQuestions } from "@/lib/ai/prompt";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
 import { useGhStatus } from "@/lib/git/queries";
-import { isMac } from "@/lib/hotkeys/binding";
+import { formatBinding } from "@/lib/hotkeys/binding";
 import { useUiStore } from "@/lib/stores/ui";
 import { CreateLocalIssueDialog } from "../issues/CreateLocalIssueDialog";
 import { ImplementPlanButton } from "./ImplementPlanButton";
@@ -188,7 +188,7 @@ export function PlanComposer({
             />
             <EffortPicker value={effort} onChange={setEffort} />
             <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
-              {isMac ? "⌘↵" : "Ctrl+↵"} to plan
+              {formatBinding("mod+enter")} to plan
             </span>
             <Button
               size="sm"

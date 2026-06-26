@@ -106,7 +106,9 @@ export function LabelsPopover({
                     className="size-2 shrink-0 rounded-full"
                     style={{ backgroundColor: `#${label.color}` }}
                   />
-                  <span className="flex-1 truncate">{label.name}</span>
+                  <span className="flex-1 truncate" title={label.name}>
+                    {label.name}
+                  </span>
                 </label>
               ))}
               {(repoLabels.data ?? []).length > 0 && (

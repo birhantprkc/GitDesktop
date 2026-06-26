@@ -261,7 +261,7 @@ export function TagDetailView({
                       variant="ghost"
                       size="icon-xs"
                       aria-label={`Delete ${a.name}`}
-                      className="text-muted-foreground opacity-0 group-hover:opacity-100"
+                      className="text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                       onClick={() =>
                         deleteAsset.mutate(
                           { tag, assetName: a.name },

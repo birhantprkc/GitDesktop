@@ -302,7 +302,7 @@ function CommitSection({
         >
           <p className="flex items-center gap-1.5 text-xs font-medium">
             <GitCommitIcon className="size-3 shrink-0 text-muted-foreground" />
-            <span className="truncate" title={commit.subject}>
+            <span className="min-w-0 truncate" title={commit.subject}>
               {commit.subject}
             </span>
           </p>

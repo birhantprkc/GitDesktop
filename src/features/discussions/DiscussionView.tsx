@@ -73,6 +73,7 @@ import {
   useUpdateDiscussionComment,
 } from "@/lib/git/queries";
 import type { PrThreadOut } from "@/lib/git/types";
+import { formatBinding } from "@/lib/hotkeys/binding";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
@@ -722,7 +723,7 @@ export function DiscussionView({
                           variant="outline"
                           disabled={!replyBody.trim() || busy}
                           onClick={() => submitReply(c.id)}
-                          title="Ctrl+Enter"
+                          title={formatBinding("mod+enter")}
                         >
                           Reply
                         </Button>
@@ -772,7 +773,7 @@ export function DiscussionView({
             size="sm"
             disabled={!composeBody.trim() || busy}
             onClick={submitComment}
-            title="Ctrl+Enter"
+            title={formatBinding("mod+enter")}
           >
             Comment
           </Button>

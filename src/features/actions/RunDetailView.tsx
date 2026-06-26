@@ -146,7 +146,7 @@ function JobRow({
                   </span>
                 )}
                 {href && (
-                  <ArrowSquareOutIcon className="size-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
+                  <ArrowSquareOutIcon className="size-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />
                 )}
               </>
             );
@@ -367,6 +367,9 @@ export function RunDetailView({
             size="sm"
             className="ml-auto cursor-pointer"
             disabled={!run.url}
+            title={
+              run.url ? "Open this run on GitHub" : "No GitHub URL for this run"
+            }
             onClick={() => run.url && openUrl(run.url)}
           >
             <ArrowSquareOutIcon data-icon="inline-start" />

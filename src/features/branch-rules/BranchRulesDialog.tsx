@@ -408,7 +408,17 @@ export function BranchRulesDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={doSave} disabled={!dirty || saving.isPending}>
+          <Button
+            onClick={doSave}
+            disabled={!dirty || saving.isPending}
+            title={
+              !dirty
+                ? "No changes to save"
+                : saving.isPending
+                  ? "Saving…"
+                  : undefined
+            }
+          >
             {scope === "shared" ? "Save to repository" : "Save changes"}
           </Button>
         </DialogFooter>

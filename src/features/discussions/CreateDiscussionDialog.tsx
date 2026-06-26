@@ -136,7 +136,10 @@ export function CreateDiscussionDialog({
               Cancel
             </Button>
             <form.AppForm>
-              <form.SubmitButton disabled={!categoryId}>
+              <form.SubmitButton
+                disabled={!categoryId}
+                title={categoryId ? undefined : "Choose a category first"}
+              >
                 Start discussion
               </form.SubmitButton>
             </form.AppForm>

@@ -71,7 +71,9 @@ export function ConversationFilterPopover({
                   checked={authorFilter.has(a)}
                   onCheckedChange={(v) => toggle("author", a, v === true)}
                 />
-                <span className="flex-1 truncate">{a}</span>
+                <span className="flex-1 truncate" title={a}>
+                  {a}
+                </span>
                 <span className="text-muted-foreground">
                   ({authorCount(a)})
                 </span>
@@ -92,7 +94,9 @@ export function ConversationFilterPopover({
                   checked={labelFilter.has(l)}
                   onCheckedChange={(v) => toggle("label", l, v === true)}
                 />
-                <span className="flex-1 truncate">{l}</span>
+                <span className="flex-1 truncate" title={l}>
+                  {l}
+                </span>
                 <span className="text-muted-foreground">({labelCount(l)})</span>
               </label>
             ))}
