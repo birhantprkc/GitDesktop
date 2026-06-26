@@ -220,6 +220,14 @@ commit list.
 
 ### Fixed
 
+- **A finished plan or agent run on a background tab now notifies you.** The OS
+  notification for a completed plan/session was suppressed whenever the window was
+  focused and that run was selected — but since plans and sessions live on the Agent
+  tab, a focused user reading another tab (Changes, Pull Requests, …) was wrongly
+  treated as "watching it" and got nothing. The notification now only stays quiet when
+  the Agent tab is the one actually on screen. A plan that finishes **with clarifying
+  questions** — a blocking handoff that idles until you answer — now always notifies,
+  even while you're looking right at it.
 - **The "default branch for new repositories" setting now updates git itself.**
   Settings → Git's default-branch field used to be a GitDesktop-only preference: it
   changed what the app's *Create repository* dialog did, but never touched your global

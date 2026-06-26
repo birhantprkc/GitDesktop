@@ -27,6 +27,7 @@ import {
   setKept,
 } from "./persistence";
 import { sessionStatus } from "./status";
+import { isWatchingAgentSurface } from "./watching";
 
 /** Fire-and-forget a transcript write: persistence must never break a session,
  *  so swallow + log failures. Per-session append ordering is preserved by the
@@ -270,11 +271,11 @@ async function runTurn(
         t.error,
       ),
     );
-    // "Watching" = window focused AND this is the session on screen; then the
-    // streamed result is already visible, so stay quiet. Notifying otherwise
-    // covers the multi-session case (working in another session, or away). A
-    // user Cancel is intentional, so it's never announced.
-    if (document.hasFocus() && get().activeId === id) return;
+    // "Watching" = window focused, the Agent tab on screen, AND this is the
+    // selected session; then the streamed result is already visible, so stay
+    // quiet. Notifying otherwise covers the multi-session case and a user on
+    // another tab. A user Cancel is intentional, so it's never announced.
+    if (isWatchingAgentSurface(get().activeId, id)) return;
     if (t.status === "error" && t.error === "Cancelled.") return;
     const label =
       s.turns[0]?.prompt.trim().replace(/\s+/g, " ").slice(0, 70) ||

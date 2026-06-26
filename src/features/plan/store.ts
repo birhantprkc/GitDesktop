@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { isWatchingAgentSurface } from "@/features/sessions/watching";
 import {
   type AgentKind,
   cancelAgentSession,
@@ -164,15 +165,18 @@ export const usePlanStore = create<PlanState>((set, get) => {
     );
     let finalText = "";
     let errored = false;
-    // Announce a finished plan run (success OR failure) the way agent sessions do
-    // — unless you're watching this very plan live (focused + selected), where the
-    // result/error is already on screen. Skips a run removed mid-flight (its row is
-    // gone, so there's nothing to return to). A user Stop stays focused on the plan,
-    // so the watching gate covers it.
+    // Announce a finished plan run (success OR failure) the way agent sessions do.
+    // A plan that finished WITH clarifying questions is a blocking handoff — it
+    // idles until the user answers — so always nudge, even while they're watching
+    // it (a redundant toast costs nothing; a stranded handoff costs a lost turn).
+    // Otherwise stay quiet only when they're actually looking at this plan
+    // (focused + Agent tab + selected); a focused user on another tab still gets
+    // it. Skips a run removed mid-flight (its row is gone, nothing to return to).
     const notifyDone = (failed: boolean, hasQuestions = false) => {
       const run = get().runs.find((r) => r.id === id);
       if (!run) return;
-      if (document.hasFocus() && get().activePlanId === id) return;
+      if (!hasQuestions && isWatchingAgentSurface(get().activePlanId, id))
+        return;
       const label =
         run.origin?.issueTitle?.trim() || run.origin?.goal?.trim() || "Plan";
       void notify(
