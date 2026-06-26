@@ -164,6 +164,26 @@ export const usePlanStore = create<PlanState>((set, get) => {
     );
     let finalText = "";
     let errored = false;
+    // Announce a finished plan run (success OR failure) the way agent sessions do
+    // — unless you're watching this very plan live (focused + selected), where the
+    // result/error is already on screen. Skips a run removed mid-flight (its row is
+    // gone, so there's nothing to return to). A user Stop stays focused on the plan,
+    // so the watching gate covers it.
+    const notifyDone = (failed: boolean, hasQuestions = false) => {
+      const run = get().runs.find((r) => r.id === id);
+      if (!run) return;
+      if (document.hasFocus() && get().activePlanId === id) return;
+      const label =
+        run.origin?.issueTitle?.trim() || run.origin?.goal?.trim() || "Plan";
+      void notify(
+        failed
+          ? "Plan failed"
+          : hasQuestions
+            ? "Plan ready — answer its questions"
+            : "Plan ready",
+        label,
+      );
+    };
     try {
       await runAgentSession({
         binPath: null,
@@ -208,10 +228,12 @@ export const usePlanStore = create<PlanState>((set, get) => {
       });
     } catch (e) {
       patch(id, { generating: false, error: errorMessage(e) });
+      notifyDone(true);
       return;
     }
     if (errored) {
       patch(id, { generating: false });
+      notifyDone(true);
       return;
     }
     const { title, body } = extractPlanDraft(finalText);
@@ -220,6 +242,7 @@ export const usePlanStore = create<PlanState>((set, get) => {
         generating: false,
         error: "The planner returned nothing — try again.",
       });
+      notifyDone(true);
       return;
     }
     patch(id, {
@@ -230,18 +253,7 @@ export const usePlanStore = create<PlanState>((set, get) => {
         unverified: validatePlanPaths(body, new Set(tracked)),
       },
     });
-    // Notify when it lands — unless you're watching this very plan (focused +
-    // selected), in which case the result is already on screen.
-    if (!(document.hasFocus() && get().activePlanId === id)) {
-      const run = get().runs.find((r) => r.id === id);
-      const label =
-        run?.origin?.issueTitle?.trim() || run?.origin?.goal?.trim() || "Plan";
-      const hasQuestions = /\[NEEDS\s+CLARIFICATION/i.test(body);
-      void notify(
-        hasQuestions ? "Plan ready — answer its questions" : "Plan ready",
-        label,
-      );
-    }
+    notifyDone(false, /\[NEEDS\s+CLARIFICATION/i.test(body));
   };
 
   /** Build turn 1's system + user prompt (grounded in the repo's instructions),

@@ -130,8 +130,10 @@ commit list.
   agent conversation: read tools only, no worktree, never a write.) Review it, then
   create a local or GitHub issue from it in one click. Plans live in the **Agent
   sidebar** alongside your sessions and **run several at once** — start one, switch to
-  another, and come back; none are lost. Reach it from the Agent tab's "Plan a task"
-  mode, the command palette, or an issue's Plan button.
+  another, and come back; none are lost, and an **OS notification** tells you when each
+  one finishes (ready, awaiting your answers, or failed) unless you're watching it.
+  Reach it from the Agent tab's "Plan a task" mode, the command palette, or an issue's
+  Plan button.
 - **Hand a plan or issue straight to an agent.** A finished plan gets an **Implement**
   button that **starts a write-capable session directly** (a quick popover sets the
   agent / model / effort first); any open local or GitHub issue gets **Solve with
