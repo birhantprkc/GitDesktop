@@ -208,8 +208,8 @@ function CustomLanguageDialog({
           </div>
 
           {draft.tmGrammar && (
-            <div className="flex items-center justify-between gap-3 rounded border border-green-600/30 bg-green-600/10 px-3 py-2 text-xs">
-              <span className="text-green-700 dark:text-green-400">
+            <div className="flex items-center justify-between gap-3 rounded border border-success/30 bg-success/10 px-3 py-2 text-xs">
+              <span className="text-success">
                 ✓ Full TextMate grammar loaded — rendered with Shiki (VSCode
                 fidelity). The fields below are ignored while it's loaded.
               </span>
@@ -243,7 +243,7 @@ function CustomLanguageDialog({
                   placeholder="Nip"
                 />
                 {builtinClash && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                  <p className="text-xs text-warning">
                     A built-in language is already called “{toLangId(name)}”.
                     Saving will override it everywhere.
                   </p>

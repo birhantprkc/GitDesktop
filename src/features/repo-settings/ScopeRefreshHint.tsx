@@ -19,7 +19,7 @@ export function ScopeRefreshHint({
   if (!scopes.data?.classic || scopes.data.scopes.includes(scope)) return null;
   const cmd = `gh auth refresh -h github.com -s ${scope}`;
   return (
-    <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11px]">
+    <div className="rounded-md border border-warning/40 bg-warning/10 p-2.5 text-[11px]">
       <p className="text-muted-foreground">
         {action} needs the <span className="font-mono">{scope}</span> scope,
         which your GitHub sign-in is missing. Run this, then reopen:

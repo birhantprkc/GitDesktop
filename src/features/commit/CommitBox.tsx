@@ -144,7 +144,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
         </div>
       )}
       {amending && (
-        <div className="bg-amber-500/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-400">
+        <div className="bg-warning/10 px-2.5 py-2 text-xs text-warning">
           <p className="flex items-start gap-2">
             <InfoIcon className="mt-0.5 size-3.5 shrink-0" />
             <span className="flex-1">

@@ -155,8 +155,8 @@ function App() {
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       {COLD_START && (
-        <div className="pointer-events-none fixed right-2 bottom-2 z-50 flex items-center gap-1.5 border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
-          <span className="size-1.5 rounded-full bg-amber-500" />
+        <div className="pointer-events-none fixed right-2 bottom-2 z-50 flex items-center gap-1.5 border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] font-medium text-warning">
+          <span className="size-1.5 rounded-full bg-warning" />
           Cold-start test mode
         </div>
       )}

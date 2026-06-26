@@ -267,8 +267,8 @@ function WebhookRow({
     lastCode == null
       ? "text-muted-foreground"
       : lastCode >= 200 && lastCode < 300
-        ? "text-green-600 dark:text-green-400"
-        : "text-red-600 dark:text-red-400";
+        ? "text-success"
+        : "text-destructive";
   const canTest = hook.events.includes("push") || hook.events.includes("*");
 
   return (
@@ -478,9 +478,7 @@ function DeliveryRow({
         <span
           className={cn(
             "shrink-0 font-mono tabular-nums",
-            ok
-              ? "text-green-600 dark:text-green-400"
-              : "text-red-600 dark:text-red-400",
+            ok ? "text-success" : "text-destructive",
           )}
         >
           {delivery.statusCode || "—"}

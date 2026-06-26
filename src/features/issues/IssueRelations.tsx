@@ -38,9 +38,9 @@ import { CreateIssueDialog } from "./CreateIssueDialog";
 /** Open/closed glyph for a related issue, so state isn't conveyed by text alone. */
 function StateIcon({ state }: { state: string }) {
   return state === "CLOSED" ? (
-    <CheckCircleIcon className="size-3.5 shrink-0 text-violet-600 dark:text-violet-400" />
+    <CheckCircleIcon className="size-3.5 shrink-0 text-merged" />
   ) : (
-    <CircleDashedIcon className="size-3.5 shrink-0 text-green-600 dark:text-green-400" />
+    <CircleDashedIcon className="size-3.5 shrink-0 text-success" />
   );
 }
 

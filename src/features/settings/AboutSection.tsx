@@ -77,10 +77,7 @@ function AuthState({ authed }: { authed: AuthStatus }) {
   if (authed === "authed") {
     return (
       <span className="inline-flex items-center gap-1 text-muted-foreground">
-        <CheckCircleIcon
-          weight="fill"
-          className="size-3 text-emerald-600 dark:text-emerald-400"
-        />
+        <CheckCircleIcon weight="fill" className="size-3 text-success" />
         Signed in
       </span>
     );
@@ -88,10 +85,7 @@ function AuthState({ authed }: { authed: AuthStatus }) {
   if (authed === "notAuthed") {
     return (
       <span className="inline-flex items-center gap-1 text-muted-foreground">
-        <WarningCircleIcon
-          weight="fill"
-          className="size-3 text-amber-600 dark:text-amber-400"
-        />
+        <WarningCircleIcon weight="fill" className="size-3 text-warning" />
         Not signed in
       </span>
     );
@@ -109,12 +103,12 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
           {tool.found ? (
             <CheckCircleIcon
               weight="fill"
-              className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+              className="size-3.5 shrink-0 text-success"
             />
           ) : (
             <WarningCircleIcon
               weight="fill"
-              className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+              className="size-3.5 shrink-0 text-warning"
             />
           )}
           <span className="font-medium">{meta.name}</span>

@@ -8,7 +8,7 @@ function Check({ ok, label }: { ok: boolean; label: string }) {
       {ok ? (
         <CheckCircleIcon
           weight="fill"
-          className="size-3.5 shrink-0 text-green-600 dark:text-green-400"
+          className="size-3.5 shrink-0 text-success"
         />
       ) : (
         <XCircleIcon className="size-3.5 shrink-0 text-muted-foreground" />

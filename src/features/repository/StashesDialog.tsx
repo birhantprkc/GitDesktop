@@ -285,12 +285,8 @@ function StashFiles({ repoPath, index }: { repoPath: string; index: number }) {
                   <span className="shrink-0 text-muted-foreground">bin</span>
                 ) : (
                   <span className="shrink-0 tabular-nums">
-                    <span className="text-green-600 dark:text-green-400">
-                      +{file.added}
-                    </span>{" "}
-                    <span className="text-red-600 dark:text-red-400">
-                      -{file.deleted}
-                    </span>
+                    <span className="text-success">+{file.added}</span>{" "}
+                    <span className="text-destructive">-{file.deleted}</span>
                   </span>
                 )}
               </button>

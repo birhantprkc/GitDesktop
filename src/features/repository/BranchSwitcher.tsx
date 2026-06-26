@@ -113,12 +113,12 @@ const PR_RANK: Record<PrState, number> = {
   closed: 1,
 };
 
-// GitHub's PR-state palette, in the app's `text-…-600 dark:text-…-400` idiom.
+// GitHub's PR-state palette, via the app's semantic color tokens.
 const PR_TONE: Record<PrState, string> = {
-  open: "text-green-600 dark:text-green-400",
+  open: "text-success",
   draft: "text-muted-foreground",
-  merged: "text-purple-600 dark:text-purple-400",
-  closed: "text-red-600 dark:text-red-400",
+  merged: "text-merged",
+  closed: "text-destructive",
 };
 
 const PR_STATE_LABEL: Record<PrState, string> = {

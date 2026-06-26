@@ -58,7 +58,7 @@ export function ConflictBanner({
       : "All conflicts resolved.";
 
   return (
-    <div className="space-y-2 border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+    <div className="space-y-2 border-b bg-warning/10 px-3 py-2 text-xs text-warning">
       <div>
         <p className="font-medium">
           {op ? OP_LABELS[op].banner : "Conflicts to resolve"}

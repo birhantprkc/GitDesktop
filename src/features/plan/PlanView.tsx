@@ -317,7 +317,7 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
       {(draft || error) && (
         <div className="shrink-0 border-t">
           {draft && !locked && draft.unverified.length > 0 && (
-            <div className="flex items-start gap-2 border-b bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
+            <div className="flex items-start gap-2 border-b bg-warning/10 px-3 py-2 text-[11px] text-warning">
               <WarningIcon className="mt-0.5 size-3.5 shrink-0" />
               <span>
                 {draft.unverified.length} cited path

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { parseCoAuthorInput } from "@/lib/git/co-authors";
 import { useCommitAuthors, useUserIdentity } from "@/lib/git/queries";
 import type { CommitAuthor } from "@/lib/git/types";
+import { cn } from "@/lib/utils";
 
 /**
  * Co-author chips + an "add" popover fed by the repo's commit authors.
@@ -25,6 +26,9 @@ export function CoAuthorPicker({
   const authors = useCommitAuthors(repoPath);
   const identity = useUserIdentity(repoPath);
   const [query, setQuery] = useState("");
+  // Which option the keyboard has landed on (typeahead/combobox pattern: focus
+  // stays in the input, ↑/↓ move a highlight, Enter adds the highlighted one).
+  const [activeIndex, setActiveIndex] = useState(0);
 
   // The commit author is already credited — never offer them as a co-author.
   const selfEmail = identity.data?.email.toLowerCase() || null;
@@ -49,9 +53,25 @@ export function CoAuthorPicker({
     !typedSelf &&
     !selectedEmails.has(parsed.email.toLowerCase());
 
+  // The keyboard list = an optional "add typed entry" row, then the matches.
+  const optionCount = (canAddTyped ? 1 : 0) + suggestions.length;
+  const active = optionCount > 0 ? Math.min(activeIndex, optionCount - 1) : 0;
+
   function add(author: CommitAuthor) {
     onChange([...value, author]);
     setQuery("");
+    setActiveIndex(0);
+  }
+
+  function addAt(index: number) {
+    // Index 0 is the typed "Name <email>" row when it parses; the rest map to
+    // the suggestion list.
+    if (canAddTyped && parsed && index === 0) {
+      add(parsed);
+      return;
+    }
+    const match = suggestions[canAddTyped ? index - 1 : index];
+    if (match) add(match);
   }
 
   function remove(email: string) {
@@ -59,11 +79,16 @@ export function CoAuthorPicker({
   }
 
   function onInputKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "Enter") return;
-    e.preventDefault();
-    // Prefer the typed "Name <email>" when it parses; else the top match.
-    if (canAddTyped && parsed) add(parsed);
-    else if (suggestions[0]) add(suggestions[0]);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex(Math.min(active + 1, optionCount - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex(Math.max(active - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      addAt(active);
+    }
   }
 
   return (
@@ -93,16 +118,39 @@ export function CoAuthorPicker({
               <p className="pb-2 text-sm font-medium">Add a co-author</p>
               <Input
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setActiveIndex(0);
+                }}
                 onKeyDown={onInputKeyDown}
                 placeholder="Search, or Name <email>"
                 autoComplete="off"
+                role="combobox"
+                aria-expanded={optionCount > 0}
+                aria-controls="coauthor-options"
+                aria-activedescendant={
+                  optionCount > 0 ? `coauthor-option-${active}` : undefined
+                }
               />
-              <div className="mt-2 space-y-px">
+              <div
+                id="coauthor-options"
+                role="listbox"
+                aria-label="Co-author suggestions"
+                className="mt-2 space-y-px"
+              >
                 {canAddTyped && parsed && (
                   <button
                     type="button"
-                    className="flex w-full items-baseline gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/60"
+                    id="coauthor-option-0"
+                    role="option"
+                    aria-selected={active === 0}
+                    className={cn(
+                      "flex w-full items-baseline gap-2 px-2 py-1.5 text-left text-xs",
+                      active === 0
+                        ? "bg-accent text-accent-foreground"
+                        : "hover:bg-muted/60",
+                    )}
+                    onMouseEnter={() => setActiveIndex(0)}
                     onClick={() => add(parsed)}
                   >
                     <span className="font-medium">Add "{parsed.name}"</span>
@@ -111,19 +159,31 @@ export function CoAuthorPicker({
                     </span>
                   </button>
                 )}
-                {suggestions.map((a) => (
-                  <button
-                    type="button"
-                    key={a.email}
-                    className="flex w-full items-baseline gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/60"
-                    onClick={() => add(a)}
-                  >
-                    <span className="truncate font-medium">{a.name}</span>
-                    <span className="truncate text-muted-foreground">
-                      {a.email}
-                    </span>
-                  </button>
-                ))}
+                {suggestions.map((a, i) => {
+                  const idx = (canAddTyped ? 1 : 0) + i;
+                  return (
+                    <button
+                      type="button"
+                      key={a.email}
+                      id={`coauthor-option-${idx}`}
+                      role="option"
+                      aria-selected={active === idx}
+                      className={cn(
+                        "flex w-full items-baseline gap-2 px-2 py-1.5 text-left text-xs",
+                        active === idx
+                          ? "bg-accent text-accent-foreground"
+                          : "hover:bg-muted/60",
+                      )}
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      onClick={() => add(a)}
+                    >
+                      <span className="truncate font-medium">{a.name}</span>
+                      <span className="truncate text-muted-foreground">
+                        {a.email}
+                      </span>
+                    </button>
+                  );
+                })}
                 {typedSelf && (
                   <p className="px-2 py-1.5 text-xs text-muted-foreground">
                     That's you — the commit author is already credited.

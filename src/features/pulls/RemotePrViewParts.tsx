@@ -67,12 +67,8 @@ export function PrFilesPane({
                   {file.path}
                 </span>
                 <span className="shrink-0 tabular-nums">
-                  <span className="text-green-600 dark:text-green-400">
-                    +{file.additions}
-                  </span>{" "}
-                  <span className="text-red-600 dark:text-red-400">
-                    -{file.deletions}
-                  </span>
+                  <span className="text-success">+{file.additions}</span>{" "}
+                  <span className="text-destructive">-{file.deletions}</span>
                 </span>
               </button>
             ))}

@@ -101,20 +101,20 @@ function checkPresentation(status: string): {
   const s = status.toUpperCase();
   if (s === "SUCCESS") {
     return {
-      tone: "text-green-600 dark:text-green-400",
+      tone: "text-success",
       Icon: CheckCircleIcon,
       label: "passed",
     };
   }
   if (["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"].includes(s)) {
     return {
-      tone: "text-red-600 dark:text-red-400",
+      tone: "text-destructive",
       Icon: XCircleIcon,
       label: "failed",
     };
   }
   return {
-    tone: "text-amber-600 dark:text-amber-400",
+    tone: "text-warning",
     Icon: CircleIcon,
     label: "pending",
   };
@@ -391,12 +391,8 @@ export function RemotePrView({
           <span className="font-mono">{pr.headRefName}</span>
           <span>→</span>
           <span className="font-mono">{pr.baseRefName}</span>
-          <span className="text-green-600 dark:text-green-400">
-            +{pr.additions}
-          </span>
-          <span className="text-red-600 dark:text-red-400">
-            -{pr.deletions}
-          </span>
+          <span className="text-success">+{pr.additions}</span>
+          <span className="text-destructive">-{pr.deletions}</span>
         </div>
         {isOpen ? (
           <LabelsPopover

@@ -53,9 +53,16 @@ export function InsightsPanel({
             <Skeleton className="h-24 w-full" />
           </div>
         ) : stats.isError ? (
-          <p className="py-4 text-center text-xs text-muted-foreground">
-            Couldn't gather statistics: {String(stats.error)}
-          </p>
+          <div className="py-4 text-center text-xs">
+            <p className="font-medium text-destructive">
+              Couldn't gather statistics.
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              {stats.error instanceof Error
+                ? stats.error.message
+                : "Reopen Insights to try again."}
+            </p>
+          </div>
         ) : data ? (
           <div className="space-y-5">
             <section>
@@ -137,10 +144,10 @@ export function InsightsPanel({
                       {fmt(branchStats.data.filesChanged)}
                     </Stat>
                     <Stat label="Lines changed">
-                      <span className="text-green-600 dark:text-green-400">
+                      <span className="text-success">
                         +{fmt(branchStats.data.additions)}
                       </span>{" "}
-                      <span className="text-red-600 dark:text-red-400">
+                      <span className="text-destructive">
                         −{fmt(branchStats.data.deletions)}
                       </span>
                     </Stat>

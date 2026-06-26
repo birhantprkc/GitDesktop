@@ -177,7 +177,7 @@ export function CreatePrDialog({
                 {base || "…"}
               </p>
               {sameBranch ? (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
+                <p className="text-xs text-warning">
                   Pick two different branches.
                 </p>
               ) : (

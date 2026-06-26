@@ -213,7 +213,7 @@ function CliReviewConfig({
             Checking for {PROVIDER_LABELS[value.provider]}…
           </span>
         ) : info?.found && info.authed === "notAuthed" ? (
-          <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+          <span className="flex items-center gap-1 text-warning">
             <XCircleIcon className="size-4 shrink-0" />
             Found{version} but not signed in — run{" "}
             <code className="font-mono">
@@ -228,7 +228,7 @@ function CliReviewConfig({
             .
           </span>
         ) : info?.found ? (
-          <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
+          <span className="flex items-center gap-1 text-success">
             <CheckCircleIcon className="size-4 shrink-0" />
             Found{version}
             {info.authed === "authed" ? " — signed in" : ""}
@@ -512,7 +512,7 @@ export const AiProviderSection = withForm({
             Test connection
           </Button>
           {testResult?.ok && (
-            <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+            <span className="flex items-center gap-1 text-xs text-success">
               <CheckCircleIcon className="size-4" /> Connected
             </span>
           )}

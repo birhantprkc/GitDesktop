@@ -601,7 +601,7 @@ export function DiscussionView({
             <div key={c.id} className="space-y-2">
               <div className="space-y-1">
                 {c.isAnswer && (
-                  <p className="flex items-center gap-1 text-[11px] font-medium text-green-600 dark:text-green-400">
+                  <p className="flex items-center gap-1 text-[11px] font-medium text-success">
                     <CheckCircleIcon className="size-3.5" weight="fill" />
                     Answer
                   </p>

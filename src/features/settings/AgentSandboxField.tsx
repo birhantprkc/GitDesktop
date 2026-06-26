@@ -259,7 +259,7 @@ function Row({
   // warnings stay full-contrast; informational lines are muted.
   const toneClass =
     tone === "ok"
-      ? "text-green-600 dark:text-green-400"
+      ? "text-success"
       : tone === "warn"
         ? "text-foreground"
         : "text-muted-foreground";

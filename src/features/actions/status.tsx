@@ -72,7 +72,7 @@ export function StatusIcon({
       return (
         <CircleNotchIcon
           weight="bold"
-          className={cn(base, "animate-spin text-amber-500")}
+          className={cn(base, "animate-spin text-warning")}
         />
       );
     }
@@ -87,27 +87,16 @@ export function StatusIcon({
   switch (conclusion) {
     case "success":
       return (
-        <CheckCircleIcon
-          weight="fill"
-          className={cn(base, "text-green-600 dark:text-green-400")}
-        />
+        <CheckCircleIcon weight="fill" className={cn(base, "text-success")} />
       );
     case "failure":
     case "timed_out":
     case "startup_failure":
       return (
-        <XCircleIcon
-          weight="fill"
-          className={cn(base, "text-red-600 dark:text-red-400")}
-        />
+        <XCircleIcon weight="fill" className={cn(base, "text-destructive")} />
       );
     case "action_required":
-      return (
-        <WarningIcon
-          weight="fill"
-          className={cn(base, "text-amber-600 dark:text-amber-400")}
-        />
-      );
+      return <WarningIcon weight="fill" className={cn(base, "text-warning")} />;
     case "cancelled":
       return (
         <ProhibitIcon

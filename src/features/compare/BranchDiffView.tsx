@@ -83,10 +83,8 @@ export function BranchDiffView({
         <span className="text-muted-foreground">
           {files.data.length} file{files.data.length === 1 ? "" : "s"}
         </span>
-        <span className="text-green-600 dark:text-green-400">
-          +{totalAdded}
-        </span>
-        <span className="text-red-600 dark:text-red-400">-{totalDeleted}</span>
+        <span className="text-success">+{totalAdded}</span>
+        <span className="text-destructive">-{totalDeleted}</span>
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -114,12 +112,8 @@ export function BranchDiffView({
                     <span className="shrink-0 text-muted-foreground">bin</span>
                   ) : (
                     <span className="shrink-0 tabular-nums">
-                      <span className="text-green-600 dark:text-green-400">
-                        +{file.added}
-                      </span>{" "}
-                      <span className="text-red-600 dark:text-red-400">
-                        -{file.deleted}
-                      </span>
+                      <span className="text-success">+{file.added}</span>{" "}
+                      <span className="text-destructive">-{file.deleted}</span>
                     </span>
                   )}
                 </button>

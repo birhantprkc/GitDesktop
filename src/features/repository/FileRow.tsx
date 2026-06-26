@@ -5,13 +5,13 @@ import type { ChangeKind, FileEntry } from "@/lib/git/types";
 import { cn } from "@/lib/utils";
 
 const KIND_BADGE: Record<ChangeKind, { letter: string; className: string }> = {
-  added: { letter: "A", className: "text-green-600 dark:text-green-400" },
-  untracked: { letter: "U", className: "text-green-600 dark:text-green-400" },
-  modified: { letter: "M", className: "text-amber-600 dark:text-amber-400" },
-  typechange: { letter: "T", className: "text-amber-600 dark:text-amber-400" },
-  deleted: { letter: "D", className: "text-red-600 dark:text-red-400" },
-  renamed: { letter: "R", className: "text-blue-600 dark:text-blue-400" },
-  copied: { letter: "C", className: "text-blue-600 dark:text-blue-400" },
+  added: { letter: "A", className: "text-success" },
+  untracked: { letter: "U", className: "text-success" },
+  modified: { letter: "M", className: "text-warning" },
+  typechange: { letter: "T", className: "text-warning" },
+  deleted: { letter: "D", className: "text-destructive" },
+  renamed: { letter: "R", className: "text-info" },
+  copied: { letter: "C", className: "text-info" },
   conflicted: { letter: "!", className: "text-destructive" },
 };
 

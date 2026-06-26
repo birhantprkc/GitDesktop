@@ -38,18 +38,18 @@ function prPresentation(state: string): {
   if (state === "MERGED") {
     return {
       Icon: GitMergeIcon,
-      tone: "text-violet-600 dark:text-violet-400",
+      tone: "text-merged",
     };
   }
   if (state === "CLOSED") {
     return {
       Icon: GitPullRequestIcon,
-      tone: "text-red-600 dark:text-red-400",
+      tone: "text-destructive",
     };
   }
   return {
     Icon: GitPullRequestIcon,
-    tone: "text-green-600 dark:text-green-400",
+    tone: "text-success",
   };
 }
 

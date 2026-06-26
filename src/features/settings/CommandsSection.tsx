@@ -123,7 +123,7 @@ function CommandDialog({
             </p>
           )}
           {!duplicate && overridesBuiltin && (
-            <p className="text-xs text-amber-600 dark:text-amber-400">
+            <p className="text-xs text-warning">
               This overrides the built-in “/{name}” command.
             </p>
           )}

@@ -50,12 +50,8 @@ function ContributorsList({ data }: { data: ContributorChurn[] }) {
             <span className="truncate font-medium">{c.name}</span>
             <span className="shrink-0 tabular-nums text-muted-foreground">
               {fmt(c.commits)} {c.commits === 1 ? "commit" : "commits"} ·{" "}
-              <span className="text-green-600 dark:text-green-400">
-                +{fmt(c.additions)}
-              </span>{" "}
-              <span className="text-red-600 dark:text-red-400">
-                −{fmt(c.deletions)}
-              </span>
+              <span className="text-success">+{fmt(c.additions)}</span>{" "}
+              <span className="text-destructive">−{fmt(c.deletions)}</span>
             </span>
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">

@@ -233,6 +233,14 @@ commit list.
   silently to the empty "Run a review…" placeholder with no explanation; it now
   displays the actual error (and keeps any partial output that streamed first).
   CLI-agent failures also no longer surface as a useless `[object Object]`.
+- **The co-author picker is fully keyboard-navigable.** When adding a commit
+  co-author, ↑/↓ now move through the suggestions and Enter adds the highlighted
+  one (it's a proper combobox), instead of only being able to add the top match or
+  reach for the mouse.
+- **A couple of dead-ends now explain themselves.** The repository Insights error
+  no longer prints a raw error string, and the Actions toolbar's "Run workflow" and
+  refresh buttons, when disabled, now say they need a GitHub CLI sign-in instead of
+  greying out silently.
 
 ### Changed
 
@@ -251,6 +259,15 @@ commit list.
   the ahead/behind badges in the toolbar; and a soft fade as the Changes list
   replaces its loading placeholder. Everything respects your system "reduce motion"
   setting (it falls back to a plain fade or no animation).
+- **The mint brand color now lives in the app, as a restrained accent.** Primary
+  actions (Open repository, Commit, Send a task…), the current selection in lists,
+  and keyboard focus rings are now GitDesktop's mint instead of flat gray — so the
+  one primary action and where the keyboard is focused are obvious at a glance on
+  every screen. The calm monochrome base is unchanged; mint only marks action,
+  selection, and focus. Under the hood, the status colors (added / modified /
+  deleted, success / warning / error, merged) are now driven by shared design
+  tokens, so they stay consistent across every view instead of drifting per-screen,
+  and the diff line-selection highlight uses the accent instead of a one-off blue.
 
 ### Fixed
 

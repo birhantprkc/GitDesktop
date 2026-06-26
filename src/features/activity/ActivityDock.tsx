@@ -136,10 +136,8 @@ function TriggerIcon({
 }) {
   if (running > 0 || queued > 0) return <Spinner className="size-4" />;
   if (failed > 0)
-    return (
-      <WarningCircleIcon className="size-4 text-amber-500" weight="fill" />
-    );
-  return <CheckCircleIcon className="size-4 text-emerald-500" weight="fill" />;
+    return <WarningCircleIcon className="size-4 text-warning" weight="fill" />;
+  return <CheckCircleIcon className="size-4 text-success" weight="fill" />;
 }
 
 /** The expandable task list shared by both surfaces. */
@@ -292,7 +290,7 @@ function StateGlyph({ phase }: { phase: ReviewPhase }) {
     case "error":
       return (
         <WarningCircleIcon
-          className="size-3 shrink-0 text-amber-500"
+          className="size-3 shrink-0 text-warning"
           weight="fill"
         />
       );
@@ -301,7 +299,7 @@ function StateGlyph({ phase }: { phase: ReviewPhase }) {
     default:
       return (
         <CheckCircleIcon
-          className="size-3 shrink-0 text-emerald-500"
+          className="size-3 shrink-0 text-success"
           weight="fill"
         />
       );

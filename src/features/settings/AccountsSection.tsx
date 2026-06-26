@@ -88,7 +88,7 @@ export function AccountsSection() {
           )}
 
           {!canSwitch && (
-            <p className="text-xs text-amber-600 dark:text-amber-400">
+            <p className="text-xs text-warning">
               Multiple accounts need GitHub CLI 2.40+ (you have {version}).
               Update with{" "}
               <button

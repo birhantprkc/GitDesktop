@@ -274,7 +274,7 @@ export function BranchRulesDialog({
                         <span
                           className={
                             testMatches
-                              ? "shrink-0 text-xs text-green-600 dark:text-green-400"
+                              ? "shrink-0 text-xs text-success"
                               : "shrink-0 text-xs text-destructive"
                           }
                         >

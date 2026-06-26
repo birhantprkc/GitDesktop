@@ -106,11 +106,7 @@ export const KeyboardSection = withForm({
             unbinds. Unbound actions stay available in the command palette.
             Changes apply when you save.
           </p>
-          {note && (
-            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              {note}
-            </p>
-          )}
+          {note && <p className="mt-1 text-xs text-warning">{note}</p>}
           {/* Announce recording state + notes to screen readers. */}
           <span role="status" aria-live="assertive" className="sr-only">
             {recordingId

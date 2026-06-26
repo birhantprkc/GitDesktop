@@ -78,6 +78,11 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
           size="xs"
           className="ml-auto"
           disabled={!ghReady}
+          title={
+            ghReady
+              ? "Run a workflow"
+              : "Sign in with GitHub CLI to run workflows"
+          }
           onClick={() => setRunOpen(true)}
         >
           <PlayIcon data-icon="inline-start" />
@@ -88,6 +93,9 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
           size="icon-sm"
           aria-label="Refresh runs"
           disabled={!ghReady || runs.isFetching}
+          title={
+            ghReady ? "Refresh runs" : "Sign in with GitHub CLI to load runs"
+          }
           onClick={() => runs.refetch()}
         >
           <ArrowClockwiseIcon

@@ -235,7 +235,7 @@ export function HooksDialog({
                   >
                     <span className="truncate font-mono">{e.name}</span>
                     {e.state === "active" && (
-                      <span className="shrink-0 text-[10px] text-green-600 dark:text-green-400">
+                      <span className="shrink-0 text-[10px] text-success">
                         Active
                       </span>
                     )}
@@ -293,7 +293,7 @@ export function HooksDialog({
                     </div>
                   </div>
                   {noShebang && (
-                    <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
+                    <p className="mt-1.5 text-xs text-warning">
                       No shebang line (e.g.{" "}
                       <span className="font-mono">#!/bin/sh</span>) — git may
                       not run this hook.

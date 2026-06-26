@@ -264,13 +264,13 @@ export function PrReviewPanel({
           </Combobox>
         </div>
         {needsKey && !keyPreview.data && (
-          <p className="text-xs text-amber-600 dark:text-amber-400">
+          <p className="text-xs text-warning">
             No {PROVIDER_LABELS[provider]} API key saved — add one in Settings
             to run a review.
           </p>
         )}
         {cliKind && cliDetect.data && !cliDetect.data.found && (
-          <p className="text-xs text-amber-600 dark:text-amber-400">
+          <p className="text-xs text-warning">
             {PROVIDER_LABELS[provider]} not found — install it or set its path
             in Settings.
           </p>
@@ -278,7 +278,7 @@ export function PrReviewPanel({
         {cliKind &&
           cliDetect.data?.found &&
           cliDetect.data.authed === "notAuthed" && (
-            <p className="text-xs text-amber-600 dark:text-amber-400">
+            <p className="text-xs text-warning">
               {PROVIDER_LABELS[provider]} is installed but not signed in — run{" "}
               <code className="font-mono">
                 {cliKind === "copilot"
@@ -432,7 +432,7 @@ export function PrReviewPanel({
           {deltaState &&
             DELTA_NOTE[deltaState] &&
             (text.trim() || generating) && (
-              <p className="mb-3 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+              <p className="mb-3 flex items-center gap-1.5 text-xs text-warning">
                 <WarningIcon className="size-3.5 shrink-0" />
                 {DELTA_NOTE[deltaState]}
               </p>
