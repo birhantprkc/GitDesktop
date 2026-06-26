@@ -33,8 +33,10 @@
         { "url": "https://eu.i.posthog.com/*" },
         { "url": "https://eu-assets.i.posthog.com/*" },
         { "url": "https://registry.npmjs.org/*" },
+        { "url": "https://api.npmjs.org/*" },
         { "url": "https://crates.io/*" },
-        { "url": "https://pypi.org/*" }
+        { "url": "https://pypi.org/*" },
+        { "url": "https://registry.modelcontextprotocol.io/*" }
       ]
     }
   ]

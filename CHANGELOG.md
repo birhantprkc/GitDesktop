@@ -18,7 +18,12 @@ commit list.
   — and a new **MCP** picker in the agent composer opts a session into the ones you
   choose. A Claude session passes *only* the servers you picked, in strict mode, so a run
   never inherits other MCP servers on your machine; with no servers registered, nothing
-  changes. Already have servers set up? **Import** pulls them in from the open repo's
+  changes. Don't have any yet? **Browse** opens the official Model Context Protocol
+  registry right in the panel — search it and add a server in a click. Each result shows
+  signals to **vet a server before adding it**: GitHub **stars** and activity, weekly **npm
+  installs**, deprecation status, the source repo, and — expanded — exactly **what it runs
+  or connects to** and which secrets it needs. Added servers still land disabled for review.
+  Already have servers set up? **Import** pulls them in from the open repo's
   `.mcp.json` or your global Claude config — reviewed, started disabled, with any secret
   values moved to your keychain (the source files aren't touched). Each server is **scoped
   Global or to a specific repo** (import sets this from where it came from), so a repo's

@@ -26,6 +26,7 @@ import { COLD_START } from "@/lib/test-mode";
 function App() {
   const view = useUiStore((s) => s.view);
   const openSettings = useUiStore((s) => s.openSettings);
+  const openMcpBrowse = useUiStore((s) => s.openMcpBrowse);
   const openHelp = useUiStore((s) => s.openHelp);
   const gitInstalled = useGitInstalled();
   const queryClient = useQueryClient();
@@ -114,6 +115,7 @@ function App() {
     () => openSettings("mcp-servers"),
     !settings.data?.hideAi,
   );
+  useHotkeyAction("browse-mcp-registry", openMcpBrowse, !settings.data?.hideAi);
   useHotkeyAction("show-help", openHelp);
   useHotkeyAction("show-shortcuts", () => setShortcutsOpen(true));
   useHotkeyAction("command-palette", () => setPaletteOpen(true));

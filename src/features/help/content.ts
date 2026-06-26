@@ -487,6 +487,13 @@ to the agent in strict mode, so a run never inherits other MCP servers on your m
 The selection is fixed when the session starts. (Today this covers **Claude** sessions on
 the **host**; the other agents and container sessions are on the way.)
 
+New to MCP? **Browse** opens the official Model Context Protocol registry right in that
+panel — search it and add a server in a click; it arrives **disabled** for you to review
+and enable. You can also reach it from the command palette (*Browse MCP registry*). Each
+result carries signals to vet a server first — **GitHub stars** and last-updated, weekly
+**npm installs**, deprecation status, and (when you expand it) the source repo plus exactly
+**what it runs or connects to** and which secrets it needs.
+
 Already have servers configured? Use **Import** in that panel to pull them in from the
 open repo's \`.mcp.json\` or your global Claude config — you pick which ones, they arrive
 **disabled** for you to review, and any secret-looking values are moved to your keychain.

@@ -59,8 +59,10 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   `stdio` or remote HTTP, with secrets kept in your **OS keychain**) under
   **Settings → MCP servers**, then opt a session into the ones you want from the
   composer's **MCP** picker. A Claude session passes *only* the servers you picked,
-  in strict mode, so it never inherits other MCP servers on your machine. (More
-  agents and container sessions are on the way.)
+  in strict mode, so it never inherits other MCP servers on your machine. Find new
+  servers by **Browse**-ing the official MCP registry in-app — with GitHub stars, weekly
+  installs, and exactly what each one runs shown so you can vet before adding — or
+  **Import** ones you've already configured. (More agents and container sessions are on the way.)
 - **Run commands without leaving the app** — every agent session has an integrated
   terminal: a real shell in a resizable bottom dock, toggled with `Ctrl`/`⌘`+`J`. For a
   container session it runs *inside* the session's container — you pick which dev-server

@@ -105,6 +105,10 @@ interface UiState {
   /** Settings section to jump to when opening Settings; null = leave as-is.
    *  Consumed (and cleared) by SettingsScreen once applied. */
   settingsTarget: SettingsTarget | null;
+  /** Whether the MCP-registry browser (in Settings → MCP servers) is open. Held
+   *  in the store so the command palette can deep-link to it in one atomic
+   *  navigation, regardless of whether the panel is mounted yet. */
+  mcpBrowseOpen: boolean;
   repoPath: string | null;
   repoName: string | null;
   repoTab: RepoTab;
@@ -165,6 +169,9 @@ interface UiState {
   }) => void;
   openSettings: (target?: SettingsTarget) => void;
   clearSettingsTarget: () => void;
+  /** Navigate to Settings → MCP servers and open the registry browser, atomically. */
+  openMcpBrowse: () => void;
+  setMcpBrowseOpen: (open: boolean) => void;
   closeSettings: () => void;
   openHelp: () => void;
   closeHelp: () => void;
@@ -246,6 +253,7 @@ export const useUiStore = create<UiState>()((set, get) => {
     view: "welcome",
     previousView: "welcome",
     settingsTarget: null,
+    mcpBrowseOpen: false,
     repoPath: null,
     repoName: null,
     repoTab: "changes",
@@ -382,6 +390,20 @@ export const useUiStore = create<UiState>()((set, get) => {
         });
       }),
     clearSettingsTarget: () => set({ settingsTarget: null }),
+    // One atomic update (inside the view transition) so the browse flag isn't
+    // clobbered by the deferred set the transition schedules.
+    openMcpBrowse: () =>
+      startViewTransition(() => {
+        const { view } = get();
+        set({
+          view: "settings",
+          settingsTarget: "mcp-servers",
+          mcpBrowseOpen: true,
+          previousView:
+            view === "settings" || view === "help" ? get().previousView : view,
+        });
+      }),
+    setMcpBrowseOpen: (open) => set({ mcpBrowseOpen: open }),
     closeSettings: () =>
       startViewTransition(() => set({ view: get().previousView })),
     openHelp: () =>

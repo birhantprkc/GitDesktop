@@ -57,6 +57,12 @@ export const ACTIONS = [
     category: "Application",
     defaultBinding: null,
   },
+  {
+    id: "browse-mcp-registry",
+    label: "Browse MCP registry",
+    category: "Application",
+    defaultBinding: null,
+  },
 
   // Navigation
   {

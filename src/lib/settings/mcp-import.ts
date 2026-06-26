@@ -27,8 +27,10 @@ export const discoverMcpServers = (repoPath: string | null) =>
   });
 
 /** Env/header names that almost certainly hold a secret, so on import their
- *  values go to the keychain instead of settings.json. */
-const SECRET_KEY_RE =
+ *  values go to the keychain instead of settings.json. Shared with the registry
+ *  browser, which applies the same heuristic on top of the registry's own
+ *  `isSecret` flag. */
+export const SECRET_KEY_RE =
   /key|token|secret|password|passwd|auth|credential|bearer/i;
 
 /** Coerce a source name to the registry's charset (letters/digits/`-`/`_`, must

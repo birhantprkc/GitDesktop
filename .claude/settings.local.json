@@ -9,7 +9,9 @@
       "Bash(cargo check *)",
       "Bash(pnpm build *)",
       "Bash(pnpm lint *)",
-      "Bash(git --no-pager diff --name-only)"
+      "Bash(git --no-pager diff --name-only)",
+      "PowerShell(pnpm build 2>&1)",
+      "PowerShell(pnpm lint 2>&1)"
     ]
   },
   "enabledMcpjsonServers": [

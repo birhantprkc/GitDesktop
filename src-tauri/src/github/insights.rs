@@ -1,7 +1,9 @@
+use std::collections::HashSet;
+
 use serde::Serialize;
 
 use crate::error::AppResult;
-use crate::github::runner::{run_gh_raw, GhOutput, GH_TIMEOUT};
+use crate::github::runner::{run_gh_raw, GhOutput, GH_NETWORK_TIMEOUT, GH_TIMEOUT};
 
 /// Community-health profile + social counts for the Insights tab. Read-only and
 /// tolerant: a repo without a GitHub remote (or with the dependency/community
@@ -75,6 +77,107 @@ pub async fn gh_community_insights(repo_path: String) -> AppResult<CommunityInsi
     }
 
     Ok(out)
+}
+
+// ── Repo social stats by explicit owner/name (MCP registry browser) ──────────
+// Unlike `gh_community_insights` (which resolves {owner}/{repo} from a local
+// repo's remote), this takes explicit "owner/name" refs straight from the MCP
+// registry's `repository.url`, and fetches a whole page of them in ONE GraphQL
+// call. Tolerant: an unresolved/private repo returns null for its alias while
+// the rest still resolve, so a single bad ref never sinks the batch.
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoStat {
+    /// Canonical "owner/name" from GitHub (the frontend matches case-insensitively).
+    pub name_with_owner: String,
+    pub stars: u32,
+    pub forks: u32,
+    /// Last push, ISO-8601 — a freshness/maintenance signal.
+    pub pushed_at: Option<String>,
+    pub archived: bool,
+    /// SPDX id, when GitHub detected a license (NOASSERTION/none → null).
+    pub license: Option<String>,
+}
+
+/// True for the GitHub owner/repo character set, so a ref is safe to inline in
+/// the GraphQL query string (no injection, no quoting needed).
+fn safe_repo_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Batched repo social stats for the given "owner/name" refs. Returns only the
+/// repos that resolved (caller treats a missing one as "no stats"). Capped at
+/// 100 refs so one query can't blow the GraphQL node budget.
+#[tauri::command]
+pub async fn gh_repo_stats(repos: Vec<String>) -> AppResult<Vec<RepoStat>> {
+    let mut seen = HashSet::new();
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for r in &repos {
+        let Some((owner, name)) = r.trim().split_once('/') else {
+            continue;
+        };
+        let name = name.trim_end_matches(".git");
+        if safe_repo_token(owner)
+            && safe_repo_token(name)
+            && seen.insert((owner.to_lowercase(), name.to_lowercase()))
+        {
+            pairs.push((owner.to_string(), name.to_string()));
+            if pairs.len() >= 100 {
+                break;
+            }
+        }
+    }
+    if pairs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut query = String::from("query{");
+    for (i, (owner, name)) in pairs.iter().enumerate() {
+        query.push_str(&format!(
+            "r{i}: repository(owner:\"{owner}\",name:\"{name}\"){{ nameWithOwner \
+             stargazerCount forkCount pushedAt isArchived licenseInfo{{spdxId}} }} "
+        ));
+    }
+    query.push('}');
+
+    // run_gh_raw (not run_gh): GitHub returns 200 with partial `data` plus an
+    // `errors` array for unresolved refs, but gh still exits non-zero — we want
+    // the partial data, so ignore the exit code and parse `data`.
+    let arg = format!("query={query}");
+    let out = run_gh_raw(
+        None,
+        &["api", "graphql", "-f", &arg],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+
+    let mut stats = Vec::new();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out.stdout_lossy()) {
+        if let Some(data) = v.get("data").and_then(|d| d.as_object()) {
+            for repo in data.values() {
+                let name_with_owner = repo["nameWithOwner"].as_str().unwrap_or("");
+                if name_with_owner.is_empty() {
+                    continue;
+                }
+                let license = repo["licenseInfo"]["spdxId"]
+                    .as_str()
+                    .filter(|s| !s.is_empty() && *s != "NOASSERTION")
+                    .map(str::to_string);
+                stats.push(RepoStat {
+                    name_with_owner: name_with_owner.to_string(),
+                    stars: repo["stargazerCount"].as_u64().unwrap_or(0) as u32,
+                    forks: repo["forkCount"].as_u64().unwrap_or(0) as u32,
+                    pushed_at: repo["pushedAt"].as_str().map(str::to_string),
+                    archived: repo["isArchived"].as_bool().unwrap_or(false),
+                    license,
+                });
+            }
+        }
+    }
+    Ok(stats)
 }
 
 // ── Traffic (Insights Phase 2) ───────────────────────────────────────────────
