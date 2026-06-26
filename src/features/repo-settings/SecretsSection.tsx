@@ -117,7 +117,19 @@ export function SecretsSection({
             <SelectContent>
               <SelectItem value={REPO_SCOPE}>Repository</SelectItem>
               {(envs.data ?? []).map((e) => (
-                <SelectItem key={e} value={e}>
+                <SelectItem
+                  key={e}
+                  value={e}
+                  // The dropdown is pinned to the narrow trigger width, so long
+                  // environment names clip. Surface the full name on hover, but
+                  // only when it's actually cut off. The clip happens at the
+                  // popup (overflow-x-hidden), not the inner span, so measure the
+                  // item itself — a span-level check wouldn't fire here.
+                  onMouseEnter={(ev) => {
+                    const el = ev.currentTarget;
+                    el.title = el.scrollWidth > el.clientWidth ? e : "";
+                  }}
+                >
                   <span className="block truncate">{e}</span>
                 </SelectItem>
               ))}

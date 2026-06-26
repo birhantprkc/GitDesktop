@@ -406,7 +406,7 @@ export function DangerZone({
   const repo = settings.data;
 
   return (
-    <div className="mt-6 space-y-3 rounded-md border border-destructive/40 p-3">
+    <div className="space-y-3 rounded-md border border-destructive/40 p-3">
       <h3 className="text-xs font-semibold text-destructive">Danger zone</h3>
       <RenameAction repoPath={repoPath} repo={repo} />
       <div className="border-t" />

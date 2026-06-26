@@ -8,6 +8,7 @@ import {
   PlusIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
+import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -34,7 +35,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { highlightJson } from "@/features/diff/shiki-highlighter";
 import { copyText } from "@/lib/clipboard";
-import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import {
   useCreateWebhook,
   useDeleteWebhook,
@@ -47,6 +47,8 @@ import {
   useWebhooks,
 } from "@/lib/git/queries";
 import type { HookDelivery, Webhook, WebhookInput } from "@/lib/git/types";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
+import { quickTransition } from "@/lib/motion";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -157,6 +159,7 @@ export function RepoSettingsDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [section, setSection] = useState<SectionId>("general");
+  const reduceMotion = useReducedMotion();
 
   // ArrowUp/ArrowDown move between rail items (roving tabindex), matching the
   // arrow-key navigation the Tabs primitive gave the old strip.
@@ -170,10 +173,10 @@ export function RepoSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* Fixed height so switching sections never resizes the dialog; the body
-          column scrolls (overflow-y-auto) so a long form / many webhooks stay
-          contained while the rail stays put. */}
-      <DialogContent className="flex h-[80vh] max-h-[85vh] flex-col sm:max-w-3xl">
+      {/* Fixed, calm height so switching sections never resizes the dialog; the
+          body column scrolls (overflow-y-auto) so a long form / many webhooks
+          stay contained while the rail stays put. Caps to 85vh on short screens. */}
+      <DialogContent className="flex h-150 max-h-[85vh] flex-col sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Repository settings</DialogTitle>
           <DialogDescription>
@@ -189,7 +192,7 @@ export function RepoSettingsDialog({
           >
             {SECTION_GROUPS.map((group) => (
               <div key={group.label} className="space-y-0.5">
-                <p className="px-2 pb-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+                <p className="px-2 pb-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                   {group.label}
                 </p>
                 {group.items.map((item) => (
@@ -212,33 +215,46 @@ export function RepoSettingsDialog({
             </div>
           </nav>
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto pr-1">
-            {section === "general" && (
-              <GeneralSettingsSection repoPath={repoPath} open={open} />
-            )}
-            {section === "access" && (
-              <CollaboratorsSection repoPath={repoPath} open={open} />
-            )}
-            {section === "rules" && (
-              <RulesetsSection repoPath={repoPath} open={open} />
-            )}
-            {section === "security" && (
-              <SecuritySection repoPath={repoPath} open={open} />
-            )}
-            {section === "pages" && (
-              <PagesSection repoPath={repoPath} open={open} />
-            )}
-            {section === "sponsor" && (
-              <FundingSection repoPath={repoPath} open={open} />
-            )}
-            {section === "secrets" && (
-              <SecretsSection repoPath={repoPath} open={open} />
-            )}
-            {section === "webhooks" && (
-              <WebhooksSection repoPath={repoPath} open={open} />
-            )}
-            {section === "danger" && (
-              <DangerZone repoPath={repoPath} open={open} />
-            )}
+            {/* Crossfade the body on section change so the swap reads as one
+                quiet refresh, not a hard cut. Opacity only (content is tall and
+                scrolls); instant under reduced motion. */}
+            <AnimatePresence mode="wait" initial={false}>
+              <m.div
+                key={section}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={reduceMotion ? { duration: 0 } : quickTransition}
+              >
+                {section === "general" && (
+                  <GeneralSettingsSection repoPath={repoPath} open={open} />
+                )}
+                {section === "access" && (
+                  <CollaboratorsSection repoPath={repoPath} open={open} />
+                )}
+                {section === "rules" && (
+                  <RulesetsSection repoPath={repoPath} open={open} />
+                )}
+                {section === "security" && (
+                  <SecuritySection repoPath={repoPath} open={open} />
+                )}
+                {section === "pages" && (
+                  <PagesSection repoPath={repoPath} open={open} />
+                )}
+                {section === "sponsor" && (
+                  <FundingSection repoPath={repoPath} open={open} />
+                )}
+                {section === "secrets" && (
+                  <SecretsSection repoPath={repoPath} open={open} />
+                )}
+                {section === "webhooks" && (
+                  <WebhooksSection repoPath={repoPath} open={open} />
+                )}
+                {section === "danger" && (
+                  <DangerZone repoPath={repoPath} open={open} />
+                )}
+              </m.div>
+            </AnimatePresence>
           </div>
         </div>
       </DialogContent>

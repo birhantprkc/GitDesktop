@@ -244,6 +244,13 @@ commit list.
 
 ### Changed
 
+- **Calmer repository settings.** The repository settings dialog moved from a wrapping
+  row of eight tabs to a vertical sidebar — grouped into Repository, Security,
+  Publishing, and Automation — matching the app's main Settings. The **Danger zone** is
+  now its own sidebar item instead of riding the bottom of the General tab, so delete /
+  transfer / visibility live behind a deliberate click rather than below your topics.
+  Arrow keys move between sections, and the panel crossfades as you switch (respecting
+  "reduce motion").
 - **Configure and rebuild the agent container image.** Settings → AI now lets you
   pick the image's **Node version** (default 24 LTS, or 22 / 20) and **which agents**
   to install (Claude / Codex), and adds **Rebuild** — which pulls a fresh base image
