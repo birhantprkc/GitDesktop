@@ -9,9 +9,9 @@
 //! shapes differ) and container delivery are later tiers; `build_claude_config`
 //! is the only adapter wired today.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::error::{AppError, AppResult};
@@ -191,4 +191,69 @@ pub fn cleanup_host_config(app: &tauri::AppHandle, session_id: &str) {
     if let Ok(dir) = config_root(app) {
         let _ = std::fs::remove_file(dir.join(format!("{session_id}.json")));
     }
+}
+
+// --- discovery (import, not inherit) -----------------------------------------
+//
+// Reads the MCP servers the user has ALREADY configured for Claude — the open
+// repo's `.mcp.json` and the global `~/.claude.json` — so the Settings panel can
+// offer them as a reviewed import into the managed registry. This is the only
+// place GitDesktop reads those files; sessions never inherit them (that's what
+// `--strict-mcp-config` enforces). Read-only: the source files are never written.
+
+/// One server found in an existing config, with where it came from. `config` is
+/// the raw server object (Claude `.mcp.json` shape) for the frontend to convert.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredServer {
+    /// "repo" (the open repo's `.mcp.json`) or "global" (`~/.claude.json`).
+    origin: String,
+    name: String,
+    config: Value,
+}
+
+/// `mcpServers` map from a config file, pushing each entry. Best-effort: a
+/// missing / oversized / malformed file is silently skipped (it just yields no
+/// imports). The size guard keeps a large `~/.claude.json` (it also holds chat
+/// history) from being slurped whole.
+fn collect_discovered(path: &Path, origin: &str, out: &mut Vec<DiscoveredServer>) {
+    const MAX_BYTES: u64 = 16 * 1024 * 1024;
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() <= MAX_BYTES => {}
+        _ => return,
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(json) = serde_json::from_str::<Value>(&text) else {
+        return;
+    };
+    if let Some(servers) = json.get("mcpServers").and_then(|v| v.as_object()) {
+        for (name, config) in servers {
+            out.push(DiscoveredServer {
+                origin: origin.into(),
+                name: name.clone(),
+                config: config.clone(),
+            });
+        }
+    }
+}
+
+/// Discover MCP servers already configured for Claude, for the Settings import
+/// flow: the open repo's `.mcp.json` (when a repo is open) and the global
+/// `~/.claude.json`. Read-only; returns an empty list when neither exists.
+#[tauri::command]
+pub async fn discover_mcp_servers(
+    app: tauri::AppHandle,
+    repo_path: Option<String>,
+) -> AppResult<Vec<DiscoveredServer>> {
+    use tauri::Manager;
+    let mut out = Vec::new();
+    if let Some(rp) = repo_path.as_deref().filter(|s| !s.is_empty()) {
+        collect_discovered(&Path::new(rp).join(".mcp.json"), "repo", &mut out);
+    }
+    if let Ok(home) = app.path().home_dir() {
+        collect_discovered(&home.join(".claude.json"), "global", &mut out);
+    }
+    Ok(out)
 }

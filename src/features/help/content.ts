@@ -487,6 +487,11 @@ to the agent in strict mode, so a run never inherits other MCP servers on your m
 The selection is fixed when the session starts. (Today this covers **Claude** sessions on
 the **host**; the other agents and container sessions are on the way.)
 
+Already have servers configured? Use **Import** in that panel to pull them in from the
+open repo's \`.mcp.json\` or your global Claude config — you pick which ones, they arrive
+**disabled** for you to review, and any secret-looking values are moved to your keychain.
+Nothing is inherited automatically; the source files are left untouched.
+
 ## Run several ways at once (Best-of-N)
 
 **Best-of-N** runs the same task across 2–5 arms, each with its own agent, model, and

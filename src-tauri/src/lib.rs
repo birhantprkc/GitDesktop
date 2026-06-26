@@ -342,6 +342,7 @@ pub fn run() {
             secrets::set_mcp_secret,
             secrets::delete_mcp_secret,
             secrets::mcp_secret_exists,
+            mcp::discover_mcp_servers,
             instructions::read_repo_instructions,
             instructions::read_repo_ai_ignore,
             instructions::read_repo_branch_rules,

@@ -18,8 +18,10 @@ commit list.
   — and a new **MCP** picker in the agent composer opts a session into the ones you
   choose. A Claude session passes *only* the servers you picked, in strict mode, so a run
   never inherits other MCP servers on your machine; with no servers registered, nothing
-  changes. (Codex/Copilot/opencode and container sessions are coming next;
-  [design](docs/mcp-agent-sessions-tier1.md).)
+  changes. Already have servers set up? **Import** pulls them in from the open repo's
+  `.mcp.json` or your global Claude config — reviewed, started disabled, with any secret
+  values moved to your keychain (the source files aren't touched). (Codex/Copilot/opencode
+  and container sessions are coming next; [design](docs/mcp-agent-sessions-tier1.md).)
 
 - **GitHub Pages config, in the app.** A new **Pages** tab in repository settings: enable
   Pages from a branch + folder or via **GitHub Actions**, see the live URL and build
