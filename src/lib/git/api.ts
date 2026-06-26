@@ -1516,3 +1516,23 @@ export const secretExists = (provider: string) =>
   COLD_START
     ? Promise.resolve(coldStartGetSecret(provider) !== null)
     : invoke<boolean>("secret_exists", { provider });
+
+// MCP server secrets are keyed per registered server id + entry (env/header)
+// name; in cold-start mode they reuse the isolated store via a combined key.
+const mcpRef = (serverId: string, key: string) =>
+  `mcp-server/${serverId}/${key}`;
+
+export const setMcpSecret = (serverId: string, key: string, value: string) =>
+  COLD_START
+    ? Promise.resolve(coldStartSetSecret(mcpRef(serverId, key), value))
+    : invoke<void>("set_mcp_secret", { serverId, key, value });
+
+export const deleteMcpSecret = (serverId: string, key: string) =>
+  COLD_START
+    ? Promise.resolve(coldStartDeleteSecret(mcpRef(serverId, key)))
+    : invoke<void>("delete_mcp_secret", { serverId, key });
+
+export const mcpSecretExists = (serverId: string, key: string) =>
+  COLD_START
+    ? Promise.resolve(coldStartGetSecret(mcpRef(serverId, key)) !== null)
+    : invoke<boolean>("mcp_secret_exists", { serverId, key });

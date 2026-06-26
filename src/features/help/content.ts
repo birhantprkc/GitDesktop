@@ -473,7 +473,19 @@ In the composer you can:
 - Run a **slash command** — built-ins like \`/review\`, \`/test\`, \`/fix\`, \`/explain\`,
   and \`/refactor\`, plus the selected CLI's own commands (such as \`/plan\` with Copilot
   or Codex) and your project's custom commands and **skills**.
+- Opt into **MCP servers** for the session from the **MCP** picker (appears once you've
+  registered some — see below).
 - Continue the conversation across turns; **↑ / ↓** recall previous prompts.
+
+## MCP servers
+
+Register **Model Context Protocol** servers under **Settings → MCP servers** — local
+(\`stdio\`) processes or remote (HTTP) endpoints, with environment variables / headers and
+**secrets kept in your OS keychain**, never in your settings file. Each session opts into
+the ones you choose from the composer's **MCP** picker, and GitDesktop passes *only* those
+to the agent in strict mode, so a run never inherits other MCP servers on your machine.
+The selection is fixed when the session starts. (Today this covers **Claude** sessions on
+the **host**; the other agents and container sessions are on the way.)
 
 ## Run several ways at once (Best-of-N)
 
@@ -626,6 +638,8 @@ Open **Settings** from the header gear (or {{kbd:open-settings}}). Sections:
 {{ai}}- **AI** — providers, models, keys, instructions, agent-session isolation
   (worktree / container), and the container image.
 - **Slash commands** — manage built-in and custom agent commands.
+- **MCP servers** — register Model Context Protocol servers (secrets in your OS keychain)
+  that agent sessions can opt into.
 - **Automations** — AI actions that run on triggers.
 {{/ai}}- **Notifications** — opt into OS notifications (sent only when the window isn't
   focused) for PR activity, CI checks, reviews on your PRs, and workflow runs finishing.

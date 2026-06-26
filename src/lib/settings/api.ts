@@ -66,6 +66,52 @@ export interface CustomCommand {
   prompt: string;
 }
 
+/** One ordered environment variable / request header entry in an MCP server
+ *  definition. Secret-bearing entries keep their `value` empty here (the real
+ *  value lives in the OS keychain — see `McpServer.secretKeys`). */
+export interface McpKeyValue {
+  key: string;
+  value: string;
+}
+
+/**
+ * A managed MCP (Model Context Protocol) server the user has registered. Agent
+ * sessions can opt into a subset of these; GitDesktop passes *exactly* the
+ * opted-in servers to the CLI in strict / only-these mode, so a run never
+ * silently inherits whatever MCP servers happen to be on the machine.
+ *
+ * The CLIs are the MCP *hosts* — GitDesktop only generates their config. Secret
+ * values (tokens in env/headers) are stored in the OS keychain keyed by
+ * `mcp-server/<id>/<entry-key>` and never written to settings.json; `secretKeys`
+ * lists which env (stdio) / header (http) names are secret so they're resolved
+ * from the keychain at session-launch time.
+ */
+export interface McpServer {
+  /** Stable id (uuid) — list key, per-session opt-in reference, keychain namespace. */
+  id: string;
+  /** Display name; also the server key in the generated config. Letters, digits,
+   *  `-`, `_` (no spaces); unique across the registry. */
+  name: string;
+  /** Optional human description shown in the list and the composer picker. */
+  description: string;
+  /** Offered to new sessions by default when true. */
+  enabled: boolean;
+  /** "stdio" = a local subprocess; "http" = a remote streamable-HTTP server. */
+  transport: "stdio" | "http";
+  /** Executable to launch (stdio only), e.g. `npx`. */
+  command: string;
+  /** Arguments passed to `command` (stdio only). */
+  args: string[];
+  /** Non-secret environment variables (stdio only). */
+  env: McpKeyValue[];
+  /** Server URL (http only). */
+  url: string;
+  /** Non-secret request headers (http only). */
+  headers: McpKeyValue[];
+  /** env (stdio) / header (http) names whose values live in the OS keychain. */
+  secretKeys: string[];
+}
+
 export interface NotificationSettings {
   /** Automation results (review posted / ready / failed). */
   automations: boolean;
@@ -148,6 +194,8 @@ export interface AppSettings {
   customLanguages: CustomLanguage[];
   /** User-defined agent slash commands for the agent composer's `/` menu. */
   customCommands: CustomCommand[];
+  /** Managed MCP servers an agent session can opt into. Empty = MCP stays off. */
+  mcpServers: McpServer[];
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
 }
@@ -198,6 +246,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   syntaxMap: {},
   customLanguages: [],
   customCommands: [],
+  mcpServers: [],
   recentRepos: [],
   diffViewMode: "unified",
 };

@@ -356,7 +356,12 @@ pub async fn agent_detect(kind: AgentKind, bin_path: Option<String>) -> AppResul
 /// false`) exposes no tools at all; Tier 2 exposes only read tools so the agent
 /// can read surrounding code for context but still can't edit, run commands, or
 /// hang waiting on a permission prompt.
-fn claude_review_args(model: &str, system_prompt: &str, repo_aware: bool) -> Vec<String> {
+fn claude_review_args(
+    model: &str,
+    system_prompt: &str,
+    repo_aware: bool,
+    mcp_config: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "-p".into(),
         "--system-prompt".into(),
@@ -371,9 +376,16 @@ fn claude_review_args(model: &str, system_prompt: &str, repo_aware: bool) -> Vec
         } else {
             String::new()
         },
-        "--strict-mcp-config".into(), // no MCP servers (also trims token cost)
+        // `--strict-mcp-config` ignores every OTHER MCP source (global ~/.claude,
+        // the repo's .mcp.json). With no `--mcp-config` that means zero servers
+        // (also trims token cost); with one it means EXACTLY our file's servers.
+        "--strict-mcp-config".into(),
         "--no-session-persistence".into(),
     ];
+    if let Some(path) = mcp_config {
+        args.push("--mcp-config".into());
+        args.push(path.into());
+    }
     if !model.trim().is_empty() {
         args.push("--model".into());
         args.push(model.into());
@@ -398,10 +410,23 @@ fn claude_session_args(
     session_id: &str,
     resume: bool,
     read_only: bool,
+    mcp_config: Option<&str>,
+    mcp_tools: &[String],
 ) -> Vec<String> {
     // Read-only (a Plan conversation): only read tools and no bypass — there's
     // nothing to permit, and writes are impossible by construction (the hard
     // guarantee, same as a review). Write sessions get the full toolset + bypass.
+    // `--tools` is a strict allowlist, so any opted-in MCP servers' tools
+    // (`mcp__<server>`) must be appended or the loaded server stays uncallable.
+    let mut tools = if read_only {
+        "Read,Grep,Glob".to_string()
+    } else {
+        "Read,Grep,Glob,Edit,Write,Bash".to_string()
+    };
+    for pattern in mcp_tools {
+        tools.push(',');
+        tools.push_str(pattern);
+    }
     let mut args = vec![
         "-p".into(),
         "--output-format".into(),
@@ -409,13 +434,15 @@ fn claude_session_args(
         "--include-partial-messages".into(),
         "--verbose".into(),
         "--tools".into(),
-        if read_only {
-            "Read,Grep,Glob".into()
-        } else {
-            "Read,Grep,Glob,Edit,Write,Bash".into()
-        },
+        tools,
+        // Strict = ignore every other MCP source; pair with `--mcp-config` below
+        // to allow EXACTLY the session's opted-in servers, nothing inherited.
         "--strict-mcp-config".into(),
     ];
+    if let Some(path) = mcp_config {
+        args.push("--mcp-config".into());
+        args.push(path.into());
+    }
     if !read_only {
         args.push("--permission-mode".into());
         args.push("bypassPermissions".into());
@@ -1253,7 +1280,10 @@ pub async fn agent_review(
                 Some(kw) => format!("{user_prompt}\n\n{kw}"),
                 None => user_prompt,
             };
-            (claude_review_args(&model, &system_prompt, repo_aware), prompt)
+            (
+                claude_review_args(&model, &system_prompt, repo_aware, None),
+                prompt,
+            )
         }
         AgentKind::Codex => (
             codex_review_args(&model, &repo_path, &effort),
@@ -1342,6 +1372,9 @@ pub async fn agent_session(
     // sessionID), so a *host* session resumes the right conversation; None on turn
     // 1 / Claude / Copilot / container.
     native_session_id: Option<String>,
+    // The session's opted-in MCP servers (resolved from the settings registry by
+    // the frontend). None/empty = MCP stays off. Tier 1: Claude on the host only.
+    mcp_servers: Option<Vec<crate::mcp::McpServerSpec>>,
     on_event: Channel<ReviewEvent>,
 ) -> AppResult<()> {
     // Strict: reject an unknown agent rather than silently coercing it.
@@ -1364,6 +1397,38 @@ pub async fn agent_session(
     };
     let container = isolation.as_deref() == Some("container");
 
+    // Resolve the session's opted-in MCP servers into a generated config file,
+    // passed to the CLI in strict / only-these mode. Tier 1 wires Claude on the
+    // host; the composer gates selection to that case, so a non-Claude or
+    // container session arriving here with servers is an error, not a silent drop.
+    let mcp_specs = mcp_servers.unwrap_or_default();
+    // `mcp__<server>` allowlist entries so the opted-in servers' tools are usable:
+    // loading them via `--mcp-config` does NOT admit them past `--tools` (proven by
+    // live testing — the server connected but its tools stayed uncallable without this).
+    let mcp_tools = crate::mcp::tool_allow_patterns(&mcp_specs);
+    let mcp_config_path: Option<String> = if mcp_specs.is_empty() {
+        None
+    } else {
+        match kind {
+            AgentKind::Claude if !container => {
+                crate::mcp::write_host_config(&app, &session_id, &mcp_specs)?
+                    .map(|p| p.to_string_lossy().into_owned())
+            }
+            AgentKind::Claude => {
+                return Err(AppError::Command(
+                    "MCP servers aren't available for container sessions yet — \
+                     they run on host sessions for now."
+                        .into(),
+                ));
+            }
+            _ => {
+                return Err(AppError::Command(
+                    "MCP servers are only supported for Claude sessions right now.".into(),
+                ));
+            }
+        }
+    };
+
     // The inner CLI invocation + the stdin for this turn. Claude carries the
     // system prompt as a flag; Codex has none, so it's prepended on stdin (turn
     // 1 only — a resumed Codex session already has it in context).
@@ -1382,6 +1447,8 @@ pub async fn agent_session(
                     &session_id,
                     resume,
                     read_only,
+                    mcp_config_path.as_deref(),
+                    &mcp_tools,
                 ),
                 prompt,
             )

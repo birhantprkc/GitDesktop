@@ -422,6 +422,8 @@ pub async fn agent_sandbox_cleanup(app: AppHandle, session_id: String) -> AppRes
     if let Ok(dir) = agent_home_root(&app).map(|r| r.join(&session_id)) {
         let _ = std::fs::remove_dir_all(dir);
     }
+    // Drop the generated MCP config too (it may hold resolved secrets).
+    crate::mcp::cleanup_host_config(&app, &session_id);
     if let Some((bin, _)) = detect_runtime().await {
         let name = container_name(&session_id);
         let _ = run_capture(&bin, &["rm", "-f", &name], DETECT_TIMEOUT).await;

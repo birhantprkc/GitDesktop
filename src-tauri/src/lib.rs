@@ -9,6 +9,7 @@ mod github;
 mod health;
 mod hooks;
 mod instructions;
+mod mcp;
 mod pty;
 mod secrets;
 mod sessions;
@@ -338,6 +339,9 @@ pub fn run() {
             secrets::get_secret,
             secrets::delete_secret,
             secrets::secret_exists,
+            secrets::set_mcp_secret,
+            secrets::delete_mcp_secret,
+            secrets::mcp_secret_exists,
             instructions::read_repo_instructions,
             instructions::read_repo_ai_ignore,
             instructions::read_repo_branch_rules,

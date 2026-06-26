@@ -27,6 +27,7 @@ export const createTranscript = (session: {
   isolation: string;
   agent: string;
   effort: string;
+  mcpServers?: string[];
 }) => invoke<void>("transcript_create", { session });
 
 /** Record the start of a turn (`seq` = its index in the session). */

@@ -55,6 +55,12 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   **Agent Skills** (project *and* global, including the shared `.agents/skills`) —
   plus `@file` mentions, a model/reasoning-effort picker, and terminal-style
   prompt history.
+- **Bring your own MCP servers** — register Model Context Protocol servers (local
+  `stdio` or remote HTTP, with secrets kept in your **OS keychain**) under
+  **Settings → MCP servers**, then opt a session into the ones you want from the
+  composer's **MCP** picker. A Claude session passes *only* the servers you picked,
+  in strict mode, so it never inherits other MCP servers on your machine. (More
+  agents and container sessions are on the way.)
 - **Run commands without leaving the app** — every agent session has an integrated
   terminal: a real shell in a resizable bottom dock, toggled with `Ctrl`/`⌘`+`J`. For a
   container session it runs *inside* the session's container — you pick which dev-server

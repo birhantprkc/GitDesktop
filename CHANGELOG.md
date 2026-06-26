@@ -12,6 +12,15 @@ commit list.
 
 ### Added
 
+- **MCP servers for agent sessions (Claude, host).** A new **Settings → MCP servers**
+  panel lets you register Model Context Protocol servers — local (stdio) or remote
+  (HTTP), with environment variables / headers and **secrets kept in your OS keychain**
+  — and a new **MCP** picker in the agent composer opts a session into the ones you
+  choose. A Claude session passes *only* the servers you picked, in strict mode, so a run
+  never inherits other MCP servers on your machine; with no servers registered, nothing
+  changes. (Codex/Copilot/opencode and container sessions are coming next;
+  [design](docs/mcp-agent-sessions-tier1.md).)
+
 - **GitHub Pages config, in the app.** A new **Pages** tab in repository settings: enable
   Pages from a branch + folder or via **GitHub Actions**, see the live URL and build
   status, change the source, set a **custom domain**, **enforce HTTPS**, and disable the

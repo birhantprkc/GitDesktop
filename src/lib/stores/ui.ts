@@ -37,6 +37,7 @@ const CREATE_TAB: Record<CreateKind, RepoTab> = {
 export type SettingsTarget =
   | "general"
   | "ai"
+  | "mcp-servers"
   | "automations"
   | "notifications"
   | "keyboard"

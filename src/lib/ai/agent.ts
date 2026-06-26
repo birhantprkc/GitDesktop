@@ -1,4 +1,5 @@
 import { Channel } from "@tauri-apps/api/core";
+import type { McpServer } from "@/lib/settings/api";
 import { invoke } from "@/lib/tauri/invoke";
 import type { AiProviderId } from "./types";
 
@@ -116,6 +117,10 @@ export interface AgentSessionArgs {
    *  back on resume so a host session continues the right conversation (Codex
    *  thread / opencode session); null otherwise. */
   nativeSessionId: string | null;
+  /** The session's opted-in MCP servers (resolved registry definitions, secrets
+   *  excluded — the backend pulls those from the keychain). Omitted = no MCP.
+   *  Tier 1: honored for Claude host sessions only. */
+  mcpServers?: McpServer[];
   onEvent: (event: ReviewEvent) => void;
 }
 
@@ -144,6 +149,7 @@ export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
     readOnly: args.readOnly,
     isolation: args.isolation,
     nativeSessionId: args.nativeSessionId,
+    mcpServers: args.mcpServers,
     onEvent: channel,
   });
 }

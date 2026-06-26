@@ -58,3 +58,65 @@ pub async fn delete_secret(provider: String) -> AppResult<()> {
 pub async fn secret_exists(provider: String) -> AppResult<bool> {
     Ok(get_secret(provider).await?.is_some())
 }
+
+// --- MCP server secrets ---------------------------------------------------
+//
+// MCP env/header secrets are namespaced per registered server + entry key, so
+// they need their own keychain accounts separate from the fixed AI-provider
+// allowlist above. The account string is `mcp-server/<id>/<key>`; both parts
+// are validated to a safe character set so a malformed id/key can't smuggle an
+// unexpected account name into the keychain.
+
+fn safe_token(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+fn mcp_entry_for(server_id: &str, key: &str) -> AppResult<keyring::Entry> {
+    if !safe_token(server_id) || !safe_token(key) {
+        return Err(AppError::InvalidArgument(
+            "invalid MCP secret reference".into(),
+        ));
+    }
+    keyring::Entry::new(SERVICE, &format!("mcp-server/{server_id}/{key}"))
+        .map_err(|e| AppError::Keyring(e.to_string()))
+}
+
+/// Read an MCP secret synchronously (no async bridge), for config generation at
+/// session-launch time. `None` when no secret is stored for that ref.
+pub fn read_mcp_secret(server_id: &str, key: &str) -> AppResult<Option<String>> {
+    match mcp_entry_for(server_id, key)?.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(AppError::Keyring(e.to_string())),
+    }
+}
+
+#[tauri::command]
+pub async fn set_mcp_secret(server_id: String, key: String, value: String) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        mcp_entry_for(&server_id, &key)?
+            .set_password(&value)
+            .map_err(|e| AppError::Keyring(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::Keyring(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn delete_mcp_secret(server_id: String, key: String) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        match mcp_entry_for(&server_id, &key)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(AppError::Keyring(e.to_string())),
+        }
+    })
+    .await
+    .map_err(|e| AppError::Keyring(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn mcp_secret_exists(server_id: String, key: String) -> AppResult<bool> {
+    tauri::async_runtime::spawn_blocking(move || Ok(read_mcp_secret(&server_id, &key)?.is_some()))
+        .await
+        .map_err(|e| AppError::Keyring(e.to_string()))?
+}

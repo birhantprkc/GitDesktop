@@ -86,6 +86,10 @@ struct Header {
     /// `model`); the header carries the creation value. New field → defaults "".
     #[serde(default)]
     effort: String,
+    /// Ids of the MCP servers this session opted into (from the settings
+    /// registry). Fixed at creation. New field → defaults to empty (no MCP).
+    #[serde(default)]
+    mcp_servers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +178,8 @@ pub struct LoadedSession {
     effort: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     native_session_id: Option<String>,
+    /// MCP server ids the session opted into (empty = none). From the header.
+    mcp_servers: Vec<String>,
     running: bool,
     kept: bool,
     turns: Vec<LoadedTurn>,
@@ -194,6 +200,8 @@ pub struct NewSession {
     agent: String,
     #[serde(default)]
     effort: String,
+    #[serde(default)]
+    mcp_servers: Vec<String>,
 }
 
 // ----------------------------------------------------------------- paths + io
@@ -326,6 +334,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
         agent: header.agent,
         effort,
         native_session_id,
+        mcp_servers: header.mcp_servers,
         running: false,
         kept,
         turns,
@@ -412,6 +421,7 @@ fn migrate_legacy_if_needed(app: &AppHandle) -> AppResult<()> {
                 isolation: "worktree".into(),
                 agent: "claude".into(),
                 effort: String::new(),
+                mcp_servers: Vec::new(),
             }),
         )?;
         let turns = s
@@ -500,6 +510,7 @@ pub async fn transcript_create(app: AppHandle, session: NewSession) -> AppResult
             isolation: session.isolation,
             agent: session.agent,
             effort: session.effort,
+            mcp_servers: session.mcp_servers,
         }),
     )
 }
@@ -628,6 +639,7 @@ mod tests {
             isolation: "worktree".into(),
             agent: "claude".into(),
             effort: String::new(),
+            mcp_servers: Vec::new(),
         })
     }
 

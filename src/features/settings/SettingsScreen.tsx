@@ -33,6 +33,7 @@ import {
 } from "./GitSection";
 import { InstructionsSection } from "./InstructionsSection";
 import { KeyboardSection } from "./KeyboardSection";
+import { McpServersSection } from "./McpServersSection";
 import { NotificationsSection } from "./NotificationsSection";
 import { SyntaxSection } from "./SyntaxSection";
 import { settingsFormOpts, toDraft } from "./settings-form";
@@ -43,6 +44,7 @@ const PANELS = [
   { id: "general", label: "General" },
   { id: "ai", label: "AI" },
   { id: "commands", label: "Slash commands" },
+  { id: "mcp-servers", label: "MCP servers" },
   { id: "automations", label: "Automations" },
   { id: "notifications", label: "Notifications" },
   { id: "keyboard", label: "Keyboard" },
@@ -74,7 +76,12 @@ function stableStringify(value: unknown): string {
 }
 
 /** Panels that only make sense when AI features are enabled. */
-const AI_PANELS = new Set<PanelId>(["ai", "commands", "automations"]);
+const AI_PANELS = new Set<PanelId>([
+  "ai",
+  "commands",
+  "mcp-servers",
+  "automations",
+]);
 
 export function SettingsScreen() {
   const closeSettings = useUiStore((s) => s.closeSettings);
@@ -218,6 +225,9 @@ export function SettingsScreen() {
                 </>
               )}
               {activePanel === "commands" && <CommandsSection form={form} />}
+              {activePanel === "mcp-servers" && (
+                <McpServersSection form={form} />
+              )}
               {activePanel === "automations" && <AutomationsSection />}
               {activePanel === "notifications" && (
                 <NotificationsSection form={form} />

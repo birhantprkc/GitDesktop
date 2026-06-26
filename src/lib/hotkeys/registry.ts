@@ -51,6 +51,12 @@ export const ACTIONS = [
     category: "Application",
     defaultBinding: "f1",
   },
+  {
+    id: "open-mcp-servers-settings",
+    label: "MCP server settings",
+    category: "Application",
+    defaultBinding: null,
+  },
 
   // Navigation
   {

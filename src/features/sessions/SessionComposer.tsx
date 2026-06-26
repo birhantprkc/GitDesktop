@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import {
   AgentPicker,
   EffortPicker,
+  McpServersPicker,
   ModelPicker,
   modelsForAgent,
   type RunMode,
@@ -88,6 +89,10 @@ export function SessionComposer({
   const [startAgent, setStartAgent] = useState<
     "claude" | "codex" | "copilot" | "opencode"
   >("claude");
+  // MCP servers opted into for a NEW session. null = "use the default" (every
+  // enabled registry server); a concrete array once the user picks. Frozen at
+  // turn 1, so it only matters before a session exists.
+  const [startMcp, setStartMcp] = useState<string[] | null>(null);
   // Run mode for a NEW task: a single session, or best-of-N. The mode picker is
   // always clickable (the Send button isn't, until you type), so you can choose
   // best-of-N first; Send then follows the mode.
@@ -219,6 +224,19 @@ export function SessionComposer({
   // (each CLI reads different dirs).
   const settings = useSettings();
   const customCommands = settings.data?.customCommands;
+  // MCP registry (Settings → MCP servers) → the new-session opt-in. Default
+  // selection is every ENABLED server; the picker lets you pare it down. Tier 1
+  // applies it to Claude HOST sessions only (the picker self-hides when empty).
+  const mcpRegistry = settings.data?.mcpServers ?? [];
+  const enabledMcpIds = useMemo(
+    () =>
+      (settings.data?.mcpServers ?? [])
+        .filter((s) => s.enabled)
+        .map((s) => s.id),
+    [settings.data?.mcpServers],
+  );
+  const effectiveMcp = startMcp ?? enabledMcpIds;
+  const isContainer = settings.data?.agentIsolation === "container";
   const discovered = useAgentCommands(
     repoPath,
     agent,
@@ -243,7 +261,17 @@ export function SessionComposer({
 
   const dispatch = (text: string) => {
     if (session) send(session.id, text);
-    else start(repoPath, text, startModel, startAgent, startEffort);
+    else
+      start(
+        repoPath,
+        text,
+        startModel,
+        startAgent,
+        startEffort,
+        undefined,
+        // MCP is Tier-1 Claude-host only; other agents/container ignore it.
+        startAgent === "claude" ? effectiveMcp : undefined,
+      );
   };
 
   // Expand a known `/command` client-side (no CLI parses `/cmd` headless) so the
@@ -550,6 +578,18 @@ export function SessionComposer({
               )}
               {(session || mode === "single") && (
                 <EffortPicker value={effort} onChange={onEffort} />
+              )}
+              {!session && mode === "single" && startAgent === "claude" && (
+                <McpServersPicker
+                  servers={mcpRegistry}
+                  value={effectiveMcp}
+                  onChange={setStartMcp}
+                  disabledReason={
+                    isContainer
+                      ? "MCP runs on host sessions — switch isolation in Settings → General"
+                      : undefined
+                  }
+                />
               )}
               {!session && <RunModePicker value={mode} onChange={setMode} />}
               <AnimatePresence mode="wait" initial={false}>

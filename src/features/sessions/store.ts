@@ -74,6 +74,9 @@ export interface AgentSession {
   isolation: "worktree" | "container";
   /** Which CLI drives the session, fixed at creation. */
   agent: "claude" | "codex" | "copilot" | "opencode";
+  /** Ids of the MCP servers this session opted into (resolved to their registry
+   *  definitions at each turn). Fixed at creation; absent/empty = no MCP. */
+  mcpServers?: string[];
   /** The CLI's native resume id, captured from turn 1 (Codex thread / opencode
    *  session) — lets a host session resume the right conversation (each shares its
    *  CLI home). Unset for Claude / Copilot / container / pre-turn-1. */
@@ -130,6 +133,7 @@ interface SessionsState {
     agent: "claude" | "codex" | "copilot" | "opencode",
     effort: string,
     ensembleId?: string,
+    mcpServers?: string[],
   ) => Promise<string | null>;
   /** Best-of-N: start one session per `arm` on the SAME task, sharing one ensemble
    *  id, so they can be reviewed side by side and the best one kept. Each arm runs
@@ -242,6 +246,16 @@ async function runTurn(
     nativeSessionId,
   } = s0;
 
+  // Resolve the session's opted-in MCP server ids to their CURRENT registry
+  // definitions (re-read each turn, so editing a server applies on the next
+  // turn). The backend resolves any secret env/header values from the keychain.
+  const mcpIds = s0.mcpServers ?? [];
+  const mcpServers = mcpIds.length
+    ? ((await loadSettings().catch(() => null))?.mcpServers ?? []).filter(
+        (srv) => mcpIds.includes(srv.id),
+      )
+    : undefined;
+
   const setSession = (updater: (s: AgentSession) => AgentSession) =>
     set({
       sessions: get().sessions.map((s) => (s.id === id ? updater(s) : s)),
@@ -299,6 +313,7 @@ async function runTurn(
       isolation,
       agent,
       nativeSessionId: nativeSessionId ?? null,
+      mcpServers,
       onEvent: (ev) => {
         const s = find();
         if (!s) return;
@@ -429,7 +444,15 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 
   setPendingTask: (pendingTask) => set({ pendingTask }),
 
-  start: async (repoPath, prompt, model, agent, effort, ensembleId) => {
+  start: async (
+    repoPath,
+    prompt,
+    model,
+    agent,
+    effort,
+    ensembleId,
+    mcpServers,
+  ) => {
     const task = prompt.trim();
     if (!task || get().creating) return null;
     set({ creating: true });
@@ -462,6 +485,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       effort,
       isolation,
       agent,
+      // Containers don't deliver MCP yet (Tier 1 = host); drop the selection so a
+      // container session never carries servers the backend would reject.
+      mcpServers: isolation === "container" ? undefined : mcpServers,
       ensembleId,
       running: false,
       kept: false,
@@ -484,6 +510,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
         isolation: session.isolation,
         agent: session.agent,
         effort: session.effort,
+        mcpServers: session.mcpServers,
       }),
     );
     persist(appendTurn(wt.id, 0, task, model));

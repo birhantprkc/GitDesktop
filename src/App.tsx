@@ -108,6 +108,12 @@ function App() {
   // The app-wide hotkey dispatcher plus the always-available actions.
   useHotkeysListener();
   useHotkeyAction("open-settings", openSettings);
+  // Palette-only deep link; hidden alongside the panel when AI features are off.
+  useHotkeyAction(
+    "open-mcp-servers-settings",
+    () => openSettings("mcp-servers"),
+    !settings.data?.hideAi,
+  );
   useHotkeyAction("show-help", openHelp);
   useHotkeyAction("show-shortcuts", () => setShortcutsOpen(true));
   useHotkeyAction("command-palette", () => setPaletteOpen(true));
