@@ -1,17 +1,62 @@
 import { ArrowLeftIcon } from "@phosphor-icons/react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { NavRail } from "@/components/NavRail";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { formatBinding } from "@/lib/hotkeys/binding";
+import { useEffectiveBindings } from "@/lib/hotkeys/hotkeys";
+import type { ActionId } from "@/lib/hotkeys/registry";
+import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { cn } from "@/lib/utils";
 import { GUIDE_SECTIONS } from "./content";
+
+const BINDING_TOKEN = /\{\{(kbd|key):([a-z0-9+-]+)\}\}/g;
+const AI_BLOCK = /\{\{ai\}\}[\s\S]*?\{\{\/ai\}\}/g;
+const AI_MARKER = /\{\{\/?ai\}\}/g;
+
+/**
+ * Resolve a guide body for display: first gate AI passages on `aiEnabled` (strip
+ * the marked block when AI is hidden, else drop just the markers), then swap each
+ * shortcut token for the live, platform-formatted binding — so the guide always
+ * shows the right keys (⌘ vs Ctrl) and reflects the user's rebindings.
+ */
+function resolveBody(
+  md: string,
+  aiEnabled: boolean,
+  bindings: Map<ActionId, string | null>,
+): string {
+  const gated = aiEnabled
+    ? md.replace(AI_MARKER, "")
+    : md.replace(AI_BLOCK, "");
+  return gated.replace(BINDING_TOKEN, (_match, kind, ref) => {
+    if (kind === "key") return formatBinding(ref);
+    const binding = bindings.get(ref as ActionId);
+    return binding ? formatBinding(binding) : "unbound";
+  });
+}
 
 export function HelpScreen() {
   const closeHelp = useUiStore((s) => s.closeHelp);
+  const aiEnabled = useAiEnabled();
+  const bindings = useEffectiveBindings();
   const [sectionId, setSectionId] = useState(GUIDE_SECTIONS[0].id);
-  const active =
-    GUIDE_SECTIONS.find((s) => s.id === sectionId) ?? GUIDE_SECTIONS[0];
+
+  // Drop AI-only sections when "Hide AI features" is on.
+  const sections = useMemo(
+    () => GUIDE_SECTIONS.filter((s) => aiEnabled || !s.ai),
+    [aiEnabled],
+  );
+  // Keep a valid selection if the current section just got hidden.
+  const active = sections.find((s) => s.id === sectionId) ?? sections[0];
+  const body = useMemo(
+    () => resolveBody(active.body, aiEnabled, bindings),
+    [active.body, aiEnabled, bindings],
+  );
+  const railGroups = useMemo(
+    () => [{ items: sections.map((s) => ({ id: s.id, label: s.label })) }],
+    [sections],
+  );
 
   // Esc closes the guide. Guarded so Base UI popups (which mark the event
   // consumed) get first claim; an effect event reads the latest closeHelp.
@@ -39,31 +84,17 @@ export function HelpScreen() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <nav
-          aria-label="Guide sections"
-          className="w-44 shrink-0 space-y-0.5 overflow-y-auto border-r p-2"
-        >
-          {GUIDE_SECTIONS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              aria-current={s.id === sectionId ? "page" : undefined}
-              className={cn(
-                "block w-full px-2 py-1.5 text-left text-xs",
-                s.id === sectionId
-                  ? "bg-accent font-medium text-accent-foreground"
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-              )}
-              onClick={() => setSectionId(s.id)}
-            >
-              {s.label}
-            </button>
-          ))}
-        </nav>
+        <NavRail
+          ariaLabel="Guide sections"
+          groups={railGroups}
+          activeId={active.id}
+          onSelect={setSectionId}
+          className="w-44 overflow-y-auto border-r p-2"
+        />
         {/* key remounts the scroll area so a new section starts at the top. */}
-        <ScrollArea key={sectionId} className="min-h-0 flex-1">
+        <ScrollArea key={active.id} className="min-h-0 flex-1">
           <main className="mx-auto w-full max-w-2xl p-6">
-            <Markdown>{active.body}</Markdown>
+            <Markdown>{body}</Markdown>
           </main>
         </ScrollArea>
       </div>

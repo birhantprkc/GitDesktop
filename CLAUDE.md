@@ -16,11 +16,18 @@ don't wait to be asked:**
    `FeatureRow` when it warrants a section. The page has two synced views,
    **AI-native** and **Just Git** — put non-AI features in both, AI features in the
    AI view only. Then `cd site && pnpm build` to verify.
-3. **`CHANGELOG.md`** — add an entry under `## [Unreleased]` (existing convention,
+3. **In-app user guide** (`src/features/help/content.ts`) — when a change adds or
+   meaningfully alters a user-facing surface, update the matching guide section (or add a
+   new one for a whole new surface), and keep it accurate (verify claims against the
+   code, not memory). Shortcuts are `{{kbd:action-id}}` / `{{key:…}}` tokens, **never
+   literal keys** (they resolve per-platform and reflect rebindings); gate AI content with
+   the `ai: true` section flag + `{{ai}}…{{/ai}}` inline markers so *Hide AI* hides it.
+   (Conventions + gotchas: `memory/help-guide-content-conventions.md`.)
+4. **`CHANGELOG.md`** — add an entry under `## [Unreleased]` (existing convention,
    for any user-facing change, written for humans).
 
-If a feature is too minor for the README/site, it's fine to add only the capability
-line + changelog — but make the call deliberately, don't skip silently.
+If a feature is too minor for the README / site / guide, it's fine to add only the
+capability line + changelog — but make the call deliberately, don't skip silently.
 
 **Screenshots:** marketing-site screenshots for the **Just Git** view must be
 captured with the app's *Settings → General → Hide AI features* ON, so they match

@@ -11,6 +11,7 @@ import {
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { NavRail, type NavRailGroup } from "@/components/NavRail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -47,7 +48,6 @@ import {
   useWebhooks,
 } from "@/lib/git/queries";
 import type { HookDelivery, Webhook, WebhookInput } from "@/lib/git/types";
-import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { quickTransition } from "@/lib/motion";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
@@ -138,15 +138,15 @@ const SECTION_GROUPS: { label: string; items: SectionItem[] }[] = [
   },
 ];
 
-/** Pulled out of General into its own rail item so the first screen isn't also
- *  the densest, and delete-the-repo lives behind a deliberate click. */
-const DANGER_ITEM: SectionItem = { id: "danger", label: "Danger zone" };
-
-/** Flat rail order for ArrowUp/ArrowDown roving (groups top-to-bottom, then the
- *  Danger zone item last). Computed once at module load, not in render. */
-const SECTION_ORDER: SectionId[] = [
-  ...SECTION_GROUPS.flatMap((g) => g.items.map((i) => i.id)),
-  DANGER_ITEM.id,
+/** The rail's groups: the grouped sections, then the Danger zone set off on its own
+ *  so the first screen isn't also the densest and delete-the-repo is a deliberate
+ *  click. */
+const RAIL_GROUPS: NavRailGroup[] = [
+  ...SECTION_GROUPS,
+  {
+    separated: true,
+    items: [{ id: "danger", label: "Danger zone", destructive: true }],
+  },
 ];
 
 export function RepoSettingsDialog({
@@ -160,16 +160,6 @@ export function RepoSettingsDialog({
 }) {
   const [section, setSection] = useState<SectionId>("general");
   const reduceMotion = useReducedMotion();
-
-  // ArrowUp/ArrowDown move between rail items (roving tabindex), matching the
-  // arrow-key navigation the Tabs primitive gave the old strip.
-  const onRailKeyDown = listKeyboardNav<SectionId>({
-    items: SECTION_ORDER,
-    activeIndex: SECTION_ORDER.indexOf(section),
-    onActivate: (id) => setSection(id),
-    rowKey: (id) => id,
-    rowAttr: "data-section",
-  });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -185,35 +175,13 @@ export function RepoSettingsDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 min-w-0 flex-1 gap-4">
-          <nav
-            aria-label="Repository settings sections"
-            className="w-40 shrink-0 space-y-3 overflow-y-auto"
-            onKeyDown={onRailKeyDown}
-          >
-            {SECTION_GROUPS.map((group) => (
-              <div key={group.label} className="space-y-0.5">
-                <p className="px-2 pb-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {group.label}
-                </p>
-                {group.items.map((item) => (
-                  <RailButton
-                    key={item.id}
-                    item={item}
-                    active={section === item.id}
-                    onSelect={setSection}
-                  />
-                ))}
-              </div>
-            ))}
-            <div className="border-t pt-3">
-              <RailButton
-                item={DANGER_ITEM}
-                active={section === "danger"}
-                onSelect={setSection}
-                destructive
-              />
-            </div>
-          </nav>
+          <NavRail
+            ariaLabel="Repository settings sections"
+            groups={RAIL_GROUPS}
+            activeId={section}
+            onSelect={(id) => setSection(id as SectionId)}
+            className="w-40 overflow-y-auto"
+          />
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto pr-1">
             {/* Crossfade the body on section change so the swap reads as one
                 quiet refresh, not a hard cut. Opacity only (content is tall and
@@ -259,42 +227,6 @@ export function RepoSettingsDialog({
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function RailButton({
-  item,
-  active,
-  destructive,
-  onSelect,
-}: {
-  item: SectionItem;
-  active: boolean;
-  destructive?: boolean;
-  onSelect: (id: SectionId) => void;
-}) {
-  return (
-    <button
-      type="button"
-      data-section={item.id}
-      // Roving tabindex: only the active item is in the tab order; arrows move
-      // within the rail, Tab leaves it for the body.
-      tabIndex={active ? 0 : -1}
-      aria-current={active ? "page" : undefined}
-      onClick={() => onSelect(item.id)}
-      className={cn(
-        "block w-full px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-        active
-          ? destructive
-            ? "bg-destructive/10 font-medium text-destructive"
-            : "bg-accent font-medium text-accent-foreground"
-          : destructive
-            ? "text-destructive/80 hover:bg-destructive/5 hover:text-destructive"
-            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-      )}
-    >
-      {item.label}
-    </button>
   );
 }
 

@@ -253,7 +253,18 @@ commit list.
   transfer / visibility live behind a deliberate click rather than below your topics.
   Arrow keys move between sections, and the panel crossfades as you switch (respecting
   "reduce motion").
-- **Configure and rebuild the agent container image.** Settings → AI now lets you
+- **The in-app user guide caught up with the app.** The guide (press the *Open user
+  guide* shortcut, or the **?** menu) was rewritten and expanded to cover everything
+  that's shipped — **Agent sessions** (plan, delegate, best-of-N, isolation), the
+  **Issues**, **Discussions**, **Releases & tags**, **Insights**, and **Repository
+  settings** surfaces, the full provider list, and more — with arrow-key navigation in
+  its section rail. Keyboard shortcuts shown in the guide now read from your **actual
+  bindings** (so they show ⌘ on macOS and reflect anything you've rebound), and when
+  **Hide AI features** is on the guide hides its AI sections and mentions too.
+- **Keyboard-navigable section sidebars everywhere.** The Settings, Repository settings,
+  and user-guide sidebars now share one component, so all three navigate the same way —
+  **↑ / ↓** to move between sections with a visible focus ring (the Settings sidebar was
+  the last one missing this).
   pick the image's **Node version** (default 24 LTS, or 22 / 20) and **which agents**
   to install (Claude / Codex), and adds **Rebuild** — which pulls a fresh base image
   and reinstalls the CLIs so newer releases are picked up. Previously the image was

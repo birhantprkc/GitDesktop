@@ -1,7 +1,8 @@
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { NavRail } from "@/components/NavRail";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,7 +19,6 @@ import { AutomationsSection } from "@/features/automations/AutomationsSection";
 import { useAppForm } from "@/lib/form";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { cn } from "@/lib/utils";
 import { AboutSection } from "./AboutSection";
 import { AccountsSection } from "./AccountsSection";
 import { AiProviderSection } from "./AiProviderSection";
@@ -101,11 +101,18 @@ export function SettingsScreen() {
   // Gating reflects SAVED settings (not the in-progress draft), so panels don't
   // vanish mid-edit while the user is still toggling "Hide AI features".
   const aiEnabled = !settings.data?.hideAi;
-  const visiblePanels = PANELS.filter((p) => aiEnabled || !AI_PANELS.has(p.id));
+  const visiblePanels = useMemo(
+    () => PANELS.filter((p) => aiEnabled || !AI_PANELS.has(p.id)),
+    [aiEnabled],
+  );
   // Keep a sensible active panel if the current one got hidden.
   const activePanel = visiblePanels.some((p) => p.id === panel)
     ? panel
     : "general";
+  const railGroups = useMemo(
+    () => [{ items: visiblePanels.map((p) => ({ id: p.id, label: p.label })) }],
+    [visiblePanels],
+  );
 
   const form = useAppForm({
     ...settingsFormOpts,
@@ -194,27 +201,13 @@ export function SettingsScreen() {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
-          <nav
-            aria-label="Settings sections"
-            className="w-44 shrink-0 space-y-0.5 border-r p-2"
-          >
-            {visiblePanels.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                aria-current={activePanel === p.id ? "page" : undefined}
-                className={cn(
-                  "block w-full px-2 py-1.5 text-left text-xs",
-                  activePanel === p.id
-                    ? "bg-accent font-medium text-accent-foreground"
-                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                )}
-                onClick={() => setPanel(p.id)}
-              >
-                {p.label}
-              </button>
-            ))}
-          </nav>
+          <NavRail
+            ariaLabel="Settings sections"
+            groups={railGroups}
+            activeId={activePanel}
+            onSelect={(id) => setPanel(id as PanelId)}
+            className="w-44 border-r p-2"
+          />
           <ScrollArea className="min-h-0 flex-1">
             <main className="mx-auto w-full max-w-2xl space-y-8 p-6">
               {activePanel === "general" && <GeneralSection form={form} />}
