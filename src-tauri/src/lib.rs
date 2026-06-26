@@ -46,6 +46,7 @@ pub fn run() {
                 app.handle()
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
                 tray::setup_tray(app.handle())?;
+                tray::init_window_title(app.handle());
             }
             Ok(())
         })

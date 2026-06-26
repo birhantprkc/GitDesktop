@@ -12,17 +12,30 @@ pub const WINDOW_STATE_FLAGS: StateFlags = StateFlags::SIZE
     .union(StateFlags::POSITION)
     .union(StateFlags::MAXIMIZED);
 
+/// The app's display name. In a `tauri dev` session it gets a "(Dev)" suffix so
+/// a running dev build is tellable apart from an installed release — both show a
+/// tray icon, and otherwise the tooltip/window title are identical. No-op (plain
+/// "GitDesktop") in a bundled release.
+pub fn app_display_name() -> &'static str {
+    if tauri::is_dev() {
+        "GitDesktop (Dev)"
+    } else {
+        "GitDesktop"
+    }
+}
+
 /// Builds the system-tray icon + menu. Left-click restores the window; the
 /// menu (right-click on Windows) offers Open and a real Quit.
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    let name = app_display_name();
     let menu = MenuBuilder::new(app)
-        .text("open", "Open GitDesktop")
+        .text("open", format!("Open {name}"))
         .separator()
         .text("quit", "Quit")
         .build()?;
 
     let mut builder = TrayIconBuilder::new()
-        .tooltip("GitDesktop")
+        .tooltip(name)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -57,6 +70,20 @@ fn show_main_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+    }
+}
+
+/// In a `tauri dev` session, suffix the main window's title with "(Dev)" so the
+/// dev instance is tellable apart in the taskbar / Alt-Tab from an installed
+/// release. The frontend re-applies the same suffix whenever a repo is open (see
+/// `RepositoryView`); this covers the initial welcome state before any repo is
+/// selected. No-op in a bundled release (the title already matches the config).
+pub fn init_window_title(app: &AppHandle) {
+    if !tauri::is_dev() {
+        return;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_title(app_display_name());
     }
 }
 

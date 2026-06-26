@@ -58,6 +58,11 @@ import { InsightsPanel } from "./insights/InsightsPanel";
 import { RepoHeader } from "./RepoHeader";
 import { usePrNotifications } from "./usePrNotifications";
 
+// Base OS window title. In a `tauri dev` session (Vite serving) it gets a
+// "(Dev)" suffix so the dev instance is tellable apart in the taskbar / Alt-Tab
+// from an installed release — matching the tray tooltip set in `tray.rs`.
+const APP_TITLE = import.meta.env.DEV ? "GitDesktop (Dev)" : "GitDesktop";
+
 // The Insights board pulls in Recharts; lazy-load it so that chunk stays off
 // the boot path and only loads once the user first opens the Insights tab.
 const InsightsBoard = lazy(() =>
@@ -161,21 +166,21 @@ export function RepositoryView() {
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open. No
   // cleanup here: a branch switch updates the title in one pass instead of
-  // flashing through the bare "GitDesktop" (the cleanup used to run on every
+  // flashing through the bare base title (the cleanup used to run on every
   // dep change, racing the async setTitle).
   useEffect(() => {
     const display = alias ?? repoName;
     if (!display) return;
     const title = currentName ? `${display} • ${currentName}` : display;
     getCurrentWindow()
-      .setTitle(`${title} — GitDesktop`)
+      .setTitle(`${title} — ${APP_TITLE}`)
       .catch(() => undefined);
   }, [repoName, alias, currentName]);
   // Reset to the bare title only when the repo view unmounts (repo closed).
   useEffect(() => {
     return () => {
       getCurrentWindow()
-        .setTitle("GitDesktop")
+        .setTitle(APP_TITLE)
         .catch(() => undefined);
     };
   }, []);
