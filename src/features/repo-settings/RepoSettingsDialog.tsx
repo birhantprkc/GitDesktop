@@ -32,9 +32,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { highlightJson } from "@/features/diff/shiki-highlighter";
 import { copyText } from "@/lib/clipboard";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import {
   useCreateWebhook,
   useDeleteWebhook,
@@ -87,6 +87,66 @@ function eventsSummary(events: string[]): string {
   return `${labels.slice(0, 3).join(", ")} +${labels.length - 3}`;
 }
 
+type SectionId =
+  | "general"
+  | "access"
+  | "rules"
+  | "security"
+  | "pages"
+  | "sponsor"
+  | "secrets"
+  | "webhooks"
+  | "danger";
+
+interface SectionItem {
+  id: SectionId;
+  label: string;
+}
+
+/** The rail's grouped sections, mirroring GitHub's familiar settings buckets so
+ *  the mental model stays intact while the headers keep the list scannable. */
+const SECTION_GROUPS: { label: string; items: SectionItem[] }[] = [
+  {
+    label: "Repository",
+    items: [
+      { id: "general", label: "General" },
+      { id: "access", label: "Access" },
+    ],
+  },
+  {
+    label: "Security",
+    items: [
+      { id: "rules", label: "Rules" },
+      { id: "security", label: "Security" },
+    ],
+  },
+  {
+    label: "Publishing",
+    items: [
+      { id: "pages", label: "Pages" },
+      { id: "sponsor", label: "Sponsor" },
+    ],
+  },
+  {
+    label: "Automation",
+    items: [
+      { id: "secrets", label: "Secrets" },
+      { id: "webhooks", label: "Webhooks" },
+    ],
+  },
+];
+
+/** Pulled out of General into its own rail item so the first screen isn't also
+ *  the densest, and delete-the-repo lives behind a deliberate click. */
+const DANGER_ITEM: SectionItem = { id: "danger", label: "Danger zone" };
+
+/** Flat rail order for ArrowUp/ArrowDown roving (groups top-to-bottom, then the
+ *  Danger zone item last). Computed once at module load, not in render. */
+const SECTION_ORDER: SectionId[] = [
+  ...SECTION_GROUPS.flatMap((g) => g.items.map((i) => i.id)),
+  DANGER_ITEM.id,
+];
+
 export function RepoSettingsDialog({
   repoPath,
   open,
@@ -96,12 +156,24 @@ export function RepoSettingsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const [section, setSection] = useState<SectionId>("general");
+
+  // ArrowUp/ArrowDown move between rail items (roving tabindex), matching the
+  // arrow-key navigation the Tabs primitive gave the old strip.
+  const onRailKeyDown = listKeyboardNav<SectionId>({
+    items: SECTION_ORDER,
+    activeIndex: SECTION_ORDER.indexOf(section),
+    onActivate: (id) => setSection(id),
+    rowKey: (id) => id,
+    rowAttr: "data-section",
+  });
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* flex + max-h caps the dialog to the viewport; the active tab body
-          scrolls (overflow-y-auto) so many webhooks / the long form don't push
-          it off-screen. */}
-      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
+      {/* Fixed height so switching sections never resizes the dialog; the body
+          column scrolls (overflow-y-auto) so a long form / many webhooks stay
+          contained while the rail stays put. */}
+      <DialogContent className="flex h-[80vh] max-h-[85vh] flex-col sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Repository settings</DialogTitle>
           <DialogDescription>
@@ -109,69 +181,104 @@ export function RepoSettingsDialog({
             on GitHub immediately.
           </DialogDescription>
         </DialogHeader>
-        <Tabs defaultValue="general" className="flex min-h-0 min-w-0 flex-col">
-          <TabsList className="h-auto flex-wrap">
-            <TabsTrigger value="general">General</TabsTrigger>
-            <TabsTrigger value="access">Access</TabsTrigger>
-            <TabsTrigger value="rules">Rules</TabsTrigger>
-            <TabsTrigger value="security">Security</TabsTrigger>
-            <TabsTrigger value="pages">Pages</TabsTrigger>
-            <TabsTrigger value="sponsor">Sponsor</TabsTrigger>
-            <TabsTrigger value="secrets">Secrets</TabsTrigger>
-            <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
-          </TabsList>
-          <TabsContent
-            value="general"
-            className="min-h-0 min-w-0 overflow-y-auto pr-1"
+        <div className="flex min-h-0 min-w-0 flex-1 gap-4">
+          <nav
+            aria-label="Repository settings sections"
+            className="w-40 shrink-0 space-y-3 overflow-y-auto"
+            onKeyDown={onRailKeyDown}
           >
-            <GeneralSettingsSection repoPath={repoPath} open={open} />
-            <DangerZone repoPath={repoPath} open={open} />
-          </TabsContent>
-          <TabsContent
-            value="access"
-            className="min-h-0 min-w-0 overflow-y-auto pr-1"
-          >
-            <CollaboratorsSection repoPath={repoPath} open={open} />
-          </TabsContent>
-          <TabsContent
-            value="rules"
-            className="min-h-0 min-w-0 overflow-y-auto pr-1"
-          >
-            <RulesetsSection repoPath={repoPath} open={open} />
-          </TabsContent>
-          <TabsContent
-            value="security"
-            className="min-h-0 min-w-0 overflow-y-auto pr-1"
-          >
-            <SecuritySection repoPath={repoPath} open={open} />
-          </TabsContent>
-          <TabsContent
-            value="pages"
-            className="min-h-0 min-w-0 overflow-y-auto pr-1"
-          >
-            <PagesSection repoPath={repoPath} open={open} />
-          </TabsContent>
-          <TabsContent
-            value="sponsor"
-            className="min-h-0 min-w-0 overflow-y-auto pr-1"
-          >
-            <FundingSection repoPath={repoPath} open={open} />
-          </TabsContent>
-          <TabsContent
-            value="secrets"
-            className="min-h-0 min-w-0 overflow-y-auto pr-1"
-          >
-            <SecretsSection repoPath={repoPath} open={open} />
-          </TabsContent>
-          <TabsContent
-            value="webhooks"
-            className="min-h-0 min-w-0 overflow-y-auto pr-1"
-          >
-            <WebhooksSection repoPath={repoPath} open={open} />
-          </TabsContent>
-        </Tabs>
+            {SECTION_GROUPS.map((group) => (
+              <div key={group.label} className="space-y-0.5">
+                <p className="px-2 pb-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+                  {group.label}
+                </p>
+                {group.items.map((item) => (
+                  <RailButton
+                    key={item.id}
+                    item={item}
+                    active={section === item.id}
+                    onSelect={setSection}
+                  />
+                ))}
+              </div>
+            ))}
+            <div className="border-t pt-3">
+              <RailButton
+                item={DANGER_ITEM}
+                active={section === "danger"}
+                onSelect={setSection}
+                destructive
+              />
+            </div>
+          </nav>
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto pr-1">
+            {section === "general" && (
+              <GeneralSettingsSection repoPath={repoPath} open={open} />
+            )}
+            {section === "access" && (
+              <CollaboratorsSection repoPath={repoPath} open={open} />
+            )}
+            {section === "rules" && (
+              <RulesetsSection repoPath={repoPath} open={open} />
+            )}
+            {section === "security" && (
+              <SecuritySection repoPath={repoPath} open={open} />
+            )}
+            {section === "pages" && (
+              <PagesSection repoPath={repoPath} open={open} />
+            )}
+            {section === "sponsor" && (
+              <FundingSection repoPath={repoPath} open={open} />
+            )}
+            {section === "secrets" && (
+              <SecretsSection repoPath={repoPath} open={open} />
+            )}
+            {section === "webhooks" && (
+              <WebhooksSection repoPath={repoPath} open={open} />
+            )}
+            {section === "danger" && (
+              <DangerZone repoPath={repoPath} open={open} />
+            )}
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function RailButton({
+  item,
+  active,
+  destructive,
+  onSelect,
+}: {
+  item: SectionItem;
+  active: boolean;
+  destructive?: boolean;
+  onSelect: (id: SectionId) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-section={item.id}
+      // Roving tabindex: only the active item is in the tab order; arrows move
+      // within the rail, Tab leaves it for the body.
+      tabIndex={active ? 0 : -1}
+      aria-current={active ? "page" : undefined}
+      onClick={() => onSelect(item.id)}
+      className={cn(
+        "block w-full px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+        active
+          ? destructive
+            ? "bg-destructive/10 font-medium text-destructive"
+            : "bg-accent font-medium text-accent-foreground"
+          : destructive
+            ? "text-destructive/80 hover:bg-destructive/5 hover:text-destructive"
+            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+      )}
+    >
+      {item.label}
+    </button>
   );
 }
 
