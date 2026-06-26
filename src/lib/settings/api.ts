@@ -96,6 +96,15 @@ export interface McpServer {
   description: string;
   /** Offered to new sessions by default when true. */
   enabled: boolean;
+  /** Where this server is available: "global" (or absent) = every repo; otherwise
+   *  a repo root path = only sessions in that repo. Organization only — un-scoped
+   *  servers are still never auto-inherited (strict mode gags un-registered ones). */
+  scope?: string;
+  /** Per-repo overrides of a GLOBAL server's state, keyed by repo root path:
+   *  "on" (available + on by default), "optional" (available, off by default),
+   *  "off" (not offered in that repo). Absent for a repo = inherit `enabled`.
+   *  Only meaningful for global servers; repo-scoped ones use `enabled` directly. */
+  repoOverrides?: Record<string, "on" | "optional" | "off">;
   /** "stdio" = a local subprocess; "http" = a remote streamable-HTTP server. */
   transport: "stdio" | "http";
   /** Executable to launch (stdio only), e.g. `npx`. */

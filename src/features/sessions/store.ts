@@ -13,6 +13,7 @@ import {
 } from "@/lib/git/worktree";
 import { notify } from "@/lib/notify";
 import { loadSettings } from "@/lib/settings/api";
+import { isServerAvailable } from "@/lib/settings/mcp";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
 import {
@@ -247,12 +248,14 @@ async function runTurn(
   } = s0;
 
   // Resolve the session's opted-in MCP server ids to their CURRENT registry
-  // definitions (re-read each turn, so editing a server applies on the next
-  // turn). The backend resolves any secret env/header values from the keychain.
+  // definitions (re-read each turn, so editing a server applies next turn). Drop
+  // any no longer OFFERED in this session's repo — re-scoping a server away or
+  // setting it per-repo "off" stops it applying, matching what the picker would
+  // now offer. The backend resolves secret env/header values from the keychain.
   const mcpIds = s0.mcpServers ?? [];
   const mcpServers = mcpIds.length
     ? ((await loadSettings().catch(() => null))?.mcpServers ?? []).filter(
-        (srv) => mcpIds.includes(srv.id),
+        (srv) => mcpIds.includes(srv.id) && isServerAvailable(srv, s0.repoPath),
       )
     : undefined;
 

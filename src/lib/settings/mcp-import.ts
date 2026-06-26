@@ -1,6 +1,6 @@
 import { invoke } from "@/lib/tauri/invoke";
 import type { McpServer } from "./api";
-import { MCP_NAME_RE } from "./mcp";
+import { MCP_NAME_RE, MCP_SCOPE_GLOBAL } from "./mcp";
 
 /** A server object as it appears in a Claude `.mcp.json` / `~/.claude.json`. */
 interface RawMcpServer {
@@ -65,6 +65,7 @@ export interface ImportCandidate {
 export function toImportCandidate(
   d: DiscoveredServer,
   existingNames: Set<string>,
+  repoPath: string | null,
 ): ImportCandidate {
   const id = crypto.randomUUID();
   const name = normalizeMcpName(d.name);
@@ -96,6 +97,8 @@ export function toImportCandidate(
         ? "Imported from .mcp.json"
         : "Imported from global config",
     enabled: false,
+    // A repo's `.mcp.json` server is scoped to that repo; a global one stays global.
+    scope: d.origin === "repo" && repoPath ? repoPath : MCP_SCOPE_GLOBAL,
     transport,
     command: raw.command ?? "",
     args: raw.args ?? [],

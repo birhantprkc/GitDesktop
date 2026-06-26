@@ -4,13 +4,74 @@ import type { McpKeyValue, McpServer } from "./api";
  *  must start with a letter or digit, no spaces. */
 export const MCP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-/** A blank server for the "Add" dialog. stdio is the common default. */
+/** The sentinel scope meaning "available in every repo". */
+export const MCP_SCOPE_GLOBAL = "global";
+
+/** A server's effective scope ("global" when unset, for back-compat with
+ *  registries saved before scoping existed). */
+export function serverScope(server: McpServer): string {
+  const s = server.scope?.trim();
+  return s ? s : MCP_SCOPE_GLOBAL;
+}
+
+/** Whether a server is in SCOPE for `repoPath` (ignores per-repo on/off):
+ *  global servers always are; a repo-scoped server only in its own repo. */
+export function isServerInScope(
+  server: McpServer,
+  repoPath: string | null,
+): boolean {
+  const scope = serverScope(server);
+  return scope === MCP_SCOPE_GLOBAL || scope === repoPath;
+}
+
+/** A server's resolved state in `repoPath`: "on" (available + default-on),
+ *  "optional" (available, off by default), or "off" (not offered). A global
+ *  server can be overridden per repo (`repoOverrides`); otherwise — and always
+ *  for repo-scoped servers — it follows `enabled` (on / optional). */
+export type McpRepoState = "on" | "optional" | "off";
+export function effectiveMcpState(
+  server: McpServer,
+  repoPath: string | null,
+): McpRepoState {
+  if (repoPath && serverScope(server) === MCP_SCOPE_GLOBAL) {
+    const override = server.repoOverrides?.[repoPath];
+    if (override) return override;
+  }
+  return server.enabled ? "on" : "optional";
+}
+
+/** Whether a server is OFFERED to sessions in `repoPath` (in scope and not
+ *  per-repo "off"). The composer picker + resume both use this. */
+export function isServerAvailable(
+  server: McpServer,
+  repoPath: string | null,
+): boolean {
+  return (
+    isServerInScope(server, repoPath) &&
+    effectiveMcpState(server, repoPath) !== "off"
+  );
+}
+
+/** Whether a server is pre-selected by default for a new session in `repoPath`. */
+export function isServerDefaultOn(
+  server: McpServer,
+  repoPath: string | null,
+): boolean {
+  return (
+    isServerAvailable(server, repoPath) &&
+    effectiveMcpState(server, repoPath) === "on"
+  );
+}
+
+/** A blank server for the "Add" dialog. stdio + global are the common defaults;
+ *  the dialog's scope control narrows it to the open repo when wanted. */
 export function emptyMcpServer(): McpServer {
   return {
     id: crypto.randomUUID(),
     name: "",
     description: "",
     enabled: true,
+    scope: MCP_SCOPE_GLOBAL,
     transport: "stdio",
     command: "",
     args: [],
@@ -45,6 +106,10 @@ export function validateMcpServer(
   if (!name) return "Give the server a name.";
   if (!MCP_NAME_RE.test(name))
     return "Name can use letters, digits, - and _ only (no spaces).";
+  // Names are unique across the WHOLE registry, not per scope: the name is the
+  // key in the generated config, and a session can hold global + repo-scoped
+  // servers together, so two same-named servers could otherwise collide. Global
+  // uniqueness keeps every generated config key unambiguous.
   if (
     others.some(
       (o) =>

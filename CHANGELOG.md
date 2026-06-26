@@ -20,8 +20,13 @@ commit list.
   never inherits other MCP servers on your machine; with no servers registered, nothing
   changes. Already have servers set up? **Import** pulls them in from the open repo's
   `.mcp.json` or your global Claude config — reviewed, started disabled, with any secret
-  values moved to your keychain (the source files aren't touched). (Codex/Copilot/opencode
-  and container sessions are coming next; [design](docs/mcp-agent-sessions-tier1.md).)
+  values moved to your keychain (the source files aren't touched). Each server is **scoped
+  Global or to a specific repo** (import sets this from where it came from), so a repo's
+  servers only show up in that repo's sessions and the registry stays tidy. And a shared
+  **global server can be tuned per repo** — set it **On**, **Optional** (available but off
+  by default), or **Off** for the repo you're in, or leave it on **Default** to follow the
+  global setting. (Codex/Copilot/opencode and container sessions are coming next;
+  [design](docs/mcp-agent-sessions-tier1.md).)
 
 - **GitHub Pages config, in the app.** A new **Pages** tab in repository settings: enable
   Pages from a branch + folder or via **GitHub Actions**, see the live URL and build

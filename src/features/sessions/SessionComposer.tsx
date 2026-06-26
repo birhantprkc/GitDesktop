@@ -21,6 +21,7 @@ import {
 } from "@/lib/ai/slash";
 import { useAgentCommands, useTrackedFiles } from "@/lib/git/queries";
 import { quickTransition } from "@/lib/motion";
+import { isServerAvailable, isServerDefaultOn } from "@/lib/settings/mcp";
 import { useSettings } from "@/lib/settings/queries";
 import { cn } from "@/lib/utils";
 import {
@@ -224,16 +225,23 @@ export function SessionComposer({
   // (each CLI reads different dirs).
   const settings = useSettings();
   const customCommands = settings.data?.customCommands;
-  // MCP registry (Settings → MCP servers) → the new-session opt-in. Default
-  // selection is every ENABLED server; the picker lets you pare it down. Tier 1
+  // MCP registry (Settings → MCP servers) → the new-session opt-in, narrowed to
+  // the servers OFFERED in THIS repo (in scope and not per-repo "off"). Default
+  // selection is the per-repo "on" set; the picker lets you pare it down. Tier 1
   // applies it to Claude HOST sessions only (the picker self-hides when empty).
-  const mcpRegistry = settings.data?.mcpServers ?? [];
+  const mcpRegistry = useMemo(
+    () =>
+      (settings.data?.mcpServers ?? []).filter((s) =>
+        isServerAvailable(s, repoPath),
+      ),
+    [settings.data?.mcpServers, repoPath],
+  );
   const enabledMcpIds = useMemo(
     () =>
-      (settings.data?.mcpServers ?? [])
-        .filter((s) => s.enabled)
+      mcpRegistry
+        .filter((s) => isServerDefaultOn(s, repoPath))
         .map((s) => s.id),
-    [settings.data?.mcpServers],
+    [mcpRegistry, repoPath],
   );
   const effectiveMcp = startMcp ?? enabledMcpIds;
   const isContainer = settings.data?.agentIsolation === "container";

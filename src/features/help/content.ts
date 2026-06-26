@@ -492,6 +492,17 @@ open repo's \`.mcp.json\` or your global Claude config — you pick which ones, 
 **disabled** for you to review, and any secret-looking values are moved to your keychain.
 Nothing is inherited automatically; the source files are left untouched.
 
+Each server is **scoped** either **Global** (every repo) or to **one repo** — import sets
+this from where the server came from, and you can change it when editing. The panel groups
+the list accordingly, and a repo-scoped server only appears in that repo's session picker,
+so the registry stays tidy as it grows.
+
+When you open Settings **with a repo active**, each global server's row shows a per-repo
+control: **On** (available and pre-selected here), **Optional** (available but off by
+default), **Off** (not offered in this repo), or **Default** to follow its global setting.
+That lets you keep a shared server on in one repo and off in another without touching the
+others.
+
 ## Run several ways at once (Best-of-N)
 
 **Best-of-N** runs the same task across 2–5 arms, each with its own agent, model, and

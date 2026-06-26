@@ -21,6 +21,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,8 +36,12 @@ import { deleteMcpSecret, setMcpSecret } from "@/lib/git/api";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import type { McpServer } from "@/lib/settings/api";
 import {
+  effectiveMcpState,
   emptyMcpServer,
   entriesFor,
+  MCP_SCOPE_GLOBAL,
+  type McpRepoState,
+  serverScope,
   validateMcpServer,
 } from "@/lib/settings/mcp";
 import {
@@ -54,6 +65,16 @@ interface EntryRow {
   secretInput: string;
 }
 
+/** Last path segment of a repo root, for labelling a repo scope. */
+function repoBasename(path: string): string {
+  return (
+    path
+      .replace(/[/\\]+$/, "")
+      .split(/[/\\]/)
+      .pop() || path
+  );
+}
+
 function toRows(server: McpServer): EntryRow[] {
   const secretKeys = new Set(server.secretKeys);
   return entriesFor(server).map((e) => ({
@@ -71,12 +92,17 @@ function toRows(server: McpServer): EntryRow[] {
 function McpServerDialog({
   initial,
   others,
+  repoPath,
+  repoName,
   onSave,
   onClose,
 }: {
   initial: McpServer | null;
   /** The other servers in the registry, for duplicate-name detection. */
   others: McpServer[];
+  /** The repo open behind Settings (for the "This repo" scope option). */
+  repoPath: string | null;
+  repoName: string | null;
   onSave: (server: McpServer) => void;
   onClose: () => void;
 }) {
@@ -93,6 +119,24 @@ function McpServerDialog({
     setRows((rs) =>
       rs.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)),
     );
+
+  // Scope choices: always Global; "This repo" when one is open; plus the server's
+  // own scope when it points at a DIFFERENT repo (editing it elsewhere), so that
+  // assignment is preserved rather than silently dropped.
+  const scopeOptions: { value: string; label: string }[] = [
+    { value: MCP_SCOPE_GLOBAL, label: "Global — all repositories" },
+  ];
+  if (repoPath)
+    scopeOptions.push({
+      value: repoPath,
+      label: `This repo — ${repoName ?? repoBasename(repoPath)}`,
+    });
+  const curScope = serverScope(draft);
+  if (curScope !== MCP_SCOPE_GLOBAL && curScope !== repoPath)
+    scopeOptions.push({
+      value: curScope,
+      label: `${repoBasename(curScope)} — other repo`,
+    });
 
   // Reconstruct a candidate server from the live draft + rows for validation.
   function candidate(): McpServer {
@@ -203,6 +247,30 @@ function McpServerDialog({
               placeholder="Local file operations"
             />
           </div>
+
+          {scopeOptions.length > 1 && (
+            <div className="space-y-2">
+              <Label>Available in</Label>
+              <Select
+                value={serverScope(draft)}
+                onValueChange={(v) => v && set("scope", v)}
+              >
+                <SelectTrigger size="sm" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {scopeOptions.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Repo-scoped servers only appear in that repo's sessions.
+              </p>
+            </div>
+          )}
 
           {isStdio ? (
             <>
@@ -413,6 +481,45 @@ function EntryEditor({
   );
 }
 
+/** Per-repo state picker for a GLOBAL server, shown on its row when a repo is
+ *  open: On (available + default-on) / Optional (available, off by default) /
+ *  Off (not offered here), or "Default" to follow the global Enabled. Muted
+ *  while inheriting; solid once this repo overrides it. */
+function PerRepoStateControl({
+  server,
+  repoPath,
+  onChange,
+}: {
+  server: McpServer;
+  repoPath: string;
+  onChange: (state: McpRepoState | null) => void;
+}) {
+  const override = server.repoOverrides?.[repoPath];
+  const baseline = server.enabled ? "On" : "Optional";
+  return (
+    <Select
+      value={override ?? "default"}
+      onValueChange={(v) =>
+        v && onChange(v === "default" ? null : (v as McpRepoState))
+      }
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label={`Availability of ${server.name} in this repo`}
+        className={`w-auto gap-1 ${override ? "" : "text-muted-foreground"}`}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="default">Default · {baseline}</SelectItem>
+        <SelectItem value="on">On</SelectItem>
+        <SelectItem value="optional">Optional</SelectItem>
+        <SelectItem value="off">Off</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
 export const McpServersSection = withForm({
   ...settingsFormOpts,
   render: function McpServersSectionRender({ form }) {
@@ -422,6 +529,7 @@ export const McpServersSection = withForm({
     const [activeIndex, setActiveIndex] = useState(-1);
     const listRef = useRef<HTMLDivElement>(null);
     const repoPath = useUiStore((s) => s.repoPath);
+    const repoName = useUiStore((s) => s.repoName);
 
     const list = servers ?? [];
 
@@ -456,9 +564,72 @@ export const McpServersSection = withForm({
       setServers(list.map((s) => (s.id === server.id ? { ...s, enabled } : s)));
     }
 
+    // Set (or clear, when null = "follow the global default") a global server's
+    // per-repo state override for the open repo.
+    function setRepoOverride(
+      server: McpServer,
+      rp: string,
+      state: McpRepoState | null,
+    ) {
+      setServers(
+        list.map((s) => {
+          if (s.id !== server.id) return s;
+          const overrides = { ...(s.repoOverrides ?? {}) };
+          if (state) overrides[rp] = state;
+          else delete overrides[rp];
+          const next: McpServer = { ...s, repoOverrides: overrides };
+          if (Object.keys(overrides).length === 0)
+            next.repoOverrides = undefined;
+          return next;
+        }),
+      );
+    }
+
+    // Group by scope so global vs repo-specific servers read as distinct sets.
+    const groups: {
+      key: string;
+      label: string;
+      hint?: string;
+      servers: McpServer[];
+    }[] = [
+      {
+        key: "global",
+        label: "Global — all repositories",
+        // With a repo open, the per-row control sets this repo's override.
+        hint: repoPath
+          ? "Set how each behaves in this repo, or Default to follow the global setting."
+          : undefined,
+        servers: list.filter((s) => serverScope(s) === MCP_SCOPE_GLOBAL),
+      },
+      {
+        key: "repo",
+        label: `This repo — ${repoName ?? (repoPath ? repoBasename(repoPath) : "")}`,
+        servers: repoPath
+          ? list.filter((s) => serverScope(s) === repoPath)
+          : [],
+      },
+      {
+        key: "other",
+        label: "Other repositories",
+        servers: list.filter((s) => {
+          const sc = serverScope(s);
+          return sc !== MCP_SCOPE_GLOBAL && sc !== repoPath;
+        }),
+      },
+    ].filter((g) => g.servers.length > 0);
+    // Flattened in display order, so arrow-key nav follows what's on screen.
+    const ordered = groups.flatMap((g) => g.servers);
+    const indexById = new Map(ordered.map((s, i) => [s.id, i]));
+    const showHeaders = groups.length > 1;
+    // Removing/adding rows changes `ordered`'s length but not `activeIndex`, so
+    // clamp the stale value (keeping -1 = "nothing active yet") to avoid leaving
+    // no row focusable when the active row is removed.
+    const safeActive =
+      activeIndex >= ordered.length ? ordered.length - 1 : activeIndex;
+
     const onKeyDown = listKeyboardNav<McpServer>({
-      items: list,
-      activeIndex,
+      items: ordered,
+      activeIndex: safeActive,
       onActivate: (_s, to) => setActiveIndex(to),
       rowKey: (s) => s.id,
       rowAttr: "data-mcp-row",
@@ -502,67 +673,102 @@ export const McpServersSection = withForm({
             composer's server picker.
           </p>
         ) : (
-          <div
-            ref={listRef}
-            role="listbox"
-            aria-label="MCP servers"
-            tabIndex={-1}
-            onKeyDown={onKeyDown}
-            className="space-y-2"
-          >
-            {list.map((server, i) => (
+          // A roving-focus list (arrow keys move between rows); grouped by scope.
+          <div ref={listRef} onKeyDown={onKeyDown} className="space-y-3">
+            {groups.map((g) => (
               <div
-                key={server.id}
-                data-mcp-row={server.id}
-                role="option"
-                aria-selected={i === activeIndex}
-                tabIndex={
-                  i === activeIndex || (activeIndex === -1 && i === 0) ? 0 : -1
-                }
-                onFocus={() => setActiveIndex(i)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    setEditing(server);
-                  }
-                }}
-                className="flex items-center gap-2 rounded border px-3 py-2 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                key={g.key}
+                role="group"
+                aria-label={g.label}
+                className="space-y-2"
               >
-                <span className="shrink-0 font-mono text-xs font-medium">
-                  {server.name}
-                </span>
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground uppercase">
-                  {server.transport}
-                </span>
-                {server.description && (
-                  <span className="truncate text-xs text-muted-foreground">
-                    {server.description}
-                  </span>
+                {showHeaders && (
+                  <div className="space-y-0.5">
+                    <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                      {g.label}
+                    </p>
+                    {g.hint && (
+                      <p className="text-[11px] text-muted-foreground">
+                        {g.hint}
+                      </p>
+                    )}
+                  </div>
                 )}
-                <div className="ml-auto flex shrink-0 items-center gap-1">
-                  <Switch
-                    size="sm"
-                    checked={server.enabled}
-                    onCheckedChange={(v) => toggleEnabled(server, v)}
-                    aria-label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Edit ${server.name}`}
-                    onClick={() => setEditing(server)}
-                  >
-                    <PencilSimpleIcon />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Remove ${server.name}`}
-                    onClick={() => removeServer(server)}
-                  >
-                    <XIcon />
-                  </Button>
-                </div>
+                {g.servers.map((server) => {
+                  const i = indexById.get(server.id) ?? 0;
+                  const isGlobal = serverScope(server) === MCP_SCOPE_GLOBAL;
+                  return (
+                    <div
+                      key={server.id}
+                      data-mcp-row={server.id}
+                      aria-label={`${server.name}, ${server.transport}, ${effectiveMcpState(
+                        server,
+                        repoPath,
+                      )}. Press Enter to edit.`}
+                      tabIndex={
+                        i === safeActive || (safeActive === -1 && i === 0)
+                          ? 0
+                          : -1
+                      }
+                      onFocus={() => setActiveIndex(i)}
+                      onKeyDown={(e) => {
+                        // Only the row itself edits on Enter — not when a child
+                        // control (the state picker / switch / buttons) is focused.
+                        if (e.key === "Enter" && e.target === e.currentTarget) {
+                          e.preventDefault();
+                          setEditing(server);
+                        }
+                      }}
+                      className="flex items-center gap-2 rounded border px-3 py-2 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <span className="shrink-0 font-mono text-xs font-medium">
+                        {server.name}
+                      </span>
+                      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground uppercase">
+                        {server.transport}
+                      </span>
+                      {server.description && (
+                        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                          {server.description}
+                        </span>
+                      )}
+                      <div className="ml-auto flex shrink-0 items-center gap-1">
+                        {isGlobal && repoPath ? (
+                          <PerRepoStateControl
+                            server={server}
+                            repoPath={repoPath}
+                            onChange={(state) =>
+                              setRepoOverride(server, repoPath, state)
+                            }
+                          />
+                        ) : (
+                          <Switch
+                            size="sm"
+                            checked={server.enabled}
+                            onCheckedChange={(v) => toggleEnabled(server, v)}
+                            aria-label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
+                          />
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Edit ${server.name}`}
+                          onClick={() => setEditing(server)}
+                        >
+                          <PencilSimpleIcon />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Remove ${server.name}`}
+                          onClick={() => removeServer(server)}
+                        >
+                          <XIcon />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>
@@ -575,6 +781,8 @@ export const McpServersSection = withForm({
             others={list.filter(
               (s) => editing === "new" || s.id !== editing.id,
             )}
+            repoPath={repoPath}
+            repoName={repoName}
             onSave={saveServer}
             onClose={() => setEditing(null)}
           />
@@ -614,16 +822,23 @@ function ImportMcpDialog({
   const [candidates, setCandidates] = useState<ImportCandidate[]>([]);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
+  // Read the registry through a ref so discovery runs once (keyed on repoPath)
+  // and isn't re-triggered — wiping the user's ticks — by the parent handing a
+  // new `existing` array reference on re-render.
+  const existingRef = useRef(existing);
+  existingRef.current = existing;
 
   useEffect(() => {
     let alive = true;
     const existingNames = new Set(
-      existing.map((s) => s.name.trim().toLowerCase()),
+      existingRef.current.map((s) => s.name.trim().toLowerCase()),
     );
     discoverMcpServers(repoPath)
       .then((found) => {
         if (!alive) return;
-        const cands = found.map((d) => toImportCandidate(d, existingNames));
+        const cands = found.map((d) =>
+          toImportCandidate(d, existingNames, repoPath),
+        );
         setCandidates(cands);
         // Pre-tick everything that isn't already in the registry.
         setPicked(
@@ -639,7 +854,7 @@ function ImportMcpDialog({
     return () => {
       alive = false;
     };
-  }, [repoPath, existing]);
+  }, [repoPath]);
 
   const toggle = (id: string, on: boolean) =>
     setPicked((prev) => {
