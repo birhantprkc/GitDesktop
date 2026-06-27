@@ -21,7 +21,12 @@ import {
 } from "@/lib/ai/slash";
 import { useAgentCommands, useTrackedFiles } from "@/lib/git/queries";
 import { quickTransition } from "@/lib/motion";
-import { isServerAvailable, isServerDefaultOn } from "@/lib/settings/mcp";
+import {
+  isServerAvailable,
+  isServerDefaultOn,
+  mcpServerUsableBy,
+  mcpSupportedFor,
+} from "@/lib/settings/mcp";
 import { useSettings } from "@/lib/settings/queries";
 import { cn } from "@/lib/utils";
 import {
@@ -79,6 +84,7 @@ export function SessionComposer({
   const send = useSessionsStore((s) => s.send);
   const setModel = useSessionsStore((s) => s.setModel);
   const setEffort = useSessionsStore((s) => s.setEffort);
+  const setSessionMcp = useSessionsStore((s) => s.setSessionMcp);
   const cancel = useSessionsStore((s) => s.cancel);
   const creating = useSessionsStore((s) => s.creating);
   const pendingTask = useSessionsStore((s) => s.pendingTask);
@@ -236,15 +242,41 @@ export function SessionComposer({
       ),
     [settings.data?.mcpServers, repoPath],
   );
+  const isContainer = settings.data?.agentIsolation === "container";
+  // Servers the chosen agent can actually run (Codex = local/stdio only).
+  const mcpServersForAgent = useMemo(
+    () => mcpRegistry.filter((s) => mcpServerUsableBy(s, startAgent)),
+    [mcpRegistry, startAgent],
+  );
   const enabledMcpIds = useMemo(
     () =>
-      mcpRegistry
+      mcpServersForAgent
         .filter((s) => isServerDefaultOn(s, repoPath))
         .map((s) => s.id),
-    [mcpRegistry, repoPath],
+    [mcpServersForAgent, repoPath],
   );
   const effectiveMcp = startMcp ?? enabledMcpIds;
-  const isContainer = settings.data?.agentIsolation === "container";
+  // MCP runs on Claude (host) and Codex (container). Show the picker for both and
+  // explain when the current isolation is the wrong one for the chosen agent.
+  const mcpUsable = mcpSupportedFor(startAgent, isContainer);
+  const mcpDisabledReason =
+    startAgent === "claude" && isContainer
+      ? "MCP runs on host sessions for Claude — switch isolation in Settings → AI"
+      : startAgent === "codex" && !isContainer
+        ? "Codex runs MCP in container sessions — switch isolation in Settings → AI"
+        : undefined;
+  // For an ACTIVE session the agent + isolation are fixed, so gate on the session's
+  // own values and let the user re-pick servers (applies from the next turn).
+  const sessionMcpUsable = session
+    ? mcpSupportedFor(session.agent, session.isolation === "container")
+    : false;
+  const sessionMcpServers = useMemo(
+    () =>
+      session
+        ? mcpRegistry.filter((s) => mcpServerUsableBy(s, session.agent))
+        : [],
+    [mcpRegistry, session],
+  );
   const discovered = useAgentCommands(
     repoPath,
     agent,
@@ -277,8 +309,12 @@ export function SessionComposer({
         startAgent,
         startEffort,
         undefined,
-        // MCP is Tier-1 Claude-host only; other agents/container ignore it.
-        startAgent === "claude" ? effectiveMcp : undefined,
+        // MCP: Claude (host) or Codex (container) — pass only the agent-runnable picks.
+        mcpUsable
+          ? effectiveMcp.filter((id) =>
+              mcpServersForAgent.some((s) => s.id === id),
+            )
+          : undefined,
       );
   };
 
@@ -578,6 +614,7 @@ export function SessionComposer({
                   onChange={(a) => {
                     setStartAgent(a);
                     setStartModel(""); // model lists differ between agents
+                    setStartMcp(null); // re-derive the new agent's default servers
                   }}
                 />
               )}
@@ -587,16 +624,21 @@ export function SessionComposer({
               {(session || mode === "single") && (
                 <EffortPicker value={effort} onChange={onEffort} />
               )}
-              {!session && mode === "single" && startAgent === "claude" && (
+              {!session &&
+                mode === "single" &&
+                (startAgent === "claude" || startAgent === "codex") && (
+                  <McpServersPicker
+                    servers={mcpServersForAgent}
+                    value={effectiveMcp}
+                    onChange={setStartMcp}
+                    disabledReason={mcpDisabledReason}
+                  />
+                )}
+              {session && sessionMcpUsable && (
                 <McpServersPicker
-                  servers={mcpRegistry}
-                  value={effectiveMcp}
-                  onChange={setStartMcp}
-                  disabledReason={
-                    isContainer
-                      ? "MCP runs on host sessions — switch isolation in Settings → General"
-                      : undefined
-                  }
+                  servers={sessionMcpServers}
+                  value={session.mcpServers ?? []}
+                  onChange={(ids) => setSessionMcp(session.id, ids)}
                 />
               )}
               {!session && <RunModePicker value={mode} onChange={setMode} />}

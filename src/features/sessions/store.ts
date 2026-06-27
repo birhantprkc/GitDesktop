@@ -13,11 +13,16 @@ import {
 } from "@/lib/git/worktree";
 import { notify } from "@/lib/notify";
 import { loadSettings } from "@/lib/settings/api";
-import { isServerAvailable } from "@/lib/settings/mcp";
+import {
+  isServerAvailable,
+  mcpServerUsableBy,
+  mcpSupportedFor,
+} from "@/lib/settings/mcp";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
 import {
   appendEffort,
+  appendMcp,
   appendModel,
   appendNativeSession,
   appendResult,
@@ -76,7 +81,7 @@ export interface AgentSession {
   /** Which CLI drives the session, fixed at creation. */
   agent: "claude" | "codex" | "copilot" | "opencode";
   /** Ids of the MCP servers this session opted into (resolved to their registry
-   *  definitions at each turn). Fixed at creation; absent/empty = no MCP. */
+   *  definitions at each turn). Changeable mid-session; absent/empty = no MCP. */
   mcpServers?: string[];
   /** The CLI's native resume id, captured from turn 1 (Codex thread / opencode
    *  session) — lets a host session resume the right conversation (each shares its
@@ -153,6 +158,8 @@ interface SessionsState {
   send: (id: string, prompt: string) => Promise<void>;
   setModel: (id: string, model: string) => void;
   setEffort: (id: string, effort: string) => void;
+  /** Change a live session's opted-in MCP servers; applies from the next turn. */
+  setSessionMcp: (id: string, mcpServers: string[]) => void;
   cancel: (id: string) => Promise<void>;
   keep: (id: string, squash: boolean) => Promise<void>;
   /** Best-of-N resolution: keep session `id` (the winner), then discard its idle,
@@ -255,7 +262,10 @@ async function runTurn(
   const mcpIds = s0.mcpServers ?? [];
   const mcpServers = mcpIds.length
     ? ((await loadSettings().catch(() => null))?.mcpServers ?? []).filter(
-        (srv) => mcpIds.includes(srv.id) && isServerAvailable(srv, s0.repoPath),
+        (srv) =>
+          mcpIds.includes(srv.id) &&
+          isServerAvailable(srv, s0.repoPath) &&
+          mcpServerUsableBy(srv, s0.agent),
       )
     : undefined;
 
@@ -339,10 +349,16 @@ async function runTurn(
           patchTurn({
             costUsd: ev.costUsd,
             statusText: "",
+            // Codex delivers its whole message in the done event, not as `delta`s
+            // (parse_codex_line accumulates and surfaces it at turn end), so adopt
+            // `ev.text` when nothing was streamed — otherwise the turn shows blank.
+            // Streaming agents already have `narration`, so this leaves them as-is.
+            ...(ev.text && !last.narration ? { narration: ev.text } : {}),
             ...(ev.isError
               ? {
                   status: "error",
-                  error: last.narration || "The agent reported an error.",
+                  error:
+                    last.narration || ev.text || "The agent reported an error.",
                 }
               : {}),
           });
@@ -488,9 +504,11 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       effort,
       isolation,
       agent,
-      // Containers don't deliver MCP yet (Tier 1 = host); drop the selection so a
-      // container session never carries servers the backend would reject.
-      mcpServers: isolation === "container" ? undefined : mcpServers,
+      // MCP runs on Claude (host) and Codex (container); drop the selection for any
+      // other combo so a session never carries servers the backend would reject.
+      mcpServers: mcpSupportedFor(agent, isolation === "container")
+        ? mcpServers
+        : undefined,
       ensembleId,
       running: false,
       kept: false,
@@ -578,6 +596,17 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       sessions: get().sessions.map((s) => (s.id === id ? { ...s, effort } : s)),
     });
     persist(appendEffort(id, effort));
+  },
+
+  // Mid-session MCP change: update live state (runTurn re-resolves ids→specs each
+  // turn, so it takes effect next turn) and persist so a reload keeps the choice.
+  setSessionMcp: (id, mcpServers) => {
+    set({
+      sessions: get().sessions.map((s) =>
+        s.id === id ? { ...s, mcpServers } : s,
+      ),
+    });
+    persist(appendMcp(id, mcpServers));
   },
 
   cancel: async (id) => {

@@ -33,8 +33,22 @@ commit list.
   servers only show up in that repo's sessions and the registry stays tidy. And a shared
   **global server can be tuned per repo** — set it **On**, **Optional** (available but off
   by default), or **Off** for the repo you're in, or leave it on **Default** to follow the
-  global setting. (Codex/Copilot/opencode and container sessions are coming next;
+  global setting. (Copilot/opencode are coming next;
   [design](docs/mcp-agent-sessions-tier1.md).)
+
+- **MCP servers for Codex (container sessions).** Codex agent sessions can now use your
+  registered MCP servers too — in **container** isolation. (Host Codex can't approve MCP
+  tool calls non-interactively — an upstream limitation — but a container session bypasses
+  approvals safely because the container *is* the sandbox.) The composer's **MCP** picker
+  now appears for Codex and tells you to switch to container isolation if you're on host;
+  it offers **local (`stdio`) servers** (Codex's remote-MCP config can't carry the arbitrary
+  headers our HTTP servers use). Your picks are written into the session's sandboxed Codex
+  config — secrets stay in the OS keychain, never in the command line — and, because a
+  container's Codex home is clean, the session sees *only* the servers you picked.
+
+- **Change a session's MCP servers mid-conversation.** The composer's **MCP** picker now
+  appears on an active session too, not just a new one — toggle servers on or off and the
+  new selection applies from your next turn (and survives a reload).
 
 - **GitHub Pages config, in the app.** A new **Pages** tab in repository settings: enable
   Pages from a branch + folder or via **GitHub Actions**, see the live URL and build
@@ -243,6 +257,11 @@ commit list.
   skills committed to the repo were visible there.
 
 ### Fixed
+
+- **Codex agent sessions no longer show a blank "No response."** Codex delivers its whole
+  reply at the end of a turn (it doesn't stream it incrementally like the other CLIs), and
+  the session view was discarding that final message — so every Codex turn looked empty.
+  The message is now displayed.
 
 - **A finished plan or agent run on a background tab now notifies you.** The OS
   notification for a completed plan/session was suppressed whenever the window was

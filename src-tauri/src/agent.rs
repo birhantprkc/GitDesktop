@@ -1405,29 +1405,56 @@ pub async fn agent_session(
     // `mcp__<server>` allowlist entries so the opted-in servers' tools are usable:
     // loading them via `--mcp-config` does NOT admit them past `--tools` (proven by
     // live testing — the server connected but its tools stayed uncallable without this).
+    // (Claude only; Codex needs no tool allowlist under the container's bypass.)
     let mcp_tools = crate::mcp::tool_allow_patterns(&mcp_specs);
-    let mcp_config_path: Option<String> = if mcp_specs.is_empty() {
-        None
-    } else {
-        match kind {
-            AgentKind::Claude if !container => {
-                crate::mcp::write_host_config(&app, &session_id, &mcp_specs)?
-                    .map(|p| p.to_string_lossy().into_owned())
+    // Each CLI takes its MCP config differently:
+    //  - Claude (host): a JSON file via `--mcp-config` in strict mode (set here).
+    //  - Codex (container ONLY): a `config.toml` written into the mounted ~/.codex
+    //    home in the container branch below — host Codex cancels every MCP tool call
+    //    (stdin EOF → "declined", upstream), while the container already bypasses
+    //    approvals so its tool calls run. stdio servers only (validated here).
+    // Anything else is rejected with an actionable message, never silently dropped.
+    let mut mcp_config_path: Option<String> = None;
+    if !mcp_specs.is_empty() {
+        crate::mcp::validate_specs(&mcp_specs)?;
+        match (kind, container) {
+            (AgentKind::Claude, false) => {
+                mcp_config_path = crate::mcp::write_host_config(&app, &session_id, &mcp_specs)?
+                    .map(|p| p.to_string_lossy().into_owned());
             }
-            AgentKind::Claude => {
+            (AgentKind::Codex, true) => {
+                // The config.toml is written once the ~/.codex home is seeded (below);
+                // reject a remote server now so the failure is clear and pre-flight.
+                if let Some(remote) = mcp_specs.iter().find(|s| s.transport != "stdio") {
+                    return Err(AppError::Command(format!(
+                        "Codex sessions support local (stdio) MCP servers only right now; \
+                         \"{}\" is a remote server.",
+                        remote.name
+                    )));
+                }
+            }
+            (AgentKind::Codex, false) => {
                 return Err(AppError::Command(
-                    "MCP servers aren't available for container sessions yet — \
-                     they run on host sessions for now."
+                    "Codex runs MCP servers in container sessions only — host Codex can't \
+                     approve MCP tool calls. Turn on container isolation in Settings → AI."
+                        .into(),
+                ));
+            }
+            (AgentKind::Claude, true) => {
+                return Err(AppError::Command(
+                    "MCP servers aren't available for container Claude sessions yet — \
+                     they run on host Claude sessions for now."
                         .into(),
                 ));
             }
             _ => {
                 return Err(AppError::Command(
-                    "MCP servers are only supported for Claude sessions right now.".into(),
+                    "MCP servers work with Claude (host) and Codex (container) sessions right now."
+                        .into(),
                 ));
             }
         }
-    };
+    }
 
     // The inner CLI invocation + the stdin for this turn. Claude carries the
     // system prompt as a flag; Codex has none, so it's prepended on stdin (turn
@@ -1592,6 +1619,21 @@ pub async fn agent_session(
             ));
         }
         let home = crate::agent_sandbox::seed_session_home(&app, &session_id, agent_name)?;
+        // Codex reads MCP servers from `~/.codex/config.toml`. Make the file a
+        // faithful per-turn projection of the opted-in servers: write it when there
+        // are any (secrets in the file, never argv; the seeded home has only
+        // `auth.json`, so these are the ONLY source — strict), and REMOVE a stale one
+        // when this turn has none, so a server de-selected mid-session (re-scoped /
+        // set per-repo "off") stops loading. Codex reads it implicitly — unlike
+        // Claude's `--strict-mcp-config`, there's no flag to ignore a stale file.
+        if kind == AgentKind::Codex {
+            let config_path = home.join("config.toml");
+            if mcp_specs.is_empty() {
+                let _ = std::fs::remove_file(&config_path);
+            } else {
+                std::fs::write(&config_path, crate::mcp::build_codex_config(&mcp_specs)?)?;
+            }
+        }
         let name = crate::agent_sandbox::container_name(&session_id);
         // Mount the user's global skills read-only so a skill nudged by name resolves
         // in-container (the worktree only carries project skills). None if absent.

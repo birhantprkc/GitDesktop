@@ -66,6 +66,11 @@ export const appendModel = (id: string, model: string) =>
 export const appendEffort = (id: string, effort: string) =>
   invoke<void>("transcript_append_meta", { id, effort });
 
+/** Record a mid-session MCP-server selection change — the full opted-in id list,
+ *  folded last-wins (so a reload restores the latest choice). */
+export const appendMcp = (id: string, mcpServers: string[]) =>
+  invoke<void>("transcript_append_meta", { id, mcpServers });
+
 /** Record the CLI's native resume id (captured from turn 1 — Codex thread / opencode
  *  session), so a host session resumes the right conversation after a reload. Folded
  *  last-wins, same `meta` event as the model. */

@@ -484,8 +484,11 @@ Register **Model Context Protocol** servers under **Settings → MCP servers** �
 **secrets kept in your OS keychain**, never in your settings file. Each session opts into
 the ones you choose from the composer's **MCP** picker, and GitDesktop passes *only* those
 to the agent in strict mode, so a run never inherits other MCP servers on your machine.
-The selection is fixed when the session starts. (Today this covers **Claude** sessions on
-the **host**; the other agents and container sessions are on the way.)
+Two combinations work today: **Claude on the host**, and **Codex in a container session**
+(local/\`stdio\` servers; host Codex can't approve MCP tool calls, so it needs the container's
+sandbox). The composer's **MCP** picker shows for both and tells you when to switch isolation.
+You can also change the selection **mid-session** — the picker appears in a running session's
+reply box too, and a new choice applies from your next turn. Copilot and opencode are on the way.
 
 New to MCP? **Browse** opens the official Model Context Protocol registry right in that
 panel — search it and add a server in a click; it arrives **disabled** for you to review

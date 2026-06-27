@@ -142,6 +142,10 @@ struct MetaEvent {
     /// A mid-session effort change. Absent on a model/resume-id-only meta event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     effort: Option<String>,
+    /// A mid-session MCP-server selection change (the full opted-in id list).
+    /// Absent on other meta events; folded last-wins like the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp_servers: Option<Vec<String>>,
 }
 
 // ----------------------------------------------------------------- folded (read) view
@@ -274,6 +278,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
     let mut kept = false;
     let mut head_hash = header.base.clone();
     let mut native_session_id: Option<String> = None;
+    let mut mcp_servers = header.mcp_servers.clone();
 
     for e in events {
         match e {
@@ -317,6 +322,9 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
                 if let Some(sid) = &m.native_session_id {
                     native_session_id = Some(sid.clone());
                 }
+                if let Some(servers) = &m.mcp_servers {
+                    mcp_servers = servers.clone();
+                }
             }
         }
     }
@@ -334,7 +342,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
         agent: header.agent,
         effort,
         native_session_id,
-        mcp_servers: header.mcp_servers,
+        mcp_servers,
         running: false,
         kept,
         turns,
@@ -573,6 +581,7 @@ pub async fn transcript_append_meta(
     model: Option<String>,
     native_session_id: Option<String>,
     effort: Option<String>,
+    mcp_servers: Option<Vec<String>>,
 ) -> AppResult<()> {
     append_to_dir(
         &sessions_dir(&app)?,
@@ -582,6 +591,7 @@ pub async fn transcript_append_meta(
             model,
             native_session_id,
             effort,
+            mcp_servers,
         }),
     )
 }

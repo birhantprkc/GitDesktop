@@ -63,6 +63,24 @@ export function isServerDefaultOn(
   );
 }
 
+/** Whether an (agent, isolation) combination can run MCP servers at all.
+ *  Claude: host only (container delivery isn't wired). Codex: container only —
+ *  host `codex exec` cancels every MCP tool call (stdin EOF → "declined", an
+ *  upstream limitation), while a container session bypasses approvals so they run.
+ *  Other CLIs: not yet. Shared by the composer (gating) and the store (persist). */
+export function mcpSupportedFor(agent: string, isContainer: boolean): boolean {
+  if (agent === "claude") return !isContainer;
+  if (agent === "codex") return isContainer;
+  return false;
+}
+
+/** Whether a specific server can run under `agent`. Codex's MCP config only takes
+ *  local (stdio) servers cleanly (its remote support is bearer-token-only, not the
+ *  arbitrary headers our http servers carry), so http servers aren't offered to it. */
+export function mcpServerUsableBy(server: McpServer, agent: string): boolean {
+  return agent === "codex" ? server.transport === "stdio" : true;
+}
+
 /** A blank server for the "Add" dialog. stdio + global are the common defaults;
  *  the dialog's scope control narrows it to the open repo when wanted. */
 export function emptyMcpServer(): McpServer {
