@@ -493,6 +493,14 @@ shows for every agent and tells you when to switch isolation. You can also chang
 selection **mid-session** — the picker appears in a running session's reply box too, and a
 new choice applies from your next turn.
 
+**The other direction — GitDesktop *as* a server.** At the bottom of the panel, **Use
+GitDesktop as an MCP server** gives you a ready-to-paste config snippet so any external MCP
+client — Claude Desktop, Cursor, Claude Code — can use *this* repo's **read-only** git &
+GitHub tools (status, log, diffs, blame, branches, file history/read, PRs, issues, CI logs).
+The app itself runs as a stdio server (\`gitdesktop mcp --repo <path>\`) exposing only read
+tools, so an agent can understand a repo without changing it. Copy it, paste it into your
+client's MCP config, done.
+
 New to MCP? **Browse** opens the official Model Context Protocol registry right in that
 panel — search it and add a server in a click; it arrives **disabled** for you to review
 and enable. You can also reach it from the command palette (*Browse MCP registry*). Each

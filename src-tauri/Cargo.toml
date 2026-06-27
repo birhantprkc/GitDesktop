@@ -5,9 +5,6 @@ description = "A fast, native desktop Git client"
 authors = ["theBGuy"]
 edition = "2021"
 license = "Apache-2.0"
-# Two binaries exist — the GUI app (`gitdesktop`) and the Tier-3 `gitdesktop-mcp`
-# stdio server — so `cargo run` / `tauri dev` must be told which is the default.
-default-run = "gitdesktop"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -17,18 +14,6 @@ default-run = "gitdesktop"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "gitdesktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
-
-# Tier-3 "GitDesktop AS an MCP server" lives in a second binary that reuses the
-# lib crate's command cores. Gated behind the `mcp-server` feature + this target's
-# required-features, so a normal `cargo build` / `tauri build` skips it and the GUI
-# app never compiles or links rmcp. See docs/mcp-server-tier3.md.
-[[bin]]
-name = "gitdesktop-mcp"
-path = "src/mcp_bin.rs"
-required-features = ["mcp-server"]
-
-[features]
-mcp-server = ["dep:rmcp"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -51,9 +36,10 @@ base64 = "0.22.1"
 tauri-plugin-notification = "2.3.3"
 os_info = "3"
 portable-pty = "0.9"
-# Tier-3 MCP server only (see the [[bin]] above). Optional so the GUI app build
-# doesn't pull it in.
-rmcp = { version = "1", optional = true, features = ["server", "macros", "transport-io"] }
+# Tier-3 "GitDesktop AS an MCP server" — the read-only stdio server reached via the
+# `gitdesktop mcp` subcommand (see main.rs + docs/mcp-server-tier3.md). Linked into
+# the main binary so a shipped app can act as an MCP server with nothing extra to bundle.
+rmcp = { version = "1", features = ["server", "macros", "transport-io"] }
 
 # Desktop-only: the updater plugin doesn't build for mobile.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

@@ -2,6 +2,7 @@ import {
   ArrowSquareOutIcon,
   CaretRightIcon,
   CheckIcon,
+  CopyIcon,
   DownloadSimpleIcon,
   LockSimpleIcon,
   LockSimpleOpenIcon,
@@ -44,8 +45,9 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { copyText } from "@/lib/clipboard";
 import { withForm } from "@/lib/form";
-import { deleteMcpSecret, setMcpSecret } from "@/lib/git/api";
+import { appExePath, deleteMcpSecret, setMcpSecret } from "@/lib/git/api";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import type { McpServer } from "@/lib/settings/api";
 import {
@@ -547,6 +549,103 @@ function PerRepoStateControl({
   );
 }
 
+/** Bottom-of-section disclosure: the inverse of the rest of this panel. Instead of
+ *  consuming MCP servers, expose GitDesktop's OWN read-only git/GitHub tools to
+ *  external clients, which run the app as a stdio server via `gitdesktop mcp`.
+ *  Collapsed by default — it's a one-time setup, not part of the daily list. */
+function GitDesktopAsServer({ repoPath }: { repoPath: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  // The command is this app's own executable; resolved once (it can't change
+  // mid-session). Falls back to a bare name only while the path is loading.
+  const { data: exePath } = useQuery({
+    queryKey: ["app-exe-path"],
+    queryFn: appExePath,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+
+  const snippet = JSON.stringify(
+    {
+      mcpServers: {
+        gitdesktop: {
+          command: exePath ?? "GitDesktop",
+          args: ["mcp", "--repo", repoPath ?? "<path to your repo>"],
+        },
+      },
+    },
+    null,
+    2,
+  );
+
+  async function copy() {
+    await copyText(snippet);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <div className="border-t pt-4">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls="gd-as-mcp-config"
+        className="flex w-full items-start gap-2 rounded text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        <CaretRightIcon
+          className={`mt-0.5 shrink-0 text-muted-foreground transition-transform ${
+            open ? "rotate-90" : ""
+          }`}
+        />
+        <span className="min-w-0">
+          <span className="block text-sm font-medium">
+            Use GitDesktop as an MCP server
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            Let Claude Desktop, Cursor, or Claude Code use this repo's git &amp;
+            GitHub tools — read-only, over stdio.
+          </span>
+        </span>
+      </button>
+
+      {open && (
+        <div id="gd-as-mcp-config" className="mt-3 space-y-2 pl-6">
+          {!repoPath && (
+            <p className="text-xs text-muted-foreground">
+              No repository open — replace{" "}
+              <code className="font-mono">&lt;path to your repo&gt;</code> with
+              the repo you want to expose.
+            </p>
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-muted-foreground">
+              Paste into your client's MCP config
+            </span>
+            <Button type="button" variant="ghost" size="sm" onClick={copy}>
+              {copied ? (
+                <>
+                  <CheckIcon data-icon="inline-start" /> Copied
+                </>
+              ) : (
+                <>
+                  <CopyIcon data-icon="inline-start" /> Copy
+                </>
+              )}
+            </Button>
+          </div>
+          <pre className="overflow-x-auto rounded border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">
+            {snippet}
+          </pre>
+          <p className="text-xs text-muted-foreground">
+            Read-only · stdio · exposes git &amp; GitHub tools (status, log,
+            diff, blame, PRs, issues, CI).
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const McpServersSection = withForm({
   ...settingsFormOpts,
   render: function McpServersSectionRender({ form }) {
@@ -834,6 +933,8 @@ export const McpServersSection = withForm({
             ))}
           </div>
         )}
+
+        <GitDesktopAsServer repoPath={repoPath} />
 
         {editing !== null && (
           <McpServerDialog

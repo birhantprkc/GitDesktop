@@ -12,6 +12,13 @@ commit list.
 
 ### Added
 
+- **Use GitDesktop as an MCP server.** GitDesktop can now *be* a Model Context Protocol
+  server, not just consume them. A new **Use GitDesktop as an MCP server** panel in
+  **Settings → MCP servers** shows a ready-to-paste config snippet that points any external
+  MCP client — Claude Desktop, Cursor, Claude Code — at this repo. The app runs as a
+  **read-only** stdio server (`gitdesktop mcp --repo <path>`) exposing ~20 git & GitHub tools
+  (status, log, diffs, blame, branches, file history/read, PRs, issues, CI logs), so an agent
+  can *understand* a repository without changing it.
 - **MCP servers for agent sessions (Claude, host).** A new **Settings → MCP servers**
   panel lets you register Model Context Protocol servers — local (stdio) or remote
   (HTTP), with environment variables / headers and **secrets kept in your OS keychain**

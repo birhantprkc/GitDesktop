@@ -10,7 +10,6 @@ mod health;
 mod hooks;
 mod instructions;
 mod mcp;
-#[cfg(feature = "mcp-server")]
 mod mcp_server;
 mod pty;
 mod secrets;
@@ -20,7 +19,6 @@ mod tray;
 
 use state::AppState;
 
-#[cfg(feature = "mcp-server")]
 pub use mcp_server::run_mcp_server;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -334,6 +332,7 @@ pub fn run() {
             fsops::open_with_program,
             fsops::detect_editors,
             fsops::detect_terminals,
+            fsops::app_exe_path,
             git::remote::git_fetch,
             git::remote::git_pull,
             git::remote::git_push,

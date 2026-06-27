@@ -68,6 +68,12 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   official MCP registry in-app — with GitHub stars, weekly installs, and exactly what
   each one runs shown so you can vet before adding — or **Import** ones you've already
   configured. Change the selection **mid-session**, too.
+- **Use GitDesktop *as* an MCP server** — the reverse direction: expose this repo's
+  **read-only** git & GitHub tools (status, log, diff, blame, branches, file history/read,
+  PRs, issues, CI logs) to any external MCP client — **Claude Desktop**, **Cursor**,
+  **Claude Code**. **Settings → MCP servers** shows a ready-to-paste config snippet; the
+  app runs as a stdio server (`gitdesktop mcp --repo <path>`), so an agent can *understand*
+  a repo without touching it.
 - **Run commands without leaving the app** — every agent session has an integrated
   terminal: a real shell in a resizable bottom dock, toggled with `Ctrl`/`⌘`+`J`. For a
   container session it runs *inside* the session's container — you pick which dev-server

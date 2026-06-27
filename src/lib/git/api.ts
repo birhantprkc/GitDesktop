@@ -1495,6 +1495,10 @@ export const readAgentCommands = (repoPath: string, agent: string) =>
 export const readTextFile = (path: string) =>
   invoke<string>("read_text_file", { path });
 
+/** Absolute path to the running app executable — the command for the "use
+ *  GitDesktop as an MCP server" config snippet (`<exe> mcp --repo <path>`). */
+export const appExePath = () => invoke<string>("app_exe_path");
+
 // Cold-start test mode keeps API keys in an isolated sessionStorage store so
 // the OS keychain (and the user's real keys) are never touched (no-op normally).
 export const setSecret = (provider: string, value: string) =>
