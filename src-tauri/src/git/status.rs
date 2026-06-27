@@ -5,10 +5,12 @@ use crate::git::runner::{run_git, DEFAULT_TIMEOUT};
 use crate::git::types::{BranchHead, ChangeKind, FileEntry, RepoStatus};
 use crate::state::AppState;
 
-#[tauri::command]
-pub async fn git_status(_state: State<'_, AppState>, repo_path: String) -> AppResult<RepoStatus> {
+/// Core of [`git_status`], callable outside a Tauri context (e.g. the Tier-3 MCP
+/// server). The `#[tauri::command]` wrapper only adds the (unused) `State` for
+/// IPC; both call this, so there's a single source of truth and no drift.
+pub async fn status_core(repo_path: &str) -> AppResult<RepoStatus> {
     let out = run_git(
-        Some(&repo_path),
+        Some(repo_path),
         // -uall lists files inside untracked directories individually
         // instead of collapsing them to "dir/"
         &[
@@ -22,6 +24,11 @@ pub async fn git_status(_state: State<'_, AppState>, repo_path: String) -> AppRe
     )
     .await?;
     Ok(parse_status_v2(&out.stdout_lossy()))
+}
+
+#[tauri::command]
+pub async fn git_status(_state: State<'_, AppState>, repo_path: String) -> AppResult<RepoStatus> {
+    status_core(&repo_path).await
 }
 
 fn change_kind(c: char) -> Option<ChangeKind> {

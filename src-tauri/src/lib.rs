@@ -10,6 +10,8 @@ mod health;
 mod hooks;
 mod instructions;
 mod mcp;
+#[cfg(feature = "mcp-server")]
+mod mcp_server;
 mod pty;
 mod secrets;
 mod sessions;
@@ -17,6 +19,9 @@ mod state;
 mod tray;
 
 use state::AppState;
+
+#[cfg(feature = "mcp-server")]
+pub use mcp_server::run_mcp_server;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
