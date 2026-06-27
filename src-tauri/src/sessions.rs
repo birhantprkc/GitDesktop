@@ -685,12 +685,14 @@ mod tests {
                 model: Some("sonnet".into()),
                 native_session_id: None,
                 effort: Some("high".into()),
+                mcp_servers: None,
             }),
             Event::Meta(MetaEvent {
                 ts: 4,
                 model: None,
                 native_session_id: Some("thread-xyz".into()),
                 effort: None,
+                mcp_servers: None,
             }),
             Event::Status(StatusEvent {
                 ts: 5,

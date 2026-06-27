@@ -205,15 +205,46 @@ fn probe_dir(dir: &Path, names: &[&str], exts: &[String]) -> Option<PathBuf> {
 
 fn find_executable(names: &[&str]) -> Option<PathBuf> {
     let exts = exe_exts();
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            if let Some(found) = probe_dir(&dir, names, &exts) {
-                return Some(found);
+    // PATH first, then the known per-tool install dirs.
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    dirs.extend(candidate_dirs());
+
+    // Windows: prefer a real `.exe`/`.com` found ANYWHERE over a `.cmd`/`.bat`
+    // shim that sits earlier on PATH. Two reasons: Rust refuses to pass a
+    // newline-bearing argument to a batch file ("batch file arguments are
+    // invalid"), which our multi-line agent prompts are; and a wrapper shim is the
+    // wrong target anyway — e.g. the VS Code Copilot extension injects a
+    // `copilot.bat` ahead of the real `copilot.exe` on the integrated-terminal
+    // PATH (`pnpm tauri dev` inherits it), so without this we'd spawn the wrapper.
+    // CLIs that ship ONLY a `.cmd` shim (e.g. codex) still resolve in the second
+    // pass below. (Unix `exts` is just `[""]`, so this pass is a no-op there.)
+    #[cfg(windows)]
+    {
+        let exe_only: Vec<&String> = exts
+            .iter()
+            .filter(|e| {
+                let u = e.to_ascii_uppercase();
+                u == ".EXE" || u == ".COM"
+            })
+            .collect();
+        for dir in &dirs {
+            for name in names {
+                for ext in &exe_only {
+                    // No bare-name fallback here: a bare `copilot` next to the
+                    // `.bat` is a bash shim CreateProcess can't run.
+                    let candidate = dir.join(format!("{name}{ext}"));
+                    if candidate.is_file() {
+                        return Some(candidate);
+                    }
+                }
             }
         }
     }
-    for dir in candidate_dirs() {
-        if let Some(found) = probe_dir(&dir, names, &exts) {
+
+    for dir in &dirs {
+        if let Some(found) = probe_dir(dir, names, &exts) {
             return Some(found);
         }
     }
@@ -556,6 +587,7 @@ fn copilot_session_args(
     prompt: &str,
     effort: &str,
     read_only: bool,
+    mcp_config: Option<&str>,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-p".into(),
@@ -565,6 +597,13 @@ fn copilot_session_args(
         "--no-color".into(),
         "--allow-all-tools".into(),
     ];
+    if let Some(path) = mcp_config {
+        // Per-session MCP servers, augmenting (never mutating) the user's
+        // ~/.copilot/mcp-config.json. `@` marks a file path; `--allow-all-tools`
+        // above auto-approves the loaded tools for this non-interactive run.
+        args.push("--additional-mcp-config".into());
+        args.push(format!("@{path}"));
+    }
     if read_only {
         // Read-only Plan conversation: deny every write path (denial takes
         // precedence over allow-all), so reads/search auto-approve but writes are
@@ -1407,19 +1446,37 @@ pub async fn agent_session(
     // live testing — the server connected but its tools stayed uncallable without this).
     // (Claude only; Codex needs no tool allowlist under the container's bypass.)
     let mcp_tools = crate::mcp::tool_allow_patterns(&mcp_specs);
-    // Each CLI takes its MCP config differently:
-    //  - Claude (host): a JSON file via `--mcp-config` in strict mode (set here).
-    //  - Codex (container ONLY): a `config.toml` written into the mounted ~/.codex
-    //    home in the container branch below — host Codex cancels every MCP tool call
-    //    (stdin EOF → "declined", upstream), while the container already bypasses
-    //    approvals so its tool calls run. stdio servers only (validated here).
+    // Each CLI takes its MCP config differently — `mcp_config_path` is the generated
+    // file for whichever host CLI this is, consumed below by:
+    //  - Claude (host): `--mcp-config` in strict mode + a `mcp__<server>` tool allowlist.
+    //  - Copilot (host): `--additional-mcp-config @<path>` (`--allow-all-tools` already
+    //    auto-approves the tools — no allowlist needed; no host-Codex approval wall).
+    //  - opencode (host): the `OPENCODE_CONFIG` env var (`--dangerously-skip-permissions`
+    //    auto-approves; opencode merges, never replaces, the user's config).
+    //  - Codex (container ONLY): a `config.toml` written into the mounted ~/.codex home
+    //    in the container branch below — host Codex cancels every MCP tool call (stdin
+    //    EOF → "declined", upstream), while the container bypasses approvals. stdio only.
     // Anything else is rejected with an actionable message, never silently dropped.
     let mut mcp_config_path: Option<String> = None;
     if !mcp_specs.is_empty() {
         crate::mcp::validate_specs(&mcp_specs)?;
+        let host_only = |label: &str| -> AppResult<()> {
+            Err(AppError::Command(format!(
+                "MCP servers run on host {label} sessions for now — turn container isolation \
+                 off in Settings → AI."
+            )))
+        };
         match (kind, container) {
             (AgentKind::Claude, false) => {
                 mcp_config_path = crate::mcp::write_host_config(&app, &session_id, &mcp_specs)?
+                    .map(|p| p.to_string_lossy().into_owned());
+            }
+            (AgentKind::Copilot, false) => {
+                mcp_config_path = crate::mcp::write_copilot_config(&app, &session_id, &mcp_specs)?
+                    .map(|p| p.to_string_lossy().into_owned());
+            }
+            (AgentKind::Opencode, false) => {
+                mcp_config_path = crate::mcp::write_opencode_config(&app, &session_id, &mcp_specs)?
                     .map(|p| p.to_string_lossy().into_owned());
             }
             (AgentKind::Codex, true) => {
@@ -1440,19 +1497,9 @@ pub async fn agent_session(
                         .into(),
                 ));
             }
-            (AgentKind::Claude, true) => {
-                return Err(AppError::Command(
-                    "MCP servers aren't available for container Claude sessions yet — \
-                     they run on host Claude sessions for now."
-                        .into(),
-                ));
-            }
-            _ => {
-                return Err(AppError::Command(
-                    "MCP servers work with Claude (host) and Codex (container) sessions right now."
-                        .into(),
-                ));
-            }
+            (AgentKind::Claude, true) => return host_only("Claude"),
+            (AgentKind::Copilot, true) => return host_only("Copilot"),
+            (AgentKind::Opencode, true) => return host_only("opencode"),
         }
     }
 
@@ -1520,6 +1567,9 @@ pub async fn agent_session(
                     &prompt,
                     &effort,
                     read_only,
+                    // Host Copilot only — a container session errored out above, so a
+                    // path here always names the host `--additional-mcp-config` file.
+                    mcp_config_path.as_deref(),
                 ),
                 String::new(),
             )
@@ -1673,6 +1723,14 @@ pub async fn agent_session(
             kind.label()
         ))
     })?;
+    // opencode takes its MCP config via the `OPENCODE_CONFIG` env var (it has no
+    // config-file flag); set it only when this host session has servers. opencode
+    // merges config layers, so this adds our servers without replacing the user's.
+    // (Claude/Copilot carry their config in argv, so they need no extra env.)
+    let host_extra_env: Vec<(&str, String)> = match (kind, &mcp_config_path) {
+        (AgentKind::Opencode, Some(path)) => vec![("OPENCODE_CONFIG", path.clone())],
+        _ => Vec::new(),
+    };
     stream_agent(
         &state,
         kind,
@@ -1684,7 +1742,7 @@ pub async fn agent_session(
         &session_id,
         "session",
         None,
-        &[],
+        &host_extra_env,
         &on_event,
     )
     .await

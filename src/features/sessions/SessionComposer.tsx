@@ -256,15 +256,14 @@ export function SessionComposer({
     [mcpServersForAgent, repoPath],
   );
   const effectiveMcp = startMcp ?? enabledMcpIds;
-  // MCP runs on Claude (host) and Codex (container). Show the picker for both and
-  // explain when the current isolation is the wrong one for the chosen agent.
+  // MCP runs on host Claude/Copilot/opencode and on container Codex. Show the picker
+  // for any agent and explain when the current isolation is the wrong one for it.
   const mcpUsable = mcpSupportedFor(startAgent, isContainer);
-  const mcpDisabledReason =
-    startAgent === "claude" && isContainer
-      ? "MCP runs on host sessions for Claude — switch isolation in Settings → AI"
-      : startAgent === "codex" && !isContainer
-        ? "Codex runs MCP in container sessions — switch isolation in Settings → AI"
-        : undefined;
+  const mcpDisabledReason = mcpUsable
+    ? undefined
+    : startAgent === "codex"
+      ? "Codex runs MCP in container sessions — switch isolation in Settings → AI"
+      : "MCP runs on host sessions for this agent — switch isolation in Settings → AI";
   // For an ACTIVE session the agent + isolation are fixed, so gate on the session's
   // own values and let the user re-pick servers (applies from the next turn).
   const sessionMcpUsable = session
@@ -309,7 +308,8 @@ export function SessionComposer({
         startAgent,
         startEffort,
         undefined,
-        // MCP: Claude (host) or Codex (container) — pass only the agent-runnable picks.
+        // MCP: host Claude/Copilot/opencode or container Codex — pass only the
+        // agent-runnable picks (the rest are filtered out for this agent).
         mcpUsable
           ? effectiveMcp.filter((id) =>
               mcpServersForAgent.some((s) => s.id === id),
@@ -626,7 +626,12 @@ export function SessionComposer({
               )}
               {!session &&
                 mode === "single" &&
-                (startAgent === "claude" || startAgent === "codex") && (
+                // Show for any MCP-capable agent: the picker when this isolation is
+                // right (mcpUsable), or the disabled trigger + "switch isolation" hint
+                // when it's wrong (mcpDisabledReason). Driven by the shared predicates
+                // so adding an agent never needs this gate touched again. (The picker
+                // self-hides when no servers are registered for the agent.)
+                (mcpUsable || !!mcpDisabledReason) && (
                   <McpServersPicker
                     servers={mcpServersForAgent}
                     value={effectiveMcp}

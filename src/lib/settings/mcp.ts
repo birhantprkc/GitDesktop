@@ -64,19 +64,24 @@ export function isServerDefaultOn(
 }
 
 /** Whether an (agent, isolation) combination can run MCP servers at all.
- *  Claude: host only (container delivery isn't wired). Codex: container only —
- *  host `codex exec` cancels every MCP tool call (stdin EOF → "declined", an
- *  upstream limitation), while a container session bypasses approvals so they run.
- *  Other CLIs: not yet. Shared by the composer (gating) and the store (persist). */
+ *  Claude / Copilot / opencode: host only — each CLI auto-approves MCP tool calls
+ *  non-interactively (`--mcp-config` / `--additional-mcp-config` + `--allow-all-tools`
+ *  / `OPENCODE_CONFIG` + `--dangerously-skip-permissions`); container delivery for
+ *  these isn't wired yet. Codex: container only — host `codex exec` cancels every
+ *  MCP tool call (stdin EOF → "declined", an upstream limitation), while a container
+ *  session bypasses approvals so they run. Shared by the composer (gating) and the
+ *  store (persist). */
 export function mcpSupportedFor(agent: string, isContainer: boolean): boolean {
-  if (agent === "claude") return !isContainer;
   if (agent === "codex") return isContainer;
+  if (agent === "claude" || agent === "copilot" || agent === "opencode")
+    return !isContainer;
   return false;
 }
 
 /** Whether a specific server can run under `agent`. Codex's MCP config only takes
  *  local (stdio) servers cleanly (its remote support is bearer-token-only, not the
- *  arbitrary headers our http servers carry), so http servers aren't offered to it. */
+ *  arbitrary headers our http servers carry), so http servers aren't offered to it.
+ *  Claude, Copilot, and opencode all take stdio + http. */
 export function mcpServerUsableBy(server: McpServer, agent: string): boolean {
   return agent === "codex" ? server.transport === "stdio" : true;
 }

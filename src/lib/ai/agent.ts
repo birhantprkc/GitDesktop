@@ -119,7 +119,8 @@ export interface AgentSessionArgs {
   nativeSessionId: string | null;
   /** The session's opted-in MCP servers (resolved registry definitions, secrets
    *  excluded — the backend pulls those from the keychain). Omitted = no MCP.
-   *  Tier 1: honored for Claude host sessions only. */
+   *  Honored for host Claude/Copilot/opencode and container Codex sessions (see
+   *  `mcpSupportedFor`); other combinations omit it. */
   mcpServers?: McpServer[];
   onEvent: (event: ReviewEvent) => void;
 }

@@ -58,12 +58,14 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 - **Bring your own MCP servers** — register Model Context Protocol servers (local
   `stdio` or remote HTTP, with secrets kept in your **OS keychain**) under
   **Settings → MCP servers**, then opt a session into the ones you want from the
-  composer's **MCP** picker. A Claude session passes *only* the servers you picked,
-  in strict mode, so it never inherits other MCP servers on your machine. Find new
-  servers by **Browse**-ing the official MCP registry in-app — with GitHub stars, weekly
-  installs, and exactly what each one runs shown so you can vet before adding — or
-  **Import** ones you've already configured. **Codex** sessions can use MCP too, in
-  **container** isolation. (Copilot and opencode are on the way.)
+  composer's **MCP** picker — on **Claude**, **Copilot**, or **opencode** host
+  sessions, or **Codex** in a **container** (host Codex can't approve MCP tool calls,
+  so it needs the sandbox). A Claude session runs in strict mode — *only* the servers
+  you picked, never inheriting others on your machine — while Copilot and opencode
+  layer your picks onto their own config. Find new servers by **Browse**-ing the
+  official MCP registry in-app — with GitHub stars, weekly installs, and exactly what
+  each one runs shown so you can vet before adding — or **Import** ones you've already
+  configured. Change the selection **mid-session**, too.
 - **Run commands without leaving the app** — every agent session has an integrated
   terminal: a real shell in a resizable bottom dock, toggled with `Ctrl`/`⌘`+`J`. For a
   container session it runs *inside* the session's container — you pick which dev-server

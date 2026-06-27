@@ -5,9 +5,12 @@
 //! CLI consumes, resolving any secret env/header values from the OS keychain at
 //! launch time (so secrets never live in settings.json, argv, or the worktree).
 //!
-//! Tier 1 covers **Claude Code on the host**. The other CLIs (their config
-//! shapes differ) and container delivery are later tiers; `build_claude_config`
-//! is the only adapter wired today.
+//! Host sessions are wired for **Claude**, **GitHub Copilot**, and **opencode** —
+//! each consumes a different config shape (`build_claude_config` /
+//! `build_copilot_config` / `build_opencode_config`) delivered a different way
+//! (Claude `--mcp-config`, Copilot `--additional-mcp-config @file`, opencode the
+//! `OPENCODE_CONFIG` env var). **Codex** is container-only (`build_codex_config`);
+//! container delivery for the other CLIs is a later tier.
 
 use std::path::{Path, PathBuf};
 
@@ -115,6 +118,71 @@ pub fn build_claude_config(specs: &[McpServerSpec]) -> AppResult<Value> {
     Ok(json!({ "mcpServers": servers }))
 }
 
+/// Build GitHub Copilot CLI's `{ "mcpServers": { name: {…} } }` document, passed
+/// per-session via `--additional-mcp-config @<path>` (it *augments* — never mutates
+/// — the user's `~/.copilot/mcp-config.json`). A stdio server uses `"type": "local"`
+/// (the config-file spelling; the CLI's `--transport` flag spells the same thing
+/// "stdio"), an http server `"type": "http"`. `"tools": ["*"]` exposes every tool;
+/// `--allow-all-tools` (already passed for non-interactive runs) auto-approves them,
+/// so no per-tool allowlist is needed — unlike Claude. Secrets are resolved into the
+/// `env` / `headers` map from the keychain, never argv.
+pub fn build_copilot_config(specs: &[McpServerSpec]) -> AppResult<Value> {
+    let mut servers = Map::new();
+    for spec in specs {
+        let entry = if spec.is_stdio() {
+            json!({
+                "type": "local",
+                "command": spec.command,
+                "args": spec.args,
+                "env": resolve_entries(spec)?,
+                "tools": ["*"],
+            })
+        } else {
+            json!({
+                "type": "http",
+                "url": spec.url,
+                "headers": resolve_entries(spec)?,
+                "tools": ["*"],
+            })
+        };
+        servers.insert(spec.name.clone(), entry);
+    }
+    Ok(json!({ "mcpServers": servers }))
+}
+
+/// Build opencode's `{ "mcp": { name: {…} } }` document, pointed at per-session via
+/// the `OPENCODE_CONFIG` env var. opencode *merges* config layers (it never
+/// replaces), so this adds our servers on top of the user's global config without
+/// disturbing it. A stdio server is `"type": "local"` with a single `command`
+/// ARRAY (the binary + args, joined — opencode has no separate args field) and an
+/// `environment` map; an http server is `"type": "remote"` with `url` + `headers`.
+/// `enabled: true` is explicit. Tools are auto-exposed and `--dangerously-skip-permissions`
+/// (already passed) auto-approves them, so no allowlist is needed.
+pub fn build_opencode_config(specs: &[McpServerSpec]) -> AppResult<Value> {
+    let mut servers = Map::new();
+    for spec in specs {
+        let entry = if spec.is_stdio() {
+            let mut command = vec![Value::String(spec.command.clone())];
+            command.extend(spec.args.iter().map(|a| Value::String(a.clone())));
+            json!({
+                "type": "local",
+                "command": command,
+                "environment": resolve_entries(spec)?,
+                "enabled": true,
+            })
+        } else {
+            json!({
+                "type": "remote",
+                "url": spec.url,
+                "headers": resolve_entries(spec)?,
+                "enabled": true,
+            })
+        };
+        servers.insert(spec.name.clone(), entry);
+    }
+    Ok(json!({ "mcp": servers }))
+}
+
 /// Server-name charset (mirrors the frontend `MCP_NAME_RE`): a letter/digit first,
 /// then letters/digits/`-`/`_`. Safe as a bare TOML key and a JSON map key.
 fn is_valid_server_name(name: &str) -> bool {
@@ -175,38 +243,94 @@ fn config_root(app: &tauri::AppHandle) -> AppResult<PathBuf> {
         .join("mcp"))
 }
 
-/// Validate + generate the Claude config for a HOST session and write it to a
-/// stable per-session path (`<app_data>/mcp/<session_id>.json`), returning that
-/// path for `--mcp-config`. Overwritten each turn so an edited registry takes
-/// effect on the next turn. Returns `Ok(None)` when there are no servers.
-pub fn write_host_config(
+/// The generated-config filenames a host session can leave in `<app_data>/mcp`,
+/// one per CLI shape. Each turn references its file explicitly (Claude's
+/// `--mcp-config`, Copilot's `@file`, opencode's `OPENCODE_CONFIG`), so a stale
+/// file from a de-selected turn is simply never read — but cleanup still removes
+/// all of them when a session is discarded.
+const HOST_CONFIG_FILES: [&str; 3] = ["json", "copilot.json", "opencode.json"];
+
+/// Validate the session id + servers, serialize `config`, and write it to a stable
+/// per-session path (`<app_data>/mcp/<session_id>.<ext>`) — kept out of the
+/// repo/worktree since it may hold resolved secrets. Overwritten each turn so an
+/// edited registry takes effect next turn. Returns `Ok(None)` when there are no
+/// servers (the caller then omits the flag/env, so nothing loads).
+fn write_session_config(
     app: &tauri::AppHandle,
     session_id: &str,
+    ext: &str,
     specs: &[McpServerSpec],
+    config: &Value,
 ) -> AppResult<Option<PathBuf>> {
     if specs.is_empty() {
         return Ok(None);
     }
     crate::sessions::validate_id(session_id)?;
-    validate_specs(specs)?;
-    let config = build_claude_config(specs)?;
     let dir = config_root(app)?;
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{session_id}.json"));
-    let body = serde_json::to_string_pretty(&config)
+    let path = dir.join(format!("{session_id}.{ext}"));
+    let body = serde_json::to_string_pretty(config)
         .map_err(|e| AppError::Command(format!("serialize mcp config: {e}")))?;
     std::fs::write(&path, body)?;
     Ok(Some(path))
 }
 
-/// Remove a session's generated host config (best-effort), called on cleanup so
-/// resolved-secret files don't linger after a session is discarded.
+/// Generate + write the Claude config for a HOST session, returning its path for
+/// `--mcp-config`. `Ok(None)` when there are no servers.
+pub fn write_host_config(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    specs: &[McpServerSpec],
+) -> AppResult<Option<PathBuf>> {
+    validate_specs(specs)?;
+    write_session_config(app, session_id, "json", specs, &build_claude_config(specs)?)
+}
+
+/// Generate + write the GitHub Copilot config for a HOST session, returning its
+/// path for `--additional-mcp-config @<path>`. `Ok(None)` when there are no servers.
+pub fn write_copilot_config(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    specs: &[McpServerSpec],
+) -> AppResult<Option<PathBuf>> {
+    validate_specs(specs)?;
+    write_session_config(
+        app,
+        session_id,
+        "copilot.json",
+        specs,
+        &build_copilot_config(specs)?,
+    )
+}
+
+/// Generate + write the opencode config for a HOST session, returning its path for
+/// the `OPENCODE_CONFIG` env var. `Ok(None)` when there are no servers.
+pub fn write_opencode_config(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    specs: &[McpServerSpec],
+) -> AppResult<Option<PathBuf>> {
+    validate_specs(specs)?;
+    write_session_config(
+        app,
+        session_id,
+        "opencode.json",
+        specs,
+        &build_opencode_config(specs)?,
+    )
+}
+
+/// Remove a session's generated host configs (best-effort, every CLI shape),
+/// called on cleanup so resolved-secret files don't linger after a session is
+/// discarded.
 pub fn cleanup_host_config(app: &tauri::AppHandle, session_id: &str) {
     if crate::sessions::validate_id(session_id).is_err() {
         return;
     }
     if let Ok(dir) = config_root(app) {
-        let _ = std::fs::remove_file(dir.join(format!("{session_id}.json")));
+        for ext in HOST_CONFIG_FILES {
+            let _ = std::fs::remove_file(dir.join(format!("{session_id}.{ext}")));
+        }
     }
 }
 
@@ -357,4 +481,87 @@ pub async fn discover_mcp_servers(
         collect_discovered(&home.join(".claude.json"), "global", &mut out);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stdio(name: &str) -> McpServerSpec {
+        McpServerSpec {
+            id: "id-1".into(),
+            name: name.into(),
+            transport: "stdio".into(),
+            command: "npx".into(),
+            args: vec!["-y".into(), "@modelcontextprotocol/server-everything".into()],
+            env: vec![KeyValue {
+                key: "TOKEN".into(),
+                value: "plain".into(),
+            }],
+            url: String::new(),
+            headers: vec![],
+            secret_keys: vec![], // no secret → resolve_entries won't touch the keychain
+        }
+    }
+
+    fn http(name: &str) -> McpServerSpec {
+        McpServerSpec {
+            id: "id-2".into(),
+            name: name.into(),
+            transport: "http".into(),
+            command: String::new(),
+            args: vec![],
+            env: vec![],
+            url: "https://mcp.example.com/mcp".into(),
+            headers: vec![KeyValue {
+                key: "Authorization".into(),
+                value: "Bearer x".into(),
+            }],
+            secret_keys: vec![],
+        }
+    }
+
+    #[test]
+    fn copilot_stdio_uses_local_type_with_command_args_and_tools() {
+        let cfg = build_copilot_config(&[stdio("everything")]).unwrap();
+        let srv = &cfg["mcpServers"]["everything"];
+        assert_eq!(srv["type"], "local");
+        assert_eq!(srv["command"], "npx");
+        assert_eq!(srv["args"][1], "@modelcontextprotocol/server-everything");
+        assert_eq!(srv["env"]["TOKEN"], "plain");
+        assert_eq!(srv["tools"][0], "*");
+    }
+
+    #[test]
+    fn copilot_http_uses_http_type_with_url_and_headers() {
+        let cfg = build_copilot_config(&[http("remote")]).unwrap();
+        let srv = &cfg["mcpServers"]["remote"];
+        assert_eq!(srv["type"], "http");
+        assert_eq!(srv["url"], "https://mcp.example.com/mcp");
+        assert_eq!(srv["headers"]["Authorization"], "Bearer x");
+        assert!(srv.get("command").is_none());
+    }
+
+    #[test]
+    fn opencode_stdio_merges_command_and_args_into_one_array() {
+        let cfg = build_opencode_config(&[stdio("everything")]).unwrap();
+        let srv = &cfg["mcp"]["everything"];
+        assert_eq!(srv["type"], "local");
+        // command is a single array: binary then args (opencode has no args field).
+        assert_eq!(srv["command"][0], "npx");
+        assert_eq!(srv["command"][1], "-y");
+        assert_eq!(srv["command"][2], "@modelcontextprotocol/server-everything");
+        assert_eq!(srv["environment"]["TOKEN"], "plain");
+        assert_eq!(srv["enabled"], true);
+    }
+
+    #[test]
+    fn opencode_http_uses_remote_type_with_url_and_headers() {
+        let cfg = build_opencode_config(&[http("remote")]).unwrap();
+        let srv = &cfg["mcp"]["remote"];
+        assert_eq!(srv["type"], "remote");
+        assert_eq!(srv["url"], "https://mcp.example.com/mcp");
+        assert_eq!(srv["headers"]["Authorization"], "Bearer x");
+        assert_eq!(srv["enabled"], true);
+    }
 }

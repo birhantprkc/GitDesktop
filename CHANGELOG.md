@@ -33,8 +33,7 @@ commit list.
   servers only show up in that repo's sessions and the registry stays tidy. And a shared
   **global server can be tuned per repo** — set it **On**, **Optional** (available but off
   by default), or **Off** for the repo you're in, or leave it on **Default** to follow the
-  global setting. (Copilot/opencode are coming next;
-  [design](docs/mcp-agent-sessions-tier1.md).)
+  global setting. ([design](docs/mcp-agent-sessions-tier1.md).)
 
 - **MCP servers for Codex (container sessions).** Codex agent sessions can now use your
   registered MCP servers too — in **container** isolation. (Host Codex can't approve MCP
@@ -45,6 +44,15 @@ commit list.
   headers our HTTP servers use). Your picks are written into the session's sandboxed Codex
   config — secrets stay in the OS keychain, never in the command line — and, because a
   container's Codex home is clean, the session sees *only* the servers you picked.
+
+- **MCP servers for Copilot and opencode (host sessions).** Your registered MCP servers
+  now work on **GitHub Copilot** and **opencode** host sessions too — alongside Claude on
+  the host and Codex in a container. The composer's **MCP** picker appears for both (local
+  `stdio` *and* remote HTTP servers), and your picks are handed to the CLI for that session
+  only — secrets stay in your OS keychain, never on the command line. Both CLIs approve the
+  servers' tools automatically, so a non-interactive run never stalls on a prompt; Copilot
+  and opencode layer your picks onto their own config, while Claude alone runs in strict,
+  only-these mode.
 
 - **Change a session's MCP servers mid-conversation.** The composer's **MCP** picker now
   appears on an active session too, not just a new one — toggle servers on or off and the
@@ -257,6 +265,13 @@ commit list.
   skills committed to the repo were visible there.
 
 ### Fixed
+
+- **Host GitHub Copilot sessions no longer fail with "batch file arguments are invalid"
+  on Windows.** When the VS Code Copilot extension is installed, it puts a `copilot.bat`
+  wrapper on your `PATH` *ahead* of the real `copilot.exe` — and Windows won't let an app
+  pass a multi-line prompt to a batch file. GitDesktop now prefers a real `.exe` over a
+  `.cmd`/`.bat` shim found earlier on `PATH` when locating any agent CLI, so it launches
+  the actual Copilot binary. (CLIs that ship only a `.cmd`, like Codex, are unaffected.)
 
 - **Codex agent sessions no longer show a blank "No response."** Codex delivers its whole
   reply at the end of a turn (it doesn't stream it incrementally like the other CLIs), and
