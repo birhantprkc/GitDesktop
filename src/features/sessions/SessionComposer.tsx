@@ -274,10 +274,11 @@ export function SessionComposer({
         : [],
     [mcpRegistry, session],
   );
-  // The MCP config handed to the Options popover, resolved per (session, mode):
-  // an active session re-picks from its own usable servers; a new single-run
-  // session opts in (or shows the Codex-on-host hint); best-of-N omits it (arms
-  // self-configure). undefined → the popover renders no MCP section.
+  // The MCP config handed to the Options popover, resolved per session/mode: an
+  // active session re-picks from its own usable servers; a new session (single OR
+  // best-of-N) opts in (or shows the Codex-on-host hint). For best-of-N the one
+  // selection is SHARED — passed to every arm and filtered per-arm by agent. The
+  // servers/hint follow the composer's seed agent. undefined → no MCP section.
   const composerMcp = session
     ? sessionMcpUsable
       ? {
@@ -286,7 +287,7 @@ export function SessionComposer({
           onChange: (ids: string[]) => setSessionMcp(session.id, ids),
         }
       : undefined
-    : mode === "single" && (mcpUsable || !!mcpDisabledReason)
+    : mcpUsable || mcpDisabledReason
       ? {
           servers: mcpServersForAgent,
           value: effectiveMcp,
@@ -378,12 +379,17 @@ export function SessionComposer({
     setEnsembleOpen(true);
   };
 
-  // Approved in the dialog: fan out one session per arm on the same task.
+  // Approved in the dialog: fan out one session per arm on the same task. The MCP
+  // selection is SHARED across arms — pass the seed-agent-runnable picks; each arm's
+  // start() + runTurn then drop any its own agent/isolation can't use.
   const runEnsemble = (
     arms: { agent: AgentKind; model: string; effort: string }[],
   ) => {
     if (!pendingEnsemble) return;
-    void startEnsemble(repoPath, pendingEnsemble, arms);
+    const mcp = mcpUsable
+      ? effectiveMcp.filter((id) => mcpServersForAgent.some((s) => s.id === id))
+      : undefined;
+    void startEnsemble(repoPath, pendingEnsemble, arms, mcp);
     clearDraft();
     setPendingEnsemble("");
   };

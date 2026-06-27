@@ -1,8 +1,10 @@
 import {
   GaugeIcon,
+  GearSixIcon,
   PlugsConnectedIcon,
   UsersThreeIcon,
 } from "@phosphor-icons/react";
+import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -21,6 +23,7 @@ import type { AgentKind } from "@/lib/ai/agent";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
 import type { McpServer } from "@/lib/settings/api";
 import { useUiStore } from "@/lib/stores/ui";
+import { cn } from "@/lib/utils";
 
 // The agent / model / effort pickers, shared by the task composer, the plan
 // composer, the plan's Implement popover, and the best-of-N arm editor. Kept in
@@ -131,114 +134,231 @@ export function EffortPicker({
 /** How a new task runs: one session, or best-of-N across several arms. */
 export type RunMode = "single" | "ensemble";
 
-/** Selects the run mode for a NEW task (activation composer only). Always
- *  clickable — unlike the Send button it isn't gated on a typed prompt — so you can
- *  choose best-of-N before typing. `Send` then follows the mode; the per-arm setup
- *  lives in the best-of-N dialog. */
-export function RunModePicker({
+/** A compact inline segmented control (radio-group of buttons). Used inside the
+ *  composer Options popover for run mode and effort — no nested dropdown, fully
+ *  keyboard-operable. */
+function Segmented<T extends string>({
   value,
   onChange,
+  options,
+  ariaLabel,
 }: {
-  value: RunMode;
-  onChange: (m: RunMode) => void;
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+  ariaLabel: string;
 }) {
   return (
-    <Select
-      value={value}
-      onValueChange={(v) => onChange(v === "ensemble" ? "ensemble" : "single")}
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className="flex overflow-hidden rounded-none border border-input"
     >
-      <SelectTrigger
-        size="sm"
-        aria-label="Run mode"
-        title="Run once, or several ways and keep the best (best-of-N)"
-        className="w-auto gap-1 border-0 text-muted-foreground shadow-none hover:bg-muted dark:bg-transparent"
-      >
-        <UsersThreeIcon className="size-3.5" />
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="single">Single run</SelectItem>
-        <SelectItem value="ensemble">Best-of-N</SelectItem>
-      </SelectContent>
-    </Select>
+      {options.map((o, i) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "flex-1 px-1.5 py-1 text-[11px] transition-colors outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            i > 0 && "border-l border-input",
+            value === o.value
+              ? "bg-accent font-medium text-accent-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const EFFORT_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Auto" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Med" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Max" },
+];
+
+const RUN_MODE_OPTIONS: { value: RunMode; label: string }[] = [
+  { value: "single", label: "Single" },
+  { value: "ensemble", label: "Best-of-N" },
+];
+
+function effortLabel(value: string): string {
+  return EFFORT_OPTIONS.find((o) => o.value === value)?.label ?? "Auto";
+}
+
+/** A labeled field row inside the Options popover. */
+function OptionField({
+  icon,
+  label,
+  children,
+}: {
+  icon: ReactNode;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+        {icon}
+        {label}
+      </span>
+      {children}
+    </div>
   );
 }
 
 /**
- * Per-session MCP-server opt-in (a peer of the model/effort pickers, new sessions
- * only — the set is frozen at turn 1). The session passes ONLY the checked
- * servers to its CLI in strict mode. Self-hides when no servers are registered, so
- * it never clutters the composer for people who don't use MCP. `disabledReason`,
- * when set (e.g. a container session), greys it out with an explanation instead of
- * silently dropping a selection that can't be delivered yet.
+ * The composer's collapsed "Options" popover. Provider + model stay inline on the
+ * toolbar for quick access; everything else — run mode, reasoning effort, and the
+ * per-session MCP-server opt-in — lives here so the action row never overflows or
+ * shifts as the box grows. Each control renders only when the parent passes its
+ * props: run mode is new-session only; effort + MCP drop out in best-of-N (each
+ * arm sets its own); MCP also self-hides when no servers are registered. The
+ * trigger shows a count + summary tooltip of the non-default choices so collapsing
+ * them stays discoverable. MCP rules (frozen at turn 1 for a new session, strict
+ * "only these" for Claude, the container/host caveats) are unchanged — see the
+ * call site.
  */
-export function McpServersPicker({
-  servers,
-  value,
-  onChange,
-  disabledReason,
+export function ComposerOptions({
+  effort,
+  onEffort,
+  mode,
+  onMode,
+  mcp,
 }: {
-  servers: McpServer[];
-  value: string[];
-  onChange: (ids: string[]) => void;
-  disabledReason?: string;
+  effort?: string;
+  onEffort?: (e: string) => void;
+  mode?: RunMode;
+  onMode?: (m: RunMode) => void;
+  mcp?: {
+    servers: McpServer[];
+    value: string[];
+    onChange: (ids: string[]) => void;
+    disabledReason?: string;
+  };
 }) {
   const openSettings = useUiStore((s) => s.openSettings);
-  if (servers.length === 0) return null;
 
-  const selected = new Set(value);
-  const count = servers.filter((s) => selected.has(s.id)).length;
-  const toggle = (id: string, on: boolean) =>
-    onChange(on ? [...value, id] : value.filter((v) => v !== id));
+  const mcpListable = mcp && !mcp.disabledReason && mcp.servers.length > 0;
+  const mcpCount = mcpListable
+    ? mcp.servers.filter((s) => mcp.value.includes(s.id)).length
+    : 0;
+
+  // A summary of the non-default choices, surfaced as a count badge + tooltip so
+  // the collapsed state reads at a glance without opening the popover.
+  const summary: string[] = [];
+  if (mode === "ensemble") summary.push("Best-of-N");
+  if (effort) summary.push(`Effort: ${effortLabel(effort)}`);
+  if (mcpCount > 0)
+    summary.push(`${mcpCount} MCP server${mcpCount > 1 ? "s" : ""}`);
+  const count = summary.length;
+
+  const toggleMcp = (id: string, on: boolean) =>
+    mcp?.onChange(on ? [...mcp.value, id] : mcp.value.filter((v) => v !== id));
 
   return (
     <Popover>
       <PopoverTrigger
-        disabled={!!disabledReason}
-        title={disabledReason ?? "MCP servers for this session"}
+        title={count > 0 ? summary.join(" · ") : "Run options"}
         render={
           <Button
             size="sm"
             variant="ghost"
-            className="w-auto gap-1 border-0 text-muted-foreground shadow-none hover:bg-muted dark:bg-transparent"
+            aria-label="Run options"
+            className="gap-1 border-0 text-muted-foreground shadow-none hover:bg-muted dark:bg-transparent"
           />
         }
       >
-        <PlugsConnectedIcon className="size-3.5" />
-        MCP{count > 0 ? ` · ${count}` : ""}
+        <GearSixIcon className="size-3.5" />
+        Options
+        {count > 0 && (
+          <span className="ml-0.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary/15 px-1 text-[10px] font-medium text-primary tabular-nums">
+            {count}
+          </span>
+        )}
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 gap-1">
-        <p className="px-1 pb-1 text-[11px] font-medium text-muted-foreground">
-          Servers for this session
-        </p>
-        {servers.map((s) => (
-          <label
-            key={s.id}
-            className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 hover:bg-muted"
-          >
-            <Checkbox
-              checked={selected.has(s.id)}
-              onCheckedChange={(on) => toggle(s.id, on === true)}
-            />
-            <span
-              className="min-w-0 flex-1 truncate font-mono text-xs"
-              title={s.name}
+      <PopoverContent align="start" className="w-64">
+        <div className="flex flex-col gap-3">
+          {mode !== undefined && onMode && (
+            <OptionField
+              icon={<UsersThreeIcon className="size-3.5" />}
+              label="Run mode"
             >
-              {s.name}
-            </span>
-            <span className="shrink-0 text-[10px] text-muted-foreground uppercase">
-              {s.transport}
-            </span>
-          </label>
-        ))}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mt-1 h-7 justify-start text-muted-foreground"
-          onClick={() => openSettings("mcp-servers")}
-        >
-          Manage servers…
-        </Button>
+              <Segmented
+                ariaLabel="Run mode"
+                value={mode}
+                onChange={onMode}
+                options={RUN_MODE_OPTIONS}
+              />
+            </OptionField>
+          )}
+          {effort !== undefined && onEffort && (
+            <OptionField
+              icon={<GaugeIcon className="size-3.5" />}
+              label="Reasoning effort"
+            >
+              <Segmented
+                ariaLabel="Reasoning effort"
+                value={effort}
+                onChange={onEffort}
+                options={EFFORT_OPTIONS}
+              />
+            </OptionField>
+          )}
+          {mcp?.disabledReason ? (
+            <OptionField
+              icon={<PlugsConnectedIcon className="size-3.5" />}
+              label="MCP servers"
+            >
+              <p className="text-[11px] text-muted-foreground">
+                {mcp.disabledReason}
+              </p>
+            </OptionField>
+          ) : mcpListable ? (
+            <OptionField
+              icon={<PlugsConnectedIcon className="size-3.5" />}
+              label="MCP servers"
+            >
+              <div className="flex flex-col gap-0.5">
+                {mcp.servers.map((s) => (
+                  <label
+                    key={s.id}
+                    className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 hover:bg-muted"
+                  >
+                    <Checkbox
+                      checked={mcp.value.includes(s.id)}
+                      onCheckedChange={(on) => toggleMcp(s.id, on === true)}
+                    />
+                    <span
+                      className="min-w-0 flex-1 truncate font-mono text-xs"
+                      title={s.name}
+                    >
+                      {s.name}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground uppercase">
+                      {s.transport}
+                    </span>
+                  </label>
+                ))}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-0.5 h-7 justify-start text-muted-foreground"
+                  onClick={() => openSettings("mcp-servers")}
+                >
+                  Manage servers…
+                </Button>
+              </div>
+            </OptionField>
+          ) : null}
+        </div>
       </PopoverContent>
     </Popover>
   );

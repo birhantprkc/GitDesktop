@@ -154,6 +154,9 @@ interface SessionsState {
       model: string;
       effort: string;
     }[],
+    /** MCP server ids shared across every arm (each arm drops the ones its own
+     *  agent/isolation can't use). Absent/empty = no MCP. */
+    mcpServers?: string[],
   ) => Promise<string[]>;
   send: (id: string, prompt: string) => Promise<void>;
   setModel: (id: string, model: string) => void;
@@ -543,7 +546,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     return wt.id;
   },
 
-  startEnsemble: async (repoPath, prompt, arms) => {
+  startEnsemble: async (repoPath, prompt, arms, mcpServers) => {
     const task = prompt.trim();
     if (!task || arms.length === 0) return [];
     // One shared id ties the arms together; each is otherwise a normal session
@@ -561,6 +564,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
         arm.agent,
         arm.effort,
         ensembleId,
+        // The shared MCP selection; start() drops it for an arm whose
+        // agent/isolation can't run MCP, and runTurn filters per-agent each turn.
+        mcpServers,
       );
       if (id) ids.push(id);
     }

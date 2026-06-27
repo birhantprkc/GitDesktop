@@ -69,6 +69,11 @@ commit list.
   appears on an active session too, not just a new one — toggle servers on or off and the
   new selection applies from your next turn (and survives a reload).
 
+- **MCP servers in best-of-N runs.** The composer's **MCP** picker now appears in best-of-N
+  mode too — your selection is **shared across every arm**, so each agent attacks the task
+  with the same tools (a fair comparison). Each arm automatically drops any server its own
+  agent or isolation can't use.
+
 - **GitHub Pages config, in the app.** A new **Pages** tab in repository settings: enable
   Pages from a branch + folder or via **GitHub Actions**, see the live URL and build
   status, change the source, set a **custom domain**, **enforce HTTPS**, and disable the
@@ -323,6 +328,14 @@ commit list.
 
 ### Changed
 
+- **A steadier, tidier agent composer.** The task box (Delegate, Plan, and the
+  in-conversation reply) now docks to the bottom of its panel like a terminal: the
+  text grows **upward** so the action row and **Send** never drift as you type. The
+  run controls also stopped overflowing — the provider and model stay out for quick
+  access, and run mode, reasoning effort, and MCP servers fold into a single
+  **Options** popover (with a count + summary so you can still tell at a glance
+  what's set). Best-of-N, the Codex-on-host MCP hint, and changing effort/MCP
+  mid-session all work as before.
 - **Calmer repository settings.** The repository settings dialog moved from a wrapping
   row of eight tabs to a vertical sidebar — grouped into Repository, Security,
   Publishing, and Automation — matching the app's main Settings. The **Danger zone** is
