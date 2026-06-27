@@ -124,6 +124,12 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Pretty-print an MCP config `Value` to the string body written into a container's
+/// mounted home, with a uniform error (the host writers use the same message).
+fn json_to_string(v: &serde_json::Value) -> AppResult<String> {
+    serde_json::to_string_pretty(v).map_err(|e| AppError::Command(format!("serialize mcp config: {e}")))
+}
+
 fn candidate_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = home_dir() {
@@ -1412,7 +1418,8 @@ pub async fn agent_session(
     // 1 / Claude / Copilot / container.
     native_session_id: Option<String>,
     // The session's opted-in MCP servers (resolved from the settings registry by
-    // the frontend). None/empty = MCP stays off. Tier 1: Claude on the host only.
+    // the frontend). None/empty = MCP stays off. Honored for host Claude/Copilot/
+    // opencode and container Claude/Copilot/opencode/Codex (the composer gates it).
     mcp_servers: Option<Vec<crate::mcp::McpServerSpec>>,
     on_event: Channel<ReviewEvent>,
 ) -> AppResult<()> {
@@ -1436,37 +1443,34 @@ pub async fn agent_session(
     };
     let container = isolation.as_deref() == Some("container");
 
-    // Resolve the session's opted-in MCP servers into a generated config file,
-    // passed to the CLI in strict / only-these mode. Tier 1 wires Claude on the
-    // host; the composer gates selection to that case, so a non-Claude or
-    // container session arriving here with servers is an error, not a silent drop.
+    // Resolve the session's opted-in MCP servers into a generated config file, passed
+    // to whichever CLI this is in its own form. The composer gates selection to the
+    // supported (agent, isolation) combos, so an unsupported one arriving here with
+    // servers is an error, not a silent drop.
     let mcp_specs = mcp_servers.unwrap_or_default();
     // `mcp__<server>` allowlist entries so the opted-in servers' tools are usable:
     // loading them via `--mcp-config` does NOT admit them past `--tools` (proven by
     // live testing — the server connected but its tools stayed uncallable without this).
-    // (Claude only; Codex needs no tool allowlist under the container's bypass.)
+    // (Claude only — host AND container; the others need no allowlist.)
     let mcp_tools = crate::mcp::tool_allow_patterns(&mcp_specs);
-    // Each CLI takes its MCP config differently — `mcp_config_path` is the generated
-    // file for whichever host CLI this is, consumed below by:
-    //  - Claude (host): `--mcp-config` in strict mode + a `mcp__<server>` tool allowlist.
-    //  - Copilot (host): `--additional-mcp-config @<path>` (`--allow-all-tools` already
-    //    auto-approves the tools — no allowlist needed; no host-Codex approval wall).
-    //  - opencode (host): the `OPENCODE_CONFIG` env var (`--dangerously-skip-permissions`
-    //    auto-approves; opencode merges, never replaces, the user's config).
-    //  - Codex (container ONLY): a `config.toml` written into the mounted ~/.codex home
-    //    in the container branch below — host Codex cancels every MCP tool call (stdin
-    //    EOF → "declined", upstream), while the container bypasses approvals. stdio only.
-    // Anything else is rejected with an actionable message, never silently dropped.
+    // Each CLI takes its MCP config differently — `mcp_config_path` holds the value for
+    // whichever CLI's config flag applies here (consumed by the inner builders below):
+    //  - Claude: a JSON file via `--mcp-config` (strict) + a `mcp__<server>` tool allowlist;
+    //    HOST = a host file path, CONTAINER = the mounted `/home/node/.claude/mcp.json`.
+    //  - Copilot: HOST = `--additional-mcp-config @<path>`; CONTAINER = none (the file is
+    //    written to `~/.copilot/mcp-config.json` in the mounted home, which Copilot auto-loads).
+    //    `--allow-all-tools` auto-approves the tools — no allowlist, no host-Codex wall.
+    //  - opencode: the `OPENCODE_CONFIG` env var (HOST = via the spawn env; CONTAINER = `-e`
+    //    on the run, set in the container branch). `--dangerously-skip-permissions` approves.
+    //  - Codex: container ONLY — a `config.toml` in the mounted `~/.codex` (host Codex cancels
+    //    every MCP tool call, stdin EOF → "declined", upstream). stdio servers only.
+    // The config FILE is written HERE for host sessions and in the container branch below
+    // (uniform, all agents) for container ones. Codex-on-host is the only rejected combo.
     let mut mcp_config_path: Option<String> = None;
     if !mcp_specs.is_empty() {
         crate::mcp::validate_specs(&mcp_specs)?;
-        let host_only = |label: &str| -> AppResult<()> {
-            Err(AppError::Command(format!(
-                "MCP servers run on host {label} sessions for now — turn container isolation \
-                 off in Settings → AI."
-            )))
-        };
         match (kind, container) {
+            // Host: write the generated file now; the flag/env value is its host path.
             (AgentKind::Claude, false) => {
                 mcp_config_path = crate::mcp::write_host_config(&app, &session_id, &mcp_specs)?
                     .map(|p| p.to_string_lossy().into_owned());
@@ -1479,9 +1483,17 @@ pub async fn agent_session(
                 mcp_config_path = crate::mcp::write_opencode_config(&app, &session_id, &mcp_specs)?
                     .map(|p| p.to_string_lossy().into_owned());
             }
+            // Container: the file is written into the mounted home in the container branch
+            // below (uniform). Only Claude carries a path here, for its `--mcp-config` flag;
+            // Copilot/Codex read their dotdir file implicitly, opencode gets `OPENCODE_CONFIG`.
+            (AgentKind::Claude, true) => {
+                mcp_config_path =
+                    crate::agent_sandbox::container_mcp_config("claude").map(|(_, p)| p);
+            }
+            (AgentKind::Copilot, true) | (AgentKind::Opencode, true) => {}
             (AgentKind::Codex, true) => {
-                // The config.toml is written once the ~/.codex home is seeded (below);
-                // reject a remote server now so the failure is clear and pre-flight.
+                // stdio only — reject a remote server pre-flight (Codex's remote-MCP config
+                // can't carry our arbitrary headers). The config.toml is written below.
                 if let Some(remote) = mcp_specs.iter().find(|s| s.transport != "stdio") {
                     return Err(AppError::Command(format!(
                         "Codex sessions support local (stdio) MCP servers only right now; \
@@ -1497,9 +1509,6 @@ pub async fn agent_session(
                         .into(),
                 ));
             }
-            (AgentKind::Claude, true) => return host_only("Claude"),
-            (AgentKind::Copilot, true) => return host_only("Copilot"),
-            (AgentKind::Opencode, true) => return host_only("opencode"),
         }
     }
 
@@ -1669,25 +1678,46 @@ pub async fn agent_session(
             ));
         }
         let home = crate::agent_sandbox::seed_session_home(&app, &session_id, agent_name)?;
-        // Codex reads MCP servers from `~/.codex/config.toml`. Make the file a
-        // faithful per-turn projection of the opted-in servers: write it when there
-        // are any (secrets in the file, never argv; the seeded home has only
-        // `auth.json`, so these are the ONLY source — strict), and REMOVE a stale one
-        // when this turn has none, so a server de-selected mid-session (re-scoped /
-        // set per-repo "off") stops loading. Codex reads it implicitly — unlike
-        // Claude's `--strict-mcp-config`, there's no flag to ignore a stale file.
-        if kind == AgentKind::Codex {
-            let config_path = home.join("config.toml");
+        // Write the opted-in MCP servers into the mounted home so the in-container CLI
+        // loads them. The seeded home is clean (only the agent's creds), so the file is
+        // the ONLY MCP source — strict, regardless of CLI. Each CLI's filename + format
+        // differ (`container_mcp_config` maps them); the body is the per-CLI config
+        // (secrets resolved into the file, never argv). REMOVE a stale file when this
+        // turn has none, so a de-selected server stops loading — the CLIs read the file
+        // implicitly (no host-style `--strict-mcp-config` to ignore a leftover).
+        if let Some((filename, _)) = crate::agent_sandbox::container_mcp_config(agent_name) {
+            let config_path = home.join(filename);
             if mcp_specs.is_empty() {
                 let _ = std::fs::remove_file(&config_path);
             } else {
-                std::fs::write(&config_path, crate::mcp::build_codex_config(&mcp_specs)?)?;
+                let body = match kind {
+                    AgentKind::Codex => crate::mcp::build_codex_config(&mcp_specs)?,
+                    AgentKind::Claude => json_to_string(&crate::mcp::build_claude_config(&mcp_specs)?)?,
+                    AgentKind::Copilot => {
+                        json_to_string(&crate::mcp::build_copilot_config(&mcp_specs)?)?
+                    }
+                    AgentKind::Opencode => {
+                        json_to_string(&crate::mcp::build_opencode_config(&mcp_specs)?)?
+                    }
+                };
+                std::fs::write(&config_path, body)?;
             }
         }
         let name = crate::agent_sandbox::container_name(&session_id);
         // Mount the user's global skills read-only so a skill nudged by name resolves
         // in-container (the worktree only carries project skills). None if absent.
         let skills = crate::agent_sandbox::global_skills_dir();
+        // Persistent npm cache so an npx MCP server downloads once, not every turn.
+        let npm_cache = crate::agent_sandbox::npm_cache_dir(&app);
+        // opencode reads its MCP config from `OPENCODE_CONFIG` (no flag) — point it at the
+        // file mounted in the home. Other agents read their dotdir file implicitly.
+        let container_env: Vec<(&str, String)> =
+            match crate::agent_sandbox::container_mcp_config("opencode") {
+                Some((_, path)) if kind == AgentKind::Opencode && !mcp_specs.is_empty() => {
+                    vec![("OPENCODE_CONFIG", path)]
+                }
+                _ => Vec::new(),
+            };
         let args = crate::agent_sandbox::build_run_args(
             &runtime_name,
             agent_name,
@@ -1695,6 +1725,8 @@ pub async fn agent_session(
             &home,
             &name,
             skills.as_deref().and_then(Path::to_str),
+            npm_cache.as_deref().and_then(Path::to_str),
+            &container_env,
             &inner,
         );
         return stream_agent(

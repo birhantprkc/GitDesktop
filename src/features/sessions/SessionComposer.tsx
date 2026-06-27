@@ -233,8 +233,9 @@ export function SessionComposer({
   const customCommands = settings.data?.customCommands;
   // MCP registry (Settings → MCP servers) → the new-session opt-in, narrowed to
   // the servers OFFERED in THIS repo (in scope and not per-repo "off"). Default
-  // selection is the per-repo "on" set; the picker lets you pare it down. Tier 1
-  // applies it to Claude HOST sessions only (the picker self-hides when empty).
+  // selection is the per-repo "on" set; the picker lets you pare it down. Applied to
+  // Claude/Copilot/opencode (host or container) and Codex (container) — see
+  // `mcpSupportedFor`; the picker self-hides when empty.
   const mcpRegistry = useMemo(
     () =>
       (settings.data?.mcpServers ?? []).filter((s) =>
@@ -256,14 +257,13 @@ export function SessionComposer({
     [mcpServersForAgent, repoPath],
   );
   const effectiveMcp = startMcp ?? enabledMcpIds;
-  // MCP runs on host Claude/Copilot/opencode and on container Codex. Show the picker
-  // for any agent and explain when the current isolation is the wrong one for it.
+  // MCP runs on host + container for Claude/Copilot/opencode, and on container Codex.
+  // The only unsupported combo is Codex on the host, so that's the one hint we show.
   const mcpUsable = mcpSupportedFor(startAgent, isContainer);
-  const mcpDisabledReason = mcpUsable
-    ? undefined
-    : startAgent === "codex"
+  const mcpDisabledReason =
+    !mcpUsable && startAgent === "codex"
       ? "Codex runs MCP in container sessions — switch isolation in Settings → AI"
-      : "MCP runs on host sessions for this agent — switch isolation in Settings → AI";
+      : undefined;
   // For an ACTIVE session the agent + isolation are fixed, so gate on the session's
   // own values and let the user re-pick servers (applies from the next turn).
   const sessionMcpUsable = session
@@ -308,7 +308,7 @@ export function SessionComposer({
         startAgent,
         startEffort,
         undefined,
-        // MCP: host Claude/Copilot/opencode or container Codex — pass only the
+        // MCP runs in the supported (agent, isolation) combos — pass only the
         // agent-runnable picks (the rest are filtered out for this agent).
         mcpUsable
           ? effectiveMcp.filter((id) =>

@@ -58,11 +58,13 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 - **Bring your own MCP servers** — register Model Context Protocol servers (local
   `stdio` or remote HTTP, with secrets kept in your **OS keychain**) under
   **Settings → MCP servers**, then opt a session into the ones you want from the
-  composer's **MCP** picker — on **Claude**, **Copilot**, or **opencode** host
-  sessions, or **Codex** in a **container** (host Codex can't approve MCP tool calls,
-  so it needs the sandbox). A Claude session runs in strict mode — *only* the servers
-  you picked, never inheriting others on your machine — while Copilot and opencode
-  layer your picks onto their own config. Find new servers by **Browse**-ing the
+  composer's **MCP** picker — on **Claude**, **Copilot**, or **opencode** sessions
+  (host *or* container), and on **Codex** in a **container** (host Codex can't approve
+  MCP tool calls, so it needs the sandbox). A Claude session runs in strict mode —
+  *only* the servers you picked, never inheriting others on your machine — while Copilot
+  and opencode layer your picks onto their own config. In a container the servers run
+  *inside* the sandbox, with a shared npm cache so an `npx` server downloads only once.
+  Find new servers by **Browse**-ing the
   official MCP registry in-app — with GitHub stars, weekly installs, and exactly what
   each one runs shown so you can vet before adding — or **Import** ones you've already
   configured. Change the selection **mid-session**, too.

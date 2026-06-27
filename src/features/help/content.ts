@@ -482,14 +482,16 @@ In the composer you can:
 Register **Model Context Protocol** servers under **Settings → MCP servers** — local
 (\`stdio\`) processes or remote (HTTP) endpoints, with environment variables / headers and
 **secrets kept in your OS keychain**, never in your settings file. Each session opts into
-the ones you choose from the composer's **MCP** picker. These combinations work today:
-**Claude**, **Copilot**, and **opencode** on the **host**, and **Codex in a container
-session** (local/\`stdio\` servers only — host Codex can't approve MCP tool calls, so it
-needs the container's sandbox). A Claude run is **strict** — it gets *only* the servers you
-picked and never inherits others on your machine — while Copilot and opencode layer your
-picks onto their own config. The composer's **MCP** picker shows for every agent and tells
-you when to switch isolation. You can also change the selection **mid-session** — the picker
-appears in a running session's reply box too, and a new choice applies from your next turn.
+the ones you choose from the composer's **MCP** picker. **Claude**, **Copilot**, and
+**opencode** run MCP servers on the **host** *or* in a **container**; **Codex** runs them
+in a **container** only (local/\`stdio\` servers — host Codex can't approve MCP tool calls,
+so it needs the container's sandbox). In a container the servers run *inside* the sandbox,
+sharing an npm cache so an \`npx\` server is downloaded only once. A Claude run is **strict** —
+it gets *only* the servers you picked and never inherits others on your machine — while
+Copilot and opencode layer your picks onto their own config. The composer's **MCP** picker
+shows for every agent and tells you when to switch isolation. You can also change the
+selection **mid-session** — the picker appears in a running session's reply box too, and a
+new choice applies from your next turn.
 
 New to MCP? **Browse** opens the official Model Context Protocol registry right in that
 panel — search it and add a server in a click; it arrives **disabled** for you to review

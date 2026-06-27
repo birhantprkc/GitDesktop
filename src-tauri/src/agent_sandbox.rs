@@ -75,6 +75,25 @@ fn agent_dotdir(agent: &str) -> &'static str {
     }
 }
 
+/// The MCP config an in-container agent reads, as `(home-relative filename,
+/// absolute container path)`. The per-session home mounts at the agent's dotdir
+/// (`agent_dotdir`), so writing `<home>/<filename>` lands the file at the returned
+/// container path. Each CLI consumes it differently (Claude `--mcp-config <path>`;
+/// opencode `OPENCODE_CONFIG=<path>`; Codex + Copilot read their dotdir file
+/// implicitly — `config.toml` / `mcp-config.json`). The seeded home is clean, so
+/// the written file is the ONLY MCP source (strict). `None` for an unknown agent.
+pub(crate) fn container_mcp_config(agent: &str) -> Option<(&'static str, String)> {
+    let dotdir = agent_dotdir(agent);
+    let filename = match agent {
+        "claude" => "mcp.json",
+        "codex" => "config.toml",
+        "copilot" => "mcp-config.json",
+        "opencode" => "opencode-mcp.json",
+        _ => return None,
+    };
+    Some((filename, format!("{dotdir}/{filename}")))
+}
+
 /// Where the in-container CLI reads GLOBAL skills — Claude reads only
 /// `~/.claude/skills` (the host junctions it to the canonical store), every other
 /// agent reads the vendor-neutral `~/.agents/skills` directly.
@@ -382,6 +401,18 @@ fn agent_home_root(app: &AppHandle) -> AppResult<PathBuf> {
         .app_data_dir()
         .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?
         .join("agent-home"))
+}
+
+/// A persistent host npm cache, mounted into every container at `~/.npm` so an
+/// `npx`-based MCP server (or any `npx` use) downloads ONCE and is reused across
+/// turns + sessions instead of re-fetching each run (the per-session home is wiped
+/// on discard, so without this every first turn re-downloads). Shared across
+/// sessions — npm's content-addressed cache is concurrency-safe. Best-effort:
+/// returns `None` if the dir can't be created, so a session still runs (just slower).
+pub(crate) fn npm_cache_dir(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_data_dir().ok()?.join("agent-npm-cache");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 /// `<app_data>/agent-home/<session>/<agent>` — mounted at the container's
@@ -745,6 +776,11 @@ pub(crate) fn build_run_args(
     container_name: &str,
     // Host path to the global skills store to mount read-only (None = don't mount).
     skills_src: Option<&str>,
+    // Host path to the shared npm cache to mount at `~/.npm` (None = don't mount).
+    npm_cache_src: Option<&str>,
+    // Extra container env (`-e K=V`) — e.g. opencode's `OPENCODE_CONFIG`. Values are
+    // non-secret (a path); a secret is passed by-name instead (see Copilot's token).
+    container_env: &[(&str, String)],
     inner: &[String],
 ) -> Vec<String> {
     let workspace_mount = format!("{}:/workspace", to_mount_source(worktree_path, runtime));
@@ -770,6 +806,12 @@ pub(crate) fn build_run_args(
     if agent == "copilot" {
         args.push("-e".into());
         args.push("COPILOT_GITHUB_TOKEN".into());
+    }
+    // Extra container env (`-e K=V`) — e.g. opencode's `OPENCODE_CONFIG` pointing at
+    // the mounted MCP config. Paths, never secrets (those go by-name, above).
+    for (k, v) in container_env {
+        args.push("-e".into());
+        args.push(format!("{k}={v}"));
     }
     // Rootless Podman on Linux maps the container's non-root `node` (uid 1000) to
     // a host *subuid*, so it can't even write the host-user-owned worktree, and
@@ -804,6 +846,15 @@ pub(crate) fn build_run_args(
             "{}:{}:ro",
             to_mount_source(src, runtime),
             skills_target(agent)
+        ));
+    }
+    // Persistent npm cache (read-write) at `~/.npm` so an npx MCP server is fetched
+    // once, not every turn. Sits beside the home mount (`~/.npm` ≠ the agent dotdir).
+    if let Some(src) = npm_cache_src {
+        args.push("-v".into());
+        args.push(format!(
+            "{}:/home/node/.npm",
+            to_mount_source(src, runtime)
         ));
     }
     args.extend([
@@ -865,6 +916,8 @@ mod tests {
             &home,
             "gd-agent-s1",
             None,
+            None,
+            &[],
             &inner,
         );
         assert_eq!(args[0], "run");
@@ -873,10 +926,14 @@ mod tests {
         assert!(args.iter().any(|a| a.ends_with(":/workspace")));
         assert!(args.iter().any(|a| a.ends_with(":/home/node/.claude")));
         // Codex mounts its home at ~/.codex instead.
-        let codex = build_run_args("docker", "codex", "/repos/wt", &home, "n", None, &inner);
+        let codex = build_run_args(
+            "docker", "codex", "/repos/wt", &home, "n", None, None, &[], &inner,
+        );
         assert!(codex.iter().any(|a| a.ends_with(":/home/node/.codex")));
         // opencode mounts its XDG data dir.
-        let oc = build_run_args("docker", "opencode", "/repos/wt", &home, "n", None, &inner);
+        let oc = build_run_args(
+            "docker", "opencode", "/repos/wt", &home, "n", None, None, &[], &inner,
+        );
         assert!(oc
             .iter()
             .any(|a| a.ends_with(":/home/node/.local/share/opencode")));
@@ -892,7 +949,7 @@ mod tests {
     fn copilot_passes_token_env_by_name_only() {
         let home = PathBuf::from("/data/agent-home/s1/copilot");
         let inner = vec!["-p".to_string(), "hi".to_string()];
-        let cp = build_run_args("docker", "copilot", "/repos/wt", &home, "n", None, &inner);
+        let cp = build_run_args("docker", "copilot", "/repos/wt", &home, "n", None, None, &[], &inner);
         // Token is passed through by NAME (no `=value`) so it never lands in argv.
         let e = cp.iter().position(|a| a == "-e").expect("has -e");
         assert_eq!(cp[e + 1], "COPILOT_GITHUB_TOKEN");
@@ -903,7 +960,7 @@ mod tests {
         let img = cp.iter().position(|a| a == IMAGE).unwrap();
         assert_eq!(cp[img + 1], "copilot");
         // Other agents get no token env passthrough.
-        let claude = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, &inner);
+        let claude = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, None, &[], &inner);
         assert!(!claude.iter().any(|a| a == "COPILOT_GITHUB_TOKEN"));
     }
 
@@ -917,18 +974,80 @@ mod tests {
             "/home/u/.agents/skills"
         };
         // Claude reads only ~/.claude/skills; the mount is read-only.
-        let cl = build_run_args("docker", "claude", "/repos/wt", &home, "n", Some(src), &inner);
+        let cl = build_run_args("docker", "claude", "/repos/wt", &home, "n", Some(src), None, &[], &inner);
         assert!(cl
             .iter()
             .any(|a| a.ends_with(":/home/node/.claude/skills:ro")));
         // Every other agent reads the vendor-neutral ~/.agents/skills.
-        let cx = build_run_args("docker", "codex", "/repos/wt", &home, "n", Some(src), &inner);
+        let cx = build_run_args("docker", "codex", "/repos/wt", &home, "n", Some(src), None, &[], &inner);
         assert!(cx
             .iter()
             .any(|a| a.ends_with(":/home/node/.agents/skills:ro")));
         // No source → no skills mount at all.
-        let none = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, &inner);
+        let none = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, None, &[], &inner);
         assert!(!none.iter().any(|a| a.contains("/skills:ro")));
+    }
+
+    #[test]
+    fn mounts_npm_cache_and_sets_container_env() {
+        let home = PathBuf::from("/data/agent-home/s1/opencode");
+        let inner = vec!["run".to_string()];
+        let cache = if cfg!(windows) {
+            "C:\\data\\agent-npm-cache"
+        } else {
+            "/data/agent-npm-cache"
+        };
+        let env = [(
+            "OPENCODE_CONFIG",
+            "/home/node/.local/share/opencode/opencode-mcp.json".to_string(),
+        )];
+        let a = build_run_args(
+            "docker",
+            "opencode",
+            "/repos/wt",
+            &home,
+            "n",
+            None,
+            Some(cache),
+            &env,
+            &inner,
+        );
+        // npm cache mounts read-write at ~/.npm (no :ro), beside the home mount.
+        assert!(a.iter().any(|m| m.ends_with(":/home/node/.npm")));
+        // container env is `-e KEY=VALUE` (a path, in argv — it's not a secret).
+        assert!(a
+            .iter()
+            .any(|m| m == "OPENCODE_CONFIG=/home/node/.local/share/opencode/opencode-mcp.json"));
+        // None → neither appears.
+        let none = build_run_args(
+            "docker", "opencode", "/repos/wt", &home, "n", None, None, &[], &inner,
+        );
+        assert!(!none.iter().any(|m| m.ends_with(":/home/node/.npm")));
+        assert!(!none.iter().any(|m| m.starts_with("OPENCODE_CONFIG=")));
+    }
+
+    #[test]
+    fn container_mcp_config_paths_match_agent_dotdirs() {
+        assert_eq!(
+            container_mcp_config("claude").unwrap(),
+            ("mcp.json", "/home/node/.claude/mcp.json".to_string())
+        );
+        assert_eq!(
+            container_mcp_config("codex").unwrap(),
+            ("config.toml", "/home/node/.codex/config.toml".to_string())
+        );
+        assert_eq!(
+            container_mcp_config("copilot").unwrap(),
+            ("mcp-config.json", "/home/node/.copilot/mcp-config.json".to_string())
+        );
+        assert_eq!(
+            container_mcp_config("opencode").unwrap(),
+            (
+                "opencode-mcp.json",
+                "/home/node/.local/share/opencode/opencode-mcp.json".to_string()
+            )
+        );
+        assert!(container_mcp_config("nope").is_none());
     }
 
     #[cfg(target_os = "linux")]
@@ -936,9 +1055,9 @@ mod tests {
     fn linux_podman_adds_keep_id_docker_does_not() {
         let home = PathBuf::from("/data/agent-home/s1/claude");
         let inner = vec!["-p".to_string()];
-        let podman = build_run_args("podman", "claude", "/repos/wt", &home, "n", None, &inner);
+        let podman = build_run_args("podman", "claude", "/repos/wt", &home, "n", None, None, &[], &inner);
         assert!(podman.iter().any(|a| a == "--userns=keep-id"));
-        let docker = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, &inner);
+        let docker = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, None, &[], &inner);
         assert!(!docker.iter().any(|a| a == "--userns=keep-id"));
     }
 

@@ -504,9 +504,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       effort,
       isolation,
       agent,
-      // MCP runs on host Claude/Copilot/opencode and container Codex; drop the
-      // selection for any other combo so a session never carries servers the
-      // backend would reject.
+      // MCP runs in the supported (agent, isolation) combos (host + container for
+      // Claude/Copilot/opencode, container for Codex); drop the selection for any
+      // unsupported combo so a session never carries servers the backend would reject.
       mcpServers: mcpSupportedFor(agent, isolation === "container")
         ? mcpServers
         : undefined,

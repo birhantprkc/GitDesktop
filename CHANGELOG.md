@@ -54,6 +54,17 @@ commit list.
   and opencode layer your picks onto their own config, while Claude alone runs in strict,
   only-these mode.
 
+- **MCP servers in container sessions, for every agent.** Your registered MCP servers now
+  work in **container** isolation for **Claude**, **Copilot**, and **opencode** too — not
+  just Codex. Each session's picks are written into the agent's config *inside* the sandbox
+  (secrets stay in your OS keychain, never on the command line), so the servers run in the
+  container alongside the agent. A shared **npm cache** means an `npx`-based server is
+  downloaded once and reused across turns and sessions instead of re-fetching every run.
+  You pick servers from the composer the same way whether a session runs on the host or in
+  a container. (Tip: a Claude server takes a few seconds to connect inside a fresh
+  container, so the very first thing in a turn may not see it yet — it's there once the
+  agent gets going.)
+
 - **Change a session's MCP servers mid-conversation.** The composer's **MCP** picker now
   appears on an active session too, not just a new one — toggle servers on or off and the
   new selection applies from your next turn (and survives a reload).

@@ -64,18 +64,16 @@ export function isServerDefaultOn(
 }
 
 /** Whether an (agent, isolation) combination can run MCP servers at all.
- *  Claude / Copilot / opencode: host only — each CLI auto-approves MCP tool calls
- *  non-interactively (`--mcp-config` / `--additional-mcp-config` + `--allow-all-tools`
- *  / `OPENCODE_CONFIG` + `--dangerously-skip-permissions`); container delivery for
- *  these isn't wired yet. Codex: container only — host `codex exec` cancels every
- *  MCP tool call (stdin EOF → "declined", an upstream limitation), while a container
- *  session bypasses approvals so they run. Shared by the composer (gating) and the
- *  store (persist). */
+ *  Claude / Copilot / opencode: BOTH host and container — each CLI auto-approves MCP
+ *  tool calls non-interactively (`--mcp-config` / `--additional-mcp-config` +
+ *  `--allow-all-tools` / `OPENCODE_CONFIG` + `--dangerously-skip-permissions`), and
+ *  the container delivers the same config into the CLI's mounted home. Codex: container
+ *  only — host `codex exec` cancels every MCP tool call (stdin EOF → "declined", an
+ *  upstream limitation), while a container session bypasses approvals so they run.
+ *  Shared by the composer (gating) and the store (persist). */
 export function mcpSupportedFor(agent: string, isContainer: boolean): boolean {
   if (agent === "codex") return isContainer;
-  if (agent === "claude" || agent === "copilot" || agent === "opencode")
-    return !isContainer;
-  return false;
+  return agent === "claude" || agent === "copilot" || agent === "opencode";
 }
 
 /** Whether a specific server can run under `agent`. Codex's MCP config only takes
