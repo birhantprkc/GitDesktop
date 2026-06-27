@@ -17,6 +17,7 @@ import {
   TagSimpleIcon,
   TerminalIcon,
   TrashIcon,
+  TreeStructureIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -68,6 +69,7 @@ import { RemoteUrlDialog } from "./RemoteUrlDialog";
 import { RemoveRepoDialog, RepoAliasDialog } from "./RepoDialogs";
 import { RepositoryFilesDialog } from "./RepositoryFilesDialog";
 import { SubmodulesDialog } from "./SubmodulesDialog";
+import { WorktreesDialog } from "./WorktreesDialog";
 
 export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const gh = useGhStatus(repoPath);
@@ -80,6 +82,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const [branchRulesOpen, setBranchRulesOpen] = useState(false);
   const [hooksOpen, setHooksOpen] = useState(false);
   const [submodulesOpen, setSubmodulesOpen] = useState(false);
+  const [worktreesOpen, setWorktreesOpen] = useState(false);
   // Only offer the Submodules menu item when the repo actually has submodules.
   const submodules = useSubmodules(repoPath);
   const hasSubmodules = (submodules.data?.length ?? 0) > 0;
@@ -155,6 +158,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   useHotkeyAction("branch-rules", () => setBranchRulesOpen(true));
   useHotkeyAction("git-hooks", () => setHooksOpen(true));
   useHotkeyAction("submodules", () => setSubmodulesOpen(true), hasSubmodules);
+  useHotkeyAction("worktrees", () => setWorktreesOpen(true));
   useHotkeyAction(
     "star-repository",
     () =>
@@ -283,6 +287,10 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
             Submodules…
           </DropdownMenuItem>
         )}
+        <DropdownMenuItem onClick={() => setWorktreesOpen(true)}>
+          <TreeStructureIcon />
+          Worktrees…
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => setRemoteUrlOpen(true)}>
           <LinkIcon />
           Change remote URL…
@@ -329,6 +337,11 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={submodulesOpen}
         onOpenChange={setSubmodulesOpen}
+      />
+      <WorktreesDialog
+        repoPath={repoPath}
+        open={worktreesOpen}
+        onOpenChange={setWorktreesOpen}
       />
       <RemoteUrlDialog
         repoPath={repoPath}

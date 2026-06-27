@@ -269,6 +269,12 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "worktrees",
+    label: "Worktrees",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
     id: "change-remote-url",
     label: "Change remote URL",
     category: "Repository",

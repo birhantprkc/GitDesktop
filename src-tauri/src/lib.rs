@@ -106,6 +106,8 @@ pub fn run() {
             git::ops::git_reset,
             git::worktree::git_worktree_create,
             git::worktree::git_worktree_list,
+            git::worktree::git_worktree_list_user,
+            git::worktree::git_worktree_add_user,
             git::worktree::git_worktree_remove,
             git::worktree::git_worktree_prune,
             git::worktree::git_worktree_commit_all,

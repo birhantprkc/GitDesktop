@@ -7,6 +7,7 @@ import {
   GitBranchIcon,
   GitPullRequestIcon,
   SparkleIcon,
+  TreeStructureIcon,
 } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { useMemo, useState } from "react";
@@ -68,6 +69,7 @@ import {
   useStashCount,
   useStashPop,
   useUpdateBranchFrom,
+  useUserWorktrees,
 } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import type { Branch } from "@/lib/git/types";
@@ -81,6 +83,11 @@ import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { StashesDialog } from "./StashesDialog";
 import { useGenerateBranchName } from "./useGenerateBranchName";
+import { useOpenWorktree } from "./useOpenRepoByPath";
+
+/** Lower-cased, forward-slashed path for cross-source comparison — git emits
+ *  "/", the app stores "\" on Windows. */
+const normPath = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 
 type PickerMode = "merge" | "squash" | "rebase";
 
@@ -165,6 +172,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const rebaseBranch = useRebaseBranch(repoPath);
   const updateBranchFrom = useUpdateBranchFrom(repoPath);
   const setBranchArchived = useSetBranchArchived(repoPath);
+  const openWorktree = useOpenWorktree();
   const rulesConfig = useEffectiveBranchRules(repoPath);
   const amendingHash = useUiStore((s) => s.amendingHash);
   const openSettings = useUiStore((s) => s.openSettings);
@@ -187,6 +195,11 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
   const [pickerBranch, setPickerBranch] = useState("");
   const [switchTarget, setSwitchTarget] = useState<string | null>(null);
+  // A branch checked out in another worktree, awaiting confirm to open it.
+  const [worktreeSwitchTarget, setWorktreeSwitchTarget] = useState<{
+    name: string;
+    path: string;
+  } | null>(null);
 
   const head = status.data?.branch;
   const currentName = head?.name ?? null;
@@ -278,6 +291,21 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     setRepoTab("pulls");
     setOpen(false);
   };
+
+  // Branches checked out in *another* worktree → that worktree's path. Git
+  // forbids the same branch in two worktrees, so these can't be checked out
+  // here; the row offers to open the worktree instead. The active repo's own
+  // branch is excluded (it's the one you're on). Fetched only while open.
+  const userWorktrees = useUserWorktrees(repoPath, open);
+  const activeNorm = normPath(repoPath);
+  const worktreeByBranch = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const w of userWorktrees.data ?? []) {
+      if (w.branch && normPath(w.path) !== activeNorm)
+        map.set(w.branch, w.path);
+    }
+    return map;
+  }, [userWorktrees.data, activeNorm]);
   // Default branch pinned on top, then the rest by most recently committed.
   // Memoized: the compiler won't hoist the `.sort()` copy or the filter
   // allocations, and these recompute on every filter keystroke otherwise.
@@ -354,6 +382,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   function switchTo(name: string) {
     if (amending) return; // guarded by the disabled trigger; belt-and-suspenders
     setOpen(false);
+    // A branch that's checked out in another worktree can't be checked out here
+    // (git forbids it); offer to open that worktree instead of erroring.
+    const wtPath = worktreeByBranch.get(name);
+    if (wtPath) {
+      setWorktreeSwitchTarget({ name, path: wtPath });
+      return;
+    }
     // with work in progress, let the user choose to bring or stash it
     if (hasChanges) {
       setSwitchTarget(name);
@@ -439,14 +474,21 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       return;
     }
     try {
-      // git refuses to delete the checked-out branch: move off it first
+      // git refuses to delete the checked-out branch: move off it first — onto a
+      // branch that isn't already occupied by another worktree (checking out an
+      // occupied branch fails too, which is what stranded the delete before).
       if (deleteTarget === currentName) {
-        const fallback =
-          defaultName && defaultName !== deleteTarget
-            ? defaultName
-            : otherBranches[0]?.name;
+        const free = (b: string | null | undefined): b is string =>
+          Boolean(b) &&
+          b !== deleteTarget &&
+          !worktreeByBranch.has(b as string);
+        const fallback = free(defaultName)
+          ? defaultName
+          : otherBranches.find((b) => free(b.name))?.name;
         if (!fallback) {
-          toast.error("Cannot delete the only branch.");
+          toast.error(
+            "Can't switch off this branch — every other branch is checked out in a worktree.",
+          );
           setDeleteTarget(null);
           return;
         }
@@ -576,6 +618,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     const div = divByName.get(branch.name);
     const canUpdate = Boolean(defaultName) && branch.name !== defaultName;
     const deletionBlocked = isDeletionBlocked(rulesConfig, branch.name);
+    const inWorktree = worktreeByBranch.has(branch.name);
     return (
       <ContextMenu key={branch.name}>
         <ContextMenuTrigger
@@ -638,6 +681,17 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   </span>
                 );
               })()}
+              {inWorktree && (
+                <span
+                  className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground"
+                  title={`Checked out in another worktree (${worktreeByBranch.get(
+                    branch.name,
+                  )}) — open it instead of switching`}
+                >
+                  <TreeStructureIcon className="size-3" weight="bold" />
+                  worktree
+                </span>
+              )}
               {div && (div.ahead > 0 || div.behind > 0) && (
                 <span
                   className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground tabular-nums"
@@ -694,13 +748,17 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem
-            disabled={deletionBlocked}
+            disabled={deletionBlocked || inWorktree}
             onClick={() => {
               setOpen(false);
               setDeleteTarget(branch.name);
             }}
           >
-            {deletionBlocked ? "Delete… (protected)" : "Delete…"}
+            {deletionBlocked
+              ? "Delete… (protected)"
+              : inWorktree
+                ? "Delete… (in worktree)"
+                : "Delete…"}
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -1095,6 +1153,25 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={stashesOpen}
         onOpenChange={setStashesOpen}
+      />
+
+      <ConfirmDialog
+        open={worktreeSwitchTarget !== null}
+        onCancel={() => setWorktreeSwitchTarget(null)}
+        title="Open worktree?"
+        body={
+          <>
+            <span className="font-mono">{worktreeSwitchTarget?.name}</span> is
+            checked out in another worktree. A branch can only be in one
+            worktree at a time, so open that worktree instead of switching here.
+          </>
+        }
+        confirmLabel="Open worktree"
+        onConfirm={() => {
+          const target = worktreeSwitchTarget;
+          setWorktreeSwitchTarget(null);
+          if (target) openWorktree(target.path);
+        }}
       />
 
       <ConfirmDialog

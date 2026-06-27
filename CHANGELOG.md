@@ -12,6 +12,13 @@ commit list.
 
 ### Added
 
+- **Worktree manager.** A new **Worktrees…** dialog (repository ⋯ menu, or the command
+  palette) lists the repo's linked worktrees and lets you **create** one (a new branch
+  from any base, or an existing branch, checked out into its own folder), **open** one to
+  switch the active repository to it, and **remove** one safely (the branch is kept; a
+  worktree with uncommitted changes asks before force-removing). Worktrees let you work on
+  several branches at once without stashing or switching, and the ones AI agent sessions
+  use internally stay hidden and protected — you can't list or delete them by accident.
 - **Use GitDesktop as an MCP server.** GitDesktop can now *be* a Model Context Protocol
   server, not just consume them. A new **Use GitDesktop as an MCP server** panel in
   **Settings → MCP servers** shows a ready-to-paste config snippet that points any external

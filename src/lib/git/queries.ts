@@ -29,6 +29,12 @@ import type {
   UnignoreRule,
   WebhookInput,
 } from "./types";
+import {
+  addUserWorktree,
+  listUserWorktrees,
+  pruneWorktrees,
+  removeWorktree,
+} from "./worktree";
 
 export const repoKeys = {
   all: (repo: string) => ["repo", repo] as const,
@@ -97,6 +103,56 @@ export function useBranches(repo: string) {
     queryKey: repoKeys.branches(repo),
     queryFn: () => api.gitBranches(repo),
   });
+}
+
+const worktreeKey = (repo: string) => ["repo", repo, "user-worktrees"] as const;
+
+/** The repo's user-facing worktrees (session worktrees filtered out by the
+ *  backend). `enabled` gates the fetch so it only runs while the manager is open. */
+export function useUserWorktrees(repo: string, enabled = true) {
+  return useQuery({
+    queryKey: worktreeKey(repo),
+    queryFn: () => listUserWorktrees(repo),
+    enabled: enabled && Boolean(repo),
+  });
+}
+
+/** Creates a user worktree. Invalidates the worktree list + branches (a new
+ *  branch may have been created). */
+export function useAddUserWorktree(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      path: string;
+      branch: string;
+      newBranch: boolean;
+      baseRef?: string;
+    }) =>
+      addUserWorktree(
+        repo,
+        args.path,
+        args.branch,
+        args.newBranch,
+        args.baseRef,
+      ),
+    { invalidate: [worktreeKey(repo), repoKeys.branches(repo)] },
+  );
+}
+
+/** Removes a user worktree (keeping its branch), then prunes any stale admin
+ *  entry. `force` drops a worktree with uncommitted changes. */
+export function useRemoveUserWorktree(repo: string) {
+  return useRepoMutation(
+    repo,
+    async (args: { path: string; force: boolean }) => {
+      // Pass branch=null: removing a worktree leaves the branch intact (deleting
+      // a user's branch is a separate, more destructive action).
+      await removeWorktree(repo, args.path, null, args.force);
+      // Best-effort cleanup; a clean remove already drops its own admin entry.
+      await pruneWorktrees(repo).catch(() => undefined);
+    },
+    { invalidate: [worktreeKey(repo), repoKeys.branches(repo)] },
+  );
 }
 
 /** Owners (from each repo's origin remote) for grouping the repo list. */

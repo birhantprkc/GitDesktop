@@ -26,6 +26,36 @@ pub struct WorktreeInfo {
     pub base: String,
 }
 
+/// A worktree as shown in the **user-facing** worktree manager — richer than the
+/// agent-session `WorktreeInfo` (adds HEAD + main/detached/locked state). Session
+/// worktrees are filtered out before this is ever built (see `git_worktree_list_user`).
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserWorktree {
+    /// Absolute path to the checkout (as git reports it — forward slashes).
+    pub path: String,
+    /// The checked-out branch, or "" when detached.
+    pub branch: String,
+    /// The worktree's HEAD commit sha (full).
+    pub head: String,
+    /// The repo's main worktree (git always lists it first); undeletable.
+    pub is_main: bool,
+    /// Detached HEAD — no branch checked out.
+    pub is_detached: bool,
+    /// `git worktree lock`ed — blocks prune/remove without `--force`.
+    pub is_locked: bool,
+    /// The lock reason, when one was given (else "").
+    pub lock_reason: String,
+}
+
+/// Normalizes a worktree path for cross-source comparison: git prints forward
+/// slashes while the app stores native separators (back-slashes on Windows), and
+/// Windows paths are case-insensitive. Lower-casing is harmless on Unix here — the
+/// only paths compared are app-generated session dirs vs. git's own output.
+pub(crate) fn normalize_wt_path(p: &str) -> String {
+    p.replace('\\', "/").to_lowercase()
+}
+
 /// A short, stable hash of the repo path, used to namespace a repo's session
 /// worktrees. Lower-cased first since Windows paths are case-insensitive.
 fn repo_hash(repo_path: &str) -> String {
@@ -107,6 +137,105 @@ pub async fn git_worktree_list(repo_path: String) -> AppResult<Vec<WorktreeInfo>
     )
     .await?;
     Ok(parse_worktree_list(&out.stdout_lossy()))
+}
+
+/// Lists the repo's **user** worktrees for the worktree manager — every checkout
+/// except the ones agent sessions own (those are app-internal and protected).
+/// The main worktree is always included (first, undeletable). Stale entries
+/// (`prunable` — a dir deleted out from under git) are hidden; the delete path
+/// runs the actual prune.
+#[tauri::command]
+pub async fn git_worktree_list_user(
+    app: AppHandle,
+    repo_path: String,
+) -> AppResult<Vec<UserWorktree>> {
+    let out = run_git(
+        Some(&repo_path),
+        &["worktree", "list", "--porcelain"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let raw = parse_worktree_porcelain(&out.stdout_lossy());
+
+    // Authoritative exclusion: the sessions registry's owned worktree paths.
+    let session_paths = crate::sessions::session_worktree_paths(&app);
+    // Defense-in-depth: anything under the app-data worktrees root.
+    let app_data_root = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|d| normalize_wt_path(&d.join("worktrees").to_string_lossy()));
+
+    let user = raw
+        .into_iter()
+        .enumerate()
+        .filter(|(_, w)| !w.prunable)
+        // The main worktree (index 0) is never a session worktree; keep it
+        // unconditionally so the user can always switch back to it.
+        .filter(|(i, w)| {
+            *i == 0 || !is_session_worktree(w, &session_paths, app_data_root.as_deref())
+        })
+        .map(|(i, w)| UserWorktree {
+            is_main: i == 0,
+            is_detached: w.detached,
+            is_locked: w.locked.is_some(),
+            lock_reason: w.locked.unwrap_or_default(),
+            path: w.path,
+            branch: w.branch,
+            head: w.head,
+        })
+        .collect();
+    Ok(user)
+}
+
+/// Creates a **user** worktree at `path` for the worktree manager. With
+/// `new_branch`, branches a fresh `branch` off `base_ref` (default HEAD) and
+/// checks it out there (`worktree add -b <branch> <path> <base>`); otherwise it
+/// checks out the *existing* `branch` (`worktree add <path> <branch>`). Distinct
+/// from `git_worktree_create`, which makes app-internal `gd/session/*` worktrees
+/// under app-data. Fails loudly (git's own message) when the branch is already
+/// checked out elsewhere — git forbids double-checkout — rather than `--force`-ing.
+#[tauri::command]
+pub async fn git_worktree_add_user(
+    state: State<'_, AppState>,
+    repo_path: String,
+    path: String,
+    branch: String,
+    new_branch: bool,
+    base_ref: Option<String>,
+) -> AppResult<()> {
+    let branch = branch.trim();
+    let path = path.trim();
+    if branch.is_empty() {
+        return Err(AppError::InvalidArgument("a branch is required".into()));
+    }
+    if path.is_empty() {
+        return Err(AppError::InvalidArgument("a worktree path is required".into()));
+    }
+    // A leading '-' would be parsed as a git option, not a path/branch.
+    if path.starts_with('-') || branch.starts_with('-') {
+        return Err(AppError::InvalidArgument(
+            "path and branch must not start with '-'".into(),
+        ));
+    }
+    if std::path::Path::new(path).exists() {
+        return Err(AppError::InvalidArgument(format!(
+            "{path} already exists — choose a new folder"
+        )));
+    }
+    let base = base_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("HEAD");
+    let mut args: Vec<&str> = vec!["worktree", "add"];
+    if new_branch {
+        args.extend_from_slice(&["-b", branch, path, base]);
+    } else {
+        args.extend_from_slice(&[path, branch]);
+    }
+    run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    Ok(())
 }
 
 /// Removes a session worktree and (when given) deletes its branch. `force` is
@@ -247,6 +376,81 @@ pub async fn git_worktree_resume(
     Ok(())
 }
 
+/// One `git worktree list --porcelain` stanza, with the extra attributes the
+/// user-facing manager needs (the agent `WorktreeInfo` path ignores these).
+#[derive(Default)]
+struct RawWorktree {
+    path: String,
+    head: String,
+    branch: String,
+    detached: bool,
+    /// `Some(reason)` when locked (reason may be ""); `None` when unlocked.
+    locked: Option<String>,
+    /// git considers this entry stale (its directory is gone) — hide it.
+    prunable: bool,
+}
+
+/// Parses `git worktree list --porcelain` into one `RawWorktree` per stanza,
+/// reading the `HEAD` / `branch` / `detached` / `locked` / `prunable` attribute
+/// lines. Stanzas are blank-line separated and the main worktree is always first.
+fn parse_worktree_porcelain(porcelain: &str) -> Vec<RawWorktree> {
+    let mut out: Vec<RawWorktree> = Vec::new();
+    let mut cur: Option<RawWorktree> = None;
+    for line in porcelain.lines() {
+        let line = line.trim_end();
+        if let Some(p) = line.strip_prefix("worktree ") {
+            if let Some(w) = cur.take() {
+                out.push(w);
+            }
+            cur = Some(RawWorktree {
+                path: p.to_string(),
+                ..Default::default()
+            });
+        } else if let Some(w) = cur.as_mut() {
+            if let Some(h) = line.strip_prefix("HEAD ") {
+                w.head = h.to_string();
+            } else if let Some(b) = line.strip_prefix("branch ") {
+                w.branch = b.strip_prefix("refs/heads/").unwrap_or(b).to_string();
+            } else if line == "detached" {
+                w.detached = true;
+            } else if line == "locked" {
+                w.locked = Some(String::new());
+            } else if let Some(r) = line.strip_prefix("locked ") {
+                w.locked = Some(r.to_string());
+            } else if line == "prunable" || line.starts_with("prunable ") {
+                w.prunable = true;
+            }
+        }
+    }
+    if let Some(w) = cur.take() {
+        out.push(w);
+    }
+    out
+}
+
+/// Whether a worktree belongs to an agent session and must be hidden from the
+/// user. Registry path match is authoritative; the `gd/session/*` branch and the
+/// app-data-root path are belt-and-suspenders for a stale/missing registry entry.
+fn is_session_worktree(
+    w: &RawWorktree,
+    session_paths: &std::collections::HashSet<String>,
+    app_data_root: Option<&str>,
+) -> bool {
+    let norm = normalize_wt_path(&w.path);
+    if session_paths.contains(&norm) {
+        return true;
+    }
+    if w.branch.starts_with("gd/session/") {
+        return true;
+    }
+    if let Some(root) = app_data_root {
+        if norm.starts_with(&format!("{root}/")) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Parses `git worktree list --porcelain` into one `WorktreeInfo` per stanza.
 /// Stanzas are blank-line separated; each carries a `worktree <path>` line and
 /// (unless detached) a `branch refs/heads/<name>` line.
@@ -320,6 +524,86 @@ branch refs/heads/gd/session/sess1
                 },
             ]
         );
+    }
+
+    #[test]
+    fn parse_porcelain_reads_head_branch_detached_and_locked() {
+        let porcelain = "\
+worktree C:/repos/app
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/main
+
+worktree C:/repos/app-detached
+HEAD 2222222222222222222222222222222222222222
+detached
+
+worktree C:/repos/app-locked
+HEAD 3333333333333333333333333333333333333333
+branch refs/heads/feature
+locked on a removable drive
+
+worktree C:/repos/app-stale
+HEAD 4444444444444444444444444444444444444444
+branch refs/heads/gone
+prunable gitdir file points to non-existent location
+";
+        let got = parse_worktree_porcelain(porcelain);
+        assert_eq!(got.len(), 4);
+        assert_eq!(got[0].branch, "main");
+        assert_eq!(got[0].head, "1111111111111111111111111111111111111111");
+        assert!(!got[0].detached && got[0].locked.is_none());
+        assert!(got[1].detached && got[1].branch.is_empty());
+        assert_eq!(got[2].locked.as_deref(), Some("on a removable drive"));
+        assert!(got[3].prunable);
+    }
+
+    #[test]
+    fn parse_porcelain_reads_locked_without_reason() {
+        let porcelain = "worktree C:/wt\nHEAD abc\nbranch refs/heads/x\nlocked\n";
+        let got = parse_worktree_porcelain(porcelain);
+        assert_eq!(got[0].locked.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn is_session_worktree_matches_registry_branch_and_app_data() {
+        use std::collections::HashSet;
+        let registry: HashSet<String> =
+            [normalize_wt_path("C:\\Users\\me\\AppData\\Local\\app\\worktrees\\h\\sess1")]
+                .into_iter()
+                .collect();
+        let app_root = Some("c:/users/me/appdata/local/app/worktrees");
+
+        // 1) exact registry path match (note: stored with backslashes, git emits slashes)
+        let by_registry = RawWorktree {
+            path: "C:/Users/me/AppData/Local/app/worktrees/h/sess1".into(),
+            branch: "some-renamed-branch".into(),
+            ..Default::default()
+        };
+        assert!(is_session_worktree(&by_registry, &registry, app_root));
+
+        // 2) gd/session/* branch even if the registry is missing it
+        let by_branch = RawWorktree {
+            path: "C:/somewhere/else".into(),
+            branch: "gd/session/abc".into(),
+            ..Default::default()
+        };
+        assert!(is_session_worktree(&by_branch, &HashSet::new(), app_root));
+
+        // 3) under the app-data worktrees root even with a non-session branch
+        let by_path = RawWorktree {
+            path: "C:/Users/me/AppData/Local/app/worktrees/h/orphan".into(),
+            branch: "main".into(),
+            ..Default::default()
+        };
+        assert!(is_session_worktree(&by_path, &HashSet::new(), app_root));
+
+        // 4) an ordinary user worktree is NOT excluded
+        let user = RawWorktree {
+            path: "C:/repos/app-feature".into(),
+            branch: "feature".into(),
+            ..Default::default()
+        };
+        assert!(!is_session_worktree(&user, &registry, app_root));
     }
 
     #[test]

@@ -43,6 +43,28 @@ export function useOpenRepoByPath() {
 }
 
 /**
+ * Switches the active repo to a linked worktree directory. A worktree's `.git`
+ * is a pointer file, but `validateRepo` runs `rev-parse --show-toplevel`, which
+ * resolves it to the worktree root — so opening it Just Works. Unlike
+ * {@link useOpenRepoByPath} this does NOT record the path in recents: worktrees
+ * are child checkouts of a repo already in the switcher, not first-class repos.
+ */
+export function useOpenWorktree() {
+  const openRepo = useUiStore((s) => s.openRepo);
+  return useCallback(
+    async (path: string) => {
+      try {
+        const info = await validateRepo(path);
+        openRepo(info);
+      } catch (e) {
+        toastError(e);
+      }
+    },
+    [openRepo],
+  );
+}
+
+/**
  * Prompts for a local folder, then opens it as a repository (validate, record
  * in recents, switch to it). Shared by the welcome screen and the in-app repo
  * switcher so "Open repository…" behaves identically everywhere.

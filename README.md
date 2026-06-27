@@ -161,7 +161,9 @@ are shareable via a committed file or importable from GitHub.
 per-file history and line blame, and an at-a-glance marker on every commit that
 hasn't been pushed yet; cherry-pick (onto the current or another branch),
 squash and reorder unpushed commits behind an atomic replay engine, a stash
-browser, tag management, and submodule management.
+browser, tag management, submodule management, and a **worktree manager**
+(create, switch between, and remove linked worktrees, so you can work on several
+branches in parallel folders without stashing).
 
 **Syncing** — fetch / pull / push with ahead/behind indicators; pull is
 `--ff-only`, and divergence routes to a guarded force push with

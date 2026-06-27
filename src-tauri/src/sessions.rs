@@ -252,6 +252,51 @@ fn append_to_dir(dir: &Path, id: &str, event: &Event) -> AppResult<()> {
     Ok(())
 }
 
+/// Reads only a session file's header (line 1), without folding the whole
+/// transcript — the worktree manager's exclusion gate only needs each session's
+/// owned worktree path, and a kept session's log can be long.
+fn read_header(path: &Path) -> Option<Header> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    let mut line = String::new();
+    std::io::BufReader::new(file).read_line(&mut line).ok()?;
+    match serde_json::from_str::<Event>(line.trim()).ok()? {
+        Event::Session(h) => Some(h),
+        _ => None,
+    }
+}
+
+/// The set of absolute worktree paths owned by persisted agent sessions (active
+/// or kept), normalized (lower-cased, forward-slashed) for path comparison.
+///
+/// This is the **authoritative** exclusion set for the user-facing worktree
+/// manager: a worktree a live/kept session depends on must never be listed to,
+/// switched into, or deleted by the user (the user dogfoods `gd/session/*` in a
+/// real repo). The manager pairs this with a secondary `gd/session/*`-branch +
+/// app-data-path filter as defense-in-depth, so a real session worktree stays
+/// hidden even if the registry entry is missing.
+pub(crate) fn session_worktree_paths(app: &AppHandle) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    let Ok(dir) = sessions_dir(app) else {
+        return set;
+    };
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return set;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+            continue;
+        }
+        if let Some(h) = read_header(&path) {
+            if !h.worktree_path.is_empty() {
+                set.insert(crate::git::worktree::normalize_wt_path(&h.worktree_path));
+            }
+        }
+    }
+    set
+}
+
 /// Reads a transcript file into events, skipping any unparseable line (e.g. a
 /// final line torn by a crash mid-append — at most the last event is lost).
 fn read_events(path: &Path) -> Vec<Event> {

@@ -263,7 +263,23 @@ show. From here you can merge, rebase, or jump straight to opening a pull reques
 deletion, allowed merge methods, require-PR, and force-push blocking. They're enforced
 inside the app, can be shared with your team via a committed file, and can be imported
 from a repo's GitHub branch-protection rules. (For server-side enforcement, use **Rules**
-in *Repository settings*.)`,
+in *Repository settings*.)
+
+## Worktrees
+
+**Worktrees…** (in the ⋮ menu, or the command palette) manages linked worktrees — extra
+folders that each check out a different branch of the same repository, so you can build,
+test, or review several branches at once without stashing or switching.
+
+- **Add** a worktree on a new branch (from any base) or an existing one; it's checked out
+  into its own folder, defaulting to a sibling of the repository.
+- **Open** a worktree to make it the active repository — git commands then run in that
+  folder and the window title follows. Open the main worktree to switch back.
+- **Delete** a worktree to remove its folder; its branch is kept. A worktree with
+  uncommitted changes asks before force-removing, and the main worktree can't be removed.
+
+A branch can only be checked out in one worktree at a time, so the list excludes branches
+already in use.{{ai}} Worktrees that AI agent sessions use internally are hidden here.{{/ai}}`,
   },
   {
     id: "syncing",

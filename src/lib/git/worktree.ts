@@ -25,6 +25,49 @@ export const createWorktree = (repoPath: string, baseRef?: string) =>
 export const listWorktrees = (repoPath: string) =>
   invoke<WorktreeInfo[]>("git_worktree_list", { repoPath });
 
+/** A user-facing worktree (richer than `WorktreeInfo`): used by the worktree
+ *  manager. Agent-session worktrees are filtered out by the backend and never
+ *  appear here. */
+export interface UserWorktree {
+  /** Absolute path to the checkout (forward slashes, as git reports it). */
+  path: string;
+  /** Checked-out branch, or "" when detached. */
+  branch: string;
+  /** The worktree's HEAD commit sha (full). */
+  head: string;
+  /** The repo's main worktree (listed first); can't be removed. */
+  isMain: boolean;
+  /** Detached HEAD — no branch checked out. */
+  isDetached: boolean;
+  /** `git worktree lock`ed — blocks remove without force. */
+  isLocked: boolean;
+  /** Lock reason, when one was given (else ""). */
+  lockReason: string;
+}
+
+/** Lists the repo's *user* worktrees for the worktree manager — every checkout
+ *  except the agent-session ones, which are app-internal and protected. */
+export const listUserWorktrees = (repoPath: string) =>
+  invoke<UserWorktree[]>("git_worktree_list_user", { repoPath });
+
+/** Creates a user worktree at `path`. `newBranch` branches a fresh `branch` off
+ *  `baseRef` (default HEAD); otherwise it checks out the existing `branch`.
+ *  Rejects loudly when the branch is already checked out elsewhere. */
+export const addUserWorktree = (
+  repoPath: string,
+  path: string,
+  branch: string,
+  newBranch: boolean,
+  baseRef?: string,
+) =>
+  invoke<void>("git_worktree_add_user", {
+    repoPath,
+    path,
+    branch,
+    newBranch,
+    baseRef: baseRef ?? null,
+  });
+
 /** Removes a session worktree and (when given) deletes its branch. `force` is
  *  required to drop a worktree with uncommitted changes. */
 export const removeWorktree = (
