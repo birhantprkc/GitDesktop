@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { AgentNarration } from "@/features/sessions/AgentNarration";
 import {
   AgentPicker,
-  EffortPicker,
+  ComposerOptions,
   ModelPicker,
 } from "@/features/sessions/AgentPickers";
 import { selectSession } from "@/features/sessions/agentSelect";
@@ -132,27 +132,30 @@ export function PlanComposer({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
-      <div className="flex w-full max-w-xl flex-col gap-5">
-        <div className="flex flex-col gap-2 text-center">
+    // Docked like the Delegate panel: intro floats above, the composer is pinned
+    // to the bottom edge so its toolbar holds steady as the textarea grows.
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto p-6 text-center">
+        <div className="flex max-w-md flex-col gap-2">
           <h2 className="text-base font-medium text-balance">
             Plan a task, grounded in your code
           </h2>
-          <p className="mx-auto max-w-md text-xs leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             A read-only agent explores the repo and drafts an agent-ready issue
             — problem, approach, affected files, acceptance criteria, and a
             verify plan. Nothing is changed; review it, then file it as an
             issue. Start several — they run side by side.
           </p>
         </div>
-
         {planningIssue && (
-          <div className="border-l-2 border-primary/40 bg-muted/40 px-3 py-2 text-xs">
+          <div className="mt-4 w-full max-w-xl border border-primary/30 bg-muted/40 px-3 py-2 text-left text-xs">
             <p className="text-muted-foreground">Planning this issue:</p>
             <p className="mt-0.5 font-medium">{seed?.issueTitle}</p>
           </div>
         )}
+      </div>
 
+      <div className="shrink-0 border-t p-2">
         <div className="flex flex-col gap-2 border border-input bg-transparent p-3 transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50 dark:bg-input/30">
           <textarea
             value={goal}
@@ -186,18 +189,20 @@ export function PlanComposer({
               onChange={setModel}
               models={MODELS[agent]}
             />
-            <EffortPicker value={effort} onChange={setEffort} />
-            <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
-              {formatBinding("mod+enter")} to plan
-            </span>
-            <Button
-              size="sm"
-              className="ml-auto min-w-20"
-              disabled={!canPlan}
-              onClick={submit}
-            >
-              Plan
-            </Button>
+            <ComposerOptions effort={effort} onEffort={setEffort} />
+            <div className="ml-auto flex items-center gap-2">
+              <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
+                {formatBinding("mod+enter")} to plan
+              </span>
+              <Button
+                size="sm"
+                className="min-w-20"
+                disabled={!canPlan}
+                onClick={submit}
+              >
+                Plan
+              </Button>
+            </div>
           </div>
         </div>
       </div>

@@ -65,18 +65,23 @@ export function SessionActivation({ repoPath }: { repoPath: string }) {
       </div>
 
       {mode === "delegate" ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
-          <div className="flex w-full max-w-xl flex-col gap-5">
-            <div className="flex flex-col gap-2 text-center">
+        // Docked like the conversation footer + VS Code: the welcome text floats
+        // in the scrollable area above, the composer is pinned to the bottom edge,
+        // so its toolbar never shifts as the textarea grows upward.
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto p-6 text-center">
+            <div className="flex max-w-md flex-col gap-2">
               <h2 className="text-base font-medium text-balance">
                 Delegate a task to an agent
               </h2>
-              <p className="mx-auto max-w-md text-xs leading-relaxed text-muted-foreground">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 The agent runs full-auto in an isolated worktree — your working
                 tree, index, and branch are never touched. Review its changes
                 and keep them when you're happy. Run several at once.
               </p>
             </div>
+          </div>
+          <div className="shrink-0 border-t p-2">
             <SessionComposer
               repoPath={repoPath}
               session={null}

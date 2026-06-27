@@ -31,12 +31,10 @@ import { useSettings } from "@/lib/settings/queries";
 import { cn } from "@/lib/utils";
 import {
   AgentPicker,
-  EffortPicker,
-  McpServersPicker,
+  ComposerOptions,
   ModelPicker,
   modelsForAgent,
   type RunMode,
-  RunModePicker,
 } from "./AgentPickers";
 import { EnsembleRunDialog } from "./EnsembleRunDialog";
 import { type AgentSession, useSessionsStore } from "./store";
@@ -276,6 +274,26 @@ export function SessionComposer({
         : [],
     [mcpRegistry, session],
   );
+  // The MCP config handed to the Options popover, resolved per (session, mode):
+  // an active session re-picks from its own usable servers; a new single-run
+  // session opts in (or shows the Codex-on-host hint); best-of-N omits it (arms
+  // self-configure). undefined → the popover renders no MCP section.
+  const composerMcp = session
+    ? sessionMcpUsable
+      ? {
+          servers: sessionMcpServers,
+          value: session.mcpServers ?? [],
+          onChange: (ids: string[]) => setSessionMcp(session.id, ids),
+        }
+      : undefined
+    : mode === "single" && (mcpUsable || !!mcpDisabledReason)
+      ? {
+          servers: mcpServersForAgent,
+          value: effectiveMcp,
+          onChange: (ids: string[]) => setStartMcp(ids),
+          disabledReason: mcpDisabledReason,
+        }
+      : undefined;
   const discovered = useAgentCommands(
     repoPath,
     agent,
@@ -606,8 +624,9 @@ export function SessionComposer({
               className="max-h-40 min-h-9 w-full resize-none overflow-y-auto bg-transparent text-xs leading-relaxed outline-none placeholder:text-muted-foreground"
             />
             <div className="flex items-center gap-2 border-t pt-2">
-              {/* Single run: agent/model/effort here. Best-of-N: hidden — each
-                  arm sets its own in the dialog, so this bar stays uncluttered. */}
+              {/* Provider + model stay inline for quick access; run mode, effort,
+                  and MCP collapse into Options so the row never overflows. Best-of-N
+                  hides the inline pickers — each arm sets its own in the dialog. */}
               {!session && mode === "single" && (
                 <AgentPicker
                   value={startAgent}
@@ -621,32 +640,13 @@ export function SessionComposer({
               {(session || mode === "single") && (
                 <ModelPicker value={model} onChange={onModel} models={models} />
               )}
-              {(session || mode === "single") && (
-                <EffortPicker value={effort} onChange={onEffort} />
-              )}
-              {!session &&
-                mode === "single" &&
-                // Show for any MCP-capable agent: the picker when this isolation is
-                // right (mcpUsable), or the disabled trigger + "switch isolation" hint
-                // when it's wrong (mcpDisabledReason). Driven by the shared predicates
-                // so adding an agent never needs this gate touched again. (The picker
-                // self-hides when no servers are registered for the agent.)
-                (mcpUsable || !!mcpDisabledReason) && (
-                  <McpServersPicker
-                    servers={mcpServersForAgent}
-                    value={effectiveMcp}
-                    onChange={setStartMcp}
-                    disabledReason={mcpDisabledReason}
-                  />
-                )}
-              {session && sessionMcpUsable && (
-                <McpServersPicker
-                  servers={sessionMcpServers}
-                  value={session.mcpServers ?? []}
-                  onChange={(ids) => setSessionMcp(session.id, ids)}
-                />
-              )}
-              {!session && <RunModePicker value={mode} onChange={setMode} />}
+              <ComposerOptions
+                effort={session || mode === "single" ? effort : undefined}
+                onEffort={session || mode === "single" ? onEffort : undefined}
+                mode={!session ? mode : undefined}
+                onMode={!session ? setMode : undefined}
+                mcp={composerMcp}
+              />
               <AnimatePresence mode="wait" initial={false}>
                 {running ? (
                   <m.div
