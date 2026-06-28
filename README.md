@@ -167,7 +167,10 @@ branches in parallel folders without stashing).
 
 **Syncing** — fetch / pull / push with ahead/behind indicators; pull is
 `--ff-only`, and divergence routes to a guarded force push with
-`--force-with-lease`. In-progress merge/rebase/cherry-pick get a conflict banner
+`--force-with-lease`. **Auto-fetch** (on by default) quietly runs a background
+`git fetch` on an interval while the window is focused, so the behind-count and
+incoming commits stay current without pressing Fetch — it never pulls or merges,
+and pushing/pulling stay manual. In-progress merge/rebase/cherry-pick get a conflict banner
 with gated Continue / Abort. Selecting a conflicted file opens an **in-app
 conflict editor**: each region shows Current (ours) over Incoming (theirs) with
 Accept current / incoming / both, plus whole-file Accept all current / incoming

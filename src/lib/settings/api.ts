@@ -121,6 +121,10 @@ export interface McpServer {
   secretKeys: string[];
 }
 
+/** Background-fetch cadence, in minutes (stored as a string so it binds to the
+ *  settings Select directly). */
+export type AutoFetchInterval = "5" | "10" | "15" | "30" | "60";
+
 export interface NotificationSettings {
   /** Automation results (review posted / ready / failed). */
   automations: boolean;
@@ -186,6 +190,12 @@ export interface AppSettings {
   showLineStageHint: boolean;
   /** Check GitHub Releases for a new version on launch (install stays opt-in). */
   autoCheckUpdates: boolean;
+  /** Periodically run a background `git fetch` for the open repo so the
+   *  behind-count and incoming commits stay current. Fetch only — never pulls,
+   *  merges, or touches the working tree. */
+  autoFetch: boolean;
+  /** How often the background fetch runs, in minutes. */
+  autoFetchInterval: AutoFetchInterval;
   /** First-run nudge toward the user guide; set once the user opens or dismisses it. */
   seenGuideNudge: boolean;
   /** Send anonymous usage events to PostHog. Default on (opt-out). */
@@ -247,6 +257,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showSelectionHint: true,
   showLineStageHint: true,
   autoCheckUpdates: true,
+  autoFetch: true,
+  autoFetchInterval: "10",
   seenGuideNudge: false,
   analyticsEnabled: true,
   recordReplay: false,

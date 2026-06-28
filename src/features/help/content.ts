@@ -302,6 +302,16 @@ The header shows **Fetch / Pull / Push** with ahead/behind indicators.
 - **Push** ({{kbd:push}}) sends your commits. For a branch with no upstream yet, you'll
   see **Publish branch** instead.
 
+## Auto-fetch
+
+By default, GitDesktop quietly fetches in the background so the ahead/behind counts stay
+current without pressing **Fetch**. It runs on an interval while the window is focused, and
+once more when you return to the app or open a repo. It only updates your view of the remote
+— it **never pulls, merges, or changes your files**, so pulling and pushing stay deliberate.
+There are no toasts; the **Fetch** button simply spins while it works, and hovering it shows
+when the repo was last fetched. Turn it off, or change the interval, under
+**Settings → General**.
+
 ## Safer force push
 
 If your local history was rewritten (for example, after amending a commit that was

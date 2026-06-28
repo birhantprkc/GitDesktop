@@ -12,6 +12,13 @@ commit list.
 
 ### Added
 
+- **Auto-fetch (background sync).** GitDesktop now keeps the open repo's view of its remote
+  current on its own: an opt-out periodic background `git fetch` (Settings → General; on by
+  default, every 5 / 10 / 15 / 30 / 60 minutes) runs while the window is focused, plus once when
+  you return to the app or open a repo and it's been at least one interval. It's quiet — no
+  toasts, the Fetch button just spins, and its tooltip shows when the repo was last fetched. It
+  only updates remote-tracking refs, so the behind-count and incoming commits stay fresh **without
+  ever pulling, merging, or touching your files** — pushing and pulling stay manual.
 - **Conflict resolution, in-app.** Selecting a conflicted file no longer shows an empty pane —
   it opens a **conflict editor**: the file rendered with each conflict region called out as
   **Current (ours)** over **Incoming (theirs)**, with **Accept current / Accept incoming /

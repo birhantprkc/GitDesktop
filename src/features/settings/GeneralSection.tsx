@@ -1,3 +1,4 @@
+import { useSelector } from "@tanstack/react-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -5,9 +6,18 @@ import { PRIVACY_POLICY_URL, resetAnalyticsId } from "@/lib/analytics";
 import { withForm } from "@/lib/form";
 import { settingsFormOpts } from "./settings-form";
 
+const FETCH_INTERVAL_OPTIONS: Record<string, string> = {
+  "5": "Every 5 minutes",
+  "10": "Every 10 minutes",
+  "15": "Every 15 minutes",
+  "30": "Every 30 minutes",
+  "60": "Every hour",
+};
+
 export const GeneralSection = withForm({
   ...settingsFormOpts,
   render: function GeneralSectionRender({ form }) {
+    const autoFetchOn = useSelector(form.store, (s) => s.values.autoFetch);
     return (
       <section className="space-y-4">
         <div>
@@ -47,6 +57,32 @@ export const GeneralSection = withForm({
             from the tray icon, or use its Quit menu to exit. Turn this off to
             make closing quit the app.
           </p>
+        </div>
+        <div className="space-y-1.5">
+          <form.AppField name="autoFetch">
+            {(field) => (
+              <field.CheckboxField
+                label="Automatically fetch from your remotes"
+                className="flex cursor-pointer items-center gap-2 text-xs"
+              />
+            )}
+          </form.AppField>
+          <p className="text-xs text-muted-foreground">
+            Periodically runs a background{" "}
+            <span className="font-mono">git fetch</span> while the window is
+            focused, so the behind-count and incoming commits stay current. It
+            never pulls, merges, or changes files — pulling and pushing stay
+            manual.
+          </p>
+          {autoFetchOn && (
+            <div className="max-w-xs pt-1">
+              <form.AppField name="autoFetchInterval">
+                {(field) => (
+                  <field.SelectField items={FETCH_INTERVAL_OPTIONS} />
+                )}
+              </form.AppField>
+            </div>
+          )}
         </div>
         <div className="space-y-1.5">
           <form.AppField name="analyticsEnabled">

@@ -7,7 +7,7 @@ import {
   WarningIcon,
 } from "@phosphor-icons/react";
 import { AnimatePresence, m } from "motion/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,11 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import type { PullMode } from "@/lib/git/api";
 import {
+  useAutoFetch,
+  useFetchStatusStore,
+  useLastFetchedAt,
+} from "@/lib/git/auto-fetch";
+import {
   useFetchRemote,
   useGhStatus,
   usePull,
@@ -38,7 +43,9 @@ import {
 } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { quickTransition } from "@/lib/motion";
+import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
+import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { PublishDialog } from "./PublishDialog";
 
@@ -46,16 +53,20 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
   const remotes = useRemotes(repoPath);
   const gh = useGhStatus(repoPath);
+  const settings = useSettings();
   const repoName = useUiStore((s) => s.repoName);
   const fetchRemote = useFetchRemote(repoPath);
   const pull = usePull(repoPath);
   const push = usePush(repoPath);
+  const markFetched = useFetchStatusStore((s) => s.markFetched);
+  const lastFetchedAt = useLastFetchedAt(repoPath);
   const [forceConfirmOpen, setForceConfirmOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
 
   // A repo with no `origin` (e.g. created locally in GitDesktop) can't push;
   // offer to create the GitHub repo instead.
   const noOrigin = remotes.isSuccess && !remotes.data.includes("origin");
+  const hasOrigin = remotes.isSuccess && remotes.data.includes("origin");
   const canGh = Boolean(gh.data?.installed && gh.data?.authenticated);
 
   const head = status.data?.branch;
@@ -66,12 +77,44 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   const busy = fetchRemote.isPending || pull.isPending || push.isPending;
   const onError = (e: unknown) => toastError(e);
 
+  // One entry point for every fetch — manual (button/hotkey) and automatic —
+  // so a successful fetch always records its freshness. Auto-fetches stay quiet
+  // (a failed background fetch just retries next tick).
+  function doFetch(silent: boolean) {
+    fetchRemote.mutate(undefined, {
+      onSuccess: () => markFetched(repoPath),
+      onError: silent ? undefined : onError,
+    });
+  }
+
+  // Opt-out periodic background fetch (Settings → General). Shares the fetch
+  // mutation above, so the Fetch spinner covers it too.
+  useAutoFetch({
+    repoPath,
+    enabled: settings.data?.autoFetch ?? false,
+    intervalMs: Number(settings.data?.autoFetchInterval ?? "10") * 60_000,
+    hasOrigin,
+    busy,
+    fetch: () => doFetch(true),
+  });
+
+  // Keep the Fetch tooltip's relative time honest while the window sits idle
+  // (the status poll only re-renders on change). Cheap; only while we have a
+  // timestamp to age.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (lastFetchedAt === undefined) return;
+    const id = setInterval(() => tick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, [lastFetchedAt]);
+
+  const fetchTitle =
+    lastFetchedAt === undefined
+      ? "Fetch from origin"
+      : `Last fetched ${formatRelativeTime(new Date(lastFetchedAt).toISOString())}`;
+
   // Hotkeys mirror the buttons' disabled states exactly.
-  useHotkeyAction(
-    "fetch",
-    () => fetchRemote.mutate(undefined, { onError }),
-    !noOrigin && !busy,
-  );
+  useHotkeyAction("fetch", () => doFetch(false), !noOrigin && !busy);
   useHotkeyAction(
     "pull",
     () => doPull("ffOnly"),
@@ -173,7 +216,8 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
           variant="outline"
           size="sm"
           disabled={busy}
-          onClick={() => fetchRemote.mutate(undefined, { onError })}
+          title={fetchTitle}
+          onClick={() => doFetch(false)}
         >
           {fetchRemote.isPending ? (
             <Spinner data-icon="inline-start" />
