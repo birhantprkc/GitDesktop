@@ -275,11 +275,15 @@ test, or review several branches at once without stashing or switching.
   into its own folder, defaulting to a sibling of the repository.
 - **Open** a worktree to make it the active repository — git commands then run in that
   folder and the window title follows. Open the main worktree to switch back.
+- **Rename** a worktree to move its folder to a new name in place; its branch is unchanged.
 - **Delete** a worktree to remove its folder; its branch is kept. A worktree with
-  uncommitted changes asks before force-removing, and the main worktree can't be removed.
+  uncommitted changes asks before force-removing. The main worktree, and whichever one
+  you're currently in, can't be renamed or deleted — switch away first.
 
 A branch can only be checked out in one worktree at a time, so the list excludes branches
-already in use.{{ai}} Worktrees that AI agent sessions use internally are hidden here.{{/ai}}`,
+already in use. The **branch switcher** knows this too: a branch that's checked out in
+another worktree is badged, and choosing it offers to open that worktree instead of failing
+with a checkout error.{{ai}} Worktrees that AI agent sessions use internally are hidden here.{{/ai}}`,
   },
   {
     id: "syncing",

@@ -32,6 +32,7 @@ import type {
 import {
   addUserWorktree,
   listUserWorktrees,
+  moveUserWorktree,
   pruneWorktrees,
   removeWorktree,
 } from "./worktree";
@@ -136,6 +137,16 @@ export function useAddUserWorktree(repo: string) {
         args.baseRef,
       ),
     { invalidate: [worktreeKey(repo), repoKeys.branches(repo)] },
+  );
+}
+
+/** Renames (moves) a user worktree to a new path. */
+export function useMoveUserWorktree(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { from: string; to: string }) =>
+      moveUserWorktree(repo, args.from, args.to),
+    { invalidate: [worktreeKey(repo)] },
   );
 }
 

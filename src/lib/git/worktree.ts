@@ -68,6 +68,15 @@ export const addUserWorktree = (
     baseRef: baseRef ?? null,
   });
 
+/** Renames (moves) a user worktree from `fromPath` to `toPath`
+ *  (`git worktree move`). Rejects the main worktree, an existing target, or a
+ *  locked worktree (git's own message). */
+export const moveUserWorktree = (
+  repoPath: string,
+  fromPath: string,
+  toPath: string,
+) => invoke<void>("git_worktree_move", { repoPath, fromPath, toPath });
+
 /** Removes a session worktree and (when given) deletes its branch. `force` is
  *  required to drop a worktree with uncommitted changes. */
 export const removeWorktree = (

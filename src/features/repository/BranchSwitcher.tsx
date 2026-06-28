@@ -73,6 +73,7 @@ import {
 } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import type { Branch } from "@/lib/git/types";
+import { listUserWorktrees } from "@/lib/git/worktree";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useLocalPrs } from "@/lib/pulls/queries";
@@ -206,7 +207,15 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const currentLabel = head?.detached
     ? `detached @ ${head.oid?.slice(0, 7) ?? "?"}`
     : (currentName ?? "…");
-  const allBranches = branches.data ?? [];
+  // Agent-session branches (`gd/session/*`) are app-internal — never list or act
+  // on them in the switcher. Critically, a *kept* session's worktree is removed
+  // but its branch persists, so without this filter its branch would show here
+  // with Delete enabled, and `git branch -D` would destroy a branch the sessions
+  // registry still needs to Resume. (Worktrees-side exclusion doesn't cover the
+  // branch list, which comes straight from `git for-each-ref`.)
+  const allBranches = (branches.data ?? []).filter(
+    (b) => !b.name.startsWith("gd/session/"),
+  );
   // Archived branches are hidden from the list and the merge picker.
   const otherBranches = allBranches.filter((b) => !b.isCurrent && !b.archived);
   const defaultName = defaultBranch.data ?? null;
@@ -478,10 +487,24 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       // branch that isn't already occupied by another worktree (checking out an
       // occupied branch fails too, which is what stranded the delete before).
       if (deleteTarget === currentName) {
+        // Fetch occupancy FRESH: the cached `worktreeByBranch` is gated on the
+        // popover being open, but a delete can fire from the `delete-branch`
+        // hotkey that never opened it — leaving the map empty and the guard moot.
+        let occupied: Set<string>;
+        try {
+          const wts = await listUserWorktrees(repoPath);
+          occupied = new Set(
+            wts
+              .filter(
+                (w) => w.branch && normPath(w.path) !== normPath(repoPath),
+              )
+              .map((w) => w.branch),
+          );
+        } catch {
+          occupied = new Set(worktreeByBranch.keys());
+        }
         const free = (b: string | null | undefined): b is string =>
-          Boolean(b) &&
-          b !== deleteTarget &&
-          !worktreeByBranch.has(b as string);
+          Boolean(b) && b !== deleteTarget && !occupied.has(b as string);
         const fallback = free(defaultName)
           ? defaultName
           : otherBranches.find((b) => free(b.name))?.name;

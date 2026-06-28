@@ -4,6 +4,7 @@ import {
   FolderOpenIcon,
   GitBranchIcon,
   LockSimpleIcon,
+  PencilSimpleIcon,
   PlusIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
@@ -39,6 +40,7 @@ import { Spinner } from "@/components/ui/spinner";
 import {
   useAddUserWorktree,
   useBranches,
+  useMoveUserWorktree,
   useRemoveUserWorktree,
   useRepoStatus,
   useUserWorktrees,
@@ -129,6 +131,7 @@ function WorktreeList({
 
   const [highlight, setHighlight] = useState(-1);
   const [deleteTarget, setDeleteTarget] = useState<UserWorktree | null>(null);
+  const [renameTarget, setRenameTarget] = useState<UserWorktree | null>(null);
 
   const list = worktrees.data ?? [];
   const linkedCount = list.filter((w) => !w.isMain).length;
@@ -180,6 +183,7 @@ function WorktreeList({
                 isCurrent={norm(w.path) === activeNorm}
                 onFocus={() => setHighlight(i)}
                 onOpen={() => handleOpen(w)}
+                onRename={() => setRenameTarget(w)}
                 onDelete={() => setDeleteTarget(w)}
               />
             ))
@@ -203,6 +207,13 @@ function WorktreeList({
         </Button>
       </DialogFooter>
 
+      <RenameWorktreeDialog
+        key={renameTarget?.path ?? "no-rename"}
+        repoPath={repoPath}
+        worktree={renameTarget}
+        onClose={() => setRenameTarget(null)}
+      />
+
       <DeleteWorktreeDialog
         key={deleteTarget?.path ?? "none"}
         repoPath={repoPath}
@@ -219,6 +230,7 @@ function WorktreeRow({
   isCurrent,
   onFocus,
   onOpen,
+  onRename,
   onDelete,
 }: {
   worktree: UserWorktree;
@@ -226,6 +238,7 @@ function WorktreeRow({
   isCurrent: boolean;
   onFocus: () => void;
   onOpen: () => void;
+  onRename: () => void;
   onDelete: () => void;
 }) {
   const { path, branch, isMain, isDetached, isLocked, lockReason } = worktree;
@@ -307,6 +320,16 @@ function WorktreeRow({
           <DropdownMenuItem disabled={isCurrent} onClick={onOpen}>
             <FolderOpenIcon />
             {isCurrent ? "Current worktree" : "Open worktree"}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            // git can't move the main worktree, and moving the one you're
+            // standing in risks a cwd lock + a stale active path — rename it
+            // after switching away.
+            disabled={isMain || isCurrent}
+            onClick={onRename}
+          >
+            <PencilSimpleIcon />
+            Rename…
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"
@@ -454,6 +477,95 @@ function DeleteWorktreeDialog({
           >
             {remove.isPending && <Spinner data-icon="inline-start" />}
             {forceNeeded ? "Force remove" : "Remove"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// --------------------------------------------------------------- rename worktree
+
+function RenameWorktreeDialog({
+  repoPath,
+  worktree,
+  onClose,
+}: {
+  repoPath: string;
+  worktree: UserWorktree | null;
+  onClose: () => void;
+}) {
+  const move = useMoveUserWorktree(repoPath);
+  const { parent, name: currentName } = splitPath(worktree?.path ?? "");
+  const [name, setName] = useState(currentName);
+
+  const trimmed = name.trim();
+  const newPath = parent ? `${parent}/${trimmed}` : trimmed;
+  const unchanged = !!worktree && norm(newPath) === norm(worktree.path);
+  // A rename keeps the worktree in place, so block path separators (that'd be a
+  // move into another folder) — keep this a simple in-place rename.
+  const invalid = /[\\/]/.test(trimmed);
+
+  function handleRename() {
+    if (!worktree || !trimmed || unchanged || invalid) return;
+    move.mutate(
+      { from: worktree.path, to: newPath },
+      {
+        onSuccess: () => {
+          toast.success(`Renamed to ${trimmed}`);
+          onClose();
+        },
+        onError: toastError,
+      },
+    );
+  }
+
+  return (
+    <Dialog open={worktree !== null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Rename worktree</DialogTitle>
+          <DialogDescription>
+            Renames the worktree folder in place. Its branch and commits are
+            unchanged.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form
+          className="grid grid-cols-[auto_1fr] items-center gap-x-3 text-xs"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleRename();
+          }}
+        >
+          <label htmlFor="wt-rename" className="text-muted-foreground">
+            Folder name
+          </label>
+          <Input
+            id="wt-rename"
+            autoFocus
+            autoComplete="off"
+            spellCheck={false}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="h-7 font-mono"
+            aria-invalid={invalid || undefined}
+          />
+          <span className="col-start-2 mt-1 block truncate font-mono text-[11px] text-muted-foreground">
+            {invalid ? "Use a folder name, not a path." : newPath}
+          </span>
+        </form>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={move.isPending}>
+            Cancel
+          </Button>
+          <Button
+            disabled={!trimmed || unchanged || invalid || move.isPending}
+            onClick={handleRename}
+          >
+            {move.isPending && <Spinner data-icon="inline-start" />}
+            Rename
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -683,15 +795,22 @@ function CreateWorktree({
   );
 }
 
+/** Splits a path into its parent and last segment, tolerating both separators
+ *  and a trailing slash. Parent is "" when there's no separator. */
+function splitPath(p: string): { parent: string; name: string } {
+  const base = p.replace(/[/\\]+$/, "");
+  const i = Math.max(base.lastIndexOf("/"), base.lastIndexOf("\\"));
+  return i >= 0
+    ? { parent: base.slice(0, i), name: base.slice(i + 1) }
+    : { parent: "", name: base };
+}
+
 /** A sibling folder of the main worktree named for the branch:
  *  `<parent>/<repo>-<branch>` (branch slashes flattened to dashes). */
 function deriveSiblingPath(mainPath: string, branch: string): string {
   if (!mainPath) return "";
-  const base = mainPath.replace(/[/\\]+$/, "");
-  const slash = Math.max(base.lastIndexOf("/"), base.lastIndexOf("\\"));
-  const parent = slash >= 0 ? base.slice(0, slash) : base;
-  const name = slash >= 0 ? base.slice(slash + 1) : base;
+  const { parent, name } = splitPath(mainPath);
   const safe = branch.trim().replace(/[\\/]+/g, "-");
   if (!safe) return "";
-  return `${parent}/${name}-${safe}`;
+  return parent ? `${parent}/${name}-${safe}` : `${name}-${safe}`;
 }

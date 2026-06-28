@@ -141,14 +141,20 @@ pub async fn git_worktree_list(repo_path: String) -> AppResult<Vec<WorktreeInfo>
 
 /// Lists the repo's **user** worktrees for the worktree manager — every checkout
 /// except the ones agent sessions own (those are app-internal and protected).
-/// The main worktree is always included (first, undeletable). Stale entries
-/// (`prunable` — a dir deleted out from under git) are hidden; the delete path
-/// runs the actual prune.
+/// The main worktree is always included (first, undeletable).
+///
+/// Prunes first: a worktree whose directory was deleted out-of-band (in Explorer,
+/// say) leaves a stale admin entry + a branch lock. Since such entries are also
+/// filtered from the list, the manager would otherwise have no way to clear them,
+/// so every list self-heals. Git never prunes a *locked* worktree, so a worktree
+/// on a temporarily-disconnected drive is safe if the user locked it.
 #[tauri::command]
 pub async fn git_worktree_list_user(
     app: AppHandle,
+    state: State<'_, AppState>,
     repo_path: String,
 ) -> AppResult<Vec<UserWorktree>> {
+    let _ = run_git_mutating(&state, &repo_path, &["worktree", "prune"], DEFAULT_TIMEOUT).await;
     let out = run_git(
         Some(&repo_path),
         &["worktree", "list", "--porcelain"],
@@ -218,6 +224,13 @@ pub async fn git_worktree_add_user(
             "path and branch must not start with '-'".into(),
         ));
     }
+    // `gd/session/*` is reserved for agent sessions, which the manager hides — a
+    // user worktree on such a branch would be created and then vanish from view.
+    if branch.starts_with("gd/session/") {
+        return Err(AppError::InvalidArgument(
+            "the gd/session/ prefix is reserved for agent sessions".into(),
+        ));
+    }
     if std::path::Path::new(path).exists() {
         return Err(AppError::InvalidArgument(format!(
             "{path} already exists — choose a new folder"
@@ -235,6 +248,47 @@ pub async fn git_worktree_add_user(
         args.extend_from_slice(&[path, branch]);
     }
     run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    Ok(())
+}
+
+/// Renames (moves) a user worktree from `from_path` to `to_path`
+/// (`git worktree move`) — updates git's admin metadata and the worktree's `.git`
+/// pointer file. Git refuses to move the **main** worktree, to move onto an
+/// existing path, or to move a **locked** worktree (unlock it first); those
+/// surface as git's own message. The caller must not move the worktree it's
+/// currently running in (the UI disables that).
+#[tauri::command]
+pub async fn git_worktree_move(
+    state: State<'_, AppState>,
+    repo_path: String,
+    from_path: String,
+    to_path: String,
+) -> AppResult<()> {
+    let from = from_path.trim();
+    let to = to_path.trim();
+    if from.is_empty() || to.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "both worktree paths are required".into(),
+        ));
+    }
+    // A leading '-' would be parsed as a git option.
+    if from.starts_with('-') || to.starts_with('-') {
+        return Err(AppError::InvalidArgument(
+            "paths must not start with '-'".into(),
+        ));
+    }
+    if std::path::Path::new(to).exists() {
+        return Err(AppError::InvalidArgument(format!(
+            "{to} already exists — choose a new name"
+        )));
+    }
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["worktree", "move", from, to],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
     Ok(())
 }
 
