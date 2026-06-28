@@ -90,6 +90,14 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   rest**. Because fanning out multiple agents costs more, a confirmation first shows an
   **upfront estimate** drawn from your own recent sessions, and the ensemble's
   **running total** as it works — opt-in, never the default.
+- **Research before you plan** — a read-only, **web-enabled Research** mode that
+  sits upstream of Plan. **Brainstorm** surveys the web and your code for several
+  distinct directions with prior art; **Deep research** investigates one direction
+  in depth and writes a **cited** report, rendered right in the app (never bounced
+  to an external editor). Hand a report **straight to Plan**, **save** it as a local
+  Markdown file (yours to review and commit, in `docs/research/` by default), or —
+  from a brainstorm — **deep-research one of its directions**. Read-only: it
+  searches and reads, but never writes. (Claude in this version.)
 - **Plan before you build** — a read-only **Plan** mode drafts an agent-ready
   issue from a task (or an existing issue): a repo-aware agent explores your code
   and writes the problem, approach, affected files, acceptance criteria, and verify

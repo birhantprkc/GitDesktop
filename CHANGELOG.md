@@ -12,6 +12,15 @@ commit list.
 
 ### Added
 
+- **Research mode — Brainstorm & Deep research.** A new read-only, web-enabled agent mode in the
+  **Agent** tab, sitting upstream of Plan. **Brainstorm** surveys the web and your repo and surfaces
+  several distinct directions with prior art; **Deep research** investigates one direction in depth
+  and streams a **cited** report — rendered right in the app, never bounced to an external editor.
+  When you're happy, hand a report **straight to Plan**, **save** it as a local Markdown file
+  (created in `docs/research/` for you to review and commit — never committed automatically; the
+  folder is configurable under **Settings → AI**), or — from a brainstorm — **deep-research one of
+  its directions**. Keep refining with follow-up messages; several runs go side by side. Read-only
+  throughout: it searches and reads, but can never write (Claude in this version).
 - **Custom & LAN AI servers, with an allowed-hosts list.** You can now point GitDesktop at an
   Ollama (or any OpenAI-compatible) server running on **another machine on your network** — not
   just `localhost`. Set the server's URL under **Settings → AI** (now available for the review

@@ -22,6 +22,8 @@ import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { PlanView } from "@/features/plan/PlanView";
 import { usePlanStore } from "@/features/plan/store";
 import { CreateLocalPrDialog } from "@/features/pulls/CreateLocalPrDialog";
+import { ResearchView } from "@/features/research/ResearchView";
+import { useResearchStore } from "@/features/research/store";
 import { TerminalDock } from "@/features/terminal/TerminalDock";
 import { formatUsd } from "@/lib/ai/cost";
 import { openContainerShell } from "@/lib/ai/sandbox";
@@ -56,11 +58,18 @@ export function SessionView({ repoPath }: { repoPath: string }) {
     const run = s.runs.find((r) => r.id === s.activePlanId);
     return Boolean(run && run.repoPath === repoPath);
   });
+  // Research runs likewise take over the surface when one for this repo is
+  // selected (mutually exclusive with sessions and plans — see agentSelect.ts).
+  const researchActive = useResearchStore((s) => {
+    const run = s.runs.find((r) => r.id === s.activeResearchId);
+    return Boolean(run && run.repoPath === repoPath);
+  });
   // activeId is global; only adopt it when the session belongs to this repo.
   const active =
     sessions.find((s) => s.id === activeId && s.repoPath === repoPath) ?? null;
 
   if (planActive) return <PlanView repoPath={repoPath} />;
+  if (researchActive) return <ResearchView />;
   if (!active) return <SessionActivation repoPath={repoPath} />;
   return <SessionCanvas key={active.id} session={active} repoPath={repoPath} />;
 }

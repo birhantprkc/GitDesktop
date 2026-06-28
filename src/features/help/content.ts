@@ -515,8 +515,27 @@ repository analytics, mixing local Git history with GitHub data.
     body: `# Agent sessions
 
 The **Agent** tab turns a configured CLI agent (Claude Code, Codex, GitHub Copilot, or
-opencode) into a hands-on teammate that can **plan** and **implement** changes for you —
-safely, in an isolated copy of your repo. It appears when AI features are enabled.
+opencode) into a hands-on teammate that can **research**, **plan**, and **implement** changes
+for you — safely, in an isolated copy of your repo. It appears when AI features are enabled.
+
+## Research a topic (read-only)
+
+**Research** runs a read-only, **web-enabled** agent that explores the web *and* your repo,
+then streams a **cited report** right here in the app. Pick an intent:
+
+- **Brainstorm** — breadth-first. Surveys what's out there and surfaces several distinct
+  directions with rough tradeoffs and prior art (who else does this), so you can widen your
+  options before committing to one.
+- **Deep research** — depth-first. Investigates one direction rigorously — feasibility,
+  approaches, libraries, tradeoffs — grounded in primary sources, with a confidence note per
+  major claim and an explicit "what I couldn't verify".
+
+Keep refining with follow-up messages; the agent keeps its sources in context. When a report
+is ready you can **Turn it into a Plan** (it carries the report over as the goal to converge),
+**Save report** as a local Markdown file (created in \`docs/research/\` for you to review and
+commit — never committed for you; change the folder under **Settings → AI**), or — from a
+brainstorm — **Deep-research a direction** to dig into one of its options. It's **read-only**:
+it searches and reads, but never changes your code. (Research uses Claude in this version.)
 
 ## Plan a task (read-only)
 

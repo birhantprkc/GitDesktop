@@ -171,6 +171,10 @@ export interface AppSettings {
    *  wrapper blocks any other host; the Tauri HTTP capability is opened to
    *  `http(s)://*` as a coarse backstop, so this list is the effective gate. */
   aiAllowedHosts: string[];
+  /** Repo-relative directory where a saved Research report is written (a local
+   *  file the user commits, like FUNDING.yml — never auto-committed). Default
+   *  `docs/research`. Sanitized backend-side so it stays inside the repo. */
+  researchReportDir: string;
   /** Path to a program used by "Open in editor" (empty = not configured). */
   externalEditor: string;
   /** Friendly name for the configured editor, used in menu labels. */
@@ -254,6 +258,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   globalInstructions: "",
   aiIgnorePatterns: "",
   aiAllowedHosts: [],
+  researchReportDir: "docs/research",
   externalEditor: "",
   externalEditorName: "",
   terminal: "",

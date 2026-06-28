@@ -443,6 +443,12 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "agent-research",
+    label: "Research a topic (read-only)",
+    category: "Agent",
+    defaultBinding: null,
+  },
+  {
     id: "agent-keep-session",
     label: "Keep agent session",
     category: "Agent",

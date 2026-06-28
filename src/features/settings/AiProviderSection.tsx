@@ -619,6 +619,10 @@ export const AiProviderSection = withForm({
       form.store,
       (s) => s.values.aiAllowedHosts,
     );
+    const researchReportDir = useSelector(
+      form.store,
+      (s) => s.values.researchReportDir,
+    );
     const provider = ai.provider;
     const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
     const keyPreview = useSecretPreview(provider);
@@ -886,6 +890,31 @@ export const AiProviderSection = withForm({
             providers={agentImageProviders}
             onProviders={(v) => form.setFieldValue("agentImageProviders", v)}
           />
+        </div>
+
+        <div className="space-y-3 border-t pt-4">
+          <div>
+            <h3 className="text-sm font-medium">Research reports</h3>
+            <p className="text-xs text-muted-foreground">
+              Where a saved Research report is written, relative to the repo.
+              The file is created locally for you to review and commit — never
+              committed for you.
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="research-report-dir">Report folder</Label>
+            <Input
+              id="research-report-dir"
+              value={researchReportDir}
+              onChange={(e) =>
+                form.setFieldValue("researchReportDir", e.target.value)
+              }
+              placeholder="docs/research"
+              spellCheck={false}
+              autoComplete="off"
+              className="max-w-xs font-mono"
+            />
+          </div>
         </div>
 
         <Dialog open={confirmClear} onOpenChange={setConfirmClear}>

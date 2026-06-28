@@ -1,4 +1,5 @@
 import {
+  ArrowClockwiseIcon,
   ArrowLeftIcon,
   SparkleIcon,
   StopIcon,
@@ -16,6 +17,7 @@ import {
 import { selectSession } from "@/features/sessions/agentSelect";
 import { useSessionsStore } from "@/features/sessions/store";
 import type { AgentKind } from "@/lib/ai/agent";
+import { formatUsd } from "@/lib/ai/cost";
 import { extractPlanQuestions } from "@/lib/ai/prompt";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
 import { useGhStatus } from "@/lib/git/queries";
@@ -125,6 +127,7 @@ export function PlanComposer({
       goal,
       issueTitle: seed?.issueTitle,
       issueBody: seed?.issueBody,
+      originResearchId: seed?.originResearchId,
       agent,
       model,
       effort,
@@ -214,6 +217,7 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
   const refine = usePlanStore((s) => s.refine);
   const remove = usePlanStore((s) => s.remove);
   const cancel = usePlanStore((s) => s.cancel);
+  const restart = usePlanStore((s) => s.restart);
   const setPendingPlanSeed = usePlanStore((s) => s.setPendingPlanSeed);
 
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
@@ -225,7 +229,7 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
   const [localOpen, setLocalOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const { generating, text, status, draft, costUsd, error } = run;
+  const { generating, stopped, text, status, draft, costUsd, error } = run;
 
   // Once a session is implementing this plan, the plan becomes a read-only
   // reference (editing it would drift from what the session is building). Locked
@@ -274,15 +278,20 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {(generating || status) && (
+      {(generating || status || stopped) && (
         <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2 text-[11px] text-muted-foreground">
           {generating && (
             <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary" />
           )}
           <span className="truncate">
-            {status || (generating ? "Exploring the repository…" : "")}
+            {status ||
+              (generating
+                ? "Exploring the repository…"
+                : stopped
+                  ? "Stopped"
+                  : "")}
           </span>
-          {generating && (
+          {generating ? (
             <Button
               size="sm"
               variant="outline"
@@ -292,7 +301,17 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
               <StopIcon weight="fill" />
               Stop
             </Button>
-          )}
+          ) : stopped ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              onClick={() => restart(run.id)}
+            >
+              <ArrowClockwiseIcon className="size-3.5" />
+              Restart
+            </Button>
+          ) : null}
         </div>
       )}
 
@@ -365,7 +384,7 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
                   className="text-[11px] text-muted-foreground tabular-nums"
                   title="Estimated cost of this planning run"
                 >
-                  ${costUsd.toFixed(3)}
+                  {formatUsd(costUsd)}
                 </span>
               )}
               {draft && (

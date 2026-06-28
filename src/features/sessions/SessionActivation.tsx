@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PlanComposer } from "@/features/plan/PlanView";
 import { type PlanSeed, usePlanStore } from "@/features/plan/store";
+import { ResearchComposer } from "@/features/research/ResearchView";
+import { type ResearchSeed, useResearchStore } from "@/features/research/store";
 import { SessionComposer } from "./SessionComposer";
 import { useSessionsStore } from "./store";
 
@@ -11,32 +13,40 @@ const EXAMPLES = [
   "Refactor this file into smaller components",
 ];
 
-type Mode = "delegate" | "plan";
+type Mode = "delegate" | "plan" | "research";
 
 /**
  * The new-task state of the canvas (shown when nothing is selected): a calm,
- * centered panel with two modes — "Delegate a task" hands a write-capable agent a
- * job in an isolated worktree; "Plan a task" starts a read-only plan run that
- * explores the repo and drafts an agent-ready issue (no worktree, no writes).
+ * centered panel with three modes — "Delegate" hands a write-capable agent a job
+ * in an isolated worktree; "Plan" starts a read-only plan run that drafts an
+ * agent-ready issue; "Research" starts a read-only, web-enabled run that explores
+ * (Brainstorm) or investigates (Deep research) and streams a cited report. Plan
+ * and Research never write (no worktree); they sit upstream of Delegate.
  */
 export function SessionActivation({ repoPath }: { repoPath: string }) {
   const [mode, setMode] = useState<Mode>("delegate");
   const [planSeed, setPlanSeed] = useState<PlanSeed | null>(null);
-  // Bumped when a seed is consumed, so PlanComposer remounts and re-initializes
+  const [researchSeed, setResearchSeed] = useState<ResearchSeed | null>(null);
+  // Bumped when a seed is consumed, so the composer remounts and re-initializes
   // its fields from the new seed.
   const [seedNonce, setSeedNonce] = useState(0);
 
   const pendingTask = useSessionsStore((s) => s.pendingTask);
   const pendingPlanSeed = usePlanStore((s) => s.pendingPlanSeed);
   const setPendingPlanSeed = usePlanStore((s) => s.setPendingPlanSeed);
+  const pendingResearchSeed = useResearchStore((s) => s.pendingResearchSeed);
+  const setPendingResearchSeed = useResearchStore(
+    (s) => s.setPendingResearchSeed,
+  );
 
   // A handoff ("Implement this issue") seeds the Delegate composer.
   useEffect(() => {
     if (pendingTask) setMode("delegate");
   }, [pendingTask]);
 
-  // The agent-plan hotkey or an issue's Plan button switches to (and seeds) the
-  // Plan composer. Snapshot the seed locally so it survives clearing the store.
+  // The agent-plan hotkey, an issue's Plan button, or "Turn into a Plan" from a
+  // research run switches to (and seeds) the Plan composer. Snapshot the seed
+  // locally so it survives clearing the store.
   useEffect(() => {
     if (!pendingPlanSeed) return;
     setMode("plan");
@@ -44,6 +54,16 @@ export function SessionActivation({ repoPath }: { repoPath: string }) {
     setSeedNonce((n) => n + 1);
     setPendingPlanSeed(null);
   }, [pendingPlanSeed, setPendingPlanSeed]);
+
+  // The agent-research hotkey or a "Deep-research a direction" handoff switches
+  // to (and seeds) the Research composer.
+  useEffect(() => {
+    if (!pendingResearchSeed) return;
+    setMode("research");
+    setResearchSeed(pendingResearchSeed);
+    setSeedNonce((n) => n + 1);
+    setPendingResearchSeed(null);
+  }, [pendingResearchSeed, setPendingResearchSeed]);
 
   return (
     <div className="flex h-full flex-col">
@@ -53,13 +73,15 @@ export function SessionActivation({ repoPath }: { repoPath: string }) {
           onValueChange={(v) => {
             setMode(v as Mode);
             // A manual tab switch starts a blank composer (a pending seed comes
-            // in via the effect above, not through user interaction).
+            // in via the effects above, not through user interaction).
             setPlanSeed(null);
+            setResearchSeed(null);
           }}
         >
           <TabsList>
             <TabsTrigger value="delegate">Delegate a task</TabsTrigger>
             <TabsTrigger value="plan">Plan a task</TabsTrigger>
+            <TabsTrigger value="research">Research</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
@@ -90,8 +112,14 @@ export function SessionActivation({ repoPath }: { repoPath: string }) {
             />
           </div>
         </div>
-      ) : (
+      ) : mode === "plan" ? (
         <PlanComposer key={seedNonce} repoPath={repoPath} seed={planSeed} />
+      ) : (
+        <ResearchComposer
+          key={seedNonce}
+          repoPath={repoPath}
+          seed={researchSeed}
+        />
       )}
     </div>
   );

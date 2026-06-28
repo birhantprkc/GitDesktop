@@ -535,16 +535,30 @@ fn claude_session_args(
     session_id: &str,
     resume: bool,
     read_only: bool,
+    // Web-enabled read-only profile (a Research conversation): add WebSearch/WebFetch
+    // to the read tools so the agent can investigate the web while STILL being unable
+    // to write (no Edit/Write/Bash). Only meaningful when `read_only` is true; ignored
+    // for write sessions (which already have the full toolset). Plan passes false.
+    web: bool,
     mcp_config: Option<&str>,
     mcp_tools: &[String],
 ) -> Vec<String> {
-    // Read-only (a Plan conversation): only read tools and no bypass — there's
-    // nothing to permit, and writes are impossible by construction (the hard
-    // guarantee, same as a review). Write sessions get the full toolset + bypass.
+    // Read-only (a Plan / Research conversation): only read tools. Plan needs no
+    // bypass — the read tools (Read/Grep/Glob) are auto-approved even in `-p`
+    // non-interactive mode. Research additionally gets the WEB tools, which are NOT
+    // auto-approved (they hit the network), so a non-interactive run reports
+    // "Web search isn't authorized" without a permission grant — hence bypass is
+    // added below for the web profile too. It stays read-only regardless: the strict
+    // `--tools` allowlist has no Edit/Write/Bash, so bypass only skips the approval
+    // prompt there's no one to answer. Write sessions get the full toolset + bypass.
     // `--tools` is a strict allowlist, so any opted-in MCP servers' tools
     // (`mcp__<server>`) must be appended or the loaded server stays uncallable.
     let mut tools = if read_only {
-        "Read,Grep,Glob".to_string()
+        if web {
+            "Read,Grep,Glob,WebSearch,WebFetch".to_string()
+        } else {
+            "Read,Grep,Glob".to_string()
+        }
     } else {
         "Read,Grep,Glob,Edit,Write,Bash".to_string()
     };
@@ -568,7 +582,10 @@ fn claude_session_args(
         args.push("--mcp-config".into());
         args.push(path.into());
     }
-    if !read_only {
+    // Write sessions always bypass; a read-only Research run bypasses too so its web
+    // tools are authorized (see the toolset comment above). Plan (read-only, no web)
+    // stays prompt-gated — its read tools need no grant.
+    if !read_only || web {
         args.push("--permission-mode".into());
         args.push("bypassPermissions".into());
     }
@@ -1498,6 +1515,11 @@ pub async fn agent_session(
     // Copilot deny-write/shell, opencode `--agent plan`), so the turn can explore
     // but can NEVER write — even though it runs in the live repo, not a worktree.
     read_only: bool,
+    // Web-enabled read-only profile (a Research conversation): adds WebSearch/WebFetch
+    // to Claude's read-only toolset so the turn can investigate the web while still
+    // never writing. Only honored for Claude (v1 Research is Claude-only) and only
+    // alongside `read_only`; Plan/Delegate pass false, so they're untouched.
+    web: bool,
     // "container" runs the turn inside a Docker/Podman container (worktree-
     // confined); anything else (incl. None) runs it on the host (worktree-only).
     isolation: Option<String>,
@@ -1618,6 +1640,7 @@ pub async fn agent_session(
                     &session_id,
                     resume,
                     read_only,
+                    web,
                     mcp_config_path.as_deref(),
                     &mcp_tools,
                 ),
@@ -1964,5 +1987,42 @@ mod tests {
             dirs.iter().any(|d| d.is_dir()),
             "expected at least one real directory among: {dirs:?}"
         );
+    }
+
+    /// Pull the `--tools` allowlist out of a built Claude arg vector.
+    fn tools_of(args: &[String]) -> &str {
+        let i = args.iter().position(|a| a == "--tools").expect("--tools");
+        args.get(i + 1).expect("a tools value").as_str()
+    }
+
+    #[test]
+    fn claude_read_only_web_adds_web_tools_but_no_write_tools() {
+        // The web-enabled read-only profile (Research / deep research): web search +
+        // fetch are added, but Edit/Write/Bash stay out — live-repo safety holds.
+        let args =
+            claude_session_args("", "sys", "sid", false, true, true, None, &[]);
+        assert_eq!(tools_of(&args), "Read,Grep,Glob,WebSearch,WebFetch");
+        // Bypass IS set so the (non-auto-approved) web tools are authorized in
+        // non-interactive mode; the strict allowlist above keeps the run read-only.
+        assert!(args.iter().any(|a| a == "bypassPermissions"));
+    }
+
+    #[test]
+    fn claude_read_only_without_web_is_plan_toolset() {
+        // Plan with web off: the original read-only toolset, no web, and NO bypass
+        // (read tools are auto-approved; the prompt gate stays for plan).
+        let args =
+            claude_session_args("", "sys", "sid", false, true, false, None, &[]);
+        assert_eq!(tools_of(&args), "Read,Grep,Glob");
+        assert!(!args.iter().any(|a| a == "bypassPermissions"));
+    }
+
+    #[test]
+    fn claude_write_session_ignores_web_flag() {
+        // A write session is never web-gated here: even with web=true it gets the
+        // full write toolset and no web tools (web is a read-only-profile concept).
+        let args =
+            claude_session_args("", "sys", "sid", false, false, true, None, &[]);
+        assert_eq!(tools_of(&args), "Read,Grep,Glob,Edit,Write,Bash");
     }
 }

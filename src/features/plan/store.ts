@@ -29,6 +29,10 @@ export interface PlanSeed {
   goal?: string;
   issueTitle?: string | null;
   issueBody?: string | null;
+  /** The research run this plan was handed off from ("Turn into a Plan"), if any.
+   *  Recorded on the plan so the research sidebar can derive that its run was
+   *  converted (and archive it). Reversible: discard the plan and it reverts. */
+  originResearchId?: string;
 }
 
 export interface GenerateArgs extends PlanSeed {
@@ -68,6 +72,9 @@ export interface PlanRun {
   /** The seed this run was started from, so "Re-plan" can reopen the composer. */
   seed: PlanSeed | null;
   generating: boolean;
+  /** The user stopped this run mid-turn (Stop). Idle but restartable; tells the
+   *  result view to offer Restart instead of treating partial output as a draft. */
+  stopped: boolean;
   /** The latest streamed plan markdown (replaced each turn — a refine re-outputs
    *  the full updated plan). */
   text: string;
@@ -113,8 +120,11 @@ interface PlanState {
   sendFollowUp: (id: string, message: string) => void;
   /** Link a plan to the write-capable session "Implement" spawned from it. */
   markImplemented: (id: string, sessionId: string) => void;
-  /** Signal an in-flight turn to stop. */
+  /** Signal an in-flight turn to stop (leaves the run restartable). */
   cancel: (id: string) => void;
+  /** Re-run a stopped (or errored) plan from its original seed — a fresh
+   *  conversation, reusing the row. No-op while generating. */
+  restart: (id: string) => void;
   /** Drop a run from the list (cancelling any in-flight turn). */
   remove: (id: string) => void;
 }
@@ -158,8 +168,16 @@ export const usePlanStore = create<PlanState>((set, get) => {
       status: "",
       draft: null,
       costUsd: null,
+      stopped: false,
       error: null,
     });
+    // True once this turn's result is stale: the user stopped it (`stopped`), or a
+    // restart issued a fresh session id. Either way its (killed/partial) output must
+    // not overwrite the run — guards every terminal patch below.
+    const superseded = () => {
+      const cur = get().runs.find((r) => r.id === id);
+      return !cur || cur.sessionId !== run0.sessionId || cur.stopped;
+    };
     const tracked = await gitListTracked(run0.repoPath).catch(
       () => [] as string[],
     );
@@ -220,21 +238,26 @@ export const usePlanStore = create<PlanState>((set, get) => {
             if (ev.costUsd != null) patch(id, { costUsd: ev.costUsd });
             if (ev.isError) {
               errored = true;
-              patch(id, {
-                error: finalText || "The planner reported an error.",
-              });
+              // Don't paint an error onto a run the user just stopped (or a turn a
+              // restart superseded) — a killed process may emit one on the way out.
+              if (!superseded())
+                patch(id, {
+                  error: finalText || "The planner reported an error.",
+                });
             }
           } else if (ev.kind === "error") {
             errored = true;
-            patch(id, { error: ev.message });
+            if (!superseded()) patch(id, { error: ev.message });
           }
         },
       });
     } catch (e) {
+      if (superseded()) return;
       patch(id, { generating: false, error: errorMessage(e) });
       notifyDone(true);
       return;
     }
+    if (superseded()) return;
     if (errored) {
       patch(id, { generating: false });
       notifyDone(true);
@@ -320,8 +343,10 @@ export const usePlanStore = create<PlanState>((set, get) => {
           goal: args.goal,
           issueTitle: args.issueTitle,
           issueBody: args.issueBody,
+          originResearchId: args.originResearchId,
         },
         generating: true,
+        stopped: false,
         text: "",
         status: "",
         draft: null,
@@ -365,7 +390,37 @@ export const usePlanStore = create<PlanState>((set, get) => {
 
     cancel: (id) => {
       const run = get().runs.find((r) => r.id === id);
-      if (run?.generating) void cancelAgentSession(run.sessionId);
+      if (!run?.generating) return;
+      void cancelAgentSession(run.sessionId);
+      // Settle to a clear stopped state right away; the in-flight turn sees
+      // `stopped` when its killed process returns and bails without overwriting.
+      patch(id, { generating: false, status: "", stopped: true });
+    },
+
+    restart: (id) => {
+      const run = get().runs.find((r) => r.id === id);
+      if (!run || run.generating) return;
+      // Fresh conversation (the stopped one was killed): a new session id so the
+      // old turn — if it's still resolving — is detected as stale and bails, then
+      // re-run turn 1 from the original seed.
+      patch(id, {
+        sessionId: crypto.randomUUID(),
+        nativeSessionId: null,
+        generating: true,
+        status: "",
+        stopped: false,
+        error: null,
+      });
+      void runFirstTurn(id, {
+        repoPath: run.repoPath,
+        goal: run.seed?.goal ?? run.origin?.goal ?? "",
+        issueTitle: run.seed?.issueTitle,
+        issueBody: run.seed?.issueBody,
+        agent: run.agent,
+        model: run.model,
+        effort: run.effort,
+        origin: run.origin ?? undefined,
+      });
     },
 
     remove: (id) => {

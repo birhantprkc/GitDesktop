@@ -109,6 +109,11 @@ export interface AgentSessionArgs {
   /** Read-only mode (a Plan conversation): swaps each CLI's write toolset for its
    *  read-only one, so the resumable turn can explore but never write. */
   readOnly: boolean;
+  /** Web-enabled read-only profile (a Research conversation): adds WebSearch/WebFetch
+   *  to Claude's read-only toolset so the turn can investigate the web while still
+   *  never writing. Claude-only (v1 Research is Claude-only); ignored without
+   *  `readOnly`. Omitted/false everywhere else (Plan, Delegate). */
+  web?: boolean;
   /** Isolation mode, fixed at session creation. "container" runs the turn inside
    *  a Docker/Podman container; anything else runs on the host (worktree-confined
    *  by each CLI's own OS sandbox). */
@@ -148,6 +153,8 @@ export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
     sessionId: args.sessionId,
     resume: args.resume,
     readOnly: args.readOnly,
+    // Default false so Plan/Delegate (which omit it) stay on the non-web profile.
+    web: args.web ?? false,
     isolation: args.isolation,
     nativeSessionId: args.nativeSessionId,
     mcpServers: args.mcpServers,

@@ -1,0 +1,449 @@
+import { create } from "zustand";
+import { isWatchingAgentSurface } from "@/features/sessions/watching";
+import {
+  type AgentKind,
+  cancelAgentSession,
+  runAgentSession,
+} from "@/lib/ai/agent";
+import { buildResearchPrompt, extractResearchReport } from "@/lib/ai/prompt";
+import { readRepoInstructions } from "@/lib/git/api";
+import { notify } from "@/lib/notify";
+import { loadSettings } from "@/lib/settings/api";
+import { errorMessage, invoke } from "@/lib/tauri/invoke";
+import { loadPersistedResearch, savePersistedResearch } from "./persistence";
+
+/** Which research persona drives the run, fixed at creation. "brainstorm"
+ *  diverges (breadth, options); "deep" investigates one direction (depth, cited). */
+export type ResearchDepth = "brainstorm" | "deep";
+
+/** The parsed result of a research turn — the full report markdown plus the
+ *  title lifted from its first heading (sidebar row + saved file name). */
+export interface ResearchReport {
+  title: string;
+  report: string;
+}
+
+/** Prefill for the research composer: a topic + persona, and (for the
+ *  brainstorm→deep-research chain) the brainstorm carried as context. */
+export interface ResearchSeed {
+  topic?: string;
+  depth?: ResearchDepth;
+  /** A brainstorm report carried into a deep-research run as data (the
+   *  "Deep-research a direction" handoff). Never instructions to the agent. */
+  priorContext?: string | null;
+  /** The brainstorm run this deep-research run was seeded from, for lineage. */
+  fromBrainstormId?: string | null;
+}
+
+export interface ResearchGenerateArgs extends ResearchSeed {
+  repoPath: string;
+  /** Web research needs a web-enabled read-only CLI; v1 is Claude-only. */
+  agent: AgentKind;
+  model: string;
+  effort: string;
+  topic: string;
+  depth: ResearchDepth;
+}
+
+/**
+ * One concurrent research run — a **web-enabled read-only agent conversation**.
+ * Turn 1 explores (repo + web) and streams a cited markdown report; a follow-up
+ * resumes the SAME conversation so the agent keeps its sources in context and digs
+ * deeper incrementally. Kept in the list so switching away never loses it — the
+ * keyed analogue of a session/plan. Never writes: the per-CLI read-only toolset
+ * (read + web tools, no Edit/Write/Bash) is the hard guarantee.
+ */
+export interface ResearchRun {
+  id: string;
+  repoPath: string;
+  agent: AgentKind;
+  model: string;
+  effort: string;
+  depth: ResearchDepth;
+  /** The conversation's stable uuid: `--session-id` on turn 1, `--resume` after;
+   *  also the cancel key. */
+  sessionId: string;
+  /** The CLI's native resume id captured on turn 1; unset until then. */
+  nativeSessionId: string | null;
+  /** The original topic + persona, for the sidebar row + canvas header. */
+  origin: { topic: string; depth: ResearchDepth } | null;
+  /** The seed this run was started from, so a re-run can reopen the composer. */
+  seed: ResearchSeed | null;
+  /** The brainstorm this deep-research run came from (the chain), or null. */
+  fromBrainstormId: string | null;
+  generating: boolean;
+  /** The user stopped this run mid-turn (Stop). Idle but restartable; tells the
+   *  canvas to offer Restart instead of treating partial output as a report. */
+  stopped: boolean;
+  /** The latest streamed report markdown (replaced each turn). */
+  text: string;
+  /** Transient tool-activity note (e.g. "Searching the web…"). */
+  status: string;
+  /** Parsed report (title + markdown), set when the turn completes. */
+  report: ResearchReport | null;
+  /** The latest turn's reported cost (USD); null if unreported. */
+  costUsd: number | null;
+  /** Repo-relative path of the saved report file once saved (null = unsaved). */
+  reportPath: string | null;
+  error: string | null;
+}
+
+interface ResearchState {
+  /** All concurrent research runs, in creation order. */
+  runs: ResearchRun[];
+  /** The research run shown in the agent canvas; null = none (shares the surface
+   *  with sessions and plans — see `agentSelect.ts` for mutual exclusion). */
+  activeResearchId: string | null;
+  /** A seed for the activation "Research" composer (set by the hotkey or a
+   *  "Deep-research a direction" handoff), consumed by SessionActivation. */
+  pendingResearchSeed: ResearchSeed | null;
+  /** Whether persisted runs have loaded (gates autosave so the initial empty
+   *  state never overwrites disk). */
+  hydrated: boolean;
+
+  hydrate: () => Promise<void>;
+  setActiveResearch: (id: string | null) => void;
+  setPendingResearchSeed: (seed: ResearchSeed | null) => void;
+  /** Start a new research run (creates it, selects it, streams turn 1). Returns its id. */
+  start: (args: ResearchGenerateArgs) => string;
+  /** Send a free-form follow-up — resumes the conversation so the agent digs
+   *  deeper. No-op if it's missing, mid-turn, or the message is blank. */
+  sendFollowUp: (id: string, message: string) => void;
+  /** Save the run's report as a local Markdown file (scaffold-local-files: the
+   *  user commits it, we never do). Resolves to the repo-relative path written. */
+  saveReport: (id: string) => Promise<string>;
+  /** Signal an in-flight turn to stop (leaves the run restartable). */
+  cancel: (id: string) => void;
+  /** Re-run a stopped (or errored) research run from its original topic — a fresh
+   *  conversation, reusing the row. No-op while generating. */
+  restart: (id: string) => void;
+  /** Drop a run from the list (cancelling any in-flight turn). */
+  remove: (id: string) => void;
+}
+
+function repoName(p: string): string {
+  return (
+    p
+      .replace(/[/\\]+$/, "")
+      .split(/[/\\]/)
+      .pop() ?? p
+  );
+}
+
+/** A filesystem-safe stem from a report title (the Rust side sanitizes again as a
+ *  safety net; this just keeps the saved name readable). */
+function slugify(title: string): string {
+  return (
+    title
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "research"
+  );
+}
+
+/**
+ * Read-only research surface. Each run is a **resumable web-enabled read-only
+ * agent conversation** (the `agent_session` backend with `readOnly: true` and
+ * `web: true` — read + web tools only, no worktree, runs in the live repo). Turn
+ * 1 explores and streams a cited report; a follow-up resumes the same
+ * conversation. Never writes: the per-CLI read-only toolset is the hard guarantee.
+ */
+export const useResearchStore = create<ResearchState>((set, get) => {
+  /** Patch one run by id — touches only that run, so concurrent runs streaming
+   *  at once never clobber each other. */
+  const patch = (id: string, p: Partial<ResearchRun>) =>
+    set({ runs: get().runs.map((r) => (r.id === id ? { ...r, ...p } : r)) });
+
+  /** Stream one turn of run `id` (a web-enabled read-only session turn), then
+   *  parse the result into a report. `resume` continues the conversation. */
+  const runTurn = async (
+    id: string,
+    system: string,
+    userPrompt: string,
+    resume: boolean,
+  ) => {
+    const run0 = get().runs.find((r) => r.id === id);
+    if (!run0) return;
+    patch(id, {
+      generating: true,
+      text: "",
+      status: "",
+      report: null,
+      costUsd: null,
+      // Clear the saved-file marker too: a new turn re-outputs the report, so a
+      // previously-saved path is stale even if this turn errors (the row would
+      // otherwise show "Saved to …" next to an emptied/errored run).
+      reportPath: null,
+      stopped: false,
+      error: null,
+    });
+    // True once this turn's result is stale: the user stopped it (`stopped`), or a
+    // restart issued a fresh session id. Either way its (killed/partial) output must
+    // not overwrite the run — guards every terminal patch below.
+    const superseded = () => {
+      const cur = get().runs.find((r) => r.id === id);
+      return !cur || cur.sessionId !== run0.sessionId || cur.stopped;
+    };
+    let finalText = "";
+    let errored = false;
+    // Announce a finished run (success OR failure) the way plans/sessions do —
+    // but stay quiet when the user is actually looking at this run (focused +
+    // Agent tab + selected); a focused user on another tab still gets it.
+    const notifyDone = (failed: boolean) => {
+      const run = get().runs.find((r) => r.id === id);
+      if (!run) return;
+      if (isWatchingAgentSurface(get().activeResearchId, id)) return;
+      const label = run.origin?.topic?.trim() || "Research";
+      void notify(failed ? "Research failed" : "Research ready", label);
+    };
+    try {
+      await runAgentSession({
+        binPath: null,
+        agent: run0.agent,
+        model: run0.model,
+        effort: run0.effort,
+        systemPrompt: system,
+        userPrompt,
+        // Read-only: runs in the live repo, never a worktree, and can't write.
+        worktreePath: run0.repoPath,
+        sessionId: run0.sessionId,
+        resume,
+        readOnly: true,
+        // The web-enabled read-only profile — adds WebSearch/WebFetch, still no writes.
+        web: true,
+        isolation: "worktree",
+        nativeSessionId: run0.nativeSessionId,
+        onEvent: (ev) => {
+          if (ev.kind === "nativeSession") {
+            const cur = get().runs.find((r) => r.id === id);
+            if (cur && !cur.nativeSessionId)
+              patch(id, { nativeSessionId: ev.id });
+          } else if (ev.kind === "delta") {
+            finalText += ev.text;
+            patch(id, { text: finalText, status: "" });
+          } else if (ev.kind === "status") {
+            patch(id, { status: ev.text });
+          } else if (ev.kind === "done") {
+            if (ev.text.length > finalText.length) finalText = ev.text;
+            if (ev.costUsd != null) patch(id, { costUsd: ev.costUsd });
+            if (ev.isError) {
+              errored = true;
+              // Don't paint an error onto a run the user just stopped (or a turn a
+              // restart superseded) — a killed process may emit one on the way out.
+              if (!superseded())
+                patch(id, {
+                  error: finalText || "The research agent reported an error.",
+                });
+            }
+          } else if (ev.kind === "error") {
+            errored = true;
+            if (!superseded()) patch(id, { error: ev.message });
+          }
+        },
+      });
+    } catch (e) {
+      if (superseded()) return;
+      patch(id, { generating: false, error: errorMessage(e) });
+      notifyDone(true);
+      return;
+    }
+    if (superseded()) return;
+    if (errored) {
+      patch(id, { generating: false });
+      notifyDone(true);
+      return;
+    }
+    const { title, report } = extractResearchReport(finalText);
+    if (!report.trim()) {
+      patch(id, {
+        generating: false,
+        error: "The research agent returned nothing — try again.",
+      });
+      notifyDone(true);
+      return;
+    }
+    // reportPath was already cleared at turn start, so a fresh report always
+    // offers a fresh save.
+    patch(id, {
+      generating: false,
+      report: { title, report },
+    });
+    notifyDone(false);
+  };
+
+  /** Build turn 1's system + user prompt (grounded in the repo's instructions),
+   *  then stream it. */
+  const runFirstTurn = async (id: string, args: ResearchGenerateArgs) => {
+    const { repoPath, topic, depth, priorContext } = args;
+    const [repoInstructions, settings] = await Promise.all([
+      readRepoInstructions(repoPath).catch(() => null),
+      loadSettings().catch(() => null),
+    ]);
+    const { system, prompt } = buildResearchPrompt({
+      depth,
+      topic,
+      priorContext,
+      repoName: repoName(repoPath),
+      repoInstructions,
+      globalInstructions: settings?.globalInstructions ?? "",
+    });
+    await runTurn(id, system, prompt, false);
+  };
+
+  return {
+    runs: [],
+    activeResearchId: null,
+    pendingResearchSeed: null,
+    hydrated: false,
+
+    hydrate: async () => {
+      if (get().hydrated) return;
+      let persisted: ResearchRun[] = [];
+      try {
+        persisted = await loadPersistedResearch();
+      } catch {
+        // No store yet / unreadable — start clean.
+      }
+      const live = new Set(get().runs.map((r) => r.id));
+      set({
+        runs: [...persisted.filter((p) => !live.has(p.id)), ...get().runs],
+        hydrated: true,
+      });
+    },
+
+    setActiveResearch: (activeResearchId) => set({ activeResearchId }),
+    setPendingResearchSeed: (pendingResearchSeed) =>
+      set({ pendingResearchSeed }),
+
+    start: (args) => {
+      const id = crypto.randomUUID();
+      const run: ResearchRun = {
+        id,
+        repoPath: args.repoPath,
+        agent: args.agent,
+        model: args.model,
+        effort: args.effort,
+        depth: args.depth,
+        sessionId: crypto.randomUUID(),
+        nativeSessionId: null,
+        origin: { topic: args.topic, depth: args.depth },
+        seed: {
+          topic: args.topic,
+          depth: args.depth,
+          priorContext: args.priorContext,
+          fromBrainstormId: args.fromBrainstormId,
+        },
+        fromBrainstormId: args.fromBrainstormId ?? null,
+        generating: true,
+        stopped: false,
+        text: "",
+        status: "",
+        report: null,
+        costUsd: null,
+        reportPath: null,
+        error: null,
+      };
+      set({
+        runs: [...get().runs, run],
+        activeResearchId: id,
+        pendingResearchSeed: null,
+      });
+      void runFirstTurn(id, args);
+      return id;
+    },
+
+    sendFollowUp: (id, message) => {
+      const run = get().runs.find((r) => r.id === id);
+      const text = message.trim();
+      if (!run || run.generating || !text) return;
+      const userPrompt = `${text}\n\nApply this and re-output the COMPLETE updated report in the same format.`;
+      void runTurn(id, "", userPrompt, true);
+    },
+
+    saveReport: async (id) => {
+      const run = get().runs.find((r) => r.id === id);
+      if (!run?.report) throw new Error("No report to save yet.");
+      const settings = await loadSettings().catch(() => null);
+      const dir = settings?.researchReportDir?.trim() || "docs/research";
+      const rel = await invoke<string>("research_save_report", {
+        repoPath: run.repoPath,
+        dir,
+        slug: slugify(run.report.title),
+        content: run.report.report,
+      });
+      patch(id, { reportPath: rel });
+      return rel;
+    },
+
+    cancel: (id) => {
+      const run = get().runs.find((r) => r.id === id);
+      if (!run?.generating) return;
+      void cancelAgentSession(run.sessionId);
+      // Settle to a clear stopped state right away; the in-flight turn sees
+      // `stopped` when its killed process returns and bails without overwriting.
+      patch(id, { generating: false, status: "", stopped: true });
+    },
+
+    restart: (id) => {
+      const run = get().runs.find((r) => r.id === id);
+      if (!run || run.generating) return;
+      // Fresh conversation (the stopped one was killed): a new session id so the
+      // old turn — if it's still resolving — is detected as stale and bails, then
+      // re-run turn 1 from the original topic + persona (+ any brainstorm context).
+      patch(id, {
+        sessionId: crypto.randomUUID(),
+        nativeSessionId: null,
+        generating: true,
+        status: "",
+        stopped: false,
+        error: null,
+      });
+      void runFirstTurn(id, {
+        repoPath: run.repoPath,
+        agent: run.agent,
+        model: run.model,
+        effort: run.effort,
+        topic: run.seed?.topic ?? run.origin?.topic ?? "",
+        depth: run.depth,
+        priorContext: run.seed?.priorContext,
+        fromBrainstormId: run.fromBrainstormId,
+      });
+    },
+
+    remove: (id) => {
+      const run = get().runs.find((r) => r.id === id);
+      if (run?.generating) void cancelAgentSession(run.sessionId);
+      set({
+        runs: get().runs.filter((r) => r.id !== id),
+        activeResearchId:
+          get().activeResearchId === id ? null : get().activeResearchId,
+      });
+    },
+  };
+});
+
+// Persist the research list to disk, debounced so a streaming run's rapid text
+// updates coalesce into roughly one write a second (latest snapshot wins, and
+// captures the native session id mid-stream so a resume survives a restart).
+// Gated on `hydrated` so the initial empty state never clobbers what's on disk.
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+useResearchStore.subscribe((state, prev) => {
+  if (!state.hydrated || state.runs === prev.runs) return;
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    void savePersistedResearch(useResearchStore.getState().runs);
+  }, 800);
+});
+
+// Load persisted research once at startup (so runs are back in the sidebar).
+void useResearchStore.getState().hydrate();
+
+/** The currently-selected research run, or null. Reference-stable while that run
+ *  is unchanged (so streaming another run won't re-render the active one). */
+export function useActiveResearchRun(): ResearchRun | null {
+  return useResearchStore(
+    (s) => s.runs.find((r) => r.id === s.activeResearchId) ?? null,
+  );
+}

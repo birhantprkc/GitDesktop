@@ -32,6 +32,7 @@ function toPersisted(r: PlanRun): PersistedPlan {
     nativeSessionId: r.nativeSessionId,
     origin: r.origin,
     seed: r.seed,
+    stopped: r.stopped,
     text: r.text,
     draft: r.draft,
     costUsd: r.costUsd,

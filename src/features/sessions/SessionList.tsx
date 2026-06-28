@@ -3,6 +3,7 @@ import {
   PlusIcon,
   SparkleIcon,
   UsersThreeIcon,
+  WarningCircleIcon,
 } from "@phosphor-icons/react";
 import {
   AnimatePresence,
@@ -16,11 +17,17 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type PlanRun, usePlanStore } from "@/features/plan/store";
 import { useReconcileLocalPrs } from "@/features/pulls/useReconcileLocalPrs";
+import { type ResearchRun, useResearchStore } from "@/features/research/store";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { type PrAudit, usePrAuditByBranch } from "@/lib/pulls/audit";
 import { cn } from "@/lib/utils";
-import { clearAgentSelection, selectPlan, selectSession } from "./agentSelect";
+import {
+  clearAgentSelection,
+  selectPlan,
+  selectResearch,
+  selectSession,
+} from "./agentSelect";
 import { PrAuditChip } from "./PrAuditChip";
 import { StatusIndicator, sessionStatus } from "./status";
 import { type AgentSession, useSessionsStore } from "./store";
@@ -29,9 +36,13 @@ import { type AgentSession, useSessionsStore } from "./store";
  *  plans filed away as references. */
 type SessionTab = "active" | "kept" | "archived";
 
-/** A row in the unified list — a read-only plan run, or a write-capable session.
- *  Both share the agent surface; one is selected at a time. */
-type NavRow = { kind: "plan"; id: string } | { kind: "session"; id: string };
+/** A row in the unified list — a read-only research run, a read-only plan run, or
+ *  a write-capable session. All share the agent surface; one is selected at a
+ *  time. Listed upstream-first (research → plan → session). */
+type NavRow =
+  | { kind: "research"; id: string }
+  | { kind: "plan"; id: string }
+  | { kind: "session"; id: string };
 
 /** Lowercased text a session search matches: the branch and every turn's prompt. */
 function sessionHaystack(s: AgentSession): string {
@@ -50,6 +61,15 @@ function planLabel(r: PlanRun): string {
   return r.origin?.issueTitle?.trim() || r.origin?.goal?.trim() || "Plan";
 }
 
+/** Lowercased text a research search matches: its topic and the streamed report. */
+function researchHaystack(r: ResearchRun): string {
+  return [r.origin?.topic, r.text].filter(Boolean).join(" \n ").toLowerCase();
+}
+
+function researchLabel(r: ResearchRun): string {
+  return r.origin?.topic?.trim() || "Research";
+}
+
 /**
  * The agent sidebar: read-only **plans** and write-capable **sessions** in one
  * list, each as a row with its task and status. Sessions split into **Active**
@@ -64,6 +84,11 @@ export function SessionList({ repoPath }: { repoPath: string }) {
   const allRuns = usePlanStore((s) => s.runs);
   const activePlanId = usePlanStore((s) => s.activePlanId);
   const setPendingPlanSeed = usePlanStore((s) => s.setPendingPlanSeed);
+  const allResearch = useResearchStore((s) => s.runs);
+  const activeResearchId = useResearchStore((s) => s.activeResearchId);
+  const setPendingResearchSeed = useResearchStore(
+    (s) => s.setPendingResearchSeed,
+  );
 
   const [tab, setTab] = useState<SessionTab>("active");
   const [query, setQuery] = useState("");
@@ -77,6 +102,10 @@ export function SessionList({ repoPath }: { repoPath: string }) {
   const repoPlans = useMemo(
     () => allRuns.filter((r) => r.repoPath === repoPath),
     [allRuns, repoPath],
+  );
+  const repoResearch = useMemo(
+    () => allResearch.filter((r) => r.repoPath === repoPath),
+    [allResearch, repoPath],
   );
   const activeSessionCount = useMemo(
     () => repoSessions.filter((s) => !s.kept).length,
@@ -98,13 +127,29 @@ export function SessionList({ repoPath }: { repoPath: string }) {
       ).length,
     [repoPlans, keptSessionIds],
   );
-  // Active = in-progress plans + working/ready sessions. Kept = finalized
-  // sessions. Archived = implemented plans (kept references) in their own tab so
-  // they don't crowd either.
+  // A research run that's been handed off ("Turn into a Plan") is "archived" — a
+  // plan run records the originating research id on its seed, so this derives
+  // (and reverts if that plan is discarded), the same way an implemented plan
+  // archives off its kept session.
+  const seededResearchIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const p of repoPlans)
+      if (p.seed?.originResearchId) ids.add(p.seed.originResearchId);
+    return ids;
+  }, [repoPlans]);
+  const archivedResearchCount = useMemo(
+    () => repoResearch.filter((r) => seededResearchIds.has(r.id)).length,
+    [repoResearch, seededResearchIds],
+  );
+  // Active = in-progress research + in-progress plans + working/ready sessions.
+  // Kept = finalized sessions. Archived = implemented plans + research that became
+  // a plan (kept references) in their own tab so they don't crowd either.
   const activeCount =
-    activeSessionCount + (repoPlans.length - archivedPlanCount);
+    activeSessionCount +
+    (repoPlans.length - archivedPlanCount) +
+    (repoResearch.length - archivedResearchCount);
   const keptCount = repoSessions.length - activeSessionCount;
-  const archivedCount = archivedPlanCount;
+  const archivedCount = archivedPlanCount + archivedResearchCount;
 
   // Audit: link each session's branch to its pull request and merge state. Keep
   // local PRs honest with git while the agent tab is open, then look up by branch
@@ -137,14 +182,30 @@ export function SessionList({ repoPath }: { repoPath: string }) {
         (!q || planHaystack(r).includes(q)),
     );
   }, [repoPlans, tab, query, keptSessionIds]);
+  // Research shows on Active (in-progress / report ready) and Archived (handed off
+  // to a plan). Never on Kept (that's finalized write-sessions only).
+  const research = useMemo(() => {
+    if (tab === "kept") return [];
+    const q = query.trim().toLowerCase();
+    return repoResearch.filter(
+      (r) =>
+        seededResearchIds.has(r.id) === (tab === "archived") &&
+        (!q || researchHaystack(r).includes(q)),
+    );
+  }, [repoResearch, tab, query, seededResearchIds]);
 
   const newSession = () => clearAgentSelection();
   const openPlanComposer = () => {
     clearAgentSelection();
     setPendingPlanSeed({});
   };
+  const openResearchComposer = () => {
+    clearAgentSelection();
+    setPendingResearchSeed({});
+  };
   useHotkeyAction("agent-new-session", newSession);
   useHotkeyAction("agent-plan", openPlanComposer);
+  useHotkeyAction("agent-research", openResearchComposer);
   useHotkeyAction("agent-toggle-list-tab", () =>
     setTab((t) =>
       t === "active" ? "kept" : t === "kept" ? "archived" : "active",
@@ -175,16 +236,21 @@ export function SessionList({ repoPath }: { repoPath: string }) {
         exit: { opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0 },
       };
 
-  // One flat navigation order: plans first, then sessions.
+  // One flat navigation order, upstream-first: research, then plans, then sessions.
   const navItems = useMemo<NavRow[]>(
     () => [
+      ...research.map((r) => ({ kind: "research" as const, id: r.id })),
       ...plans.map((r) => ({ kind: "plan" as const, id: r.id })),
       ...sessions.map((s) => ({ kind: "session" as const, id: s.id })),
     ],
-    [plans, sessions],
+    [research, plans, sessions],
   );
   const activeIndex = navItems.findIndex((it) =>
-    it.kind === "plan" ? it.id === activePlanId : it.id === activeId,
+    it.kind === "research"
+      ? it.id === activeResearchId
+      : it.kind === "plan"
+        ? it.id === activePlanId
+        : it.id === activeId,
   );
   // When nothing in this list is selected, the first row is the roving tab stop.
   const rovingIndex = activeIndex === -1 ? 0 : activeIndex;
@@ -193,12 +259,25 @@ export function SessionList({ repoPath }: { repoPath: string }) {
     activeIndex,
     rowKey: (it) => it.id,
     onActivate: (it) =>
-      it.kind === "plan" ? selectPlan(it.id) : selectSession(it.id),
+      it.kind === "research"
+        ? selectResearch(it.id)
+        : it.kind === "plan"
+          ? selectPlan(it.id)
+          : selectSession(it.id),
   });
 
-  const nothingSelected = activeId === null && activePlanId === null;
-  const repoEmpty = repoSessions.length === 0 && repoPlans.length === 0;
-  const showGroups = plans.length > 0 && sessions.length > 0;
+  const nothingSelected =
+    activeId === null && activePlanId === null && activeResearchId === null;
+  const repoEmpty =
+    repoSessions.length === 0 &&
+    repoPlans.length === 0 &&
+    repoResearch.length === 0;
+  // A group label per kind, shown only when more than one kind is present.
+  const groupCount =
+    (research.length > 0 ? 1 : 0) +
+    (plans.length > 0 ? 1 : 0) +
+    (sessions.length > 0 ? 1 : 0);
+  const showGroups = groupCount > 1;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -246,8 +325,8 @@ export function SessionList({ repoPath }: { repoPath: string }) {
                 ref={searchRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search plans & sessions"
-                aria-label="Search agent plans and sessions"
+                placeholder="Search research, plans & sessions"
+                aria-label="Search agent research, plans, and sessions"
                 autoComplete="off"
                 className="h-7 pl-7"
               />
@@ -258,30 +337,51 @@ export function SessionList({ repoPath }: { repoPath: string }) {
           ) : (
             <div
               role="listbox"
-              aria-label="Agent plans and sessions"
+              aria-label="Agent research, plans, and sessions"
               onKeyDown={onKeyDown}
               className="min-h-0 flex-1 overflow-y-auto p-1"
             >
               {/* Keyed by tab so switching tabs is an instant swap; within a tab,
                   add/remove animates. */}
               <AnimatePresence key={tab} initial={false}>
-                {showGroups && <GroupLabel key="g-plans">Plans</GroupLabel>}
-                {plans.map((r, i) => (
-                  <PlanRow
-                    key={`plan:${r.id}`}
+                {showGroups && research.length > 0 && (
+                  <GroupLabel key="g-research">Research</GroupLabel>
+                )}
+                {/* Research is first in navItems, so a research row's array index
+                    IS its nav index — no offset (plans/sessions add one below). */}
+                {research.map((r, i) => (
+                  <ResearchRow
+                    key={`research:${r.id}`}
                     run={r}
-                    audit={prAudit}
-                    active={r.id === activePlanId}
+                    planned={tab === "archived"}
+                    active={r.id === activeResearchId}
                     tabIndex={i === rovingIndex ? 0 : -1}
                     motionProps={rowMotion}
-                    onClick={() => selectPlan(r.id)}
+                    onClick={() => selectResearch(r.id)}
                   />
                 ))}
-                {showGroups && (
+                {showGroups && plans.length > 0 && (
+                  <GroupLabel key="g-plans">Plans</GroupLabel>
+                )}
+                {plans.map((r, i) => {
+                  const idx = research.length + i;
+                  return (
+                    <PlanRow
+                      key={`plan:${r.id}`}
+                      run={r}
+                      audit={prAudit}
+                      active={r.id === activePlanId}
+                      tabIndex={idx === rovingIndex ? 0 : -1}
+                      motionProps={rowMotion}
+                      onClick={() => selectPlan(r.id)}
+                    />
+                  );
+                })}
+                {showGroups && sessions.length > 0 && (
                   <GroupLabel key="g-sessions">Sessions</GroupLabel>
                 )}
                 {sessions.map((s, j) => {
-                  const idx = plans.length + j;
+                  const idx = research.length + plans.length + j;
                   return (
                     <SessionRow
                       key={`session:${s.id}`}
@@ -398,7 +498,12 @@ function PlanStatus({
       );
     }
     if (st.kind === "error") {
-      return <span className="text-destructive">Implement failed</span>;
+      return (
+        <span className="flex min-w-0 items-center gap-1.5 text-destructive">
+          <WarningCircleIcon className="size-3.5 shrink-0" />
+          Implement failed
+        </span>
+      );
     }
     // Audit trail: once the implementing session has a pull request, surface it
     // (its merge is the real "done") instead of the redundant "Kept".
@@ -412,7 +517,13 @@ function PlanStatus({
       </span>
     );
   }
-  if (run.error) return <span className="text-destructive">Plan failed</span>;
+  if (run.error)
+    return (
+      <span className="flex min-w-0 items-center gap-1.5 text-destructive">
+        <WarningCircleIcon className="size-3.5 shrink-0" />
+        Plan failed
+      </span>
+    );
   if (run.draft)
     return <span className="text-muted-foreground">Plan ready</span>;
   return <span className="text-muted-foreground">Read-only plan</span>;
@@ -510,6 +621,81 @@ function SessionRow({
         {cost > 0 && (
           <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
             ${cost.toFixed(2)}
+          </span>
+        )}
+      </span>
+    </m.button>
+  );
+}
+
+/** Status line for a research row — mirrors a plan's PlanStatus. `planned` marks
+ *  a run that's been handed off to a plan (shown in the Archived tab). */
+function ResearchStatus({
+  run,
+  planned,
+}: {
+  run: ResearchRun;
+  planned: boolean;
+}) {
+  if (run.generating) {
+    return (
+      <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+        <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" />
+        {run.depth === "deep" ? "Researching…" : "Brainstorming…"}
+      </span>
+    );
+  }
+  if (run.error)
+    return (
+      <span className="flex min-w-0 items-center gap-1.5 text-destructive">
+        <WarningCircleIcon className="size-3.5 shrink-0" />
+        Research failed
+      </span>
+    );
+  if (planned)
+    return <span className="text-muted-foreground">Turned into a plan</span>;
+  if (run.report)
+    return <span className="text-muted-foreground">Report ready</span>;
+  return <span className="text-muted-foreground">Read-only research</span>;
+}
+
+function ResearchRow({
+  run,
+  planned,
+  active,
+  tabIndex,
+  motionProps,
+  onClick,
+}: {
+  run: ResearchRun;
+  planned: boolean;
+  active: boolean;
+  tabIndex: number;
+  motionProps: Pick<MotionProps, "initial" | "animate" | "exit">;
+  onClick: () => void;
+}) {
+  return (
+    <m.button
+      {...motionProps}
+      type="button"
+      role="option"
+      aria-selected={active}
+      data-row={run.id}
+      tabIndex={tabIndex}
+      onClick={onClick}
+      className={cn(
+        "flex w-full flex-col items-start gap-1 overflow-hidden px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+        active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
+      )}
+    >
+      <span className="line-clamp-2 w-full text-xs font-medium leading-snug">
+        {researchLabel(run)}
+      </span>
+      <span className="flex w-full items-center gap-2 text-[11px]">
+        <ResearchStatus run={run} planned={planned} />
+        {run.costUsd != null && (
+          <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
+            ${run.costUsd.toFixed(2)}
           </span>
         )}
       </span>

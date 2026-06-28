@@ -12,6 +12,7 @@ mod instructions;
 mod mcp;
 mod mcp_server;
 mod pty;
+mod research;
 mod secrets;
 mod sessions;
 mod state;
@@ -295,6 +296,7 @@ pub fn run() {
             funding::funding_get,
             funding::funding_set,
             funding::funding_delete,
+            research::research_save_report,
             dependabot::dependabot_get,
             dependabot::dependabot_set,
             dependabot::dependabot_delete,
