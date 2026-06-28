@@ -54,6 +54,7 @@ import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { EditHistoryDialog } from "./EditHistoryDialog";
 import {
   CherryPickOntoDialog,
   CreateRefFromCommitDialog,
@@ -61,7 +62,7 @@ import {
   DeleteTagDialog,
   ResetCommitDialog,
 } from "./HistoryDialogs";
-import { ReorderDialog, SquashDialog } from "./RewriteDialogs";
+import { SquashDialog } from "./RewriteDialogs";
 import { useAmendWithConfirm } from "./useAmendCommit";
 
 export function HistoryPanel({ repoPath }: { repoPath: string }) {
@@ -102,14 +103,14 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   // Tag pending deletion, plus whether to delete it from origin too.
   const [deleteTagName, setDeleteTagName] = useState<string | null>(null);
   const [deleteTagRemote, setDeleteTagRemote] = useState(false);
-  // History rewriting (squash / reorder), unpushed commits only.
+  // History rewriting (quick squash + the Edit-history editor), unpushed only.
   const [squashCtx, setSquashCtx] = useState<{
     base: string;
     steps: RewriteStep[];
     count: number;
     defaultMessage: string;
   } | null>(null);
-  const [reorderOpen, setReorderOpen] = useState(false);
+  const [editHistoryOpen, setEditHistoryOpen] = useState(false);
   // The commit (+ its row index) the one shared context menu acts on.
   const [menuTarget, setMenuTarget] = useState<{
     commit: CommitSummary;
@@ -399,20 +400,21 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     });
   }
 
-  // Reorder: the top unpushed commits (capped), needing a base below them.
-  // Merge commits can't be replayed, so the range stops at the first one.
-  const REORDER_MAX = 15;
+  // Edit history: the top unpushed commits (capped), needing a base below them.
+  // Merge commits can't be replayed, so the range stops at the first one. One
+  // editable commit is enough (you can reword or drop a single commit).
+  const EDIT_MAX = 15;
   const firstMerge = commits.findIndex((c) => c.isMerge);
-  let reorderLen = Math.min(
+  let editLen = Math.min(
     unpushedCount,
-    REORDER_MAX,
+    EDIT_MAX,
     commits.length,
     firstMerge === -1 ? Number.POSITIVE_INFINITY : firstMerge,
   );
-  if (reorderLen === commits.length && !log.hasNextPage) reorderLen -= 1;
-  const canReorder = reorderLen >= 2;
-  const reorderCommits = commits.slice(0, Math.max(reorderLen, 0));
-  const reorderBase = commits[Math.max(reorderLen, 0)]?.hash ?? "";
+  if (editLen === commits.length && !log.hasNextPage) editLen -= 1;
+  const canEditHistory = editLen >= 1;
+  const editCommits = commits.slice(0, Math.max(editLen, 0));
+  const editBase = commits[Math.max(editLen, 0)]?.hash ?? "";
 
   function openCherryPickOnto(hash: string) {
     setPickOntoHashes(effectiveSelection(hash));
@@ -511,10 +513,10 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
             {!canSquash && squashDisabledHint}
           </ContextMenuItem>
           <ContextMenuItem
-            disabled={!canReorder}
-            onClick={() => setReorderOpen(true)}
+            disabled={!canEditHistory}
+            onClick={() => setEditHistoryOpen(true)}
           >
-            Reorder unpushed commits…
+            Edit history…
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem
@@ -602,10 +604,10 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
           Cherry-pick to branch…
         </ContextMenuItem>
         <ContextMenuItem
-          disabled={!canReorder || index >= reorderLen}
-          onClick={() => setReorderOpen(true)}
+          disabled={!canEditHistory}
+          onClick={() => setEditHistoryOpen(true)}
         >
-          Reorder unpushed commits…
+          Edit history…
         </ContextMenuItem>
         {commit.tags.length > 0 && <ContextMenuSeparator />}
         {commit.tags.map((tag) => (
@@ -822,14 +824,16 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
         />
       )}
 
-      <ReorderDialog
-        repoPath={repoPath}
-        base={reorderBase}
-        commits={reorderCommits}
-        open={reorderOpen}
-        onOpenChange={setReorderOpen}
-        onDone={() => setSelected(new Set())}
-      />
+      {editHistoryOpen && (
+        <EditHistoryDialog
+          repoPath={repoPath}
+          base={editBase}
+          commits={editCommits}
+          open
+          onOpenChange={setEditHistoryOpen}
+          onDone={() => setSelected(new Set())}
+        />
+      )}
 
       <AmendForcePushDialog {...forcePushDialog} />
 

@@ -1,9 +1,4 @@
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  SparkleIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+import { SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -15,7 +10,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Spinner } from "@/components/ui/spinner";
 import { createAiClient } from "@/lib/ai/client";
 import { buildCommitPrompt } from "@/lib/ai/prompt";
 import { required, useAppForm } from "@/lib/form";
@@ -25,16 +19,17 @@ import {
   readRepoInstructions,
 } from "@/lib/git/api";
 import { useRewriteCommits } from "@/lib/git/queries";
-import type { CommitSummary, RewriteStep } from "@/lib/git/types";
+import type { RewriteStep } from "@/lib/git/types";
 import { loadSettings } from "@/lib/settings/api";
 import { toastError } from "@/lib/toast";
 
 /**
- * Streams an AI commit message for the squashed run — the commit-box
- * generator pipeline, fed by the run's combined diff instead of the
- * staged diff.
+ * Streams an AI commit message from a `base..head` diff — the commit-box
+ * generator pipeline, fed by an arbitrary commit range instead of the staged
+ * diff. Used for a squashed run and, in the Edit-history editor, a reworded
+ * commit (`<hash>^..<hash>`).
  */
-function useGenerateSquashMessage(
+export function useGenerateSquashMessage(
   repoPath: string,
   onText: (message: string) => void,
 ) {
@@ -209,121 +204,6 @@ export function SquashDialog({
             </form.AppForm>
           </DialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * Reorders the unpushed commits with ↑/↓ per row, then replays them in the
- * new order. Apply stays disabled until the order actually changes.
- */
-export function ReorderDialog({
-  repoPath,
-  base,
-  commits,
-  open,
-  onOpenChange,
-  onDone,
-}: {
-  repoPath: string;
-  base: string;
-  /** Newest-first, matching the history list. */
-  commits: CommitSummary[];
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onDone: () => void;
-}) {
-  const rewrite = useRewriteCommits(repoPath);
-  const [order, setOrder] = useState<CommitSummary[]>(commits);
-  // Reseed when a different set of commits comes in (render-time adjustment).
-  const [lastKey, setLastKey] = useState("");
-  const key = commits.map((c) => c.hash).join();
-  if (key !== lastKey) {
-    setLastKey(key);
-    setOrder(commits);
-  }
-
-  const changed = order.some((c, i) => c.hash !== commits[i]?.hash);
-
-  function move(index: number, delta: -1 | 1) {
-    const next = [...order];
-    const target = index + delta;
-    if (target < 0 || target >= next.length) return;
-    [next[index], next[target]] = [next[target], next[index]];
-    setOrder(next);
-  }
-
-  function apply() {
-    // Steps are oldest-first; the dialog shows newest-first.
-    const steps = [...order]
-      .reverse()
-      .map((c) => ({ hashes: [c.hash] }) as RewriteStep);
-    rewrite.mutate(
-      { base, steps },
-      {
-        onSuccess: () => {
-          toast.success("Commits reordered");
-          onOpenChange(false);
-          onDone();
-        },
-        onError: (e) => toastError(e),
-      },
-    );
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Reorder commits</DialogTitle>
-          <DialogDescription>
-            Newest on top, like the history list. This rewrites local history;
-            if replaying hits a conflict, nothing is changed.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="max-h-80 space-y-px overflow-y-auto border">
-          {order.map((commit, index) => (
-            <div
-              key={commit.hash}
-              className="flex items-center gap-2 border-b px-2 py-1.5 last:border-b-0"
-            >
-              <span className="font-mono text-[11px] text-muted-foreground">
-                {commit.hash.slice(0, 7)}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-xs">
-                {commit.subject}
-              </span>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={`Move ${commit.subject} up`}
-                disabled={index === 0 || rewrite.isPending}
-                onClick={() => move(index, -1)}
-              >
-                <ArrowUpIcon />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={`Move ${commit.subject} down`}
-                disabled={index === order.length - 1 || rewrite.isPending}
-                onClick={() => move(index, 1)}
-              >
-                <ArrowDownIcon />
-              </Button>
-            </div>
-          ))}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button disabled={!changed || rewrite.isPending} onClick={apply}>
-            {rewrite.isPending && <Spinner data-icon="inline-start" />}
-            Apply new order
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

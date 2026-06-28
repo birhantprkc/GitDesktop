@@ -1743,6 +1743,25 @@ export function useRewriteCommits(repo: string) {
   );
 }
 
+/** Full messages for the unpushed commits `base..HEAD`, as a hash→message map,
+ *  for the Edit-history editor's reword/squash defaults. Enabled only when the
+ *  dialog is open with a base. */
+export function useUnpushedMessages(
+  repo: string,
+  base: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "unpushed-messages", base] as const,
+    queryFn: async () => {
+      const list = await api.gitUnpushedMessages(repo, base);
+      return Object.fromEntries(list.map((c) => [c.hash, c.message]));
+    },
+    enabled: enabled && base !== "",
+    staleTime: 0,
+  });
+}
+
 export function usePushTag(repo: string) {
   return useRepoMutation(repo, (name: string) => api.gitPushTag(repo, name));
 }

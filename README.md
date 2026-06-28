@@ -162,8 +162,10 @@ are shareable via a committed file or importable from GitHub.
 
 **History & advanced** — paged, filterable history with rich commit detail,
 per-file history and line blame, and an at-a-glance marker on every commit that
-hasn't been pushed yet; cherry-pick (onto the current or another branch),
-squash and reorder unpushed commits behind an atomic replay engine, a stash
+hasn't been pushed yet; cherry-pick (onto the current or another branch) and a
+full **interactive rebase** ⭐ — an *Edit history* editor that reword / squash /
+fixup / drop / reorder your unpushed commits behind an atomic replay engine
+(any conflict rolls back untouched), which GitHub Desktop doesn't offer; a stash
 browser, tag management, submodule management, and a **worktree manager**
 (create, switch between, and remove linked worktrees, so you can work on several
 branches in parallel folders without stashing).

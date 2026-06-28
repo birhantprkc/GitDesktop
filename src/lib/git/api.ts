@@ -339,6 +339,14 @@ export const gitRewriteCommits = (
   steps: RewriteStep[],
 ) => invoke<void>("git_rewrite_commits", { repoPath, base, steps });
 
+/** Full messages (subject + body) for the unpushed commits `base..HEAD`, to
+ *  pre-fill the Edit-history editor without truncating multi-line bodies. */
+export const gitUnpushedMessages = (repoPath: string, base: string) =>
+  invoke<{ hash: string; message: string }[]>("git_unpushed_messages", {
+    repoPath,
+    base,
+  });
+
 export const gitPushTag = (repoPath: string, name: string) =>
   invoke<void>("git_push_tag", { repoPath, name });
 

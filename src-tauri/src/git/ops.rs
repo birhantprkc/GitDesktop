@@ -1044,10 +1044,16 @@ pub async fn git_merge_local_pr(
 }
 
 /// Rewrites the unpushed tip of the current branch (`base..HEAD`): each step
-/// becomes one commit â€” a single-hash step is a plain cherry-pick, a
-/// multi-hash step squashes those commits into one with `message`. Drives
-/// both "reorder commits" and "squash commits". Refuses on a dirty tree or
-/// merge commits in range; any conflict rolls everything back untouched.
+/// becomes one commit. The full interactive-rebase vocabulary maps onto steps:
+/// a single-hash step with no message is a **pick** (plain cherry-pick,
+/// original message kept); a single-hash step with a message is a **reword**; a
+/// multi-hash step *with* a message is a **squash** (those commits collapse into
+/// one with that message); a multi-hash step *without* a message is a **fixup**
+/// (collapse but reuse the first/leader commit's message and authorship via
+/// `commit -C`). Omitting a commit from every step **drops** it; the step order
+/// is the new history order. Drives reorder, squash, and the Edit-history
+/// editor. Refuses on a dirty tree or merge commits in range; any conflict rolls
+/// everything back untouched.
 #[tauri::command]
 pub async fn git_rewrite_commits(
     state: State<'_, AppState>,
@@ -1075,13 +1081,9 @@ pub(crate) async fn rewrite_commits(
         for h in &step.hashes {
             validate_hash(h)?;
         }
-        let squashing = step.hashes.len() > 1;
-        let message = step.message.as_deref().map(str::trim).unwrap_or("");
-        if squashing && message.is_empty() {
-            return Err(AppError::InvalidArgument(
-                "a squash needs a commit message".into(),
-            ));
-        }
+        // A multi-hash step with no message is a valid fixup (reuse the leader's
+        // message), so no message requirement here — pick/reword/squash/fixup
+        // are all expressible.
     }
 
     // reset --hard would destroy uncommitted work â€” refuse instead.
@@ -1150,7 +1152,13 @@ pub(crate) async fn rewrite_commits(
                 break 'steps;
             }
             let message = step.message.as_deref().map(str::trim).unwrap_or("");
-            let commit_args = ["commit", "-m", message];
+            // With a message → squash/reword. Without → fixup: reuse the first
+            // (leader) commit's message and authorship.
+            let commit_args: Vec<&str> = if message.is_empty() {
+                vec!["commit", "-C", step.hashes[0].as_str()]
+            } else {
+                vec!["commit", "-m", message]
+            };
             if let Err(e) =
                 run_git_mutating(state, repo_path, &commit_args, DEFAULT_TIMEOUT).await
             {
@@ -1173,13 +1181,58 @@ pub(crate) async fn rewrite_commits(
             AppError::Git { code, stderr } => AppError::Git {
                 code,
                 stderr: format!(
-                    "The rewrite hit conflicts and was rolled back; your branch is unchanged.\n{stderr}"
+                    "The rewrite couldn't be applied (usually a conflict, or a squash/fixup that left nothing to commit) and was rolled back; your branch is unchanged.\n{stderr}"
                 ),
             },
             other => other,
         });
     }
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitMessage {
+    pub hash: String,
+    /// The full commit message (subject + body), so the Edit-history editor can
+    /// pre-fill reword/squash fields without truncating multi-line bodies.
+    pub message: String,
+}
+
+/// Full messages for the unpushed commits `base..HEAD`. NUL-delimited so
+/// multi-line bodies survive intact.
+#[tauri::command]
+pub async fn git_unpushed_messages(
+    repo_path: String,
+    base: String,
+) -> AppResult<Vec<CommitMessage>> {
+    validate_hash(&base)?;
+    let range = format!("{base}..HEAD");
+    let out = run_git(
+        Some(&repo_path),
+        &["log", "-z", "--format=%H%n%B", &range],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let text = out.stdout_lossy();
+    let mut messages = Vec::new();
+    for record in text.split('\0') {
+        let record = record.trim_start_matches('\n');
+        if record.is_empty() {
+            continue;
+        }
+        match record.split_once('\n') {
+            Some((hash, message)) => messages.push(CommitMessage {
+                hash: hash.trim().to_string(),
+                message: message.trim_end().to_string(),
+            }),
+            None => messages.push(CommitMessage {
+                hash: record.trim().to_string(),
+                message: String::new(),
+            }),
+        }
+    }
+    Ok(messages)
 }
 
 fn validate_tag_name(name: &str) -> AppResult<()> {
@@ -1421,6 +1474,36 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(subjects(&repo).await, vec!["combined", "base"]);
+        assert!(dir.join("b.txt").exists());
+        assert!(dir.join("c.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn fixup_keeps_leader_message() {
+        let (dir, repo) = setup_repo("fixup").await;
+        let base = rev(&repo, "HEAD").await;
+        commit_file(&repo, &dir, "b.txt", "b\n", "keep this message").await;
+        let c1 = rev(&repo, "HEAD").await;
+        commit_file(&repo, &dir, "c.txt", "c\n", "discard me").await;
+        let c2 = rev(&repo, "HEAD").await;
+
+        let state = AppState::default();
+        // Multi-hash step with NO message = fixup: collapse c1+c2 but reuse c1's
+        // message ("keep this message"), dropping c2's.
+        rewrite_commits(
+            &state,
+            &repo,
+            &base,
+            &[RewriteStep {
+                hashes: vec![c1, c2],
+                message: None,
+            }],
+        )
+        .await
+        .unwrap();
+        assert_eq!(subjects(&repo).await, vec!["keep this message", "base"]);
         assert!(dir.join("b.txt").exists());
         assert!(dir.join("c.txt").exists());
 

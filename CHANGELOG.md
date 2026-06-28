@@ -12,6 +12,16 @@ commit list.
 
 ### Added
 
+- **Interactive rebase — "Edit history".** A new **Edit history…** item in the History
+  context menu opens an editor over your unpushed commits where each commit gets a per-row
+  action — **pick**, **reword**, **squash**, **fixup**, or **drop** — plus **↑/↓ reorder** and
+  inline message editing (reword loads the full original message and can regenerate it with AI).
+  A live "Result: N commits" footer shows what you'll end up with. Applying runs the same
+  conflict-safe replay engine as squash/reorder: it's **atomic** — any conflict rolls everything
+  back untouched — and it refuses a dirty tree, merge commits, or already-pushed history. The
+  quick **Squash N commits…** multi-select shortcut stays; the standalone Reorder dialog is
+  folded into the editor. (Mid-rebase `edit` to amend a commit's contents is planned for a
+  follow-up.) GitHub Desktop has no equivalent.
 - **GitHub Enterprise support.** GitDesktop no longer assumes `github.com` — every GitHub
   feature runs through `gh`, which detects each repository's host from its remote, so an
   Enterprise Server repo (`github.acme.com`) gets the same pull requests, issues, Actions, and

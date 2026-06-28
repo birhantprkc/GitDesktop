@@ -217,7 +217,13 @@ Right-click a commit (or use the commit detail view) for:
 - **Cherry-pick** a commit onto the current branch.
 - **Reset** the current branch to a commit — a **mixed reset**, so the changes from later
   commits return to your working tree as uncommitted changes.
-- **Squash** or **reorder** unpushed commits to tidy history before pushing.
+- **Edit history** — open the interactive-rebase editor over your unpushed commits, where
+  each commit gets an action: **pick** (keep), **reword** (edit its message), **squash**
+  (merge into the commit below, combining messages), **fixup** (merge in, keeping the
+  message), or **drop** (remove it) — plus **↑/↓** to reorder.{{ai}} Reword can regenerate a
+  message with AI.{{/ai}} A "Result" count shows what you'll end up with. It applies all at once
+  and rolls back untouched if anything conflicts. A quick **Squash N commits…** is also on the
+  context menu when you select adjacent commits.
 - **Create a branch** or **create a tag** at a commit, **check out** a commit, or copy
   its SHA.
 
@@ -226,9 +232,9 @@ Right-click a commit (or use the commit detail view) for:
 - **File history** — see every commit that touched a specific file.
 - **Blame** — line-by-line, which commit last changed each line.
 
-> History-rewriting actions (reset, squash, reorder) confirm first, and a push of
-> rewritten history becomes a safe **force-with-lease** push (see *Syncing &
-> conflicts*).`,
+> History-rewriting actions (reset, Edit history, squash) only ever touch **unpushed**
+> commits, and a push of rewritten history becomes a safe **force-with-lease** push (see
+> *Syncing & conflicts*).`,
   },
   {
     id: "branches",
