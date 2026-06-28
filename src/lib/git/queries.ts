@@ -32,9 +32,12 @@ import type {
 import {
   addUserWorktree,
   listUserWorktrees,
+  lockWorktree,
   moveUserWorktree,
   pruneWorktrees,
   removeWorktree,
+  repairWorktrees,
+  unlockWorktree,
 } from "./worktree";
 
 export const repoKeys = {
@@ -148,6 +151,30 @@ export function useMoveUserWorktree(repo: string) {
       moveUserWorktree(repo, args.from, args.to),
     { invalidate: [worktreeKey(repo)] },
   );
+}
+
+/** Locks a user worktree (optionally with a reason). */
+export function useLockUserWorktree(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { path: string; reason?: string }) =>
+      lockWorktree(repo, args.path, args.reason),
+    { invalidate: [worktreeKey(repo)] },
+  );
+}
+
+/** Unlocks a user worktree. */
+export function useUnlockUserWorktree(repo: string) {
+  return useRepoMutation(repo, (path: string) => unlockWorktree(repo, path), {
+    invalidate: [worktreeKey(repo)],
+  });
+}
+
+/** Repairs worktree links after the repo folder was moved or renamed. */
+export function useRepairWorktrees(repo: string) {
+  return useRepoMutation(repo, (_: void) => repairWorktrees(repo), {
+    invalidate: [worktreeKey(repo)],
+  });
 }
 
 /** Removes a user worktree (keeping its branch), then prunes any stale admin

@@ -4,9 +4,11 @@ import {
   FolderOpenIcon,
   GitBranchIcon,
   LockSimpleIcon,
+  LockSimpleOpenIcon,
   PencilSimpleIcon,
   PlusIcon,
   TrashIcon,
+  WrenchIcon,
 } from "@phosphor-icons/react";
 import type { MouseEvent } from "react";
 import { useState } from "react";
@@ -40,9 +42,12 @@ import { Spinner } from "@/components/ui/spinner";
 import {
   useAddUserWorktree,
   useBranches,
+  useLockUserWorktree,
   useMoveUserWorktree,
   useRemoveUserWorktree,
+  useRepairWorktrees,
   useRepoStatus,
+  useUnlockUserWorktree,
   useUserWorktrees,
 } from "@/lib/git/queries";
 import type { UserWorktree } from "@/lib/git/worktree";
@@ -126,12 +131,15 @@ function WorktreeList({
 }) {
   const worktrees = useUserWorktrees(repoPath, open);
   const openWorktree = useOpenWorktree();
+  const unlock = useUnlockUserWorktree(repoPath);
+  const repair = useRepairWorktrees(repoPath);
   const activeRepo = useUiStore((s) => s.repoPath);
   const activeNorm = activeRepo ? norm(activeRepo) : "";
 
   const [highlight, setHighlight] = useState(-1);
   const [deleteTarget, setDeleteTarget] = useState<UserWorktree | null>(null);
   const [renameTarget, setRenameTarget] = useState<UserWorktree | null>(null);
+  const [lockTarget, setLockTarget] = useState<UserWorktree | null>(null);
 
   const list = worktrees.data ?? [];
   const linkedCount = list.filter((w) => !w.isMain).length;
@@ -148,6 +156,13 @@ function WorktreeList({
     if (norm(w.path) === activeNorm) return; // already here
     await openWorktree(w.path);
     onClose();
+  }
+
+  function handleUnlock(w: UserWorktree) {
+    unlock.mutate(w.path, {
+      onSuccess: () => toast.success("Worktree unlocked"),
+      onError: toastError,
+    });
   }
 
   return (
@@ -184,6 +199,8 @@ function WorktreeList({
                 onFocus={() => setHighlight(i)}
                 onOpen={() => handleOpen(w)}
                 onRename={() => setRenameTarget(w)}
+                onLock={() => setLockTarget(w)}
+                onUnlock={() => handleUnlock(w)}
                 onDelete={() => setDeleteTarget(w)}
               />
             ))
@@ -198,6 +215,28 @@ function WorktreeList({
       </div>
 
       <DialogFooter>
+        {linkedCount > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground sm:mr-auto"
+            disabled={repair.isPending}
+            title="Re-link worktrees after moving or renaming the repository folder"
+            onClick={() =>
+              repair.mutate(undefined, {
+                onSuccess: () => toast.success("Worktree links repaired"),
+                onError: toastError,
+              })
+            }
+          >
+            {repair.isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <WrenchIcon data-icon="inline-start" />
+            )}
+            Repair links
+          </Button>
+        )}
         <Button variant="outline" onClick={onClose}>
           Close
         </Button>
@@ -212,6 +251,13 @@ function WorktreeList({
         repoPath={repoPath}
         worktree={renameTarget}
         onClose={() => setRenameTarget(null)}
+      />
+
+      <LockWorktreeDialog
+        key={lockTarget?.path ?? "no-lock"}
+        repoPath={repoPath}
+        worktree={lockTarget}
+        onClose={() => setLockTarget(null)}
       />
 
       <DeleteWorktreeDialog
@@ -231,6 +277,8 @@ function WorktreeRow({
   onFocus,
   onOpen,
   onRename,
+  onLock,
+  onUnlock,
   onDelete,
 }: {
   worktree: UserWorktree;
@@ -239,6 +287,8 @@ function WorktreeRow({
   onFocus: () => void;
   onOpen: () => void;
   onRename: () => void;
+  onLock: () => void;
+  onUnlock: () => void;
   onDelete: () => void;
 }) {
   const { path, branch, isMain, isDetached, isLocked, lockReason } = worktree;
@@ -331,6 +381,18 @@ function WorktreeRow({
             <PencilSimpleIcon />
             Rename…
           </DropdownMenuItem>
+          {!isMain &&
+            (isLocked ? (
+              <DropdownMenuItem onClick={onUnlock}>
+                <LockSimpleOpenIcon />
+                Unlock
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem onClick={onLock}>
+                <LockSimpleIcon />
+                Lock…
+              </DropdownMenuItem>
+            ))}
           <DropdownMenuItem
             variant="destructive"
             // Can't delete the main worktree, nor the one you're standing in
@@ -566,6 +628,81 @@ function RenameWorktreeDialog({
           >
             {move.isPending && <Spinner data-icon="inline-start" />}
             Rename
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ----------------------------------------------------------------- lock worktree
+
+function LockWorktreeDialog({
+  repoPath,
+  worktree,
+  onClose,
+}: {
+  repoPath: string;
+  worktree: UserWorktree | null;
+  onClose: () => void;
+}) {
+  const lock = useLockUserWorktree(repoPath);
+  const [reason, setReason] = useState("");
+
+  function handleLock() {
+    if (!worktree) return;
+    lock.mutate(
+      { path: worktree.path, reason: reason.trim() || undefined },
+      {
+        onSuccess: () => {
+          toast.success("Worktree locked");
+          onClose();
+        },
+        onError: toastError,
+      },
+    );
+  }
+
+  return (
+    <Dialog open={worktree !== null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Lock worktree</DialogTitle>
+          <DialogDescription>
+            Locking stops git from pruning or removing this worktree without a
+            forced confirmation — useful for one on a removable or network
+            drive. Add an optional note for why.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form
+          className="grid grid-cols-[auto_1fr] items-center gap-x-3 text-xs"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleLock();
+          }}
+        >
+          <label htmlFor="wt-lock-reason" className="text-muted-foreground">
+            Reason
+          </label>
+          <Input
+            id="wt-lock-reason"
+            autoFocus
+            autoComplete="off"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Optional — e.g. on a USB drive"
+            className="h-7"
+          />
+        </form>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={lock.isPending}>
+            Cancel
+          </Button>
+          <Button onClick={handleLock} disabled={lock.isPending}>
+            {lock.isPending && <Spinner data-icon="inline-start" />}
+            Lock
           </Button>
         </DialogFooter>
       </DialogContent>

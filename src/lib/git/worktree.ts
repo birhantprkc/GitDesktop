@@ -77,6 +77,20 @@ export const moveUserWorktree = (
   toPath: string,
 ) => invoke<void>("git_worktree_move", { repoPath, fromPath, toPath });
 
+/** Locks a worktree (`git worktree lock`) so git won't prune/move/remove it
+ *  without force. `reason` is optional and shown back to the user. */
+export const lockWorktree = (repoPath: string, path: string, reason?: string) =>
+  invoke<void>("git_worktree_lock", { repoPath, path, reason: reason ?? null });
+
+/** Unlocks a previously locked worktree. */
+export const unlockWorktree = (repoPath: string, path: string) =>
+  invoke<void>("git_worktree_unlock", { repoPath, path });
+
+/** Repairs worktree links (`git worktree repair`) after the repo folder was
+ *  moved or renamed. Safe + idempotent. */
+export const repairWorktrees = (repoPath: string) =>
+  invoke<void>("git_worktree_repair", { repoPath });
+
 /** Removes a session worktree and (when given) deletes its branch. `force` is
  *  required to drop a worktree with uncommitted changes. */
 export const removeWorktree = (

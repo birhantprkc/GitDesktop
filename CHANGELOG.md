@@ -15,8 +15,11 @@ commit list.
 - **Worktree manager.** A new **Worktrees…** dialog (repository ⋯ menu, or the command
   palette) lists the repo's linked worktrees and lets you **create** one (a new branch
   from any base, or an existing branch, checked out into its own folder), **open** one to
-  switch the active repository to it, **rename** one, and **remove** one safely (the branch
-  is kept; a worktree with uncommitted changes asks before force-removing). The **branch
+  switch the active repository to it, **rename** one, **lock / unlock** one (with an optional
+  reason, to guard it from accidental removal — handy for a worktree on a removable or network
+  drive), and **remove** one safely (the branch is kept; a worktree with uncommitted changes
+  asks before force-removing). A **Repair links** action re-connects worktrees after you've
+  moved or renamed the repository folder. The **branch
   switcher** is worktree-aware too: a branch already checked out in another worktree is
   badged, and selecting it offers to open that worktree instead of failing. Worktrees let
   you work on several branches at once without stashing or switching, and the ones AI agent

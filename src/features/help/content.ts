@@ -276,9 +276,13 @@ test, or review several branches at once without stashing or switching.
 - **Open** a worktree to make it the active repository — git commands then run in that
   folder and the window title follows. Open the main worktree to switch back.
 - **Rename** a worktree to move its folder to a new name in place; its branch is unchanged.
+- **Lock** a worktree (with an optional reason) so git won't prune or remove it without a
+  forced confirmation — useful for one on a removable or network drive; **Unlock** to undo.
 - **Delete** a worktree to remove its folder; its branch is kept. A worktree with
   uncommitted changes asks before force-removing. The main worktree, and whichever one
   you're currently in, can't be renamed or deleted — switch away first.
+- **Repair links** (footer) re-connects worktrees if you moved or renamed the repository
+  folder in your file manager, which otherwise breaks the path each worktree records.
 
 A branch can only be checked out in one worktree at a time, so the list excludes branches
 already in use. The **branch switcher** knows this too: a branch that's checked out in

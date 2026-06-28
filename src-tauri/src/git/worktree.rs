@@ -292,6 +292,89 @@ pub async fn git_worktree_move(
     Ok(())
 }
 
+/// Locks a worktree (`git worktree lock`) so git won't prune, move, or remove it
+/// without `--force` — useful for one on a removable or network drive, or to
+/// guard it from accidental removal. An optional `reason` is shown back to the
+/// user (in the lock badge + the delete confirm). Git refuses the main worktree.
+#[tauri::command]
+pub async fn git_worktree_lock(
+    state: State<'_, AppState>,
+    repo_path: String,
+    path: String,
+    reason: Option<String>,
+) -> AppResult<()> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "a worktree path is required".into(),
+        ));
+    }
+    if path.starts_with('-') {
+        return Err(AppError::InvalidArgument(
+            "path must not start with '-'".into(),
+        ));
+    }
+    let reason = reason.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let mut args: Vec<&str> = vec!["worktree", "lock"];
+    // `--reason` consumes the next token as its value, so a reason starting with
+    // '-' is parsed as the value, not an option — no injection via the Vec API.
+    if let Some(r) = reason {
+        args.push("--reason");
+        args.push(r);
+    }
+    args.push(path);
+    run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    Ok(())
+}
+
+/// Unlocks a worktree previously locked with `git_worktree_lock`.
+#[tauri::command]
+pub async fn git_worktree_unlock(
+    state: State<'_, AppState>,
+    repo_path: String,
+    path: String,
+) -> AppResult<()> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "a worktree path is required".into(),
+        ));
+    }
+    if path.starts_with('-') {
+        return Err(AppError::InvalidArgument(
+            "path must not start with '-'".into(),
+        ));
+    }
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["worktree", "unlock", path],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Repairs worktree administrative links (`git worktree repair`) after the
+/// repository folder was moved or renamed — which breaks the absolute paths git
+/// records in each linked worktree's `.git` pointer (and the main repo's
+/// `.git/worktrees/<id>/gitdir`). Run from anywhere in the repo; it re-derives
+/// the paths. Safe + idempotent — a no-op when the links are already correct.
+#[tauri::command]
+pub async fn git_worktree_repair(
+    state: State<'_, AppState>,
+    repo_path: String,
+) -> AppResult<()> {
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["worktree", "repair"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Removes a session worktree and (when given) deletes its branch. `force` is
 /// needed to drop a worktree with uncommitted changes — i.e. a discarded
 /// session whose output was never committed.
