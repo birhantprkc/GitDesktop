@@ -173,13 +173,17 @@ pub struct CommitAuthor {
 }
 
 /// One resulting commit in a history rewrite: a single hash is a plain
-/// pick; several hashes squash into one commit carrying `message`.
+/// pick; several hashes squash into one commit carrying `message`. `edit`
+/// flags the commit to pause at (only the interactive-rebase path honors it;
+/// the atomic replay engine ignores it).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RewriteStep {
     pub hashes: Vec<String>,
     #[serde(default)]
     pub message: Option<String>,
+    #[serde(default)]
+    pub edit: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -208,4 +212,7 @@ pub struct RepoOpState {
     pub merging: bool,
     pub rebasing: bool,
     pub cherry_picking: bool,
+    /// An interactive rebase is paused at an `edit` (vs a conflict) — the user
+    /// should amend the commit, then continue.
+    pub edit_paused: bool,
 }

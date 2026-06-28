@@ -1743,6 +1743,14 @@ export function useRewriteCommits(repo: string) {
   );
 }
 
+/** Starts a resumable interactive rebase (for plans containing an `edit`); the
+ *  rebase pauses and the conflict/op banner takes over. */
+export function useRebaseEdit(repo: string) {
+  return useRepoMutation(repo, (args: { base: string; steps: RewriteStep[] }) =>
+    api.gitRebaseEdit(repo, args.base, args.steps),
+  );
+}
+
 /** Full messages for the unpushed commits `base..HEAD`, as a hash→message map,
  *  for the Edit-history editor's reword/squash defaults. Enabled only when the
  *  dialog is open with a base. */

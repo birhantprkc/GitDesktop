@@ -152,6 +152,9 @@ export interface CommitAuthor {
 export interface RewriteStep {
   hashes: string[];
   message?: string;
+  /** Pause at this commit (interactive-rebase path only; the replay engine
+   *  ignores it). */
+  edit?: boolean;
 }
 
 export interface MergePreview {
@@ -305,6 +308,8 @@ export interface RepoOpState {
   merging: boolean;
   rebasing: boolean;
   cherryPicking: boolean;
+  /** An interactive rebase is paused at an `edit` (vs a conflict). */
+  editPaused: boolean;
 }
 
 export type RepoOp = "merge" | "rebase" | "cherry-pick";

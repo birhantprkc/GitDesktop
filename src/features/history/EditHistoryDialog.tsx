@@ -24,8 +24,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { useRewriteCommits, useUnpushedMessages } from "@/lib/git/queries";
+import {
+  useRebaseEdit,
+  useRewriteCommits,
+  useUnpushedMessages,
+} from "@/lib/git/queries";
 import type { CommitSummary } from "@/lib/git/types";
+import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { compilePlan, type EditRow, type RowAction } from "./edit-history-plan";
@@ -48,6 +53,11 @@ const ACTIONS: { value: RowAction; label: string; hint: string }[] = [
     value: "fixup",
     label: "Fixup",
     hint: "Merge into the commit below, keep its message",
+  },
+  {
+    value: "edit",
+    label: "Edit",
+    hint: "Stop to amend this commit's changes",
   },
   { value: "drop", label: "Drop", hint: "Remove this commit entirely" },
 ];
@@ -76,6 +86,8 @@ export function EditHistoryDialog({
   onDone: () => void;
 }) {
   const rewrite = useRewriteCommits(repoPath);
+  const rebaseEdit = useRebaseEdit(repoPath);
+  const setRepoTab = useUiStore((s) => s.setRepoTab);
   const messages = useUnpushedMessages(repoPath, base, open);
 
   const [order, setOrder] = useState<string[]>(() =>
@@ -145,9 +157,26 @@ export function EditHistoryDialog({
     setOrder(next);
   }
 
-  const busy = rewrite.isPending;
+  const busy = rewrite.isPending || rebaseEdit.isPending;
   function apply() {
     if (plan.error || !plan.changed) return;
+    if (plan.hasEdit) {
+      // Resumable path: starts a real rebase that pauses at the first Edit —
+      // the conflict/op banner in Changes takes it from there.
+      rebaseEdit.mutate(
+        { base, steps: plan.steps },
+        {
+          onSuccess: () => {
+            toast.success("Rebase started — paused to edit a commit");
+            onOpenChange(false);
+            setRepoTab("changes");
+            onDone();
+          },
+          onError: (e) => toastError(e),
+        },
+      );
+      return;
+    }
     rewrite.mutate(
       { base, steps: plan.steps },
       {
@@ -233,6 +262,11 @@ export function EditHistoryDialog({
                   {view.foldInto && (
                     <span className="shrink-0 text-[11px] text-muted-foreground">
                       ↳ {view.foldInto}
+                    </span>
+                  )}
+                  {row.action === "edit" && (
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      ↳ pauses to amend
                     </span>
                   )}
                   {dropped && (
@@ -336,6 +370,12 @@ export function EditHistoryDialog({
                   {plan.resultCount}
                 </span>{" "}
                 {plan.resultCount === 1 ? "commit" : "commits"}
+                {plan.hasEdit && (
+                  <span className="block text-[11px]">
+                    Pauses at each Edit so you can amend it, then Continue from
+                    the banner.
+                  </span>
+                )}
               </>
             )}
           </div>
@@ -352,7 +392,7 @@ export function EditHistoryDialog({
             onClick={apply}
           >
             {busy && <Spinner data-icon="inline-start" />}
-            Rewrite history
+            {plan.hasEdit ? "Start rebase" : "Rewrite history"}
           </Button>
         </DialogFooter>
       </DialogContent>

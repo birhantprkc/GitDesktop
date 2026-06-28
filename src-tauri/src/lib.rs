@@ -139,6 +139,7 @@ pub fn run() {
             git::ops::git_cherry_pick,
             git::ops::git_cherry_pick_onto,
             git::ops::git_rewrite_commits,
+            git::ops::git_rebase_edit,
             git::ops::git_unpushed_messages,
             git::ops::git_tag,
             git::ops::git_push_tag,

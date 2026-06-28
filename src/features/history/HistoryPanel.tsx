@@ -40,6 +40,7 @@ import {
   useCreateTag,
   useHoverPrefetch,
   useLog,
+  useOpState,
   usePrefetchCommit,
   usePushTag,
   useRepoStatus,
@@ -68,6 +69,7 @@ import { useAmendWithConfirm } from "./useAmendCommit";
 export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const log = useLog(repoPath);
   const status = useRepoStatus(repoPath);
+  const opState = useOpState(repoPath);
   const undoCommit = useUndoCommit(repoPath);
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
   const selectCommit = useUiStore((s) => s.selectCommit);
@@ -412,7 +414,18 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     firstMerge === -1 ? Number.POSITIVE_INFINITY : firstMerge,
   );
   if (editLen === commits.length && !log.hasNextPage) editLen -= 1;
-  const canEditHistory = editLen >= 1;
+  // Block editing history while a merge/rebase/cherry-pick is mid-flight — a
+  // new edit-rebase would clobber the in-flight one's state (the banner drives
+  // it). The backend refuses too; this just keeps the action from looking live.
+  const opInProgress = Boolean(
+    opState.data?.merging ||
+      opState.data?.rebasing ||
+      opState.data?.cherryPicking,
+  );
+  const canEditHistory = editLen >= 1 && !opInProgress;
+  const editHistoryHint = opInProgress
+    ? " (finish the operation in Changes first)"
+    : "";
   const editCommits = commits.slice(0, Math.max(editLen, 0));
   const editBase = commits[Math.max(editLen, 0)]?.hash ?? "";
 
@@ -517,6 +530,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
             onClick={() => setEditHistoryOpen(true)}
           >
             Edit history…
+            {editHistoryHint}
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem
@@ -608,6 +622,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
           onClick={() => setEditHistoryOpen(true)}
         >
           Edit history…
+          {editHistoryHint}
         </ContextMenuItem>
         {commit.tags.length > 0 && <ContextMenuSeparator />}
         {commit.tags.map((tag) => (

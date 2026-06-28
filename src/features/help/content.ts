@@ -220,10 +220,13 @@ Right-click a commit (or use the commit detail view) for:
 - **Edit history** — open the interactive-rebase editor over your unpushed commits, where
   each commit gets an action: **pick** (keep), **reword** (edit its message), **squash**
   (merge into the commit below, combining messages), **fixup** (merge in, keeping the
-  message), or **drop** (remove it) — plus **↑/↓** to reorder.{{ai}} Reword can regenerate a
-  message with AI.{{/ai}} A "Result" count shows what you'll end up with. It applies all at once
-  and rolls back untouched if anything conflicts. A quick **Squash N commits…** is also on the
-  context menu when you select adjacent commits.
+  message), **edit** (pause to amend its changes), or **drop** (remove it) — plus **↑/↓** to
+  reorder.{{ai}} Reword can regenerate a message with AI.{{/ai}} A "Result" count shows what
+  you'll end up with. With no **edit**, it applies all at once and rolls back untouched if
+  anything conflicts. If you choose **edit**, it starts a rebase that **pauses** at that commit —
+  amend it in the **Changes** tab (stage and commit/amend as usual), then **Continue** from the
+  banner there. A quick **Squash N commits…** is also on the context menu when you select
+  adjacent commits.
 - **Create a branch** or **create a tag** at a commit, **check out** a commit, or copy
   its SHA.
 

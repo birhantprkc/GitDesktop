@@ -4,9 +4,16 @@ import type { RewriteStep } from "@/lib/git/types";
  * The interactive-rebase vocabulary for one unpushed commit. Mirrors
  * `git rebase -i`: **pick** keeps it, **reword** changes its message, **squash**
  * folds it into the commit below (older) combining messages, **fixup** folds it
- * in keeping the leader's message, **drop** removes it.
+ * in keeping the leader's message, **edit** pauses there so you can amend its
+ * contents, **drop** removes it.
  */
-export type RowAction = "pick" | "reword" | "squash" | "fixup" | "drop";
+export type RowAction =
+  | "pick"
+  | "reword"
+  | "squash"
+  | "fixup"
+  | "edit"
+  | "drop";
 
 export interface EditRow {
   hash: string;
@@ -37,9 +44,13 @@ export interface CompiledPlan {
   error: string | null;
   /** Whether the plan differs from the no-op (original order, all picked). */
   changed: boolean;
+  /** Whether any commit is set to `edit` — routes the apply to the resumable
+   *  interactive rebase instead of the atomic replay engine. */
+  hasEdit: boolean;
 }
 
-const leads = (a: RowAction) => a === "pick" || a === "reword";
+// A leader produces its own commit; folds attach to the nearest one below.
+const leads = (a: RowAction) => a === "pick" || a === "reword" || a === "edit";
 
 /**
  * Compiles Edit-history rows (newest-first display order) into the oldest-first
@@ -80,6 +91,7 @@ export function compilePlan(
     if (leads(action)) {
       currentLeader = i;
       const step: RewriteStep = { hashes: [rows[i].hash] };
+      if (action === "edit") step.edit = true;
       steps.push(step);
       stepByLeader.set(i, step);
     } else if (currentLeader === -1) {
@@ -93,10 +105,11 @@ export function compilePlan(
     }
   }
 
-  // A pick leader that receives a squash also exposes its message — its full
-  // body goes into the combined commit, so it must be visible and editable.
+  // A pick/edit leader that receives a squash also exposes its message — its
+  // full body goes into the combined commit, so it must be visible and editable.
   for (let i = 0; i < n; i++) {
-    if (rows[i].action === "pick" && leaderHasSquash[i]) {
+    const a = rows[i].action;
+    if ((a === "pick" || a === "edit") && leaderHasSquash[i]) {
       views[i].showMessage = true;
     }
   }
@@ -136,6 +149,7 @@ export function compilePlan(
     rows.length !== originalHashes.length ||
     rows.some((r, i) => r.hash !== originalHashes[i]);
   const changed = reordered || rows.some((r) => r.action !== "pick");
+  const hasEdit = rows.some((r) => r.action === "edit");
 
-  return { steps, resultCount: steps.length, views, error, changed };
+  return { steps, resultCount: steps.length, views, error, changed, hasEdit };
 }

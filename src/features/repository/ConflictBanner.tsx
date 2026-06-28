@@ -1,4 +1,4 @@
-import { SparkleIcon, WarningIcon } from "@phosphor-icons/react";
+import { InfoIcon, SparkleIcon, WarningIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import type { RepoOp } from "@/lib/git/types";
 import { useAiEnabled, useReviewConfigured } from "@/lib/settings/queries";
 import { useConflictResolve } from "@/lib/stores/conflict-resolve";
 import { toastError } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 
 const OP_LABELS: Record<RepoOp, { banner: string; cont: string }> = {
   merge: { banner: "Merge in progress", cont: "Finish merge" },
@@ -72,15 +73,31 @@ export function ConflictBanner({
     conflictedCount > 0
       ? `${conflictedCount} conflict${conflictedCount === 1 ? "" : "s"}`
       : "all conflicts resolved";
+  // A rebase deliberately paused at an `edit` (not a conflict): the user amends
+  // the commit via the Changes tab, then continues.
+  const editPaused = Boolean(opState.data?.editPaused) && conflictedCount === 0;
 
   return (
     // One calm status line — the per-file resolution actions live in the diff
     // pane's conflict view, so this just carries merge state + Continue/Abort
     // and the batch "Resolve all with AI".
     <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-3 py-1.5 text-xs">
-      <span className="flex items-center gap-1.5 text-warning">
-        <WarningIcon className="size-3.5 shrink-0" />
-        {opVerb ? `${opVerb} · ${conflictText}` : conflictText}
+      <span
+        className={cn(
+          "flex items-center gap-1.5",
+          editPaused ? "text-info" : "text-warning",
+        )}
+      >
+        {editPaused ? (
+          <InfoIcon className="size-3.5 shrink-0" />
+        ) : (
+          <WarningIcon className="size-3.5 shrink-0" />
+        )}
+        {editPaused
+          ? "Rebase paused — amend this commit's changes in Changes, then Continue"
+          : opVerb
+            ? `${opVerb} · ${conflictText}`
+            : conflictText}
       </span>
       <div className="flex items-center gap-1.5">
         {canResolveWithAi && (
@@ -128,11 +145,13 @@ export function ConflictBanner({
             <Dialog open={confirmAbort} onOpenChange={setConfirmAbort}>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>Abort the {op}?</DialogTitle>
+                  <DialogTitle>
+                    {editPaused ? "Abort editing history?" : `Abort the ${op}?`}
+                  </DialogTitle>
                   <DialogDescription>
-                    Abandons the in-progress {op} and restores the repository to
-                    the state before it started. Any conflict resolutions you've
-                    made will be lost.
+                    {editPaused
+                      ? "Abandons the rebase and restores your branch to its original history. Any changes you've amended into this commit are lost."
+                      : `Abandons the in-progress ${op} and restores the repository to the state before it started. Any conflict resolutions you've made will be lost.`}
                   </DialogDescription>
                 </DialogHeader>
                 <DialogFooter>

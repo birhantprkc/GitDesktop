@@ -12,35 +12,63 @@ use crate::git::runner::{
 use crate::git::types::{FileDiff, RepoOpState, RewriteStep, StashEntry, TagInfo};
 use crate::state::AppState;
 
-/// Whether a file/dir inside .git exists (worktree-safe via --git-path).
-async fn git_path_exists(repo: &str, name: &str) -> bool {
-    let Ok(out) = run_git(
+/// Resolves a path inside .git (worktree-safe via --git-path) to an absolute one.
+async fn git_dir_path(repo: &str, name: &str) -> Option<std::path::PathBuf> {
+    let out = run_git(
         Some(repo),
         &["rev-parse", "--git-path", name],
         DEFAULT_TIMEOUT,
     )
     .await
-    else {
+    .ok()?;
+    let raw = out.stdout_lossy();
+    let p = Path::new(raw.trim());
+    Some(if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        Path::new(repo).join(p)
+    })
+}
+
+/// Whether a file/dir inside .git exists (worktree-safe via --git-path).
+async fn git_path_exists(repo: &str, name: &str) -> bool {
+    match git_dir_path(repo, name).await {
+        Some(path) => path.exists(),
+        None => false,
+    }
+}
+
+/// True when an interactive rebase is paused at an `edit` instruction (the last
+/// executed todo line is `edit`/`e`), as opposed to a conflict.
+async fn rebase_stopped_for_edit(repo: &str) -> bool {
+    let Some(path) = git_dir_path(repo, "rebase-merge/done").await else {
         return false;
     };
-    let raw = out.stdout_lossy();
-    let path = Path::new(raw.trim());
-    if path.is_absolute() {
-        path.exists()
-    } else {
-        Path::new(repo).join(path).exists()
-    }
+    let Ok(done) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    done.lines()
+        .filter(|l| !l.trim().is_empty())
+        .next_back()
+        .map(|last| {
+            let cmd = last.split_whitespace().next().unwrap_or("");
+            cmd == "edit" || cmd == "e"
+        })
+        .unwrap_or(false)
 }
 
 /// Which multi-step git operation, if any, is mid-flight â€” drives the
 /// conflict-resolution banner.
 #[tauri::command]
 pub async fn git_op_state(repo_path: String) -> AppResult<RepoOpState> {
+    let rebasing = git_path_exists(&repo_path, "rebase-merge").await
+        || git_path_exists(&repo_path, "rebase-apply").await;
+    let edit_paused = rebasing && rebase_stopped_for_edit(&repo_path).await;
     Ok(RepoOpState {
         merging: git_path_exists(&repo_path, "MERGE_HEAD").await,
-        rebasing: git_path_exists(&repo_path, "rebase-merge").await
-            || git_path_exists(&repo_path, "rebase-apply").await,
+        rebasing,
         cherry_picking: git_path_exists(&repo_path, "CHERRY_PICK_HEAD").await,
+        edit_paused,
     })
 }
 
@@ -1304,6 +1332,128 @@ pub(crate) async fn rewrite_commits(
     Ok(())
 }
 
+/// Rewrites the unpushed tip via a **real, resumable** `git rebase -i` — used
+/// when the plan contains an `edit` (the atomic replay engine can't pause).
+/// Generates a todo (pick/edit the leader, fixup the folds, and set
+/// reword/squash messages with a non-interactive `exec ... commit --amend -F`),
+/// injects it with `sequence.editor`, and never opens an editor. When git stops
+/// at an `edit` (or a conflict before one) the rebase is left in progress and
+/// the conflict/op banner takes over (continue/abort); that's a normal outcome,
+/// not an error.
+#[tauri::command]
+pub async fn git_rebase_edit(
+    repo_path: String,
+    base: String,
+    steps: Vec<RewriteStep>,
+) -> AppResult<()> {
+    validate_hash(&base)?;
+    if steps.is_empty() {
+        return Err(AppError::InvalidArgument("no rebase steps".into()));
+    }
+    for step in &steps {
+        if step.hashes.is_empty() {
+            return Err(AppError::InvalidArgument("empty rebase step".into()));
+        }
+        for h in &step.hashes {
+            validate_hash(h)?;
+        }
+    }
+    // CRITICAL: refuse if a sequencer op is already mid-flight, BEFORE the
+    // scratch-dir clear below — otherwise it would delete the in-flight rebase's
+    // pending message files (its `exec ... -F msg` lines would then fail on
+    // --continue, losing the message), and the post-run check would mask it as
+    // success.
+    if git_path_exists(&repo_path, "rebase-merge").await
+        || git_path_exists(&repo_path, "rebase-apply").await
+        || git_path_exists(&repo_path, "MERGE_HEAD").await
+        || git_path_exists(&repo_path, "CHERRY_PICK_HEAD").await
+    {
+        return Err(AppError::InvalidArgument(
+            "a rebase, merge, or cherry-pick is already in progress — finish or abort it from the banner first".into(),
+        ));
+    }
+    // git rebase refuses a dirty tree too, but a clear message here is nicer.
+    let status = run_git(
+        Some(&repo_path),
+        &["status", "--porcelain"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if !status.stdout_lossy().trim().is_empty() {
+        return Err(AppError::InvalidArgument(
+            "the working tree has uncommitted changes — commit or stash them first".into(),
+        ));
+    }
+
+    // Scratch dir inside .git for the generated todo + message files. The
+    // message files are referenced by `exec` lines that run on each --continue,
+    // so they must outlive this call — clear stale ones up front instead.
+    let dir = git_dir_path(&repo_path, "gd-rebase-edit")
+        .await
+        .ok_or_else(|| AppError::InvalidArgument("couldn't resolve the git dir".into()))?;
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AppError::InvalidArgument(format!("couldn't create scratch dir: {e}")))?;
+
+    let mut todo = String::new();
+    for (i, step) in steps.iter().enumerate() {
+        todo.push_str(if step.edit { "edit " } else { "pick " });
+        todo.push_str(&step.hashes[0]);
+        todo.push('\n');
+        for fold in &step.hashes[1..] {
+            todo.push_str("fixup ");
+            todo.push_str(fold);
+            todo.push('\n');
+        }
+        let message = step.message.as_deref().map(str::trim).unwrap_or("");
+        if !message.is_empty() {
+            let msg_path = dir.join(format!("msg-{i}"));
+            std::fs::write(&msg_path, message)
+                .map_err(|e| AppError::InvalidArgument(format!("couldn't write message: {e}")))?;
+            let msg_fwd = msg_path.to_string_lossy().replace('\\', "/");
+            // --no-verify: the message is already composed; don't let a
+            // pre-commit/commit-msg hook stall the rebase mid-flight.
+            todo.push_str(&format!(
+                "exec git commit --amend --no-verify -F \"{msg_fwd}\"\n"
+            ));
+        }
+    }
+    let todo_path = dir.join("todo");
+    std::fs::write(&todo_path, &todo)
+        .map_err(|e| AppError::InvalidArgument(format!("couldn't write todo: {e}")))?;
+    let todo_fwd = todo_path.to_string_lossy().replace('\\', "/");
+    // `sequence.editor` swaps git's generated todo for ours (a plain copy);
+    // `core.editor=true` guarantees nothing ever blocks waiting for an editor.
+    let seq_editor = format!("sequence.editor=cp \"{todo_fwd}\"");
+
+    let out = run_git_raw(
+        Some(&repo_path),
+        &[
+            "-c",
+            "core.editor=true",
+            "-c",
+            &seq_editor,
+            "rebase",
+            "-i",
+            &base,
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+
+    // A paused rebase leaves rebase-merge in place — that's the hand-off to the
+    // banner, not a failure. Only error when nothing's in progress.
+    let rebasing = git_path_exists(&repo_path, "rebase-merge").await
+        || git_path_exists(&repo_path, "rebase-apply").await;
+    if !rebasing && out.code != 0 {
+        return Err(AppError::Git {
+            code: out.code,
+            stderr: format!("Couldn't start the rebase.\n{}", out.stderr),
+        });
+    }
+    Ok(())
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitMessage {
@@ -1544,6 +1694,7 @@ mod tests {
         RewriteStep {
             hashes: vec![hash.to_string()],
             message: None,
+            edit: false,
         }
     }
 
@@ -1583,6 +1734,7 @@ mod tests {
             &[RewriteStep {
                 hashes: vec![c1, c2],
                 message: Some("combined".into()),
+                edit: false,
             }],
         )
         .await
@@ -1613,6 +1765,7 @@ mod tests {
             &[RewriteStep {
                 hashes: vec![c1, c2],
                 message: None,
+                edit: false,
             }],
         )
         .await
@@ -1641,6 +1794,37 @@ mod tests {
         assert_eq!(rev(&repo, "HEAD").await, orig);
         let status = git(&repo, &["status", "--porcelain"]).await;
         assert!(status.trim().is_empty(), "tree should be clean: {status}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn rebase_edit_refuses_a_concurrent_op() {
+        let (dir, repo) = setup_repo("reentry").await;
+        let base = rev(&repo, "HEAD").await;
+        commit_file(&repo, &dir, "x.txt", "x\n", "one").await;
+        let c1 = rev(&repo, "HEAD").await;
+        // Simulate an in-progress rebase via its marker dir.
+        std::fs::create_dir_all(std::path::Path::new(&repo).join(".git/rebase-merge"))
+            .unwrap();
+        let step = RewriteStep {
+            hashes: vec![c1],
+            message: None,
+            edit: true,
+        };
+        let result = git_rebase_edit(repo.clone(), base, vec![step]).await;
+        assert!(
+            result.is_err(),
+            "must refuse a new edit-rebase while one is in progress"
+        );
+        // The guard runs before the scratch-dir clear, so it's never created —
+        // the in-flight rebase's message files are left untouched.
+        assert!(
+            !std::path::Path::new(&repo)
+                .join(".git/gd-rebase-edit")
+                .exists(),
+            "scratch dir must not be touched when refused"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

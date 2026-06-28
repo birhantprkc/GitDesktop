@@ -22,14 +22,16 @@ commit list.
   "N files auto-resolved"). Degrades quietly on older git. GitHub Desktop has none of this.
 - **Interactive rebase — "Edit history".** A new **Edit history…** item in the History
   context menu opens an editor over your unpushed commits where each commit gets a per-row
-  action — **pick**, **reword**, **squash**, **fixup**, or **drop** — plus **↑/↓ reorder** and
-  inline message editing (reword loads the full original message and can regenerate it with AI).
-  A live "Result: N commits" footer shows what you'll end up with. Applying runs the same
-  conflict-safe replay engine as squash/reorder: it's **atomic** — any conflict rolls everything
-  back untouched — and it refuses a dirty tree, merge commits, or already-pushed history. The
-  quick **Squash N commits…** multi-select shortcut stays; the standalone Reorder dialog is
-  folded into the editor. (Mid-rebase `edit` to amend a commit's contents is planned for a
-  follow-up.) GitHub Desktop has no equivalent.
+  action — **pick**, **reword**, **squash**, **fixup**, **edit**, or **drop** — plus **↑/↓
+  reorder** and inline message editing (reword loads the full original message and can regenerate
+  it with AI). A live "Result: N commits" footer shows what you'll end up with. Edit-free plans
+  run the **atomic** conflict-safe replay engine (any conflict rolls everything back untouched).
+  Choosing **edit** instead starts a real, resumable rebase that **pauses at that commit so you
+  can amend its contents** — the Changes banner reads "Rebase paused — amend… then Continue", you
+  amend with the normal stage/commit flow, and Continue/Abort finish it (conflicts on this path
+  are resolvable, not rolled back). It refuses a dirty tree, merge commits, or already-pushed
+  history. The quick **Squash N commits…** multi-select shortcut stays; the standalone Reorder
+  dialog is folded into the editor. GitHub Desktop has no equivalent.
 - **GitHub Enterprise support.** GitDesktop no longer assumes `github.com` — every GitHub
   feature runs through `gh`, which detects each repository's host from its remote, so an
   Enterprise Server repo (`github.acme.com`) gets the same pull requests, issues, Actions, and
