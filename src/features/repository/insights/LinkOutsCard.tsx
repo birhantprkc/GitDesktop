@@ -2,6 +2,7 @@ import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/button";
 import { ghRepoUrl } from "@/lib/git/api";
+import { useActiveGhHost } from "@/lib/git/host";
 import { toastError } from "@/lib/toast";
 
 // Insights surfaces GitHub only renders on the web (no usable API) — link out
@@ -31,7 +32,10 @@ export function LinkOutsCard({
       toastError(e);
     }
   }
-  // Stars-over-time has no native GitHub page; star-history.com is the de-facto tool.
+  // Stars-over-time has no native GitHub page; star-history.com is the de-facto
+  // tool, but it only covers github.com — hidden on Enterprise hosts.
+  const host = useActiveGhHost();
+  const canStarHistory = host === "github.com";
   async function openStars() {
     try {
       const url = await ghRepoUrl(repoPath);
@@ -46,7 +50,7 @@ export function LinkOutsCard({
   return (
     <div className="space-y-2">
       <p className="text-xs text-muted-foreground">
-        These insights only render on github.com:
+        These insights only render on the web:
       </p>
       <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
         {LINKS.filter((l) => !l.publicOnly || isPublic).map((l) => (
@@ -61,15 +65,17 @@ export function LinkOutsCard({
             {l.label}
           </Button>
         ))}
-        <Button
-          variant="outline"
-          size="sm"
-          className="cursor-pointer justify-start"
-          onClick={openStars}
-        >
-          <ArrowSquareOutIcon data-icon="inline-start" />
-          Stars over time
-        </Button>
+        {canStarHistory && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="cursor-pointer justify-start"
+            onClick={openStars}
+          >
+            <ArrowSquareOutIcon data-icon="inline-start" />
+            Stars over time
+          </Button>
+        )}
       </div>
     </div>
   );

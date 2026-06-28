@@ -21,12 +21,36 @@ pub struct GhStatus {
     pub authenticated: bool,
     /// "owner/name" when this repo has a GitHub remote gh recognizes.
     pub repo: Option<String>,
-    /// The active account's login, when it can be determined.
+    /// The repo's GitHub host — "github.com" or an Enterprise server like
+    /// "github.acme.com" — when it's a recognized GitHub repo. gh derives it
+    /// from the repo's remote, so we don't assume github.com anywhere.
+    pub host: Option<String>,
+    /// The active account's login on this repo's host, when it can be determined.
     pub login: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepoView {
+    name_with_owner: String,
+    url: String,
+}
+
+/// The host of a repo URL like `https://github.acme.com/owner/repo` →
+/// `github.acme.com`. None when it isn't an http(s)-style URL. Tolerates an
+/// optional `user@` prefix and `:port` suffix.
+fn host_from_url(url: &str) -> Option<String> {
+    let after = url.split_once("://").map(|(_, rest)| rest)?;
+    let authority = after.split('/').next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = host.split(':').next().unwrap_or(host);
+    (!host.is_empty()).then(|| host.to_string())
+}
+
 /// Probes the GitHub CLI: present on PATH, logged in, and pointing at a
-/// GitHub repo. Drives whether the PR features are offered at all.
+/// GitHub repo. Drives whether the PR features are offered at all. Host-aware:
+/// resolves the repo's host (github.com or Enterprise) and the active login on
+/// that host.
 #[tauri::command]
 pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
     match run_gh_raw(None, &["--version"], GH_TIMEOUT).await {
@@ -35,6 +59,7 @@ pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
                 installed: false,
                 authenticated: false,
                 repo: None,
+                host: None,
                 login: None,
             });
         }
@@ -43,38 +68,46 @@ pub async fn gh_status(repo_path: String) -> AppResult<GhStatus> {
     }
 
     // `gh auth status` exits 0 only when a host is logged in. Its report
-    // (stderr on old gh, stdout on newer) names the account(s).
-    let (authenticated, login) = match run_gh_raw(None, &["auth", "status"], GH_TIMEOUT).await {
+    // (stderr on old gh, stdout on newer) names the account(s) per host.
+    let (authenticated, accounts) = match run_gh_raw(None, &["auth", "status"], GH_TIMEOUT).await {
         Ok(out) => {
             let report = format!("{}\n{}", out.stdout_lossy(), out.stderr);
-            let active = parse_auth_accounts(&report)
-                .into_iter()
-                .find(|(_, active)| *active)
-                .map(|(login, _)| login);
-            (out.code == 0, active)
+            (out.code == 0, parse_auth_accounts(&report))
         }
-        Err(_) => (false, None),
+        Err(_) => (false, Vec::new()),
     };
 
-    let repo = if authenticated {
+    // gh auto-detects the repo's host from its remote, so this resolves
+    // nameWithOwner + the canonical URL on github.com OR an Enterprise server.
+    let view = if authenticated {
         run_gh_raw(
             Some(&repo_path),
-            &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+            &["repo", "view", "--json", "nameWithOwner,url"],
             GH_TIMEOUT,
         )
         .await
         .ok()
         .filter(|o| o.code == 0)
-        .map(|o| o.stdout_lossy().trim().to_string())
-        .filter(|s| !s.is_empty())
+        .and_then(|o| serde_json::from_str::<RepoView>(&o.stdout_lossy()).ok())
     } else {
         None
     };
+    let repo = view.as_ref().map(|v| v.name_with_owner.clone());
+    let host = view.as_ref().and_then(|v| host_from_url(&v.url));
+
+    // The active login on the repo's host (each host has its own active
+    // account); fall back to any active account when the host is unknown.
+    let login = accounts
+        .iter()
+        .find(|a| a.active && host.as_deref() == Some(a.host.as_str()))
+        .or_else(|| accounts.iter().find(|a| a.active))
+        .map(|a| a.login.clone());
 
     Ok(GhStatus {
         installed: true,
         authenticated,
         repo,
+        host,
         login,
     })
 }
@@ -175,6 +208,9 @@ pub async fn gh_list_repos() -> AppResult<GhRepoList> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GhAccount {
+    /// The host this account is signed in to ("github.com" or an Enterprise
+    /// server). Accounts are grouped by host in the UI and switched per host.
+    pub host: String,
     pub login: String,
     pub active: bool,
 }
@@ -213,7 +249,11 @@ pub async fn gh_accounts() -> AppResult<GhAccounts> {
             let report = format!("{}\n{}", out.stdout_lossy(), out.stderr);
             parse_auth_accounts(&report)
                 .into_iter()
-                .map(|(login, active)| GhAccount { login, active })
+                .map(|a| GhAccount {
+                    host: a.host,
+                    login: a.login,
+                    active: a.active,
+                })
                 .collect()
         }
         Err(_) => Vec::new(),
@@ -221,10 +261,11 @@ pub async fn gh_accounts() -> AppResult<GhAccounts> {
     Ok(GhAccounts { version, accounts })
 }
 
-/// Switches the active gh account (gh ≥ 2.40; older gh errors, which the
-/// UI surfaces with an upgrade hint).
+/// Switches the active gh account on a specific host (gh ≥ 2.40; older gh
+/// errors, which the UI surfaces with an upgrade hint). The host is required so
+/// switching works on Enterprise servers, not just github.com.
 #[tauri::command]
-pub async fn gh_switch_account(login: String) -> AppResult<()> {
+pub async fn gh_switch_account(host: String, login: String) -> AppResult<()> {
     if login.is_empty()
         || !login
             .chars()
@@ -232,53 +273,68 @@ pub async fn gh_switch_account(login: String) -> AppResult<()> {
     {
         return Err(AppError::InvalidArgument(format!("invalid login: {login}")));
     }
+    // A hostname: letters, digits, dots, hyphens (no slashes, spaces, or flags).
+    if host.is_empty()
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return Err(AppError::InvalidArgument(format!("invalid host: {host}")));
+    }
     run_gh(
         None,
-        &[
-            "auth",
-            "switch",
-            "--hostname",
-            "github.com",
-            "--user",
-            &login,
-        ],
+        &["auth", "switch", "--hostname", &host, "--user", &login],
         GH_TIMEOUT,
     )
     .await?;
     Ok(())
 }
 
-/// Accounts from a `gh auth status` report, with the active one flagged.
-/// Handles both formats: old gh prints "Logged in to <host> as <login>",
-/// gh 2.40+ prints "Logged in to <host> account <login>" with a separate
-/// "Active account: true" line per account.
-fn parse_auth_accounts(report: &str) -> Vec<(String, bool)> {
-    let mut accounts: Vec<(String, bool)> = Vec::new();
+/// One account from a `gh auth status` report.
+struct ParsedAccount {
+    host: String,
+    login: String,
+    active: bool,
+}
+
+/// Accounts from a `gh auth status` report, with the active one per host
+/// flagged. Handles both formats: old gh prints "Logged in to <host> as
+/// <login>", gh 2.40+ prints "Logged in to <host> account <login>" with a
+/// separate "Active account: true" line per account.
+fn parse_auth_accounts(report: &str) -> Vec<ParsedAccount> {
+    let mut accounts: Vec<ParsedAccount> = Vec::new();
     for line in report.lines() {
-        if let Some(rest) = line
-            .split_once(" as ")
-            .or_else(|| line.split_once(" account "))
-            .filter(|_| line.contains("Logged in to"))
-            .map(|(_, rest)| rest)
-        {
-            let login = rest
-                .split_whitespace()
-                .next()
+        if let Some(after) = line.split_once("Logged in to ").map(|(_, rest)| rest) {
+            // after = "<host> as <login> (...)" (old gh) or
+            //         "<host> account <login> (...)" (gh 2.40+).
+            let host = after.split_whitespace().next().unwrap_or("").to_string();
+            let login = after
+                .split_once(" as ")
+                .or_else(|| after.split_once(" account "))
+                .map(|(_, rest)| rest)
+                .and_then(|rest| rest.split_whitespace().next())
                 .unwrap_or("")
                 .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-')
                 .to_string();
-            if !login.is_empty() {
-                accounts.push((login, false));
+            if !host.is_empty() && !login.is_empty() {
+                accounts.push(ParsedAccount {
+                    host,
+                    login,
+                    active: false,
+                });
             }
         } else if line.contains("Active account: true") {
             if let Some(last) = accounts.last_mut() {
-                last.1 = true;
+                last.active = true;
             }
         }
     }
-    // Old gh has no active marker — the only account is the active one.
-    if !accounts.is_empty() && !accounts.iter().any(|(_, a)| *a) {
-        accounts[0].1 = true;
+    // Old gh (<2.40) has no "Active account" line and one account per host —
+    // each is the active account for its own host.
+    if !accounts.is_empty() && !accounts.iter().any(|a| a.active) {
+        for a in &mut accounts {
+            a.active = true;
+        }
     }
     accounts
 }
@@ -1616,4 +1672,66 @@ pub async fn gh_pr_create(
         .unwrap_or(0);
 
     Ok(PrRef { number, url })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{host_from_url, parse_auth_accounts};
+
+    #[test]
+    fn host_from_url_handles_github_and_enterprise() {
+        assert_eq!(
+            host_from_url("https://github.com/owner/repo").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            host_from_url("https://github.acme.com/owner/repo").as_deref(),
+            Some("github.acme.com")
+        );
+        // userinfo + port are tolerated.
+        assert_eq!(
+            host_from_url("https://user@github.acme.com:8443/owner/repo").as_deref(),
+            Some("github.acme.com")
+        );
+        // Not an http(s)-style URL → no host.
+        assert_eq!(host_from_url("git@github.com:owner/repo.git"), None);
+    }
+
+    #[test]
+    fn parse_auth_accounts_groups_hosts_and_marks_active() {
+        // gh 2.40+ format: per-account "Active account" lines, multi-host.
+        let report = "\
+github.com
+  ✓ Logged in to github.com account alice (keyring)
+  - Active account: true
+  ✓ Logged in to github.com account bob (keyring)
+  - Active account: false
+github.acme.com
+  ✓ Logged in to github.acme.com account alice-work (keyring)
+  - Active account: true";
+        let accounts = parse_auth_accounts(report);
+        assert_eq!(accounts.len(), 3);
+        assert_eq!(accounts[0].host, "github.com");
+        assert_eq!(accounts[0].login, "alice");
+        assert!(accounts[0].active);
+        assert_eq!(accounts[1].login, "bob");
+        assert!(!accounts[1].active);
+        assert_eq!(accounts[2].host, "github.acme.com");
+        assert_eq!(accounts[2].login, "alice-work");
+        assert!(accounts[2].active);
+    }
+
+    #[test]
+    fn parse_auth_accounts_old_gh_marks_each_host_active() {
+        // Old gh: "as <login>", no "Active account" lines → each host's lone
+        // account is active.
+        let report = "\
+  ✓ Logged in to github.com as alice (oauth_token)
+  ✓ Logged in to github.acme.com as alice-work (oauth_token)";
+        let accounts = parse_auth_accounts(report);
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].host, "github.com");
+        assert_eq!(accounts[1].host, "github.acme.com");
+        assert!(accounts[0].active && accounts[1].active);
+    }
 }

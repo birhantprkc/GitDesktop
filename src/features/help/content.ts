@@ -44,6 +44,11 @@ A few things worth knowing up front:
   Actions, and repository settings appear once \`gh\` is installed and you've run
   \`gh auth login\`. There's no separate sign-in, and the app never stores your tokens.
   Plain Git (clone/fetch/pull/push) works against any remote without GitHub.
+- **GitHub Enterprise works too.** GitDesktop follows \`gh\`, which detects each repo's
+  host from its remote — so sign in to your Enterprise server with
+  \`gh auth login --hostname your.github.example\` and its repos get the same PR, issue,
+  and Actions features. **Settings → Accounts** lists every signed-in host and lets you
+  switch the active account per host.
 {{ai}}- **AI is optional.** Commit messages, PR descriptions, reviews, CI debugging, and
   agent sessions can use Anthropic, OpenAI, OpenRouter, Ollama (local or cloud), an
   OpenAI-compatible endpoint, or the Claude Code / Codex / GitHub Copilot / opencode

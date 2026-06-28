@@ -19,7 +19,10 @@ the provider you choose, local models included.
 
 Built with **Tauri 2 + React 19**. All GitHub access goes through the **GitHub
 CLI (`gh`)**: no OAuth app, and the app never stores your tokens. Core git runs
-against any remote via system `git`.
+against any remote via system `git`. Because everything follows `gh` — which
+detects each repo's host from its remote — **GitHub Enterprise** servers work
+the same as github.com once you've run `gh auth login --hostname <host>`, and
+Settings → Accounts switches the active account per host.
 
 ![GitDesktop's Changes view: a split, syntax-highlighted diff on the right; the changes list, a stash browser, and an AI-generated commit message with co-authors on the left.](site/src/assets/app-staging.png)
 

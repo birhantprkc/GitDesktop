@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { useActiveGhHost } from "@/lib/git/host";
 import { cn } from "@/lib/utils";
 
 /**
@@ -37,6 +38,7 @@ export function AsyncListBody({
   /** A custom hint node in the error card, for sections without a single scope. */
   errorHint?: ReactNode;
 }) {
+  const host = useActiveGhHost();
   if (loading) {
     return (
       <div className="space-y-2">
@@ -57,7 +59,7 @@ export function AsyncListBody({
             If this is a permissions error, your GitHub sign-in may need a
             broader scope — run{" "}
             <span className="font-mono">
-              gh auth refresh -h github.com -s {errorScope}
+              gh auth refresh -h {host} -s {errorScope}
             </span>{" "}
             and reopen this dialog.
           </p>

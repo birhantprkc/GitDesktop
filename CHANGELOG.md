@@ -12,6 +12,15 @@ commit list.
 
 ### Added
 
+- **GitHub Enterprise support.** GitDesktop no longer assumes `github.com` — every GitHub
+  feature runs through `gh`, which detects each repository's host from its remote, so an
+  Enterprise Server repo (`github.acme.com`) gets the same pull requests, issues, Actions, and
+  repository-settings features once you've signed in with
+  `gh auth login --hostname your.github.example`. **Settings → Accounts** now groups signed-in
+  accounts by host and switches the active account **per host** (a single-host user sees the same
+  flat list as before); author avatars, profile links, and the `gh auth refresh` scope hints all
+  resolve on the repo's actual host. Unlike GitHub Desktop, no separate Enterprise sign-in flow —
+  it follows whatever hosts you've added to `gh`.
 - **Auto-fetch (background sync).** GitDesktop now keeps the open repo's view of its remote
   current on its own: an opt-out periodic background `git fetch` (Settings → General; on by
   default, every 5 / 10 / 15 / 30 / 60 minutes) runs while the window is focused, plus once when

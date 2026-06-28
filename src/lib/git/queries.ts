@@ -1362,7 +1362,8 @@ export function useGhAccounts() {
 export function useSwitchAccount() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (login: string) => api.ghSwitchAccount(login),
+    mutationFn: (args: { host: string; login: string }) =>
+      api.ghSwitchAccount(args.host, args.login),
     // The active account changes what every gh query returns.
     onSettled: () => queryClient.invalidateQueries(),
   });
@@ -1379,6 +1380,7 @@ export function useGhStatus(repo: string) {
             authenticated: false,
             login: null,
             repo: null,
+            host: null,
           })
       : () => api.ghStatus(repo),
     staleTime: 60_000,
@@ -2202,10 +2204,10 @@ export function useRepoAdmin(repo: string, enabled: boolean) {
 
 /** The active gh token's OAuth scopes — for "this needs gh auth refresh -s X"
  *  prompts on governance controls. Account-wide, so not repo-keyed. */
-export function useGhScopes() {
+export function useGhScopes(host?: string) {
   return useQuery({
-    queryKey: ["gh", "token-scopes"] as const,
-    queryFn: api.ghTokenScopes,
+    queryKey: ["gh", "token-scopes", host ?? null] as const,
+    queryFn: () => api.ghTokenScopes(host),
     staleTime: 5 * 60_000,
     retry: false,
   });

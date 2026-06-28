@@ -16,6 +16,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { useActiveGhHost } from "@/lib/git/host";
 import {
   useBranches,
   useGhScopes,
@@ -123,7 +124,7 @@ const WEB_ONLY_SETTINGS = [
 /** A muted readout of the gh token's OAuth scopes — context for what governance
  *  actions are available. Hidden for fine-grained/App tokens (no classic scopes). */
 function GhScopesNote() {
-  const scopes = useGhScopes();
+  const scopes = useGhScopes(useActiveGhHost());
   if (!scopes.data?.classic || scopes.data.scopes.length === 0) return null;
   return (
     <p className="text-[11px] text-muted-foreground">

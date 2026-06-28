@@ -1,5 +1,6 @@
 import { CopyIcon } from "@phosphor-icons/react";
 import { copyText } from "@/lib/clipboard";
+import { useActiveGhHost } from "@/lib/git/host";
 import { useGhScopes } from "@/lib/git/queries";
 
 /**
@@ -15,9 +16,10 @@ export function ScopeRefreshHint({
   scope: string;
   action: string;
 }) {
-  const scopes = useGhScopes();
+  const host = useActiveGhHost();
+  const scopes = useGhScopes(host);
   if (!scopes.data?.classic || scopes.data.scopes.includes(scope)) return null;
-  const cmd = `gh auth refresh -h github.com -s ${scope}`;
+  const cmd = `gh auth refresh -h ${host} -s ${scope}`;
   return (
     <div className="rounded-md border border-warning/40 bg-warning/10 p-2.5 text-[11px]">
       <p className="text-muted-foreground">

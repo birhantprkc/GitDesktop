@@ -17,6 +17,7 @@ import {
 import { Markdown } from "@/components/ui/markdown";
 import { copyText } from "@/lib/clipboard";
 import type { MinimizeReason } from "@/lib/git/api";
+import { useActiveGhHost } from "@/lib/git/host";
 import type { PrThreadOut, Reaction, RepoLabel } from "@/lib/git/types";
 import { formatRelativeTime } from "@/lib/time";
 import { ReactionBar } from "./ReactionBar";
@@ -53,23 +54,22 @@ export function formatReason(reason: string): string {
 }
 
 /** GitHub avatar that links to the author's profile. Avatars are served from
- *  github.com/<login>.png; CSP is unrestricted so they load directly, and the
- *  Avatar primitive falls back to the initial if the image can't load. */
+ *  <host>/<login>.png on the open repo's host (github.com or an Enterprise
+ *  server); CSP is unrestricted so they load directly, and the Avatar primitive
+ *  falls back to the initial if the image can't load. */
 export function AuthorAvatar({ login }: { login: string }) {
+  const host = useActiveGhHost();
   if (!login) return null;
   return (
     <Button
       variant="ghost"
       size="icon-xs"
-      onClick={() => openUrl(`https://github.com/${login}`)}
-      title={`@${login} on GitHub`}
+      onClick={() => openUrl(`https://${host}/${login}`)}
+      title={`@${login} on ${host}`}
       className="shrink-0 rounded-full hover:opacity-80 cursor-pointer"
     >
       <Avatar size="sm">
-        <AvatarImage
-          src={`https://github.com/${login}.png?size=48`}
-          alt={login}
-        />
+        <AvatarImage src={`https://${host}/${login}.png?size=48`} alt={login} />
         <AvatarFallback>{login.charAt(0).toUpperCase()}</AvatarFallback>
       </Avatar>
     </Button>

@@ -33,6 +33,8 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
   const ghReady = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );
+  // Avatars resolve on the repo's host (github.com or an Enterprise server).
+  const host = gh.data?.host ?? "github.com";
   const meta = useDiscussionMeta(repoPath, ghReady);
   const enabled = meta.data?.hasDiscussionsEnabled ?? false;
   const listEnabled = ghReady && enabled;
@@ -205,7 +207,7 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
                 >
                   <Avatar size="sm" className="mt-0.5 shrink-0">
                     <AvatarImage
-                      src={`https://github.com/${d.author}.png?size=48`}
+                      src={`https://${host}/${d.author}.png?size=48`}
                       alt={d.author}
                     />
                     <AvatarFallback>

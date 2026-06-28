@@ -1128,8 +1128,8 @@ export const ghAccounts = () => invoke<GhAccounts>("gh_accounts");
 /** Every repo the signed-in user can access (+ viewer login), newest first. */
 export const ghListRepos = () => invoke<GhRepoList>("gh_list_repos");
 
-export const ghSwitchAccount = (login: string) =>
-  invoke<void>("gh_switch_account", { login });
+export const ghSwitchAccount = (host: string, login: string) =>
+  invoke<void>("gh_switch_account", { host, login });
 
 export const ghPrPoll = (repoPath: string) =>
   invoke<PrPollInfo[]>("gh_pr_poll", { repoPath });
@@ -1158,7 +1158,8 @@ export const ghRepoAdmin = (repoPath: string) =>
   invoke<boolean>("gh_repo_admin", { repoPath });
 
 /** The active gh token's OAuth scopes (for "needs gh auth refresh -s …" hints). */
-export const ghTokenScopes = () => invoke<GhScopes>("gh_token_scopes");
+export const ghTokenScopes = (host?: string) =>
+  invoke<GhScopes>("gh_token_scopes", { host: host ?? null });
 
 export const ghHooksList = (repoPath: string) =>
   invoke<Webhook[]>("gh_hooks_list", { repoPath });

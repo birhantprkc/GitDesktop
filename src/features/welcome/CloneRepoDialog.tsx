@@ -208,7 +208,7 @@ export function CloneRepoDialog({
           <Tabs value={tab} onValueChange={(v) => setTab(v as CloneTab)}>
             <TabsList className="w-full">
               <TabsTrigger value="github" className="flex-1">
-                GitHub.com
+                GitHub
               </TabsTrigger>
               <TabsTrigger value="url" className="flex-1">
                 URL

@@ -342,6 +342,9 @@ export interface GhRepoList {
 }
 
 export interface GhAccount {
+  /** The host this account is signed in to ("github.com" or an Enterprise
+   *  server). Accounts are grouped by host and switched per host. */
+  host: string;
   login: string;
   active: boolean;
 }
@@ -355,10 +358,13 @@ export interface GhAccounts {
 export interface GhStatus {
   installed: boolean;
   authenticated: boolean;
-  /** The active account's login, when it can be determined. */
+  /** The active account's login on this repo's host, when it can be determined. */
   login: string | null;
   /** "owner/name" when this repo has a GitHub remote gh recognizes. */
   repo: string | null;
+  /** The repo's GitHub host — "github.com" or an Enterprise server like
+   *  "github.acme.com" — when it's a recognized GitHub repo. */
+  host: string | null;
 }
 
 export interface WebhookConfig {

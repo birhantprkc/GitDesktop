@@ -22,10 +22,17 @@ pub struct GhScopes {
 
 /// The active gh token's OAuth scopes, read from the `X-OAuth-Scopes` response
 /// header of `gh api -i user` (the robust detection path — any authenticated
-/// REST call returns the granted scopes in that header).
+/// REST call returns the granted scopes in that header). `host` targets a
+/// specific host (e.g. an Enterprise server) so the scopes match the repo the
+/// governance UI is acting on, not gh's default host; None uses the default.
 #[tauri::command]
-pub async fn gh_token_scopes() -> AppResult<GhScopes> {
-    let out = run_gh_raw(None, &["api", "-i", "user"], GH_TIMEOUT).await?;
+pub async fn gh_token_scopes(host: Option<String>) -> AppResult<GhScopes> {
+    let mut args = vec!["api", "-i", "user"];
+    if let Some(h) = host.as_deref().filter(|h| !h.is_empty()) {
+        args.push("--hostname");
+        args.push(h);
+    }
+    let out = run_gh_raw(None, &args, GH_TIMEOUT).await?;
     if out.code != 0 {
         return Ok(GhScopes::default());
     }
