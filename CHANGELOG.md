@@ -348,6 +348,14 @@ commit list.
 
 ### Changed
 
+- **Sharper AI security reviews.** The security-review prompt was rebuilt to cut false
+  positives and surface real, exploitable issues. Every finding must now spell out a
+  concrete exploit scenario (no attack path, no finding), severity bands are defined
+  (High/Medium/Low), and an explicit exclusion list tuned to this codebase tells the model
+  what *not* to flag — e.g. memory-safety bugs in Rust, React XSS without
+  `dangerouslySetInnerHTML`, missing client-side auth checks, DoS/rate-limiting, outdated
+  dependencies, and attacks that depend on controlling environment variables or CLI flags.
+  Applies to both the quick (diff-only) and repo-aware security reviews, on any provider.
 - **A steadier, tidier agent composer.** The task box (Delegate, Plan, and the
   in-conversation reply) now docks to the bottom of its panel like a terminal: the
   text grows **upward** so the action row and **Send** never drift as you type. The
