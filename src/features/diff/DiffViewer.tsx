@@ -21,6 +21,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ConflictFileView } from "@/features/repository/ConflictFileView";
+import { ConflictResolveView } from "@/features/repository/ConflictResolveView";
 import type { SelectedLine } from "@/lib/git/api";
 import {
   buildHunkPatch,
@@ -36,6 +38,7 @@ import {
   useRepoStatus,
 } from "@/lib/git/queries";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
+import { useConflictResolve } from "@/lib/stores/conflict-resolve";
 import type { SelectedFile } from "@/lib/stores/ui";
 import { useUiStore } from "@/lib/stores/ui";
 import { useEffectiveSyntax } from "@/lib/syntax/queries";
@@ -59,6 +62,7 @@ export function DiffViewer({ repoPath }: { repoPath: string }) {
   // Shared cache with the changes list — used only to tell "clean tree" apart
   // from "files exist but none picked yet" so the empty pane reads honestly.
   const status = useRepoStatus(repoPath);
+  const resolveActive = useConflictResolve((s) => s.activePath);
   // Render off a deferred selection so rapidly arrowing the changes list only
   // mounts + loads the file landed on (the row keeps WorkingTreeDiff keyed, so
   // it remounts per file). The list highlight still uses the live selection.
@@ -77,6 +81,33 @@ export function DiffViewer({ repoPath }: { repoPath: string }) {
       />
     );
   }
+
+  // A conflicted file (unmerged index) gets the conflict editor instead of a
+  // diff (a combined diff git can't render): per-region + whole-file resolution,
+  // or the AI streaming view while a session is active for it. Conflicts always
+  // live on the unstaged side.
+  const liveEntry = status.data?.entries.find(
+    (e) => e.path === deferredFile.path,
+  );
+  const isConflicted =
+    liveEntry?.unstaged === "conflicted" || liveEntry?.staged === "conflicted";
+
+  if (isConflicted) {
+    return resolveActive === deferredFile.path ? (
+      <ConflictResolveView
+        key={deferredFile.path}
+        repoPath={repoPath}
+        path={deferredFile.path}
+      />
+    ) : (
+      <ConflictFileView
+        key={deferredFile.path}
+        repoPath={repoPath}
+        path={deferredFile.path}
+      />
+    );
+  }
+
   return (
     <WorkingTreeDiff
       key={`${deferredFile.staged}:${deferredFile.path}`}

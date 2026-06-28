@@ -48,6 +48,21 @@ export function useAiConfigured(): boolean {
   return secret.isSuccess ? secret.data !== null : true;
 }
 
+/**
+ * Whether the **review** model (Settings → AI → Review model) is usable: a saved
+ * key for key-based providers, always true for local/CLI ones. Mirrors
+ * {@link useAiConfigured} but for `reviewAi` — used to gate AI conflict resolution
+ * and the Debug-with-AI affordances.
+ */
+export function useReviewConfigured(): boolean {
+  const settings = useSettings();
+  const provider = settings.data?.reviewAi.provider ?? "anthropic";
+  const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
+  const secret = useSecretPreview(provider);
+  if (!needsKey) return true;
+  return secret.isSuccess ? secret.data !== null : true;
+}
+
 export function useSaveSettings() {
   const queryClient = useQueryClient();
   return useMutation({

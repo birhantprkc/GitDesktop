@@ -13,7 +13,11 @@ import {
 } from "@/lib/git/api";
 import type { FileEntry } from "@/lib/git/types";
 import { isWindows } from "@/lib/hotkeys/binding";
-import { useSettings } from "@/lib/settings/queries";
+import {
+  useAiEnabled,
+  useReviewConfigured,
+  useSettings,
+} from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
 
 /** What the one shared context menu acts on, set on right-click. */
@@ -34,6 +38,7 @@ export interface ChangesMenuActions {
   ignoreSelected: () => void;
   untrackSelected: () => void;
   toggle: (entry: FileEntry, staged: boolean) => void;
+  resolveWithAi: (path: string) => void;
   discardFile: (entry: FileEntry) => void;
   stashFile: (entry: FileEntry) => void;
   viewHistory: (path: string) => void;
@@ -78,6 +83,8 @@ export function ChangesContextMenuItems({
   actions: ChangesMenuActions;
 }) {
   const settings = useSettings();
+  const aiEnabled = useAiEnabled();
+  const reviewConfigured = useReviewConfigured();
   const editorPath = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
@@ -137,8 +144,18 @@ export function ChangesContextMenuItems({
   const extension =
     dot > entry.path.lastIndexOf("/") + 1 ? entry.path.slice(dot + 1) : null;
   const isTracked = entry.unstaged !== "untracked" && entry.staged !== "added";
+  const isConflicted =
+    entry.unstaged === "conflicted" || entry.staged === "conflicted";
   return (
     <>
+      {isConflicted && aiEnabled && reviewConfigured && (
+        <>
+          <ContextMenuItem onClick={() => actions.resolveWithAi(entry.path)}>
+            Resolve with AI…
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+        </>
+      )}
       <ContextMenuItem onClick={() => actions.toggle(entry, staged)}>
         {staged ? "Unstage file" : "Stage file"}
       </ContextMenuItem>

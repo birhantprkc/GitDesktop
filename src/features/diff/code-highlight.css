@@ -1,0 +1,99 @@
+/* highlight.js token colors for read-only full-file code views (blame, the AI
+   conflict-resolution side panes), scoped to .gd-code so they don't leak.
+   GitHub-ish palette; dark variant via the app's OS theme. */
+.gd-code .hljs-comment,
+.gd-code .hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+.gd-code .hljs-keyword,
+.gd-code .hljs-selector-tag,
+.gd-code .hljs-doctag,
+.gd-code .hljs-meta .hljs-keyword {
+  color: #cf222e;
+}
+.gd-code .hljs-string,
+.gd-code .hljs-regexp,
+.gd-code .hljs-meta .hljs-string {
+  color: #0a3069;
+}
+.gd-code .hljs-number,
+.gd-code .hljs-literal {
+  color: #0550ae;
+}
+.gd-code .hljs-title,
+.gd-code .hljs-title.function_,
+.gd-code .hljs-section,
+.gd-code .hljs-built_in {
+  color: #8250df;
+}
+.gd-code .hljs-type,
+.gd-code .hljs-class .hljs-title,
+.gd-code .hljs-title.class_ {
+  color: #953800;
+}
+.gd-code .hljs-attr,
+.gd-code .hljs-attribute,
+.gd-code .hljs-property,
+.gd-code .hljs-variable,
+.gd-code .hljs-template-variable {
+  color: #0550ae;
+}
+.gd-code .hljs-tag,
+.gd-code .hljs-name,
+.gd-code .hljs-symbol,
+.gd-code .hljs-bullet {
+  color: #116329;
+}
+.gd-code .hljs-meta {
+  color: #6e7781;
+}
+
+@media (prefers-color-scheme: dark) {
+  .gd-code .hljs-comment,
+  .gd-code .hljs-quote {
+    color: #8b949e;
+  }
+  .gd-code .hljs-keyword,
+  .gd-code .hljs-selector-tag,
+  .gd-code .hljs-doctag,
+  .gd-code .hljs-meta .hljs-keyword {
+    color: #ff7b72;
+  }
+  .gd-code .hljs-string,
+  .gd-code .hljs-regexp,
+  .gd-code .hljs-meta .hljs-string {
+    color: #a5d6ff;
+  }
+  .gd-code .hljs-number,
+  .gd-code .hljs-literal {
+    color: #79c0ff;
+  }
+  .gd-code .hljs-title,
+  .gd-code .hljs-title.function_,
+  .gd-code .hljs-section,
+  .gd-code .hljs-built_in {
+    color: #d2a8ff;
+  }
+  .gd-code .hljs-type,
+  .gd-code .hljs-class .hljs-title,
+  .gd-code .hljs-title.class_ {
+    color: #ffa657;
+  }
+  .gd-code .hljs-attr,
+  .gd-code .hljs-attribute,
+  .gd-code .hljs-property,
+  .gd-code .hljs-variable,
+  .gd-code .hljs-template-variable {
+    color: #79c0ff;
+  }
+  .gd-code .hljs-tag,
+  .gd-code .hljs-name,
+  .gd-code .hljs-symbol,
+  .gd-code .hljs-bullet {
+    color: #7ee787;
+  }
+  .gd-code .hljs-meta {
+    color: #8b949e;
+  }
+}

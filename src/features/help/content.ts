@@ -311,10 +311,24 @@ pushed in the meantime.
 
 ## Resolving conflicts
 
-During a **merge**, **rebase**, or **cherry-pick**, a banner appears in **Changes** with
-the conflicted-file count. Resolve each conflict in your editor and stage it — the \`!\`
-badge clears as files are resolved — then **Continue**, or **Abort** to back out.
-Continue stays disabled until every conflict is resolved.`,
+During a **merge**, **rebase**, or **cherry-pick**, a slim banner appears in **Changes**
+with the conflict count and **Abort** / **Finish** controls. Select a conflicted file (the
+\`!\` badge) to open the **conflict editor**: each conflict region shows **Current (ours)**
+over **Incoming (theirs)** with **Accept current**, **Accept incoming**, or **Accept both**,
+and the header adds whole-file **Accept all current** / **Accept all incoming** and **Open in
+editor**. Files mark themselves resolved as you go — the \`!\` badge clears — and **Finish**
+stays disabled until every conflict is resolved.
+
+{{ai}}## Resolve conflicts with AI
+
+Select a conflicted file and click **Resolve with AI** in the conflict editor's header (also
+on the file's right-click menu, and via the command palette ({{kbd:command-palette}})). Your configured
+**Review** model (Settings → AI) merges the file's sides and streams a proposal; you review
+it as a diff against your side, flip to the proposed file or the *ours* / *theirs* / *base*
+versions, then **Accept & stage** to apply it — nothing is written until you accept.
+**Regenerate** for another attempt, or **Discard** to drop it. The banner's **Resolve all
+with AI** walks every conflict in turn. It runs on any provider, including local Ollama and
+keyless Claude Code / Codex agents, and skips files matched by your AI ignore patterns.{{/ai}}`,
   },
   {
     id: "pull-requests",

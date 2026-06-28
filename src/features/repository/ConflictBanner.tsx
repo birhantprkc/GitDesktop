@@ -1,3 +1,4 @@
+import { SparkleIcon, WarningIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,8 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { useOpAbort, useOpContinue, useOpState } from "@/lib/git/queries";
 import type { RepoOp } from "@/lib/git/types";
+import { useAiEnabled, useReviewConfigured } from "@/lib/settings/queries";
+import { useConflictResolve } from "@/lib/stores/conflict-resolve";
 import { toastError } from "@/lib/toast";
 
 const OP_LABELS: Record<RepoOp, { banner: string; cont: string }> = {
@@ -31,16 +34,20 @@ const OP_LABELS: Record<RepoOp, { banner: string; cont: string }> = {
  */
 export function ConflictBanner({
   repoPath,
-  conflictedCount,
+  conflictedPaths,
 }: {
   repoPath: string;
-  conflictedCount: number;
+  conflictedPaths: string[];
 }) {
   const opState = useOpState(repoPath);
   const abortOp = useOpAbort(repoPath);
   const continueOp = useOpContinue(repoPath);
+  const aiEnabled = useAiEnabled();
+  const reviewConfigured = useReviewConfigured();
+  const startAll = useConflictResolve((s) => s.startAll);
   const [confirmAbort, setConfirmAbort] = useState(false);
 
+  const conflictedCount = conflictedPaths.length;
   const op: RepoOp | null = opState.data?.merging
     ? "merge"
     : opState.data?.rebasing
@@ -50,96 +57,116 @@ export function ConflictBanner({
         : null;
   if (!op && conflictedCount === 0) return null;
 
+  const canResolveWithAi = aiEnabled && reviewConfigured && conflictedCount > 0;
+
   const busy = abortOp.isPending || continueOp.isPending;
   const onError = (e: unknown) => toastError(e);
-  const conflictNote =
+  const opVerb = op
+    ? op === "merge"
+      ? "Merging"
+      : op === "rebase"
+        ? "Rebasing"
+        : "Cherry-picking"
+    : null;
+  const conflictText =
     conflictedCount > 0
-      ? `${conflictedCount} conflicted file${conflictedCount === 1 ? "" : "s"} — edit to resolve, then stage to mark resolved.`
-      : "All conflicts resolved.";
+      ? `${conflictedCount} conflict${conflictedCount === 1 ? "" : "s"}`
+      : "all conflicts resolved";
 
   return (
-    <div className="space-y-2 border-b bg-warning/10 px-3 py-2 text-xs text-warning">
-      <div>
-        <p className="font-medium">
-          {op ? OP_LABELS[op].banner : "Conflicts to resolve"}
-        </p>
-        <p>{conflictNote}</p>
-      </div>
-      {op && (
-        <div className="flex justify-end gap-2">
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={busy}
-            onClick={() => setConfirmAbort(true)}
-          >
-            Abort
-          </Button>
+    // One calm status line — the per-file resolution actions live in the diff
+    // pane's conflict view, so this just carries merge state + Continue/Abort
+    // and the batch "Resolve all with AI".
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-3 py-1.5 text-xs">
+      <span className="flex items-center gap-1.5 text-warning">
+        <WarningIcon className="size-3.5 shrink-0" />
+        {opVerb ? `${opVerb} · ${conflictText}` : conflictText}
+      </span>
+      <div className="flex items-center gap-1.5">
+        {canResolveWithAi && (
           <Button
             size="xs"
-            disabled={busy || conflictedCount > 0}
-            title={
-              conflictedCount > 0
-                ? "Resolve and stage every conflicted file first"
-                : undefined
-            }
-            onClick={() =>
-              continueOp.mutate(op, {
-                onSuccess: () =>
-                  toast.success(
-                    op === "merge"
-                      ? "Merge completed"
-                      : `${OP_LABELS[op].banner.replace(" in progress", "")} continued`,
-                  ),
-                onError,
-              })
-            }
+            variant="ghost"
+            onClick={() => startAll(conflictedPaths)}
           >
-            {continueOp.isPending && <Spinner data-icon="inline-start" />}
-            {OP_LABELS[op].cont}
+            <SparkleIcon data-icon="inline-start" />
+            {conflictedCount === 1 ? "Resolve with AI" : "Resolve all with AI"}
           </Button>
+        )}
+        {op && (
+          <>
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={busy}
+              onClick={() => setConfirmAbort(true)}
+            >
+              Abort
+            </Button>
+            <Button
+              size="xs"
+              disabled={busy || conflictedCount > 0}
+              title={
+                conflictedCount > 0 ? "Resolve every conflict first" : undefined
+              }
+              onClick={() =>
+                continueOp.mutate(op, {
+                  onSuccess: () =>
+                    toast.success(
+                      op === "merge"
+                        ? "Merge completed"
+                        : `${opVerb} continued`,
+                    ),
+                  onError,
+                })
+              }
+            >
+              {continueOp.isPending && <Spinner data-icon="inline-start" />}
+              {OP_LABELS[op].cont}
+            </Button>
 
-          <Dialog open={confirmAbort} onOpenChange={setConfirmAbort}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Abort the {op}?</DialogTitle>
-                <DialogDescription>
-                  Abandons the in-progress {op} and restores the repository to
-                  the state before it started. Any conflict resolutions you've
-                  made will be lost.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => setConfirmAbort(false)}
-                >
-                  Keep going
-                </Button>
-                <Button
-                  variant="destructive"
-                  disabled={abortOp.isPending}
-                  onClick={() =>
-                    abortOp.mutate(op, {
-                      onSuccess: () => {
-                        setConfirmAbort(false);
-                        toast.success(`Aborted the ${op}`);
-                      },
-                      onError: (e) => {
-                        setConfirmAbort(false);
-                        onError(e);
-                      },
-                    })
-                  }
-                >
-                  {abortOp.isPending && <Spinner data-icon="inline-start" />}
-                  Abort {op}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </div>
-      )}
+            <Dialog open={confirmAbort} onOpenChange={setConfirmAbort}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Abort the {op}?</DialogTitle>
+                  <DialogDescription>
+                    Abandons the in-progress {op} and restores the repository to
+                    the state before it started. Any conflict resolutions you've
+                    made will be lost.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setConfirmAbort(false)}
+                  >
+                    Keep going
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    disabled={abortOp.isPending}
+                    onClick={() =>
+                      abortOp.mutate(op, {
+                        onSuccess: () => {
+                          setConfirmAbort(false);
+                          toast.success(`Aborted the ${op}`);
+                        },
+                        onError: (e) => {
+                          setConfirmAbort(false);
+                          onError(e);
+                        },
+                      })
+                    }
+                  >
+                    {abortOp.isPending && <Spinner data-icon="inline-start" />}
+                    Abort {op}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </>
+        )}
+      </div>
     </div>
   );
 }

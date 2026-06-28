@@ -405,6 +405,12 @@ export const ACTIONS = [
     defaultBinding: "mod+g",
   },
   {
+    id: "resolve-conflict-ai",
+    label: "Resolve conflict with AI",
+    category: "Changes",
+    defaultBinding: null,
+  },
+  {
     id: "undo-commit",
     label: "Undo last commit",
     category: "Changes",

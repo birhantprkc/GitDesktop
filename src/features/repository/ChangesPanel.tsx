@@ -39,7 +39,13 @@ import type { ChangeKind, FileEntry } from "@/lib/git/types";
 import { formatBinding } from "@/lib/hotkeys/binding";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
-import { useSaveSettings, useSettings } from "@/lib/settings/queries";
+import {
+  useAiEnabled,
+  useReviewConfigured,
+  useSaveSettings,
+  useSettings,
+} from "@/lib/settings/queries";
+import { useConflictResolve } from "@/lib/stores/conflict-resolve";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -107,6 +113,10 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const untrack = useUntrack(repoPath);
   const selectedFile = useUiStore((s) => s.selectedFile);
   const selectFile = useUiStore((s) => s.selectFile);
+  const startResolveOne = useConflictResolve((s) => s.startOne);
+  const startResolveAll = useConflictResolve((s) => s.startAll);
+  const aiEnabled = useAiEnabled();
+  const reviewConfigured = useReviewConfigured();
   const settings = useSettings();
   const saveSettings = useSaveSettings();
   const stashCount = useStashCount(repoPath);
@@ -134,6 +144,11 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
 
   const entries = status.data?.entries ?? [];
+  const conflictedPaths = entries
+    .filter((e) => e.unstaged === "conflicted" || e.staged === "conflicted")
+    .map((e) => e.path);
+  const canResolveConflicts =
+    aiEnabled && reviewConfigured && conflictedPaths.length > 0;
 
   // Empty-state suggestions: a published repo offers "View on GitHub"; a
   // branch with commits the default branch doesn't have offers a PR. The
@@ -574,6 +589,19 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     () => filterRef.current?.focus(),
     entries.length > 0,
   );
+  // Resolve the selected conflicted file with AI, or start an all-conflicts run
+  // when the selection isn't a conflict. Palette-only (no default binding).
+  useHotkeyAction(
+    "resolve-conflict-ai",
+    () => {
+      if (selectedFile && conflictedPaths.includes(selectedFile.path)) {
+        startResolveOne(selectedFile.path);
+      } else {
+        startResolveAll(conflictedPaths);
+      }
+    },
+    canResolveConflicts,
+  );
 
   if (status.isPending) {
     return (
@@ -584,10 +612,6 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
       </div>
     );
   }
-
-  const conflictedCount = entries.filter(
-    (e) => e.unstaged === "conflicted" || e.staged === "conflicted",
-  ).length;
 
   // Confirm-dialog copy, derived from each action's scope (a single file, a
   // multi-selection, or the whole tree).
@@ -629,7 +653,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     // one-shot opacity fade is the existing tw-animate-css idiom, lighter than
     // wrapping this whole tree in a motion component). Reduced-motion-safe.
     <div className="flex min-h-0 flex-1 flex-col motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
-      <ConflictBanner repoPath={repoPath} conflictedCount={conflictedCount} />
+      <ConflictBanner repoPath={repoPath} conflictedPaths={conflictedPaths} />
       {entries.length === 0 ? (
         <ChangesEmptyState
           repoPath={repoPath}
@@ -859,6 +883,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
                   ignoreSelected,
                   untrackSelected,
                   toggle: handleToggle,
+                  resolveWithAi: startResolveOne,
                   discardFile: (entry) =>
                     setDiscardScope({ kind: "files", entries: [entry] }),
                   stashFile: (entry) =>

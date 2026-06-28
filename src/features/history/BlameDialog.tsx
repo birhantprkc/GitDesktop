@@ -11,7 +11,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { diffLang } from "@/features/diff/diff-lang";
 import { useBlame } from "@/lib/git/queries";
 import { formatRelativeTime } from "@/lib/time";
-import "./blame-highlight.css";
+import "@/features/diff/code-highlight.css";
 
 /** One code line, syntax-highlighted when the language is recognized. */
 function BlameCode({
@@ -30,7 +30,7 @@ function BlameCode({
   }
   return (
     <span
-      className="blame-hl px-2 whitespace-pre-wrap"
+      className="gd-code px-2 whitespace-pre-wrap"
       dangerouslySetInnerHTML={{ __html: html || " " }}
     />
   );

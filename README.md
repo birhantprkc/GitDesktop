@@ -168,7 +168,13 @@ branches in parallel folders without stashing).
 **Syncing** — fetch / pull / push with ahead/behind indicators; pull is
 `--ff-only`, and divergence routes to a guarded force push with
 `--force-with-lease`. In-progress merge/rebase/cherry-pick get a conflict banner
-with gated Continue / Abort.
+with gated Continue / Abort. Selecting a conflicted file opens an **in-app
+conflict editor**: each region shows Current (ours) over Incoming (theirs) with
+Accept current / incoming / both, plus whole-file Accept all current / incoming
+and Open in editor. **AI conflict resolution** is one more option there — ask your
+model to merge a file, review the proposal as a diff, and accept it (per file or
+all at once). Multi-provider, runs on local Ollama or a keyless Claude Code /
+Codex agent, and never writes until you accept.
 
 **Pull requests** — full read + write for GitHub PRs, plus **local PRs**: the full
 PR workflow against any two branches with no remote at all. AI review + security

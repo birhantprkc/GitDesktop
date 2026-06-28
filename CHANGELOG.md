@@ -12,6 +12,20 @@ commit list.
 
 ### Added
 
+- **Conflict resolution, in-app.** Selecting a conflicted file no longer shows an empty pane —
+  it opens a **conflict editor**: the file rendered with each conflict region called out as
+  **Current (ours)** over **Incoming (theirs)**, with **Accept current / Accept incoming /
+  Accept both** on every region, or whole-file **Accept all current / Accept all incoming** and
+  **Open in editor** in the header. Resolve as granularly or as bluntly as you like; the file is
+  marked resolved automatically once the last conflict is gone. Works with AI off.
+- **AI conflict resolution.** The same editor's **Resolve with AI** asks your model to merge a
+  file: it streams a proposal you review **as a diff** against your side (flip to the full
+  proposed file or the *ours* / *theirs* / *base* versions), then **Accept & stage** applies it —
+  nothing is written until you accept; **Regenerate** retries, **Discard** drops it. The conflict
+  banner's **Resolve all with AI** walks every conflicted file in turn. It uses your configured
+  **Review** model, so it runs on any provider including local Ollama and keyless Claude Code /
+  Codex agents, honors your AI ignore patterns, and is hidden entirely when AI features are off.
+  Unlike GitHub Desktop's Copilot-only equivalent, there's no subscription or sign-in lock-in.
 - **Worktree manager.** A new **Worktrees…** dialog (repository ⋯ menu, or the command
   palette) lists the repo's linked worktrees and lets you **create** one (a new branch
   from any base, or an existing branch, checked out into its own folder), **open** one to

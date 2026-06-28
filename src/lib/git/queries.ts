@@ -10,6 +10,11 @@ import {
 import { useCallback, useEffect, useRef } from "react";
 import { COLD_START_NO_GH, COLD_START_NO_GIT } from "@/lib/test-mode";
 import * as api from "./api";
+import {
+  checkoutConflictSide,
+  conflictSides,
+  resolveConflict,
+} from "./conflict";
 import type {
   DiffStatEntry,
   DiscussionDetails,
@@ -1504,6 +1509,40 @@ export function useOpAbort(repo: string) {
 
 export function useOpContinue(repo: string) {
   return useRepoMutation(repo, (op: RepoOp) => api.gitOpContinue(repo, op));
+}
+
+/** The conflicted file's sides + marked working text, for the conflict editor.
+ *  Re-fetches after each per-region resolve (the mutations invalidate this). */
+export function useConflictFile(repo: string, path: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "conflict-file", path] as const,
+    queryFn: () => conflictSides(repo, path, []),
+    retry: false,
+  });
+}
+
+const conflictFileKeys = (repo: string) =>
+  [...workingTreeKeys(repo), ["repo", repo, "conflict-file"]] as const;
+
+/** Writes a conflict resolution, staging it when `stage` (marks resolved).
+ *  Invalidates the working tree + conflict editor so they refresh. */
+export function useResolveConflict(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { path: string; content: string; stage: boolean }) =>
+      resolveConflict(repo, args.path, args.content, args.stage),
+    { invalidate: conflictFileKeys(repo) },
+  );
+}
+
+/** Resolves a whole conflicted file by taking one side ("ours"/"theirs"). */
+export function useCheckoutConflictSide(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { path: string; side: "ours" | "theirs" }) =>
+      checkoutConflictSide(repo, args.path, args.side),
+    { invalidate: conflictFileKeys(repo) },
+  );
 }
 
 export function useFileAtRev(
