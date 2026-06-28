@@ -360,6 +360,10 @@ commit list.
 
 ### Fixed
 
+- **The review-model picker no longer changes your global default.** Switching the provider
+  or model in a pull request's **Review** panel now applies to **that review only** — it no
+  longer overwrites the default review model in Settings → AI. The panel shows a small note
+  while a one-off model is in effect, and resets to your default for the next PR.
 - **Windows: tools added to `PATH` after the app started are now found without a restart.**
   Windows never pushes a `PATH` change into an already-running program, so a CLI you
   installed (or added to `PATH`) while GitDesktop was open — `glab`, `gh`, or an agent CLI —

@@ -43,11 +43,7 @@ import { copyText } from "@/lib/clipboard";
 import { quickTransition } from "@/lib/motion";
 import { useExternalReviews, useReviewHistory } from "@/lib/pulls/queries";
 import type { PersistedReview } from "@/lib/pulls/reviews-history";
-import {
-  useSaveSettings,
-  useSecretPreview,
-  useSettings,
-} from "@/lib/settings/queries";
+import { useSecretPreview, useSettings } from "@/lib/settings/queries";
 import {
   type ReviewContext,
   type ReviewTarget,
@@ -85,7 +81,6 @@ export function PrReviewPanel({
   posting?: boolean;
 }) {
   const settings = useSettings();
-  const saveSettings = useSaveSettings();
   const repoName = useUiStore((s) => s.repoName) ?? "";
   // The review run is keyed by repo + PR so it survives this panel unmounting;
   // memoized so its identity is stable across the panel's many re-renders.
@@ -145,7 +140,15 @@ export function PrReviewPanel({
   const externalCount = external.data?.items.length ?? 0;
   const [ignoreExternal, setIgnoreExternal] = useState(false);
 
-  const reviewAi = settings.data?.reviewAi;
+  const globalReviewAi = settings.data?.reviewAi;
+  // The provider/model picked in this panel is a per-run OVERRIDE — it changes
+  // the model used for THIS review without rewriting the global default (set in
+  // Settings → AI). Resets to the default when the panel remounts (e.g. a
+  // different PR), so a one-off model choice never leaks into every future review.
+  const [reviewOverride, setReviewOverride] = useState<NonNullable<
+    typeof globalReviewAi
+  > | null>(null);
+  const reviewAi = reviewOverride ?? globalReviewAi;
   const provider = reviewAi?.provider ?? "anthropic";
   const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
   const keyPreview = useSecretPreview(provider);
@@ -168,11 +171,8 @@ export function PrReviewPanel({
   const models = available.data?.models ?? [];
 
   function updateReview(patch: Partial<NonNullable<typeof reviewAi>>) {
-    if (!settings.data || !reviewAi) return;
-    saveSettings.mutate({
-      ...settings.data,
-      reviewAi: { ...reviewAi, ...patch },
-    });
+    if (!reviewAi) return;
+    setReviewOverride({ ...reviewAi, ...patch });
   }
 
   function run(mode: ReviewMode) {
@@ -263,6 +263,11 @@ export function PrReviewPanel({
             </ComboboxContent>
           </Combobox>
         </div>
+        {reviewOverride && (
+          <p className="text-xs text-muted-foreground">
+            Model set for this review only — the default lives in Settings → AI.
+          </p>
+        )}
         {needsKey && !keyPreview.data && (
           <p className="text-xs text-warning">
             No {PROVIDER_LABELS[provider]} API key saved — add one in Settings
