@@ -6,8 +6,11 @@ import {
   CheckIcon,
   GitBranchIcon,
   GitPullRequestIcon,
+  InfoIcon,
+  LightningIcon,
   SparkleIcon,
   TreeStructureIcon,
+  WarningIcon,
 } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { useMemo, useState } from "react";
@@ -15,6 +18,7 @@ import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -50,6 +54,7 @@ import {
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
+import type { MergeConflictStrategy } from "@/lib/git/api";
 import {
   useBranchDivergence,
   useBranches,
@@ -60,6 +65,7 @@ import {
   useDiscardAll,
   useGhStatus,
   useMergeBranch,
+  useMergePreview,
   usePrList,
   useRebaseBranch,
   useRenameBranch,
@@ -195,6 +201,18 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [stashesOpen, setStashesOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
   const [pickerBranch, setPickerBranch] = useState("");
+  // Advanced merge options (merge mode only).
+  const [mergeNoFf, setMergeNoFf] = useState(false);
+  const [mergeStrategy, setMergeStrategy] =
+    useState<MergeConflictStrategy>("none");
+  // In-memory conflict prediction for the selected branch, while the merge
+  // picker is open.
+  const mergePreview = useMergePreview(
+    repoPath,
+    pickerBranch,
+    mergeStrategy,
+    pickerMode === "merge",
+  );
   const [switchTarget, setSwitchTarget] = useState<string | null>(null);
   // A branch checked out in another worktree, awaiting confirm to open it.
   const [worktreeSwitchTarget, setWorktreeSwitchTarget] = useState<{
@@ -538,7 +556,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       });
     } else {
       mergeBranch.mutate(
-        { branch, squash: mode === "squash" },
+        {
+          branch,
+          squash: mode === "squash",
+          // Options apply to a regular merge only, not squash.
+          noFf: mode === "merge" && mergeNoFf,
+          strategy: mode === "merge" ? mergeStrategy : "none",
+        },
         {
           onSuccess: () =>
             toast.success(
@@ -555,7 +579,73 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   function openPicker(mode: PickerMode) {
     setOpen(false);
     setPickerBranch(otherBranches[0]?.name ?? "");
+    setMergeNoFf(false);
+    setMergeStrategy("none");
     setPickerMode(mode);
+  }
+
+  // The merge picker's in-memory conflict prediction, as a calm status line.
+  function renderMergePreview() {
+    if (mergePreview.isFetching) {
+      return (
+        <span className="flex items-center gap-1.5 text-muted-foreground">
+          <Spinner className="size-3" /> Checking…
+        </span>
+      );
+    }
+    const p = mergePreview.data;
+    if (!p || p.status === "unknown") return null;
+    if (p.status === "fast-forward") {
+      // --no-ff suppresses the fast-forward, so reflect that when it's ticked.
+      return mergeNoFf ? (
+        <span className="flex items-center gap-1.5 text-info">
+          <InfoIcon className="size-3.5 shrink-0" /> Fast-forward available —
+          will create a merge commit
+        </span>
+      ) : (
+        <span className="flex items-center gap-1.5 text-info">
+          <LightningIcon className="size-3.5 shrink-0" /> Fast-forward — no
+          merge commit needed
+        </span>
+      );
+    }
+    if (p.status === "up-to-date") {
+      return (
+        <span className="flex items-center gap-1.5 text-muted-foreground">
+          <CheckIcon className="size-3.5 shrink-0" /> Already up to date —
+          nothing to merge
+        </span>
+      );
+    }
+    if (p.status === "clean") {
+      // The preview already ran with the chosen strategy, so a "clean" result
+      // means it really will be clean (any conflicts auto-resolved).
+      return (
+        <span className="flex items-center gap-1.5 text-success">
+          <CheckIcon className="size-3.5 shrink-0" /> Clean merge — creates a
+          merge commit
+        </span>
+      );
+    }
+    // conflict — the preview is strategy-aware, so these are real conflicts that
+    // remain even with the chosen strategy ("still" once a strategy can't take
+    // them, e.g. structural delete/rename conflicts).
+    const n = p.conflicts.length;
+    const files = p.conflicts.slice(0, 4).join(", ");
+    const more = n > 4 ? `, +${n - 4}` : "";
+    const noun = n === 1 ? "file" : "files";
+    const still = mergeStrategy !== "none" ? "still " : "";
+    return (
+      <span className="flex items-start gap-1.5 text-warning">
+        <WarningIcon className="mt-px size-3.5 shrink-0" />
+        <span>
+          {n > 0
+            ? `${n} ${noun} will ${still}conflict`
+            : `This merge will ${still}conflict`}
+          {files && `: ${files}${more}`}
+        </span>
+      </span>
+    );
   }
 
   function openCreate() {
@@ -1303,6 +1393,54 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               </SelectContent>
             </Select>
           </div>
+          {pickerMode === "merge" && (
+            <div className="space-y-3">
+              <div className="min-h-5 text-xs">{renderMergePreview()}</div>
+              <label className="flex cursor-pointer items-center gap-2 text-xs">
+                <Checkbox
+                  checked={mergeNoFf}
+                  onCheckedChange={(c) => setMergeNoFf(c === true)}
+                />
+                Always create a merge commit
+              </label>
+              <div className="space-y-1.5">
+                <Label className="text-xs">On conflict</Label>
+                <Select
+                  items={{
+                    none: "Stop and let me resolve",
+                    ours: "Prefer current branch",
+                    theirs: "Prefer incoming branch",
+                  }}
+                  value={mergeStrategy}
+                  onValueChange={(v) =>
+                    v && setMergeStrategy(v as MergeConflictStrategy)
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">
+                      Stop and let me resolve
+                    </SelectItem>
+                    <SelectItem value="ours">Prefer current branch</SelectItem>
+                    <SelectItem value="theirs">
+                      Prefer incoming branch
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                {mergeStrategy !== "none" &&
+                  mergePreview.data?.status !== "fast-forward" &&
+                  mergePreview.data?.status !== "up-to-date" && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Conflicting changes from the{" "}
+                      {mergeStrategy === "ours" ? "incoming" : "current"} side
+                      are discarded.
+                    </p>
+                  )}
+              </div>
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setPickerMode(null)}>
               Cancel

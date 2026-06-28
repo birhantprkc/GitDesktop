@@ -154,6 +154,14 @@ export interface RewriteStep {
   message?: string;
 }
 
+export interface MergePreview {
+  /** "up-to-date" (already merged) · "fast-forward" · "clean" (merge commit, no
+   *  conflicts) · "conflict" · "unknown" (couldn't predict — old git/error). */
+  status: "up-to-date" | "fast-forward" | "clean" | "conflict" | "unknown";
+  /** Conflicting file paths when `status` is "conflict" (may be empty). */
+  conflicts: string[];
+}
+
 export interface StashEntry {
   index: number;
   message: string;

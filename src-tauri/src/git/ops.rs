@@ -6,7 +6,9 @@ use tauri::State;
 use crate::error::{AppError, AppResult};
 use crate::git::diff::parse_numstat_z;
 use crate::git::history::validate_hash;
-use crate::git::runner::{run_git, run_git_mutating, run_git_raw_input, DEFAULT_TIMEOUT};
+use crate::git::runner::{
+    run_git, run_git_mutating, run_git_raw, run_git_raw_input, DEFAULT_TIMEOUT,
+};
 use crate::git::types::{FileDiff, RepoOpState, RewriteStep, StashEntry, TagInfo};
 use crate::state::AppState;
 
@@ -872,23 +874,135 @@ fn validate_branch_arg(name: &str) -> AppResult<()> {
 }
 
 /// Merges a branch into the current one. With `squash`, the combined changes
-/// are left staged so the user writes the commit themselves. Conflicts leave
-/// the repo in a normal merge-conflict state visible in the changes list.
+/// are left staged so the user writes the commit themselves. Otherwise `no_ff`
+/// forces a merge commit even when a fast-forward is possible, and `strategy`
+/// ("ours"/"theirs", anything else = none) auto-resolves conflicting hunks in
+/// favor of the current/incoming side via `-X`. Conflicts (when not
+/// auto-resolved) leave the repo in a normal merge-conflict state visible in
+/// the changes list.
 #[tauri::command]
 pub async fn git_merge(
     state: State<'_, AppState>,
     repo_path: String,
     branch: String,
     squash: bool,
+    no_ff: bool,
+    strategy: String,
 ) -> AppResult<()> {
     validate_branch_arg(&branch)?;
-    let args: Vec<&str> = if squash {
-        vec!["merge", "--squash", &branch]
+    let mut args: Vec<&str> = vec!["merge"];
+    if squash {
+        args.push("--squash");
     } else {
-        vec!["merge", "--no-edit", &branch]
-    };
+        args.push("--no-edit");
+        if no_ff {
+            args.push("--no-ff");
+        }
+        match strategy.as_str() {
+            "ours" => args.extend(["-X", "ours"]),
+            "theirs" => args.extend(["-X", "theirs"]),
+            _ => {}
+        }
+    }
+    args.push(&branch);
     run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePreview {
+    /// "up-to-date" | "fast-forward" | "clean" | "conflict" | "unknown".
+    pub status: String,
+    /// Conflicting file paths when status is "conflict" (may be empty if the
+    /// git version doesn't report them).
+    pub conflicts: Vec<String>,
+}
+
+/// Predicts the outcome of merging `branch` into the current branch **without
+/// touching the working tree or index**. Uses merge-base for the
+/// already-merged and fast-forward cases, then `git merge-tree --write-tree`
+/// (git 2.38+, file names need 2.40+) for a real in-memory merge — honoring
+/// `strategy` ("ours"/"theirs" → `-X`) so the prediction matches what the merge
+/// will actually do (content conflicts auto-resolve; structural ones still show
+/// as conflicts). Degrades to "unknown" (so the UI hides the preview) on older
+/// git or any error.
+#[tauri::command]
+pub async fn git_merge_preview(
+    repo_path: String,
+    branch: String,
+    strategy: String,
+) -> AppResult<MergePreview> {
+    validate_branch_arg(&branch)?;
+    let unknown = || MergePreview {
+        status: "unknown".to_string(),
+        conflicts: Vec::new(),
+    };
+
+    let head = run_git_raw(Some(&repo_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT).await?;
+    let tip = run_git_raw(Some(&repo_path), &["rev-parse", &branch], DEFAULT_TIMEOUT).await?;
+    if head.code != 0 || tip.code != 0 {
+        return Ok(unknown());
+    }
+    let head = head.stdout_lossy().trim().to_string();
+    let tip = tip.stdout_lossy().trim().to_string();
+
+    let base_out =
+        run_git_raw(Some(&repo_path), &["merge-base", "HEAD", &branch], DEFAULT_TIMEOUT).await?;
+    if base_out.code == 0 {
+        let base = base_out.stdout_lossy().trim().to_string();
+        if base == tip {
+            return Ok(MergePreview {
+                status: "up-to-date".to_string(),
+                conflicts: Vec::new(),
+            });
+        }
+        if base == head {
+            return Ok(MergePreview {
+                status: "fast-forward".to_string(),
+                conflicts: Vec::new(),
+            });
+        }
+    }
+
+    // Diverged (or unrelated histories) — do the merge in memory, honoring the
+    // chosen strategy so the prediction matches what the real merge will do.
+    let mut args: Vec<&str> = vec!["merge-tree", "--write-tree", "--name-only"];
+    match strategy.as_str() {
+        "ours" => args.extend(["-X", "ours"]),
+        "theirs" => args.extend(["-X", "theirs"]),
+        _ => {}
+    }
+    args.extend(["HEAD", &branch]);
+    let mt = run_git_raw(Some(&repo_path), &args, DEFAULT_TIMEOUT).await?;
+    match mt.code {
+        0 => Ok(MergePreview {
+            status: "clean".to_string(),
+            conflicts: Vec::new(),
+        }),
+        1 => {
+            // Line 1 is the merged-tree OID; the conflicted file names follow,
+            // ending at the blank line before any informational messages. Empty
+            // stdout means git refused the merge (no tree OID) — that's an
+            // "unknown", not a zero-file conflict.
+            let text = mt.stdout_lossy();
+            if text.trim().is_empty() {
+                return Ok(unknown());
+            }
+            let conflicts: Vec<String> = text
+                .lines()
+                .skip(1)
+                .take_while(|l| !l.trim().is_empty())
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            Ok(MergePreview {
+                status: "conflict".to_string(),
+                conflicts,
+            })
+        }
+        _ => Ok(unknown()),
+    }
 }
 
 /// Rebases the current branch onto another. Conflicts leave the rebase in
@@ -1527,6 +1641,58 @@ mod tests {
         assert_eq!(rev(&repo, "HEAD").await, orig);
         let status = git(&repo, &["status", "--porcelain"]).await;
         assert!(status.trim().is_empty(), "tree should be clean: {status}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn merge_preview_reports_outcomes() {
+        let (dir, repo) = setup_repo("preview").await;
+        let main = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .trim()
+            .to_string();
+        commit_file(&repo, &dir, "shared.txt", "base\n", "base shared").await;
+
+        // up-to-date: a branch pinned at an ancestor of HEAD.
+        git(&repo, &["branch", "old"]).await;
+        commit_file(&repo, &dir, "shared.txt", "main2\n", "advance main").await;
+        let up = git_merge_preview(repo.clone(), "old".to_string(), "none".to_string())
+            .await
+            .unwrap();
+        assert_eq!(up.status, "up-to-date");
+
+        // fast-forward: a branch strictly ahead of HEAD.
+        git(&repo, &["checkout", "-b", "ahead"]).await;
+        commit_file(&repo, &dir, "ahead.txt", "a\n", "ahead only").await;
+        git(&repo, &["checkout", &main]).await;
+        let ff = git_merge_preview(repo.clone(), "ahead".to_string(), "none".to_string())
+            .await
+            .unwrap();
+        assert_eq!(ff.status, "fast-forward");
+
+        // conflict: divergent edits to shared.txt (needs git merge-tree, 2.38+).
+        git(&repo, &["checkout", "-b", "feat"]).await;
+        commit_file(&repo, &dir, "shared.txt", "feat\n", "feat edit").await;
+        git(&repo, &["checkout", &main]).await;
+        commit_file(&repo, &dir, "shared.txt", "main3\n", "main edit").await;
+        let cf = git_merge_preview(repo.clone(), "feat".to_string(), "none".to_string())
+            .await
+            .unwrap();
+        assert_eq!(cf.status, "conflict", "conflicts: {:?}", cf.conflicts);
+        assert!(
+            cf.conflicts.iter().any(|f| f.contains("shared.txt")),
+            "{:?}",
+            cf.conflicts
+        );
+
+        // A content conflict auto-resolves with -X (strategy-aware preview) →
+        // the same merge predicts "clean" once a side is chosen.
+        let resolved =
+            git_merge_preview(repo.clone(), "feat".to_string(), "theirs".to_string())
+                .await
+                .unwrap();
+        assert_eq!(resolved.status, "clean", "{:?}", resolved.conflicts);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

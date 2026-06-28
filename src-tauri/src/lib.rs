@@ -161,6 +161,7 @@ pub fn run() {
             git::ops::git_stash_apply,
             git::ops::git_stash_drop,
             git::ops::git_merge,
+            git::ops::git_merge_preview,
             git::ops::git_rebase,
             git::ops::git_op_state,
             git::ops::git_op_abort,

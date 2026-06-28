@@ -12,6 +12,14 @@ commit list.
 
 ### Added
 
+- **Advanced merge tooling.** The **Merge into current** picker now **predicts the merge before
+  you run it** — a calm status line shows *fast-forward*, *already up to date*, *clean merge*, or
+  *which files will conflict*, computed in memory with `git merge-tree` (it touches nothing). Two
+  options join it: **Always create a merge commit** (`--no-ff`), and an **On conflict** strategy —
+  *Stop and let me resolve* (default), *Prefer current branch* (`-X ours`), or *Prefer incoming
+  branch* (`-X theirs`) — that auto-resolves conflicting hunks in one side's favor, clearly
+  cautioned that the other side's conflicting changes are dropped (and the preview then reframes to
+  "N files auto-resolved"). Degrades quietly on older git. GitHub Desktop has none of this.
 - **Interactive rebase — "Edit history".** A new **Edit history…** item in the History
   context menu opens an editor over your unpushed commits where each commit gets a per-row
   action — **pick**, **reword**, **squash**, **fixup**, or **drop** — plus **↑/↓ reorder** and

@@ -2058,9 +2058,34 @@ export function useStashDrop(repo: string) {
 }
 
 export function useMergeBranch(repo: string) {
-  return useRepoMutation(repo, (args: { branch: string; squash: boolean }) =>
-    api.gitMerge(repo, args.branch, args.squash),
+  return useRepoMutation(
+    repo,
+    (args: {
+      branch: string;
+      squash: boolean;
+      noFf: boolean;
+      strategy: api.MergeConflictStrategy;
+    }) =>
+      api.gitMerge(repo, args.branch, args.squash, args.noFf, args.strategy),
   );
+}
+
+/** Predicts a merge's outcome (fast-forward / clean / conflict / …) in memory,
+ *  for the merge picker. Strategy-aware — re-runs when the conflict strategy
+ *  changes so the prediction matches what the merge will actually do. Enabled
+ *  only while the picker is open with a branch. */
+export function useMergePreview(
+  repo: string,
+  branch: string,
+  strategy: api.MergeConflictStrategy,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "merge-preview", branch, strategy] as const,
+    queryFn: () => api.gitMergePreview(repo, branch, strategy),
+    enabled: enabled && branch !== "",
+    staleTime: 15_000,
+  });
 }
 
 export function useRebaseBranch(repo: string) {

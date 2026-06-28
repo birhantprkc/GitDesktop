@@ -48,6 +48,7 @@ import type {
   IssueRelation,
   IssueRelations,
   IssueType,
+  MergePreview,
   Milestone,
   PagesInfo,
   PrDetails,
@@ -604,8 +605,23 @@ export const gitStashPop = (repoPath: string) =>
 export const gitStashCount = (repoPath: string) =>
   invoke<number>("git_stash_count", { repoPath });
 
-export const gitMerge = (repoPath: string, branch: string, squash: boolean) =>
-  invoke<void>("git_merge", { repoPath, branch, squash });
+/** Conflict-auto-resolve strategy for a merge: "none" stops on conflicts,
+ *  "ours"/"theirs" auto-resolve conflicting hunks via `-X`. */
+export type MergeConflictStrategy = "none" | "ours" | "theirs";
+
+export const gitMerge = (
+  repoPath: string,
+  branch: string,
+  squash: boolean,
+  noFf: boolean,
+  strategy: MergeConflictStrategy,
+) => invoke<void>("git_merge", { repoPath, branch, squash, noFf, strategy });
+
+export const gitMergePreview = (
+  repoPath: string,
+  branch: string,
+  strategy: MergeConflictStrategy,
+) => invoke<MergePreview>("git_merge_preview", { repoPath, branch, strategy });
 
 export const gitRebase = (repoPath: string, branch: string) =>
   invoke<void>("git_rebase", { repoPath, branch });

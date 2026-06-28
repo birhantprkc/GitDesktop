@@ -255,6 +255,12 @@ The branch name in the header opens the **branch switcher** ({{kbd:show-branches
 - Right-click a branch to **merge**, **squash and merge**, **rebase**, or **update it
   from the default branch** ({{kbd:update-from-default}}) — the last *without* checking it
   out.
+- The **Merge** dialog previews the result before you commit to it — *fast-forward*, *clean
+  merge*, or *which files will conflict* — worked out in memory without touching your files.
+  Two options sit alongside: **Always create a merge commit** (no fast-forward), and an **On
+  conflict** strategy — *Stop and let me resolve* (default), or *Prefer current* / *Prefer
+  incoming* to auto-resolve conflicting changes in one branch's favor (the other side's
+  conflicting changes are dropped, so it's used deliberately).
 
 ## Stash
 
