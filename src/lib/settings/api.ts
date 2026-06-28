@@ -165,6 +165,12 @@ export interface AppSettings {
   globalInstructions: string;
   /** gitignore-style globs (one per line) excluded from AI context. */
   aiIgnorePatterns: string;
+  /** Extra network hosts (`host` or `host:port`) the app may reach for AI
+   *  inference, beyond the built-in provider hosts and localhost — e.g. a LAN
+   *  Ollama or a self-hosted OpenAI-compatible server. The shared AI `fetch`
+   *  wrapper blocks any other host; the Tauri HTTP capability is opened to
+   *  `http(s)://*` as a coarse backstop, so this list is the effective gate. */
+  aiAllowedHosts: string[];
   /** Path to a program used by "Open in editor" (empty = not configured). */
   externalEditor: string;
   /** Friendly name for the configured editor, used in menu labels. */
@@ -247,6 +253,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   agentImageProviders: ["claude", "codex"],
   globalInstructions: "",
   aiIgnorePatterns: "",
+  aiAllowedHosts: [],
   externalEditor: "",
   externalEditorName: "",
   terminal: "",

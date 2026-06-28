@@ -30,6 +30,8 @@
         { "url": "https://api.z.ai/*" },
         { "url": "http://localhost:11434/*" },
         { "url": "http://127.0.0.1:11434/*" },
+        { "url": "http://*:*/*" },
+        { "url": "https://*:*/*" },
         { "url": "https://eu.i.posthog.com/*" },
         { "url": "https://eu-assets.i.posthog.com/*" },
         { "url": "https://registry.npmjs.org/*" },

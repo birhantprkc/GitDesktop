@@ -1,7 +1,14 @@
-import { CheckCircleIcon, CopyIcon, XCircleIcon } from "@phosphor-icons/react";
+import {
+  CheckCircleIcon,
+  CopyIcon,
+  PlusIcon,
+  WarningIcon,
+  XCircleIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "@tanstack/react-store";
-import { useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +38,11 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { detectAgentCli, providerKind } from "@/lib/ai/agent";
+import {
+  entryMatchesUrl,
+  isHostAllowed,
+  normalizeHost,
+} from "@/lib/ai/allowed-hosts";
 import { createAiClient } from "@/lib/ai/client";
 import { useAvailableModels } from "@/lib/ai/models";
 import {
@@ -78,14 +90,20 @@ function ModelPicker({
   value,
   onChange,
   providerIds,
+  allowedHosts,
 }: {
   idPrefix: string;
   value: AiSettings;
   onChange: (next: AiSettings) => void;
   providerIds: AiProviderId[];
+  allowedHosts: string[];
 }) {
   const keyPreview = useSecretPreview(value.provider);
-  const availableModels = useAvailableModels(value, Boolean(keyPreview.data));
+  const availableModels = useAvailableModels(
+    value,
+    Boolean(keyPreview.data),
+    allowedHosts,
+  );
   const models = availableModels.data?.models ?? [];
   const needsKey = PROVIDERS_REQUIRING_KEY.includes(value.provider);
   const isCli = isCliProvider(value.provider);
@@ -254,16 +272,96 @@ const PRESET_ITEMS: Record<string, string> = {
 };
 
 /**
- * Base-URL + preset picker for the `openai-compatible` provider. Choosing a preset
- * fills the base URL (and a default model); the URL stays editable for any other
- * OpenAI-compatible endpoint. The host must be in the app's network allowlist.
+ * The note under a custom provider URL. When the URL points at a host that isn't
+ * built-in / local / already allowed, it surfaces *why* requests will fail and a
+ * one-click **Allow host** that adds it to the allowlist — turning a silent block
+ * into a guided fix. Otherwise it shows the muted default note.
  */
-function OpenAiCompatibleConfig({
+function HostAllowNote({
+  url,
+  allowedHosts,
+  onAllowHost,
+  defaultNote,
+}: {
+  url: string;
+  allowedHosts: string[];
+  onAllowHost: (url: string) => void;
+  defaultNote: ReactNode;
+}) {
+  const host = normalizeHost(url);
+  if (!host || isHostAllowed(url, allowedHosts)) {
+    return <p className="text-xs text-muted-foreground">{defaultNote}</p>;
+  }
+  return (
+    <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-warning">
+      <WarningIcon className="size-4 shrink-0" />
+      <span>
+        <code className="font-mono">{host}</code> isn't an allowed host yet — AI
+        requests to it are blocked.
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="xs"
+        onClick={() => onAllowHost(url)}
+      >
+        Allow host
+      </Button>
+    </p>
+  );
+}
+
+/** Ollama base-URL field — the URL the local/LAN Ollama server is reached at. */
+function OllamaConfig({
+  idPrefix,
   value,
   onChange,
+  allowedHosts,
+  onAllowHost,
 }: {
+  idPrefix: string;
   value: AiSettings;
   onChange: (next: AiSettings) => void;
+  allowedHosts: string[];
+  onAllowHost: (url: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={`${idPrefix}-ollama-url`}>Ollama URL</Label>
+      <Input
+        id={`${idPrefix}-ollama-url`}
+        autoComplete="off"
+        placeholder="http://localhost:11434"
+        value={value.ollamaBaseUrl}
+        onChange={(e) => onChange({ ...value, ollamaBaseUrl: e.target.value })}
+      />
+      <HostAllowNote
+        url={value.ollamaBaseUrl}
+        allowedHosts={allowedHosts}
+        onAllowHost={onAllowHost}
+        defaultNote="Point at a local or LAN Ollama server."
+      />
+    </div>
+  );
+}
+
+/**
+ * Base-URL + preset picker for the `openai-compatible` provider. Choosing a preset
+ * fills the base URL (and a default model); the URL stays editable for any other
+ * OpenAI-compatible endpoint. A host outside the built-in presets must be allowed.
+ */
+function OpenAiCompatibleConfig({
+  idPrefix,
+  value,
+  onChange,
+  allowedHosts,
+  onAllowHost,
+}: {
+  idPrefix: string;
+  value: AiSettings;
+  onChange: (next: AiSettings) => void;
+  allowedHosts: string[];
+  onAllowHost: (url: string) => void;
 }) {
   const base = value.openaiCompatibleBaseUrl.replace(/\/$/, "");
   const current = OPENAI_COMPATIBLE_PRESETS.find((p) => p.baseUrl === base);
@@ -272,7 +370,7 @@ function OpenAiCompatibleConfig({
   return (
     <div className="grid grid-cols-2 gap-4">
       <div className="space-y-2">
-        <Label htmlFor="oai-compat-preset">Service</Label>
+        <Label htmlFor={`${idPrefix}-oai-compat-preset`}>Service</Label>
         <Select
           items={PRESET_ITEMS}
           value={presetId}
@@ -287,7 +385,10 @@ function OpenAiCompatibleConfig({
             }
           }}
         >
-          <SelectTrigger id="oai-compat-preset" className="w-full">
+          <SelectTrigger
+            id={`${idPrefix}-oai-compat-preset`}
+            className="w-full"
+          >
             <SelectValue placeholder="Custom" />
           </SelectTrigger>
           <SelectContent>
@@ -302,9 +403,9 @@ function OpenAiCompatibleConfig({
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="oai-compat-url">Base URL</Label>
+        <Label htmlFor={`${idPrefix}-oai-compat-url`}>Base URL</Label>
         <Input
-          id="oai-compat-url"
+          id={`${idPrefix}-oai-compat-url`}
           autoComplete="off"
           placeholder="https://…/v1"
           value={value.openaiCompatibleBaseUrl}
@@ -314,13 +415,184 @@ function OpenAiCompatibleConfig({
         />
       </div>
 
-      <p className="col-span-2 text-xs text-muted-foreground">
-        Any OpenAI-compatible{" "}
-        <code className="font-mono">/chat/completions</code> endpoint.{" "}
-        {current?.keysUrl
-          ? `Get an API key at ${current.keysUrl}.`
-          : "A host outside the built-in presets must be added to the app's network allowlist."}
-      </p>
+      <div className="col-span-2">
+        <HostAllowNote
+          url={value.openaiCompatibleBaseUrl}
+          allowedHosts={allowedHosts}
+          onAllowHost={onAllowHost}
+          defaultNote={
+            <>
+              Any OpenAI-compatible{" "}
+              <code className="font-mono">/chat/completions</code> endpoint.{" "}
+              {current?.keysUrl
+                ? `Get an API key at ${current.keysUrl}.`
+                : null}
+            </>
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+/** The provider-specific URL config (Ollama URL or OpenAI-compatible base URL),
+ *  shared by the generation and review model blocks. Renders nothing for a
+ *  provider with a fixed host. */
+function ProviderUrlConfig({
+  idPrefix,
+  value,
+  onChange,
+  allowedHosts,
+  onAllowHost,
+}: {
+  idPrefix: string;
+  value: AiSettings;
+  onChange: (next: AiSettings) => void;
+  allowedHosts: string[];
+  onAllowHost: (url: string) => void;
+}) {
+  if (value.provider === "ollama") {
+    return (
+      <OllamaConfig
+        idPrefix={idPrefix}
+        value={value}
+        onChange={onChange}
+        allowedHosts={allowedHosts}
+        onAllowHost={onAllowHost}
+      />
+    );
+  }
+  if (value.provider === "openai-compatible") {
+    return (
+      <OpenAiCompatibleConfig
+        idPrefix={idPrefix}
+        value={value}
+        onChange={onChange}
+        allowedHosts={allowedHosts}
+        onAllowHost={onAllowHost}
+      />
+    );
+  }
+  return null;
+}
+
+/**
+ * Manage the AI host allowlist — add a `host[:port]`, remove one. Built-in
+ * provider hosts and localhost are always allowed and aren't listed. The list
+ * is the effective gate for which custom servers the app will talk to (the Tauri
+ * HTTP capability is opened broadly as a backstop), so it's worth keeping tight.
+ */
+function AllowedHostsField({
+  hosts,
+  activeUrls,
+  onChange,
+}: {
+  hosts: string[];
+  /** URLs the currently-selected Ollama/OpenAI-compatible providers point at, so
+   *  a host that's keeping one reachable can be flagged before it's removed. */
+  activeUrls: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [warn, setWarn] = useState<string | null>(null);
+
+  function add() {
+    const host = normalizeHost(draft);
+    if (!host) {
+      setWarn("Enter a host like 192.168.1.50:11434");
+      return;
+    }
+    // isHostAllowed also covers built-in/local hosts and a port already covered
+    // by a no-port entry, so this blocks adding a redundant or always-allowed one.
+    if (isHostAllowed(`http://${host}`, hosts)) {
+      setWarn(`${host} is already allowed`);
+      return;
+    }
+    onChange([...hosts, host]);
+    setDraft("");
+    setWarn(null);
+  }
+
+  return (
+    <div className="space-y-3 border-t pt-4">
+      <div>
+        <h3 className="text-sm font-medium">Allowed hosts</h3>
+        <p className="text-xs text-muted-foreground">
+          Hosts GitDesktop may reach for AI inference, beyond the built-in
+          providers and localhost — add a LAN or self-hosted Ollama /
+          OpenAI-compatible server as <code className="font-mono">host</code> or{" "}
+          <code className="font-mono">host:port</code>.
+        </p>
+      </div>
+      <div className="flex items-start gap-2">
+        <div className="flex-1 space-y-1">
+          <Input
+            aria-label="Host to allow"
+            autoComplete="off"
+            placeholder="192.168.1.50:11434"
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setWarn(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                add();
+              } else if (e.key === "Escape") {
+                setDraft("");
+                setWarn(null);
+              }
+            }}
+          />
+          {warn && <p className="text-xs text-warning">{warn}</p>}
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={add}
+          disabled={!draft.trim()}
+        >
+          <PlusIcon data-icon="inline-start" />
+          Add
+        </Button>
+      </div>
+      {hosts.length > 0 ? (
+        <ul className="space-y-1">
+          {hosts.map((h) => {
+            const inUse = activeUrls.some((u) => entryMatchesUrl(h, u));
+            return (
+              <li
+                key={h}
+                className="flex items-center justify-between gap-2 border px-3 py-1.5"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate font-mono text-xs">{h}</span>
+                  {inUse && (
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      in use
+                    </span>
+                  )}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={`Remove ${h}`}
+                  onClick={() => onChange(hosts.filter((x) => x !== h))}
+                >
+                  <XIcon />
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No custom hosts yet — built-in providers and localhost are always
+          allowed.
+        </p>
+      )}
     </div>
   );
 }
@@ -343,9 +615,27 @@ export const AiProviderSection = withForm({
       form.store,
       (s) => s.values.agentImageProviders,
     );
+    const allowedHosts = useSelector(
+      form.store,
+      (s) => s.values.aiAllowedHosts,
+    );
     const provider = ai.provider;
     const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
     const keyPreview = useSecretPreview(provider);
+    // The Allowed-hosts manager is only relevant to the providers that take a
+    // custom URL; keep it out of the way for the cloud-only majority.
+    const showAllowedHosts = [ai.provider, reviewAi.provider].some(
+      (p) => p === "ollama" || p === "openai-compatible",
+    );
+    // The URLs the selected custom-host providers point at — so a host that's
+    // keeping one reachable shows an "in use" hint before it's removed.
+    const activeProviderUrls = [
+      ai.provider === "ollama" && ai.ollamaBaseUrl,
+      ai.provider === "openai-compatible" && ai.openaiCompatibleBaseUrl,
+      reviewAi.provider === "ollama" && reviewAi.ollamaBaseUrl,
+      reviewAi.provider === "openai-compatible" &&
+        reviewAi.openaiCompatibleBaseUrl,
+    ].filter((u): u is string => Boolean(u));
 
     const [confirmClear, setConfirmClear] = useState(false);
     const [testing, setTesting] = useState(false);
@@ -379,6 +669,15 @@ export const AiProviderSection = withForm({
       form.setFieldValue("ai", next);
     }
 
+    /** Add a URL's host to the draft allowlist (dedup'd) — the one-click fix
+     *  behind the contextual "Allow host" affordance on the URL fields. */
+    function allowHost(url: string) {
+      const host = normalizeHost(url);
+      if (host && !allowedHosts.includes(host)) {
+        form.setFieldValue("aiAllowedHosts", [...allowedHosts, host]);
+      }
+    }
+
     async function clearKey() {
       try {
         await deleteSecret(provider);
@@ -396,8 +695,13 @@ export const AiProviderSection = withForm({
       setTesting(true);
       setTestResult(null);
       try {
-        // Use a typed-but-unsaved key if present, so you can test before saving.
-        const client = await createAiClient(ai, keyForm.getFieldValue("key"));
+        // Use a typed-but-unsaved key and the unsaved allow list, so you can
+        // test a just-added host/key before saving the settings draft.
+        const client = await createAiClient(
+          ai,
+          keyForm.getFieldValue("key"),
+          allowedHosts,
+        );
         const result = await client.testConnection();
         setTestResult(
           result.ok ? { ok: true } : { ok: false, message: result.message },
@@ -424,26 +728,16 @@ export const AiProviderSection = withForm({
           value={ai}
           onChange={setAi}
           providerIds={GENERATION_PROVIDER_IDS}
+          allowedHosts={allowedHosts}
         />
 
-        {provider === "ollama" && (
-          <div className="space-y-2">
-            <Label htmlFor="ollama-url">Ollama URL</Label>
-            <Input
-              id="ollama-url"
-              autoComplete="off"
-              value={ai.ollamaBaseUrl}
-              onChange={(e) => setAi({ ...ai, ollamaBaseUrl: e.target.value })}
-            />
-            <p className="text-xs text-muted-foreground">
-              Only localhost is allowed by the app's network policy.
-            </p>
-          </div>
-        )}
-
-        {provider === "openai-compatible" && (
-          <OpenAiCompatibleConfig value={ai} onChange={setAi} />
-        )}
+        <ProviderUrlConfig
+          idPrefix="ai"
+          value={ai}
+          onChange={setAi}
+          allowedHosts={allowedHosts}
+          onAllowHost={allowHost}
+        />
 
         {needsKey && (
           <form
@@ -550,6 +844,7 @@ export const AiProviderSection = withForm({
             value={reviewAi}
             onChange={(next) => form.setFieldValue("reviewAi", next)}
             providerIds={ALL_PROVIDER_IDS}
+            allowedHosts={allowedHosts}
           />
           {isCliProvider(reviewAi.provider) && (
             <CliReviewConfig
@@ -557,7 +852,22 @@ export const AiProviderSection = withForm({
               onChange={(next) => form.setFieldValue("reviewAi", next)}
             />
           )}
+          <ProviderUrlConfig
+            idPrefix="review"
+            value={reviewAi}
+            onChange={(next) => form.setFieldValue("reviewAi", next)}
+            allowedHosts={allowedHosts}
+            onAllowHost={allowHost}
+          />
         </div>
+
+        {showAllowedHosts && (
+          <AllowedHostsField
+            hosts={allowedHosts}
+            activeUrls={activeProviderUrls}
+            onChange={(next) => form.setFieldValue("aiAllowedHosts", next)}
+          />
+        )}
 
         <div className="space-y-3 border-t pt-4">
           <div>

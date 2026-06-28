@@ -1453,6 +1453,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "trash",
+ "winreg 0.55.0",
 ]
 
 [[package]]

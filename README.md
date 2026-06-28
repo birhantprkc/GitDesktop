@@ -259,11 +259,15 @@ display can't strand it off-screen.
 
 - **Providers** — Anthropic, OpenAI, **any OpenAI-compatible endpoint** (custom
   base URL, with one-click presets for the Vercel AI Gateway, Google Gemini,
-  DeepSeek, Mistral, and Z.ai), OpenRouter, local **Ollama**, **Ollama Cloud**
+  DeepSeek, Mistral, and Z.ai), OpenRouter, **local or LAN Ollama**, **Ollama Cloud**
   (hosted models via an API key), and the **Claude Code / Codex / GitHub Copilot /
   opencode CLIs** (keyless, via your subscription — or opencode's free hosted
   models). Separate models for generation vs. review; live model lists in a
   searchable picker.
+- **Custom & LAN servers** — point Ollama or an OpenAI-compatible endpoint at a
+  box on your network, not just `localhost`. Non-built-in hosts must be added to
+  the **Allowed hosts** list (Settings → AI; one-click *Allow host* on the URL
+  field), which GitDesktop enforces before every AI request.
 - **Custom instructions** (included in every generation):
   - **Global** — Settings → AI instructions (e.g. "Follow Conventional Commits").
   - **Per-repo** — `.gitdesktop/instructions.md` in the repo. Takes precedence.

@@ -45,6 +45,12 @@ rmcp = { version = "1", features = ["server", "macros", "transport-io"] }
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 
+# Windows-only: re-read the live user/system PATH from the registry so the CLI
+# resolver can find a tool added to PATH AFTER the app launched (Windows never
+# pushes PATH edits into a running process). See agent.rs `registry_path_dirs`.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
 # Vendored portable-pty carrying a 1-line Windows ConPTY fix: pass NULL (not
 # INVALID_HANDLE_VALUE) std handles when spawning the pty child, so it attaches to
 # the pseudoconsole instead of allocating its own console window (which left the

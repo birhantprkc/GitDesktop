@@ -639,12 +639,20 @@ Bring your own model:
   keychain, never in app files).
 - **OpenAI-compatible** — any endpoint that speaks the OpenAI API, with one-click presets
   for **Vercel AI Gateway, Google Gemini, DeepSeek, Mistral, and Z.ai (GLM)**.
-- **Ollama (local)** — a fully local model, so your code never leaves your machine.
+- **Ollama (local or LAN)** — a local model (your code never leaves your machine), or one
+  running on another machine on your network — set its URL in Settings.
 - **Claude Code, Codex, GitHub Copilot, opencode CLIs** — *keyless*: they reuse your
   existing CLI login, with no API key. The CLI agents are **write-capable** — they power
   agent sessions and plan mode — and can read repo files for deeper reviews.
 
 You can set **separate models** for generation (commit/PR messages) versus review.
+
+**Custom & LAN servers — allowed hosts.** To reach an Ollama or OpenAI-compatible server
+that isn't \`localhost\` (a box on your network, or a self-hosted endpoint), enter its URL in
+Settings → AI and add its host to the **Allowed hosts** list — or click **Allow host** on the
+prompt that appears next to a not-yet-permitted URL. Built-in providers and \`localhost\` are
+always allowed; every other host must be on your list, which GitDesktop checks before each AI
+request so it never reaches a server you didn't authorize.
 
 ## Generation
 

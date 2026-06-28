@@ -43,6 +43,7 @@ const capabilities = [
   { label: "Agent sessions — tabs, search & completion alerts", ai: true },
   { label: "Slash commands & skills in the agent composer", ai: true },
   { label: "Bring your own MCP servers, opted in per session", ai: true },
+  { label: "Point AI at a custom or LAN Ollama / OpenAI-compatible server", ai: true },
   { label: "Browse the official MCP registry to add servers", ai: true },
   { label: "Use GitDesktop as an MCP server for external AI clients", ai: true },
   { label: "Run agents in a Docker/Podman sandbox (opt-in)", ai: true },
@@ -298,7 +299,7 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
               <p class="mt-4 max-w-[60ch] leading-relaxed text-muted">
                 Bring your own model: Anthropic, OpenAI, any OpenAI-compatible
                 endpoint (Vercel AI Gateway, Gemini, DeepSeek, Mistral, Z.ai),
-                OpenRouter, Ollama (local or cloud), or your
+                OpenRouter, Ollama (local, LAN, or cloud), or your
                 Claude&nbsp;/&nbsp;Codex&nbsp;/&nbsp;Copilot&nbsp;/&nbsp;opencode
                 CLI. No keys go to us — they're yours, stored in your OS keychain.
               </p>

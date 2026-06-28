@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { getSecret } from "@/lib/git/api";
+import { guardedFetch } from "./guarded-fetch";
 import {
   MODEL_SUGGESTIONS,
   OLLAMA_CLOUD_HOST,
@@ -31,15 +31,22 @@ export interface AvailableModels {
 const OPENAI_NON_CHAT =
   /embed|whisper|tts|dall-e|audio|realtime|moderation|image|transcribe|babbage|davinci|codex|search/i;
 
-async function fetchJson(url: string, headers?: Record<string, string>) {
-  const res = await tauriFetch(url, { headers });
-  if (!res.ok) {
-    throw new Error(`${url} returned ${res.status}`);
-  }
-  return res.json();
-}
-
-async function fetchProviderModels(settings: AiSettings): Promise<string[]> {
+async function fetchProviderModels(
+  settings: AiSettings,
+  allowedHosts?: readonly string[],
+): Promise<string[]> {
+  // The live model list hits the same hosts as inference (incl. a custom Ollama /
+  // OpenAI-compatible base URL), so it goes through the same host allowlist — the
+  // unsaved draft list (`allowedHosts`) when called from Settings, else the saved
+  // list. A blocked or unreachable host just falls back to the static suggestions.
+  const aiFetch = guardedFetch(allowedHosts);
+  const fetchJson = async (url: string, headers?: Record<string, string>) => {
+    const res = await aiFetch(url, { headers });
+    if (!res.ok) {
+      throw new Error(`${url} returned ${res.status}`);
+    }
+    return res.json();
+  };
   switch (settings.provider) {
     case "openai": {
       const key = await getSecret("openai");
@@ -108,7 +115,11 @@ async function fetchProviderModels(settings: AiSettings): Promise<string[]> {
  * Live model list for the current provider, falling back to the static
  * suggestions when there's no key or the request fails.
  */
-export function useAvailableModels(settings: AiSettings, keySaved: boolean) {
+export function useAvailableModels(
+  settings: AiSettings,
+  keySaved: boolean,
+  allowedHosts?: readonly string[],
+) {
   return useQuery({
     queryKey: [
       "models",
@@ -116,10 +127,11 @@ export function useAvailableModels(settings: AiSettings, keySaved: boolean) {
       keySaved,
       settings.ollamaBaseUrl,
       settings.openaiCompatibleBaseUrl,
+      allowedHosts ?? [],
     ] as const,
     queryFn: async (): Promise<AvailableModels> => {
       try {
-        const models = await fetchProviderModels(settings);
+        const models = await fetchProviderModels(settings, allowedHosts);
         if (models.length > 0) {
           return { models, live: true };
         }

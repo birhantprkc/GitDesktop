@@ -12,6 +12,14 @@ commit list.
 
 ### Added
 
+- **Custom & LAN AI servers, with an allowed-hosts list.** You can now point GitDesktop at an
+  Ollama (or any OpenAI-compatible) server running on **another machine on your network** — not
+  just `localhost`. Set the server's URL under **Settings → AI** (now available for the review
+  model too, not only generation), then allow its host in the new **Allowed hosts** list — or
+  just click **Allow host** on the inline prompt that appears when you enter a URL that isn't
+  permitted yet. Built-in providers and `localhost` are always allowed; everything else must be
+  on your list, which is the gate the app enforces before every AI request — so a typo or a
+  compromised page can't quietly reach an arbitrary server.
 - **Advanced merge tooling.** The **Merge into current** picker now **predicts the merge before
   you run it** — a calm status line shows *fast-forward*, *already up to date*, *clean merge*, or
   *which files will conflict*, computed in memory with `git merge-tree` (it touches nothing). Two
@@ -352,6 +360,12 @@ commit list.
 
 ### Fixed
 
+- **Windows: tools added to `PATH` after the app started are now found without a restart.**
+  Windows never pushes a `PATH` change into an already-running program, so a CLI you
+  installed (or added to `PATH`) while GitDesktop was open — `glab`, `gh`, or an agent CLI —
+  used to read **"Not found"** in Settings → About until you fully relaunched the app. The
+  resolver now also reads your *live* user and system `PATH` straight from the registry, so
+  detection (and the **Re-check** button) picks up a freshly-installed tool immediately.
 - **Host GitHub Copilot sessions no longer fail with "batch file arguments are invalid"
   on Windows.** When the VS Code Copilot extension is installed, it puts a `copilot.bat`
   wrapper on your `PATH` *ahead* of the real `copilot.exe` — and Windows won't let an app
@@ -400,12 +414,17 @@ commit list.
 
 - **Sharper AI security reviews.** The security-review prompt was rebuilt to cut false
   positives and surface real, exploitable issues. Every finding must now spell out a
-  concrete exploit scenario (no attack path, no finding), severity bands are defined
-  (High/Medium/Low), and an explicit exclusion list tuned to this codebase tells the model
-  what *not* to flag — e.g. memory-safety bugs in Rust, React XSS without
-  `dangerouslySetInnerHTML`, missing client-side auth checks, DoS/rate-limiting, outdated
-  dependencies, and attacks that depend on controlling environment variables or CLI flags.
-  Applies to both the quick (diff-only) and repo-aware security reviews, on any provider.
+  concrete exploit scenario (no attack path, no finding) and carries a **confidence score**,
+  reported against a severity-scaled bar — eager on critical-impact issues, strict on
+  low-severity ones. Each risk category now pins its own *"not an issue"* list right beside
+  it, the model must **name the specific guard** that makes a risky sink safe before
+  dismissing it, and an exclusion list tuned to this codebase tells it what *not* to flag —
+  e.g. memory-safety bugs in Rust, React XSS without `dangerouslySetInnerHTML`, missing
+  client-side auth checks, DoS/rate-limiting, outdated dependencies, and attacks that depend
+  on controlling environment variables or CLI flags. **Prompt-injection (XPIA)** is now a
+  first-class category, with a carve-out so GitDesktop's own intentional embedding of repo,
+  PR, and diff content into its AI prompts isn't mistaken for a vulnerability. Applies to
+  both the quick (diff-only) and repo-aware security reviews, on any provider.
 - **A steadier, tidier agent composer.** The task box (Delegate, Plan, and the
   in-conversation reply) now docks to the bottom of its panel like a terminal: the
   text grows **upward** so the action row and **Send** never drift as you type. The

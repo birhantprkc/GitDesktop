@@ -168,6 +168,85 @@ fn candidate_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Windows analog of `resolve_via_login_shell`: a packaged GUI app captures its
+/// PATH once at launch, and Windows never pushes a later PATH edit into a
+/// running process — so a CLI installed (or added to PATH) AFTER GitDesktop
+/// started is invisible to a process-PATH search until the app is relaunched
+/// with a fresh environment. Re-read the *current* user + system PATH straight
+/// from the registry (the source of truth Windows itself broadcasts edits from)
+/// and feed those directories into the search. This recovers an after-launch
+/// PATH addition without a restart and makes Settings → About's "Re-check"
+/// button actually find a freshly-installed tool (e.g. glab, or an agent CLI).
+#[cfg(windows)]
+fn registry_path_dirs() -> Vec<PathBuf> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+
+    // (root, subkey) — the user PATH overrides/extends the system PATH, so read
+    // HKCU first; both are merged into the search either way.
+    let sources = [
+        (HKEY_CURRENT_USER, "Environment"),
+        (
+            HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ),
+    ];
+    let mut dirs = Vec::new();
+    for (root, subkey) in sources {
+        let Ok(key) = RegKey::predef(root).open_subkey(subkey) else {
+            continue;
+        };
+        // "Path" is usually REG_EXPAND_SZ; winreg decodes it but does NOT expand
+        // %VARS%, so we expand below. (Value-name lookup is case-insensitive.)
+        let Ok(raw) = key.get_value::<String, _>("Path") else {
+            continue;
+        };
+        for entry in raw.split(';') {
+            let expanded = expand_env_vars(entry.trim());
+            if !expanded.is_empty() {
+                dirs.push(PathBuf::from(expanded));
+            }
+        }
+    }
+    dirs
+}
+
+/// Expand `%VAR%` references in a registry PATH entry using the process
+/// environment (Windows env-var names are case-insensitive; `std::env::var`
+/// honors that). An unknown or unbalanced `%VAR%` is left literal rather than
+/// dropped, so we never fabricate a truncated path.
+#[cfg(windows)]
+fn expand_env_vars(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) => {
+                let name = &after[..end];
+                match std::env::var(name) {
+                    Ok(val) => out.push_str(&val),
+                    Err(_) => {
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                // Unbalanced '%' — emit the remainder literally and stop.
+                out.push('%');
+                out.push_str(after);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Executable suffixes to try. On Windows this is PATHEXT (`.EXE` before
 /// `.CMD`); elsewhere just the bare name.
 fn exe_exts() -> Vec<String> {
@@ -216,6 +295,13 @@ fn find_executable(names: &[&str]) -> Option<PathBuf> {
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
     dirs.extend(candidate_dirs());
+    // Windows: also search the *live* registry PATH, so a tool added to PATH
+    // after launch is found without a relaunch. Appended after the process PATH
+    // (the common case) but before probing — both the `.exe`-preference pass and
+    // the general pass below iterate `dirs`, so a registry-only `.exe` still wins
+    // over an earlier `.cmd` shim.
+    #[cfg(windows)]
+    dirs.extend(registry_path_dirs());
 
     // Windows: prefer a real `.exe`/`.com` found ANYWHERE over a `.cmd`/`.bat`
     // shim that sits earlier on PATH. Two reasons: Rust refuses to pass a
@@ -314,6 +400,8 @@ pub(crate) async fn resolve_named(names: &[&str], bin_path: Option<&str>) -> Opt
     }
     #[cfg(windows)]
     {
+        // No login-shell probe on Windows; the after-launch-PATH recovery is
+        // handled inside `find_executable` via the live registry PATH instead.
         None
     }
 }
@@ -1840,5 +1928,41 @@ mod tests {
             other => panic!("expected Done, got {other:?}"),
         }
         assert!(term);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn expand_env_vars_resolves_known_and_keeps_unknown() {
+        // SAFETY: test-local env var, single-threaded within this test.
+        std::env::set_var("GD_TEST_ROOT", r"C:\tools");
+        // Known %VAR% is expanded; surrounding literals are preserved.
+        assert_eq!(expand_env_vars(r"%GD_TEST_ROOT%\bin"), r"C:\tools\bin");
+        // A plain path (the common installer case, e.g. glab) is untouched.
+        assert_eq!(
+            expand_env_vars(r"C:\Program Files (x86)\glab"),
+            r"C:\Program Files (x86)\glab"
+        );
+        // An unknown var is left literal, not silently dropped to a partial path.
+        assert_eq!(expand_env_vars(r"%GD_NOPE%\bin"), r"%GD_NOPE%\bin");
+        // An unbalanced '%' is emitted literally.
+        assert_eq!(expand_env_vars("50%done"), "50%done");
+        std::env::remove_var("GD_TEST_ROOT");
+    }
+
+    // Runtime validation of the actual registry read (not just the expander):
+    // HKLM's Session Manager Environment Path always exists on Windows and always
+    // contains the (expandable) system32 dir, so a working read returns a
+    // non-empty list with at least one real directory in it. This is what proves
+    // the open_subkey + get_value + %VAR% expansion path works against the live
+    // registry on the build machine — the bit a pure-logic test can't cover.
+    #[cfg(windows)]
+    #[test]
+    fn registry_path_dirs_reads_the_live_system_path() {
+        let dirs = registry_path_dirs();
+        assert!(!dirs.is_empty(), "expected the system PATH from the registry");
+        assert!(
+            dirs.iter().any(|d| d.is_dir()),
+            "expected at least one real directory among: {dirs:?}"
+        );
     }
 }

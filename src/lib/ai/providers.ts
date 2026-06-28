@@ -1,9 +1,9 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { LanguageModel } from "ai";
 import { createOllama } from "ollama-ai-provider-v2";
+import { guardedFetch } from "./guarded-fetch";
 import type { AiProviderId, AiSettings } from "./types";
 
 export const PROVIDER_LABELS: Record<AiProviderId, string> = {
@@ -25,9 +25,9 @@ export const OLLAMA_CLOUD_HOST = "https://ollama.com";
 
 /** Presets for the `openai-compatible` provider — each is an OpenAI-compatible
  *  `/chat/completions` endpoint. The Vercel AI Gateway is an aggregator (one host,
- *  many models). Each `baseUrl`'s host MUST be in the network allowlist
- *  (`src-tauri/capabilities/default.json`); a base URL outside these presets needs
- *  its host added there too, else requests are silently blocked. */
+ *  many models). Each preset's host is a built-in (always allowed by `allowed-hosts.ts`);
+ *  a base URL outside these presets needs its host added to the user's
+ *  Settings → AI → Allowed hosts list, else the guarded fetch blocks it. */
 export interface OpenAiCompatiblePreset {
   id: string;
   label: string;
@@ -162,13 +162,16 @@ export const MODEL_SUGGESTIONS: Record<AiProviderId, string[]> = {
   ],
 };
 
-// All providers get the Tauri fetch, which proxies through Rust and so
-// is exempt from webview CORS (most AI APIs reject browser origins).
+// All providers go through `guardedFetch` (guarded-fetch.ts) — the Tauri fetch
+// (proxied through Rust, exempt from the webview CORS most AI APIs reject) behind
+// the host allowlist. `allowedHostsOverride` is the unsaved draft list for
+// Settings "Test connection"; omitted elsewhere so the saved list applies.
 export function createModel(
   settings: AiSettings,
   apiKey: string | null,
+  allowedHostsOverride?: readonly string[],
 ): LanguageModel {
-  const fetch = tauriFetch as typeof globalThis.fetch;
+  const fetch = guardedFetch(allowedHostsOverride);
   switch (settings.provider) {
     case "anthropic":
       return createAnthropic({ apiKey: apiKey ?? "", fetch })(settings.model);
