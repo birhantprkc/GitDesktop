@@ -95,6 +95,14 @@ pub enum ReviewEvent {
     Delta { text: String },
     /// Transient progress note (Tier 2 tool activity, e.g. "Reading files…").
     Status { text: String },
+    /// One structured tool step for the activity timeline — a normalized `tool`
+    /// category (read/search/list/edit/write/run/web-fetch/web-search/other) plus
+    /// the thing it acted on (`target`: a file path, command, URL, or query), when
+    /// extractable. The frontend accumulates these into a per-turn step list.
+    Tool {
+        tool: String,
+        target: Option<String>,
+    },
     /// Terminal success: the full final review text plus run metadata.
     Done {
         text: String,
@@ -913,27 +921,59 @@ fn opencode_variant(level: &str) -> Option<&'static str> {
     }
 }
 
-/// Friendly progress label for an opencode tool call (`part.tool`).
-fn opencode_tool_status(tool: &str) -> String {
-    match tool {
-        "write" => "Writing files…".to_string(),
-        "edit" | "patch" => "Editing files…".to_string(),
-        "read" => "Reading files…".to_string(),
-        "grep" => "Searching code…".to_string(),
-        "glob" | "list" | "ls" => "Listing files…".to_string(),
-        "bash" => "Running a command…".to_string(),
-        "webfetch" | "fetch" => "Fetching a page…".to_string(),
-        other => format!("Using {other}…"),
+/// Normalize a Claude/opencode-style tool NAME to a timeline category. Unknown
+/// names fall through to "other" so the step still shows (just generically). The
+/// frontend maps each category to an icon + verb.
+fn normalize_tool(name: &str) -> &'static str {
+    match name.to_ascii_lowercase().as_str() {
+        "read" => "read",
+        "grep" | "search" => "search",
+        "glob" | "list" | "ls" => "list",
+        "edit" | "multiedit" | "patch" | "apply_patch" | "applypatch" => "edit",
+        "write" | "create" => "write",
+        "bash" | "shell" | "run" | "execute" => "run",
+        "webfetch" | "fetch" => "web-fetch",
+        "websearch" => "web-search",
+        "task" | "agent" => "task",
+        _ => "other",
     }
 }
 
-/// Friendly progress label for a Claude Tier-2 tool call.
-fn tool_status(name: &str) -> String {
-    match name {
-        "Read" => "Reading files…".to_string(),
-        "Grep" => "Searching code…".to_string(),
-        "Glob" => "Finding files…".to_string(),
-        other => format!("Using {other}…"),
+/// Pull the most useful "target" out of a tool-call input object: the file path,
+/// command, URL, or query — whatever the tool acted on. None when nothing fits.
+fn tool_target(input: &serde_json::Value) -> Option<String> {
+    const KEYS: &[&str] = &[
+        "file_path",
+        "filePath",
+        "path",
+        "notebook_path",
+        "command",
+        "cmd",
+        "url",
+        "query",
+        "pattern",
+        "prompt",
+    ];
+    for k in KEYS {
+        if let Some(s) = input.get(k).and_then(|v| v.as_str()) {
+            let t = s.trim();
+            if !t.is_empty() {
+                return Some(clip_target(t));
+            }
+        }
+    }
+    None
+}
+
+/// Keep a target to a sane size for the event payload (the UI also truncates for
+/// display) and collapse internal whitespace so a multi-line command reads as one.
+fn clip_target(s: &str) -> String {
+    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() > 200 {
+        let truncated: String = one_line.chars().take(200).collect();
+        format!("{truncated}…")
+    } else {
+        one_line
     }
 }
 
@@ -963,21 +1003,20 @@ fn codex_review_args(model: &str, repo_path: &str, effort: &str) -> Vec<String> 
     args
 }
 
-/// Friendly progress label for a Codex shell command (it reads files by running
-/// `Get-Content`/`cat`/`rg`/… in the read-only sandbox).
-fn codex_command_status(cmd: &str) -> String {
+/// Classify a Codex shell command into a timeline category (it reads/searches by
+/// running `Get-Content`/`cat`/`rg`/… in its sandbox, and edits via `apply_patch`).
+fn codex_command_kind(cmd: &str) -> &'static str {
     let lower = cmd.to_lowercase();
-    if lower.contains("get-content") || lower.contains("cat ") || lower.contains("type ") {
-        "Reading files…".to_string()
-    } else if lower.contains("rg ")
-        || lower.contains("grep")
-        || lower.contains("select-string")
-    {
-        "Searching code…".to_string()
+    if lower.contains("apply_patch") {
+        "edit"
+    } else if lower.contains("get-content") || lower.contains("cat ") || lower.contains("type ") {
+        "read"
+    } else if lower.contains("rg ") || lower.contains("grep") || lower.contains("select-string") {
+        "search"
     } else if lower.contains("get-childitem") || lower.contains("ls ") || lower.contains("dir ") {
-        "Listing files…".to_string()
+        "list"
     } else {
-        "Inspecting the repo…".to_string()
+        "run"
     }
 }
 
@@ -1003,8 +1042,13 @@ fn parse_codex_line(
             let item = v.get("item")?;
             if item.get("type")?.as_str()? == "command_execution" {
                 let cmd = item.get("command").and_then(|c| c.as_str()).unwrap_or("");
-                return Some(ReviewEvent::Status {
-                    text: codex_command_status(cmd),
+                return Some(ReviewEvent::Tool {
+                    tool: codex_command_kind(cmd).to_string(),
+                    target: if cmd.is_empty() {
+                        None
+                    } else {
+                        Some(clip_target(cmd))
+                    },
                 });
             }
             None
@@ -1078,13 +1122,20 @@ fn parse_copilot_line(
             None
         }
         "tool.execution_start" => {
-            let name = v
-                .get("data")
+            let data = v.get("data");
+            let name = data
                 .and_then(|d| d.get("name").or_else(|| d.get("tool")))
                 .and_then(|t| t.as_str())
                 .unwrap_or("a tool");
-            Some(ReviewEvent::Status {
-                text: format!("Running {name}…"),
+            // Copilot's argument shape isn't documented; try a nested `arguments`
+            // object, then the data object itself — best-effort, None if neither fits.
+            let target = data
+                .and_then(|d| d.get("arguments"))
+                .and_then(tool_target)
+                .or_else(|| data.and_then(tool_target));
+            Some(ReviewEvent::Tool {
+                tool: normalize_tool(name).to_string(),
+                target,
             })
         }
         "session.error" => {
@@ -1150,13 +1201,18 @@ fn parse_opencode_line(
             Some(ReviewEvent::Delta { text: chunk })
         }
         "tool_use" => {
-            let tool = v
-                .get("part")
+            let part = v.get("part");
+            let tool = part
                 .and_then(|p| p.get("tool"))
                 .and_then(|t| t.as_str())
                 .unwrap_or("a tool");
-            Some(ReviewEvent::Status {
-                text: opencode_tool_status(tool),
+            let target = part
+                .and_then(|p| p.get("state"))
+                .and_then(|s| s.get("input"))
+                .and_then(tool_target);
+            Some(ReviewEvent::Tool {
+                tool: normalize_tool(tool).to_string(),
+                target,
             })
         }
         "step_finish" => {
@@ -1192,8 +1248,15 @@ fn parse_opencode_line(
 }
 
 /// Parses one NDJSON line of Claude `--output-format stream-json`. Sets
-/// `saw_result` when the terminal `result` event arrives.
-fn parse_claude_line(line: &str, saw_result: &mut bool) -> Option<ReviewEvent> {
+/// `saw_result` when the terminal `result` event arrives. `tool_inputs`
+/// accumulates each in-flight tool call's streamed input JSON, keyed by block
+/// index (the input arrives as `input_json_delta` fragments after the block
+/// starts); a completed block emits one `Tool` event with the extracted target.
+fn parse_claude_line(
+    line: &str,
+    saw_result: &mut bool,
+    tool_inputs: &mut std::collections::HashMap<i64, (String, String)>,
+) -> Option<ReviewEvent> {
     let line = line.trim();
     if line.is_empty() {
         return None;
@@ -1203,25 +1266,52 @@ fn parse_claude_line(line: &str, saw_result: &mut bool) -> Option<ReviewEvent> {
         "stream_event" => {
             let event = v.get("event")?;
             match event.get("type")?.as_str()? {
-                // A tool call begins — surface it as transient progress.
+                // A tool call begins: record its name + index so the input fragments
+                // that follow can be accumulated and emitted as one step at stop.
                 "content_block_start" => {
                     let block = event.get("content_block")?;
                     if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                        let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("a tool");
-                        return Some(ReviewEvent::Status {
-                            text: tool_status(name),
-                        });
+                        if let Some(idx) = event.get("index").and_then(|i| i.as_i64()) {
+                            let name = block
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("a tool")
+                                .to_string();
+                            tool_inputs.insert(idx, (name, String::new()));
+                        }
                     }
                     None
                 }
                 "content_block_delta" => {
                     let delta = event.get("delta")?;
-                    if delta.get("type")?.as_str()? == "text_delta" {
-                        return Some(ReviewEvent::Delta {
+                    match delta.get("type")?.as_str()? {
+                        "text_delta" => Some(ReviewEvent::Delta {
                             text: delta.get("text")?.as_str()?.to_string(),
-                        });
+                        }),
+                        // A tool's input streams as JSON fragments — append to its buffer.
+                        "input_json_delta" => {
+                            if let (Some(idx), Some(frag)) = (
+                                event.get("index").and_then(|i| i.as_i64()),
+                                delta.get("partial_json").and_then(|p| p.as_str()),
+                            ) {
+                                if let Some(entry) = tool_inputs.get_mut(&idx) {
+                                    entry.1.push_str(frag);
+                                }
+                            }
+                            None
+                        }
+                        _ => None,
                     }
-                    None
+                }
+                // The tool call is fully described now — emit one structured step.
+                "content_block_stop" => {
+                    let idx = event.get("index").and_then(|i| i.as_i64())?;
+                    let (name, json) = tool_inputs.remove(&idx)?;
+                    let input = serde_json::from_str(&json).unwrap_or(serde_json::Value::Null);
+                    Some(ReviewEvent::Tool {
+                        tool: normalize_tool(&name).to_string(),
+                        target: tool_target(&input),
+                    })
                 }
                 _ => None,
             }
@@ -1316,6 +1406,9 @@ async fn stream_agent(
 
     let mut saw_result = false;
     let mut last_message = String::new(); // codex: accumulates the final message
+    // claude: per-tool-call streamed input JSON, keyed by content-block index.
+    let mut claude_tool_inputs: std::collections::HashMap<i64, (String, String)> =
+        std::collections::HashMap::new();
     let mut cancelled = false;
     let mut timed_out = false;
 
@@ -1338,7 +1431,9 @@ async fn stream_agent(
                 match line {
                     Ok(Some(l)) => {
                         let ev = match kind {
-                            AgentKind::Claude => parse_claude_line(&l, &mut saw_result),
+                            AgentKind::Claude => {
+                                parse_claude_line(&l, &mut saw_result, &mut claude_tool_inputs)
+                            }
                             AgentKind::Codex => {
                                 parse_codex_line(&l, &mut saw_result, &mut last_message)
                             }
@@ -1928,11 +2023,78 @@ mod tests {
     }
 
     #[test]
-    fn opencode_tool_use_is_status_only() {
+    fn opencode_tool_use_emits_a_tool_step() {
         let (mut term, mut msg) = (false, String::new());
         let ev = parse_opencode_line(TOOL, &mut term, &mut msg).unwrap();
-        assert!(matches!(ev, ReviewEvent::Status { text } if text == "Writing files…"));
+        match ev {
+            ReviewEvent::Tool { tool, target } => {
+                assert_eq!(tool, "write");
+                assert_eq!(target, None); // this event carries no state.input
+            }
+            other => panic!("expected Tool, got {other:?}"),
+        }
         assert!(!term, "a tool call doesn't end the turn");
+    }
+
+    const OC_TOOL_WITH_INPUT: &str = r#"{"type":"tool_use","sessionID":"s","part":{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"src/main.rs"}}}}"#;
+
+    #[test]
+    fn opencode_tool_use_extracts_target_from_input() {
+        let (mut term, mut msg) = (false, String::new());
+        let ev = parse_opencode_line(OC_TOOL_WITH_INPUT, &mut term, &mut msg).unwrap();
+        match ev {
+            ReviewEvent::Tool { tool, target } => {
+                assert_eq!(tool, "read");
+                assert_eq!(target.as_deref(), Some("src/main.rs"));
+            }
+            other => panic!("expected Tool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalize_tool_maps_known_names_and_falls_back() {
+        assert_eq!(normalize_tool("Read"), "read");
+        assert_eq!(normalize_tool("MultiEdit"), "edit");
+        assert_eq!(normalize_tool("WebFetch"), "web-fetch");
+        assert_eq!(normalize_tool("bash"), "run");
+        assert_eq!(normalize_tool("SomethingNew"), "other");
+    }
+
+    #[test]
+    fn tool_target_prefers_path_then_command_and_clips() {
+        let v: serde_json::Value =
+            serde_json::from_str(r#"{"file_path":"a/b.ts","command":"x"}"#).unwrap();
+        assert_eq!(tool_target(&v).as_deref(), Some("a/b.ts"));
+        let cmd: serde_json::Value =
+            serde_json::from_str(r#"{"command":"pnpm   build\n--flag"}"#).unwrap();
+        // Whitespace (incl. the newline) collapses to single spaces.
+        assert_eq!(tool_target(&cmd).as_deref(), Some("pnpm build --flag"));
+        let none: serde_json::Value = serde_json::from_str(r#"{"foo":"bar"}"#).unwrap();
+        assert_eq!(tool_target(&none), None);
+    }
+
+    #[test]
+    fn claude_tool_input_accumulates_across_blocks() {
+        // The three-line lifecycle of a Claude tool call: start (name), input
+        // fragments, stop — only the stop emits a Tool, carrying the joined input.
+        let mut saw = false;
+        let mut acc = std::collections::HashMap::new();
+        let start = r#"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","name":"Read","input":{}}}}"#;
+        let d1 = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"file_pa"}}}"#;
+        let d2 = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"th\":\"src/x.ts\"}"}}}"#;
+        let stop = r#"{"type":"stream_event","event":{"type":"content_block_stop","index":1}}"#;
+        assert!(parse_claude_line(start, &mut saw, &mut acc).is_none());
+        assert!(parse_claude_line(d1, &mut saw, &mut acc).is_none());
+        assert!(parse_claude_line(d2, &mut saw, &mut acc).is_none());
+        let ev = parse_claude_line(stop, &mut saw, &mut acc).unwrap();
+        match ev {
+            ReviewEvent::Tool { tool, target } => {
+                assert_eq!(tool, "read");
+                assert_eq!(target.as_deref(), Some("src/x.ts"));
+            }
+            other => panic!("expected Tool, got {other:?}"),
+        }
+        assert!(acc.is_empty(), "the completed block is removed from the buffer");
     }
 
     #[test]

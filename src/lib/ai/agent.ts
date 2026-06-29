@@ -15,10 +15,34 @@ export interface AgentInfo {
   authed: AuthStatus;
 }
 
+/** A normalized tool category for the activity timeline (mirrors the Rust
+ *  `normalize_tool` output). Drives the icon + verb shown per step. */
+export type AgentToolKind =
+  | "read"
+  | "search"
+  | "list"
+  | "edit"
+  | "write"
+  | "run"
+  | "web-fetch"
+  | "web-search"
+  | "task"
+  | "other";
+
+/** One step in an agent's activity timeline — what tool it used and on what. */
+export interface AgentActivityStep {
+  tool: AgentToolKind;
+  /** The file path / command / URL / query it acted on, when extractable. */
+  target: string | null;
+}
+
 /** Streaming events from `agent_review`, mirroring the Rust `ReviewEvent`. */
 export type ReviewEvent =
   | { kind: "delta"; text: string }
   | { kind: "status"; text: string }
+  /** One structured tool step (read/edit/run/web-fetch/…) for the activity
+   *  timeline; `tool` is the normalized category, `target` the thing it acted on. */
+  | { kind: "tool"; tool: AgentToolKind; target: string | null }
   | { kind: "done"; text: string; isError: boolean; costUsd: number | null }
   | { kind: "error"; message: string }
   /** The CLI's own resume id captured on turn 1 (Codex thread / opencode session)

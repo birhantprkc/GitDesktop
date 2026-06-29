@@ -8,6 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { AgentActivity } from "@/features/sessions/AgentActivity";
 import { AgentNarration } from "@/features/sessions/AgentNarration";
 import {
   AgentPicker,
@@ -316,18 +317,25 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
       )}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {error ? (
-          <div className="flex items-start gap-2 text-xs text-destructive">
-            <WarningIcon className="mt-0.5 size-4 shrink-0" />
-            <span>{error}</span>
-          </div>
-        ) : text ? (
-          <div className="text-xs leading-relaxed">
-            <AgentNarration text={text} baseDir={repoPath} />
-          </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">Starting…</p>
-        )}
+        <div className="flex flex-col gap-3">
+          <AgentActivity
+            steps={run.activity ?? []}
+            running={generating}
+            baseDir={repoPath}
+          />
+          {error ? (
+            <div className="flex items-start gap-2 text-xs text-destructive">
+              <WarningIcon className="mt-0.5 size-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          ) : text ? (
+            <div className="text-xs leading-relaxed">
+              <AgentNarration text={text} baseDir={repoPath} />
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">Starting…</p>
+          )}
+        </div>
         {!generating && !locked && questions.length > 0 && (
           <PlanQuestions
             key={questions.map((q) => q.question).join("|")}

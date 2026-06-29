@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { quickTransition } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { AgentActivity } from "./AgentActivity";
 import { AgentNarration } from "./AgentNarration";
 import { SessionComposer, type SessionComposerHandle } from "./SessionComposer";
 import { type AgentSession, type SessionTurn, useSessionsStore } from "./store";
@@ -198,6 +199,11 @@ function TurnView({
       </div>
       <div className="flex flex-col gap-1.5">
         <RoleLabel agent>Agent</RoleLabel>
+        <AgentActivity
+          steps={turn.activity ?? []}
+          running={running}
+          baseDir={baseDir}
+        />
         {turn.narration ? (
           <AgentNarration text={turn.narration} baseDir={baseDir} />
         ) : (

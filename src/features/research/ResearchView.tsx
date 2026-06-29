@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePlanStore } from "@/features/plan/store";
+import { AgentActivity } from "@/features/sessions/AgentActivity";
 import { ComposerOptions, ModelPicker } from "@/features/sessions/AgentPickers";
 import { clearAgentSelection } from "@/features/sessions/agentSelect";
 import { formatUsd } from "@/lib/ai/cost";
@@ -380,16 +381,23 @@ function ResearchResult({ run }: { run: ResearchRun }) {
       )}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {error ? (
-          <div className="flex items-start gap-2 text-xs text-destructive">
-            <WarningIcon className="mt-0.5 size-4 shrink-0" />
-            <span>{error}</span>
-          </div>
-        ) : text ? (
-          <Markdown>{text}</Markdown>
-        ) : (
-          <p className="text-xs text-muted-foreground">Starting…</p>
-        )}
+        <div className="flex flex-col gap-3">
+          <AgentActivity
+            steps={run.activity ?? []}
+            running={generating}
+            baseDir={run.repoPath}
+          />
+          {error ? (
+            <div className="flex items-start gap-2 text-xs text-destructive">
+              <WarningIcon className="mt-0.5 size-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          ) : text ? (
+            <Markdown>{text}</Markdown>
+          ) : (
+            <p className="text-xs text-muted-foreground">Starting…</p>
+          )}
+        </div>
       </div>
 
       {(report || error) && (

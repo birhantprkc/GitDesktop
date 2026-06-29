@@ -1,6 +1,10 @@
 import { toast } from "sonner";
 import { create } from "zustand";
-import { cancelAgentSession, runAgentSession } from "@/lib/ai/agent";
+import {
+  type AgentActivityStep,
+  cancelAgentSession,
+  runAgentSession,
+} from "@/lib/ai/agent";
 import { cleanupContainerSandbox, stopTestContainer } from "@/lib/ai/sandbox";
 import {
   commitWorktreeAll,
@@ -52,6 +56,10 @@ export interface SessionTurn {
   status: TurnStatus;
   /** Transient tool-activity note while running. */
   statusText: string;
+  /** The structured steps the agent took this turn (the activity timeline) —
+   *  in-memory only, like `statusText` (never written to the transcript, so it's
+   *  absent on a reloaded session — read it as `activity ?? []`). */
+  activity?: AgentActivityStep[];
   /** This turn's checkpoint commit (null = the turn changed nothing). */
   commitHash: string | null;
   costUsd: number | null;
@@ -180,6 +188,7 @@ function newTurn(prompt: string): SessionTurn {
     narration: "",
     status: "running",
     statusText: "Starting the agent…",
+    activity: [],
     commitHash: null,
     costUsd: null,
     error: null,
@@ -346,6 +355,14 @@ async function runTurn(
         if (ev.kind === "delta")
           patchTurn({ narration: last.narration + ev.text, statusText: "" });
         else if (ev.kind === "status") patchTurn({ statusText: ev.text });
+        else if (ev.kind === "tool")
+          patchTurn({
+            activity: [
+              ...(last.activity ?? []),
+              { tool: ev.tool, target: ev.target },
+            ],
+            statusText: "",
+          });
         else if (ev.kind === "error")
           patchTurn({ status: "error", error: ev.message, statusText: "" });
         else if (ev.kind === "done")

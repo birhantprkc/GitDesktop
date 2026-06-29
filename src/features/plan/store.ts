@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { isWatchingAgentSurface } from "@/features/sessions/watching";
 import {
+  type AgentActivityStep,
   type AgentKind,
   cancelAgentSession,
   runAgentSession,
@@ -80,6 +81,9 @@ export interface PlanRun {
   text: string;
   /** Transient tool-activity note (e.g. "Reading files…"). */
   status: string;
+  /** The structured steps the agent took this turn (the activity timeline) —
+   *  in-memory only (not persisted; absent on a reloaded run → read as `?? []`). */
+  activity?: AgentActivityStep[];
   /** Parsed + path-validated result, set when the turn completes. */
   draft: PlanDraft | null;
   /** The latest turn's reported cost (USD); null if unreported. */
@@ -166,6 +170,7 @@ export const usePlanStore = create<PlanState>((set, get) => {
       generating: true,
       text: "",
       status: "",
+      activity: [],
       draft: null,
       costUsd: null,
       stopped: false,
@@ -232,6 +237,15 @@ export const usePlanStore = create<PlanState>((set, get) => {
             patch(id, { text: finalText, status: "" });
           } else if (ev.kind === "status") {
             patch(id, { status: ev.text });
+          } else if (ev.kind === "tool") {
+            const cur = get().runs.find((r) => r.id === id);
+            patch(id, {
+              activity: [
+                ...(cur?.activity ?? []),
+                { tool: ev.tool, target: ev.target },
+              ],
+              status: "",
+            });
           } else if (ev.kind === "done") {
             // The terminal event carries the authoritative full text; prefer it.
             if (ev.text.length > finalText.length) finalText = ev.text;
