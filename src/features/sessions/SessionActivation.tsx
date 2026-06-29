@@ -55,8 +55,7 @@ export function SessionActivation({ repoPath }: { repoPath: string }) {
     setPendingPlanSeed(null);
   }, [pendingPlanSeed, setPendingPlanSeed]);
 
-  // The agent-research hotkey or a "Deep-research a direction" handoff switches
-  // to (and seeds) the Research composer.
+  // The agent-research hotkey switches to (and seeds) the Research composer.
   useEffect(() => {
     if (!pendingResearchSeed) return;
     setMode("research");

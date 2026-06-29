@@ -324,6 +324,68 @@ pub async fn git_diff_file(
     })
 }
 
+/// Diff a single file in an agent **session** worktree against the session's base
+/// commit — the file's *cumulative* change across the whole session (committed
+/// turns AND the current uncommitted edits, unlike `git diff HEAD`, which resets
+/// per checkpoint commit). Powers the inline edit-step diff in the agent
+/// transcript. A brand-new file the agent just wrote is still untracked, so the
+/// base diff shows nothing — fall back to a full-file "added" diff (as
+/// `git_diff_file` does for untracked files). `repo_path` is the worktree.
+#[tauri::command]
+pub async fn git_session_file_diff(
+    repo_path: String,
+    file_path: String,
+    base: String,
+) -> AppResult<FileDiff> {
+    // base → working tree: captures both committed-turn changes and uncommitted edits.
+    let out = run_git(
+        Some(&repo_path),
+        &["diff", "--no-color", &base, "--", &file_path],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let mut text = out.stdout_lossy();
+
+    // Empty tracked diff + the file is untracked (a just-written new file) →
+    // show it as a full add, the same way git_diff_file handles untracked.
+    if text.trim().is_empty() {
+        let others = run_git(
+            Some(&repo_path),
+            &["ls-files", "--others", "--exclude-standard", "--", &file_path],
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+        if !others.stdout_lossy().trim().is_empty() {
+            let no_index = run_git_raw(
+                Some(&repo_path),
+                &["diff", "--no-index", "--", "/dev/null", &file_path],
+                DEFAULT_TIMEOUT,
+            )
+            .await?;
+            // exit 1 just means "differences found" for --no-index; >1 is a real error.
+            if no_index.code > 1 {
+                return Err(AppError::Git {
+                    code: no_index.code,
+                    stderr: no_index.stderr,
+                });
+            }
+            text = no_index.stdout_lossy();
+        }
+    }
+
+    let is_binary = text
+        .lines()
+        .any(|l| l.starts_with("Binary files ") && l.ends_with(" differ"));
+    let (text, is_truncated) = truncate_at_char_boundary(text, VIEWER_MAX_BYTES);
+
+    Ok(FileDiff {
+        file_path,
+        is_binary,
+        is_truncated,
+        text,
+    })
+}
+
 #[tauri::command]
 pub async fn git_staged_diff(
     repo_path: String,
@@ -703,6 +765,64 @@ mod tests {
         .unwrap();
         let staged = git(vec!["diff", "--cached", "--no-color"]).await.stdout_lossy();
         assert!(staged.trim().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `git_session_file_diff` shows a file's CUMULATIVE change vs the session
+    /// base — a committed-turn edit PLUS a later uncommitted edit (the base-aware
+    /// behavior `git diff HEAD` would miss after a checkpoint commit) — and
+    /// surfaces a brand-new untracked file as a full add via the fallback.
+    #[tokio::test]
+    async fn session_file_diff_is_cumulative_against_base() {
+        let dir = std::env::temp_dir().join(format!(
+            "gd-session-diff-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.to_string_lossy().into_owned();
+        let git = |args: Vec<&'static str>| {
+            let repo = repo.clone();
+            async move { run_git(Some(&repo), &args, DEFAULT_TIMEOUT).await.unwrap() }
+        };
+
+        git(vec!["init"]).await;
+        git(vec!["config", "user.email", "t@t"]).await;
+        git(vec!["config", "user.name", "t"]).await;
+        let file = dir.join("file.txt");
+        std::fs::write(&file, "base line\n").unwrap();
+        git(vec!["add", "."]).await;
+        git(vec!["commit", "-m", "base"]).await;
+        let base = git(vec!["rev-parse", "HEAD"]).await.stdout_lossy().trim().to_string();
+
+        // Turn 1: edit + commit (a checkpoint) — HEAD moves past base.
+        std::fs::write(&file, "base line\nFROM COMMITTED TURN\n").unwrap();
+        git(vec!["commit", "-am", "turn 1"]).await;
+        // Turn 2 (in progress): a further uncommitted edit.
+        std::fs::write(
+            &file,
+            "base line\nFROM COMMITTED TURN\nFROM UNCOMMITTED EDIT\n",
+        )
+        .unwrap();
+
+        let diff = git_session_file_diff(repo.clone(), "file.txt".into(), base.clone())
+            .await
+            .unwrap();
+        assert!(diff.text.contains("FROM COMMITTED TURN"), "{}", diff.text);
+        assert!(diff.text.contains("FROM UNCOMMITTED EDIT"), "{}", diff.text);
+        assert!(!diff.is_binary);
+
+        // A brand-new untracked file surfaces as a full add (the fallback path).
+        std::fs::write(dir.join("new.txt"), "hello new file\n").unwrap();
+        let added = git_session_file_diff(repo.clone(), "new.txt".into(), base)
+            .await
+            .unwrap();
+        assert!(added.text.contains("+hello new file"), "{}", added.text);
+        assert!(added.text.contains("new.txt"), "{}", added.text);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -942,19 +942,24 @@ fn normalize_tool(name: &str) -> &'static str {
 /// Pull the most useful "target" out of a tool-call input object: the file path,
 /// command, URL, or query — whatever the tool acted on. None when nothing fits.
 fn tool_target(input: &serde_json::Value) -> Option<String> {
-    const KEYS: &[&str] = &[
-        "file_path",
-        "filePath",
-        "path",
-        "notebook_path",
-        "command",
-        "cmd",
-        "url",
-        "query",
-        "pattern",
-        "prompt",
-    ];
-    for k in KEYS {
+    // Path-type keys come first (a tool acting on a file). The FULL path is kept
+    // un-clipped: it's load-bearing — the UI relativizes it and uses it as a git
+    // pathspec for the inline edit-step diff, so clipping (200-char cut or
+    // whitespace-collapse) would corrupt the pathspec. The display is shortened by
+    // relativize + CSS truncation instead. (A path is naturally bounded in length.)
+    const PATH_KEYS: &[&str] = &["file_path", "filePath", "path", "notebook_path"];
+    // Free-text keys (a command / URL / query / prompt) are display-only, so clip
+    // them to a sane payload size and collapse newlines to a single line.
+    const TEXT_KEYS: &[&str] = &["command", "cmd", "url", "query", "pattern", "prompt"];
+    for k in PATH_KEYS {
+        if let Some(s) = input.get(k).and_then(|v| v.as_str()) {
+            let t = s.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    for k in TEXT_KEYS {
         if let Some(s) = input.get(k).and_then(|v| v.as_str()) {
             let t = s.trim();
             if !t.is_empty() {
@@ -2061,16 +2066,26 @@ mod tests {
     }
 
     #[test]
-    fn tool_target_prefers_path_then_command_and_clips() {
+    fn tool_target_keeps_paths_full_but_clips_free_text() {
         let v: serde_json::Value =
             serde_json::from_str(r#"{"file_path":"a/b.ts","command":"x"}"#).unwrap();
         assert_eq!(tool_target(&v).as_deref(), Some("a/b.ts"));
         let cmd: serde_json::Value =
             serde_json::from_str(r#"{"command":"pnpm   build\n--flag"}"#).unwrap();
-        // Whitespace (incl. the newline) collapses to single spaces.
+        // Whitespace (incl. the newline) collapses to single spaces for free text.
         assert_eq!(tool_target(&cmd).as_deref(), Some("pnpm build --flag"));
         let none: serde_json::Value = serde_json::from_str(r#"{"foo":"bar"}"#).unwrap();
         assert_eq!(tool_target(&none), None);
+
+        // A path is load-bearing (relativized + used as a git pathspec for the
+        // inline diff), so it is NEVER clipped or whitespace-collapsed — even a long
+        // absolute path (Windows worktree paths routinely exceed 200 chars) or one
+        // with spaces must survive verbatim.
+        let long = format!("/very/long/worktree/path/{}/src/main.rs", "x".repeat(300));
+        let lv = serde_json::json!({ "file_path": long });
+        assert_eq!(tool_target(&lv).as_deref(), Some(long.as_str()));
+        let spaced = serde_json::json!({ "path": "my dir/a b.ts" });
+        assert_eq!(tool_target(&spaced).as_deref(), Some("my dir/a b.ts"));
     }
 
     #[test]

@@ -33,7 +33,6 @@ function toPersisted(r: ResearchRun): PersistedResearch {
     nativeSessionId: r.nativeSessionId,
     origin: r.origin,
     seed: r.seed,
-    fromBrainstormId: r.fromBrainstormId,
     currentPrompt: r.currentPrompt,
     // Persist prior turns (whole session survives a reload); drop the in-memory
     // `segments` — the reloaded turn renders from `text`.

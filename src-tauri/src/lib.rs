@@ -76,6 +76,7 @@ pub fn run() {
             git::branches::git_set_branch_archived,
             git::branches::git_update_branch_from,
             git::diff::git_diff_file,
+            git::diff::git_session_file_diff,
             git::diff::git_staged_diff,
             git::diff::git_apply_patch,
             git::diff::git_apply_partial,

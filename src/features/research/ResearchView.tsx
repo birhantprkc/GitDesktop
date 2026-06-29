@@ -170,10 +170,11 @@ function IntentPicker({
 
 /**
  * The new-research composer (lives in the activation surface, beside "Delegate"
- * and "Plan"). An intent segmented control picks the persona (Brainstorm / Deep
- * research) and reframes the intro; submitting starts a keyed research run and
- * selects it. `seed` prefills it from the agent-research hotkey or a
- * "Deep-research a direction" handoff (which carries a brainstorm as context).
+ * and "Plan"). An intent picker selects the persona (Brainstorm / Deep research)
+ * and reframes the intro; submitting starts a keyed research run and selects it.
+ * `seed` prefills the topic + persona from the agent-research hotkey. (To go
+ * deeper on a brainstorm, switch the persona mid-session in the follow-up composer
+ * — no separate run.)
  */
 export function ResearchComposer({
   repoPath,
@@ -190,8 +191,6 @@ export function ResearchComposer({
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
 
-  // A brainstorm carried in as context (the "Deep-research a direction" chain).
-  const fromBrainstorm = Boolean(seed?.priorContext);
   const canRun = topic.trim().length > 0;
   const copy = INTENT_COPY[depth];
 
@@ -205,8 +204,6 @@ export function ResearchComposer({
       effort,
       topic,
       depth,
-      priorContext: seed?.priorContext,
-      fromBrainstormId: seed?.fromBrainstormId,
     });
   };
 
@@ -223,14 +220,6 @@ export function ResearchComposer({
             it when you're happy. Start several — they run side by side.
           </p>
         </div>
-        {fromBrainstorm && (
-          <div className="mt-4 w-full max-w-xl border border-primary/30 bg-muted/40 px-3 py-2 text-left text-xs">
-            <p className="text-muted-foreground">
-              Deep-researching a direction from your brainstorm — name the
-              direction to dig into below.
-            </p>
-          </div>
-        )}
       </div>
 
       <div className="shrink-0 border-t p-2">

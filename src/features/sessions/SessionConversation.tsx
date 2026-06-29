@@ -104,6 +104,11 @@ export function SessionConversation({
                 key={`${i}:${turn.prompt.slice(0, 32)}`}
                 turn={turn}
                 baseDir={session.kept ? session.repoPath : session.worktreePath}
+                // Inline edit-step diffs need the live worktree (freed once kept)
+                // and the base to diff against; omitted for kept sessions. While the
+                // session runs, the worktree keeps changing, so an open diff polls.
+                editDiffBase={session.kept ? undefined : session.base}
+                editDiffLive={session.running}
                 resendable={!session.kept}
                 onEditResend={() => composerRef.current?.setPrompt(turn.prompt)}
               />
@@ -172,11 +177,17 @@ function RoleLabel({ children, agent }: { children: string; agent?: boolean }) {
 function TurnView({
   turn,
   baseDir,
+  editDiffBase,
+  editDiffLive,
   resendable,
   onEditResend,
 }: {
   turn: SessionTurn;
   baseDir: string;
+  /** Session base commit for inline edit-step diffs (undefined = kept session). */
+  editDiffBase?: string;
+  /** The session is still running, so an open edit diff polls to stay fresh. */
+  editDiffLive?: boolean;
   /** Whether edit & resend is available (false for a kept session — no composer). */
   resendable: boolean;
   onEditResend: () => void;
@@ -200,7 +211,12 @@ function TurnView({
       <div className="flex flex-col gap-1.5">
         <RoleLabel agent>Agent</RoleLabel>
         {turn.segments?.length ? (
-          <AgentTranscript segments={turn.segments} baseDir={baseDir} />
+          <AgentTranscript
+            segments={turn.segments}
+            baseDir={baseDir}
+            editDiffBase={editDiffBase}
+            editDiffLive={editDiffLive}
+          />
         ) : turn.narration ? (
           // Reloaded session (segments are in-memory) or a whole-message agent.
           <AgentNarration text={turn.narration} baseDir={baseDir} />

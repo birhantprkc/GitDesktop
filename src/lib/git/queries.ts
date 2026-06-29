@@ -237,6 +237,31 @@ export function useFileDiff(
   });
 }
 
+/**
+ * A single file's cumulative diff in an agent session worktree vs the session's
+ * base commit — for the inline edit-step diff in the transcript. `base` is in the
+ * key so a different base (e.g. after a restart) doesn't cache-hit. Idle until
+ * `enabled` (the step is expanded), so an unopened edit step costs nothing. While
+ * `live` (the session is still working), it polls: the agent edits the worktree
+ * through its own CLI, outside any app mutation that could invalidate this, so an
+ * open diff would otherwise freeze as the agent keeps editing the same file. A
+ * settled session needs no poll — the last fetch is the final diff.
+ */
+export function useSessionFileDiff(
+  repo: string,
+  filePath: string,
+  base: string,
+  enabled: boolean,
+  live: boolean,
+) {
+  return useQuery({
+    queryKey: [...repoKeys.diff(repo, filePath, false), "session-base", base],
+    queryFn: () => api.gitSessionFileDiff(repo, filePath, base),
+    enabled: enabled && Boolean(repo && filePath && base),
+    refetchInterval: enabled && live ? 1500 : false,
+  });
+}
+
 export const HISTORY_PAGE_SIZE = 200;
 
 /** Paged commit log; `data.pages.flat()` is the loaded history. */

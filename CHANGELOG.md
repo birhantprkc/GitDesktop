@@ -12,6 +12,13 @@ commit list.
 
 ### Added
 
+- **See every step the agent takes — now with inline diffs.** The agent surfaces (Delegate, Plan,
+  Research) show the agent's work as one **step-by-step transcript** — each file it reads, edits,
+  searches, command it runs, and page it fetches, interleaved with its narration in the order it
+  happened (the way Claude Code and the VS Code agent read). In a write **session** you can now
+  **expand any edit step to see that file's diff inline** — the file's cumulative change in the
+  session, syntax-highlighted, without leaving the conversation. (Read-only Plan and Research don't
+  edit, so their steps stay informational.)
 - **Research mode — Brainstorm & Deep research.** A new read-only, web-enabled agent mode in the
   **Agent** tab, sitting upstream of Plan. **Brainstorm** surveys the web and your repo and surfaces
   several distinct directions with prior art; **Deep research** investigates one direction in depth

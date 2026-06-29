@@ -56,16 +56,12 @@ export interface ResearchHistoryTurn {
   depth?: ResearchDepth;
 }
 
-/** Prefill for the research composer: a topic + persona, and (for the
- *  brainstorm→deep-research chain) the brainstorm carried as context. */
+/** Prefill for the research composer: a topic + persona (from the agent-research
+ *  hotkey). Going deeper on a brainstorm happens by switching the persona
+ *  mid-session in the follow-up composer, not by seeding a separate run. */
 export interface ResearchSeed {
   topic?: string;
   depth?: ResearchDepth;
-  /** A brainstorm report carried into a deep-research run as data (the
-   *  "Deep-research a direction" handoff). Never instructions to the agent. */
-  priorContext?: string | null;
-  /** The brainstorm run this deep-research run was seeded from, for lineage. */
-  fromBrainstormId?: string | null;
 }
 
 export interface ResearchGenerateArgs extends ResearchSeed {
@@ -102,8 +98,6 @@ export interface ResearchRun {
   origin: { topic: string; depth: ResearchDepth } | null;
   /** The seed this run was started from, so a re-run can reopen the composer. */
   seed: ResearchSeed | null;
-  /** The brainstorm this deep-research run came from (the chain), or null. */
-  fromBrainstormId: string | null;
   /** Completed earlier turns, oldest first — shown above the current turn so the
    *  whole research session stays visible (the current turn is the fields below). */
   history?: ResearchHistoryTurn[];
@@ -137,8 +131,8 @@ interface ResearchState {
   /** The research run shown in the agent canvas; null = none (shares the surface
    *  with sessions and plans — see `agentSelect.ts` for mutual exclusion). */
   activeResearchId: string | null;
-  /** A seed for the activation "Research" composer (set by the hotkey or a
-   *  "Deep-research a direction" handoff), consumed by SessionActivation. */
+  /** A seed for the activation "Research" composer (set by the agent-research
+   *  hotkey), consumed by SessionActivation. */
   pendingResearchSeed: ResearchSeed | null;
   /** Whether persisted runs have loaded (gates autosave so the initial empty
    *  state never overwrites disk). */
@@ -379,7 +373,7 @@ export const useResearchStore = create<ResearchState>((set, get) => {
   /** Build turn 1's system + user prompt (grounded in the repo's instructions),
    *  then stream it. */
   const runFirstTurn = async (id: string, args: ResearchGenerateArgs) => {
-    const { repoPath, topic, depth, priorContext } = args;
+    const { repoPath, topic, depth } = args;
     const [repoInstructions, settings] = await Promise.all([
       readRepoInstructions(repoPath).catch(() => null),
       loadSettings().catch(() => null),
@@ -387,7 +381,6 @@ export const useResearchStore = create<ResearchState>((set, get) => {
     const { system, prompt } = buildResearchPrompt({
       depth,
       topic,
-      priorContext,
       repoName: repoName(repoPath),
       repoInstructions,
       globalInstructions: settings?.globalInstructions ?? "",
@@ -432,13 +425,7 @@ export const useResearchStore = create<ResearchState>((set, get) => {
         sessionId: crypto.randomUUID(),
         nativeSessionId: null,
         origin: { topic: args.topic, depth: args.depth },
-        seed: {
-          topic: args.topic,
-          depth: args.depth,
-          priorContext: args.priorContext,
-          fromBrainstormId: args.fromBrainstormId,
-        },
-        fromBrainstormId: args.fromBrainstormId ?? null,
+        seed: { topic: args.topic, depth: args.depth },
         history: [],
         currentPrompt: "",
         generating: true,
@@ -521,9 +508,8 @@ export const useResearchStore = create<ResearchState>((set, get) => {
       if (!run || run.generating) return;
       // Fresh conversation (the stopped one was killed): a new session id so the
       // old turn — if it's still resolving — is detected as stale and bails, then
-      // re-run turn 1 from the original topic + persona (+ any brainstorm context).
-      // Reset the persona to the run's ORIGINAL mode (a mid-session switch doesn't
-      // carry into a from-scratch restart).
+      // re-run turn 1 from the original topic + persona. Reset the persona to the
+      // run's ORIGINAL mode (a mid-session switch doesn't carry into a restart).
       const depth = run.origin?.depth ?? run.depth;
       patch(id, {
         sessionId: crypto.randomUUID(),
@@ -541,8 +527,6 @@ export const useResearchStore = create<ResearchState>((set, get) => {
         effort: run.effort,
         topic: run.seed?.topic ?? run.origin?.topic ?? "",
         depth,
-        priorContext: run.seed?.priorContext,
-        fromBrainstormId: run.fromBrainstormId,
       });
     },
 
