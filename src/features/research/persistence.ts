@@ -34,10 +34,11 @@ function toPersisted(r: ResearchRun): PersistedResearch {
     origin: r.origin,
     seed: r.seed,
     currentPrompt: r.currentPrompt,
-    // Persist prior turns (whole session survives a reload); drop the in-memory
-    // `segments` — the reloaded turn renders from `text`.
+    // Persist prior turns (whole session survives a reload), including their
+    // interleaved transcript so the activity log survives a restart too.
     history: r.history?.map((h) => ({
       prompt: h.prompt,
+      segments: h.segments,
       text: h.text,
       report: h.report,
       costUsd: h.costUsd,
@@ -45,6 +46,7 @@ function toPersisted(r: ResearchRun): PersistedResearch {
     })),
     stopped: r.stopped,
     text: r.text,
+    segments: r.segments,
     report: r.report,
     costUsd: r.costUsd,
     reportPath: r.reportPath,

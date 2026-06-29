@@ -308,6 +308,7 @@ async function runTurn(
         i,
         t.status,
         t.narration,
+        t.segments,
         t.commitHash,
         t.costUsd,
         t.error,

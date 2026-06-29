@@ -34,6 +34,9 @@ function toPersisted(r: PlanRun): PersistedPlan {
     seed: r.seed,
     stopped: r.stopped,
     text: r.text,
+    // Persist the interleaved transcript (tool steps + prose) so the activity log
+    // survives a restart instead of falling back to the flat prose.
+    segments: r.segments,
     draft: r.draft,
     costUsd: r.costUsd,
     implementedSessionId: r.implementedSessionId,

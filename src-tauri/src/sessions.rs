@@ -109,6 +109,11 @@ struct ResultEvent {
     /// Terminal turn status as persisted: "done" or "error".
     status: String,
     narration: String,
+    /// The turn's interleaved transcript (prose + tool steps) as opaque JSON — the
+    /// frontend `TranscriptSegment[]`, stored verbatim so the activity log survives
+    /// a restart. Absent on turns persisted before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    segments: Option<serde_json::Value>,
     commit_hash: Option<String>,
     cost_usd: Option<f64>,
     error: Option<String>,
@@ -157,6 +162,10 @@ struct MetaEvent {
 pub struct LoadedTurn {
     prompt: String,
     narration: String,
+    /// The interleaved transcript (`TranscriptSegment[]`), restored so the activity
+    /// log shows on reload instead of the flat prose. None on legacy turns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    segments: Option<serde_json::Value>,
     status: String,
     status_text: String,
     commit_hash: Option<String>,
@@ -333,6 +342,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
                 turns.push(LoadedTurn {
                     prompt: t.prompt.clone(),
                     narration: String::new(),
+                    segments: None,
                     status: "error".into(),
                     status_text: String::new(),
                     commit_hash: None,
@@ -344,6 +354,7 @@ fn fold(events: &[Event]) -> Option<LoadedSession> {
                 if let Some(turn) = turns.last_mut() {
                     turn.status = r.status.clone();
                     turn.narration = r.narration.clone();
+                    turn.segments = r.segments.clone();
                     turn.commit_hash = r.commit_hash.clone();
                     turn.cost_usd = r.cost_usd;
                     turn.error = r.error.clone();
@@ -509,6 +520,8 @@ fn migrate_legacy_if_needed(app: &AppHandle) -> AppResult<()> {
                     ts: now_ms(),
                     status: status.into(),
                     narration: str_field(t, "narration"),
+                    // Legacy plan/session JSON never carried segments.
+                    segments: None,
                     commit_hash: t
                         .get("commitHash")
                         .and_then(|v| v.as_str())
@@ -597,6 +610,7 @@ pub async fn transcript_append_result(
     seq: u32,
     status: String,
     narration: String,
+    segments: Option<serde_json::Value>,
     commit_hash: Option<String>,
     cost_usd: Option<f64>,
     error: Option<String>,
@@ -609,6 +623,7 @@ pub async fn transcript_append_result(
             ts: now_ms(),
             status,
             narration,
+            segments,
             commit_hash,
             cost_usd,
             error,
@@ -721,6 +736,7 @@ mod tests {
                 ts: 2,
                 status: "done".into(),
                 narration: "did x".into(),
+                segments: None,
                 commit_hash: Some("c1".into()),
                 cost_usd: Some(0.5),
                 error: None,
@@ -780,6 +796,7 @@ mod tests {
                 ts: 3,
                 status: "done".into(),
                 narration: "ok".into(),
+                segments: None,
                 commit_hash: Some("c2".into()),
                 cost_usd: None,
                 error: None,
@@ -841,6 +858,7 @@ mod tests {
                 ts: 2,
                 status: "done".into(),
                 narration: "hello".into(),
+                segments: None,
                 commit_hash: Some("c9".into()),
                 cost_usd: None,
                 error: None,

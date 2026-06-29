@@ -11,17 +11,41 @@ import {
   m,
   useReducedMotion,
 } from "motion/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactElement,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type PlanRun, usePlanStore } from "@/features/plan/store";
 import { useReconcileLocalPrs } from "@/features/pulls/useReconcileLocalPrs";
-import { type ResearchRun, useResearchStore } from "@/features/research/store";
+import {
+  assembleSessionReport,
+  type ResearchRun,
+  useResearchStore,
+} from "@/features/research/store";
+import type { AgentKind } from "@/lib/ai/agent";
+import { copyText } from "@/lib/clipboard";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { type PrAudit, usePrAuditByBranch } from "@/lib/pulls/audit";
+import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { AGENT_LABELS } from "./AgentPickers";
+import { useAgentNumber, useAgentNumbers } from "./agentNumber";
 import {
   clearAgentSelection,
   selectPlan,
@@ -31,6 +55,255 @@ import {
 import { PrAuditChip } from "./PrAuditChip";
 import { StatusIndicator, sessionStatus } from "./status";
 import { type AgentSession, useSessionsStore } from "./store";
+
+/** A compact `#N · provider · model` line for a list row, so entries are browsable
+ *  by their identifier + which agent/model produced them. The `#N` (a GitHub-style
+ *  global id) lets a plan point at its implementing session. Model omitted when
+ *  it's the account default. */
+function RowAgentMeta({
+  id,
+  agent,
+  model,
+}: {
+  id: string;
+  agent: AgentKind;
+  model: string;
+}) {
+  const number = useAgentNumber(id);
+  return (
+    <span className="w-full truncate text-[10px] text-muted-foreground/80">
+      {number != null && (
+        <span className="font-medium text-muted-foreground tabular-nums">
+          #{number}
+          {" · "}
+        </span>
+      )}
+      {AGENT_LABELS[agent]}
+      {model ? ` · ${model}` : ""}
+    </span>
+  );
+}
+
+/** A destructive action awaiting confirmation (the row's context menu defers it). */
+type ConfirmReq = {
+  title: string;
+  body: string;
+  label: string;
+  action: () => void;
+};
+
+/** Wraps a list row's button in a right-click context menu of per-entry actions.
+ *  Base UI `render` makes the trigger BE the motion button (no extra DOM, so the
+ *  list's enter/exit animations are untouched); destructive items route through a
+ *  shared confirm dialog. */
+function RowMenu({
+  trigger,
+  items,
+}: {
+  trigger: ReactElement;
+  items: (requestConfirm: (req: ConfirmReq) => void) => ReactNode;
+}) {
+  const [confirm, setConfirm] = useState<ConfirmReq | null>(null);
+  return (
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger render={trigger} />
+        <ContextMenuContent className="min-w-44">
+          {items(setConfirm)}
+        </ContextMenuContent>
+      </ContextMenu>
+      {confirm && (
+        <ConfirmDialog
+          open
+          onCancel={() => setConfirm(null)}
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.label}
+          confirmVariant="destructive"
+          onConfirm={() => {
+            confirm.action();
+            setConfirm(null);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/** Context-menu actions for a session row — all directly callable (the dialog-led
+ *  ones like Create PR live in the canvas, reached via Open). */
+function SessionMenuItems({
+  session,
+  requestConfirm,
+}: {
+  session: AgentSession;
+  requestConfirm: (req: ConfirmReq) => void;
+}) {
+  const store = useSessionsStore.getState;
+  const reviewable = !session.kept && session.headHash !== session.base;
+  return (
+    <>
+      <ContextMenuItem onClick={() => selectSession(session.id)}>
+        Open
+      </ContextMenuItem>
+      {session.kept && (
+        <ContextMenuItem onClick={() => store().resume(session.id)}>
+          Resume
+        </ContextMenuItem>
+      )}
+      {reviewable && (
+        <ContextMenuItem onClick={() => store().keep(session.id, false)}>
+          Keep
+        </ContextMenuItem>
+      )}
+      {session.running && (
+        <ContextMenuItem onClick={() => store().cancel(session.id)}>
+          Stop
+        </ContextMenuItem>
+      )}
+      <ContextMenuSeparator />
+      {session.kept ? (
+        <ContextMenuItem
+          variant="destructive"
+          onClick={() =>
+            requestConfirm({
+              title: "Delete this session?",
+              body: "Removes the kept session and its transcript. This can't be undone.",
+              label: "Delete",
+              action: () => store().deleteSession(session.id),
+            })
+          }
+        >
+          Delete
+        </ContextMenuItem>
+      ) : (
+        <ContextMenuItem
+          variant="destructive"
+          onClick={() =>
+            requestConfirm({
+              title: "Discard this session?",
+              body: "Deletes the worktree and its branch, throwing away the agent's work. This can't be undone.",
+              label: "Discard",
+              action: () => store().discard(session.id),
+            })
+          }
+        >
+          Discard
+        </ContextMenuItem>
+      )}
+    </>
+  );
+}
+
+/** Context-menu actions for a plan row. */
+function PlanMenuItems({
+  run,
+  requestConfirm,
+}: {
+  run: PlanRun;
+  requestConfirm: (req: ConfirmReq) => void;
+}) {
+  const store = usePlanStore.getState;
+  return (
+    <>
+      <ContextMenuItem onClick={() => selectPlan(run.id)}>Open</ContextMenuItem>
+      {run.generating && (
+        <ContextMenuItem onClick={() => store().cancel(run.id)}>
+          Stop
+        </ContextMenuItem>
+      )}
+      {(run.stopped || run.error) && (
+        <ContextMenuItem onClick={() => store().restart(run.id)}>
+          Restart
+        </ContextMenuItem>
+      )}
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        variant="destructive"
+        onClick={() =>
+          requestConfirm({
+            title: "Dismiss this plan?",
+            body: "Removes the plan from the list. This can't be undone.",
+            label: "Dismiss",
+            action: () => store().remove(run.id),
+          })
+        }
+      >
+        Dismiss
+      </ContextMenuItem>
+    </>
+  );
+}
+
+/** Context-menu actions for a research row, including the handoffs to Plan/clipboard. */
+function ResearchMenuItems({
+  run,
+  requestConfirm,
+}: {
+  run: ResearchRun;
+  requestConfirm: (req: ConfirmReq) => void;
+}) {
+  const store = useResearchStore.getState;
+  const turnIntoPlan = () => {
+    if (!run.report) return;
+    clearAgentSelection();
+    usePlanStore.getState().setPendingPlanSeed({
+      issueTitle: run.report.title,
+      issueBody: assembleSessionReport(run),
+      originResearchId: run.id,
+    });
+  };
+  return (
+    <>
+      <ContextMenuItem onClick={() => selectResearch(run.id)}>
+        Open
+      </ContextMenuItem>
+      {run.report && (
+        <>
+          <ContextMenuItem onClick={turnIntoPlan}>
+            Turn into a Plan
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={() => void store().saveReport(run.id).catch(toastError)}
+          >
+            Save report
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={() =>
+              copyText(assembleSessionReport(run), "Report copied")
+            }
+          >
+            Copy report
+          </ContextMenuItem>
+        </>
+      )}
+      {run.generating && (
+        <ContextMenuItem onClick={() => store().cancel(run.id)}>
+          Stop
+        </ContextMenuItem>
+      )}
+      {(run.stopped || run.error) && (
+        <ContextMenuItem onClick={() => store().restart(run.id)}>
+          Restart
+        </ContextMenuItem>
+      )}
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        variant="destructive"
+        onClick={() =>
+          requestConfirm({
+            title: "Dismiss this research?",
+            body: "Removes the research run and its report from the list. This can't be undone.",
+            label: "Dismiss",
+            action: () => store().remove(run.id),
+          })
+        }
+      >
+        Dismiss
+      </ContextMenuItem>
+    </>
+  );
+}
 
 /** Which bucket the list shows: in-progress, finalized sessions, or implemented
  *  plans filed away as references. */
@@ -98,6 +371,23 @@ export function SessionList({ repoPath }: { repoPath: string }) {
   const setPendingResearchSeed = useResearchStore(
     (s) => s.setPendingResearchSeed,
   );
+
+  // Mint a stable `#N` for every agent entry (research → plans → sessions, in
+  // creation order), backfilling existing ones and numbering new ones. Global
+  // (across repos) so an id is unique app-wide, like a GitHub PR number.
+  const ensureNumbers = useAgentNumbers((s) => s.ensure);
+  const numbersHydrated = useAgentNumbers((s) => s.hydrated);
+  const orderedIds = useMemo(
+    () => [
+      ...allResearch.map((r) => r.id),
+      ...allRuns.map((r) => r.id),
+      ...allSessions.map((s) => s.id),
+    ],
+    [allResearch, allRuns, allSessions],
+  );
+  useEffect(() => {
+    if (numbersHydrated) ensureNumbers(orderedIds);
+  }, [orderedIds, numbersHydrated, ensureNumbers]);
 
   const [tab, setTab] = useState<SessionTab>("active");
   const [query, setQuery] = useState("");
@@ -486,6 +776,9 @@ function PlanStatus({
       ? s.sessions.find((x) => x.id === run.implementedSessionId)
       : undefined,
   );
+  // The implementing session's `#N`, so the plan points at what's attached to it
+  // ("Implemented · Ready to review #10"). Empty id → undefined (hooks stay top-level).
+  const sessionNumber = useAgentNumber(session?.id ?? "");
 
   if (run.generating) {
     return (
@@ -517,10 +810,11 @@ function PlanStatus({
     // Audit trail: once the implementing session has a pull request, surface it
     // (its merge is the real "done") instead of the redundant "Kept".
     const merge = audit.get(session.branch);
+    const num = sessionNumber != null ? ` #${sessionNumber}` : "";
     return (
       <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
         <span className="truncate">
-          {merge ? "Implemented" : `Implemented · ${st.label}`}
+          {merge ? "Implemented" : `Implemented · ${st.label}${num}`}
         </span>
         {merge && <PrAuditChip audit={merge} />}
       </span>
@@ -554,31 +848,37 @@ function PlanRow({
   onClick: () => void;
 }) {
   return (
-    <m.button
-      {...motionProps}
-      type="button"
-      role="option"
-      aria-selected={active}
-      data-row={run.id}
-      tabIndex={tabIndex}
-      onClick={onClick}
-      className={cn(
-        "flex w-full flex-col items-start gap-1 overflow-hidden px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
-        active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
-      )}
-    >
-      <span className="line-clamp-2 w-full text-xs font-medium leading-snug">
-        {planLabel(run)}
-      </span>
-      <span className="flex w-full items-center gap-2 text-[11px]">
-        <PlanStatus run={run} audit={audit} />
-        {run.costUsd != null && (
-          <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
-            ${run.costUsd.toFixed(2)}
+    <RowMenu
+      trigger={
+        <m.button
+          {...motionProps}
+          type="button"
+          role="option"
+          aria-selected={active}
+          data-row={run.id}
+          tabIndex={tabIndex}
+          onClick={onClick}
+          className={cn(
+            "flex w-full flex-col items-start gap-1 overflow-hidden px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+            active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
+          )}
+        >
+          <span className="line-clamp-2 w-full text-xs font-medium leading-snug">
+            {planLabel(run)}
           </span>
-        )}
-      </span>
-    </m.button>
+          <span className="flex w-full items-center gap-2 text-[11px]">
+            <PlanStatus run={run} audit={audit} />
+            {run.costUsd != null && (
+              <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
+                ${run.costUsd.toFixed(2)}
+              </span>
+            )}
+          </span>
+          <RowAgentMeta id={run.id} agent={run.agent} model={run.model} />
+        </m.button>
+      }
+      items={(req) => <PlanMenuItems run={run} requestConfirm={req} />}
+    />
   );
 }
 
@@ -600,40 +900,52 @@ function SessionRow({
   const title = session.turns[0]?.prompt.trim() || "New session";
   const cost = session.turns.reduce((sum, t) => sum + (t.costUsd ?? 0), 0);
   return (
-    <m.button
-      {...motionProps}
-      type="button"
-      role="option"
-      aria-selected={active}
-      data-row={session.id}
-      tabIndex={tabIndex}
-      onClick={onClick}
-      className={cn(
-        "flex w-full flex-col items-start gap-1 overflow-hidden px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
-        active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
+    <RowMenu
+      trigger={
+        <m.button
+          {...motionProps}
+          type="button"
+          role="option"
+          aria-selected={active}
+          data-row={session.id}
+          tabIndex={tabIndex}
+          onClick={onClick}
+          className={cn(
+            "flex w-full flex-col items-start gap-1 overflow-hidden px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+            active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
+          )}
+        >
+          <span className="line-clamp-2 w-full text-xs font-medium leading-snug">
+            {title}
+          </span>
+          <span className="flex w-full items-center gap-2 text-[11px]">
+            <StatusIndicator session={session} className="min-w-0" />
+            {session.ensembleId && (
+              <span
+                className="inline-flex shrink-0 items-center text-muted-foreground"
+                title="One arm of a best-of-N ensemble"
+              >
+                <UsersThreeIcon className="size-3.5" />
+              </span>
+            )}
+            {audit && <PrAuditChip audit={audit} />}
+            {cost > 0 && (
+              <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
+                ${cost.toFixed(2)}
+              </span>
+            )}
+          </span>
+          <RowAgentMeta
+            id={session.id}
+            agent={session.agent}
+            model={session.model}
+          />
+        </m.button>
+      }
+      items={(req) => (
+        <SessionMenuItems session={session} requestConfirm={req} />
       )}
-    >
-      <span className="line-clamp-2 w-full text-xs font-medium leading-snug">
-        {title}
-      </span>
-      <span className="flex w-full items-center gap-2 text-[11px]">
-        <StatusIndicator session={session} className="min-w-0" />
-        {session.ensembleId && (
-          <span
-            className="inline-flex shrink-0 items-center text-muted-foreground"
-            title="One arm of a best-of-N ensemble"
-          >
-            <UsersThreeIcon className="size-3.5" />
-          </span>
-        )}
-        {audit && <PrAuditChip audit={audit} />}
-        {cost > 0 && (
-          <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
-            ${cost.toFixed(2)}
-          </span>
-        )}
-      </span>
-    </m.button>
+    />
   );
 }
 
@@ -684,30 +996,36 @@ function ResearchRow({
   onClick: () => void;
 }) {
   return (
-    <m.button
-      {...motionProps}
-      type="button"
-      role="option"
-      aria-selected={active}
-      data-row={run.id}
-      tabIndex={tabIndex}
-      onClick={onClick}
-      className={cn(
-        "flex w-full flex-col items-start gap-1 overflow-hidden px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
-        active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
-      )}
-    >
-      <span className="line-clamp-2 w-full text-xs font-medium leading-snug">
-        {researchLabel(run)}
-      </span>
-      <span className="flex w-full items-center gap-2 text-[11px]">
-        <ResearchStatus run={run} planned={planned} />
-        {researchCost(run) > 0 && (
-          <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
-            ${researchCost(run).toFixed(2)}
+    <RowMenu
+      trigger={
+        <m.button
+          {...motionProps}
+          type="button"
+          role="option"
+          aria-selected={active}
+          data-row={run.id}
+          tabIndex={tabIndex}
+          onClick={onClick}
+          className={cn(
+            "flex w-full flex-col items-start gap-1 overflow-hidden px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+            active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
+          )}
+        >
+          <span className="line-clamp-2 w-full text-xs font-medium leading-snug">
+            {researchLabel(run)}
           </span>
-        )}
-      </span>
-    </m.button>
+          <span className="flex w-full items-center gap-2 text-[11px]">
+            <ResearchStatus run={run} planned={planned} />
+            {researchCost(run) > 0 && (
+              <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
+                ${researchCost(run).toFixed(2)}
+              </span>
+            )}
+          </span>
+          <RowAgentMeta id={run.id} agent={run.agent} model={run.model} />
+        </m.button>
+      }
+      items={(req) => <ResearchMenuItems run={run} requestConfirm={req} />}
+    />
   );
 }

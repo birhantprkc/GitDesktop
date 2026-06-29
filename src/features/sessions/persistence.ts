@@ -1,3 +1,4 @@
+import type { TranscriptSegment } from "@/lib/ai/agent";
 import { invoke } from "@/lib/tauri/invoke";
 import type { AgentSession } from "./store";
 
@@ -38,12 +39,15 @@ export const appendTurn = (
   model: string,
 ) => invoke<void>("transcript_append_turn", { id, seq, prompt, model });
 
-/** Record a turn's terminal result. `status` is "done" or "error". */
+/** Record a turn's terminal result. `status` is "done" or "error". `segments` is
+ *  the interleaved transcript (tool steps + prose), persisted so the activity log
+ *  survives a restart. */
 export const appendResult = (
   id: string,
   seq: number,
   status: string,
   narration: string,
+  segments: TranscriptSegment[] | undefined,
   commitHash: string | null,
   costUsd: number | null,
   error: string | null,
@@ -53,6 +57,7 @@ export const appendResult = (
     seq,
     status,
     narration,
+    segments: segments ?? null,
     commitHash,
     costUsd,
     error,

@@ -35,6 +35,14 @@ const CODEX_MODELS = MODEL_SUGGESTIONS["codex-cli"];
 const COPILOT_MODELS = MODEL_SUGGESTIONS["copilot-cli"];
 const OPENCODE_MODELS = MODEL_SUGGESTIONS["opencode-cli"];
 
+/** Compact display labels for each agent CLI — for list rows, headers, badges. */
+export const AGENT_LABELS: Record<AgentKind, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  copilot: "Copilot",
+  opencode: "opencode",
+};
+
 /** The suggested model list for an agent (each CLI exposes different models). */
 export function modelsForAgent(agent: AgentKind): string[] {
   switch (agent) {

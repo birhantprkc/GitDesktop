@@ -518,6 +518,11 @@ The **Agent** tab turns a configured CLI agent (Claude Code, Codex, GitHub Copil
 opencode) into a hands-on teammate that can **research**, **plan**, and **implement** changes
 for you — safely, in an isolated copy of your repo. It appears when AI features are enabled.
 
+The **sidebar** lists your research, plans, and sessions. Each carries a stable **#N**
+identifier (so a plan can point at the session that implemented it — *Implemented · Ready to
+review #10*) and shows its **provider · model**; **right-click** a row for its actions. The
+**step-by-step activity log** of each entry is kept across restarts.
+
 ## Research a topic (read-only)
 
 **Research** runs a read-only, **web-enabled** agent that explores the web *and* your repo,
