@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { GhNotReady } from "@/features/repository/GhNotReady";
-import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
+import { forgeReady, useForgeStatus, useRepoStatus } from "@/lib/git/queries";
 import { useWorkflowRuns } from "@/lib/github/actions";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
@@ -17,10 +17,8 @@ import { RunWorkflowDialog } from "./RunWorkflowDialog";
 import { StatusIcon, statusLabel } from "./status";
 
 export function ActionsPanel({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const forge = useForgeStatus(repoPath);
+  const ghReady = forgeReady(forge.data);
   const status = useRepoStatus(repoPath);
   const currentBranch = status.data?.branch.name ?? null;
 
@@ -115,7 +113,7 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        {gh.isPending ? (
+        {forge.isPending ? (
           <div className="space-y-2 p-3">
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-10 w-full" />

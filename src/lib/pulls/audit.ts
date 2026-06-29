@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useGhStatus, usePrList } from "@/lib/git/queries";
+import { forgeReady, useForgeStatus, usePrList } from "@/lib/git/queries";
 import { useLocalPrs } from "./queries";
 
 /** PR lifecycle states — the same vocabulary the branch picker badges use. */
@@ -56,10 +56,8 @@ export function usePrAuditByBranch(
   enabled: boolean,
 ): Map<string, PrAudit> {
   const localPrs = useLocalPrs(repo);
-  const gh = useGhStatus(repo);
-  const remote = Boolean(
-    enabled && gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const forge = useForgeStatus(repo);
+  const remote = enabled && forgeReady(forge.data);
   const openPrs = usePrList(repo, remote, "open");
   const closedPrs = usePrList(repo, remote, "closed");
 

@@ -1454,6 +1454,14 @@ export function useForgeStatus(repo: string) {
   });
 }
 
+/** Whether a repo's hosted integration is ready — its tooling is installed, signed
+ *  in, and pointing at a recognized hosted repo. The provider-neutral gate hosted
+ *  panels check before fetching or offering hosted actions, replacing the inline
+ *  `gh.data?.installed && …` duplication. */
+export function forgeReady(status: ForgeStatus | undefined | null): boolean {
+  return Boolean(status?.installed && status?.authenticated && status?.repo);
+}
+
 // ── Git hooks ────────────────────────────────────────────────────────────────
 
 export function useHooks(repo: string) {
