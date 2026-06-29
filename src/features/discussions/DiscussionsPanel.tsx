@@ -17,7 +17,7 @@ import { GhNotReady } from "@/features/repository/GhNotReady";
 import {
   useDiscussionList,
   useDiscussionMeta,
-  useGhStatus,
+  useForgeStatus,
   useHoverPrefetch,
   usePrefetchDiscussion,
 } from "@/lib/git/queries";
@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils";
 import { CreateDiscussionDialog } from "./CreateDiscussionDialog";
 
 export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const ghReady = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

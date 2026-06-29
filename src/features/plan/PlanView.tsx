@@ -21,7 +21,7 @@ import type { AgentKind } from "@/lib/ai/agent";
 import { formatUsd } from "@/lib/ai/cost";
 import { extractPlanQuestions } from "@/lib/ai/prompt";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
-import { useGhStatus } from "@/lib/git/queries";
+import { useForgeStatus } from "@/lib/git/queries";
 import { formatBinding } from "@/lib/hotkeys/binding";
 import { useUiStore } from "@/lib/stores/ui";
 import { CreateLocalIssueDialog } from "../issues/CreateLocalIssueDialog";
@@ -223,7 +223,7 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
 
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const ghReady = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

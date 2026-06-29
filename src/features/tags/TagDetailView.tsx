@@ -33,7 +33,7 @@ import {
   useDeleteTag,
   useDownloadReleaseAsset,
   useEditRelease,
-  useGhStatus,
+  useForgeStatus,
   usePushTag,
   useReleaseDetails,
   useReleaseList,
@@ -61,7 +61,7 @@ export function TagDetailView({
   repoPath: string;
   tag: string;
 }) {
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const ghReady = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

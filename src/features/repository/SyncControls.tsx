@@ -35,7 +35,7 @@ import {
 } from "@/lib/git/auto-fetch";
 import {
   useFetchRemote,
-  useGhStatus,
+  useForgeStatus,
   usePull,
   usePush,
   useRemotes,
@@ -52,7 +52,7 @@ import { PublishDialog } from "./PublishDialog";
 export function SyncControls({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
   const remotes = useRemotes(repoPath);
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const settings = useSettings();
   const repoName = useUiStore((s) => s.repoName);
   const fetchRemote = useFetchRemote(repoPath);

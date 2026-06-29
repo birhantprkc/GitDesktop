@@ -23,7 +23,7 @@ import {
   useBranches,
   useCompareBranches,
   useDefaultBranch,
-  useGhStatus,
+  useForgeStatus,
   useHoverPrefetch,
   usePrefetchCommit,
   usePrsForBranch,
@@ -40,7 +40,7 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
   const branches = useBranches(repoPath);
   const defaultBranch = useDefaultBranch(repoPath);
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const compareBranch = useUiStore((s) => s.compareBranch);
   const setCompareBranch = useUiStore((s) => s.setCompareBranch);
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);

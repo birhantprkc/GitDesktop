@@ -23,7 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import {
   useCreateTag,
-  useGhStatus,
+  useForgeStatus,
   useHoverPrefetch,
   usePrefetchRelease,
   useReleaseList,
@@ -51,7 +51,7 @@ function ReleaseBadges({ release }: { release: ReleaseInfo }) {
 }
 
 export function TagsPanel({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const ghReady = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

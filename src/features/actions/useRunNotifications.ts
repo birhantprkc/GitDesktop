@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useRef } from "react";
-import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
+import { useForgeStatus, useRepoStatus } from "@/lib/git/queries";
 import { ghRunList, isRunActive, type WorkflowRun } from "@/lib/github/actions";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { useSettings } from "@/lib/settings/queries";
@@ -14,7 +14,7 @@ import { isFailureConclusion, statusLabel } from "./status";
  */
 export function useRunNotifications(repoPath: string) {
   const settings = useSettings();
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const status = useRepoStatus(repoPath);
   const branch = status.data?.branch.name ?? null;
   const enabled =

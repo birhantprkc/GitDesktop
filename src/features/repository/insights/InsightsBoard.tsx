@@ -6,7 +6,7 @@ import {
   useCommitActivity,
   useCommunityInsights,
   useContributorActivity,
-  useGhStatus,
+  useForgeStatus,
   usePunchCard,
   useRepoDependencies,
   useRepoTraffic,
@@ -92,7 +92,7 @@ export function InsightsBoard({
   const [allTime, setAllTime] = useState(false);
   const weeks = allTime ? 0 : WINDOW_WEEKS;
 
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const canGh = Boolean(
     active && gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

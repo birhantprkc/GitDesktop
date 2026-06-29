@@ -30,7 +30,7 @@ import {
   type MergeMethod,
 } from "@/lib/branch-rules/types";
 import { ghBranchProtections } from "@/lib/git/api";
-import { useGhStatus } from "@/lib/git/queries";
+import { useForgeStatus } from "@/lib/git/queries";
 import { toastError } from "@/lib/toast";
 
 export function BranchRulesDialog({
@@ -50,7 +50,7 @@ export function BranchRulesDialog({
   const shared = useSharedBranchRules(repoPath);
   const savePersonal = useSaveBranchRules(repoPath);
   const saveShared = useSaveSharedBranchRules(repoPath);
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const ghReady = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

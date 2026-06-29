@@ -51,7 +51,7 @@ import { gitBranchDiff, type MergeStrategy } from "@/lib/git/api";
 import {
   useBranchDiffFiles,
   useCompareBranches,
-  useGhStatus,
+  useForgeStatus,
   useMergeLocalPr,
 } from "@/lib/git/queries";
 import {
@@ -115,7 +115,7 @@ export function LocalPrView({
   } = useLocalConversation(pr, save);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
-  const ghStatus = useGhStatus(repoPath);
+  const ghStatus = useForgeStatus(repoPath);
   const edit = useEditTitleBody({
     onSave: async ({ title, body }) => {
       if (!pr) return;

@@ -4,7 +4,7 @@ import { useAutomations } from "@/lib/automations/queries";
 import { maybeFireSync } from "@/lib/automations/sync";
 import { effectiveRules } from "@/lib/automations/types";
 import { ghPrPoll } from "@/lib/git/api";
-import { useGhStatus } from "@/lib/git/queries";
+import { useForgeStatus } from "@/lib/git/queries";
 import type { PrPollInfo } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { useSettings } from "@/lib/settings/queries";
@@ -19,7 +19,7 @@ import { useSettings } from "@/lib/settings/queries";
  */
 export function usePrNotifications(repoPath: string) {
   const settings = useSettings();
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const automations = useAutomations();
   const prefs = settings.data?.notifications;
   const anyNotif = Boolean(

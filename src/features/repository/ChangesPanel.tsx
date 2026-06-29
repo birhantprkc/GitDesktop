@@ -26,7 +26,7 @@ import {
   useDefaultBranch,
   useDiscardAll,
   useDiscardPaths,
-  useGhStatus,
+  useForgeStatus,
   useRepoStatus,
   useStage,
   useStashAll,
@@ -154,7 +154,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   // branch with commits the default branch doesn't have offers a PR. The
   // comparison only runs while the tree is clean, so the daily loop never
   // pays for it.
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const ghReady = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

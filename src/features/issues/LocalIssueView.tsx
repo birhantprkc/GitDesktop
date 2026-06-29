@@ -39,7 +39,7 @@ import { LocalComment } from "@/features/conversations/LocalComment";
 import { useLocalConversation } from "@/features/conversations/useLocalConversation";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { copyText } from "@/lib/clipboard";
-import { useGhStatus } from "@/lib/git/queries";
+import { useForgeStatus } from "@/lib/git/queries";
 import {
   useDeleteLocalIssue,
   useLocalIssues,
@@ -64,7 +64,7 @@ export function LocalIssueView({
   const save = useSaveLocalIssue(repoPath);
   const del = useDeleteLocalIssue(repoPath);
   const selectIssue = useUiStore((s) => s.selectIssue);
-  const ghStatus = useGhStatus(repoPath);
+  const ghStatus = useForgeStatus(repoPath);
   const {
     comment,
     setComment,

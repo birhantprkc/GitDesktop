@@ -53,8 +53,8 @@ import {
   openWithProgram,
 } from "@/lib/git/api";
 import {
+  useForgeStatus,
   useForkRepo,
-  useGhStatus,
   useRepoAdmin,
   useRepoStarStatus,
   useSetRepoStar,
@@ -72,7 +72,7 @@ import { SubmodulesDialog } from "./SubmodulesDialog";
 import { WorktreesDialog } from "./WorktreesDialog";
 
 export function RepositoryMenu({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const settings = useSettings();
   const repoName = useUiStore((s) => s.repoName);
   const setRepoTab = useUiStore((s) => s.setRepoTab);

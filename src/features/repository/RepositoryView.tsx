@@ -48,7 +48,7 @@ import { SessionList } from "@/features/sessions/SessionList";
 import { SessionView } from "@/features/sessions/SessionView";
 import { TagDetailView } from "@/features/tags/TagDetailView";
 import { TagsPanel } from "@/features/tags/TagsPanel";
-import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
+import { useForgeStatus, useRepoStatus } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useAiEnabled, useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
@@ -110,7 +110,7 @@ export function RepositoryView() {
   // The write-capable agent is an AI feature — hide its tab when AI is hidden.
   const aiEnabled = useAiEnabled();
   const currentName = status.data?.branch?.name ?? null;
-  const gh = useGhStatus(repoPath ?? "");
+  const gh = useForgeStatus(repoPath ?? "");
   const canGh = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

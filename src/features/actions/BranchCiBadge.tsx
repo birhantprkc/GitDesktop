@@ -1,4 +1,4 @@
-import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
+import { useForgeStatus, useRepoStatus } from "@/lib/git/queries";
 import { useLatestRun } from "@/lib/github/actions";
 import { useUiStore } from "@/lib/stores/ui";
 import { StatusIcon, statusLabel } from "./status";
@@ -9,7 +9,7 @@ import { StatusIcon, statusLabel } from "./status";
  * Actions tab with that run selected.
  */
 export function BranchCiBadge({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const ghReady = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

@@ -5,7 +5,7 @@ import { ConversationListPanel } from "@/features/conversations/ConversationList
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { IssueStateFilter } from "@/lib/git/api";
 import {
-  useGhStatus,
+  useForgeStatus,
   useHoverPrefetch,
   useIssueList,
   usePrefetchIssue,
@@ -19,7 +19,7 @@ import { CreateIssueDialog } from "./CreateIssueDialog";
 import { CreateLocalIssueDialog } from "./CreateLocalIssueDialog";
 
 export function IssuesPanel({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const ghReady = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

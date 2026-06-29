@@ -6,7 +6,7 @@ import { ConversationListPanel } from "@/features/conversations/ConversationList
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { PrStateFilter } from "@/lib/git/api";
 import {
-  useGhStatus,
+  useForgeStatus,
   useHoverPrefetch,
   usePrefetchPr,
   usePrList,
@@ -20,7 +20,7 @@ import { CreatePrDialog } from "./CreatePrDialog";
 import { useReconcileLocalPrs } from "./useReconcileLocalPrs";
 
 export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const ghReady = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );

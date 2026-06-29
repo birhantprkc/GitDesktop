@@ -63,7 +63,7 @@ import {
   useDefaultBranch,
   useDeleteBranch,
   useDiscardAll,
-  useGhStatus,
+  useForgeStatus,
   useMergeBranch,
   useMergePreview,
   usePrList,
@@ -263,7 +263,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   // Per-branch PR badge. Remote PRs (open + closed, the latter carrying merged)
   // and local PRs, fetched only while the menu is open and the repo has a
   // GitHub remote — mirrors the divergence gate above.
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const canGh = Boolean(
     gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
   );
