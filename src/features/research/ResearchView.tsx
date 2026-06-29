@@ -2,6 +2,7 @@ import {
   ArrowClockwiseIcon,
   ArrowLeftIcon,
   BinocularsIcon,
+  CopyIcon,
   FloppyDiskIcon,
   StopIcon,
   TrashIcon,
@@ -23,9 +24,11 @@ import { AgentTranscript } from "@/features/sessions/AgentTranscript";
 import { clearAgentSelection } from "@/features/sessions/agentSelect";
 import { formatUsd } from "@/lib/ai/cost";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
+import { copyText } from "@/lib/clipboard";
 import { formatBinding } from "@/lib/hotkeys/binding";
 import { toastError } from "@/lib/toast";
 import {
+  assembleSessionReport,
   type ResearchDepth,
   type ResearchHistoryTurn,
   type ResearchRun,
@@ -40,6 +43,11 @@ const INTENTS: { value: ResearchDepth; label: string }[] = [
   { value: "brainstorm", label: "Brainstorm" },
   { value: "deep", label: "Deep research" },
 ];
+
+const INTENT_LABEL: Record<ResearchDepth, string> = {
+  brainstorm: "Brainstorm",
+  deep: "Deep research",
+};
 
 /** Per-intent copy: heading + textarea placeholder + a one-line read-only note. */
 const INTENT_COPY: Record<
@@ -64,8 +72,9 @@ const INTENT_COPY: Record<
  * The read-only research canvas — peer of the plan and session canvases in the
  * agent surface. Shows the *selected* research run's streamed cited report (in-app,
  * never bounced to an external editor) plus a handoff bar to turn it into a plan,
- * save it, or — from a brainstorm — deep-research one of its directions. Several
- * runs can be open at once; this renders whichever is selected.
+ * copy it, or save it. The follow-up composer can switch the persona (brainstorm ↔
+ * deep research) mid-session. Several runs can be open at once; this renders
+ * whichever is selected.
  */
 export function ResearchView() {
   const run = useActiveResearchRun();
@@ -280,11 +289,26 @@ export function ResearchComposer({
 }
 
 /** The user's message for a follow-up turn, shown above the agent's response so
- *  the research session reads as a conversation. */
-function UserMessage({ text }: { text: string }) {
+ *  the research session reads as a conversation. When this turn switched the
+ *  persona, a small chip marks the transition (brainstorm ↔ deep research). */
+function UserMessage({
+  text,
+  switchedTo,
+}: {
+  text: string;
+  switchedTo?: ResearchDepth;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
-      <span className="text-[11px] font-medium text-foreground/70">You</span>
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] font-medium text-foreground/70">You</span>
+        {switchedTo && (
+          <span className="inline-flex items-center gap-1 bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            <BinocularsIcon className="size-3" />
+            Switched to {INTENT_LABEL[switchedTo]}
+          </span>
+        )}
+      </div>
       <div className="bg-muted/50 px-3 py-2 text-xs leading-relaxed break-words whitespace-pre-wrap">
         {text}
       </div>
@@ -298,13 +322,17 @@ function UserMessage({ text }: { text: string }) {
 function ResearchHistoryTurnView({
   turn,
   baseDir,
+  switchedTo,
 }: {
   turn: ResearchHistoryTurn;
   baseDir: string;
+  switchedTo?: ResearchDepth;
 }) {
   return (
     <div className="flex flex-col gap-3 border-t border-border/50 pt-4 first:border-t-0 first:pt-0">
-      {turn.prompt && <UserMessage text={turn.prompt} />}
+      {turn.prompt && (
+        <UserMessage text={turn.prompt} switchedTo={switchedTo} />
+      )}
       {turn.segments?.length ? (
         <AgentTranscript
           segments={turn.segments}
@@ -322,9 +350,6 @@ function ResearchResult({ run }: { run: ResearchRun }) {
   const cancel = useResearchStore((s) => s.cancel);
   const restart = useResearchStore((s) => s.restart);
   const saveReport = useResearchStore((s) => s.saveReport);
-  const setPendingResearchSeed = useResearchStore(
-    (s) => s.setPendingResearchSeed,
-  );
   const setPendingPlanSeed = usePlanStore((s) => s.setPendingPlanSeed);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
@@ -340,6 +365,16 @@ function ResearchResult({ run }: { run: ResearchRun }) {
     reportPath,
   } = run;
 
+  // The current (latest) turn switched personas when its mode differs from the
+  // turn before it — marked with a chip on its "You" message (history turns
+  // compute the same against their predecessor below).
+  const history = run.history ?? [];
+  const prevDepth = history.length
+    ? history[history.length - 1].depth
+    : undefined;
+  const currentSwitchedTo =
+    prevDepth !== undefined && run.depth !== prevDepth ? run.depth : undefined;
+
   // Hand the report to the Plan composer as data (treated as the goal to converge,
   // not as instructions). Recording originResearchId archives this run's sidebar
   // row once the plan exists. Clear the selection first so the activation surface
@@ -350,21 +385,9 @@ function ResearchResult({ run }: { run: ResearchRun }) {
     clearAgentSelection();
     setPendingPlanSeed({
       issueTitle: report.title,
-      issueBody: report.report,
+      // Hand the whole session (latest report + prior turns) to Plan for context.
+      issueBody: assembleSessionReport(run),
       originResearchId: run.id,
-    });
-  };
-
-  // Brainstorm → Deep research: seed a new deep-research run carrying this
-  // brainstorm as context; the user names the specific direction in the composer.
-  // Same surface-switch as above — deselect first so the composer can show.
-  const deepResearchDirection = () => {
-    if (!report) return;
-    clearAgentSelection();
-    setPendingResearchSeed({
-      depth: "deep",
-      priorContext: report.report,
-      fromBrainstormId: run.id,
     });
   };
 
@@ -423,17 +446,31 @@ function ResearchResult({ run }: { run: ResearchRun }) {
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         <div className="flex flex-col gap-4">
           {/* The whole session: each completed earlier turn, then the current one. */}
-          {(run.history ?? []).map((turn, i) => (
-            <ResearchHistoryTurnView
-              // History is append-only, so the index is a stable key.
-              key={i}
-              turn={turn}
-              baseDir={run.repoPath}
-            />
-          ))}
+          {history.map((turn, i, arr) => {
+            // Mark a turn that changed persona from the one before it.
+            const prev = i === 0 ? undefined : arr[i - 1].depth;
+            const switchedTo =
+              prev !== undefined &&
+              turn.depth !== undefined &&
+              turn.depth !== prev
+                ? turn.depth
+                : undefined;
+            return (
+              <ResearchHistoryTurnView
+                // History is append-only, so the index is a stable key.
+                key={i}
+                turn={turn}
+                baseDir={run.repoPath}
+                switchedTo={switchedTo}
+              />
+            );
+          })}
           <div className="flex flex-col gap-3 border-t border-border/50 pt-4 first:border-t-0 first:pt-0">
             {run.currentPrompt ? (
-              <UserMessage text={run.currentPrompt} />
+              <UserMessage
+                text={run.currentPrompt}
+                switchedTo={currentSwitchedTo}
+              />
             ) : null}
             {error ? (
               <div className="flex items-start gap-2 text-xs text-destructive">
@@ -477,16 +514,17 @@ function ResearchResult({ run }: { run: ResearchRun }) {
             )}
             {report && (
               <div className="ml-auto flex shrink-0 items-center gap-2">
-                {run.depth === "brainstorm" && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={deepResearchDirection}
-                    title="Start a deep-research run on one of these directions"
-                  >
-                    Deep-research a direction
-                  </Button>
-                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    copyText(assembleSessionReport(run), "Report copied")
+                  }
+                  title="Copy the report (with the session history) to the clipboard"
+                >
+                  <CopyIcon className="size-3.5" />
+                  Copy
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -507,7 +545,7 @@ function ResearchResult({ run }: { run: ResearchRun }) {
 
       {report && !error && (
         <div className="shrink-0 border-t p-2">
-          <ResearchFollowUp run={run} />
+          <ResearchFollowUp key={run.id} run={run} />
         </div>
       )}
     </div>
@@ -523,11 +561,14 @@ function ResearchResult({ run }: { run: ResearchRun }) {
 function ResearchFollowUp({ run }: { run: ResearchRun }) {
   const sendFollowUp = useResearchStore((s) => s.sendFollowUp);
   const [text, setText] = useState("");
+  // Seeded from the run's current persona; changing it switches the mode for the
+  // next turn (mounted per run via `key={run.id}`, so it tracks the active run).
+  const [depth, setDepth] = useState<ResearchDepth>(run.depth);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   const submit = () => {
     if (!text.trim() || run.generating) return;
-    sendFollowUp(run.id, text);
+    sendFollowUp(run.id, text, depth);
     setText("");
   };
 
@@ -560,6 +601,7 @@ function ResearchFollowUp({ run }: { run: ResearchRun }) {
         className="max-h-32 min-h-9 w-full resize-none overflow-y-auto bg-transparent text-xs leading-relaxed outline-none placeholder:text-muted-foreground disabled:opacity-60"
       />
       <div className="flex items-center gap-2 border-t pt-2">
+        <IntentPicker value={depth} onChange={setDepth} />
         <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
           ↵ send · ⇧↵ newline
         </span>

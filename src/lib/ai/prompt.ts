@@ -861,23 +861,60 @@ export function buildResearchPrompt(input: {
 }
 
 /**
- * Parse a research run's streamed markdown into a report + a title for the
- * sidebar row and the saved file name. The whole markdown IS the report (no
- * structured extraction — unlike a plan, there are no questions to pull); the
- * title is the first H1 (`# …`) heading, falling back to the first non-empty line.
+ * Builds the user prompt for a research FOLLOW-UP turn. Normally it just carries
+ * the user's message — the resumed conversation already holds the persona from
+ * turn 1, and the agent answers conversationally (acknowledge, then dig in).
+ *
+ * When the user SWITCHES persona mid-session (e.g. brainstorm → deep research),
+ * the system prompt can't be replaced on a resumed Claude turn (it's set only on
+ * turn 1), so the new persona's full instructions are injected inline for this and
+ * all following turns. The agent keeps the whole conversation in context but now
+ * operates in the new mode — the in-session equivalent of switching the model.
+ */
+export function buildResearchFollowUp(input: {
+  message: string;
+  depth: "brainstorm" | "deep";
+  /** True when this turn changes the persona from the previous turn. */
+  switched: boolean;
+}): string {
+  const msg = input.message.trim();
+  if (!input.switched) {
+    return `${msg}\n\nApply this and re-output the COMPLETE updated report in the same format.`;
+  }
+  const persona =
+    input.depth === "deep" ? DEEPRESEARCH_SYSTEM : BRAINSTORM_SYSTEM;
+  const mode = input.depth === "deep" ? "DEEP RESEARCH" : "BRAINSTORM";
+  return (
+    `Switch to ${mode} mode now, and stay in it for this and every following turn. ` +
+    `Operate by these instructions from here on:\n\n${persona}\n\n` +
+    `Apply this mode to the request below, drawing on everything explored so far in ` +
+    `this conversation, and produce a complete report in the format described above.\n\n${msg}`
+  );
+}
+
+/**
+ * Parse a research turn's streamed markdown into a report + a title for the
+ * sidebar row and the saved file name. The agent often narrates before the report
+ * proper ("Let me read the docs… here's the report"), so the report is taken from
+ * its first markdown heading onward — that preamble is fine to *watch* stream, but
+ * doesn't belong in the saved / handed-off artifact. The title is that heading
+ * (falling back to the first non-empty line). No questions extraction (unlike a plan).
  */
 export function extractResearchReport(raw: string): {
   title: string;
   report: string;
 } {
-  const report = raw
+  const stripped = raw
     .replace(/^\s*```[a-z]*\n?/i, "")
     .replace(/```\s*$/g, "")
     .trim();
-  const lines = report.split("\n");
-  const h1 = lines.find((l) => /^#\s+\S/.test(l.trim()));
-  const firstNonEmpty = lines.find((l) => l.trim());
-  const title = (h1 ?? firstNonEmpty ?? "")
+  // Start the report at its first heading, dropping any pre-report narration.
+  const headingAt = stripped.search(/^#{1,6}\s+\S/m);
+  const report = headingAt > 0 ? stripped.slice(headingAt).trim() : stripped;
+  const titleLine =
+    report.split("\n").find((l) => /^#{1,6}\s+\S/.test(l)) ??
+    report.split("\n").find((l) => l.trim());
+  const title = (titleLine ?? "")
     .replace(/^#+\s*/, "")
     .replace(/^[`'"]+|[`'"]+$/g, "")
     .trim()

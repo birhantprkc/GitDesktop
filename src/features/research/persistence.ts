@@ -42,6 +42,7 @@ function toPersisted(r: ResearchRun): PersistedResearch {
       text: h.text,
       report: h.report,
       costUsd: h.costUsd,
+      depth: h.depth,
     })),
     stopped: r.stopped,
     text: r.text,

@@ -94,10 +94,11 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   sits upstream of Plan. **Brainstorm** surveys the web and your code for several
   distinct directions with prior art; **Deep research** investigates one direction
   in depth and writes a **cited** report, rendered right in the app (never bounced
-  to an external editor). Hand a report **straight to Plan**, **save** it as a local
-  Markdown file (yours to review and commit, in `docs/research/` by default), or —
-  from a brainstorm — **deep-research one of its directions**. Read-only: it
-  searches and reads, but never writes. (Claude in this version.)
+  to an external editor). **Switch between the two mid-session** as the idea
+  narrows — the conversation carries over. Hand a report **straight to Plan**, or
+  **save** it as a local Markdown file (yours to review and commit, in
+  `.gitdesktop/research/`). Read-only: it searches and reads, but never writes.
+  (Claude in this version.)
 - **Plan before you build** — a read-only **Plan** mode drafts an agent-ready
   issue from a task (or an existing issue): a repo-aware agent explores your code
   and writes the problem, approach, affected files, acceptance criteria, and verify

@@ -521,7 +521,8 @@ for you — safely, in an isolated copy of your repo. It appears when AI feature
 ## Research a topic (read-only)
 
 **Research** runs a read-only, **web-enabled** agent that explores the web *and* your repo,
-then streams a **cited report** right here in the app. Pick an intent:
+then streams a **cited report** right here in the app. Pick an intent — and switch between
+them anytime from the follow-up composer, the way you'd switch a model:
 
 - **Brainstorm** — breadth-first. Surveys what's out there and surfaces several distinct
   directions with rough tradeoffs and prior art (who else does this), so you can widen your
@@ -530,12 +531,14 @@ then streams a **cited report** right here in the app. Pick an intent:
   approaches, libraries, tradeoffs — grounded in primary sources, with a confidence note per
   major claim and an explicit "what I couldn't verify".
 
-Keep refining with follow-up messages; the agent keeps its sources in context. When a report
-is ready you can **Turn it into a Plan** (it carries the report over as the goal to converge),
-**Save report** as a local Markdown file (created in \`docs/research/\` for you to review and
-commit — never committed for you; change the folder under **Settings → AI**), or — from a
-brainstorm — **Deep-research a direction** to dig into one of its options. It's **read-only**:
-it searches and reads, but never changes your code. (Research uses Claude in this version.)
+The natural flow: start in **Brainstorm** to widen your options, then **switch to Deep
+research** to flesh out the direction you chose — the whole conversation carries over, so the
+agent keeps everything it already explored. Keep refining with follow-up messages; the agent
+keeps its sources in context. When a report is ready you can **Turn it into a Plan** (it
+carries the whole session over as the goal to converge) or **Save report** as a local Markdown
+file (written to \`.gitdesktop/research/\` for you to review and commit — never committed for
+you). It's **read-only**: it searches and reads, but never changes your code. (Research uses
+Claude in this version.)
 
 ## Plan a task (read-only)
 

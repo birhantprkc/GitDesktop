@@ -2,9 +2,10 @@
 //!
 //! Same scaffold-local-files posture as `.github/FUNDING.yml` (see `funding.rs`):
 //! we WRITE the file into the repo and let the user review and commit it through
-//! the normal flow — never committing on their behalf. The default location is
-//! `docs/research/<slug>.md` (configurable via the `researchReportDir` setting);
-//! the file shows up in the Changes tab and can be reopened, in-app, by the canvas.
+//! the normal flow — never committing on their behalf. Reports land in
+//! `.gitdesktop/research/<slug>.md` — the app's committed metadata folder
+//! (alongside `instructions.md` / `branch-rules.json`), so the file shows up in
+//! the Changes tab and can be reopened, in-app, by the canvas.
 //!
 //! The slug derives from a model-produced report title, so it is untrusted: both
 //! the directory and the file stem are sanitized here (defense-in-depth) so a
@@ -15,11 +16,12 @@ use std::path::{Component, Path, PathBuf};
 use crate::error::{AppError, AppResult};
 
 /// Normalize a relative report directory, rejecting anything that could escape
-/// the repo (absolute paths, a `..` component). Empty falls back to `docs/research`.
+/// the repo (absolute paths, a `..` component). Empty falls back to
+/// `.gitdesktop/research`.
 fn safe_subdir(dir: &str) -> AppResult<PathBuf> {
     let trimmed = dir.trim().trim_matches(['/', '\\']);
     if trimmed.is_empty() {
-        return Ok(PathBuf::from("docs").join("research"));
+        return Ok(PathBuf::from(".gitdesktop").join("research"));
     }
     let mut out = PathBuf::new();
     for comp in Path::new(trimmed).components() {
@@ -36,7 +38,7 @@ fn safe_subdir(dir: &str) -> AppResult<PathBuf> {
         }
     }
     if out.as_os_str().is_empty() {
-        return Ok(PathBuf::from("docs").join("research"));
+        return Ok(PathBuf::from(".gitdesktop").join("research"));
     }
     Ok(out)
 }
@@ -115,8 +117,11 @@ mod tests {
 
     #[test]
     fn subdir_defaults_and_accepts_nested_relative() {
-        assert_eq!(safe_subdir("").unwrap(), PathBuf::from("docs").join("research"));
-        assert_eq!(safe_subdir("docs/research").unwrap(), PathBuf::from("docs").join("research"));
+        assert_eq!(safe_subdir("").unwrap(), PathBuf::from(".gitdesktop").join("research"));
+        assert_eq!(
+            safe_subdir(".gitdesktop/research").unwrap(),
+            PathBuf::from(".gitdesktop").join("research")
+        );
         assert_eq!(safe_subdir("notes").unwrap(), PathBuf::from("notes"));
     }
 

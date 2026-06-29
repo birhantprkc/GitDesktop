@@ -9,15 +9,27 @@ import {
   runAgentSession,
   type TranscriptSegment,
 } from "@/lib/ai/agent";
-import { buildResearchPrompt, extractResearchReport } from "@/lib/ai/prompt";
+import {
+  buildResearchFollowUp,
+  buildResearchPrompt,
+  extractResearchReport,
+} from "@/lib/ai/prompt";
 import { readRepoInstructions } from "@/lib/git/api";
 import { notify } from "@/lib/notify";
 import { loadSettings } from "@/lib/settings/api";
 import { errorMessage, invoke } from "@/lib/tauri/invoke";
 import { loadPersistedResearch, savePersistedResearch } from "./persistence";
 
-/** Which research persona drives the run, fixed at creation. "brainstorm"
- *  diverges (breadth, options); "deep" investigates one direction (depth, cited). */
+/** Where a saved Research report is written, relative to the repo root: under the
+ *  app's committed `.gitdesktop/` metadata folder (alongside instructions.md and
+ *  branch-rules.json), so it shows in Changes and is the user's to commit — we
+ *  never commit it (scaffold-local-files). A working artifact the user can later
+ *  promote to a polished `docs/` design doc. */
+const RESEARCH_REPORT_DIR = ".gitdesktop/research";
+
+/** Which research persona drives a turn. "brainstorm" diverges (breadth, options);
+ *  "deep" investigates one direction (depth, cited). Set at creation, but the user
+ *  can switch it mid-session from the follow-up composer (like switching models). */
 export type ResearchDepth = "brainstorm" | "deep";
 
 /** The parsed result of a research turn — the full report markdown plus the
@@ -38,6 +50,10 @@ export interface ResearchHistoryTurn {
   text: string;
   report: ResearchReport | null;
   costUsd: number | null;
+  /** The persona this turn ran in — so the canvas can mark where the session
+   *  switched modes (brainstorm ↔ deep). Absent on runs persisted before this
+   *  field existed → treated as "no switch". */
+  depth?: ResearchDepth;
 }
 
 /** Prefill for the research composer: a topic + persona, and (for the
@@ -134,8 +150,10 @@ interface ResearchState {
   /** Start a new research run (creates it, selects it, streams turn 1). Returns its id. */
   start: (args: ResearchGenerateArgs) => string;
   /** Send a free-form follow-up — resumes the conversation so the agent digs
-   *  deeper. No-op if it's missing, mid-turn, or the message is blank. */
-  sendFollowUp: (id: string, message: string) => void;
+   *  deeper. `depth` is the persona for this turn (the follow-up composer can
+   *  switch it mid-session); a change re-injects the new persona inline. No-op if
+   *  the run is missing, mid-turn, or the message is blank. */
+  sendFollowUp: (id: string, message: string, depth: ResearchDepth) => void;
   /** Save the run's report as a local Markdown file (scaffold-local-files: the
    *  user commits it, we never do). Resolves to the repo-relative path written. */
   saveReport: (id: string) => Promise<string>;
@@ -168,6 +186,41 @@ function slugify(title: string): string {
       .replace(/^-+|-+$/g, "")
       .slice(0, 80) || "research"
   );
+}
+
+/** Drop any pre-report narration (the streamed report is already cleaned by
+ *  `extractResearchReport`; this is the fallback for a turn we only have raw text
+ *  for, e.g. reloaded). */
+function cleanReportText(text: string): string {
+  const t = text
+    .replace(/^\s*```[a-z]*\n?/i, "")
+    .replace(/```\s*$/g, "")
+    .trim();
+  const at = t.search(/^#{1,6}\s+\S/m);
+  return at > 0 ? t.slice(at).trim() : t;
+}
+
+/**
+ * Assemble the whole research session into one Markdown document for saving or
+ * handing to Plan: the latest report first, then each earlier turn (its question +
+ * report) kept for full transparency. Pre-report narration is stripped throughout.
+ */
+export function assembleSessionReport(run: ResearchRun): string {
+  const reportOf = (text: string, report: ResearchReport | null) =>
+    report?.report ?? cleanReportText(text);
+  const current = reportOf(run.text, run.report);
+  const history = run.history ?? [];
+  if (history.length === 0) return current;
+  const prior = history
+    .map((h) => {
+      const asked = h.prompt?.trim();
+      const head = asked
+        ? `> **Asked:** ${asked}`
+        : "> **Initial exploration**";
+      return `${head}\n\n${reportOf(h.text, h.report)}`;
+    })
+    .join("\n\n---\n\n");
+  return `${current}\n\n---\n\n## Earlier in this research session\n\n_Prior turns of this session, kept for full transparency._\n\n${prior}`;
 }
 
 /**
@@ -406,13 +459,17 @@ export const useResearchStore = create<ResearchState>((set, get) => {
       return id;
     },
 
-    sendFollowUp: (id, message) => {
+    sendFollowUp: (id, message, depth) => {
       const run = get().runs.find((r) => r.id === id);
       const text = message.trim();
       if (!run || run.generating || !text) return;
-      // Keep the just-finished turn visible: snapshot it into history before the
-      // new turn clears the current fields, so the whole research session stays on
-      // screen (the current turn streams into the top-level fields as before).
+      // A persona change vs the turn that just ran — re-inject the new persona for
+      // this and following turns (see buildResearchFollowUp).
+      const switched = depth !== run.depth;
+      // Keep the just-finished turn visible: snapshot it into history (with the
+      // persona it ran in) before the new turn clears the current fields, so the
+      // whole research session stays on screen (the current turn streams into the
+      // top-level fields as before).
       patch(id, {
         history: [
           ...(run.history ?? []),
@@ -422,24 +479,29 @@ export const useResearchStore = create<ResearchState>((set, get) => {
             text: run.text,
             report: run.report,
             costUsd: run.costUsd,
+            depth: run.depth,
           },
         ],
         currentPrompt: text,
+        depth,
       });
-      const userPrompt = `${text}\n\nApply this and re-output the COMPLETE updated report in the same format.`;
+      const userPrompt = buildResearchFollowUp({
+        message: text,
+        depth,
+        switched,
+      });
       void runTurn(id, "", userPrompt, true);
     },
 
     saveReport: async (id) => {
       const run = get().runs.find((r) => r.id === id);
       if (!run?.report) throw new Error("No report to save yet.");
-      const settings = await loadSettings().catch(() => null);
-      const dir = settings?.researchReportDir?.trim() || "docs/research";
       const rel = await invoke<string>("research_save_report", {
         repoPath: run.repoPath,
-        dir,
+        dir: RESEARCH_REPORT_DIR,
         slug: slugify(run.report.title),
-        content: run.report.report,
+        // Save the whole session (latest report + prior turns), preamble stripped.
+        content: assembleSessionReport(run),
       });
       patch(id, { reportPath: rel });
       return rel;
@@ -460,9 +522,13 @@ export const useResearchStore = create<ResearchState>((set, get) => {
       // Fresh conversation (the stopped one was killed): a new session id so the
       // old turn — if it's still resolving — is detected as stale and bails, then
       // re-run turn 1 from the original topic + persona (+ any brainstorm context).
+      // Reset the persona to the run's ORIGINAL mode (a mid-session switch doesn't
+      // carry into a from-scratch restart).
+      const depth = run.origin?.depth ?? run.depth;
       patch(id, {
         sessionId: crypto.randomUUID(),
         nativeSessionId: null,
+        depth,
         generating: true,
         status: "",
         stopped: false,
@@ -474,7 +540,7 @@ export const useResearchStore = create<ResearchState>((set, get) => {
         model: run.model,
         effort: run.effort,
         topic: run.seed?.topic ?? run.origin?.topic ?? "",
-        depth: run.depth,
+        depth,
         priorContext: run.seed?.priorContext,
         fromBrainstormId: run.fromBrainstormId,
       });
