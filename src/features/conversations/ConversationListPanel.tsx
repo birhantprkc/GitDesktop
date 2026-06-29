@@ -10,7 +10,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { GhNotReady } from "@/features/repository/GhNotReady";
+import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import { cn } from "@/lib/utils";
 
 /** The "New ▾" dropdown's two items (GitHub + local). */
@@ -40,7 +40,7 @@ function rowClass(active: boolean) {
  */
 export function ConversationListPanel<L, R>(props: {
   repoPath: string;
-  /** GhNotReady's `feature` (e.g. "pull requests"). */
+  /** ForgeNotReady's `feature` (e.g. "pull requests"). */
   feature: string;
   // toolbar
   stateFilter: "open" | "closed";
@@ -207,7 +207,7 @@ export function ConversationListPanel<L, R>(props: {
               <Skeleton className="h-9 w-full" />
             </div>
           ) : !ghReady ? (
-            <GhNotReady repoPath={repoPath} feature={feature} />
+            <ForgeNotReady repoPath={repoPath} feature={feature} />
           ) : listPending ? (
             <div className="space-y-2 p-3">
               {Array.from({ length: remoteSkeletonRows }, (_, i) => (

@@ -13,8 +13,9 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LabelChip } from "@/features/conversations/Thread";
-import { GhNotReady } from "@/features/repository/GhNotReady";
+import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import {
+  forgeSupports,
   useDiscussionList,
   useDiscussionMeta,
   useForgeStatus,
@@ -163,7 +164,11 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
               <Skeleton className="h-9 w-full" />
             </div>
           ) : !ghReady ? (
-            <GhNotReady repoPath={repoPath} feature="discussions" />
+            <ForgeNotReady repoPath={repoPath} feature="discussions" />
+          ) : !forgeSupports(gh.data, "discussions") ? (
+            <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+              Discussions aren't available on this repository's host.
+            </p>
           ) : meta.isPending ? (
             <div className="space-y-2 p-3">
               <Skeleton className="h-9 w-full" />

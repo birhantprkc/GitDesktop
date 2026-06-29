@@ -33,7 +33,6 @@ import type {
   GhRepoList,
   GhScopes,
   GhSecret,
-  GhStatus,
   GhVariable,
   GitInfo,
   HookDelivery,
@@ -798,11 +797,8 @@ export const gitReviewWorktree = (repoPath: string, sha: string) =>
 export const gitRemoveWorktree = (repoPath: string, worktreePath: string) =>
   invoke<void>("git_remove_worktree", { repoPath, worktreePath });
 
-export const ghStatus = (repoPath: string) =>
-  invoke<GhStatus>("gh_status", { repoPath });
-
 /** Provider-neutral hosted-integration status (GitHub today; GitLab/Bitbucket as
- *  their impls land). The new gate hosted panels read instead of `ghStatus`. */
+ *  their impls land) — the gate hosted panels read for any provider. */
 export const forgeStatus = (repoPath: string) =>
   invoke<ForgeStatus>("forge_status", { repoPath });
 

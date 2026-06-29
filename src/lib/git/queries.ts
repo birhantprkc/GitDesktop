@@ -18,8 +18,8 @@ import {
 import type {
   DiffStatEntry,
   DiscussionDetails,
+  ForgeCapabilities,
   ForgeStatus,
-  GhStatus,
   IssueDetails,
   IssueReactions,
   IssueRelation,
@@ -1395,25 +1395,6 @@ export function useSwitchAccount() {
   });
 }
 
-export function useGhStatus(repo: string) {
-  return useQuery({
-    queryKey: ["repo", repo, "gh-status"] as const,
-    // Cold-start test mode can force the "GitHub not connected" empty states.
-    queryFn: COLD_START_NO_GH
-      ? (): Promise<GhStatus> =>
-          Promise.resolve({
-            installed: false,
-            authenticated: false,
-            login: null,
-            repo: null,
-            host: null,
-          })
-      : () => api.ghStatus(repo),
-    staleTime: 60_000,
-    retry: false,
-  });
-}
-
 /** The "no hosted integration" status cold-start test mode forces. */
 const NO_FORGE_STATUS: ForgeStatus = {
   provider: null,
@@ -1438,10 +1419,9 @@ const NO_FORGE_STATUS: ForgeStatus = {
 };
 
 /**
- * Provider-neutral hosted-integration status — the abstraction-layer successor to
- * {@link useGhStatus}. GitHub delegates to the same gh-backed probe today; GitLab
- * and Bitbucket join as their impls land. Hosted panels will migrate their
- * readiness/capability gates onto this incrementally.
+ * Provider-neutral hosted-integration status — the gate every hosted panel reads.
+ * GitHub delegates to the gh-backed probe; GitLab and Bitbucket join as their
+ * impls land.
  */
 export function useForgeStatus(repo: string) {
   return useQuery({
@@ -1460,6 +1440,17 @@ export function useForgeStatus(repo: string) {
  *  `gh.data?.installed && …` duplication. */
 export function forgeReady(status: ForgeStatus | undefined | null): boolean {
   return Boolean(status?.installed && status?.authenticated && status?.repo);
+}
+
+/** Whether the repo's provider supports a given hosted capability — the gate for
+ *  a control that some platforms lack (GitLab has no Discussions; Bitbucket has no
+ *  labels/milestones/stars/reactions). GitHub is all-true, so this is a no-op gate
+ *  there; it's the seam GitLab/Bitbucket need to hide what they can't do. */
+export function forgeSupports(
+  status: ForgeStatus | undefined | null,
+  capability: keyof ForgeCapabilities,
+): boolean {
+  return Boolean(status?.capabilities[capability]);
 }
 
 // ── Git hooks ────────────────────────────────────────────────────────────────

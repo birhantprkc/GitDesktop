@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { GhNotReady } from "@/features/repository/GhNotReady";
+import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import { forgeReady, useForgeStatus, useRepoStatus } from "@/lib/git/queries";
 import { useWorkflowRuns } from "@/lib/github/actions";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
@@ -119,7 +119,7 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
             <Skeleton className="h-10 w-full" />
           </div>
         ) : !ghReady ? (
-          <GhNotReady repoPath={repoPath} feature="workflow runs" />
+          <ForgeNotReady repoPath={repoPath} feature="workflow runs" />
         ) : runs.isPending ? (
           <div className="space-y-2 p-3">
             <Skeleton className="h-10 w-full" />
