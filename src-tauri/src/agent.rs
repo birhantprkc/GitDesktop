@@ -636,6 +636,11 @@ fn codex_session_args(
     thread_id: Option<&str>,
     effort: &str,
     read_only: bool,
+    // Web-enabled read-only profile (a Research conversation): force Codex's
+    // first-party web_search tool to LIVE mode (it's on-by-default but cached). The
+    // tool is hosted, so it works under the read-only sandbox. Only meaningful with
+    // read_only; Plan/Delegate pass false.
+    web: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec!["exec".into()];
     if resume {
@@ -649,10 +654,20 @@ fn codex_session_args(
         }
     }
     if read_only {
-        // A Plan conversation: the read-only sandbox denies every write (the hard
-        // guarantee). Never the container full-bypass, which would allow writes.
+        // A Plan / Research conversation: the read-only sandbox denies every write
+        // (the hard guarantee). Never the container full-bypass, which would allow writes.
         args.push("-s".into());
         args.push("read-only".into());
+        if cfg!(target_os = "windows") && !container {
+            // On Windows, read-only WITHOUT a sandbox profile blocks shell process
+            // creation entirely — so Codex (which explores the repo by running read
+            // commands like `ls`/`Get-ChildItem`) can't read it at all and falls back
+            // to "web-grounded only". The unelevated restricted token lets read
+            // commands run while the read-only policy still denies every write
+            // (same sandbox the host write profile uses, just read-only).
+            args.push("-c".into());
+            args.push("windows.sandbox=\"unelevated\"".into());
+        }
     } else if container {
         args.push("--dangerously-bypass-approvals-and-sandbox".into());
     } else {
@@ -672,6 +687,11 @@ fn codex_session_args(
             args.push("-c".into());
             args.push("windows.sandbox=\"unelevated\"".into());
         }
+    }
+    if web {
+        // Research: fresh web results, not the default cached snapshot.
+        args.push("-c".into());
+        args.push("web_search=\"live\"".into());
     }
     args.push("--skip-git-repo-check".into());
     args.push("--json".into());
@@ -706,6 +726,12 @@ fn copilot_session_args(
     prompt: &str,
     effort: &str,
     read_only: bool,
+    // Web-enabled read-only profile (a Research conversation): keep Copilot's web
+    // tools (web_fetch + web search) and the GitHub MCP available — `--allow-all-tools`
+    // already admits them and they're neither `write` nor `shell`, so the read-only
+    // guarantee holds. A plain Plan run (web=false) drops the builtin MCPs to stay
+    // repo-local. Only meaningful with read_only.
+    web: bool,
     mcp_config: Option<&str>,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
@@ -724,12 +750,16 @@ fn copilot_session_args(
         args.push(format!("@{path}"));
     }
     if read_only {
-        // Read-only Plan conversation: deny every write path (denial takes
-        // precedence over allow-all), so reads/search auto-approve but writes are
-        // impossible — no worktree write-dir needed.
+        // Read-only conversation (Plan or Research): deny every write path (denial
+        // takes precedence over allow-all), so reads/search auto-approve but writes
+        // are impossible — no worktree write-dir needed.
         args.push("--deny-tool=write".into());
         args.push("--deny-tool=shell".into());
-        args.push("--disable-builtin-mcps".into());
+        // Plan stays repo-local (drop the builtin GitHub MCP); Research keeps the
+        // builtin MCP + web tools so it can reach GitHub and the web.
+        if !web {
+            args.push("--disable-builtin-mcps".into());
+        }
     } else {
         args.push("--add-dir".into());
         args.push(worktree.into());
@@ -847,6 +877,12 @@ fn opencode_session_args(
     resume: bool,
     effort: &str,
     read_only: bool,
+    // Web-enabled read-only profile (a Research conversation): use our generated
+    // read-only agent (`gd-research`) instead of the builtin `plan`, because `plan`
+    // has NO web tools and opencode has no permission CLI flags — the agent is
+    // defined in the `OPENCODE_CONFIG` file (see mcp::build_opencode_config) with
+    // edit/bash denied + webfetch/websearch allowed. Only meaningful with read_only.
+    web: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "run".into(),
@@ -855,10 +891,11 @@ fn opencode_session_args(
         "--dangerously-skip-permissions".into(),
     ];
     if read_only {
-        // A Plan conversation: opencode's built-in `plan` agent can glob/read but
-        // has no write/edit/bash tools — a hard read-only guarantee.
+        // A read-only conversation: a hard read-only guarantee via an agent with no
+        // write/edit/bash tools — the builtin `plan` (Plan; glob/read only), or our
+        // `gd-research` (Research; adds webfetch/websearch). See the `web` doc above.
         args.push("--agent".into());
-        args.push("plan".into());
+        args.push(if web { crate::mcp::GD_RESEARCH_AGENT } else { "plan" }.into());
     }
     if resume && !session_id.trim().is_empty() {
         // opencode generated the id on turn 1; we captured it from the stream.
@@ -970,15 +1007,17 @@ fn tool_target(input: &serde_json::Value) -> Option<String> {
     None
 }
 
-/// Keep a target to a sane size for the event payload (the UI also truncates for
-/// display) and collapse internal whitespace so a multi-line command reads as one.
+/// Bound a free-text target (command / URL / query / prompt) to a sane payload
+/// size. NOT whitespace-collapsed: the UI renders the row single-line via CSS and
+/// an expandable view shows the command verbatim (newlines preserved), so the full
+/// command stays readable when expanded — a 200-char clip used to hide the rest.
 fn clip_target(s: &str) -> String {
-    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one_line.chars().count() > 200 {
-        let truncated: String = one_line.chars().take(200).collect();
+    let t = s.trim();
+    if t.chars().count() > 2000 {
+        let truncated: String = t.chars().take(2000).collect();
         format!("{truncated}…")
     } else {
-        one_line
+        t.to_string()
     }
 }
 
@@ -1615,10 +1654,11 @@ pub async fn agent_session(
     // Copilot deny-write/shell, opencode `--agent plan`), so the turn can explore
     // but can NEVER write — even though it runs in the live repo, not a worktree.
     read_only: bool,
-    // Web-enabled read-only profile (a Research conversation): adds WebSearch/WebFetch
-    // to Claude's read-only toolset so the turn can investigate the web while still
-    // never writing. Only honored for Claude (v1 Research is Claude-only) and only
-    // alongside `read_only`; Plan/Delegate pass false, so they're untouched.
+    // Web-enabled read-only profile (a Research conversation): each CLI gains its
+    // native web tools while still never writing — Claude WebSearch/WebFetch, Codex
+    // live web_search, Copilot web_fetch + GitHub MCP, opencode a generated
+    // read-only-web agent (webfetch/websearch). Only meaningful alongside `read_only`;
+    // Plan/Delegate pass false, so they're untouched.
     web: bool,
     // "container" runs the turn inside a Docker/Podman container (worktree-
     // confined); anything else (incl. None) runs it on the host (worktree-only).
@@ -1652,6 +1692,9 @@ pub async fn agent_session(
         AgentKind::Opencode => "opencode",
     };
     let container = isolation.as_deref() == Some("container");
+    // opencode Research: it needs its generated read-only-web agent in OPENCODE_CONFIG
+    // (the builtin `plan` agent has no web tools), written even with no MCP servers.
+    let opencode_research = kind == AgentKind::Opencode && web;
 
     // Resolve the session's opted-in MCP servers into a generated config file, passed
     // to whichever CLI this is in its own form. The composer gates selection to the
@@ -1690,8 +1733,9 @@ pub async fn agent_session(
                     .map(|p| p.to_string_lossy().into_owned());
             }
             (AgentKind::Opencode, false) => {
-                mcp_config_path = crate::mcp::write_opencode_config(&app, &session_id, &mcp_specs)?
-                    .map(|p| p.to_string_lossy().into_owned());
+                mcp_config_path =
+                    crate::mcp::write_opencode_config(&app, &session_id, &mcp_specs, opencode_research)?
+                        .map(|p| p.to_string_lossy().into_owned());
             }
             // Container: the file is written into the mounted home in the container branch
             // below (uniform). Only Claude carries a path here, for its `--mcp-config` flag;
@@ -1720,6 +1764,12 @@ pub async fn agent_session(
                 ));
             }
         }
+    }
+    // A host opencode Research session with NO MCP servers still needs its generated
+    // read-only-web agent config (the `!mcp_specs.is_empty()` pass above skipped it).
+    if opencode_research && !container && mcp_config_path.is_none() {
+        mcp_config_path = crate::mcp::write_opencode_config(&app, &session_id, &[], true)?
+            .map(|p| p.to_string_lossy().into_owned());
     }
 
     // The inner CLI invocation + the stdin for this turn. Claude carries the
@@ -1755,6 +1805,7 @@ pub async fn agent_session(
                 native_session_id.as_deref(),
                 &effort,
                 read_only,
+                web,
             ),
             if resume {
                 user_prompt
@@ -1787,6 +1838,7 @@ pub async fn agent_session(
                     &prompt,
                     &effort,
                     read_only,
+                    web,
                     // Host Copilot only — a container session errored out above, so a
                     // path here always names the host `--additional-mcp-config` file.
                     mcp_config_path.as_deref(),
@@ -1810,6 +1862,7 @@ pub async fn agent_session(
                     resume,
                     &effort,
                     read_only,
+                    web,
                 ),
                 prompt,
             )
@@ -1898,7 +1951,9 @@ pub async fn agent_session(
         // implicitly (no host-style `--strict-mcp-config` to ignore a leftover).
         if let Some((filename, _)) = crate::agent_sandbox::container_mcp_config(agent_name) {
             let config_path = home.join(filename);
-            if mcp_specs.is_empty() {
+            // opencode Research also needs its generated read-only-web agent in the
+            // file even with no MCP servers; every other case writes only for servers.
+            if mcp_specs.is_empty() && !opencode_research {
                 let _ = std::fs::remove_file(&config_path);
             } else {
                 let body = match kind {
@@ -1907,9 +1962,9 @@ pub async fn agent_session(
                     AgentKind::Copilot => {
                         json_to_string(&crate::mcp::build_copilot_config(&mcp_specs)?)?
                     }
-                    AgentKind::Opencode => {
-                        json_to_string(&crate::mcp::build_opencode_config(&mcp_specs)?)?
-                    }
+                    AgentKind::Opencode => json_to_string(
+                        &crate::mcp::build_opencode_config(&mcp_specs, opencode_research)?,
+                    )?,
                 };
                 std::fs::write(&config_path, body)?;
             }
@@ -1922,13 +1977,20 @@ pub async fn agent_session(
         let npm_cache = crate::agent_sandbox::npm_cache_dir(&app);
         // opencode reads its MCP config from `OPENCODE_CONFIG` (no flag) — point it at the
         // file mounted in the home. Other agents read their dotdir file implicitly.
-        let container_env: Vec<(&str, String)> =
+        let mut container_env: Vec<(&str, String)> =
             match crate::agent_sandbox::container_mcp_config("opencode") {
-                Some((_, path)) if kind == AgentKind::Opencode && !mcp_specs.is_empty() => {
+                Some((_, path))
+                    if kind == AgentKind::Opencode
+                        && (!mcp_specs.is_empty() || opencode_research) =>
+                {
                     vec![("OPENCODE_CONFIG", path)]
                 }
                 _ => Vec::new(),
             };
+        if opencode_research {
+            // Enable opencode's Exa-backed websearch tool (webfetch works regardless).
+            container_env.push(("OPENCODE_ENABLE_EXA", "1".to_string()));
+        }
         let args = crate::agent_sandbox::build_run_args(
             &runtime_name,
             agent_name,
@@ -1966,14 +2028,18 @@ pub async fn agent_session(
             kind.label()
         ))
     })?;
-    // opencode takes its MCP config via the `OPENCODE_CONFIG` env var (it has no
-    // config-file flag); set it only when this host session has servers. opencode
-    // merges config layers, so this adds our servers without replacing the user's.
+    // opencode takes its MCP config (and our Research agent) via the `OPENCODE_CONFIG`
+    // env var (it has no config-file flag); set it whenever we wrote a config file.
+    // opencode merges config layers, so this adds ours without replacing the user's.
     // (Claude/Copilot carry their config in argv, so they need no extra env.)
-    let host_extra_env: Vec<(&str, String)> = match (kind, &mcp_config_path) {
+    let mut host_extra_env: Vec<(&str, String)> = match (kind, &mcp_config_path) {
         (AgentKind::Opencode, Some(path)) => vec![("OPENCODE_CONFIG", path.clone())],
         _ => Vec::new(),
     };
+    if opencode_research {
+        // Enable opencode's Exa-backed websearch tool (webfetch works regardless).
+        host_extra_env.push(("OPENCODE_ENABLE_EXA", "1".to_string()));
+    }
     stream_agent(
         &state,
         kind,
@@ -2072,8 +2138,14 @@ mod tests {
         assert_eq!(tool_target(&v).as_deref(), Some("a/b.ts"));
         let cmd: serde_json::Value =
             serde_json::from_str(r#"{"command":"pnpm   build\n--flag"}"#).unwrap();
-        // Whitespace (incl. the newline) collapses to single spaces for free text.
-        assert_eq!(tool_target(&cmd).as_deref(), Some("pnpm build --flag"));
+        // Free text is kept VERBATIM (newlines preserved) so the expandable view
+        // shows the real command; only the outer edges are trimmed.
+        assert_eq!(tool_target(&cmd).as_deref(), Some("pnpm   build\n--flag"));
+        // …but it's length-bounded for the payload (long command → clipped + …).
+        let long_cmd = serde_json::json!({ "command": "echo ".to_string() + &"x".repeat(2500) });
+        let clipped = tool_target(&long_cmd).unwrap();
+        assert!(clipped.ends_with('…'));
+        assert!(clipped.chars().count() <= 2001);
         let none: serde_json::Value = serde_json::from_str(r#"{"foo":"bar"}"#).unwrap();
         assert_eq!(tool_target(&none), None);
 

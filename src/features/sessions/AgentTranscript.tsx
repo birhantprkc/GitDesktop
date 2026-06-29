@@ -93,6 +93,58 @@ function ToolStep({
   );
 }
 
+/** A target long or multi-line enough that the single-line row hides most of it —
+ *  e.g. a shell command. The row truncates; expanding shows the whole thing. */
+function isLongTarget(target: string): boolean {
+  return target.length > 80 || target.includes("\n") || target.endsWith("…");
+}
+
+/** A tool step whose target is too long to read in the row (typically a shell
+ *  command) — expands to show the FULL command/target verbatim. This is what makes
+ *  a run like `pwsh … -Command 'Get-ChildItem -Recurse -Include package.json,…'`
+ *  legible instead of a truncated path that looks like it's roaming the system. */
+function CommandStep({
+  tool,
+  target,
+  baseDir,
+}: {
+  tool: AgentToolKind;
+  target: string;
+  baseDir?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const meta = META[tool] ?? META.other;
+  const Glyph = meta.icon;
+  const shown = meta.file ? relativize(target, baseDir) : target;
+  return (
+    <div className="flex flex-col bg-muted/40">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex items-center gap-1.5 px-2 py-1 text-left text-[11px] leading-relaxed hover:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        <CaretRightIcon
+          className={cn(
+            "size-3 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-90",
+          )}
+        />
+        <Glyph className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="shrink-0 text-muted-foreground">{meta.verb}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-foreground/75">
+          {shown}
+        </span>
+      </button>
+      {open && (
+        <pre className="overflow-x-auto border-t border-border/60 px-2 py-1.5 font-mono text-[11px] whitespace-pre-wrap text-foreground/80">
+          {target}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 /** The diff body shown under an expanded edit/write step — the file's cumulative
  *  change in the session, with the usual placeholders. Reuses the shared diff
  *  renderer (200-line cap + "Show full diff" + syntax highlighting). */
@@ -241,6 +293,18 @@ export function AgentTranscript({
               baseDir={baseDir}
               base={editDiffBase}
               live={editDiffLive}
+            />
+          );
+        }
+        // A long/clipped target (typically a shell command) expands to its full
+        // text, so a truncated row never misreads as the agent roaming the system.
+        if (seg.target && isLongTarget(seg.target)) {
+          return (
+            <CommandStep
+              key={i}
+              tool={seg.tool}
+              target={seg.target}
+              baseDir={baseDir}
             />
           );
         }

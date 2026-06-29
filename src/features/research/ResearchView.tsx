@@ -19,11 +19,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePlanStore } from "@/features/plan/store";
-import { ComposerOptions, ModelPicker } from "@/features/sessions/AgentPickers";
+import {
+  AgentPicker,
+  ComposerOptions,
+  ModelPicker,
+  modelsForAgent,
+} from "@/features/sessions/AgentPickers";
 import { AgentTranscript } from "@/features/sessions/AgentTranscript";
 import { clearAgentSelection } from "@/features/sessions/agentSelect";
+import type { AgentKind } from "@/lib/ai/agent";
 import { formatUsd } from "@/lib/ai/cost";
-import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
 import { copyText } from "@/lib/clipboard";
 import { formatBinding } from "@/lib/hotkeys/binding";
 import { toastError } from "@/lib/toast";
@@ -37,8 +42,6 @@ import {
   useResearchStore,
 } from "./store";
 
-const CLAUDE_MODELS = MODEL_SUGGESTIONS["claude-cli"];
-
 const INTENTS: { value: ResearchDepth; label: string }[] = [
   { value: "brainstorm", label: "Brainstorm" },
   { value: "deep", label: "Deep research" },
@@ -47,6 +50,15 @@ const INTENTS: { value: ResearchDepth; label: string }[] = [
 const INTENT_LABEL: Record<ResearchDepth, string> = {
   brainstorm: "Brainstorm",
   deep: "Deep research",
+};
+
+/** Compact agent labels for the header / follow-up composer (which provider ran
+ *  the research — surfaced so a failure can be traced to its CLI). */
+const AGENT_LABEL: Record<AgentKind, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  copilot: "Copilot",
+  opencode: "opencode",
 };
 
 /** Per-intent copy: heading + textarea placeholder + a one-line read-only note. */
@@ -96,6 +108,9 @@ function ResearchHeader({ run }: { run: ResearchRun }) {
   const remove = useResearchStore((s) => s.remove);
   const label = run.origin?.topic?.trim() || "Research";
   const intent = run.depth === "deep" ? "Deep research" : "Brainstorm";
+  // Which CLI + model ran this research — surfaced so a failure or odd behavior is
+  // traceable to its provider (you can't otherwise tell which agent did what).
+  const provider = `${AGENT_LABEL[run.agent]}${run.model ? ` · ${run.model}` : ""}`;
   return (
     <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2.5">
       <BinocularsIcon className="size-4 shrink-0 text-primary" />
@@ -104,6 +119,12 @@ function ResearchHeader({ run }: { run: ResearchRun }) {
         title={label}
       >
         {label}
+      </span>
+      <span
+        className="shrink-0 font-mono text-[11px] text-muted-foreground"
+        title="Agent and model running this research"
+      >
+        {provider}
       </span>
       <span className="shrink-0 text-[11px] text-muted-foreground">
         {intent}
@@ -188,6 +209,7 @@ export function ResearchComposer({
   const [depth, setDepth] = useState<ResearchDepth>(
     seed?.depth ?? "brainstorm",
   );
+  const [agent, setAgent] = useState<AgentKind>("claude");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
 
@@ -196,15 +218,7 @@ export function ResearchComposer({
 
   const submit = () => {
     if (!canRun) return;
-    start({
-      repoPath,
-      // v1 Research is Claude-only (Claude owns WebSearch/WebFetch).
-      agent: "claude",
-      model,
-      effort,
-      topic,
-      depth,
-    });
+    start({ repoPath, agent, model, effort, topic, depth });
   };
 
   return (
@@ -244,17 +258,17 @@ export function ResearchComposer({
           </p>
           <div className="flex items-center gap-2 border-t pt-2">
             <IntentPicker value={depth} onChange={setDepth} />
-            {/* v1 is Claude-only — a quiet label, not a dead dropdown. */}
-            <span
-              className="text-[11px] text-muted-foreground"
-              title="Research uses Claude (it owns web search) in this version"
-            >
-              Claude
-            </span>
+            <AgentPicker
+              value={agent}
+              onChange={(a) => {
+                setAgent(a);
+                setModel(""); // model lists differ between agents
+              }}
+            />
             <ModelPicker
               value={model}
               onChange={setModel}
-              models={CLAUDE_MODELS}
+              models={modelsForAgent(agent)}
             />
             <ComposerOptions effort={effort} onEffort={setEffort} />
             <div className="ml-auto flex items-center gap-2">
@@ -550,14 +564,16 @@ function ResearchResult({ run }: { run: ResearchRun }) {
 function ResearchFollowUp({ run }: { run: ResearchRun }) {
   const sendFollowUp = useResearchStore((s) => s.sendFollowUp);
   const [text, setText] = useState("");
-  // Seeded from the run's current persona; changing it switches the mode for the
+  // Seeded from the run's current persona + model; changing either applies to the
   // next turn (mounted per run via `key={run.id}`, so it tracks the active run).
+  // The agent itself can't change mid-conversation (the CLI resume is per-agent).
   const [depth, setDepth] = useState<ResearchDepth>(run.depth);
+  const [model, setModel] = useState(run.model);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   const submit = () => {
     if (!text.trim() || run.generating) return;
-    sendFollowUp(run.id, text, depth);
+    sendFollowUp(run.id, text, depth, model);
     setText("");
   };
 
@@ -591,6 +607,18 @@ function ResearchFollowUp({ run }: { run: ResearchRun }) {
       />
       <div className="flex items-center gap-2 border-t pt-2">
         <IntentPicker value={depth} onChange={setDepth} />
+        {/* The agent is fixed for the conversation — a quiet label, not a picker. */}
+        <span
+          className="shrink-0 text-[11px] text-muted-foreground"
+          title="The agent can't change mid-conversation"
+        >
+          {AGENT_LABEL[run.agent]}
+        </span>
+        <ModelPicker
+          value={model}
+          onChange={setModel}
+          models={modelsForAgent(run.agent)}
+        />
         <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
           ↵ send · ⇧↵ newline
         </span>

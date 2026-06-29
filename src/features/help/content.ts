@@ -537,8 +537,9 @@ agent keeps everything it already explored. Keep refining with follow-up message
 keeps its sources in context. When a report is ready you can **Turn it into a Plan** (it
 carries the whole session over as the goal to converge) or **Save report** as a local Markdown
 file (written to \`.gitdesktop/research/\` for you to review and commit — never committed for
-you). It's **read-only**: it searches and reads, but never changes your code. (Research uses
-Claude in this version.)
+you). It's **read-only**: it searches and reads, but never changes your code. Pick any agent —
+**Claude**, **Codex**, **GitHub Copilot**, or **opencode** — each uses its own native web search
+and fetch. (opencode's web *search* needs its Exa integration enabled — web *fetch* always works.)
 
 ## Plan a task (read-only)
 

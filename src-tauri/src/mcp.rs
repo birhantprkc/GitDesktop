@@ -150,15 +150,25 @@ pub fn build_copilot_config(specs: &[McpServerSpec]) -> AppResult<Value> {
     Ok(json!({ "mcpServers": servers }))
 }
 
-/// Build opencode's `{ "mcp": { name: {…} } }` document, pointed at per-session via
-/// the `OPENCODE_CONFIG` env var. opencode *merges* config layers (it never
-/// replaces), so this adds our servers on top of the user's global config without
+/// The name of GitDesktop's generated opencode Research agent (see
+/// `build_opencode_config`). Selected with `opencode run --agent <this>`.
+pub const GD_RESEARCH_AGENT: &str = "gd-research";
+
+/// Build opencode's config document, pointed at per-session via the `OPENCODE_CONFIG`
+/// env var. opencode *merges* config layers (it never replaces), so this adds our
+/// servers (and the Research agent) on top of the user's global config without
 /// disturbing it. A stdio server is `"type": "local"` with a single `command`
 /// ARRAY (the binary + args, joined — opencode has no separate args field) and an
 /// `environment` map; an http server is `"type": "remote"` with `url` + `headers`.
 /// `enabled: true` is explicit. Tools are auto-exposed and `--dangerously-skip-permissions`
 /// (already passed) auto-approves them, so no allowlist is needed.
-pub fn build_opencode_config(specs: &[McpServerSpec]) -> AppResult<Value> {
+///
+/// `research` adds a read-only **web** agent (`GD_RESEARCH_AGENT`): the builtin
+/// `plan` agent is read-only but has NO web tools, and opencode has no permission
+/// CLI flags, so a read-only-with-web profile must be defined in config — edit/bash
+/// denied, webfetch/websearch allowed. (`websearch` also needs Exa enabled — the
+/// opencode provider or `OPENCODE_ENABLE_EXA`; `webfetch` always works.)
+pub fn build_opencode_config(specs: &[McpServerSpec], research: bool) -> AppResult<Value> {
     let mut servers = Map::new();
     for spec in specs {
         let entry = if spec.is_stdio() {
@@ -180,7 +190,33 @@ pub fn build_opencode_config(specs: &[McpServerSpec]) -> AppResult<Value> {
         };
         servers.insert(spec.name.clone(), entry);
     }
-    Ok(json!({ "mcp": servers }))
+    let mut doc = json!({ "mcp": servers });
+    if research {
+        doc["agent"] = json!({
+            GD_RESEARCH_AGENT: {
+                "description": "GitDesktop read-only web research — no file writes.",
+                "mode": "primary",
+                // STRUCTURAL read-only guarantee (matches the builtin `plan` agent):
+                // remove the write surface entirely so it can't be auto-approved by
+                // `--dangerously-skip-permissions` — robust even if a future opencode
+                // tool or an attached MCP server escapes the permission denylist below.
+                "tools": {
+                    "write": false,
+                    "edit": false,
+                    "patch": false,
+                    "bash": false,
+                },
+                // Belt-and-suspenders + the web tools: deny edits/shell, allow web.
+                "permission": {
+                    "edit": "deny",
+                    "bash": "deny",
+                    "webfetch": "allow",
+                    "websearch": "allow",
+                },
+            },
+        });
+    }
+    Ok(doc)
 }
 
 /// Server-name charset (mirrors the frontend `MCP_NAME_RE`): a letter/digit first,
@@ -261,8 +297,11 @@ fn write_session_config(
     ext: &str,
     specs: &[McpServerSpec],
     config: &Value,
+    // Write even when there are no MCP servers — e.g. an opencode Research session
+    // whose config carries only the generated read-only-web agent, no servers.
+    force: bool,
 ) -> AppResult<Option<PathBuf>> {
-    if specs.is_empty() {
+    if specs.is_empty() && !force {
         return Ok(None);
     }
     crate::sessions::validate_id(session_id)?;
@@ -283,7 +322,14 @@ pub fn write_host_config(
     specs: &[McpServerSpec],
 ) -> AppResult<Option<PathBuf>> {
     validate_specs(specs)?;
-    write_session_config(app, session_id, "json", specs, &build_claude_config(specs)?)
+    write_session_config(
+        app,
+        session_id,
+        "json",
+        specs,
+        &build_claude_config(specs)?,
+        false,
+    )
 }
 
 /// Generate + write the GitHub Copilot config for a HOST session, returning its
@@ -300,15 +346,18 @@ pub fn write_copilot_config(
         "copilot.json",
         specs,
         &build_copilot_config(specs)?,
+        false,
     )
 }
 
 /// Generate + write the opencode config for a HOST session, returning its path for
-/// the `OPENCODE_CONFIG` env var. `Ok(None)` when there are no servers.
+/// the `OPENCODE_CONFIG` env var. `Ok(None)` when there are no servers AND it's not
+/// a Research session (which writes the read-only-web agent even with no servers).
 pub fn write_opencode_config(
     app: &tauri::AppHandle,
     session_id: &str,
     specs: &[McpServerSpec],
+    research: bool,
 ) -> AppResult<Option<PathBuf>> {
     validate_specs(specs)?;
     write_session_config(
@@ -316,7 +365,8 @@ pub fn write_opencode_config(
         session_id,
         "opencode.json",
         specs,
-        &build_opencode_config(specs)?,
+        &build_opencode_config(specs, research)?,
+        research,
     )
 }
 
@@ -544,7 +594,7 @@ mod tests {
 
     #[test]
     fn opencode_stdio_merges_command_and_args_into_one_array() {
-        let cfg = build_opencode_config(&[stdio("everything")]).unwrap();
+        let cfg = build_opencode_config(&[stdio("everything")], false).unwrap();
         let srv = &cfg["mcp"]["everything"];
         assert_eq!(srv["type"], "local");
         // command is a single array: binary then args (opencode has no args field).
@@ -557,11 +607,31 @@ mod tests {
 
     #[test]
     fn opencode_http_uses_remote_type_with_url_and_headers() {
-        let cfg = build_opencode_config(&[http("remote")]).unwrap();
+        let cfg = build_opencode_config(&[http("remote")], false).unwrap();
         let srv = &cfg["mcp"]["remote"];
         assert_eq!(srv["type"], "remote");
         assert_eq!(srv["url"], "https://mcp.example.com/mcp");
         assert_eq!(srv["headers"]["Authorization"], "Bearer x");
         assert_eq!(srv["enabled"], true);
+    }
+
+    #[test]
+    fn opencode_research_defines_readonly_web_agent() {
+        let cfg = build_opencode_config(&[], true).unwrap();
+        let agent = &cfg["agent"][super::GD_RESEARCH_AGENT];
+        // Structural removal of the write surface (the hard guarantee).
+        assert_eq!(agent["tools"]["write"], false);
+        assert_eq!(agent["tools"]["edit"], false);
+        assert_eq!(agent["tools"]["patch"], false);
+        assert_eq!(agent["tools"]["bash"], false);
+        assert_eq!(agent["permission"]["edit"], "deny");
+        assert_eq!(agent["permission"]["bash"], "deny");
+        assert_eq!(agent["permission"]["webfetch"], "allow");
+        assert_eq!(agent["permission"]["websearch"], "allow");
+        // No servers, but the agent still makes the config worth writing.
+        assert!(cfg["mcp"].as_object().unwrap().is_empty());
+        // Plan (research=false) defines no agent.
+        let plan = build_opencode_config(&[], false).unwrap();
+        assert!(plan.get("agent").is_none());
     }
 }

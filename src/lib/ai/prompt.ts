@@ -783,6 +783,7 @@ An honest read on which 1–2 directions look most worth a deep-research pass, a
 Rules:
 - Cite a real source for every market/prior-art claim — link the page you actually read. Never invent a tool, a link, or a fact.
 - Ground any repo claim in files you actually opened.
+- Keep your filesystem reads INSIDE this repository (the working directory and below). Explore the repo and the web — not the broader machine, the home directory, or system paths.
 - Keep the options genuinely distinct. Resist narrowing to one — breadth is the value here.
 - No filler, no compliments, no recap of these instructions.`;
 
@@ -810,6 +811,7 @@ The open questions, the assumptions you had to make, and anything you could not 
 Rules:
 - Every non-obvious factual claim needs a real source you actually read. Never invent a URL, a fact, a version number, or a quote. If you cannot find it, say so under What I couldn't verify.
 - Ground repo-feasibility claims in files you actually opened.
+- Keep your filesystem reads INSIDE this repository (the working directory and below). Investigate the repo and the web — not the broader machine, the home directory, or system paths.
 - Cross-check before asserting; flag where sources disagree.
 - No filler, no compliments, no recap of these instructions.`;
 

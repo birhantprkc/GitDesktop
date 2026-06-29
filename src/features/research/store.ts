@@ -66,7 +66,7 @@ export interface ResearchSeed {
 
 export interface ResearchGenerateArgs extends ResearchSeed {
   repoPath: string;
-  /** Web research needs a web-enabled read-only CLI; v1 is Claude-only. */
+  /** Which CLI runs the research — each uses its own native web tools. */
   agent: AgentKind;
   model: string;
   effort: string;
@@ -145,9 +145,15 @@ interface ResearchState {
   start: (args: ResearchGenerateArgs) => string;
   /** Send a free-form follow-up — resumes the conversation so the agent digs
    *  deeper. `depth` is the persona for this turn (the follow-up composer can
-   *  switch it mid-session); a change re-injects the new persona inline. No-op if
-   *  the run is missing, mid-turn, or the message is blank. */
-  sendFollowUp: (id: string, message: string, depth: ResearchDepth) => void;
+   *  switch it mid-session); a change re-injects the new persona inline. `model` is
+   *  the model for this and following turns (also switchable mid-session, like the
+   *  agent sessions). No-op if the run is missing, mid-turn, or the message is blank. */
+  sendFollowUp: (
+    id: string,
+    message: string,
+    depth: ResearchDepth,
+    model: string,
+  ) => void;
   /** Save the run's report as a local Markdown file (scaffold-local-files: the
    *  user commits it, we never do). Resolves to the repo-relative path written. */
   saveReport: (id: string) => Promise<string>;
@@ -318,9 +324,9 @@ export const useResearchStore = create<ResearchState>((set, get) => {
           } else if (ev.kind === "done") {
             if (ev.text.length > finalText.length) finalText = ev.text;
             if (ev.costUsd != null) patch(id, { costUsd: ev.costUsd });
-            // Whole-message agents stream no deltas — fold the final text in so the
-            // transcript shows it after its tool steps (research is Claude-only today,
-            // but keep this uniform with the other surfaces).
+            // Whole-message agents (e.g. Codex) stream no deltas — fold the final
+            // text in so the transcript shows it after its tool steps (uniform with
+            // the other surfaces).
             const cur = get().runs.find((r) => r.id === id);
             patch(id, {
               segments: ensureTranscriptText(cur?.segments ?? [], finalText),
@@ -446,7 +452,7 @@ export const useResearchStore = create<ResearchState>((set, get) => {
       return id;
     },
 
-    sendFollowUp: (id, message, depth) => {
+    sendFollowUp: (id, message, depth, model) => {
       const run = get().runs.find((r) => r.id === id);
       const text = message.trim();
       if (!run || run.generating || !text) return;
@@ -471,6 +477,8 @@ export const useResearchStore = create<ResearchState>((set, get) => {
         ],
         currentPrompt: text,
         depth,
+        // The model for this turn onward (runTurn reads the run's current model).
+        model,
       });
       const userPrompt = buildResearchFollowUp({
         message: text,

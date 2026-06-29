@@ -29,7 +29,9 @@ commit list.
   you're happy, hand a report **straight to Plan** or **save** it as a local Markdown file (written
   to `.gitdesktop/research/` for you to review and commit — never committed automatically). Keep
   refining with follow-up messages; several runs go side by side. Read-only throughout: it searches
-  and reads, but can never write (Claude in this version).
+  and reads, but can never write. Runs on **any agent** — Claude, Codex, GitHub Copilot, or
+  opencode — each using its own native web search and fetch (opencode's web *search* needs its Exa
+  integration enabled; web *fetch* always works).
 - **Custom & LAN AI servers, with an allowed-hosts list.** You can now point GitDesktop at an
   Ollama (or any OpenAI-compatible) server running on **another machine on your network** — not
   just `localhost`. Set the server's URL under **Settings → AI** (now available for the review

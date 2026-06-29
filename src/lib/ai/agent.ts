@@ -168,10 +168,11 @@ export interface AgentSessionArgs {
   /** Read-only mode (a Plan conversation): swaps each CLI's write toolset for its
    *  read-only one, so the resumable turn can explore but never write. */
   readOnly: boolean;
-  /** Web-enabled read-only profile (a Research conversation): adds WebSearch/WebFetch
-   *  to Claude's read-only toolset so the turn can investigate the web while still
-   *  never writing. Claude-only (v1 Research is Claude-only); ignored without
-   *  `readOnly`. Omitted/false everywhere else (Plan, Delegate). */
+  /** Web-enabled read-only profile (a Research conversation): each CLI gains its
+   *  native web tools (Claude WebSearch/WebFetch, Codex live web_search, Copilot
+   *  web_fetch, opencode a generated read-only-web agent) so the turn can investigate
+   *  the web while still never writing. Ignored without `readOnly`. Omitted/false
+   *  everywhere else (Plan, Delegate). */
   web?: boolean;
   /** Isolation mode, fixed at session creation. "container" runs the turn inside
    *  a Docker/Podman container; anything else runs on the host (worktree-confined

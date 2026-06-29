@@ -99,7 +99,8 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   narrows — the conversation carries over. Hand a report **straight to Plan**, or
   **save** it as a local Markdown file (yours to review and commit, in
   `.gitdesktop/research/`). Read-only: it searches and reads, but never writes.
-  (Claude in this version.)
+  Runs on **any agent** — Claude, Codex, Copilot, or opencode — each using its own
+  native web search and fetch.
 - **Plan before you build** — a read-only **Plan** mode drafts an agent-ready
   issue from a task (or an existing issue): a repo-aware agent explores your code
   and writes the problem, approach, affected files, acceptance criteria, and verify
