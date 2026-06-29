@@ -16,11 +16,12 @@ commit list.
   the **activity log now survives a restart** — reopening the app no longer drops a session's,
   plan's, or research run's **step-by-step tool log** (the full interleaved transcript of reads,
   edits, commands, and web is persisted, not just the flat prose). Every entry now carries a
-  **GitHub-style `#N` identifier** (a stable, global number) shown on its row, so a plan can point
-  at the session that implemented it — *Implemented · Ready to review #10*. Each row also shows its
+  **GitHub-style `#N` identifier** (a stable, global number) shown on its row, so an entry can point
+  at what it became — a research run shows the plan it turned into (*Turned into plan #12*), and a
+  plan shows the session that implemented it (*Implemented · Ready to review #10*). Each row also shows its
   **provider · model** (e.g. `Codex · gpt-5`) for browsing by agent, and **right-clicking a row**
   opens a context menu of its actions — Open, Resume/Keep/Discard a session, Save/Copy/Turn-into-Plan
-  a research report, and so on.
+  a research report, jump from a plan to its session or file it as a local issue, and so on.
 - **See every step the agent takes — now with inline diffs.** The agent surfaces (Delegate, Plan,
   Research) show the agent's work as one **step-by-step transcript** — each file it reads, edits,
   searches, command it runs, and page it fetches, interleaved with its narration in the order it

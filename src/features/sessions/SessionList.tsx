@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CreateLocalIssueDialog } from "@/features/issues/CreateLocalIssueDialog";
 import { type PlanRun, usePlanStore } from "@/features/plan/store";
 import { useReconcileLocalPrs } from "@/features/pulls/useReconcileLocalPrs";
 import {
@@ -195,18 +196,38 @@ function SessionMenuItems({
   );
 }
 
-/** Context-menu actions for a plan row. */
+/** Context-menu actions for a plan row. Mirrors the canvas footer's actions: jump
+ *  to the implementing session, and file the drafted plan as a local issue. */
 function PlanMenuItems({
   run,
   requestConfirm,
+  onCreateIssue,
 }: {
   run: PlanRun;
   requestConfirm: (req: ConfirmReq) => void;
+  onCreateIssue: () => void;
 }) {
   const store = usePlanStore.getState;
+  // The write-capable session this plan was implemented into, if it still exists
+  // (discarding the session reverts the plan to editable) — gates "View session".
+  const session = useSessionsStore((s) =>
+    run.implementedSessionId
+      ? s.sessions.find((x) => x.id === run.implementedSessionId)
+      : undefined,
+  );
   return (
     <>
       <ContextMenuItem onClick={() => selectPlan(run.id)}>Open</ContextMenuItem>
+      {session && (
+        <ContextMenuItem onClick={() => selectSession(session.id)}>
+          View session
+        </ContextMenuItem>
+      )}
+      {run.draft && (
+        <ContextMenuItem onClick={onCreateIssue}>
+          Create local issue
+        </ContextMenuItem>
+      )}
       {run.generating && (
         <ContextMenuItem onClick={() => store().cancel(run.id)}>
           Stop
@@ -847,38 +868,58 @@ function PlanRow({
   motionProps: Pick<MotionProps, "initial" | "animate" | "exit">;
   onClick: () => void;
 }) {
+  // The plan can be filed as a local issue from its context menu; the dialog lives
+  // here (a sibling of the row's menu) so it survives the menu closing, prefilled
+  // with the plan's drafted issue — same flow as the canvas footer.
+  const [issueOpen, setIssueOpen] = useState(false);
   return (
-    <RowMenu
-      trigger={
-        <m.button
-          {...motionProps}
-          type="button"
-          role="option"
-          aria-selected={active}
-          data-row={run.id}
-          tabIndex={tabIndex}
-          onClick={onClick}
-          className={cn(
-            "flex w-full flex-col items-start gap-1 overflow-hidden px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
-            active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
-          )}
-        >
-          <span className="line-clamp-2 w-full text-xs font-medium leading-snug">
-            {planLabel(run)}
-          </span>
-          <span className="flex w-full items-center gap-2 text-[11px]">
-            <PlanStatus run={run} audit={audit} />
-            {run.costUsd != null && (
-              <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
-                ${run.costUsd.toFixed(2)}
-              </span>
+    <>
+      <RowMenu
+        trigger={
+          <m.button
+            {...motionProps}
+            type="button"
+            role="option"
+            aria-selected={active}
+            data-row={run.id}
+            tabIndex={tabIndex}
+            onClick={onClick}
+            className={cn(
+              "flex w-full flex-col items-start gap-1 overflow-hidden px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+              active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
             )}
-          </span>
-          <RowAgentMeta id={run.id} agent={run.agent} model={run.model} />
-        </m.button>
-      }
-      items={(req) => <PlanMenuItems run={run} requestConfirm={req} />}
-    />
+          >
+            <span className="line-clamp-2 w-full text-xs font-medium leading-snug">
+              {planLabel(run)}
+            </span>
+            <span className="flex w-full items-center gap-2 text-[11px]">
+              <PlanStatus run={run} audit={audit} />
+              {run.costUsd != null && (
+                <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
+                  ${run.costUsd.toFixed(2)}
+                </span>
+              )}
+            </span>
+            <RowAgentMeta id={run.id} agent={run.agent} model={run.model} />
+          </m.button>
+        }
+        items={(req) => (
+          <PlanMenuItems
+            run={run}
+            requestConfirm={req}
+            onCreateIssue={() => setIssueOpen(true)}
+          />
+        )}
+      />
+      {run.draft && (
+        <CreateLocalIssueDialog
+          repoPath={run.repoPath}
+          open={issueOpen}
+          onOpenChange={setIssueOpen}
+          initialDraft={{ title: run.draft.title, body: run.draft.body }}
+        />
+      )}
+    </>
   );
 }
 
@@ -958,6 +999,13 @@ function ResearchStatus({
   run: ResearchRun;
   planned: boolean;
 }) {
+  // The plan this research was handed off into ("Turn into a Plan"), if any — the
+  // research→plan analogue of a plan's "Implemented … #N" session link, so the row
+  // points at what it became. A plan records its originating research id on its seed.
+  const plan = usePlanStore((s) =>
+    s.runs.find((p) => p.seed?.originResearchId === run.id),
+  );
+  const planNumber = useAgentNumber(plan?.id ?? "");
   if (run.generating) {
     return (
       <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
@@ -974,7 +1022,13 @@ function ResearchStatus({
       </span>
     );
   if (planned)
-    return <span className="text-muted-foreground">Turned into a plan</span>;
+    return (
+      <span className="text-muted-foreground">
+        {planNumber != null
+          ? `Turned into plan #${planNumber}`
+          : "Turned into a plan"}
+      </span>
+    );
   if (run.report)
     return <span className="text-muted-foreground">Report ready</span>;
   return <span className="text-muted-foreground">Read-only research</span>;

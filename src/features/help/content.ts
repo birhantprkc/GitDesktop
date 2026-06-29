@@ -519,9 +519,11 @@ opencode) into a hands-on teammate that can **research**, **plan**, and **implem
 for you — safely, in an isolated copy of your repo. It appears when AI features are enabled.
 
 The **sidebar** lists your research, plans, and sessions. Each carries a stable **#N**
-identifier (so a plan can point at the session that implemented it — *Implemented · Ready to
-review #10*) and shows its **provider · model**; **right-click** a row for its actions. The
-**step-by-step activity log** of each entry is kept across restarts.
+identifier, so an entry can point at what it became — a research run shows the **plan** it
+turned into (*Turned into plan #12*), and a plan shows the **session** that implemented it
+(*Implemented · Ready to review #10*). Each row also shows its **provider · model**;
+**right-click** for a row's actions — a plan's include opening its **session** or filing it as
+a **local issue**. The **step-by-step activity log** of each entry is kept across restarts.
 
 ## Research a topic (read-only)
 
