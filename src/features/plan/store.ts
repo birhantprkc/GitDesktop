@@ -1,10 +1,13 @@
 import { create } from "zustand";
 import { isWatchingAgentSurface } from "@/features/sessions/watching";
 import {
-  type AgentActivityStep,
   type AgentKind,
+  appendTranscriptText,
+  appendTranscriptTool,
   cancelAgentSession,
+  ensureTranscriptText,
   runAgentSession,
+  type TranscriptSegment,
 } from "@/lib/ai/agent";
 import {
   buildPlanPrompt,
@@ -81,9 +84,10 @@ export interface PlanRun {
   text: string;
   /** Transient tool-activity note (e.g. "Reading files…"). */
   status: string;
-  /** The structured steps the agent took this turn (the activity timeline) —
-   *  in-memory only (not persisted; absent on a reloaded run → read as `?? []`). */
-  activity?: AgentActivityStep[];
+  /** The interleaved render of the latest turn — prose runs + tool steps in order
+   *  (`text` is the same prose, concatenated, kept for parsing the draft).
+   *  In-memory only (not persisted; absent on a reloaded run → falls back to `text`). */
+  segments?: TranscriptSegment[];
   /** Parsed + path-validated result, set when the turn completes. */
   draft: PlanDraft | null;
   /** The latest turn's reported cost (USD); null if unreported. */
@@ -170,7 +174,7 @@ export const usePlanStore = create<PlanState>((set, get) => {
       generating: true,
       text: "",
       status: "",
-      activity: [],
+      segments: [],
       draft: null,
       costUsd: null,
       stopped: false,
@@ -234,22 +238,34 @@ export const usePlanStore = create<PlanState>((set, get) => {
               patch(id, { nativeSessionId: ev.id });
           } else if (ev.kind === "delta") {
             finalText += ev.text;
-            patch(id, { text: finalText, status: "" });
+            const cur = get().runs.find((r) => r.id === id);
+            patch(id, {
+              text: finalText,
+              segments: appendTranscriptText(cur?.segments ?? [], ev.text),
+              status: "",
+            });
           } else if (ev.kind === "status") {
             patch(id, { status: ev.text });
           } else if (ev.kind === "tool") {
             const cur = get().runs.find((r) => r.id === id);
             patch(id, {
-              activity: [
-                ...(cur?.activity ?? []),
-                { tool: ev.tool, target: ev.target },
-              ],
+              segments: appendTranscriptTool(
+                cur?.segments ?? [],
+                ev.tool,
+                ev.target,
+              ),
               status: "",
             });
           } else if (ev.kind === "done") {
             // The terminal event carries the authoritative full text; prefer it.
             if (ev.text.length > finalText.length) finalText = ev.text;
             if (ev.costUsd != null) patch(id, { costUsd: ev.costUsd });
+            // Whole-message agents (codex) stream no deltas — fold the final text
+            // in so the transcript shows it after its tool steps.
+            const cur = get().runs.find((r) => r.id === id);
+            patch(id, {
+              segments: ensureTranscriptText(cur?.segments ?? [], finalText),
+            });
             if (ev.isError) {
               errored = true;
               // Don't paint an error onto a run the user just stopped (or a turn a

@@ -1,9 +1,11 @@
 import { toast } from "sonner";
 import { create } from "zustand";
 import {
-  type AgentActivityStep,
+  appendTranscriptText,
+  appendTranscriptTool,
   cancelAgentSession,
   runAgentSession,
+  type TranscriptSegment,
 } from "@/lib/ai/agent";
 import { cleanupContainerSandbox, stopTestContainer } from "@/lib/ai/sandbox";
 import {
@@ -56,10 +58,11 @@ export interface SessionTurn {
   status: TurnStatus;
   /** Transient tool-activity note while running. */
   statusText: string;
-  /** The structured steps the agent took this turn (the activity timeline) —
-   *  in-memory only, like `statusText` (never written to the transcript, so it's
-   *  absent on a reloaded session — read it as `activity ?? []`). */
-  activity?: AgentActivityStep[];
+  /** The interleaved render of this turn — prose runs + tool steps in order
+   *  (`narration` is the same prose, concatenated, kept for persistence/parsing).
+   *  In-memory only, like `statusText`; absent on a reloaded session (the renderer
+   *  falls back to `narration`). */
+  segments?: TranscriptSegment[];
   /** This turn's checkpoint commit (null = the turn changed nothing). */
   commitHash: string | null;
   costUsd: number | null;
@@ -188,7 +191,7 @@ function newTurn(prompt: string): SessionTurn {
     narration: "",
     status: "running",
     statusText: "Starting the agent…",
-    activity: [],
+    segments: [],
     commitHash: null,
     costUsd: null,
     error: null,
@@ -353,14 +356,19 @@ async function runTurn(
         const last = s.turns[s.turns.length - 1];
         if (!last) return;
         if (ev.kind === "delta")
-          patchTurn({ narration: last.narration + ev.text, statusText: "" });
+          patchTurn({
+            narration: last.narration + ev.text,
+            segments: appendTranscriptText(last.segments ?? [], ev.text),
+            statusText: "",
+          });
         else if (ev.kind === "status") patchTurn({ statusText: ev.text });
         else if (ev.kind === "tool")
           patchTurn({
-            activity: [
-              ...(last.activity ?? []),
-              { tool: ev.tool, target: ev.target },
-            ],
+            segments: appendTranscriptTool(
+              last.segments ?? [],
+              ev.tool,
+              ev.target,
+            ),
             statusText: "",
           });
         else if (ev.kind === "error")
@@ -372,8 +380,14 @@ async function runTurn(
             // Codex delivers its whole message in the done event, not as `delta`s
             // (parse_codex_line accumulates and surfaces it at turn end), so adopt
             // `ev.text` when nothing was streamed — otherwise the turn shows blank.
-            // Streaming agents already have `narration`, so this leaves them as-is.
-            ...(ev.text && !last.narration ? { narration: ev.text } : {}),
+            // Add it as a text segment too so the interleaved transcript shows the
+            // message after its tool steps. Streaming agents already have both.
+            ...(ev.text && !last.narration
+              ? {
+                  narration: ev.text,
+                  segments: appendTranscriptText(last.segments ?? [], ev.text),
+                }
+              : {}),
             ...(ev.isError
               ? {
                   status: "error",

@@ -29,11 +29,46 @@ export type AgentToolKind =
   | "task"
   | "other";
 
-/** One step in an agent's activity timeline — what tool it used and on what. */
-export interface AgentActivityStep {
-  tool: AgentToolKind;
-  /** The file path / command / URL / query it acted on, when extractable. */
-  target: string | null;
+/** One piece of an agent turn's rendered transcript, in the order it happened: a
+ *  run of streamed prose, or a tool step interleaved between prose. Built live
+ *  from `delta` + `tool` events so the UI reads like one chronological log
+ *  (text → tool → text), the way Claude Code / the VS Code agent view show it. */
+export type TranscriptSegment =
+  | { type: "text"; text: string }
+  | { type: "tool"; tool: AgentToolKind; target: string | null };
+
+/** Append streamed text to the transcript, coalescing into the trailing text run
+ *  (so consecutive deltas don't fragment a paragraph). Returns a new array. */
+export function appendTranscriptText(
+  segments: TranscriptSegment[],
+  text: string,
+): TranscriptSegment[] {
+  const last = segments[segments.length - 1];
+  if (last?.type === "text")
+    return [...segments.slice(0, -1), { type: "text", text: last.text + text }];
+  return [...segments, { type: "text", text }];
+}
+
+/** Append a tool step, which also ends the current text run so the next delta
+ *  starts a fresh paragraph after the step. Returns a new array. */
+export function appendTranscriptTool(
+  segments: TranscriptSegment[],
+  tool: AgentToolKind,
+  target: string | null,
+): TranscriptSegment[] {
+  return [...segments, { type: "tool", tool, target }];
+}
+
+/** Ensure a turn's final text is represented in the transcript. Whole-message
+ *  agents (Codex) emit no `delta`s — only a final text in their `done` event — so
+ *  their transcript would otherwise show tool steps but no prose. No-op once any
+ *  text run exists (streaming agents already have one). Returns a new array. */
+export function ensureTranscriptText(
+  segments: TranscriptSegment[],
+  text: string,
+): TranscriptSegment[] {
+  if (!text || segments.some((s) => s.type === "text")) return segments;
+  return appendTranscriptText(segments, text);
 }
 
 /** Streaming events from `agent_review`, mirroring the Rust `ReviewEvent`. */

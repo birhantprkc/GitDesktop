@@ -1,10 +1,13 @@
 import { create } from "zustand";
 import { isWatchingAgentSurface } from "@/features/sessions/watching";
 import {
-  type AgentActivityStep,
   type AgentKind,
+  appendTranscriptText,
+  appendTranscriptTool,
   cancelAgentSession,
+  ensureTranscriptText,
   runAgentSession,
+  type TranscriptSegment,
 } from "@/lib/ai/agent";
 import { buildResearchPrompt, extractResearchReport } from "@/lib/ai/prompt";
 import { readRepoInstructions } from "@/lib/git/api";
@@ -22,6 +25,19 @@ export type ResearchDepth = "brainstorm" | "deep";
 export interface ResearchReport {
   title: string;
   report: string;
+}
+
+/** A completed earlier turn of a research session, kept so the whole conversation
+ *  stays visible (the current turn lives in the run's top-level fields). */
+export interface ResearchHistoryTurn {
+  /** The user's message for this turn — "" for turn 1 (its topic is the header). */
+  prompt: string;
+  /** Interleaved render (in-memory; absent on reload → falls back to `text`). */
+  segments?: TranscriptSegment[];
+  /** Full prose of the turn (persisted, so the session survives a reload). */
+  text: string;
+  report: ResearchReport | null;
+  costUsd: number | null;
 }
 
 /** Prefill for the research composer: a topic + persona, and (for the
@@ -72,6 +88,12 @@ export interface ResearchRun {
   seed: ResearchSeed | null;
   /** The brainstorm this deep-research run came from (the chain), or null. */
   fromBrainstormId: string | null;
+  /** Completed earlier turns, oldest first — shown above the current turn so the
+   *  whole research session stays visible (the current turn is the fields below). */
+  history?: ResearchHistoryTurn[];
+  /** The current turn's user message — "" for turn 1 (topic is the header); a
+   *  follow-up shows this as a "You" bubble above its transcript. */
+  currentPrompt?: string;
   generating: boolean;
   /** The user stopped this run mid-turn (Stop). Idle but restartable; tells the
    *  canvas to offer Restart instead of treating partial output as a report. */
@@ -80,9 +102,10 @@ export interface ResearchRun {
   text: string;
   /** Transient tool-activity note (e.g. "Searching the web…"). */
   status: string;
-  /** The structured steps the agent took this turn (the activity timeline) —
-   *  in-memory only (not persisted; absent on a reloaded run → read as `?? []`). */
-  activity?: AgentActivityStep[];
+  /** The interleaved render of the latest turn — prose runs + tool steps in order
+   *  (`text` is the same prose, concatenated, kept for parsing the report).
+   *  In-memory only (not persisted; absent on a reloaded run → falls back to `text`). */
+  segments?: TranscriptSegment[];
   /** Parsed report (title + markdown), set when the turn completes. */
   report: ResearchReport | null;
   /** The latest turn's reported cost (USD); null if unreported. */
@@ -174,7 +197,7 @@ export const useResearchStore = create<ResearchState>((set, get) => {
       generating: true,
       text: "",
       status: "",
-      activity: [],
+      segments: [],
       report: null,
       costUsd: null,
       // Clear the saved-file marker too: a new turn re-outputs the report, so a
@@ -227,21 +250,34 @@ export const useResearchStore = create<ResearchState>((set, get) => {
               patch(id, { nativeSessionId: ev.id });
           } else if (ev.kind === "delta") {
             finalText += ev.text;
-            patch(id, { text: finalText, status: "" });
+            const cur = get().runs.find((r) => r.id === id);
+            patch(id, {
+              text: finalText,
+              segments: appendTranscriptText(cur?.segments ?? [], ev.text),
+              status: "",
+            });
           } else if (ev.kind === "status") {
             patch(id, { status: ev.text });
           } else if (ev.kind === "tool") {
             const cur = get().runs.find((r) => r.id === id);
             patch(id, {
-              activity: [
-                ...(cur?.activity ?? []),
-                { tool: ev.tool, target: ev.target },
-              ],
+              segments: appendTranscriptTool(
+                cur?.segments ?? [],
+                ev.tool,
+                ev.target,
+              ),
               status: "",
             });
           } else if (ev.kind === "done") {
             if (ev.text.length > finalText.length) finalText = ev.text;
             if (ev.costUsd != null) patch(id, { costUsd: ev.costUsd });
+            // Whole-message agents stream no deltas — fold the final text in so the
+            // transcript shows it after its tool steps (research is Claude-only today,
+            // but keep this uniform with the other surfaces).
+            const cur = get().runs.find((r) => r.id === id);
+            patch(id, {
+              segments: ensureTranscriptText(cur?.segments ?? [], finalText),
+            });
             if (ev.isError) {
               errored = true;
               // Don't paint an error onto a run the user just stopped (or a turn a
@@ -350,6 +386,8 @@ export const useResearchStore = create<ResearchState>((set, get) => {
           fromBrainstormId: args.fromBrainstormId,
         },
         fromBrainstormId: args.fromBrainstormId ?? null,
+        history: [],
+        currentPrompt: "",
         generating: true,
         stopped: false,
         text: "",
@@ -372,6 +410,22 @@ export const useResearchStore = create<ResearchState>((set, get) => {
       const run = get().runs.find((r) => r.id === id);
       const text = message.trim();
       if (!run || run.generating || !text) return;
+      // Keep the just-finished turn visible: snapshot it into history before the
+      // new turn clears the current fields, so the whole research session stays on
+      // screen (the current turn streams into the top-level fields as before).
+      patch(id, {
+        history: [
+          ...(run.history ?? []),
+          {
+            prompt: run.currentPrompt ?? "",
+            segments: run.segments,
+            text: run.text,
+            report: run.report,
+            costUsd: run.costUsd,
+          },
+        ],
+        currentPrompt: text,
+      });
       const userPrompt = `${text}\n\nApply this and re-output the COMPLETE updated report in the same format.`;
       void runTurn(id, "", userPrompt, true);
     },

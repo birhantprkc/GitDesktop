@@ -18,8 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePlanStore } from "@/features/plan/store";
-import { AgentActivity } from "@/features/sessions/AgentActivity";
 import { ComposerOptions, ModelPicker } from "@/features/sessions/AgentPickers";
+import { AgentTranscript } from "@/features/sessions/AgentTranscript";
 import { clearAgentSelection } from "@/features/sessions/agentSelect";
 import { formatUsd } from "@/lib/ai/cost";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
@@ -27,6 +27,7 @@ import { formatBinding } from "@/lib/hotkeys/binding";
 import { toastError } from "@/lib/toast";
 import {
   type ResearchDepth,
+  type ResearchHistoryTurn,
   type ResearchRun,
   type ResearchSeed,
   useActiveResearchRun,
@@ -278,6 +279,45 @@ export function ResearchComposer({
   );
 }
 
+/** The user's message for a follow-up turn, shown above the agent's response so
+ *  the research session reads as a conversation. */
+function UserMessage({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[11px] font-medium text-foreground/70">You</span>
+      <div className="bg-muted/50 px-3 py-2 text-xs leading-relaxed break-words whitespace-pre-wrap">
+        {text}
+      </div>
+    </div>
+  );
+}
+
+/** One completed earlier turn of the session: its follow-up prompt (turn 1 has
+ *  none — its topic is the header) + the agent's transcript (live segments when
+ *  in-memory, the saved prose after a reload). */
+function ResearchHistoryTurnView({
+  turn,
+  baseDir,
+}: {
+  turn: ResearchHistoryTurn;
+  baseDir: string;
+}) {
+  return (
+    <div className="flex flex-col gap-3 border-t border-border/50 pt-4 first:border-t-0 first:pt-0">
+      {turn.prompt && <UserMessage text={turn.prompt} />}
+      {turn.segments?.length ? (
+        <AgentTranscript
+          segments={turn.segments}
+          baseDir={baseDir}
+          fileLinks={false}
+        />
+      ) : turn.text ? (
+        <Markdown>{turn.text}</Markdown>
+      ) : null}
+    </div>
+  );
+}
+
 function ResearchResult({ run }: { run: ResearchRun }) {
   const cancel = useResearchStore((s) => s.cancel);
   const restart = useResearchStore((s) => s.restart);
@@ -381,22 +421,38 @@ function ResearchResult({ run }: { run: ResearchRun }) {
       )}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        <div className="flex flex-col gap-3">
-          <AgentActivity
-            steps={run.activity ?? []}
-            running={generating}
-            baseDir={run.repoPath}
-          />
-          {error ? (
-            <div className="flex items-start gap-2 text-xs text-destructive">
-              <WarningIcon className="mt-0.5 size-4 shrink-0" />
-              <span>{error}</span>
-            </div>
-          ) : text ? (
-            <Markdown>{text}</Markdown>
-          ) : (
-            <p className="text-xs text-muted-foreground">Starting…</p>
-          )}
+        <div className="flex flex-col gap-4">
+          {/* The whole session: each completed earlier turn, then the current one. */}
+          {(run.history ?? []).map((turn, i) => (
+            <ResearchHistoryTurnView
+              // History is append-only, so the index is a stable key.
+              key={i}
+              turn={turn}
+              baseDir={run.repoPath}
+            />
+          ))}
+          <div className="flex flex-col gap-3 border-t border-border/50 pt-4 first:border-t-0 first:pt-0">
+            {run.currentPrompt ? (
+              <UserMessage text={run.currentPrompt} />
+            ) : null}
+            {error ? (
+              <div className="flex items-start gap-2 text-xs text-destructive">
+                <WarningIcon className="mt-0.5 size-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            ) : run.segments?.length ? (
+              <AgentTranscript
+                segments={run.segments}
+                baseDir={run.repoPath}
+                fileLinks={false}
+              />
+            ) : text ? (
+              // Reloaded run (segments are in-memory) — render the saved report.
+              <Markdown>{text}</Markdown>
+            ) : (
+              <p className="text-xs text-muted-foreground">Starting…</p>
+            )}
+          </div>
         </div>
       </div>
 

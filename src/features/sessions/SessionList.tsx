@@ -61,13 +61,22 @@ function planLabel(r: PlanRun): string {
   return r.origin?.issueTitle?.trim() || r.origin?.goal?.trim() || "Plan";
 }
 
-/** Lowercased text a research search matches: its topic and the streamed report. */
+/** Lowercased text a research search matches: its topic and every turn's report. */
 function researchHaystack(r: ResearchRun): string {
-  return [r.origin?.topic, r.text].filter(Boolean).join(" \n ").toLowerCase();
+  return [r.origin?.topic, ...(r.history ?? []).map((t) => t.text), r.text]
+    .filter(Boolean)
+    .join(" \n ")
+    .toLowerCase();
 }
 
 function researchLabel(r: ResearchRun): string {
   return r.origin?.topic?.trim() || "Research";
+}
+
+/** Total cost of a research session — every turn, not just the latest. */
+function researchCost(r: ResearchRun): number {
+  const prior = (r.history ?? []).reduce((sum, t) => sum + (t.costUsd ?? 0), 0);
+  return prior + (r.costUsd ?? 0);
 }
 
 /**
@@ -693,9 +702,9 @@ function ResearchRow({
       </span>
       <span className="flex w-full items-center gap-2 text-[11px]">
         <ResearchStatus run={run} planned={planned} />
-        {run.costUsd != null && (
+        {researchCost(run) > 0 && (
           <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
-            ${run.costUsd.toFixed(2)}
+            ${researchCost(run).toFixed(2)}
           </span>
         )}
       </span>

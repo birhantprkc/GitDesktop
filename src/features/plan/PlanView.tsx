@@ -8,13 +8,13 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { AgentActivity } from "@/features/sessions/AgentActivity";
 import { AgentNarration } from "@/features/sessions/AgentNarration";
 import {
   AgentPicker,
   ComposerOptions,
   ModelPicker,
 } from "@/features/sessions/AgentPickers";
+import { AgentTranscript } from "@/features/sessions/AgentTranscript";
 import { selectSession } from "@/features/sessions/agentSelect";
 import { useSessionsStore } from "@/features/sessions/store";
 import type { AgentKind } from "@/lib/ai/agent";
@@ -318,17 +318,15 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         <div className="flex flex-col gap-3">
-          <AgentActivity
-            steps={run.activity ?? []}
-            running={generating}
-            baseDir={repoPath}
-          />
           {error ? (
             <div className="flex items-start gap-2 text-xs text-destructive">
               <WarningIcon className="mt-0.5 size-4 shrink-0" />
               <span>{error}</span>
             </div>
+          ) : run.segments?.length ? (
+            <AgentTranscript segments={run.segments} baseDir={repoPath} />
           ) : text ? (
+            // Reloaded plan (segments are in-memory) — render the saved prose.
             <div className="text-xs leading-relaxed">
               <AgentNarration text={text} baseDir={repoPath} />
             </div>
