@@ -26,6 +26,7 @@ import type {
   DiscussionMeta,
   ExternalReviewItem,
   FileDiff,
+  ForgeStatus,
   GeneratedNotes,
   GhAccounts,
   GhBranchProtection,
@@ -799,6 +800,11 @@ export const gitRemoveWorktree = (repoPath: string, worktreePath: string) =>
 
 export const ghStatus = (repoPath: string) =>
   invoke<GhStatus>("gh_status", { repoPath });
+
+/** Provider-neutral hosted-integration status (GitHub today; GitLab/Bitbucket as
+ *  their impls land). The new gate hosted panels read instead of `ghStatus`. */
+export const forgeStatus = (repoPath: string) =>
+  invoke<ForgeStatus>("forge_status", { repoPath });
 
 export const ghPrCreate = (
   repoPath: string,

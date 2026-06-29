@@ -2,6 +2,7 @@ mod agent;
 mod agent_sandbox;
 mod dependabot;
 mod error;
+mod forge;
 mod fsops;
 mod funding;
 mod git;
@@ -189,6 +190,7 @@ pub fn run() {
             git::compare::git_branch_tips,
             git::compare::git_review_worktree,
             git::compare::git_remove_worktree,
+            forge::forge_status,
             github::pr::gh_status,
             github::pr::gh_accounts,
             github::pr::gh_switch_account,

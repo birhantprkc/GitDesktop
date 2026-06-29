@@ -380,6 +380,41 @@ export interface GhStatus {
   host: string | null;
 }
 
+/** The hosting platform backing a repo's hosted features. */
+export type ForgeProvider = "github" | "gitlab" | "bitbucket";
+
+/** What a provider (and this repo on it) supports, so panels show only the
+ *  controls that work instead of erroring. GitHub is all-true; GitLab/Bitbucket
+ *  follow the parity matrix. Grows as more panels move behind capability gates. */
+export interface ForgeCapabilities {
+  pullRequests: boolean;
+  draftPrs: boolean;
+  issues: boolean;
+  labels: boolean;
+  milestones: boolean;
+  reactions: boolean;
+  discussions: boolean;
+  stars: boolean;
+  ci: boolean;
+  webhooks: boolean;
+  approvals: boolean;
+}
+
+/** Provider-neutral analogue of {@link GhStatus}: is the hosted integration usable
+ *  for this repo, on which host, as whom, and what does it support. Hosted panels
+ *  gate on this (and its `capabilities`) instead of a GitHub-only readiness check,
+ *  so the same surfaces light up for GitLab and Bitbucket too. */
+export interface ForgeStatus {
+  /** The detected provider, or null when the repo has no recognized hosted remote. */
+  provider: ForgeProvider | null;
+  installed: boolean;
+  authenticated: boolean;
+  repo: string | null;
+  host: string | null;
+  login: string | null;
+  capabilities: ForgeCapabilities;
+}
+
 export interface WebhookConfig {
   url: string;
   /** "json" or "form". */

@@ -18,6 +18,7 @@ import {
 import type {
   DiffStatEntry,
   DiscussionDetails,
+  ForgeStatus,
   GhStatus,
   IssueDetails,
   IssueReactions,
@@ -1408,6 +1409,46 @@ export function useGhStatus(repo: string) {
             host: null,
           })
       : () => api.ghStatus(repo),
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+/** The "no hosted integration" status cold-start test mode forces. */
+const NO_FORGE_STATUS: ForgeStatus = {
+  provider: null,
+  installed: false,
+  authenticated: false,
+  login: null,
+  repo: null,
+  host: null,
+  capabilities: {
+    pullRequests: false,
+    draftPrs: false,
+    issues: false,
+    labels: false,
+    milestones: false,
+    reactions: false,
+    discussions: false,
+    stars: false,
+    ci: false,
+    webhooks: false,
+    approvals: false,
+  },
+};
+
+/**
+ * Provider-neutral hosted-integration status — the abstraction-layer successor to
+ * {@link useGhStatus}. GitHub delegates to the same gh-backed probe today; GitLab
+ * and Bitbucket join as their impls land. Hosted panels will migrate their
+ * readiness/capability gates onto this incrementally.
+ */
+export function useForgeStatus(repo: string) {
+  return useQuery({
+    queryKey: ["repo", repo, "forge-status"] as const,
+    queryFn: COLD_START_NO_GH
+      ? (): Promise<ForgeStatus> => Promise.resolve(NO_FORGE_STATUS)
+      : () => api.forgeStatus(repo),
     staleTime: 60_000,
     retry: false,
   });
