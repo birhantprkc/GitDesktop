@@ -143,6 +143,10 @@ pub struct Implemented {
     pub issue_comment: bool,
     /// Closing / reopening an issue.
     pub issue_state: bool,
+    /// Posting a comment/note on a merge/pull request.
+    pub mr_comment: bool,
+    /// Closing / reopening a merge/pull request (not merge).
+    pub mr_state: bool,
 }
 
 impl Implemented {
@@ -158,6 +162,8 @@ impl Implemented {
             publish: true,
             issue_comment: true,
             issue_state: true,
+            mr_comment: true,
+            mr_state: true,
         }
     }
 
@@ -173,6 +179,8 @@ impl Implemented {
             publish: false,
             issue_comment: false,
             issue_state: false,
+            mr_comment: false,
+            mr_state: false,
         }
     }
 
@@ -185,7 +193,8 @@ impl Implemented {
             // GitLab read ops arrive incrementally — merge requests, issues, CI
             // pipelines, and releases (read) are wired up; insights / repo actions
             // still degrade to "coming soon" until their impls land. WRITES land
-            // per-action: issue comment + close/reopen are the first to flip on.
+            // per-action: issue + MR comment and close/reopen are the first to flip
+            // on (MR merge / approve / review stay GitHub-only for now).
             Provider::GitLab => Self {
                 pull_requests: true,
                 issues: true,
@@ -196,6 +205,8 @@ impl Implemented {
                 publish: false,
                 issue_comment: true,
                 issue_state: true,
+                mr_comment: true,
+                mr_state: true,
             },
             Provider::Bitbucket => Self::none(),
         }
@@ -331,15 +342,16 @@ mod tests {
         assert!(cap.ci && imp.ci);
         assert!(imp.releases);
         assert!(!imp.insights && !imp.repo_actions && !imp.publish);
-        // First WRITES: issue comment + close/reopen are wired up for GitLab.
+        // First WRITES: issue + MR comment and close/reopen are wired up for GitLab.
         assert!(imp.issue_comment && imp.issue_state);
+        assert!(imp.mr_comment && imp.mr_state);
     }
 
     #[test]
-    fn github_implements_issue_writes_bitbucket_does_not() {
+    fn github_implements_issue_and_mr_writes_bitbucket_does_not() {
         let gh = Implemented::for_provider(Provider::GitHub);
-        assert!(gh.issue_comment && gh.issue_state);
+        assert!(gh.issue_comment && gh.issue_state && gh.mr_comment && gh.mr_state);
         let bb = Implemented::for_provider(Provider::Bitbucket);
-        assert!(!bb.issue_comment && !bb.issue_state);
+        assert!(!bb.issue_comment && !bb.issue_state && !bb.mr_comment && !bb.mr_state);
     }
 }

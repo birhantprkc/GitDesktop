@@ -1440,6 +1440,8 @@ const NO_FORGE_STATUS: ForgeStatus = {
     publish: false,
     issueComment: false,
     issueState: false,
+    mrComment: false,
+    mrState: false,
   },
 };
 
@@ -2268,7 +2270,7 @@ export function useReviewPr(repo: string) {
 
 export function useCommentPr(repo: string) {
   return useRepoMutation(repo, (args: { number: number; body: string }) =>
-    api.ghPrComment(repo, args.number, args.body),
+    api.forgePrComment(repo, args.number, args.body),
   );
 }
 
@@ -2284,12 +2286,14 @@ export function useMergePr(repo: string) {
 }
 
 export function useClosePr(repo: string) {
-  return useRepoMutation(repo, (number: number) => api.ghPrClose(repo, number));
+  return useRepoMutation(repo, (number: number) =>
+    api.forgePrClose(repo, number),
+  );
 }
 
 export function useReopenPr(repo: string) {
   return useRepoMutation(repo, (number: number) =>
-    api.ghPrReopen(repo, number),
+    api.forgePrReopen(repo, number),
   );
 }
 

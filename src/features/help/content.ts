@@ -389,11 +389,12 @@ from the branch diff and commit subjects{{/ai}}.
 ## GitLab merge requests
 
 Point the app at a **GitLab** repo and the same tab lists its **merge requests** (open and
-closed/merged) next to any local PRs. Open one for a **read-only** view — description,
-comments, commits, and a highlighted **diff** — with an **Open on GitLab** link. Creating,
-reviewing, and merging MRs from the app is coming soon; for now those actions live on
-GitLab. GitLab uses the GitLab CLI (\`glab\`) — run \`glab auth login\` once, no tokens
-stored. Its issues, CI pipelines, and releases read too (see their sections below).
+closed/merged) next to any local PRs. Open one for the description, comments, commits, and a
+highlighted **diff** (with an **Open on GitLab** link) — and the **first GitLab MR writes**:
+**comment** on it and **close / reopen** it, right from the app. Reviewing (approve),
+merging, and creating MRs from the app is coming soon; for now those live on GitLab. GitLab uses the GitLab
+CLI (\`glab\`) — run \`glab auth login\` once, no tokens stored. Its issues, CI pipelines, and
+releases read too (see their sections below).
 
 ## Local PRs
 

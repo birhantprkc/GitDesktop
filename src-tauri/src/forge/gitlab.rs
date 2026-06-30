@@ -586,6 +586,53 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
     Ok(text)
 }
 
+// ── Merge requests (write) ────────────────────────────────────────────────────
+//
+// The first GitLab MR writes: comment (note) + close/reopen, mirroring
+// gh_pr_comment/close/reopen and dispatching through forge_pr_*. The frontend
+// un-gates just these for GitLab (merge / approve / review / edit stay GitHub-only).
+// Same glab `-f` raw-field + `state_event` shape as the issue writes (validated live
+// against the demo). Unlike issue close, MR close has no reason on either platform.
+
+/// Post a comment (note) on a merge request.
+pub async fn comment_mr(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/merge_requests/{number}/notes");
+    let body_arg = format!("body={body}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint, "-f", &body_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Close or reopen a merge request via the `state_event` field (`close` / `reopen`).
+async fn set_mr_state(repo_path: &str, number: u64, event: &str) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/merge_requests/{number}");
+    let state_arg = format!("state_event={event}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &state_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn close_mr(repo_path: &str, number: u64) -> AppResult<()> {
+    set_mr_state(repo_path, number, "close").await
+}
+
+pub async fn reopen_mr(repo_path: &str, number: u64) -> AppResult<()> {
+    set_mr_state(repo_path, number, "reopen").await
+}
+
 // ── Issues (read) ─────────────────────────────────────────────────────────────
 //
 // GitLab issues map onto the same neutral `IssueInfo`/`IssueDetails` the GitHub

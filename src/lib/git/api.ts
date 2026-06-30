@@ -1174,8 +1174,14 @@ export const ghPrReview = (
   body: string,
 ) => invoke<void>("gh_pr_review", { repoPath, number, action, body });
 
-export const ghPrComment = (repoPath: string, number: number, body: string) =>
-  invoke<void>("gh_pr_comment", { repoPath, number, body });
+// MR comment + close/reopen are provider-neutral (GitHub via `gh`, GitLab via
+// `glab`); the GitHub path is byte-identical to the old `gh_pr_*`. Merge / approve /
+// review / edit stay GitHub-only (`gh_pr_*`).
+export const forgePrComment = (
+  repoPath: string,
+  number: number,
+  body: string,
+) => invoke<void>("forge_pr_comment", { repoPath, number, body });
 
 export const ghPrEditComment = (
   repoPath: string,
@@ -1212,11 +1218,11 @@ export const ghPrMerge = (
   deleteBranch: boolean,
 ) => invoke<void>("gh_pr_merge", { repoPath, number, strategy, deleteBranch });
 
-export const ghPrClose = (repoPath: string, number: number) =>
-  invoke<void>("gh_pr_close", { repoPath, number });
+export const forgePrClose = (repoPath: string, number: number) =>
+  invoke<void>("forge_pr_close", { repoPath, number });
 
-export const ghPrReopen = (repoPath: string, number: number) =>
-  invoke<void>("gh_pr_reopen", { repoPath, number });
+export const forgePrReopen = (repoPath: string, number: number) =>
+  invoke<void>("forge_pr_reopen", { repoPath, number });
 
 export const ghAccounts = () => invoke<GhAccounts>("gh_accounts");
 

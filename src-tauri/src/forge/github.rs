@@ -91,6 +91,24 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
     crate::github::pr::gh_pr_diff(repo_path.to_string(), number).await
 }
 
+// ── Merge requests (write) ───────────────────────────────────────────────────
+//
+// Thin delegates to the existing gh-backed PR mutations — comment + close/reopen,
+// the first MR writes fronted behind the abstraction. Merge / approve / review /
+// edit stay GitHub-only and aren't fronted here.
+
+pub async fn comment_pr(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
+    crate::github::pr::gh_pr_comment(repo_path.to_string(), number, body.to_string()).await
+}
+
+pub async fn close_pr(repo_path: &str, number: u64) -> AppResult<()> {
+    crate::github::pr::gh_pr_close(repo_path.to_string(), number).await
+}
+
+pub async fn reopen_pr(repo_path: &str, number: u64) -> AppResult<()> {
+    crate::github::pr::gh_pr_reopen(repo_path.to_string(), number).await
+}
+
 // ── Issues (read) ────────────────────────────────────────────────────────────
 //
 // Thin delegates to the existing gh-backed issue commands, mirroring the PR ones.

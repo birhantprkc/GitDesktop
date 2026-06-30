@@ -56,6 +56,7 @@ import type {
 } from "@/lib/git/api";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
+  forgeFeatureReady,
   prDiffOptions,
   useCheckoutPr,
   useClosePr,
@@ -141,6 +142,13 @@ export function RemotePrView({
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
   const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
   const prNoun = provider === "gitlab" ? "merge request" : "pull request";
+  // The first GitLab MR WRITES land per-action: commenting + close/reopen are wired
+  // up (merge / approve / review / edit stay GitHub-only via `canWrite`). Each is
+  // `canWrite || forgeFeatureReady(...)` so GitHub keeps its controls while a
+  // forge-status query is pending/failed (canWrite default-true) AND a ready GitLab
+  // repo positively enables just these.
+  const canComment = canWrite || forgeFeatureReady(forge.data, "mrComment");
+  const canChangeState = canWrite || forgeFeatureReady(forge.data, "mrState");
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
@@ -631,9 +639,10 @@ export function RemotePrView({
             </div>
           </ScrollArea>
           {/* Shown for closed/merged PRs too — GitHub lets you comment (and
-              quote-reply) after a PR closes; only reviews are open-only. Hidden
-              entirely on GitLab, which is read-only here. */}
-          {canWrite && (
+              quote-reply) after a PR closes; only reviews are open-only. On GitLab
+              the composer shows (the first MR writes), but the GitHub-only Review
+              menu stays hidden; Bitbucket has neither, so the bar hides. */}
+          {canComment && (
             <div className="space-y-2 border-t p-3">
               <MarkdownEditor
                 ref={composerRef}
@@ -665,7 +674,7 @@ export function RemotePrView({
                 >
                   Comment
                 </Button>
-                {isOpen && (
+                {isOpen && canWrite && (
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       render={
@@ -731,9 +740,12 @@ export function RemotePrView({
         />
       )}
 
-      {isOpen && canWrite && (
+      {/* The open-MR footer hosts Close (a GitLab write) alongside Merge + Ready
+          (GitHub-only) — show it whenever either is available, and gate each
+          control individually so GitLab gets just Close. */}
+      {isOpen && (canChangeState || canWrite) && (
         <div className="flex items-center gap-2 border-t p-3">
-          {pr.isDraft && (
+          {canWrite && pr.isDraft && (
             <Button
               variant="outline"
               size="sm"
@@ -749,65 +761,69 @@ export function RemotePrView({
             </Button>
           )}
           <span className="flex-1" />
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() =>
-              closePr.mutate(number, {
-                onSuccess: () => toast.success(`Closed #${number}`),
-                onError,
-              })
-            }
-          >
-            Close
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  size="sm"
-                  disabled={busy || pr.isDraft}
-                  title={
-                    pr.isDraft
-                      ? "Mark the PR ready before merging"
-                      : "Merge this pull request"
-                  }
-                >
-                  <GitMergeIcon data-icon="inline-start" />
-                  Merge
-                  <CaretDownIcon data-icon="inline-end" />
-                </Button>
+          {canChangeState && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                closePr.mutate(number, {
+                  onSuccess: () => toast.success(`Closed #${number}`),
+                  onError,
+                })
               }
-            />
-            <DropdownMenuContent align="end" className="w-56">
-              {(["merge", "squash", "rebase"] as const).map((s) => {
-                const blocked = !isMergeMethodAllowed(
-                  rulesConfig,
-                  pr.baseRefName,
-                  s,
-                );
-                return (
-                  <DropdownMenuItem
-                    key={s}
-                    disabled={blocked}
-                    onClick={() => {
-                      setMergeStrategy(s);
-                      setDeleteBranch(false);
-                      setMergeOpen(true);
-                    }}
+            >
+              Close
+            </Button>
+          )}
+          {canWrite && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    size="sm"
+                    disabled={busy || pr.isDraft}
+                    title={
+                      pr.isDraft
+                        ? "Mark the PR ready before merging"
+                        : "Merge this pull request"
+                    }
                   >
-                    {MERGE_LABEL[s]}
-                    {blocked && " — blocked by branch rule"}
-                  </DropdownMenuItem>
-                );
-              })}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                    <GitMergeIcon data-icon="inline-start" />
+                    Merge
+                    <CaretDownIcon data-icon="inline-end" />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="w-56">
+                {(["merge", "squash", "rebase"] as const).map((s) => {
+                  const blocked = !isMergeMethodAllowed(
+                    rulesConfig,
+                    pr.baseRefName,
+                    s,
+                  );
+                  return (
+                    <DropdownMenuItem
+                      key={s}
+                      disabled={blocked}
+                      onClick={() => {
+                        setMergeStrategy(s);
+                        setDeleteBranch(false);
+                        setMergeOpen(true);
+                      }}
+                    >
+                      {MERGE_LABEL[s]}
+                      {blocked && " — blocked by branch rule"}
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       )}
 
-      {pr.state === "CLOSED" && canWrite && (
+      {pr.state === "CLOSED" && canChangeState && (
         <div className="flex items-center gap-2 border-t p-3">
           <span className="flex-1" />
           <Button

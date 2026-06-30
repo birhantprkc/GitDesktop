@@ -195,6 +195,44 @@ pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> 
     }
 }
 
+/// Post a comment on a merge/pull request, behind the abstraction. GitHub delegates
+/// to `gh pr comment`; GitLab posts a note via `glab`. Merge / approve / review stay
+/// GitHub-only (hidden for GitLab on the frontend).
+#[tauri::command]
+pub async fn forge_pr_comment(repo_path: String, number: u64, body: String) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::comment_mr(&repo_path, number, &body).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => github::comment_pr(&repo_path, number, &body).await,
+    }
+}
+
+/// Close a merge/pull request (not merge), behind the abstraction.
+#[tauri::command]
+pub async fn forge_pr_close(repo_path: String, number: u64) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::close_mr(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => github::close_pr(&repo_path, number).await,
+    }
+}
+
+/// Reopen a closed (not merged) merge/pull request, behind the abstraction.
+#[tauri::command]
+pub async fn forge_pr_reopen(repo_path: String, number: u64) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::reopen_mr(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => github::reopen_pr(&repo_path, number).await,
+    }
+}
+
 /// A repo's issues, behind the provider abstraction. GitHub delegates to the
 /// existing `gh issue list`; GitLab maps `glab` issues onto the same neutral
 /// [`IssueInfo`](crate::github::issue::IssueInfo). `state` is `"open"` or

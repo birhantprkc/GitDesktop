@@ -17,8 +17,9 @@ commit list.
   Point the app at a GitLab repo (or **browse and clone your GitLab projects** from the
   **GitLab** tab in the clone dialog) and the **Pull Requests** panel lists its **merge
   requests** right alongside any local PRs — open and closed/merged, searchable and
-  filterable. Open one for a **read-only detail view**: description, comments, commits, and a
-  syntax-highlighted **diff**, plus an "Open on GitLab" link. The **Issues** panel reads GitLab
+  filterable. Open one for the description, comments, commits, and a syntax-highlighted
+  **diff** (plus an "Open on GitLab" link) — and now **comment** on a GitLab MR and
+  **close / reopen** it, the first MR writes. The **Issues** panel reads GitLab
   too — its issues (open and closed) next to your local issues, and an issue view with the
   description, comments, and a side rail of labels, assignees, and milestone — now with the
   **first GitLab writes**: **comment** on a GitLab issue and **close / reopen** it. And the
@@ -26,7 +27,7 @@ commit list.
   read-only pipeline view with its **jobs** (status, durations, and per-job **logs**). The
   **Tags** panel reads GitLab **releases** too — alongside your local tags, with a **read-only**
   release view: notes, the Latest badge, and asset links (open in browser). The rest of the
-  GitLab surface (creating/merging MRs, editing/labeling issues, re-running/dispatching
+  GitLab surface (reviewing/merging/creating MRs, editing/labeling issues, re-running/dispatching
   pipelines, publishing releases, insights) reads **"coming soon"** for now — those panels degrade
   gracefully instead of breaking — and lands in later updates. GitHub repositories are
   completely unaffected. (Self-managed GitLab hosts and Bitbucket are still on the way.)

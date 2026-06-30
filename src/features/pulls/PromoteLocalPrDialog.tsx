@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { ghPrComment } from "@/lib/git/api";
+import { forgePrComment } from "@/lib/git/api";
 import { useCreatePr } from "@/lib/git/queries";
 import type { LocalPr } from "@/lib/pulls/local";
 import { useSaveLocalPr } from "@/lib/pulls/queries";
@@ -60,7 +60,7 @@ export function PromoteLocalPrDialog({
       setPosting(true);
       try {
         for (const c of carried) {
-          await ghPrComment(repoPath, number, c.body);
+          await forgePrComment(repoPath, number, c.body);
         }
       } finally {
         setPosting(false);

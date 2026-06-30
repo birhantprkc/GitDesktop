@@ -452,6 +452,10 @@ export interface ForgeImplemented {
   issueComment: boolean;
   /** Closing / reopening an issue. */
   issueState: boolean;
+  /** Posting a comment/note on a merge/pull request. */
+  mrComment: boolean;
+  /** Closing / reopening a merge/pull request (not merge). */
+  mrState: boolean;
 }
 
 /** Provider-neutral analogue of {@link GhStatus}: is the hosted integration usable
