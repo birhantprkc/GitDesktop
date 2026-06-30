@@ -22,11 +22,13 @@ commit list.
   too — its issues (open and closed) next to your local issues, and a **read-only** issue view
   with the description, comments, and a side rail of labels, assignees, and milestone. And the
   **Actions** panel reads GitLab **CI pipelines** — the run list, a branch CI badge, and a
-  read-only pipeline view with its **jobs** (status, durations, and per-job **logs**). The rest
-  of the GitLab surface (creating/merging MRs, writing issues, re-running/dispatching pipelines,
-  releases, insights) reads **"coming soon"** for now — those panels degrade gracefully instead
-  of breaking — and lands in later updates. GitHub repositories are completely unaffected.
-  (Self-managed GitLab hosts and Bitbucket are still on the way.)
+  read-only pipeline view with its **jobs** (status, durations, and per-job **logs**). The
+  **Tags** panel reads GitLab **releases** too — alongside your local tags, with a **read-only**
+  release view: notes, the Latest badge, and asset links (open in browser). The rest of the
+  GitLab surface (creating/merging MRs, writing issues, re-running/dispatching pipelines,
+  publishing releases, insights) reads **"coming soon"** for now — those panels degrade
+  gracefully instead of breaking — and lands in later updates. GitHub repositories are
+  completely unaffected. (Self-managed GitLab hosts and Bitbucket are still on the way.)
 - **A browsable, persistent Agent sidebar.** Several quality-of-life upgrades to the Agent list:
   the **activity log now survives a restart** — reopening the app no longer drops a session's,
   plan's, or research run's **step-by-step tool log** (the full interleaved transcript of reads,

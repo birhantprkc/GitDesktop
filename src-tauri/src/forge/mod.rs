@@ -287,6 +287,38 @@ pub async fn forge_ci_job_logs(repo_path: String, job_id: u64) -> AppResult<Stri
     }
 }
 
+/// A repo's releases (list view), behind the provider abstraction. GitHub delegates
+/// to `gh release list`; GitLab maps `glab` releases onto the same neutral
+/// [`ReleaseInfo`](crate::github::release::ReleaseInfo). Reads only — create / edit /
+/// delete / asset management stay GitHub-only (hidden for GitLab on the frontend).
+#[tauri::command]
+pub async fn forge_release_list(
+    repo_path: String,
+) -> AppResult<Vec<crate::github::release::ReleaseInfo>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::list_releases(&repo_path).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket releases aren't supported yet.".into(),
+        )),
+        _ => github::list_releases(&repo_path).await,
+    }
+}
+
+/// Full details for one release's read view, by its tag, behind the abstraction.
+#[tauri::command]
+pub async fn forge_release_view(
+    repo_path: String,
+    tag: String,
+) -> AppResult<crate::github::release::ReleaseDetails> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::view_release(&repo_path, &tag).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket releases aren't supported yet.".into(),
+        )),
+        _ => github::view_release(&repo_path, &tag).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -393,7 +393,7 @@ closed/merged) next to any local PRs. Open one for a **read-only** view — desc
 comments, commits, and a highlighted **diff** — with an **Open on GitLab** link. Creating,
 reviewing, and merging MRs from the app is coming soon; for now those actions live on
 GitLab. GitLab uses the GitLab CLI (\`glab\`) — run \`glab auth login\` once, no tokens
-stored — and its other surfaces (issues, CI, releases) read *coming soon* until they land.
+stored. Its issues, CI pipelines, and releases read too (see their sections below).
 
 ## Local PRs
 
@@ -471,13 +471,21 @@ part in GitHub Discussions for the repo. (Discussions must be enabled on the rep
     body: `# Releases & tags
 
 The **Tags** tab ({{kbd:tab-tags}}, in the More ▾ menu) manages your repository's tags and
-GitHub releases.
+releases — GitHub releases (full read/write) and **GitLab** releases (read-only, see below).
 
 - See every tag and **create a tag** (also available from a commit in History).
 - **Create a release** from a tag: set the title and notes, mark it a **pre-release** or
   **draft**, and publish. Releases show badges (**Latest**, **Pre-release**, **Draft**).
 {{ai}}- **Generate release notes with AI** — draft the notes from the commits and
-  changelog between this tag and the previous one, then edit before publishing.{{/ai}}`,
+  changelog between this tag and the previous one, then edit before publishing.{{/ai}}
+
+## GitLab releases
+
+Point the app at a **GitLab** repo and the **Tags** tab lists its **releases** alongside your
+local tags (release rows carry the **Latest** badge). Open one for a **read-only** view: the
+release **notes**, who published it and when, and any **asset links** — click to open them in
+your browser. Publishing, editing, or deleting releases from the app is coming soon; for now
+those actions live on GitLab.`,
   },
   {
     id: "actions",

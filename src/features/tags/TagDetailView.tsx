@@ -63,9 +63,14 @@ export function TagDetailView({
   tag: string;
 }) {
   const gh = useForgeStatus(repoPath);
-  // Releases are GitHub-only; a GitLab tag stays just a tag (no release view).
+  // Release reads are provider-neutral; a tag with no release stays just a tag.
   const ghReady = forgeFeatureReady(gh.data, "releases");
-  // Only ask GitHub for a release when connected; otherwise it's just a tag.
+  // Release WRITES (publish/edit/delete/assets) are GitHub-only; GitLab releases are
+  // read-only, so suppress every write affordance and relabel the external link.
+  const provider = gh.data?.provider;
+  const canWrite = provider !== "gitlab" && provider !== "bitbucket";
+  const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
+  // Ask the provider for a release only when connected; otherwise it's just a tag.
   const release = useReleaseDetails(repoPath, ghReady ? tag : null);
   const tagList = useTagList(repoPath);
   const releaseList = useReleaseList(repoPath, ghReady);
@@ -132,51 +137,59 @@ export function TagDetailView({
           <div className="flex items-start gap-2">
             <h2 className="text-sm font-medium">{rel.name || rel.tagName}</h2>
             <span className="flex-1" />
-            {rel.isDraft && (
-              <Button
-                variant="outline"
-                size="xs"
-                disabled={editRelease.isPending}
-                onClick={() =>
-                  editRelease.mutate(
-                    {
-                      tag,
-                      title: "",
-                      notes: "",
-                      prerelease: rel.isPrerelease,
-                      draft: false,
-                      latest: isLatest,
-                    },
-                    { onSuccess: () => toast.success("Published"), onError },
-                  )
-                }
-              >
-                Publish
-              </Button>
+            {/* Publish/Edit/Delete are GitHub-only; GitLab releases are read-only. */}
+            {canWrite && (
+              <>
+                {rel.isDraft && (
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    disabled={editRelease.isPending}
+                    onClick={() =>
+                      editRelease.mutate(
+                        {
+                          tag,
+                          title: "",
+                          notes: "",
+                          prerelease: rel.isPrerelease,
+                          draft: false,
+                          latest: isLatest,
+                        },
+                        {
+                          onSuccess: () => toast.success("Published"),
+                          onError,
+                        },
+                      )
+                    }
+                  >
+                    Publish
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => {
+                    setEditTitle(rel.name);
+                    setEditNotes(rel.body);
+                    setEditPrerelease(rel.isPrerelease);
+                    setEditLatest(isLatest);
+                    setEditOpen(true);
+                  }}
+                >
+                  Edit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => {
+                    setCleanupTag(false);
+                    setDeleteOpen(true);
+                  }}
+                >
+                  Delete
+                </Button>
+              </>
             )}
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={() => {
-                setEditTitle(rel.name);
-                setEditNotes(rel.body);
-                setEditPrerelease(rel.isPrerelease);
-                setEditLatest(isLatest);
-                setEditOpen(true);
-              }}
-            >
-              Edit
-            </Button>
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={() => {
-                setCleanupTag(false);
-                setDeleteOpen(true);
-              }}
-            >
-              Delete
-            </Button>
             {rel.url && (
               <Button
                 variant="outline"
@@ -185,7 +198,7 @@ export function TagDetailView({
                 className="cursor-pointer"
               >
                 <ArrowSquareOutIcon data-icon="inline-start" />
-                GitHub
+                {remoteLabel}
               </Button>
             )}
           </div>
@@ -216,19 +229,22 @@ export function TagDetailView({
                   Assets ({rel.assets.length})
                 </h3>
                 <span className="flex-1" />
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  disabled={uploadAsset.isPending}
-                  onClick={onUpload}
-                >
-                  {uploadAsset.isPending ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <UploadSimpleIcon data-icon="inline-start" />
-                  )}
-                  Upload
-                </Button>
+                {/* Uploading assets is GitHub-only; GitLab assets are read-only. */}
+                {canWrite && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    disabled={uploadAsset.isPending}
+                    onClick={onUpload}
+                  >
+                    {uploadAsset.isPending ? (
+                      <Spinner data-icon="inline-start" />
+                    ) : (
+                      <UploadSimpleIcon data-icon="inline-start" />
+                    )}
+                    Upload
+                  </Button>
+                )}
               </div>
               {rel.assets.length === 0 ? (
                 <p className="text-[11px] text-muted-foreground">
@@ -246,34 +262,52 @@ export function TagDetailView({
                     >
                       {a.name}
                     </span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-                      {formatBytes(a.size)} · {a.downloadCount} ↓
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={`Download ${a.name}`}
-                      onClick={() => onDownload(a.name)}
-                    >
-                      <DownloadSimpleIcon />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={`Delete ${a.name}`}
-                      className="text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                      onClick={() =>
-                        deleteAsset.mutate(
-                          { tag, assetName: a.name },
-                          {
-                            onSuccess: () => toast.success("Asset deleted"),
-                            onError,
-                          },
-                        )
-                      }
-                    >
-                      <TrashIcon />
-                    </Button>
+                    {canWrite ? (
+                      <>
+                        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                          {formatBytes(a.size)} · {a.downloadCount} ↓
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`Download ${a.name}`}
+                          onClick={() => onDownload(a.name)}
+                        >
+                          <DownloadSimpleIcon />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`Delete ${a.name}`}
+                          className="text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                          onClick={() =>
+                            deleteAsset.mutate(
+                              { tag, assetName: a.name },
+                              {
+                                onSuccess: () => toast.success("Asset deleted"),
+                                onError,
+                              },
+                            )
+                          }
+                        >
+                          <TrashIcon />
+                        </Button>
+                      </>
+                    ) : (
+                      // GitLab asset links carry no size/download count — open the
+                      // link in the browser rather than show GitHub-style stats.
+                      a.url && (
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`Open ${a.name}`}
+                          className="cursor-pointer"
+                          onClick={() => openUrl(a.url)}
+                        >
+                          <ArrowSquareOutIcon />
+                        </Button>
+                      )
+                    )}
                   </div>
                 ))
               )}
@@ -422,7 +456,8 @@ export function TagDetailView({
         <div className="flex items-start gap-2">
           <h2 className="font-mono text-sm font-medium">{tag}</h2>
           <span className="flex-1" />
-          {ghReady && (
+          {/* Creating a release is GitHub-only; GitLab tags are read-only here. */}
+          {ghReady && canWrite && (
             <Button
               variant="outline"
               size="xs"

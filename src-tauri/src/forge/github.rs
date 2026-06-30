@@ -138,6 +138,22 @@ pub async fn job_logs(repo_path: &str, job_id: u64) -> AppResult<String> {
     crate::github::actions::gh_job_logs(repo_path.to_string(), job_id).await
 }
 
+// ── Releases (read) ──────────────────────────────────────────────────────────
+//
+// Thin delegates to the existing gh-backed release reads. Create / edit / delete
+// and the asset commands stay GitHub-only and aren't fronted here.
+
+pub async fn list_releases(repo_path: &str) -> AppResult<Vec<crate::github::release::ReleaseInfo>> {
+    crate::github::release::gh_release_list(repo_path.to_string()).await
+}
+
+pub async fn view_release(
+    repo_path: &str,
+    tag: &str,
+) -> AppResult<crate::github::release::ReleaseDetails> {
+    crate::github::release::gh_release_view(repo_path.to_string(), tag.to_string()).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

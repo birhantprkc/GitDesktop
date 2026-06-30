@@ -22,6 +22,7 @@ use crate::github::issue::{IssueDetails, IssueInfo, Milestone};
 use crate::github::pr::{
     PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrThreadOut, RepoLabel,
 };
+use crate::github::release::{ReleaseAsset, ReleaseDetails, ReleaseInfo};
 
 /// GitLab via the `glab` CLI. Carries the repo's host (gitlab.com today; a
 /// self-managed host list arrives with the Settings → Accounts work).
@@ -1141,6 +1142,189 @@ pub async fn run_failed_logs(repo_path: &str, run_id: u64) -> AppResult<String> 
     Ok(tail_cap(text, CI_RUN_LOG_CAP))
 }
 
+// ── Releases (read) ───────────────────────────────────────────────────────────
+//
+// GitLab releases map onto the same neutral `ReleaseInfo`/`ReleaseDetails` the
+// GitHub Tags panel renders, so the frontend stays provider-agnostic. The two
+// models differ in a few ways we bridge here:
+//   • GitLab has no draft or prerelease concept — both map to `false`.
+//   • GitLab has no per-release "latest" flag; the list comes back `released_at`-
+//     desc, so the newest non-upcoming release is GitLab's own "latest" — we mark
+//     just that one.
+//   • The release web URL is `_links.self` (not a top-level `web_url` like MRs).
+//   • GitLab release assets are `links` (named URLs, no size/download count) plus
+//     auto-generated source archives; we surface only the user `links` — mirroring
+//     `gh`, which likewise omits source archives — with size/downloads 0, so the
+//     read-only UI renders them as plain external links, not downloadable binaries.
+// Reads only — create / edit / delete / asset upload stay GitHub-only and are
+// hidden for GitLab on the frontend.
+
+#[derive(Deserialize)]
+struct GlabReleaseAuthor {
+    #[serde(default)]
+    username: String,
+}
+
+/// One user-attached release asset link (`assets.links[]`). GitLab also returns
+/// `direct_asset_url` (resolves through the project) — prefer it over the raw `url`.
+#[derive(Deserialize)]
+struct GlabReleaseLink {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    direct_asset_url: String,
+}
+
+#[derive(Deserialize, Default)]
+struct GlabReleaseAssets {
+    #[serde(default, deserialize_with = "null_to_default")]
+    links: Vec<GlabReleaseLink>,
+}
+
+/// The `_links` block — we only need the release's own web URL (`self`).
+#[derive(Deserialize, Default)]
+struct GlabReleaseSelfLink {
+    #[serde(rename = "self", default)]
+    self_url: String,
+}
+
+/// A release as `glab api …/releases[/<tag>]` returns it (list + detail share one
+/// shape). `description` is the markdown body; `released_at` is the publish time.
+#[derive(Deserialize)]
+struct GlabRelease {
+    #[serde(default)]
+    tag_name: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    description: String,
+    #[serde(default)]
+    released_at: String,
+    #[serde(default)]
+    created_at: String,
+    /// A release scheduled for a future `released_at` (GitLab's nearest thing to an
+    /// unpublished state); it's still listed, and is never the "latest".
+    #[serde(default)]
+    upcoming_release: bool,
+    #[serde(default)]
+    author: Option<GlabReleaseAuthor>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    assets: GlabReleaseAssets,
+    #[serde(rename = "_links", default, deserialize_with = "null_to_default")]
+    links: GlabReleaseSelfLink,
+}
+
+fn from_glab_release_link(l: GlabReleaseLink) -> ReleaseAsset {
+    ReleaseAsset {
+        name: l.name,
+        // GitLab asset links carry no size or download count.
+        size: 0,
+        download_count: 0,
+        url: if l.direct_asset_url.is_empty() {
+            l.url
+        } else {
+            l.direct_asset_url
+        },
+    }
+}
+
+/// The release's publish time — `released_at`, falling back to `created_at`.
+fn release_published_at(r: &GlabRelease) -> String {
+    if r.released_at.is_empty() {
+        r.created_at.clone()
+    } else {
+        r.released_at.clone()
+    }
+}
+
+/// Map a GitLab release onto the neutral list-row `ReleaseInfo`. `is_latest` is
+/// decided by the caller (the newest non-upcoming release) since GitLab has no
+/// per-release latest flag.
+fn release_info(r: &GlabRelease, is_latest: bool) -> ReleaseInfo {
+    ReleaseInfo {
+        tag_name: r.tag_name.clone(),
+        name: r.name.clone(),
+        // GitLab has neither draft nor prerelease releases.
+        is_draft: false,
+        is_prerelease: false,
+        is_latest,
+        published_at: release_published_at(r),
+    }
+}
+
+/// Mark the newest non-upcoming release "latest". GitLab returns releases
+/// `released_at`-desc, so the first non-upcoming entry is GitLab's own default
+/// "latest" — every other row (and any upcoming ones) stays non-latest.
+fn releases_to_infos(releases: &[GlabRelease]) -> Vec<ReleaseInfo> {
+    let latest_idx = releases.iter().position(|r| !r.upcoming_release);
+    releases
+        .iter()
+        .enumerate()
+        .map(|(i, r)| release_info(r, Some(i) == latest_idx))
+        .collect()
+}
+
+/// Map a GitLab release onto the neutral detail `ReleaseDetails`.
+fn release_details(r: GlabRelease) -> ReleaseDetails {
+    let published_at = release_published_at(&r);
+    ReleaseDetails {
+        tag_name: r.tag_name,
+        name: r.name,
+        body: r.description,
+        author: r.author.map(|a| a.username).unwrap_or_default(),
+        published_at,
+        is_draft: false,
+        is_prerelease: false,
+        // GitLab releases have no GitHub-style "target commitish" the read view acts
+        // on (the tag's commit is implicit); leave empty (display-only on GitHub).
+        target_commitish: String::new(),
+        url: r.links.self_url,
+        assets: r
+            .assets
+            .links
+            .into_iter()
+            .map(from_glab_release_link)
+            .collect(),
+    }
+}
+
+/// The repo's releases for the Tags panel (newest first), capped at 100 to match
+/// the GitHub path (`gh release list --limit 100`).
+pub async fn list_releases(repo_path: &str) -> AppResult<Vec<ReleaseInfo>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/releases?per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let releases: Vec<GlabRelease> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab releases: {e}")))?;
+    Ok(releases_to_infos(&releases))
+}
+
+/// Full read view of one release, by its tag, mapped onto `ReleaseDetails`.
+pub async fn view_release(repo_path: &str, tag: &str) -> AppResult<ReleaseDetails> {
+    if tag.is_empty() {
+        return Err(AppError::InvalidArgument("a tag is required".into()));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    // The tag is a single path segment — percent-encode it so a `/` in a tag like
+    // `release/1.0` (or any query-significant byte) can't break the endpoint path.
+    let enc_tag = encode_query_value(tag);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/releases/{enc_tag}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let r: GlabRelease = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab release: {e}")))?;
+    Ok(release_details(r))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1449,5 +1633,105 @@ mod tests {
         }"#;
         let r = from_glab_project(serde_json::from_str(json).unwrap());
         assert!(r.private && r.archived && r.fork);
+    }
+
+    // Sample JSON below mirrors the real `glab api …/releases` shape (validated live).
+    #[test]
+    fn maps_glab_release_to_neutral_info() {
+        let json = r#"{
+            "tag_name": "v1.0.0",
+            "name": "v1.0.0 — stable",
+            "description": "First **stable** release.",
+            "released_at": "2026-06-30T07:06:16.417Z",
+            "created_at": "2026-06-30T07:06:16.417Z",
+            "upcoming_release": false,
+            "author": { "username": "theBGuy" },
+            "assets": { "links": [] },
+            "_links": { "self": "https://gitlab.com/g/r/-/releases/v1.0.0" }
+        }"#;
+        let r: GlabRelease = serde_json::from_str(json).unwrap();
+        let info = release_info(&r, true);
+        assert_eq!(info.tag_name, "v1.0.0");
+        assert_eq!(info.name, "v1.0.0 — stable");
+        // GitLab has neither draft nor prerelease releases.
+        assert!(!info.is_draft && !info.is_prerelease);
+        assert!(info.is_latest);
+        assert_eq!(info.published_at, "2026-06-30T07:06:16.417Z");
+    }
+
+    #[test]
+    fn release_detail_maps_description_url_and_asset_links() {
+        let json = r#"{
+            "tag_name": "v1.0.0",
+            "name": "v1.0.0",
+            "description": "Body text",
+            "released_at": "2026-06-30T07:06:16.417Z",
+            "created_at": "2026-06-30T07:00:00Z",
+            "upcoming_release": false,
+            "author": { "username": "theBGuy" },
+            "assets": { "links": [
+                { "id": 1, "name": "Release notes (README)", "url": "https://x/u", "direct_asset_url": "https://x/direct", "link_type": "other" }
+            ] },
+            "_links": { "self": "https://gitlab.com/g/r/-/releases/v1.0.0" }
+        }"#;
+        let d = release_details(serde_json::from_str(json).unwrap());
+        assert_eq!(d.body, "Body text");
+        assert_eq!(d.author, "theBGuy");
+        assert_eq!(d.url, "https://gitlab.com/g/r/-/releases/v1.0.0");
+        assert!(!d.is_draft && !d.is_prerelease);
+        assert_eq!(d.published_at, "2026-06-30T07:06:16.417Z");
+        assert_eq!(d.assets.len(), 1);
+        assert_eq!(d.assets[0].name, "Release notes (README)");
+        // Asset links have no size/downloads; the direct asset URL is preferred.
+        assert_eq!(d.assets[0].size, 0);
+        assert_eq!(d.assets[0].download_count, 0);
+        assert_eq!(d.assets[0].url, "https://x/direct");
+    }
+
+    #[test]
+    fn release_tolerates_null_description_and_missing_links() {
+        // A release with no description / no assets / no `_links`: GitLab can send
+        // `null` for the body, and `#[serde(default)]` alone would sink a present
+        // `null` — `null_to_default` must absorb it (same trap as the issue parse).
+        let json = r#"{
+            "tag_name": "v0.1.0",
+            "name": "",
+            "description": null,
+            "released_at": "2026-06-30T00:00:00Z",
+            "upcoming_release": false
+        }"#;
+        let d = release_details(serde_json::from_str(json).unwrap());
+        assert_eq!(d.tag_name, "v0.1.0");
+        assert_eq!(d.body, "");
+        assert_eq!(d.url, "");
+        assert!(d.assets.is_empty());
+        // Falls back to released_at for the publish time.
+        assert_eq!(d.published_at, "2026-06-30T00:00:00Z");
+    }
+
+    #[test]
+    fn newest_non_upcoming_release_is_marked_latest() {
+        // The list comes back released_at-desc; an upcoming (scheduled) release can
+        // sit at the top but must NOT be "latest" — the first non-upcoming is.
+        let mk = |tag: &str, upcoming: bool| -> GlabRelease {
+            serde_json::from_str(&format!(
+                r#"{{ "tag_name": "{tag}", "name": "{tag}", "released_at": "2026-06-30T00:00:00Z", "upcoming_release": {upcoming} }}"#
+            ))
+            .unwrap()
+        };
+        let list = vec![mk("v2.0.0-next", true), mk("v1.1.0", false), mk("v1.0.0", false)];
+        let infos = releases_to_infos(&list);
+        assert!(!infos[0].is_latest, "an upcoming release is never latest");
+        assert!(infos[1].is_latest, "the newest published release is latest");
+        assert!(!infos[2].is_latest);
+    }
+
+    #[test]
+    fn release_published_at_falls_back_to_created_at() {
+        let r: GlabRelease = serde_json::from_str(
+            r#"{ "tag_name": "v1", "name": "v1", "created_at": "2026-01-01T00:00:00Z" }"#,
+        )
+        .unwrap();
+        assert_eq!(release_published_at(&r), "2026-01-01T00:00:00Z");
     }
 }

@@ -1921,7 +1921,7 @@ export function useRecentCommits(
 export function useReleaseList(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "releases"] as const,
-    queryFn: () => api.ghReleaseList(repo),
+    queryFn: () => api.forgeReleaseList(repo),
     enabled,
     staleTime: 30_000,
     retry: false,
@@ -1931,10 +1931,10 @@ export function useReleaseList(repo: string, enabled: boolean) {
 const releaseDetailsOptions = (repo: string, tag: string) =>
   queryOptions({
     queryKey: ["repo", repo, "release", tag] as const,
-    queryFn: () => api.ghReleaseView(repo, tag),
+    queryFn: () => api.forgeReleaseView(repo, tag),
     staleTime: 30_000,
-    // A plain tag has no release → gh 404s; the detail treats that as "no
-    // release", so don't retry the expected miss.
+    // A plain tag has no release → the provider 404s; the detail treats that as
+    // "no release", so don't retry the expected miss.
     retry: false,
   });
 

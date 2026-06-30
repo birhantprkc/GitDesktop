@@ -53,8 +53,11 @@ function ReleaseBadges({ release }: { release: ReleaseInfo }) {
 
 export function TagsPanel({ repoPath }: { repoPath: string }) {
   const gh = useForgeStatus(repoPath);
-  // Releases are GitHub-only; GitLab repos still show local tags, just no releases.
+  // Release READS are provider-neutral (GitHub + GitLab); the badge/detail light up
+  // for any provider with releases implemented. Publishing a release is GitHub-only,
+  // gated separately below (canCreateRelease).
   const ghReady = forgeFeatureReady(gh.data, "releases");
+  const canCreateRelease = ghReady && gh.data?.provider === "github";
   const tagList = useTagList(repoPath);
   const releaseList = useReleaseList(repoPath, ghReady);
   const status = useRepoStatus(repoPath);
@@ -149,11 +152,13 @@ export function TagsPanel({ repoPath }: { repoPath: string }) {
           />
           <DropdownMenuContent align="end" className="min-w-52">
             <DropdownMenuItem
-              disabled={!ghReady}
+              disabled={!canCreateRelease}
               title={
-                ghReady
+                canCreateRelease
                   ? undefined
-                  : "Connect this repository to GitHub to publish a release."
+                  : gh.data?.provider === "gitlab"
+                    ? "Publishing releases isn't supported for GitLab yet — releases are read-only."
+                    : "Connect this repository to GitHub to publish a release."
               }
               onClick={() => setCreateReleaseOpen(true)}
             >

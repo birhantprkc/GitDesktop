@@ -203,6 +203,8 @@ pub fn run() {
             forge::forge_ci_run_view,
             forge::forge_ci_run_failed_logs,
             forge::forge_ci_job_logs,
+            forge::forge_release_list,
+            forge::forge_release_view,
             github::pr::gh_status,
             github::pr::gh_accounts,
             github::pr::gh_switch_account,

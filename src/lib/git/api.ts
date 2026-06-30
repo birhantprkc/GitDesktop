@@ -385,13 +385,18 @@ export const gitDeleteTag = (
 export const gitListTags = (repoPath: string) =>
   invoke<TagInfo[]>("git_list_tags", { repoPath });
 
-// ── GitHub releases (gh release …) ──────────────────────────────────────────
+// ── Releases ────────────────────────────────────────────────────────────────
+//
+// Reads go through the provider-neutral `forge_release_*` (GitHub via `gh`, GitLab
+// via `glab`); the GitHub path is byte-identical to the old `gh_release_*`. Writes
+// (create / edit / delete / asset management) stay GitHub-only (`gh_release_*`) and
+// are hidden for GitLab on the frontend.
 
-export const ghReleaseList = (repoPath: string) =>
-  invoke<ReleaseInfo[]>("gh_release_list", { repoPath });
+export const forgeReleaseList = (repoPath: string) =>
+  invoke<ReleaseInfo[]>("forge_release_list", { repoPath });
 
-export const ghReleaseView = (repoPath: string, tag: string) =>
-  invoke<ReleaseDetails>("gh_release_view", { repoPath, tag });
+export const forgeReleaseView = (repoPath: string, tag: string) =>
+  invoke<ReleaseDetails>("forge_release_view", { repoPath, tag });
 
 export const ghReleaseCreate = (
   repoPath: string,
