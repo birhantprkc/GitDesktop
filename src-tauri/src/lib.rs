@@ -191,6 +191,8 @@ pub fn run() {
             git::compare::git_review_worktree,
             git::compare::git_remove_worktree,
             forge::forge_status,
+            forge::forge_list_repos,
+            forge::forge_clone,
             github::pr::gh_status,
             github::pr::gh_accounts,
             github::pr::gh_switch_account,

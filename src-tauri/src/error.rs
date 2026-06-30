@@ -13,6 +13,10 @@ pub enum AppError {
     GhNotFound,
     #[error("{0}")]
     Gh(String),
+    #[error("GitLab CLI (glab) not found on PATH")]
+    GlabNotFound,
+    #[error("{0}")]
+    Glab(String),
     #[error("keychain error: {0}")]
     Keyring(String),
     #[error("invalid argument: {0}")]
@@ -42,6 +46,8 @@ impl Serialize for AppError {
             AppError::GitNotFound => "gitNotFound",
             AppError::GhNotFound => "ghNotFound",
             AppError::Gh(_) => "gh",
+            AppError::GlabNotFound => "glabNotFound",
+            AppError::Glab(_) => "glab",
             AppError::Keyring(_) => "keyring",
             AppError::InvalidArgument(_) => "invalidArgument",
             AppError::Command(_) => "command",

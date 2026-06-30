@@ -10,11 +10,14 @@
 //! Bitbucket are recognized but report not-ready until their impls land.
 
 pub mod github;
+pub mod gitlab;
+pub mod glab;
 pub mod model;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::forge::github::GitHubForge;
-use crate::forge::model::{ForgeStatus, Provider};
+use crate::forge::gitlab::GitLabForge;
+use crate::forge::model::{ForgeRepoList, ForgeStatus, Provider};
 
 /// A hosted-git provider GitDesktop can talk to. One method per hosted capability;
 /// the trait grows a method per phase (Phase 0 = `status` only). Called via static
@@ -29,7 +32,7 @@ pub trait Forge {
 /// The host of a remote URL — both `https://host[:port]/…` and scp-style
 /// `git@host:owner/…`. Lowercased; `None` when there's no parseable host (a local
 /// path, say). Tolerates an optional `user@` and a `:port`.
-fn remote_host(url: &str) -> Option<String> {
+pub(crate) fn remote_host(url: &str) -> Option<String> {
     let url = url.trim();
     // `scheme://[user@]host[:port]/…` → strip the scheme; otherwise treat it as a
     // scp-like `[user@]host:path` and operate on the whole string.
@@ -71,7 +74,12 @@ async fn detect_non_github(repo_path: &str) -> Option<(Provider, String)> {
 /// in Phases 1–4); everything else delegates to the GitHub impl, unchanged.
 pub async fn resolve_status(repo_path: &str) -> AppResult<ForgeStatus> {
     if let Some((provider, host)) = detect_non_github(repo_path).await {
-        return Ok(ForgeStatus::unimplemented(provider, host));
+        return match provider {
+            // GitLab probes glab for install/auth (read ops not built yet, so it
+            // reports not-ready); Bitbucket is still a recognized-only stub.
+            Provider::GitLab => GitLabForge::new(host).status(repo_path).await,
+            _ => Ok(ForgeStatus::unimplemented(provider, host)),
+        };
     }
     GitHubForge.status(repo_path).await
 }
@@ -82,6 +90,38 @@ pub async fn resolve_status(repo_path: &str) -> AppResult<ForgeStatus> {
 #[tauri::command]
 pub async fn forge_status(repo_path: String) -> AppResult<ForgeStatus> {
     resolve_status(&repo_path).await
+}
+
+/// The signed-in user's repositories on a provider, for the clone browser.
+/// Dispatches by provider — GitHub via `gh`, GitLab via `glab`; Bitbucket isn't
+/// implemented yet. Account-scoped (no repo path), unlike `forge_status`.
+#[tauri::command]
+pub async fn forge_list_repos(provider: Provider) -> AppResult<ForgeRepoList> {
+    match provider {
+        Provider::GitHub => github::list_repos().await,
+        Provider::GitLab => gitlab::list_repos().await,
+        Provider::Bitbucket => Err(AppError::InvalidArgument(
+            "Bitbucket repository listing isn't supported yet.".into(),
+        )),
+    }
+}
+
+/// Clone a repo, supplying provider auth that plain `git clone` lacks. GitHub
+/// (and the URL tab) clone fine via git + the gh credential helper; a private
+/// GitLab repo needs glab's token, injected as a ONE-SHOT `git -c` credential
+/// helper (no persistent config, no token in the remote URL). Returns the path.
+#[tauri::command]
+pub async fn forge_clone(
+    provider: Provider,
+    url: String,
+    parent_dir: String,
+    dir_name: Option<String>,
+) -> AppResult<String> {
+    let extra = match provider {
+        Provider::GitLab => gitlab::clone_credential_config(&url).await?,
+        _ => Vec::new(),
+    };
+    crate::git::repo::clone_repo_core(&url, &parent_dir, dir_name, &extra).await
 }
 
 #[cfg(test)]

@@ -7,9 +7,9 @@
 //! methods, each delegating to the matching `gh_*` function.
 
 use crate::error::AppResult;
-use crate::forge::model::{Capabilities, ForgeStatus, Provider};
+use crate::forge::model::{Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, Provider};
 use crate::forge::Forge;
-use crate::github::pr::{gh_status, GhStatus};
+use crate::github::pr::{gh_list_repos, gh_status, GhRepo, GhStatus};
 
 /// GitHub via the `gh` CLI. Unit struct — `gh` carries all the state (auth, host).
 pub struct GitHubForge;
@@ -40,6 +40,33 @@ impl Forge for GitHubForge {
         // multi-account-aware) and normalize its result.
         Ok(from_gh_status(gh_status(repo_path.to_string()).await?))
     }
+}
+
+/// Map a GitHub repo (gh shape) onto the neutral [`ForgeRepo`] — 1:1, since the
+/// neutral model was sized from `GhRepo`.
+fn from_gh_repo(r: GhRepo) -> ForgeRepo {
+    ForgeRepo {
+        full_name: r.name_with_owner,
+        owner: r.owner,
+        name: r.name,
+        private: r.private,
+        archived: r.archived,
+        fork: r.fork,
+        clone_url: r.clone_url,
+        ssh_url: r.ssh_url,
+        description: r.description,
+        pushed_at: r.pushed_at,
+    }
+}
+
+/// The signed-in GitHub user's repositories, for the clone browser — delegates to
+/// the existing `gh_list_repos` and normalizes.
+pub async fn list_repos() -> AppResult<ForgeRepoList> {
+    let gh = gh_list_repos().await?;
+    Ok(ForgeRepoList {
+        viewer: gh.viewer,
+        repos: gh.repos.into_iter().map(from_gh_repo).collect(),
+    })
 }
 
 #[cfg(test)]

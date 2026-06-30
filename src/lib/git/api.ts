@@ -26,6 +26,8 @@ import type {
   DiscussionMeta,
   ExternalReviewItem,
   FileDiff,
+  ForgeProvider,
+  ForgeRepoList,
   ForgeStatus,
   GeneratedNotes,
   GhAccounts,
@@ -801,6 +803,26 @@ export const gitRemoveWorktree = (repoPath: string, worktreePath: string) =>
  *  their impls land) — the gate hosted panels read for any provider. */
 export const forgeStatus = (repoPath: string) =>
   invoke<ForgeStatus>("forge_status", { repoPath });
+
+/** The signed-in user's repositories on a provider, for the clone browser. */
+export const forgeListRepos = (provider: ForgeProvider) =>
+  invoke<ForgeRepoList>("forge_list_repos", { provider });
+
+/** Clone a repo for a provider, supplying provider auth that plain `git clone`
+ *  lacks (a private GitLab repo authenticates via glab's token). Returns the
+ *  cloned path. */
+export const forgeClone = (
+  provider: ForgeProvider,
+  url: string,
+  parentDir: string,
+  dirName?: string,
+) =>
+  invoke<string>("forge_clone", {
+    provider,
+    url,
+    parentDir,
+    dirName: dirName ?? null,
+  });
 
 export const ghPrCreate = (
   repoPath: string,

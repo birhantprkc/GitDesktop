@@ -1,4 +1,5 @@
 import {
+  ArrowSquareOutIcon,
   GithubLogoIcon,
   TerminalIcon,
   UploadSimpleIcon,
@@ -13,12 +14,6 @@ import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { PublishDialog } from "./PublishDialog";
 
-/** Display name for a recognized host whose integration isn't built yet. */
-const UNSUPPORTED_PROVIDER: Record<string, string> = {
-  gitlab: "GitLab",
-  bitbucket: "Bitbucket",
-};
-
 /**
  * Shared "this hosted feature isn't available" empty state for the Pull
  * Requests, Issues, Discussions, and Actions tabs. Names the actual blocker and
@@ -26,9 +21,9 @@ const UNSUPPORTED_PROVIDER: Record<string, string> = {
  * instead of a dead end. `feature` is the noun the message reads with ("pull
  * requests", "workflow runs").
  *
- * Provider-aware: for a GitHub repo it walks the gh setup ladder (install →
- * sign in → publish); for a repo on a host GitDesktop doesn't support yet
- * (GitLab/Bitbucket) it says so plainly.
+ * Provider-aware: GitHub walks the gh setup ladder (install → sign in →
+ * publish); GitLab walks the analogous glab ladder (until its read ops land);
+ * Bitbucket — recognized but not yet implemented — says so plainly.
  */
 export function ForgeNotReady({
   repoPath,
@@ -44,16 +39,74 @@ export function ForgeNotReady({
 
   const provider = forge.data?.provider;
 
-  // A repo on a recognized host whose provider isn't implemented yet. (A
-  // not-ready GitHub repo has provider `null` — no repo recognized — so it
-  // falls through to the gh ladder below, unchanged.)
-  if (provider === "gitlab" || provider === "bitbucket") {
+  // GitLab: `glab` is wired (status detects install + sign-in), but read
+  // operations aren't built yet — walk the glab setup ladder, then say so. (A
+  // not-ready GitHub repo has provider `null`, so it skips this and falls through
+  // to the gh ladder below, unchanged.)
+  if (provider === "gitlab") {
+    if (!forge.data?.installed) {
+      return (
+        <div className="space-y-2.5 px-3 py-4 text-xs text-muted-foreground">
+          <p>
+            The GitLab CLI (<span className="font-mono">glab</span>) isn't
+            installed. GitDesktop will use it to work with {feature} on GitLab.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              openUrl("https://gitlab.com/gitlab-org/cli#installation")
+            }
+            className="cursor-pointer"
+          >
+            <ArrowSquareOutIcon data-icon="inline-start" />
+            Install the GitLab CLI
+          </Button>
+        </div>
+      );
+    }
+    if (!forge.data?.authenticated) {
+      return (
+        <div className="space-y-2.5 px-3 py-4 text-xs text-muted-foreground">
+          <p>
+            Sign in to GitLab to work with {feature}. Run{" "}
+            <span className="font-mono text-foreground">glab auth login</span>{" "}
+            in a terminal.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              openInTerminal(
+                repoPath,
+                settings.data?.terminal,
+                settings.data?.terminalPath,
+              ).catch(toastError)
+            }
+          >
+            <TerminalIcon data-icon="inline-start" />
+            Open terminal to sign in
+          </Button>
+        </div>
+      );
+    }
     return (
       <div className="px-3 py-4 text-xs text-muted-foreground">
         <p>
-          This repository is hosted on {UNSUPPORTED_PROVIDER[provider]}, which
-          GitDesktop doesn't support yet — {feature} are only available for
-          GitHub repositories for now.
+          GitLab support is on the way — {feature} aren't available here yet.
+        </p>
+      </div>
+    );
+  }
+
+  // Bitbucket: recognized, integration not built yet.
+  if (provider === "bitbucket") {
+    return (
+      <div className="px-3 py-4 text-xs text-muted-foreground">
+        <p>
+          This repository is hosted on Bitbucket, which GitDesktop doesn't
+          support yet — {feature} are only available for GitHub repositories for
+          now.
         </p>
       </div>
     );

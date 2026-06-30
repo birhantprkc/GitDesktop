@@ -106,24 +106,38 @@ pub async fn clone_repo(
     parent_dir: String,
     dir_name: Option<String>,
 ) -> AppResult<String> {
+    clone_repo_core(&url, &parent_dir, dir_name, &[]).await
+}
+
+/// Clone `url` into `parent_dir/<dir_name>` (dir inferred from the URL when not
+/// given), returning the cloned path. `extra_config` are `git -c key=value`
+/// entries prepended before `clone` — e.g. a provider credential helper so a
+/// private repo authenticates (see `forge::forge_clone`).
+pub(crate) async fn clone_repo_core(
+    url: &str,
+    parent_dir: &str,
+    dir_name: Option<String>,
+    extra_config: &[String],
+) -> AppResult<String> {
     if url.starts_with('-') {
         return Err(AppError::InvalidArgument("invalid clone URL".into()));
     }
     let dir_name = match dir_name {
         Some(name) => name,
-        None => default_clone_dir_name(&url)
+        None => default_clone_dir_name(url)
             .ok_or_else(|| AppError::InvalidArgument("could not infer directory from URL".into()))?,
     };
     if dir_name.starts_with('-') || dir_name.contains(['/', '\\']) {
         return Err(AppError::InvalidArgument("invalid directory name".into()));
     }
-    run_git(
-        Some(&parent_dir),
-        &["clone", "--", &url, &dir_name],
-        NETWORK_TIMEOUT,
-    )
-    .await?;
-    let cloned = Path::new(&parent_dir).join(&dir_name);
+    let mut args: Vec<&str> = Vec::new();
+    for c in extra_config {
+        args.push("-c");
+        args.push(c.as_str());
+    }
+    args.extend_from_slice(&["clone", "--", url, dir_name.as_str()]);
+    run_git(Some(parent_dir), &args, NETWORK_TIMEOUT).await?;
+    let cloned = Path::new(parent_dir).join(&dir_name);
     Ok(cloned.to_string_lossy().into_owned())
 }
 

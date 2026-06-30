@@ -19,6 +19,7 @@ import type {
   DiffStatEntry,
   DiscussionDetails,
   ForgeCapabilities,
+  ForgeProvider,
   ForgeStatus,
   IssueDetails,
   IssueReactions,
@@ -1500,6 +1501,19 @@ export function useGhRepos(enabled: boolean) {
   return useQuery({
     queryKey: ["gh-repos"] as const,
     queryFn: api.ghListRepos,
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+/** The signed-in user's repositories on a provider (GitHub via gh, GitLab via
+ *  glab), for the clone browser. The provider-neutral successor to
+ *  {@link useGhRepos} on that surface. */
+export function useForgeRepos(provider: ForgeProvider, enabled: boolean) {
+  return useQuery({
+    queryKey: ["forge-repos", provider] as const,
+    queryFn: () => api.forgeListRepos(provider),
     enabled,
     staleTime: 5 * 60_000,
     retry: false,

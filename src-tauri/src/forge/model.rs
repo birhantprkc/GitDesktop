@@ -6,10 +6,10 @@
 //! impl maps its provider's API onto them. Phase 0 only needs [`ForgeStatus`] +
 //! [`Capabilities`]; later phases add `PullRequest`, `Issue`, etc. alongside.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Which hosting platform backs a repo's hosted features.
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     GitHub,
@@ -153,6 +153,38 @@ impl ForgeStatus {
             capabilities: Capabilities::for_provider(provider),
         }
     }
+}
+
+/// A repository as listed for cloning — neutral across providers (the clone
+/// browser's row). GitHub fields map 1:1 from `GhRepo`; GitLab fills it from a
+/// `glab` project.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeRepo {
+    /// "owner/name" (GitHub) or "group/subgroup/name" (GitLab).
+    pub full_name: String,
+    /// The owning user/org/group namespace.
+    pub owner: String,
+    pub name: String,
+    pub private: bool,
+    pub archived: bool,
+    pub fork: bool,
+    /// HTTPS clone URL.
+    pub clone_url: String,
+    /// SSH clone URL.
+    pub ssh_url: String,
+    pub description: Option<String>,
+    /// ISO-8601 last-activity/push time, for recency sorting.
+    pub pushed_at: Option<String>,
+}
+
+/// The signed-in user's repositories on a provider, for the clone browser.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeRepoList {
+    /// The signed-in user's login, so the UI lists their own repos first.
+    pub viewer: String,
+    pub repos: Vec<ForgeRepo>,
 }
 
 #[cfg(test)]

@@ -354,6 +354,28 @@ export interface GhRepoList {
   repos: GhRepo[];
 }
 
+/** Provider-neutral repository row for the clone browser (GitHub via gh, GitLab
+ *  via glab). Mirrors {@link GhRepo} but with a provider-agnostic `fullName`. */
+export interface ForgeRepo {
+  /** "owner/name" (GitHub) or "group/subgroup/name" (GitLab). */
+  fullName: string;
+  owner: string;
+  name: string;
+  private: boolean;
+  archived: boolean;
+  fork: boolean;
+  cloneUrl: string;
+  sshUrl: string;
+  description: string | null;
+  pushedAt: string | null;
+}
+
+export interface ForgeRepoList {
+  /** The signed-in user's login, so the UI lists their own repos first. */
+  viewer: string;
+  repos: ForgeRepo[];
+}
+
 export interface GhAccount {
   /** The host this account is signed in to ("github.com" or an Enterprise
    *  server). Accounts are grouped by host and switched per host. */
