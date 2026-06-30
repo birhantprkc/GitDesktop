@@ -17,8 +17,11 @@ export function useRunNotifications(repoPath: string) {
   const gh = useForgeStatus(repoPath);
   const status = useRepoStatus(repoPath);
   const branch = status.data?.branch.name ?? null;
+  // Workflow runs are a GitHub-Actions-only poll; GitLab CI notifications arrive
+  // with the CI read increment.
   const enabled =
     repoPath !== "" &&
+    gh.data?.provider === "github" &&
     Boolean(gh.data?.repo) &&
     Boolean(branch) &&
     Boolean(settings.data?.notifications.actionRuns);

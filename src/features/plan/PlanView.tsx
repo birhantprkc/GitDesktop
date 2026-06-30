@@ -224,9 +224,10 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
   const gh = useForgeStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // "Create GitHub issue" is GitHub-only; a GitLab repo offers just the local issue.
+  const ghReady =
+    Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
+    gh.data?.provider === "github";
   const [localOpen, setLocalOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 

@@ -60,8 +60,8 @@ From the welcome screen (or the repo switcher in the header):
 
 - **Open repository** ({{kbd:add-local-repository}}) — point at a folder that's already
   a Git repo.
-- **Clone repository** ({{kbd:clone-repository}}) — clone from a URL, or browse your
-  GitHub repos.
+- **Clone repository** ({{kbd:clone-repository}}) — clone from a URL, or browse and
+  clone your **GitHub** or **GitLab** repos from their tabs.
 - **Create repository** ({{kbd:new-repository}}) — start a new repo with an optional
   README, \`.gitignore\`, and license.
 
@@ -365,8 +365,9 @@ keyless Claude Code / Codex agents, and skips files matched by your AI ignore pa
     label: "Pull requests",
     body: `# Pull requests
 
-The **Pull Requests** tab ({{kbd:tab-pulls}}) manages both GitHub PRs and local PRs.
-(GitHub PRs need \`gh\` installed and authenticated.)
+The **Pull Requests** tab ({{kbd:tab-pulls}}) manages GitHub PRs, GitLab merge requests,
+and local PRs. (Hosted PRs/MRs need the matching CLI — \`gh\` or \`glab\` — installed and
+authenticated.)
 
 ## GitHub PRs
 
@@ -384,6 +385,15 @@ editor is everywhere you write Markdown — issues, discussions, and release not
 Create a PR with **Create pull request** ({{kbd:create-pr}}) or from the Compare tab — as
 a **draft** if you like{{ai}}, optionally with an **AI-generated** title and description
 from the branch diff and commit subjects{{/ai}}.
+
+## GitLab merge requests
+
+Point the app at a **GitLab** repo and the same tab lists its **merge requests** (open and
+closed/merged) next to any local PRs. Open one for a **read-only** view — description,
+comments, commits, and a highlighted **diff** — with an **Open on GitLab** link. Creating,
+reviewing, and merging MRs from the app is coming soon; for now those actions live on
+GitLab. GitLab uses the GitLab CLI (\`glab\`) — run \`glab auth login\` once, no tokens
+stored — and its other surfaces (issues, CI, releases) read *coming soon* until they land.
 
 ## Local PRs
 

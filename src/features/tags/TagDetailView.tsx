@@ -27,6 +27,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import {
+  forgeFeatureReady,
   useCheckoutCommit,
   useDeleteRelease,
   useDeleteReleaseAsset,
@@ -62,9 +63,8 @@ export function TagDetailView({
   tag: string;
 }) {
   const gh = useForgeStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // Releases are GitHub-only; a GitLab tag stays just a tag (no release view).
+  const ghReady = forgeFeatureReady(gh.data, "releases");
   // Only ask GitHub for a release when connected; otherwise it's just a tag.
   const release = useReleaseDetails(repoPath, ghReady ? tag : null);
   const tagList = useTagList(repoPath);

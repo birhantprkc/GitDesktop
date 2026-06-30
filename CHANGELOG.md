@@ -12,6 +12,17 @@ commit list.
 
 ### Added
 
+- **GitLab, in the same panels (read).** GitDesktop now speaks GitLab as well as GitHub,
+  through the **GitLab CLI (`glab`)** — same delegated-auth model as `gh`, no tokens stored.
+  Point the app at a GitLab repo (or **browse and clone your GitLab projects** from the
+  **GitLab** tab in the clone dialog) and the **Pull Requests** panel lists its **merge
+  requests** right alongside any local PRs — open and closed/merged, searchable and
+  filterable. Open one for a **read-only detail view**: description, comments, commits, and a
+  syntax-highlighted **diff**, plus an "Open on GitLab" link. The rest of the GitLab surface
+  (creating/merging MRs, issues, CI pipelines, releases, insights) reads **"coming soon"** for
+  now — those panels degrade gracefully instead of breaking — and lands in later updates.
+  GitHub repositories are completely unaffected. (Self-managed GitLab hosts and Bitbucket are
+  still on the way.)
 - **A browsable, persistent Agent sidebar.** Several quality-of-life upgrades to the Agent list:
   the **activity log now survives a restart** — reopening the app no longer drops a session's,
   plan's, or research run's **step-by-step tool log** (the full interleaved transcript of reads,

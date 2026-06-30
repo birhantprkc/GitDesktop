@@ -5,6 +5,7 @@ import { ConversationListPanel } from "@/features/conversations/ConversationList
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { IssueStateFilter } from "@/lib/git/api";
 import {
+  forgeFeatureReady,
   useForgeStatus,
   useHoverPrefetch,
   useIssueList,
@@ -20,9 +21,16 @@ import { CreateLocalIssueDialog } from "./CreateLocalIssueDialog";
 
 export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const gh = useForgeStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const provider = gh.data?.provider;
+  const isGitLab = provider === "gitlab";
+  const remoteLabel =
+    provider === "gitlab"
+      ? "GitLab"
+      : provider === "bitbucket"
+        ? "Bitbucket"
+        : "GitHub";
+  // Issues are GitHub-only so far; a ready GitLab repo degrades to "coming soon".
+  const ghReady = forgeFeatureReady(gh.data, "issues");
   const [stateFilter, setStateFilter] = useState<IssueStateFilter>("open");
   const issueList = useIssueList(repoPath, ghReady, stateFilter);
   const selectedIssue = useUiStore((s) => s.selectedIssue);
@@ -110,14 +118,17 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
     <ConversationListPanel
       repoPath={repoPath}
       feature="issues"
+      remoteLabel={remoteLabel}
       stateFilter={stateFilter}
       onStateFilter={setStateFilter}
       newMenu={{
-        ghLabel: "Issue on GitHub…",
+        ghLabel: isGitLab ? "Issue on GitLab…" : "Issue on GitHub…",
         ghDisabled: !ghReady,
         ghReason: ghReady
           ? undefined
-          : "Connect this repository to GitHub to open an issue.",
+          : isGitLab
+            ? "GitDesktop doesn't support GitLab issues yet — it's coming."
+            : "Connect this repository to GitHub to open an issue.",
         onGh: () => setCreateOpen(true),
         localLabel: "Local issue…",
         onLocal: () => setCreateLocalOpen(true),

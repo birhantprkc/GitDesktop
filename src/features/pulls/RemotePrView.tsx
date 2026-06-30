@@ -63,6 +63,7 @@ import {
   useDeletePrComment,
   useEditPr,
   useEditPrComment,
+  useForgeStatus,
   useMergePr,
   useMinimizeComment,
   usePrDetails,
@@ -128,6 +129,18 @@ export function RemotePrView({
   number: number;
 }) {
   const queryClient = useQueryClient();
+  // The read view is provider-neutral, but every mutation here (merge, comment,
+  // review, edit, reactions, labels, checkout) routes through GitHub-only `gh_*`
+  // commands — so on a GitLab repo this is strictly read-only. We gate writes on
+  // "not a known read-only provider" rather than `=== "github"`, so that while the
+  // (separate) forge-status query is still pending or after it fails, a GitHub PR
+  // keeps its write controls exactly as before — only an explicitly-detected
+  // GitLab/Bitbucket repo suppresses them.
+  const forge = useForgeStatus(repoPath);
+  const provider = forge.data?.provider;
+  const canWrite = provider !== "gitlab" && provider !== "bitbucket";
+  const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
+  const prNoun = provider === "gitlab" ? "merge request" : "pull request";
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
@@ -143,7 +156,8 @@ export function RemotePrView({
   const unminimizeComment = useUnminimizeComment(repoPath);
   const readyPr = useReadyPr(repoPath);
   const editPr = useEditPr(repoPath);
-  const reactions = usePrReactions(repoPath, number);
+  // Reactions are a GitHub-only mutation surface; don't fetch them for GitLab.
+  const reactions = usePrReactions(repoPath, canWrite ? number : null);
   const toggleReactionMutation = useToggleReaction(
     repoPath,
     ["repo", repoPath, "pr", number, "reactions"] as const,
@@ -327,6 +341,7 @@ export function RemotePrView({
           </h2>
           <span className="flex-1" />
           {isOpen &&
+            canWrite &&
             (repoStatus.data?.branch?.name === pr.headRefName ? (
               <Button
                 variant="outline"
@@ -359,7 +374,7 @@ export function RemotePrView({
                 Checkout
               </Button>
             ))}
-          {isOpen && (
+          {isOpen && canWrite && (
             <Button
               variant="outline"
               size="xs"
@@ -374,11 +389,11 @@ export function RemotePrView({
             variant="outline"
             size="xs"
             onClick={() => openUrl(pr.url)}
-            title="Open this pull request on GitHub"
+            title={`Open this ${prNoun} on ${remoteLabel}`}
             className="cursor-pointer"
           >
             <ArrowSquareOutIcon data-icon="inline-start" />
-            GitHub
+            {remoteLabel}
           </Button>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -394,7 +409,7 @@ export function RemotePrView({
           <span className="text-success">+{pr.additions}</span>
           <span className="text-destructive">-{pr.deletions}</span>
         </div>
-        {isOpen ? (
+        {isOpen && canWrite ? (
           <LabelsPopover
             repoPath={repoPath}
             enabled
@@ -429,7 +444,7 @@ export function RemotePrView({
         )}
         <div className="flex gap-1 pt-1">
           {(
-            (aiEnabled
+            (aiEnabled && canWrite
               ? ["conversation", "commits", "files", "review"]
               : ["conversation", "commits", "files"]) as Section[]
           ).map((s) => (
@@ -452,7 +467,7 @@ export function RemotePrView({
         </div>
       </header>
 
-      {aiEnabled && section === "review" && (
+      {aiEnabled && canWrite && section === "review" && (
         <PrReviewPanel
           prKind="remote"
           prRef={String(number)}
@@ -531,7 +546,7 @@ export function RemotePrView({
                       >
                         Copy markdown
                       </DropdownMenuItem>
-                      {isOpen && (
+                      {isOpen && canWrite && (
                         <DropdownMenuItem
                           onClick={() =>
                             edit.openEdit({ title: pr.title, body: pr.body })
@@ -543,12 +558,14 @@ export function RemotePrView({
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
-                <ReactionBar
-                  reactions={reactions.data?.body ?? []}
-                  onToggle={(content, active) =>
-                    toggleReaction(pr.id, content, active)
-                  }
-                />
+                {canWrite && (
+                  <ReactionBar
+                    reactions={reactions.data?.body ?? []}
+                    onToggle={(content, active) =>
+                      toggleReaction(pr.id, content, active)
+                    }
+                  />
+                )}
               </div>
               {/* Events with nothing visible to say (empty body, or only an
                   unfilled-template HTML comment) render as a bare author
@@ -562,7 +579,7 @@ export function RemotePrView({
                     key={`${r.author}-${r.date}`}
                     thread={r}
                     onQuote={
-                      hasVisibleBody(r.body)
+                      canWrite && hasVisibleBody(r.body)
                         ? () => quoteReply(r.body)
                         : undefined
                     }
@@ -574,28 +591,35 @@ export function RemotePrView({
                   <Thread
                     key={c.id}
                     thread={c}
-                    onQuote={() => quoteReply(c.body)}
+                    onQuote={canWrite ? () => quoteReply(c.body) : undefined}
                     onSaveEdit={
-                      c.viewerDidAuthor
+                      canWrite && c.viewerDidAuthor
                         ? (body) => saveCommentEdit(c.id, body)
                         : undefined
                     }
                     onDelete={
-                      c.viewerDidAuthor
+                      canWrite && c.viewerDidAuthor
                         ? () => setDeletingCommentId(c.id)
                         : undefined
                     }
                     onHide={
-                      c.isMinimized
-                        ? undefined
-                        : (classifier) => hideComment(c.id, classifier)
+                      canWrite && !c.isMinimized
+                        ? (classifier) => hideComment(c.id, classifier)
+                        : undefined
                     }
                     onUnhide={
-                      c.isMinimized ? () => unhideComment(c.id) : undefined
+                      canWrite && c.isMinimized
+                        ? () => unhideComment(c.id)
+                        : undefined
                     }
-                    reactions={reactions.data?.comments[c.id]}
-                    onToggleReaction={(content, active) =>
-                      toggleReaction(c.id, content, active)
+                    reactions={
+                      canWrite ? reactions.data?.comments[c.id] : undefined
+                    }
+                    onToggleReaction={
+                      canWrite
+                        ? (content, active) =>
+                            toggleReaction(c.id, content, active)
+                        : undefined
                     }
                   />
                 ))}
@@ -607,77 +631,80 @@ export function RemotePrView({
             </div>
           </ScrollArea>
           {/* Shown for closed/merged PRs too — GitHub lets you comment (and
-              quote-reply) after a PR closes; only reviews are open-only. */}
-          <div className="space-y-2 border-t p-3">
-            <MarkdownEditor
-              ref={composerRef}
-              aria-label="Leave a comment"
-              placeholder="Leave a comment…"
-              value={composeBody}
-              onChange={setComposeBody}
-              onKeyDown={(e) => {
-                if (
-                  (e.ctrlKey || e.metaKey) &&
-                  e.key === "Enter" &&
-                  composeBody.trim() &&
-                  !busy
-                ) {
-                  e.preventDefault();
-                  submitComment();
-                }
-              }}
-              rows={2}
-              textareaClassName="max-h-32 min-h-12 resize-y"
-            />
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!composeBody.trim() || busy}
-                onClick={submitComment}
-                title="Ctrl+Enter"
-              >
-                Comment
-              </Button>
-              {isOpen && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button variant="outline" size="sm" disabled={busy}>
-                        Review
-                        <CaretDownIcon data-icon="inline-end" />
-                      </Button>
-                    }
-                  />
-                  <DropdownMenuContent className="w-52">
-                    <DropdownMenuItem onClick={() => submitReview("approve")}>
-                      Approve
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => submitReview("comment")}>
-                      Comment
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => submitReview("request_changes")}
-                    >
-                      Request changes
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-              {composeBody.trim() && (
+              quote-reply) after a PR closes; only reviews are open-only. Hidden
+              entirely on GitLab, which is read-only here. */}
+          {canWrite && (
+            <div className="space-y-2 border-t p-3">
+              <MarkdownEditor
+                ref={composerRef}
+                aria-label="Leave a comment"
+                placeholder="Leave a comment…"
+                value={composeBody}
+                onChange={setComposeBody}
+                onKeyDown={(e) => {
+                  if (
+                    (e.ctrlKey || e.metaKey) &&
+                    e.key === "Enter" &&
+                    composeBody.trim() &&
+                    !busy
+                  ) {
+                    e.preventDefault();
+                    submitComment();
+                  }
+                }}
+                rows={2}
+                textareaClassName="max-h-32 min-h-12 resize-y"
+              />
+              <div className="flex items-center gap-2">
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  className="ml-auto"
-                  disabled={busy}
-                  onClick={() => setComposeBody("")}
-                  title="Discard this draft (e.g. a quote reply)"
+                  disabled={!composeBody.trim() || busy}
+                  onClick={submitComment}
+                  title="Ctrl+Enter"
                 >
-                  Clear
+                  Comment
                 </Button>
-              )}
+                {isOpen && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button variant="outline" size="sm" disabled={busy}>
+                          Review
+                          <CaretDownIcon data-icon="inline-end" />
+                        </Button>
+                      }
+                    />
+                    <DropdownMenuContent className="w-52">
+                      <DropdownMenuItem onClick={() => submitReview("approve")}>
+                        Approve
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => submitReview("comment")}>
+                        Comment
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => submitReview("request_changes")}
+                      >
+                        Request changes
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                {composeBody.trim() && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto"
+                    disabled={busy}
+                    onClick={() => setComposeBody("")}
+                    title="Discard this draft (e.g. a quote reply)"
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 
@@ -704,7 +731,7 @@ export function RemotePrView({
         />
       )}
 
-      {isOpen && (
+      {isOpen && canWrite && (
         <div className="flex items-center gap-2 border-t p-3">
           {pr.isDraft && (
             <Button
@@ -780,7 +807,7 @@ export function RemotePrView({
         </div>
       )}
 
-      {pr.state === "CLOSED" && (
+      {pr.state === "CLOSED" && canWrite && (
         <div className="flex items-center gap-2 border-t p-3">
           <span className="flex-1" />
           <Button

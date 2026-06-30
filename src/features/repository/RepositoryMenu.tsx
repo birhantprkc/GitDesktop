@@ -53,6 +53,7 @@ import {
   openWithProgram,
 } from "@/lib/git/api";
 import {
+  forgeFeatureReady,
   useForgeStatus,
   useForkRepo,
   useRepoAdmin,
@@ -104,9 +105,9 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     lastOpenedAt: "",
   };
 
-  const canGh = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // View-on-host / fork / star / admin settings are GitHub-only operations; a
+  // GitLab repo hides them until its repo-management surface lands.
+  const canGh = forgeFeatureReady(gh.data, "repoActions");
   const starStatus = useRepoStarStatus(repoPath, canGh);
   const setStar = useSetRepoStar(repoPath);
   const starred = starStatus.data ?? false;

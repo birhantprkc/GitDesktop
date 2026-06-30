@@ -155,9 +155,11 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   // comparison only runs while the tree is clean, so the daily loop never
   // pays for it.
   const gh = useForgeStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // The empty-state "View on GitHub" / "Create PR" suggestions are GitHub-only
+  // (they call gh); a GitLab repo skips them until its write phase lands.
+  const ghReady =
+    Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
+    gh.data?.provider === "github";
   const defaultBranch = useDefaultBranch(repoPath);
   const branch = status.data?.branch;
   const currentName = branch?.name ?? null;

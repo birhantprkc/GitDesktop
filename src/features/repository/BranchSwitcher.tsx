@@ -56,6 +56,7 @@ import { copyText } from "@/lib/clipboard";
 import { required, useAppForm } from "@/lib/form";
 import type { MergeConflictStrategy } from "@/lib/git/api";
 import {
+  forgeFeatureReady,
   useBranchDivergence,
   useBranches,
   useCheckoutBranch,
@@ -262,11 +263,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   // Per-branch PR badge. Remote PRs (open + closed, the latter carrying merged)
   // and local PRs, fetched only while the menu is open and the repo has a
-  // GitHub remote — mirrors the divergence gate above.
+  // Per-branch PR/MR popovers — the list reads work for GitHub and GitLab alike.
   const gh = useForgeStatus(repoPath);
-  const canGh = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const canGh = forgeFeatureReady(gh.data, "pullRequests");
   const openPrs = usePrList(repoPath, canGh && open, "open");
   const closedPrs = usePrList(repoPath, canGh && open, "closed");
   const localPrs = useLocalPrs(repoPath);

@@ -333,7 +333,7 @@ export function LocalIssueView({
         <span className="flex-1" />
         {isOpen && (
           <>
-            {Boolean(ghStatus.data?.repo) && (
+            {ghStatus.data?.provider === "github" && (
               <Button
                 variant="outline"
                 size="sm"

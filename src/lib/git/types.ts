@@ -422,6 +422,23 @@ export interface ForgeCapabilities {
   approvals: boolean;
 }
 
+/** Which hosted features GitDesktop has actually *built* for a provider — a
+ *  different axis from {@link ForgeCapabilities}. Capabilities = what the platform
+ *  can do; this = what we've wired up. GitHub is all-true; GitLab/Bitbucket flip
+ *  these on per phase, so a *ready* repo whose feature isn't built yet degrades to
+ *  "coming soon" rather than firing GitHub calls. Gated via `forgeFeatureReady`. */
+export interface ForgeImplemented {
+  pullRequests: boolean;
+  issues: boolean;
+  ci: boolean;
+  releases: boolean;
+  insights: boolean;
+  /** Repo-management surface: View/Fork/Star/admin settings, branch-rule import. */
+  repoActions: boolean;
+  /** Publishing a local repo to the provider (create remote + push). */
+  publish: boolean;
+}
+
 /** Provider-neutral analogue of {@link GhStatus}: is the hosted integration usable
  *  for this repo, on which host, as whom, and what does it support. Hosted panels
  *  gate on this (and its `capabilities`) instead of a GitHub-only readiness check,
@@ -435,6 +452,9 @@ export interface ForgeStatus {
   host: string | null;
   login: string | null;
   capabilities: ForgeCapabilities;
+  /** Which capabilities are actually built for this provider — drives per-feature
+   *  "coming soon" gating distinct from `capabilities`. */
+  implemented: ForgeImplemented;
 }
 
 export interface WebhookConfig {

@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { LabelChip } from "@/features/conversations/Thread";
 import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import {
+  forgeReady,
   forgeSupports,
   useDiscussionList,
   useDiscussionMeta,
@@ -31,14 +32,16 @@ import { CreateDiscussionDialog } from "./CreateDiscussionDialog";
 
 export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
   const gh = useForgeStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const ghReady = forgeReady(gh.data);
+  // Discussions are a GitHub-only capability (GitLab has none) — gate the query on
+  // it so a ready GitLab repo never fires the gh discussion calls, while the render
+  // still shows the accurate "not available on this host" message below.
+  const supportsDiscussions = forgeSupports(gh.data, "discussions");
   // Avatars resolve on the repo's host (github.com or an Enterprise server).
   const host = gh.data?.host ?? "github.com";
-  const meta = useDiscussionMeta(repoPath, ghReady);
+  const meta = useDiscussionMeta(repoPath, ghReady && supportsDiscussions);
   const enabled = meta.data?.hasDiscussionsEnabled ?? false;
-  const listEnabled = ghReady && enabled;
+  const listEnabled = ghReady && supportsDiscussions && enabled;
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const list = useDiscussionList(repoPath, listEnabled, categoryId);
   const selectedDiscussion = useUiStore((s) => s.selectedDiscussion);

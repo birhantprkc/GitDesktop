@@ -517,7 +517,7 @@ export function LocalPrView({
         <span className="flex-1" />
         {pr.status === "open" && (
           <>
-            {Boolean(ghStatus.data?.repo) && (
+            {ghStatus.data?.provider === "github" && (
               <Button
                 variant="outline"
                 size="sm"

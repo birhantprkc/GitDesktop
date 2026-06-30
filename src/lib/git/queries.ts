@@ -19,6 +19,7 @@ import type {
   DiffStatEntry,
   DiscussionDetails,
   ForgeCapabilities,
+  ForgeImplemented,
   ForgeProvider,
   ForgeStatus,
   IssueDetails,
@@ -721,7 +722,7 @@ export function usePrList(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "pr-list", state] as const,
-    queryFn: () => api.ghPrList(repo, state),
+    queryFn: () => api.forgePrList(repo, state),
     enabled,
     staleTime: 30_000,
   });
@@ -742,14 +743,14 @@ export function useRepoLabels(repo: string, enabled: boolean) {
 const prDetailsOptions = (repo: string, number: number) =>
   queryOptions({
     queryKey: ["repo", repo, "pr", number] as const,
-    queryFn: () => api.ghPrView(repo, number),
+    queryFn: () => api.forgePrView(repo, number),
     staleTime: 30_000,
   });
 
 export const prDiffOptions = (repo: string, number: number) =>
   queryOptions({
     queryKey: ["repo", repo, "pr", number, "diff"] as const,
-    queryFn: () => api.ghPrDiff(repo, number),
+    queryFn: () => api.forgePrDiff(repo, number),
     staleTime: 30_000,
   });
 
@@ -1417,6 +1418,15 @@ const NO_FORGE_STATUS: ForgeStatus = {
     webhooks: false,
     approvals: false,
   },
+  implemented: {
+    pullRequests: false,
+    issues: false,
+    ci: false,
+    releases: false,
+    insights: false,
+    repoActions: false,
+    publish: false,
+  },
 };
 
 /**
@@ -1452,6 +1462,19 @@ export function forgeSupports(
   capability: keyof ForgeCapabilities,
 ): boolean {
   return Boolean(status?.capabilities[capability]);
+}
+
+/** Whether a specific hosted *feature* is usable for this repo: the integration is
+ *  ready (installed/signed-in/recognized) **and** GitDesktop has actually built
+ *  that feature for this provider. The gate every feature panel checks before
+ *  firing its data calls. GitHub implements everything, so this is exactly
+ *  `forgeReady` there; for a *ready* GitLab/Bitbucket repo it stays false for the
+ *  panels not yet wired up, so they show "coming soon" instead of breaking. */
+export function forgeFeatureReady(
+  status: ForgeStatus | undefined | null,
+  feature: keyof ForgeImplemented,
+): boolean {
+  return forgeReady(status) && Boolean(status?.implemented[feature]);
 }
 
 // ── Git hooks ────────────────────────────────────────────────────────────────

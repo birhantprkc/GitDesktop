@@ -54,9 +54,11 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
 
   const currentName = status.data?.branch?.name ?? null;
   const detached = status.data?.branch?.detached ?? false;
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // Opening a PR (and the "PRs for this branch" probe) is GitHub-only for now —
+  // GitLab merge-request creation is a later write-phase increment.
+  const ghReady =
+    Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
+    gh.data?.provider === "github";
   const branchPrs = usePrsForBranch(repoPath, currentName, ghReady);
   const otherBranches = (branches.data ?? []).filter((b) => !b.isCurrent);
   const firstOther = otherBranches[0]?.name ?? null;

@@ -1,4 +1,8 @@
-import { useForgeStatus, useRepoStatus } from "@/lib/git/queries";
+import {
+  forgeFeatureReady,
+  useForgeStatus,
+  useRepoStatus,
+} from "@/lib/git/queries";
 import { useLatestRun } from "@/lib/github/actions";
 import { useUiStore } from "@/lib/stores/ui";
 import { StatusIcon, statusLabel } from "./status";
@@ -10,9 +14,8 @@ import { StatusIcon, statusLabel } from "./status";
  */
 export function BranchCiBadge({ repoPath }: { repoPath: string }) {
   const gh = useForgeStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // GitHub Actions only so far — no CI badge for GitLab until its CI read lands.
+  const ghReady = forgeFeatureReady(gh.data, "ci");
   const status = useRepoStatus(repoPath);
   const branch = status.data?.branch.name ?? null;
   const latest = useLatestRun(repoPath, ghReady, branch);

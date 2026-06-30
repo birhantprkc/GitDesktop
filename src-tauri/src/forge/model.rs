@@ -112,6 +112,81 @@ impl Capabilities {
     }
 }
 
+/// Which hosted features GitDesktop has actually **built** for a provider — a
+/// different axis from [`Capabilities`]. Capabilities = what the *platform* can do
+/// (GitLab has labels); `Implemented` = what *we've wired up* for it (we may not
+/// have built GitLab labels yet). A panel lights up only when the repo is ready
+/// **and** the platform supports the feature **and** we've implemented it here.
+///
+/// GitHub is the reference implementation (everything built). GitLab/Bitbucket
+/// flip these on per phase as each read/write path lands — so a *ready* GitLab
+/// repo degrades its unbuilt panels to "coming soon" instead of firing `gh_*`
+/// calls that would break against it. The frontend mirrors this as
+/// `forgeFeatureReady(status, feature)`.
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub struct Implemented {
+    pub pull_requests: bool,
+    pub issues: bool,
+    pub ci: bool,
+    pub releases: bool,
+    pub insights: bool,
+    /// Repo-management surface: View/Fork/Star/admin settings, branch-rule import.
+    pub repo_actions: bool,
+    /// Publishing a local repo to the provider (create remote + push).
+    pub publish: bool,
+}
+
+impl Implemented {
+    /// Everything built — the GitHub reference profile.
+    const fn all() -> Self {
+        Self {
+            pull_requests: true,
+            issues: true,
+            ci: true,
+            releases: true,
+            insights: true,
+            repo_actions: true,
+            publish: true,
+        }
+    }
+
+    /// Nothing built yet — a recognized provider whose panels aren't wired up.
+    pub const fn none() -> Self {
+        Self {
+            pull_requests: false,
+            issues: false,
+            ci: false,
+            releases: false,
+            insights: false,
+            repo_actions: false,
+            publish: false,
+        }
+    }
+
+    /// What's built for a provider today. The single place to flip a GitLab /
+    /// Bitbucket feature on as its impl lands — bump the flag here and the matching
+    /// panel stops degrading to "coming soon".
+    pub const fn for_provider(provider: Provider) -> Self {
+        match provider {
+            Provider::GitHub => Self::all(),
+            // GitLab read ops arrive incrementally — merge requests (read) are wired
+            // up; issues / CI / releases / insights / repo actions still degrade to
+            // "coming soon" until their impls land.
+            Provider::GitLab => Self {
+                pull_requests: true,
+                issues: false,
+                ci: false,
+                releases: false,
+                insights: false,
+                repo_actions: false,
+                publish: false,
+            },
+            Provider::Bitbucket => Self::none(),
+        }
+    }
+}
+
 /// The provider-neutral analogue of `GhStatus`: is the hosted integration usable
 /// for this repo, on which host, signed in as whom, and what does it support. The
 /// frontend gates hosted features on this instead of a GitHub-only readiness
@@ -136,6 +211,9 @@ pub struct ForgeStatus {
     pub login: Option<String>,
     /// What this provider/repo supports — drives capability-gated UI.
     pub capabilities: Capabilities,
+    /// Which of those capabilities GitDesktop has actually built for this provider
+    /// — drives per-feature "coming soon" gating distinct from `capabilities`.
+    pub implemented: Implemented,
 }
 
 impl ForgeStatus {
@@ -151,6 +229,7 @@ impl ForgeStatus {
             host: Some(host),
             login: None,
             capabilities: Capabilities::for_provider(provider),
+            implemented: Implemented::for_provider(provider),
         }
     }
 }
@@ -216,5 +295,25 @@ mod tests {
     fn none_supports_nothing() {
         let c = Capabilities::none();
         assert!(!c.pull_requests && !c.issues && !c.ci && !c.webhooks);
+    }
+
+    #[test]
+    fn github_has_everything_implemented() {
+        let i = Implemented::for_provider(Provider::GitHub);
+        assert!(i.pull_requests && i.issues && i.ci && i.releases && i.insights);
+        assert!(i.repo_actions && i.publish);
+    }
+
+    #[test]
+    fn gitlab_implements_only_merge_request_reads_so_far() {
+        // GitLab is platform-capable of PRs/issues/CI (capabilities); only merge
+        // request reads are built, so issues/CI still degrade to "coming soon" even
+        // when the repo is ready.
+        let cap = Capabilities::for_provider(Provider::GitLab);
+        let imp = Implemented::for_provider(Provider::GitLab);
+        assert!(cap.pull_requests && imp.pull_requests);
+        assert!(cap.issues && !imp.issues);
+        assert!(cap.ci && !imp.ci);
+        assert!(!imp.releases && !imp.insights && !imp.repo_actions && !imp.publish);
     }
 }

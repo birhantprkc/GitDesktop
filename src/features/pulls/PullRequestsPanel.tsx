@@ -6,6 +6,7 @@ import { ConversationListPanel } from "@/features/conversations/ConversationList
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { PrStateFilter } from "@/lib/git/api";
 import {
+  forgeFeatureReady,
   useForgeStatus,
   useHoverPrefetch,
   usePrefetchPr,
@@ -21,10 +22,19 @@ import { useReconcileLocalPrs } from "./useReconcileLocalPrs";
 
 export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   const gh = useForgeStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
-  // "closed" matches GitHub's Closed tab: closed and merged PRs alike.
+  const provider = gh.data?.provider;
+  // Merge request reads work for GitHub and GitLab; the noun + section header
+  // follow the provider so a GitLab repo reads "merge requests" / "GitLab".
+  const isGitLab = provider === "gitlab";
+  const remoteLabel =
+    provider === "gitlab"
+      ? "GitLab"
+      : provider === "bitbucket"
+        ? "Bitbucket"
+        : "GitHub";
+  const remoteNoun = isGitLab ? "merge requests" : "pull requests";
+  const ghReady = forgeFeatureReady(gh.data, "pullRequests");
+  // "closed" matches the Closed tab: closed and merged alike.
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
   const prList = usePrList(repoPath, ghReady, stateFilter);
   const localPrs = useLocalPrs(repoPath);
@@ -61,13 +71,17 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
     stateFilter,
   });
 
-  // The dialog picks the head/base branches itself (so main → staging works
-  // just as well as feature → main), so the only requirement here is that the
-  // repo is actually on GitHub.
-  const ghCreateReason = ghReady
+  // Creating a remote PR is GitHub-only for now (GitLab merge-request creation is
+  // a later, write-phase increment) — so even a ready GitLab repo can't open one
+  // here yet. The dialog picks the head/base branches itself.
+  const canCreateGhPr = ghReady && provider === "github";
+  const ghCreateReason = canCreateGhPr
     ? null
-    : "Connect this repository to GitHub to open a pull request here.";
-  const canCreateGhPr = ghReady;
+    : isGitLab
+      ? ghReady
+        ? "Creating GitLab merge requests in GitDesktop is coming soon."
+        : "Sign in to GitLab to work with merge requests here."
+      : "Connect this repository to GitHub to open a pull request here.";
   const pendingCreate = useUiStore((s) => s.pendingCreate);
   const clearPendingCreate = useUiStore((s) => s.clearPendingCreate);
 
@@ -107,11 +121,14 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   return (
     <ConversationListPanel
       repoPath={repoPath}
-      feature="pull requests"
+      feature={remoteNoun}
+      remoteLabel={remoteLabel}
       stateFilter={stateFilter}
       onStateFilter={setStateFilter}
       newMenu={{
-        ghLabel: "Pull request on GitHub…",
+        ghLabel: isGitLab
+          ? "Merge request on GitLab…"
+          : "Pull request on GitHub…",
         ghDisabled: !canCreateGhPr,
         ghReason: ghCreateReason ?? undefined,
         onGh: () => setGhCreateOpen(true),
@@ -198,7 +215,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
       )}
       remoteSkeletonRows={2}
       localNoun="pull requests"
-      remoteNoun="pull requests"
+      remoteNoun={remoteNoun}
     >
       <CreateLocalPrDialog
         repoPath={repoPath}

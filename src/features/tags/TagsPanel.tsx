@@ -22,6 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import {
+  forgeFeatureReady,
   useCreateTag,
   useForgeStatus,
   useHoverPrefetch,
@@ -52,9 +53,8 @@ function ReleaseBadges({ release }: { release: ReleaseInfo }) {
 
 export function TagsPanel({ repoPath }: { repoPath: string }) {
   const gh = useForgeStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // Releases are GitHub-only; GitLab repos still show local tags, just no releases.
+  const ghReady = forgeFeatureReady(gh.data, "releases");
   const tagList = useTagList(repoPath);
   const releaseList = useReleaseList(repoPath, ghReady);
   const status = useRepoStatus(repoPath);

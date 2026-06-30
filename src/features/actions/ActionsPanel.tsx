@@ -6,7 +6,11 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
-import { forgeReady, useForgeStatus, useRepoStatus } from "@/lib/git/queries";
+import {
+  forgeFeatureReady,
+  useForgeStatus,
+  useRepoStatus,
+} from "@/lib/git/queries";
 import { useWorkflowRuns } from "@/lib/github/actions";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
@@ -18,7 +22,8 @@ import { StatusIcon, statusLabel } from "./status";
 
 export function ActionsPanel({ repoPath }: { repoPath: string }) {
   const forge = useForgeStatus(repoPath);
-  const ghReady = forgeReady(forge.data);
+  // CI is GitHub Actions only so far; a ready GitLab repo degrades to "coming soon".
+  const ghReady = forgeFeatureReady(forge.data, "ci");
   const status = useRepoStatus(repoPath);
   const currentBranch = status.data?.branch.name ?? null;
 

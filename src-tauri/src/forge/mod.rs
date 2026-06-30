@@ -44,6 +44,32 @@ pub(crate) fn remote_host(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+/// The `owner/name` (or `group/subgroup/name`) path of a remote URL — the part
+/// after the host, with any `.git` suffix and surrounding slashes trimmed.
+/// Complements [`remote_host`]; `None` when there's no path. Handles both
+/// `https://host[:port]/path` and scp-style `git@host:path`: with a scheme a `:`
+/// is a port (path starts after the next `/`), without one it's the scp path
+/// separator. Used to address a repo on a provider's API (e.g. a GitLab project).
+pub(crate) fn remote_path(url: &str) -> Option<String> {
+    let url = url.trim();
+    let (had_scheme, rest) = match url.split_once("://") {
+        Some((_, after)) => (true, after),
+        None => (false, url),
+    };
+    // Drop an optional `user@` (rsplit so `user@host` keeps `host`).
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, host)| host);
+    let path = if had_scheme {
+        // `host[:port]/path` → everything after the first `/`.
+        rest.split_once('/').map(|(_, after)| after)?
+    } else {
+        // scp `host:path` → everything after the first `:`.
+        rest.split_once(':').map(|(_, after)| after)?
+    };
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    (!path.is_empty()).then(|| path.to_string())
+}
+
 /// Route a remote host to a **non-GitHub** provider, but only when it's
 /// unmistakably GitLab.com or Bitbucket Cloud. github.com, Enterprise servers,
 /// self-managed GitLab we can't yet recognize, and unknown hosts all return
@@ -124,6 +150,51 @@ pub async fn forge_clone(
     crate::git::repo::clone_repo_core(&url, &parent_dir, dir_name, &extra).await
 }
 
+/// A repo's merge/pull requests, behind the provider abstraction. GitHub
+/// delegates to the existing `gh pr list`; GitLab maps `glab` merge requests onto
+/// the same neutral [`PrInfo`] shape. `state` is `"open"` or `"closed"` (closed
+/// includes merged, matching the GitHub panel's Closed tab).
+#[tauri::command]
+pub async fn forge_pr_list(
+    repo_path: String,
+    state: String,
+) -> AppResult<Vec<crate::github::pr::PrInfo>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::list_prs(&repo_path, &state).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => github::list_prs(&repo_path, &state).await,
+    }
+}
+
+/// Full details for one merge/pull request's read view, behind the abstraction.
+#[tauri::command]
+pub async fn forge_pr_view(
+    repo_path: String,
+    number: u64,
+) -> AppResult<crate::github::pr::PrDetails> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::view_pr(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => github::view_pr(&repo_path, number).await,
+    }
+}
+
+/// The unified diff for one merge/pull request, behind the abstraction.
+#[tauri::command]
+pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::diff_pr(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => github::diff_pr(&repo_path, number).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +222,22 @@ mod tests {
         assert_eq!(provider_for_host("github.com"), None);
         assert_eq!(provider_for_host("github.acme.com"), None);
         assert_eq!(provider_for_host("gitlab.acme.com"), None);
+    }
+
+    #[test]
+    fn remote_path_extracts_project_path() {
+        // https, with and without .git, default and custom port.
+        assert_eq!(remote_path("https://gitlab.com/group/repo.git").as_deref(), Some("group/repo"));
+        assert_eq!(remote_path("https://gitlab.com/group/repo").as_deref(), Some("group/repo"));
+        assert_eq!(
+            remote_path("https://gitlab.acme.com:8443/g/sub/repo.git").as_deref(),
+            Some("g/sub/repo"),
+        );
+        // scp form keeps the nested group path.
+        assert_eq!(remote_path("git@gitlab.com:group/sub/repo.git").as_deref(), Some("group/sub/repo"));
+        assert_eq!(remote_path("ssh://git@gitlab.com/group/repo.git").as_deref(), Some("group/repo"));
+        // host only → no path.
+        assert_eq!(remote_path("https://gitlab.com"), None);
+        assert_eq!(remote_path("/local/path"), None);
     }
 }

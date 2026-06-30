@@ -63,9 +63,11 @@ export function ConversationListPanel<L, R>(props: {
   archivedLocalCount: number;
   showArchived: boolean;
   onToggleArchived: () => void;
-  // remote (GitHub) section
+  // remote (provider) section
   ghPending: boolean;
   ghReady: boolean;
+  /** The provider's display name for the section header (default "GitHub"). */
+  remoteLabel?: string;
   listPending: boolean;
   stateRemote: R[];
   visibleRemote: R[];
@@ -102,6 +104,7 @@ export function ConversationListPanel<L, R>(props: {
     onToggleArchived,
     ghPending,
     ghReady,
+    remoteLabel = "GitHub",
     listPending,
     repoPath,
     feature,
@@ -201,7 +204,9 @@ export function ConversationListPanel<L, R>(props: {
             </button>
           )}
 
-          <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">GitHub</p>
+          <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">
+            {remoteLabel}
+          </p>
           {ghPending ? (
             <div className="space-y-2 p-3">
               <Skeleton className="h-9 w-full" />

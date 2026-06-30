@@ -30,7 +30,7 @@ import {
   type MergeMethod,
 } from "@/lib/branch-rules/types";
 import { ghBranchProtections } from "@/lib/git/api";
-import { useForgeStatus } from "@/lib/git/queries";
+import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
 import { toastError } from "@/lib/toast";
 
 export function BranchRulesDialog({
@@ -51,9 +51,8 @@ export function BranchRulesDialog({
   const savePersonal = useSaveBranchRules(repoPath);
   const saveShared = useSaveSharedBranchRules(repoPath);
   const gh = useForgeStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // Importing branch protections is a GitHub-only operation for now.
+  const ghReady = forgeFeatureReady(gh.data, "repoActions");
   const [importing, setImporting] = useState(false);
   const [draft, setDraft] = useState<BranchRulesConfig>(EMPTY_BRANCH_RULES);
   const [testName, setTestName] = useState("");

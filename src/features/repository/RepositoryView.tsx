@@ -111,9 +111,11 @@ export function RepositoryView() {
   const aiEnabled = useAiEnabled();
   const currentName = status.data?.branch?.name ?? null;
   const gh = useForgeStatus(repoPath ?? "");
-  const canGh = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // The palette create actions gated here (issue / PR / discussion / release) are
+  // all GitHub-only writes for now, so they stay disabled on a GitLab repo.
+  const canGh =
+    Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
+    gh.data?.provider === "github";
   // Tab switches are transitions: a heavy first render of the target panel
   // never blocks the click, and hidden Activities pre-render at low priority.
   const [, startTabTransition] = useTransition();

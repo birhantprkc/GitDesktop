@@ -31,8 +31,13 @@ export function usePrNotifications(repoPath: string) {
   const hasPrSync = automations.data
     ? effectiveRules(automations.data, repoPath, "pr-sync").length > 0
     : false;
+  // The head-OID poll (and pr-sync) run through GitHub-only `gh` commands, so the
+  // poller stays off for GitLab/Bitbucket repos until their notification paths land.
   const enabled =
-    repoPath !== "" && Boolean(gh.data?.repo) && (anyNotif || hasPrSync);
+    repoPath !== "" &&
+    gh.data?.provider === "github" &&
+    Boolean(gh.data?.repo) &&
+    (anyNotif || hasPrSync);
 
   const poll = useQuery({
     queryKey: ["repo", repoPath, "pr-poll"] as const,

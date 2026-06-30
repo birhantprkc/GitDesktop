@@ -869,6 +869,19 @@ export const ghPrList = (repoPath: string, state: PrStateFilter) =>
 export const ghPrView = (repoPath: string, number: number) =>
   invoke<PrDetails>("gh_pr_view", { repoPath, number });
 
+// Provider-neutral merge/pull request reads — the backend resolves the repo's
+// provider and dispatches (GitHub `gh`, GitLab `glab`), returning the same neutral
+// `PrInfo`/`PrDetails` shapes. The list/view/diff read path goes through these; the
+// write mutations (merge/comment/edit/…) stay on the GitHub-only `gh_*` commands.
+export const forgePrList = (repoPath: string, state: PrStateFilter) =>
+  invoke<PrInfo[]>("forge_pr_list", { repoPath, state });
+
+export const forgePrView = (repoPath: string, number: number) =>
+  invoke<PrDetails>("forge_pr_view", { repoPath, number });
+
+export const forgePrDiff = (repoPath: string, number: number) =>
+  invoke<string>("forge_pr_diff", { repoPath, number });
+
 export type IssueStateFilter = "open" | "closed";
 
 export const ghIssueList = (repoPath: string, state: IssueStateFilter) =>

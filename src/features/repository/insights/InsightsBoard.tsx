@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  forgeFeatureReady,
   useCodeFrequency,
   useCommitActivity,
   useCommunityInsights,
@@ -93,9 +94,8 @@ export function InsightsBoard({
   const weeks = allTime ? 0 : WINDOW_WEEKS;
 
   const gh = useForgeStatus(repoPath);
-  const canGh = Boolean(
-    active && gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // Insights (traffic, community, dependencies, Actions) are GitHub-only APIs.
+  const canGh = active && forgeFeatureReady(gh.data, "insights");
 
   // These are heavy (full-history git scans + gh calls); gate them on the
   // Insights tab being visible. <Activity> keeps this mounted while hidden but

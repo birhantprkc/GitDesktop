@@ -7,7 +7,7 @@
 //! methods, each delegating to the matching `gh_*` function.
 
 use crate::error::AppResult;
-use crate::forge::model::{Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, Provider};
+use crate::forge::model::{Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, Implemented, Provider};
 use crate::forge::Forge;
 use crate::github::pr::{gh_list_repos, gh_status, GhRepo, GhStatus};
 
@@ -30,6 +30,10 @@ pub(crate) fn from_gh_status(gh: GhStatus) -> ForgeStatus {
         capabilities: match provider {
             Some(p) => Capabilities::for_provider(p),
             None => Capabilities::none(),
+        },
+        implemented: match provider {
+            Some(p) => Implemented::for_provider(p),
+            None => Implemented::none(),
         },
     }
 }
@@ -67,6 +71,24 @@ pub async fn list_repos() -> AppResult<ForgeRepoList> {
         viewer: gh.viewer,
         repos: gh.repos.into_iter().map(from_gh_repo).collect(),
     })
+}
+
+// ── Pull requests ────────────────────────────────────────────────────────────
+//
+// Thin delegates to the existing gh-backed commands. The frontend already speaks
+// `PrInfo`/`PrDetails`, so the GitHub path is byte-identical to calling `gh_pr_*`
+// directly — the abstraction adds the dispatch seam without changing GitHub.
+
+pub async fn list_prs(repo_path: &str, state: &str) -> AppResult<Vec<crate::github::pr::PrInfo>> {
+    crate::github::pr::gh_pr_list(repo_path.to_string(), state.to_string()).await
+}
+
+pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<crate::github::pr::PrDetails> {
+    crate::github::pr::gh_pr_view(repo_path.to_string(), number).await
+}
+
+pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
+    crate::github::pr::gh_pr_diff(repo_path.to_string(), number).await
 }
 
 #[cfg(test)]
