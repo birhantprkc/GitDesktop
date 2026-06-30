@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { LabelsPopover } from "@/features/conversations/LabelsPopover";
+import { AuthorAvatar, LabelChip } from "@/features/conversations/Thread";
 import {
   useSetIssueAssignees,
   useSetIssueMilestone,
@@ -29,20 +30,30 @@ import { IssueRelationships } from "./IssueRelations";
 
 /** The issue's right-hand metadata rail: type / assignees / labels / milestone
  *  pickers (which it owns the mutations for), plus relationships, development,
- *  and the GitHub-only Projects/Notifications link-outs. */
+ *  and the GitHub-only Projects/Notifications link-outs. On a read-only provider
+ *  (GitLab) every picker would mutate via `gh_*`, so it renders a static rail
+ *  ({@link ReadOnlyIssueSidebar}) of just what the issue payload carries. */
 export function IssueSidebar({
   repoPath,
   number,
   issue,
+  canWrite,
+  remoteLabel,
 }: {
   repoPath: string;
   number: number;
   issue: IssueDetails;
+  canWrite: boolean;
+  remoteLabel: string;
 }) {
   const setAssignees = useSetIssueAssignees(repoPath);
   const setMilestone = useSetIssueMilestone(repoPath);
   const setType = useSetIssueType(repoPath);
   const onError = (e: unknown) => toastError(e);
+
+  if (!canWrite) {
+    return <ReadOnlyIssueSidebar issue={issue} remoteLabel={remoteLabel} />;
+  }
 
   return (
     <aside className="w-64 shrink-0 space-y-4 overflow-y-auto border-l p-4">
@@ -111,6 +122,74 @@ export function IssueSidebar({
         >
           <ArrowSquareOutIcon className="size-3" />
           Subscribe on GitHub
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+/** The read-only metadata rail for a provider we only read from (GitLab): static
+ *  assignees / labels / milestone — exactly what the issue payload carries — plus
+ *  one link out. No mutating pickers and none of the GitHub-only
+ *  relationships/development/notifications surfaces (those fetch via `gh_*`).
+ *  Values render at full contrast; only the section headers are muted. */
+function ReadOnlyIssueSidebar({
+  issue,
+  remoteLabel,
+}: {
+  issue: IssueDetails;
+  remoteLabel: string;
+}) {
+  const hasMeta =
+    issue.assignees.length > 0 ||
+    issue.labels.length > 0 ||
+    issue.milestone !== null;
+
+  return (
+    <aside className="w-64 shrink-0 space-y-4 overflow-y-auto border-l p-4">
+      {issue.assignees.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">Assignees</p>
+          <ul className="space-y-1">
+            {issue.assignees.map((login) => (
+              <li key={login} className="flex items-center gap-1.5 text-xs">
+                <AuthorAvatar login={login} />
+                <span className="truncate">{login}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {issue.labels.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">Labels</p>
+          <div className="flex flex-wrap gap-1.5">
+            {issue.labels.map((label) => (
+              <LabelChip key={label.name} label={label} />
+            ))}
+          </div>
+        </div>
+      )}
+      {issue.milestone && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">Milestone</p>
+          <p className="text-xs">{issue.milestone.title}</p>
+        </div>
+      )}
+      {!hasMeta && (
+        <p className="text-xs text-muted-foreground">
+          No labels, assignees, or milestone.
+        </p>
+      )}
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium text-muted-foreground">Links</p>
+        <button
+          type="button"
+          onClick={() => openUrl(issue.url)}
+          className="flex cursor-pointer items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+        >
+          <ArrowSquareOutIcon className="size-3" />
+          View on {remoteLabel}
         </button>
       </div>
     </aside>

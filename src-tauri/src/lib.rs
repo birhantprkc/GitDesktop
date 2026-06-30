@@ -197,6 +197,8 @@ pub fn run() {
             forge::forge_pr_list,
             forge::forge_pr_view,
             forge::forge_pr_diff,
+            forge::forge_issue_list,
+            forge::forge_issue_view,
             github::pr::gh_status,
             github::pr::gh_accounts,
             github::pr::gh_switch_account,

@@ -17,6 +17,7 @@ use crate::forge::model::{
     Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, Implemented, Provider,
 };
 use crate::forge::Forge;
+use crate::github::issue::{IssueDetails, IssueInfo, Milestone};
 use crate::github::pr::{
     PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrThreadOut, RepoLabel,
 };
@@ -203,6 +204,20 @@ fn map_mr_state(state: &str) -> String {
     }
 }
 
+/// Deserialize a field the provider may send as JSON `null` rather than omitting,
+/// treating a present `null` as the type's default. Paired with `#[serde(default)]`
+/// (which only fills a *missing* key) this absorbs both — the exact trap that sank a
+/// whole issue parse when GitLab returned `discussion_locked: null` instead of
+/// `false`. Applied to the optional scalars and the collections GitLab could null
+/// out (it returns `[]` today, but the same one-quirk-away fragility bit us once).
+fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// A GitLab user as embedded in MR/note payloads.
 #[derive(Deserialize)]
 struct GlabMrUser {
@@ -222,7 +237,7 @@ struct GlabMr {
     state: String,
     #[serde(default)]
     author: Option<GlabMrUser>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     labels: Vec<String>,
 }
 
@@ -302,9 +317,9 @@ struct GlabMrChanges {
     state: String,
     #[serde(default)]
     author: Option<GlabMrUser>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     labels: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     changes: Vec<GlabChange>,
 }
 
@@ -552,6 +567,205 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
     Ok(text)
 }
 
+// ── Issues (read) ─────────────────────────────────────────────────────────────
+//
+// GitLab issues map onto the same neutral `IssueInfo`/`IssueDetails` the GitHub
+// panels render, so the frontend stays provider-agnostic. As with MRs we go
+// through `glab api` addressing the project by its URL-encoded full path. Only
+// reads are wired up; every issue *mutation* (comment/close/label/assign/…) stays
+// GitHub-only and is hidden for GitLab on the frontend, so the GitLab fields the
+// mutations would need (node id, lock reason, pinned, org issue type) are left
+// empty rather than mislabeled.
+
+/// Map GitLab's issue state (`opened`/`closed`) onto the neutral `"OPEN"/"CLOSED"`
+/// the frontend expects. (Issues, unlike MRs, never have a `merged` state.)
+fn map_issue_state(state: &str) -> String {
+    match state {
+        "opened" => "OPEN".to_string(),
+        "closed" => "CLOSED".to_string(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
+/// An issue as `glab api …/issues` returns it (list shape).
+#[derive(Deserialize)]
+struct GlabIssue {
+    iid: u64,
+    web_url: String,
+    title: String,
+    state: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    updated_at: String,
+    #[serde(default)]
+    author: Option<GlabMrUser>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    labels: Vec<String>,
+}
+
+fn from_glab_issue(i: GlabIssue) -> IssueInfo {
+    IssueInfo {
+        number: i.iid,
+        url: i.web_url,
+        title: i.title,
+        state: map_issue_state(&i.state),
+        created_at: i.created_at,
+        updated_at: i.updated_at,
+        author: i.author.map(|a| PrAuthor { login: a.username }),
+        labels: i
+            .labels
+            .into_iter()
+            .map(|name| PrListLabel { name })
+            .collect(),
+    }
+}
+
+/// A GitLab milestone as embedded in an issue payload (its `iid` is the per-project
+/// number, mirroring how `Milestone.number` is used on GitHub).
+#[derive(Deserialize)]
+struct GlabMilestone {
+    iid: u64,
+    title: String,
+}
+
+/// One issue as `glab api …/issues/{iid}` returns it (detail shape). GitLab's body
+/// is `description`; `assignees`/`milestone` carry the sidebar metadata.
+#[derive(Deserialize)]
+struct GlabIssueDetail {
+    iid: u64,
+    web_url: String,
+    title: String,
+    #[serde(default)]
+    description: Option<String>,
+    state: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    author: Option<GlabMrUser>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    labels: Vec<String>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    assignees: Vec<GlabMrUser>,
+    #[serde(default)]
+    milestone: Option<GlabMilestone>,
+    // GitLab returns `null` (not `false`) when the discussion isn't locked, and
+    // `#[serde(default)]` only fills a MISSING key — a present `null` would fail to
+    // deserialize into a bare `bool` and sink the whole detail parse ("Could not
+    // load this issue"). `null_to_default` absorbs both null and missing.
+    #[serde(default, deserialize_with = "null_to_default")]
+    discussion_locked: bool,
+}
+
+/// The repo's issues for the Issues list. `state` is `"open"` or `"closed"`.
+/// GitLab issue state is a single `opened`/`closed` axis (no `merged`), so unlike
+/// `list_prs` this is one fetch. GitLab's `/issues` endpoint already excludes merge
+/// requests, so no extra filtering is needed.
+pub async fn list_issues(repo_path: &str, state: &str) -> AppResult<Vec<IssueInfo>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let gl_state = match state {
+        "open" => "opened",
+        "closed" => "closed",
+        other => {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown issue state filter: {other}"
+            )));
+        }
+    };
+    let endpoint = format!("projects/{enc}/issues?state={gl_state}&per_page=100");
+    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+    let issues: Vec<GlabIssue> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab issues: {e}")))?;
+    Ok(issues.into_iter().map(from_glab_issue).collect())
+}
+
+/// Full read view of one issue — core fields, labels (with colors), and comments,
+/// mapped onto `IssueDetails`. GitHub-only sidebar fields (org issue type, pinned)
+/// are left empty; issues have no diff so there's no `diff` counterpart.
+pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails> {
+    let enc = encode_project(&project_path(repo_path).await?);
+
+    // Core issue fields.
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/issues/{number}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let issue: GlabIssueDetail = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab issue: {e}")))?;
+
+    // Comments — drop GitLab's system notes (auto "changed the milestone", etc.).
+    let comments: Vec<PrThreadOut> = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/issues/{number}/notes?sort=asc&per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    .ok()
+    .and_then(|o| serde_json::from_str::<Vec<GlabNote>>(&o.stdout_lossy()).ok())
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|n| !n.system)
+    .map(|n| PrThreadOut {
+        author: n.author.map(|a| a.username).unwrap_or_default(),
+        state: String::new(),
+        body: n.body,
+        date: n.created_at,
+        id: n.id.to_string(),
+        url: String::new(),
+        viewer_did_author: false,
+        is_minimized: false,
+        minimized_reason: String::new(),
+    })
+    .collect();
+
+    let colors = project_label_colors(repo_path, &enc).await;
+    let labels: Vec<RepoLabel> = issue
+        .labels
+        .into_iter()
+        .map(|name| {
+            let color = colors.get(&name).cloned().unwrap_or_default();
+            RepoLabel {
+                id: String::new(),
+                name,
+                color,
+            }
+        })
+        .collect();
+
+    Ok(IssueDetails {
+        // No GraphQL node id on GitLab; label/reaction/sub-issue mutations are
+        // GitHub-only and hidden for GitLab, so an empty id is fine.
+        id: String::new(),
+        number: issue.iid,
+        title: issue.title,
+        body: issue.description.unwrap_or_default(),
+        author: issue.author.map(|a| a.username).unwrap_or_default(),
+        state: map_issue_state(&issue.state),
+        created_at: issue.created_at,
+        url: issue.web_url,
+        assignees: issue.assignees.into_iter().map(|a| a.username).collect(),
+        // The read-only rail shows only the title; `number` is display-only here
+        // (milestone mutations are GitHub-only). GitLab's `iid` is project-scoped
+        // for project milestones but group-scoped for group milestones — fine while
+        // unused, but revisit before making the milestone actionable for GitLab.
+        milestone: issue.milestone.map(|m| Milestone {
+            number: m.iid,
+            title: m.title,
+        }),
+        // GitLab's issue "type" (issue/incident/task) isn't GitHub's org-defined
+        // issue type, and GitLab has no pinned-issue concept here — leave both unset
+        // rather than mislabel.
+        issue_type: None,
+        is_pinned: false,
+        locked: issue.discussion_locked,
+        active_lock_reason: None,
+        comments,
+        labels,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,8 +779,8 @@ mod tests {
         // repo Some => forgeReady is true; MR reads are implemented…
         assert_eq!(s.repo.as_deref(), Some("group/repo"));
         assert!(s.implemented.pull_requests);
-        // …but issues/CI still degrade to "coming soon".
-        assert!(!s.implemented.issues && !s.implemented.ci);
+        // …and issue reads; CI still degrades to "coming soon".
+        assert!(s.implemented.issues && !s.implemented.ci);
         // GitLab capability profile (everything but Discussions).
         assert!(!s.capabilities.discussions && s.capabilities.labels);
     }
@@ -606,6 +820,91 @@ mod tests {
         assert_eq!(map_mr_state("closed"), "CLOSED");
         assert_eq!(map_mr_state("locked"), "CLOSED");
         assert_eq!(map_mr_state("merged"), "MERGED");
+    }
+
+    #[test]
+    fn maps_glab_issue_to_neutral_issue() {
+        let json = r#"{
+            "iid": 3,
+            "web_url": "https://gitlab.com/g/r/-/issues/3",
+            "title": "Add dark mode toggle",
+            "state": "opened",
+            "created_at": "2026-06-30T00:36:04Z",
+            "updated_at": "2026-06-30T01:00:00Z",
+            "author": { "username": "alice" },
+            "labels": ["enhancement"]
+        }"#;
+        let i = from_glab_issue(serde_json::from_str(json).unwrap());
+        assert_eq!(i.number, 3);
+        assert_eq!(i.url, "https://gitlab.com/g/r/-/issues/3");
+        assert_eq!(i.state, "OPEN");
+        assert_eq!(i.created_at, "2026-06-30T00:36:04Z");
+        assert_eq!(i.updated_at, "2026-06-30T01:00:00Z");
+        assert_eq!(i.author.unwrap().login, "alice");
+        assert_eq!(i.labels.len(), 1);
+        assert_eq!(i.labels[0].name, "enhancement");
+    }
+
+    #[test]
+    fn issue_state_maps_to_neutral() {
+        assert_eq!(map_issue_state("opened"), "OPEN");
+        assert_eq!(map_issue_state("closed"), "CLOSED");
+        // Unknown states upper-case rather than panic (issues never report merged).
+        assert_eq!(map_issue_state("weird"), "WEIRD");
+    }
+
+    #[test]
+    fn issue_detail_tolerates_null_collections_and_scalars() {
+        // GitLab can send `null` (not `[]`/`false`/omitted) for any of these, and a
+        // bare field with only `#[serde(default)]` fails the WHOLE parse on a present
+        // `null` — the "Could not load this issue" dogfood bug. `null_to_default`
+        // must absorb every one (labels, assignees, milestone, discussion_locked).
+        let json = r#"{
+            "iid": 2,
+            "web_url": "https://gitlab.com/g/r/-/issues/2",
+            "title": "Crash when cloning an empty repository",
+            "description": "Steps to reproduce…",
+            "state": "opened",
+            "created_at": "2026-06-30T00:36:04.349Z",
+            "author": { "username": "theBGuy" },
+            "labels": null,
+            "assignees": null,
+            "milestone": null,
+            "discussion_locked": null
+        }"#;
+        let issue: GlabIssueDetail = serde_json::from_str(json).unwrap();
+        assert_eq!(issue.iid, 2);
+        assert!(!issue.discussion_locked);
+        assert!(issue.milestone.is_none());
+        assert!(issue.labels.is_empty());
+        assert!(issue.assignees.is_empty());
+    }
+
+    #[test]
+    fn issue_detail_maps_populated_milestone_and_assignees() {
+        // The happy path: a present milestone + assignees + labels deserialize and
+        // carry through (locks the mapping the null test can't exercise).
+        let json = r#"{
+            "iid": 5,
+            "web_url": "https://gitlab.com/g/r/-/issues/5",
+            "title": "Polish onboarding",
+            "description": "",
+            "state": "closed",
+            "created_at": "2026-06-30T00:00:00Z",
+            "author": { "username": "alice" },
+            "labels": ["enhancement", "ui"],
+            "assignees": [{ "username": "bob" }, { "username": "carol" }],
+            "milestone": { "iid": 3, "title": "v1.0" },
+            "discussion_locked": true
+        }"#;
+        let issue: GlabIssueDetail = serde_json::from_str(json).unwrap();
+        assert_eq!(issue.labels, vec!["enhancement".to_string(), "ui".to_string()]);
+        assert_eq!(issue.assignees.len(), 2);
+        assert_eq!(issue.assignees[0].username, "bob");
+        let m = issue.milestone.as_ref().unwrap();
+        assert_eq!(m.iid, 3);
+        assert_eq!(m.title, "v1.0");
+        assert!(issue.discussion_locked);
     }
 
     #[test]

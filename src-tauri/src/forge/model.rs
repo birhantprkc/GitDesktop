@@ -170,12 +170,12 @@ impl Implemented {
     pub const fn for_provider(provider: Provider) -> Self {
         match provider {
             Provider::GitHub => Self::all(),
-            // GitLab read ops arrive incrementally — merge requests (read) are wired
-            // up; issues / CI / releases / insights / repo actions still degrade to
-            // "coming soon" until their impls land.
+            // GitLab read ops arrive incrementally — merge requests and issues
+            // (read) are wired up; CI / releases / insights / repo actions still
+            // degrade to "coming soon" until their impls land.
             Provider::GitLab => Self {
                 pull_requests: true,
-                issues: false,
+                issues: true,
                 ci: false,
                 releases: false,
                 insights: false,
@@ -305,14 +305,14 @@ mod tests {
     }
 
     #[test]
-    fn gitlab_implements_only_merge_request_reads_so_far() {
-        // GitLab is platform-capable of PRs/issues/CI (capabilities); only merge
-        // request reads are built, so issues/CI still degrade to "coming soon" even
-        // when the repo is ready.
+    fn gitlab_implements_merge_request_and_issue_reads_so_far() {
+        // GitLab is platform-capable of PRs/issues/CI (capabilities); merge request
+        // and issue reads are built, so CI still degrades to "coming soon" even when
+        // the repo is ready.
         let cap = Capabilities::for_provider(Provider::GitLab);
         let imp = Implemented::for_provider(Provider::GitLab);
         assert!(cap.pull_requests && imp.pull_requests);
-        assert!(cap.issues && !imp.issues);
+        assert!(cap.issues && imp.issues);
         assert!(cap.ci && !imp.ci);
         assert!(!imp.releases && !imp.insights && !imp.repo_actions && !imp.publish);
     }

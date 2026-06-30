@@ -888,11 +888,15 @@ export const forgePrDiff = (repoPath: string, number: number) =>
 
 export type IssueStateFilter = "open" | "closed";
 
-export const ghIssueList = (repoPath: string, state: IssueStateFilter) =>
-  invoke<IssueInfo[]>("gh_issue_list", { repoPath, state });
+// Provider-neutral issue reads — like the PR reads above, the backend resolves the
+// repo's provider and dispatches (GitHub `gh`, GitLab `glab`), returning the same
+// neutral `IssueInfo`/`IssueDetails` shapes. Only the read path is provider-neutral;
+// the issue write mutations below stay on the GitHub-only `gh_issue_*` commands.
+export const forgeIssueList = (repoPath: string, state: IssueStateFilter) =>
+  invoke<IssueInfo[]>("forge_issue_list", { repoPath, state });
 
-export const ghIssueView = (repoPath: string, number: number) =>
-  invoke<IssueDetails>("gh_issue_view", { repoPath, number });
+export const forgeIssueView = (repoPath: string, number: number) =>
+  invoke<IssueDetails>("forge_issue_view", { repoPath, number });
 
 export const ghIssueCreate = (
   repoPath: string,

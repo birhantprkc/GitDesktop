@@ -49,6 +49,7 @@ import {
   useDeletePrComment,
   useEditIssue,
   useEditPrComment,
+  useForgeStatus,
   useGhRepos,
   useIssueDetails,
   useIssueReactions,
@@ -95,6 +96,17 @@ export function RemoteIssueView({
   repoPath: string;
   number: number;
 }) {
+  // The read view is provider-neutral, but every mutation here (comment, edit,
+  // close/reopen, labels, reactions, pin/lock/transfer/delete, sub-issues) routes
+  // through GitHub-only `gh_*` commands — so on a GitLab repo this is strictly
+  // read-only. We gate writes on "not a known read-only provider" rather than
+  // `=== "github"`, so that while the (separate) forge-status query is still
+  // pending or after it fails, a GitHub issue keeps its write controls exactly as
+  // before — only an explicitly-detected GitLab/Bitbucket repo suppresses them.
+  const forge = useForgeStatus(repoPath);
+  const provider = forge.data?.provider;
+  const canWrite = provider !== "gitlab" && provider !== "bitbucket";
+  const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
   const details = useIssueDetails(repoPath, number);
   const comment = useCommentIssue(repoPath);
   const closeIssue = useCloseIssue(repoPath);
@@ -111,7 +123,8 @@ export function RemoteIssueView({
   const deleteIssue = useDeleteIssue(repoPath);
   const selectIssue = useUiStore((s) => s.selectIssue);
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
-  const reactions = useIssueReactions(repoPath, number);
+  // Reactions are a GitHub-only mutation surface; don't fetch them for GitLab.
+  const reactions = useIssueReactions(repoPath, canWrite ? number : null);
   const toggleReactionMutation = useToggleReaction(
     repoPath,
     ["repo", repoPath, "issue", number, "reactions"] as const,
@@ -279,7 +292,7 @@ export function RemoteIssueView({
               body={issue.body}
             />
           )}
-          {isOpen && (
+          {isOpen && canWrite && (
             <Button
               variant="outline"
               size="xs"
@@ -296,92 +309,98 @@ export function RemoteIssueView({
             variant="outline"
             size="xs"
             onClick={() => openUrl(issue.url)}
-            title="Open this issue on GitHub"
+            title={`Open this issue on ${remoteLabel}`}
             className="cursor-pointer"
           >
             <ArrowSquareOutIcon data-icon="inline-start" />
-            GitHub
+            {remoteLabel}
           </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button variant="outline" size="xs" aria-label="More actions" />
-              }
-            >
-              <DotsThreeIcon className="size-4" weight="bold" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-52">
-              <DropdownMenuItem
-                onClick={() =>
-                  pinIssue.mutate(
-                    { number, pinned: !issue.isPinned },
-                    {
-                      onSuccess: () =>
-                        toast.success(issue.isPinned ? "Unpinned" : "Pinned"),
-                      onError,
-                    },
-                  )
+          {canWrite && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    aria-label="More actions"
+                  />
                 }
               >
-                {issue.isPinned ? "Unpin issue" : "Pin issue"}
-              </DropdownMenuItem>
-              {issue.locked ? (
+                <DotsThreeIcon className="size-4" weight="bold" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-52">
                 <DropdownMenuItem
                   onClick={() =>
-                    unlockIssue.mutate(number, {
-                      onSuccess: () => toast.success("Conversation unlocked"),
-                      onError,
-                    })
+                    pinIssue.mutate(
+                      { number, pinned: !issue.isPinned },
+                      {
+                        onSuccess: () =>
+                          toast.success(issue.isPinned ? "Unpinned" : "Pinned"),
+                        onError,
+                      },
+                    )
                   }
                 >
-                  Unlock conversation
+                  {issue.isPinned ? "Unpin issue" : "Pin issue"}
                 </DropdownMenuItem>
-              ) : (
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
-                    Lock conversation…
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    {LOCK_REASONS.map(([label, reason]) => (
-                      <DropdownMenuItem
-                        key={reason ?? "none"}
-                        onClick={() =>
-                          lockIssue.mutate(
-                            { number, reason },
-                            {
-                              onSuccess: () =>
-                                toast.success("Conversation locked"),
-                              onError,
-                            },
-                          )
-                        }
-                      >
-                        {label}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={duplicateIssue}>
-                Duplicate issue
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  setTransferDest("");
-                  setTransferOpen(true);
-                }}
-              >
-                Transfer issue…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={() => setDeleteOpen(true)}
-              >
-                Delete issue…
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                {issue.locked ? (
+                  <DropdownMenuItem
+                    onClick={() =>
+                      unlockIssue.mutate(number, {
+                        onSuccess: () => toast.success("Conversation unlocked"),
+                        onError,
+                      })
+                    }
+                  >
+                    Unlock conversation
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      Lock conversation…
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {LOCK_REASONS.map(([label, reason]) => (
+                        <DropdownMenuItem
+                          key={reason ?? "none"}
+                          onClick={() =>
+                            lockIssue.mutate(
+                              { number, reason },
+                              {
+                                onSuccess: () =>
+                                  toast.success("Conversation locked"),
+                                onError,
+                              },
+                            )
+                          }
+                        >
+                          {label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={duplicateIssue}>
+                  Duplicate issue
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setTransferDest("");
+                    setTransferOpen(true);
+                  }}
+                >
+                  Transfer issue…
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  Delete issue…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Badge variant={isOpen ? "default" : "secondary"}>
@@ -435,7 +454,7 @@ export function RemoteIssueView({
                       >
                         Copy link
                       </DropdownMenuItem>
-                      {hasVisibleBody(issue.body) && (
+                      {canWrite && hasVisibleBody(issue.body) && (
                         <DropdownMenuItem
                           onClick={() => quoteReply(issue.body)}
                         >
@@ -447,7 +466,7 @@ export function RemoteIssueView({
                       >
                         Copy markdown
                       </DropdownMenuItem>
-                      {isOpen && (
+                      {isOpen && canWrite && (
                         <DropdownMenuItem
                           onClick={() =>
                             edit.openEdit({
@@ -469,44 +488,55 @@ export function RemoteIssueView({
                     No description provided.
                   </p>
                 )}
-                <ReactionBar
-                  reactions={reactions.data?.body ?? []}
-                  onToggle={(content, active) =>
-                    toggleReaction(issue.id, content, active)
-                  }
-                />
+                {canWrite && (
+                  <ReactionBar
+                    reactions={reactions.data?.body ?? []}
+                    onToggle={(content, active) =>
+                      toggleReaction(issue.id, content, active)
+                    }
+                  />
+                )}
               </div>
-              <IssueSubIssues
-                repoPath={repoPath}
-                issueId={issue.id}
-                number={number}
-              />
+              {canWrite && (
+                <IssueSubIssues
+                  repoPath={repoPath}
+                  issueId={issue.id}
+                  number={number}
+                />
+              )}
               {comments.map((c) => (
                 <Thread
                   key={c.id}
                   thread={c}
-                  onQuote={() => quoteReply(c.body)}
+                  onQuote={canWrite ? () => quoteReply(c.body) : undefined}
                   onSaveEdit={
-                    c.viewerDidAuthor
+                    canWrite && c.viewerDidAuthor
                       ? (body) => saveCommentEdit(c.id, body)
                       : undefined
                   }
                   onDelete={
-                    c.viewerDidAuthor
+                    canWrite && c.viewerDidAuthor
                       ? () => setDeletingCommentId(c.id)
                       : undefined
                   }
                   onHide={
-                    c.isMinimized
-                      ? undefined
-                      : (classifier) => hideComment(c.id, classifier)
+                    canWrite && !c.isMinimized
+                      ? (classifier) => hideComment(c.id, classifier)
+                      : undefined
                   }
                   onUnhide={
-                    c.isMinimized ? () => unhideComment(c.id) : undefined
+                    canWrite && c.isMinimized
+                      ? () => unhideComment(c.id)
+                      : undefined
                   }
-                  reactions={reactions.data?.comments[c.id]}
-                  onToggleReaction={(content, active) =>
-                    toggleReaction(c.id, content, active)
+                  reactions={
+                    canWrite ? reactions.data?.comments[c.id] : undefined
+                  }
+                  onToggleReaction={
+                    canWrite
+                      ? (content, active) =>
+                          toggleReaction(c.id, content, active)
+                      : undefined
                   }
                 />
               ))}
@@ -517,103 +547,115 @@ export function RemoteIssueView({
               )}
             </div>
           </ScrollArea>
-          {/* Comment is allowed after the issue closes too, matching GitHub. */}
-          <div className="space-y-2 border-t p-3">
-            <MarkdownEditor
-              ref={composerRef}
-              aria-label="Leave a comment"
-              placeholder="Leave a comment…"
-              value={composeBody}
-              onChange={setComposeBody}
-              onKeyDown={(e) => {
-                if (
-                  (e.ctrlKey || e.metaKey) &&
-                  e.key === "Enter" &&
-                  composeBody.trim() &&
-                  !busy
-                ) {
-                  e.preventDefault();
-                  submitComment();
-                }
-              }}
-              rows={2}
-              textareaClassName="max-h-32 min-h-12 resize-y"
-            />
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!composeBody.trim() || busy}
-                onClick={submitComment}
-                title="Ctrl+Enter"
-              >
-                Comment
-              </Button>
-              {composeBody.trim() && (
+          {/* Comment is allowed after the issue closes too, matching GitHub.
+              The whole composer + close/reopen bar is hidden on GitLab, which is
+              read-only here. */}
+          {canWrite && (
+            <div className="space-y-2 border-t p-3">
+              <MarkdownEditor
+                ref={composerRef}
+                aria-label="Leave a comment"
+                placeholder="Leave a comment…"
+                value={composeBody}
+                onChange={setComposeBody}
+                onKeyDown={(e) => {
+                  if (
+                    (e.ctrlKey || e.metaKey) &&
+                    e.key === "Enter" &&
+                    composeBody.trim() &&
+                    !busy
+                  ) {
+                    e.preventDefault();
+                    submitComment();
+                  }
+                }}
+                rows={2}
+                textareaClassName="max-h-32 min-h-12 resize-y"
+              />
+              <div className="flex items-center gap-2">
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  disabled={busy}
-                  onClick={() => setComposeBody("")}
-                  title="Discard this draft (e.g. a quote reply)"
+                  disabled={!composeBody.trim() || busy}
+                  onClick={submitComment}
+                  title="Ctrl+Enter"
                 >
-                  Clear
+                  Comment
                 </Button>
-              )}
-              <span className="flex-1" />
-              {isOpen ? (
-                <>
+                {composeBody.trim() && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => setComposeBody("")}
+                    title="Discard this draft (e.g. a quote reply)"
+                  >
+                    Clear
+                  </Button>
+                )}
+                <span className="flex-1" />
+                {isOpen ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => doClose("completed")}
+                    >
+                      Close issue
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
+                            aria-label="Other close options"
+                            disabled={busy}
+                          />
+                        }
+                      >
+                        <CaretDownIcon />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-52">
+                        <DropdownMenuItem onClick={() => doClose("completed")}>
+                          Close as completed
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => doClose("not_planned")}
+                        >
+                          Close as not planned
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </>
+                ) : (
                   <Button
                     variant="outline"
                     size="sm"
                     disabled={busy}
-                    onClick={() => doClose("completed")}
+                    onClick={() =>
+                      reopenIssue.mutate(number, {
+                        onSuccess: () => toast.success(`Reopened #${number}`),
+                        onError,
+                      })
+                    }
                   >
-                    Close issue
+                    <ArrowCounterClockwiseIcon data-icon="inline-start" />
+                    Reopen
                   </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <Button
-                          variant="outline"
-                          size="icon-sm"
-                          aria-label="Other close options"
-                          disabled={busy}
-                        />
-                      }
-                    >
-                      <CaretDownIcon />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="min-w-52">
-                      <DropdownMenuItem onClick={() => doClose("completed")}>
-                        Close as completed
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => doClose("not_planned")}>
-                        Close as not planned
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() =>
-                    reopenIssue.mutate(number, {
-                      onSuccess: () => toast.success(`Reopened #${number}`),
-                      onError,
-                    })
-                  }
-                >
-                  <ArrowCounterClockwiseIcon data-icon="inline-start" />
-                  Reopen
-                </Button>
-              )}
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
-        <IssueSidebar repoPath={repoPath} number={number} issue={issue} />
+        <IssueSidebar
+          repoPath={repoPath}
+          number={number}
+          issue={issue}
+          canWrite={canWrite}
+          remoteLabel={remoteLabel}
+        />
       </div>
 
       <EditTitleBodyDialog

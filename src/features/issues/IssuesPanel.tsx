@@ -29,8 +29,12 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
       : provider === "bitbucket"
         ? "Bitbucket"
         : "GitHub";
-  // Issues are GitHub-only so far; a ready GitLab repo degrades to "coming soon".
+  // Issue *reads* are provider-neutral now (GitLab issues list + open read-only),
+  // so the list fires whenever the feature is ready. Issue *creation* is still
+  // GitHub-only — gate the New affordance on that separately so a ready GitLab repo
+  // lists and opens issues but doesn't offer a create flow that can't work.
   const ghReady = forgeFeatureReady(gh.data, "issues");
+  const canCreateGh = ghReady && provider === "github";
   const [stateFilter, setStateFilter] = useState<IssueStateFilter>("open");
   const issueList = useIssueList(repoPath, ghReady, stateFilter);
   const selectedIssue = useUiStore((s) => s.selectedIssue);
@@ -50,7 +54,7 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
   >();
 
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
-  useHotkeyAction("create-issue", () => setCreateOpen(true), ghReady);
+  useHotkeyAction("create-issue", () => setCreateOpen(true), canCreateGh);
 
   // "Reference in new issue" (from a discussion) seeds + opens the GitHub create.
   useEffect(() => {
@@ -123,11 +127,11 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
       onStateFilter={setStateFilter}
       newMenu={{
         ghLabel: isGitLab ? "Issue on GitLab…" : "Issue on GitHub…",
-        ghDisabled: !ghReady,
-        ghReason: ghReady
+        ghDisabled: !canCreateGh,
+        ghReason: canCreateGh
           ? undefined
           : isGitLab
-            ? "GitDesktop doesn't support GitLab issues yet — it's coming."
+            ? "Creating issues on GitLab isn't supported yet — GitDesktop reads them for now."
             : "Connect this repository to GitHub to open an issue.",
         onGh: () => setCreateOpen(true),
         localLabel: "Local issue…",

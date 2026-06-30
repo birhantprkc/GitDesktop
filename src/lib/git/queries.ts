@@ -816,7 +816,7 @@ export function useIssueList(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "issue-list", state] as const,
-    queryFn: () => api.ghIssueList(repo, state),
+    queryFn: () => api.forgeIssueList(repo, state),
     enabled,
     staleTime: 30_000,
   });
@@ -825,7 +825,7 @@ export function useIssueList(
 const issueDetailsOptions = (repo: string, number: number) =>
   queryOptions({
     queryKey: ["repo", repo, "issue", number] as const,
-    queryFn: () => api.ghIssueView(repo, number),
+    queryFn: () => api.forgeIssueView(repo, number),
     staleTime: 30_000,
   });
 

@@ -195,6 +195,39 @@ pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> 
     }
 }
 
+/// A repo's issues, behind the provider abstraction. GitHub delegates to the
+/// existing `gh issue list`; GitLab maps `glab` issues onto the same neutral
+/// [`IssueInfo`](crate::github::issue::IssueInfo). `state` is `"open"` or
+/// `"closed"`. Issue *writes* stay GitHub-only (hidden for GitLab on the frontend).
+#[tauri::command]
+pub async fn forge_issue_list(
+    repo_path: String,
+    state: String,
+) -> AppResult<Vec<crate::github::issue::IssueInfo>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::list_issues(&repo_path, &state).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::list_issues(&repo_path, &state).await,
+    }
+}
+
+/// Full details for one issue's read view, behind the abstraction.
+#[tauri::command]
+pub async fn forge_issue_view(
+    repo_path: String,
+    number: u64,
+) -> AppResult<crate::github::issue::IssueDetails> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::view_issue(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::view_issue(&repo_path, number).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

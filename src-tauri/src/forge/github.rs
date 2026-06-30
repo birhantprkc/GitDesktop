@@ -91,6 +91,24 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
     crate::github::pr::gh_pr_diff(repo_path.to_string(), number).await
 }
 
+// ── Issues (read) ────────────────────────────────────────────────────────────
+//
+// Thin delegates to the existing gh-backed issue commands, mirroring the PR ones.
+
+pub async fn list_issues(
+    repo_path: &str,
+    state: &str,
+) -> AppResult<Vec<crate::github::issue::IssueInfo>> {
+    crate::github::issue::gh_issue_list(repo_path.to_string(), state.to_string()).await
+}
+
+pub async fn view_issue(
+    repo_path: &str,
+    number: u64,
+) -> AppResult<crate::github::issue::IssueDetails> {
+    crate::github::issue::gh_issue_view(repo_path.to_string(), number).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
