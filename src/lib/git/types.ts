@@ -448,6 +448,10 @@ export interface ForgeImplemented {
   repoActions: boolean;
   /** Publishing a local repo to the provider (create remote + push). */
   publish: boolean;
+  /** Posting a comment/note on an issue (first per-action write). */
+  issueComment: boolean;
+  /** Closing / reopening an issue. */
+  issueState: boolean;
 }
 
 /** Provider-neutral analogue of {@link GhStatus}: is the hosted integration usable

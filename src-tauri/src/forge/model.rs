@@ -126,6 +126,7 @@ impl Capabilities {
 #[derive(Serialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub struct Implemented {
+    // ── Reads (panel-level): whether we fetch+render this surface at all. ──
     pub pull_requests: bool,
     pub issues: bool,
     pub ci: bool,
@@ -135,6 +136,13 @@ pub struct Implemented {
     pub repo_actions: bool,
     /// Publishing a local repo to the provider (create remote + push).
     pub publish: bool,
+    // ── Writes (per-action): flip on as each mutation lands for a provider, so a
+    //    read-only provider's detail views suppress just the writes it can't do
+    //    yet (distinct from the panel-level read flags above). ──
+    /// Posting a comment/note on an issue.
+    pub issue_comment: bool,
+    /// Closing / reopening an issue.
+    pub issue_state: bool,
 }
 
 impl Implemented {
@@ -148,6 +156,8 @@ impl Implemented {
             insights: true,
             repo_actions: true,
             publish: true,
+            issue_comment: true,
+            issue_state: true,
         }
     }
 
@@ -161,6 +171,8 @@ impl Implemented {
             insights: false,
             repo_actions: false,
             publish: false,
+            issue_comment: false,
+            issue_state: false,
         }
     }
 
@@ -172,7 +184,8 @@ impl Implemented {
             Provider::GitHub => Self::all(),
             // GitLab read ops arrive incrementally — merge requests, issues, CI
             // pipelines, and releases (read) are wired up; insights / repo actions
-            // still degrade to "coming soon" until their impls land.
+            // still degrade to "coming soon" until their impls land. WRITES land
+            // per-action: issue comment + close/reopen are the first to flip on.
             Provider::GitLab => Self {
                 pull_requests: true,
                 issues: true,
@@ -181,6 +194,8 @@ impl Implemented {
                 insights: false,
                 repo_actions: false,
                 publish: false,
+                issue_comment: true,
+                issue_state: true,
             },
             Provider::Bitbucket => Self::none(),
         }
@@ -316,5 +331,15 @@ mod tests {
         assert!(cap.ci && imp.ci);
         assert!(imp.releases);
         assert!(!imp.insights && !imp.repo_actions && !imp.publish);
+        // First WRITES: issue comment + close/reopen are wired up for GitLab.
+        assert!(imp.issue_comment && imp.issue_state);
+    }
+
+    #[test]
+    fn github_implements_issue_writes_bitbucket_does_not() {
+        let gh = Implemented::for_provider(Provider::GitHub);
+        assert!(gh.issue_comment && gh.issue_state);
+        let bb = Implemented::for_provider(Provider::Bitbucket);
+        assert!(!bb.issue_comment && !bb.issue_state);
     }
 }

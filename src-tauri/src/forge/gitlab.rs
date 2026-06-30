@@ -785,6 +785,56 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
     })
 }
 
+// ── Issues (write) ────────────────────────────────────────────────────────────
+//
+// The first GitLab WRITE actions: post a comment (note) and close/reopen. They
+// mirror gh_issue_comment/close/reopen and dispatch through forge_issue_*; the
+// frontend un-gates just these for GitLab (every other issue write stays GitHub-
+// only). The GitHub close `reason` (completed/not_planned) has no GitLab analogue,
+// so the dispatch drops it before calling close_issue. `glab api -f key=value` is a
+// RAW string field (no `@file` interpretation, unlike `-F`), so a body starting
+// with `@` or carrying newlines is safe (glab is a real .exe — no BatBadBut shim
+// refusal of newline argv; both validated live against the demo).
+
+/// Post a comment (note) on an issue.
+pub async fn comment_issue(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}/notes");
+    let body_arg = format!("body={body}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint, "-f", &body_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Close or reopen an issue via the `state_event` field (`close` / `reopen`).
+async fn set_issue_state(repo_path: &str, number: u64, event: &str) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}");
+    let state_arg = format!("state_event={event}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &state_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn close_issue(repo_path: &str, number: u64) -> AppResult<()> {
+    set_issue_state(repo_path, number, "close").await
+}
+
+pub async fn reopen_issue(repo_path: &str, number: u64) -> AppResult<()> {
+    set_issue_state(repo_path, number, "reopen").await
+}
+
 // ── Pipelines (CI, read) ──────────────────────────────────────────────────────
 //
 // GitLab pipelines map onto the same neutral `WorkflowRun`/`RunDetail`/`RunJob`

@@ -1079,20 +1079,23 @@ export const ghDiscussionReopen = (repoPath: string, discussionId: string) =>
 export const ghDiscussionDelete = (repoPath: string, discussionId: string) =>
   invoke<void>("gh_discussion_delete", { repoPath, discussionId });
 
-export const ghIssueComment = (
+// Issue comment + close/reopen are provider-neutral (GitHub via `gh`, GitLab via
+// `glab`); the GitHub path is byte-identical to the old `gh_issue_*`. The rest of
+// the issue write surface stays GitHub-only (`gh_issue_*`).
+export const forgeIssueComment = (
   repoPath: string,
   number: number,
   body: string,
-) => invoke<void>("gh_issue_comment", { repoPath, number, body });
+) => invoke<void>("forge_issue_comment", { repoPath, number, body });
 
-export const ghIssueClose = (
+export const forgeIssueClose = (
   repoPath: string,
   number: number,
   reason: string,
-) => invoke<void>("gh_issue_close", { repoPath, number, reason });
+) => invoke<void>("forge_issue_close", { repoPath, number, reason });
 
-export const ghIssueReopen = (repoPath: string, number: number) =>
-  invoke<void>("gh_issue_reopen", { repoPath, number });
+export const forgeIssueReopen = (repoPath: string, number: number) =>
+  invoke<void>("forge_issue_reopen", { repoPath, number });
 
 export const ghIssueEdit = (
   repoPath: string,

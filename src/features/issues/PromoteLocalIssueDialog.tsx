@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { ghIssueComment } from "@/lib/git/api";
+import { forgeIssueComment } from "@/lib/git/api";
 import { useCreateIssue } from "@/lib/git/queries";
 import type { LocalIssue } from "@/lib/issues/local";
 import { useSaveLocalIssue } from "@/lib/issues/queries";
@@ -56,7 +56,7 @@ export function PromoteLocalIssueDialog({
       });
       // Carry the local comments over, in order, so none are lost.
       for (const c of carried) {
-        await ghIssueComment(repoPath, number, c.body);
+        await forgeIssueComment(repoPath, number, c.body);
       }
       await save.mutateAsync({
         ...issue,

@@ -154,6 +154,24 @@ pub async fn view_release(
     crate::github::release::gh_release_view(repo_path.to_string(), tag.to_string()).await
 }
 
+// ── Issues (write) ───────────────────────────────────────────────────────────
+//
+// Thin delegates to the existing gh-backed issue mutations — the first writes
+// fronted behind the abstraction. The rest of the issue write surface (labels,
+// assignees, edit, reactions, pin/lock, …) stays GitHub-only and isn't fronted.
+
+pub async fn comment_issue(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
+    crate::github::issue::gh_issue_comment(repo_path.to_string(), number, body.to_string()).await
+}
+
+pub async fn close_issue(repo_path: &str, number: u64, reason: &str) -> AppResult<()> {
+    crate::github::issue::gh_issue_close(repo_path.to_string(), number, reason.to_string()).await
+}
+
+pub async fn reopen_issue(repo_path: &str, number: u64) -> AppResult<()> {
+    crate::github::issue::gh_issue_reopen(repo_path.to_string(), number).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -416,7 +416,8 @@ context (slower). See *AI & automations* to pick the review model.{{/ai}}`,
     body: `# Issues
 
 The **Issues** tab ({{kbd:tab-issues}}, in the More ▾ menu) manages GitHub issues, GitLab
-issues (read-only), and private local issues.
+issues, and private local issues. (The **GitLab issues** section below covers exactly which
+GitLab actions are available.)
 
 ## GitHub issues
 
@@ -432,10 +433,11 @@ add labels, **close / reopen**, **lock**, and **transfer** an issue to another r
 ## GitLab issues
 
 Point the app at a **GitLab** repo and the same tab lists its **issues** (open and closed)
-next to any local issues. Open one for a **read-only** view — description, comments, and a
-side rail of labels, assignees, and milestone — with a **View on GitLab** link. Creating,
-commenting on, and closing issues from the app is coming soon; for now those actions live
-on GitLab.
+next to any local issues. Open one to read the description and comments with a side rail of
+labels, assignees, and milestone — and the **first GitLab writes**: **comment** on the issue
+and **close / reopen** it, right from the app. Editing the title/body, labels, assignees, and
+creating issues still live on GitLab for now (use the **View on GitLab** link); the side rail
+stays read-only.
 
 ## Local issues
 

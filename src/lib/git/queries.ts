@@ -1283,19 +1283,19 @@ export function useDiscussionReactions(repo: string, number: number | null) {
 
 export function useCommentIssue(repo: string) {
   return useRepoMutation(repo, (args: { number: number; body: string }) =>
-    api.ghIssueComment(repo, args.number, args.body),
+    api.forgeIssueComment(repo, args.number, args.body),
   );
 }
 
 export function useCloseIssue(repo: string) {
   return useRepoMutation(repo, (args: { number: number; reason: string }) =>
-    api.ghIssueClose(repo, args.number, args.reason),
+    api.forgeIssueClose(repo, args.number, args.reason),
   );
 }
 
 export function useReopenIssue(repo: string) {
   return useRepoMutation(repo, (number: number) =>
-    api.ghIssueReopen(repo, number),
+    api.forgeIssueReopen(repo, number),
   );
 }
 
@@ -1438,6 +1438,8 @@ const NO_FORGE_STATUS: ForgeStatus = {
     insights: false,
     repoActions: false,
     publish: false,
+    issueComment: false,
+    issueState: false,
   },
 };
 

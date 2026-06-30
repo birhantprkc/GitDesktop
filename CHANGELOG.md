@@ -19,14 +19,15 @@ commit list.
   requests** right alongside any local PRs — open and closed/merged, searchable and
   filterable. Open one for a **read-only detail view**: description, comments, commits, and a
   syntax-highlighted **diff**, plus an "Open on GitLab" link. The **Issues** panel reads GitLab
-  too — its issues (open and closed) next to your local issues, and a **read-only** issue view
-  with the description, comments, and a side rail of labels, assignees, and milestone. And the
+  too — its issues (open and closed) next to your local issues, and an issue view with the
+  description, comments, and a side rail of labels, assignees, and milestone — now with the
+  **first GitLab writes**: **comment** on a GitLab issue and **close / reopen** it. And the
   **Actions** panel reads GitLab **CI pipelines** — the run list, a branch CI badge, and a
   read-only pipeline view with its **jobs** (status, durations, and per-job **logs**). The
   **Tags** panel reads GitLab **releases** too — alongside your local tags, with a **read-only**
   release view: notes, the Latest badge, and asset links (open in browser). The rest of the
-  GitLab surface (creating/merging MRs, writing issues, re-running/dispatching pipelines,
-  publishing releases, insights) reads **"coming soon"** for now — those panels degrade
+  GitLab surface (creating/merging MRs, editing/labeling issues, re-running/dispatching
+  pipelines, publishing releases, insights) reads **"coming soon"** for now — those panels degrade
   gracefully instead of breaking — and lands in later updates. GitHub repositories are
   completely unaffected. (Self-managed GitLab hosts and Bitbucket are still on the way.)
 - **A browsable, persistent Agent sidebar.** Several quality-of-life upgrades to the Agent list:

@@ -319,6 +319,44 @@ pub async fn forge_release_view(
     }
 }
 
+/// Post a comment on an issue, behind the provider abstraction — the first GitLab
+/// WRITE. GitHub delegates to `gh issue comment`; GitLab posts a note via `glab`.
+#[tauri::command]
+pub async fn forge_issue_comment(repo_path: String, number: u64, body: String) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::comment_issue(&repo_path, number, &body).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::comment_issue(&repo_path, number, &body).await,
+    }
+}
+
+/// Close an issue, behind the abstraction. `reason` is GitHub's close reason
+/// (`completed`/`not_planned`); GitLab has no close reason and ignores it.
+#[tauri::command]
+pub async fn forge_issue_close(repo_path: String, number: u64, reason: String) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::close_issue(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::close_issue(&repo_path, number, &reason).await,
+    }
+}
+
+/// Reopen a closed issue, behind the abstraction.
+#[tauri::command]
+pub async fn forge_issue_reopen(repo_path: String, number: u64) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::reopen_issue(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::reopen_issue(&repo_path, number).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

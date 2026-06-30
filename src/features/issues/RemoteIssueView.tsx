@@ -43,6 +43,7 @@ import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { copyText } from "@/lib/clipboard";
 import type { LockReason, MinimizeReason } from "@/lib/git/api";
 import {
+  forgeFeatureReady,
   useCloseIssue,
   useCommentIssue,
   useDeleteIssue,
@@ -107,6 +108,14 @@ export function RemoteIssueView({
   const provider = forge.data?.provider;
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
   const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
+  // The first GitLab WRITES land per-action: commenting + close/reopen are wired up
+  // (the rest of the issue write surface stays GitHub-only via `canWrite`). Each is
+  // `canWrite || forgeFeatureReady(...)` so GitHub keeps its controls while a
+  // forge-status query is pending/failed (canWrite default-true) AND a ready GitLab
+  // repo positively enables just these.
+  const canComment = canWrite || forgeFeatureReady(forge.data, "issueComment");
+  const canChangeState =
+    canWrite || forgeFeatureReady(forge.data, "issueState");
   const details = useIssueDetails(repoPath, number);
   const comment = useCommentIssue(repoPath);
   const closeIssue = useCloseIssue(repoPath);
@@ -547,104 +556,117 @@ export function RemoteIssueView({
               )}
             </div>
           </ScrollArea>
-          {/* Comment is allowed after the issue closes too, matching GitHub.
-              The whole composer + close/reopen bar is hidden on GitLab, which is
-              read-only here. */}
-          {canWrite && (
+          {/* Comment is allowed after the issue closes too, matching GitHub. On
+              GitLab the composer + close/reopen show (the first writes), but the
+              GitHub-only close-reason dropdown stays hidden (GitLab has no reasons);
+              Bitbucket has neither, so the whole bar hides. */}
+          {(canComment || canChangeState) && (
             <div className="space-y-2 border-t p-3">
-              <MarkdownEditor
-                ref={composerRef}
-                aria-label="Leave a comment"
-                placeholder="Leave a comment…"
-                value={composeBody}
-                onChange={setComposeBody}
-                onKeyDown={(e) => {
-                  if (
-                    (e.ctrlKey || e.metaKey) &&
-                    e.key === "Enter" &&
-                    composeBody.trim() &&
-                    !busy
-                  ) {
-                    e.preventDefault();
-                    submitComment();
-                  }
-                }}
-                rows={2}
-                textareaClassName="max-h-32 min-h-12 resize-y"
-              />
+              {canComment && (
+                <MarkdownEditor
+                  ref={composerRef}
+                  aria-label="Leave a comment"
+                  placeholder="Leave a comment…"
+                  value={composeBody}
+                  onChange={setComposeBody}
+                  onKeyDown={(e) => {
+                    if (
+                      (e.ctrlKey || e.metaKey) &&
+                      e.key === "Enter" &&
+                      composeBody.trim() &&
+                      !busy
+                    ) {
+                      e.preventDefault();
+                      submitComment();
+                    }
+                  }}
+                  rows={2}
+                  textareaClassName="max-h-32 min-h-12 resize-y"
+                />
+              )}
               <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!composeBody.trim() || busy}
-                  onClick={submitComment}
-                  title="Ctrl+Enter"
-                >
-                  Comment
-                </Button>
-                {composeBody.trim() && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => setComposeBody("")}
-                    title="Discard this draft (e.g. a quote reply)"
-                  >
-                    Clear
-                  </Button>
-                )}
-                <span className="flex-1" />
-                {isOpen ? (
+                {canComment && (
                   <>
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={busy}
-                      onClick={() => doClose("completed")}
+                      disabled={!composeBody.trim() || busy}
+                      onClick={submitComment}
+                      title="Ctrl+Enter"
                     >
-                      Close issue
+                      Comment
                     </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button
-                            variant="outline"
-                            size="icon-sm"
-                            aria-label="Other close options"
-                            disabled={busy}
-                          />
-                        }
+                    {composeBody.trim() && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => setComposeBody("")}
+                        title="Discard this draft (e.g. a quote reply)"
                       >
-                        <CaretDownIcon />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="min-w-52">
-                        <DropdownMenuItem onClick={() => doClose("completed")}>
-                          Close as completed
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => doClose("not_planned")}
-                        >
-                          Close as not planned
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                        Clear
+                      </Button>
+                    )}
                   </>
-                ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() =>
-                      reopenIssue.mutate(number, {
-                        onSuccess: () => toast.success(`Reopened #${number}`),
-                        onError,
-                      })
-                    }
-                  >
-                    <ArrowCounterClockwiseIcon data-icon="inline-start" />
-                    Reopen
-                  </Button>
                 )}
+                <span className="flex-1" />
+                {canChangeState &&
+                  (isOpen ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => doClose("completed")}
+                      >
+                        Close issue
+                      </Button>
+                      {/* Close reasons are a GitHub concept; GitLab has none. */}
+                      {canWrite && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <Button
+                                variant="outline"
+                                size="icon-sm"
+                                aria-label="Other close options"
+                                disabled={busy}
+                              />
+                            }
+                          >
+                            <CaretDownIcon />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="min-w-52">
+                            <DropdownMenuItem
+                              onClick={() => doClose("completed")}
+                            >
+                              Close as completed
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => doClose("not_planned")}
+                            >
+                              Close as not planned
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() =>
+                        reopenIssue.mutate(number, {
+                          onSuccess: () => toast.success(`Reopened #${number}`),
+                          onError,
+                        })
+                      }
+                    >
+                      <ArrowCounterClockwiseIcon data-icon="inline-start" />
+                      Reopen
+                    </Button>
+                  ))}
               </div>
             </div>
           )}
