@@ -58,6 +58,7 @@ import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
   forgeFeatureReady,
   prDiffOptions,
+  useApprovePr,
   useCheckoutPr,
   useClosePr,
   useCommentPr,
@@ -67,6 +68,7 @@ import {
   useForgeStatus,
   useMergePr,
   useMinimizeComment,
+  usePrApprovals,
   usePrDetails,
   usePrDiff,
   usePrReactions,
@@ -75,8 +77,10 @@ import {
   useRepoStatus,
   useReviewPr,
   useToggleReaction,
+  useUnapprovePr,
   useUnminimizeComment,
 } from "@/lib/git/queries";
+import type { ApprovalState } from "@/lib/git/types";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -149,6 +153,10 @@ export function RemotePrView({
   // repo positively enables just these.
   const canComment = canWrite || forgeFeatureReady(forge.data, "mrComment");
   const canChangeState = canWrite || forgeFeatureReady(forge.data, "mrState");
+  // GitLab's approve/unapprove is a bodyless toggle with no GitHub analogue (GitHub
+  // approves via the Review menu above), so it's GitLab-only and gated on the forge
+  // feature directly — NOT `canWrite || …`, which would duplicate the Review control.
+  const canApprove = forgeFeatureReady(forge.data, "mrApprove");
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
@@ -158,6 +166,14 @@ export function RemotePrView({
   const mergePr = useMergePr(repoPath);
   const closePr = useClosePr(repoPath);
   const reopenPr = useReopenPr(repoPath);
+  // Approval state drives the GitLab-only toggle; only fetched for a ready GitLab
+  // repo with an open MR (null disables the read for GitHub / closed MRs).
+  const approvals = usePrApprovals(
+    repoPath,
+    canApprove && details.data?.state === "OPEN" ? number : null,
+  );
+  const approvePr = useApprovePr(repoPath);
+  const unapprovePr = useUnapprovePr(repoPath);
   const editComment = useEditPrComment(repoPath);
   const deleteComment = useDeletePrComment(repoPath);
   const minimizeComment = useMinimizeComment(repoPath);
@@ -227,6 +243,41 @@ export function RemotePrView({
     );
   }
 
+  // GitLab approve/unapprove — a single toggle keyed on whether the viewer has
+  // approved. `user_can_approve` is unreliable on Free (false even when approving
+  // works), so we don't pre-disable; a genuine permission error surfaces via toast.
+  // The status lives in a *separate* glab query, so we flip it OPTIMISTICALLY here:
+  // otherwise the label lags a click by a full approve-POST + approvals-refetch and
+  // looks broken. The success invalidation reconciles the real count; errors roll back.
+  function toggleApproval() {
+    const approved = approvals.data?.viewerHasApproved ?? false;
+    const action = approved ? unapprovePr : approvePr;
+    const key = ["repo", repoPath, "pr", number, "approvals"] as const;
+    const prev = queryClient.getQueryData<ApprovalState>(key);
+    const login = forge.data?.login ?? "";
+    if (prev) {
+      queryClient.setQueryData<ApprovalState>(key, {
+        ...prev,
+        viewerHasApproved: !approved,
+        approvedBy: approved
+          ? prev.approvedBy.filter((u) => u !== login)
+          : login && !prev.approvedBy.includes(login)
+            ? [...prev.approvedBy, login]
+            : prev.approvedBy,
+      });
+    }
+    action.mutate(number, {
+      onSuccess: () =>
+        toast.success(
+          approved ? "Approval revoked" : `Approved this ${prNoun}`,
+        ),
+      onError: (e) => {
+        if (prev) queryClient.setQueryData(key, prev);
+        onError(e);
+      },
+    });
+  }
+
   function submitComment() {
     if (!composeBody.trim()) return;
     comment.mutate(
@@ -276,6 +327,17 @@ export function RemotePrView({
       ? selectedPath
       : (pr?.files[0]?.path ?? null);
 
+  // Approval display (GitLab-only): a quiet count shown only when there's something
+  // to report — someone has approved, or a Premium project requires N approvals.
+  const approval = approvals.data;
+  const approvalNote =
+    approval &&
+    (approval.approvalsRequired > 0 || approval.approvedBy.length > 0)
+      ? approval.approvalsRequired > 0
+        ? `${approval.approvedBy.length} of ${approval.approvalsRequired} approvals`
+        : `${approval.approvedBy.length} approval${approval.approvedBy.length === 1 ? "" : "s"}`
+      : null;
+
   if (details.isPending) {
     return (
       <div className="space-y-3 p-4">
@@ -307,6 +369,8 @@ export function RemotePrView({
     mergePr.isPending ||
     closePr.isPending ||
     reopenPr.isPending ||
+    approvePr.isPending ||
+    unapprovePr.isPending ||
     readyPr.isPending;
 
   function saveCommentEdit(commentId: string, body: string) {
@@ -698,6 +762,48 @@ export function RemotePrView({
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                )}
+                {isOpen && canApprove && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      // On an approvals read-error we can't know the viewer's state,
+                      // so disable rather than present a confident (possibly wrong)
+                      // Approve that would fire the wrong direction on click.
+                      disabled={
+                        busy || approvals.isPending || approvals.isError
+                      }
+                      aria-pressed={approval?.viewerHasApproved ?? false}
+                      onClick={toggleApproval}
+                      title={
+                        approvals.isError
+                          ? "Couldn't load approval state"
+                          : approval?.viewerHasApproved
+                            ? "Revoke your approval"
+                            : `Approve this ${prNoun}`
+                      }
+                      className={cn(
+                        approval?.viewerHasApproved &&
+                          "border-success/40 text-success hover:text-success",
+                      )}
+                    >
+                      <CheckCircleIcon data-icon="inline-start" />
+                      {approval?.viewerHasApproved ? "Approved" : "Approve"}
+                    </Button>
+                    {approvalNote && (
+                      <span
+                        className="text-xs text-muted-foreground"
+                        title={
+                          approval && approval.approvedBy.length > 0
+                            ? `Approved by ${approval.approvedBy.join(", ")}`
+                            : undefined
+                        }
+                      >
+                        {approvalNote}
+                      </span>
+                    )}
+                  </>
                 )}
                 {composeBody.trim() && (
                   <Button

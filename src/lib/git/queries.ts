@@ -1442,6 +1442,7 @@ const NO_FORGE_STATUS: ForgeStatus = {
     issueState: false,
     mrComment: false,
     mrState: false,
+    mrApprove: false,
   },
 };
 
@@ -2271,6 +2272,31 @@ export function useReviewPr(repo: string) {
 export function useCommentPr(repo: string) {
   return useRepoMutation(repo, (args: { number: number; body: string }) =>
     api.forgePrComment(repo, args.number, args.body),
+  );
+}
+
+/** A merge request's approval state — the GitLab-only approve/unapprove toggle's
+ *  driver. Pass `null` when the toggle isn't shown (GitHub, or a closed MR) so the
+ *  read doesn't fire. */
+export function usePrApprovals(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr", number ?? 0, "approvals"] as const,
+    queryFn: () => api.forgePrApprovals(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useApprovePr(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.forgePrApprove(repo, number),
+  );
+}
+
+export function useUnapprovePr(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.forgePrUnapprove(repo, number),
   );
 }
 

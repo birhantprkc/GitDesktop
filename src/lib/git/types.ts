@@ -456,6 +456,23 @@ export interface ForgeImplemented {
   mrComment: boolean;
   /** Closing / reopening a merge/pull request (not merge). */
   mrState: boolean;
+  /** Approving / unapproving a merge request via the bodyless toggle — GitLab-only
+   *  (GitHub approves through the review flow), so it's false for GitHub. */
+  mrApprove: boolean;
+}
+
+/** A merge/pull request's approval summary — who has approved and whether the
+ *  signed-in viewer has. Only GitLab produces it today; the GitLab-only
+ *  approve/unapprove toggle reads it (gated on `implemented.mrApprove`). */
+export interface ApprovalState {
+  /** Whether the viewer has approved — the toggle's driver (Approve ↔ Revoke). */
+  viewerHasApproved: boolean;
+  /** Usernames who have approved, for an "Approved by …" summary. */
+  approvedBy: string[];
+  /** Required approvals — a Premium approval-rules concept; 0 on Free. */
+  approvalsRequired: number;
+  /** Approvals still needed (0 on Free). */
+  approvalsLeft: number;
 }
 
 /** Provider-neutral analogue of {@link GhStatus}: is the hosted integration usable

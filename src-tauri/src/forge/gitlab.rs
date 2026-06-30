@@ -20,7 +20,8 @@ use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::issue::{IssueDetails, IssueInfo, Milestone};
 use crate::github::pr::{
-    PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrThreadOut, RepoLabel,
+    ApprovalState, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrThreadOut,
+    RepoLabel,
 };
 use crate::github::release::{ReleaseAsset, ReleaseDetails, ReleaseInfo};
 
@@ -631,6 +632,86 @@ pub async fn close_mr(repo_path: &str, number: u64) -> AppResult<()> {
 
 pub async fn reopen_mr(repo_path: &str, number: u64) -> AppResult<()> {
     set_mr_state(repo_path, number, "reopen").await
+}
+
+// ── Merge requests (approvals) ────────────────────────────────────────────────
+//
+// GitLab's approve/unapprove is a bodyless toggle with no GitHub analogue (GitHub
+// approves through the review flow), so it surfaces as a GitLab-only control gated
+// on `implemented.mr_approve`. The approvals read drives the toggle. `user_can_approve`
+// is deliberately dropped from the neutral shape: GitLab reports it `false` on the
+// Free tier even when approving succeeds (it's a Premium approval-rules signal), so
+// the toggle keys on `user_has_approved` instead and a real permission error surfaces
+// via the action's toast. Validated live against the demo (approve adds the viewer to
+// `approved_by`; unapprove reverts it).
+
+/// One entry of a GitLab MR's `approved_by` list.
+#[derive(Deserialize)]
+struct GlabApprovedBy {
+    #[serde(default)]
+    user: Option<GlabMrUser>,
+}
+
+/// The MR `/approvals` response (the fields we map onto `ApprovalState`).
+#[derive(Deserialize)]
+struct GlabApprovals {
+    #[serde(default)]
+    user_has_approved: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    approved_by: Vec<GlabApprovedBy>,
+    #[serde(default)]
+    approvals_required: u32,
+    #[serde(default)]
+    approvals_left: u32,
+}
+
+/// The viewer's + the MR's approval state, mapped onto the neutral `ApprovalState`.
+pub async fn pr_approvals(repo_path: &str, number: u64) -> AppResult<ApprovalState> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/merge_requests/{number}/approvals")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let a: GlabApprovals = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab approvals: {e}")))?;
+    Ok(ApprovalState {
+        viewer_has_approved: a.user_has_approved,
+        approved_by: a
+            .approved_by
+            .into_iter()
+            .filter_map(|x| x.user.map(|u| u.username))
+            .collect(),
+        approvals_required: a.approvals_required,
+        approvals_left: a.approvals_left,
+    })
+}
+
+/// Approve a merge request as the signed-in user (bodyless POST).
+pub async fn approve_pr(repo_path: &str, number: u64) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/merge_requests/{number}/approve");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Revoke the signed-in user's approval of a merge request.
+pub async fn unapprove_pr(repo_path: &str, number: u64) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/merge_requests/{number}/unapprove");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
 }
 
 // ── Issues (read) ─────────────────────────────────────────────────────────────

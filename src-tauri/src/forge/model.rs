@@ -147,10 +147,17 @@ pub struct Implemented {
     pub mr_comment: bool,
     /// Closing / reopening a merge/pull request (not merge).
     pub mr_state: bool,
+    /// Approving / unapproving a merge request via the bodyless toggle. GitLab-only:
+    /// GitHub surfaces approval through the older review flow (the Review menu), not
+    /// this control, so it's the one write GitHub leaves `false` (see `all`).
+    pub mr_approve: bool,
 }
 
 impl Implemented {
-    /// Everything built — the GitHub reference profile.
+    /// Everything built — the GitHub reference profile. The one exception is
+    /// `mr_approve`: GitHub's approval surface is the older review flow (the Review
+    /// menu), not the bodyless approve/unapprove toggle, so that forge control is
+    /// GitLab-only and stays `false` here.
     const fn all() -> Self {
         Self {
             pull_requests: true,
@@ -164,6 +171,7 @@ impl Implemented {
             issue_state: true,
             mr_comment: true,
             mr_state: true,
+            mr_approve: false,
         }
     }
 
@@ -181,6 +189,7 @@ impl Implemented {
             issue_state: false,
             mr_comment: false,
             mr_state: false,
+            mr_approve: false,
         }
     }
 
@@ -193,8 +202,8 @@ impl Implemented {
             // GitLab read ops arrive incrementally — merge requests, issues, CI
             // pipelines, and releases (read) are wired up; insights / repo actions
             // still degrade to "coming soon" until their impls land. WRITES land
-            // per-action: issue + MR comment and close/reopen are the first to flip
-            // on (MR merge / approve / review stay GitHub-only for now).
+            // per-action: issue + MR comment and close/reopen, plus the GitLab-only
+            // MR approve/unapprove toggle. (MR merge / review stay GitHub-only for now.)
             Provider::GitLab => Self {
                 pull_requests: true,
                 issues: true,
@@ -207,6 +216,7 @@ impl Implemented {
                 issue_state: true,
                 mr_comment: true,
                 mr_state: true,
+                mr_approve: true,
             },
             Provider::Bitbucket => Self::none(),
         }
@@ -328,6 +338,9 @@ mod tests {
         let i = Implemented::for_provider(Provider::GitHub);
         assert!(i.pull_requests && i.issues && i.ci && i.releases && i.insights);
         assert!(i.repo_actions && i.publish);
+        // The lone exception: the bodyless approve/unapprove toggle is GitLab-only
+        // (GitHub approves via the review flow), so GitHub leaves `mr_approve` false.
+        assert!(!i.mr_approve);
     }
 
     #[test]
@@ -342,16 +355,21 @@ mod tests {
         assert!(cap.ci && imp.ci);
         assert!(imp.releases);
         assert!(!imp.insights && !imp.repo_actions && !imp.publish);
-        // First WRITES: issue + MR comment and close/reopen are wired up for GitLab.
+        // First WRITES: issue + MR comment and close/reopen are wired up for GitLab,
+        // plus the GitLab-only MR approve/unapprove toggle.
         assert!(imp.issue_comment && imp.issue_state);
-        assert!(imp.mr_comment && imp.mr_state);
+        assert!(imp.mr_comment && imp.mr_state && imp.mr_approve);
     }
 
     #[test]
     fn github_implements_issue_and_mr_writes_bitbucket_does_not() {
         let gh = Implemented::for_provider(Provider::GitHub);
         assert!(gh.issue_comment && gh.issue_state && gh.mr_comment && gh.mr_state);
+        // MR approve/unapprove is the one GitLab-only write — GitHub approves via the
+        // review flow, not this toggle.
+        assert!(!gh.mr_approve);
         let bb = Implemented::for_provider(Provider::Bitbucket);
         assert!(!bb.issue_comment && !bb.issue_state && !bb.mr_comment && !bb.mr_state);
+        assert!(!bb.mr_approve);
     }
 }

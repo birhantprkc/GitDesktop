@@ -1254,6 +1254,28 @@ pub struct PrDetails {
     pub labels: Vec<RepoLabel>,
 }
 
+/// A merge/pull request's approval summary — who has approved and whether the
+/// viewer has. Provider-neutral, but only GitLab produces it today: GitHub
+/// surfaces approval through the review flow (`reviewDecision` + the Review menu),
+/// not a bodyless toggle, so its forge arm errors and the GitLab-only
+/// approve/unapprove control gates on `implemented.mrApprove` (false for GitHub).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalState {
+    /// Whether the signed-in viewer has approved — the toggle's driver (Approve ↔
+    /// Revoke). The reliable signal, unlike GitLab's `user_can_approve`, which it
+    /// reports `false` on the Free tier even when approving succeeds (a Premium
+    /// approval-rules concept), so a genuine permission error surfaces via the
+    /// action's toast instead of pre-disabling the control.
+    pub viewer_has_approved: bool,
+    /// Usernames who have approved, for an "Approved by …" summary.
+    pub approved_by: Vec<String>,
+    /// Required approvals — a Premium approval-rules concept; `0` on Free.
+    pub approvals_required: u32,
+    /// Approvals still needed (`0` on Free).
+    pub approvals_left: u32,
+}
+
 const PR_VIEW_FIELDS: &str = "id,number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup,labels";
 
 /// Full details for one PR's read view.

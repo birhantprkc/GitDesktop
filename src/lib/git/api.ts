@@ -6,6 +6,7 @@ import {
   coldStartSetSecret,
 } from "@/lib/test-mode";
 import type {
+  ApprovalState,
   BlameLine,
   Branch,
   BranchComparison,
@@ -1182,6 +1183,17 @@ export const forgePrComment = (
   number: number,
   body: string,
 ) => invoke<void>("forge_pr_comment", { repoPath, number, body });
+
+// MR approve/unapprove is a GitLab-only toggle (GitHub approves via the review
+// flow); the read drives the control's Approve ↔ Revoke state.
+export const forgePrApprovals = (repoPath: string, number: number) =>
+  invoke<ApprovalState>("forge_pr_approvals", { repoPath, number });
+
+export const forgePrApprove = (repoPath: string, number: number) =>
+  invoke<void>("forge_pr_approve", { repoPath, number });
+
+export const forgePrUnapprove = (repoPath: string, number: number) =>
+  invoke<void>("forge_pr_unapprove", { repoPath, number });
 
 export const ghPrEditComment = (
   repoPath: string,

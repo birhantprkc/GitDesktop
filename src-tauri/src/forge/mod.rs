@@ -233,6 +233,56 @@ pub async fn forge_pr_reopen(repo_path: String, number: u64) -> AppResult<()> {
     }
 }
 
+/// The viewer's + the MR's approval state, behind the abstraction. GitLab-only:
+/// GitHub surfaces approval through the review flow (`reviewDecision` + the Review
+/// menu), so its arm errors — the frontend gates this on `implemented.mrApprove`
+/// (false for GitHub), so it's never reached there.
+#[tauri::command]
+pub async fn forge_pr_approvals(
+    repo_path: String,
+    number: u64,
+) -> AppResult<crate::github::pr::ApprovalState> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::pr_approvals(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => Err(AppError::InvalidArgument(
+            "GitHub surfaces approval through the review flow, not this control.".into(),
+        )),
+    }
+}
+
+/// Approve a merge request (a bodyless GitLab reviewer action), behind the
+/// abstraction. GitLab-only — GitHub approves via the review flow.
+#[tauri::command]
+pub async fn forge_pr_approve(repo_path: String, number: u64) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::approve_pr(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => Err(AppError::InvalidArgument(
+            "GitHub approvals go through the review flow, not this control.".into(),
+        )),
+    }
+}
+
+/// Revoke the viewer's approval of a merge request, behind the abstraction.
+/// GitLab-only.
+#[tauri::command]
+pub async fn forge_pr_unapprove(repo_path: String, number: u64) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::unapprove_pr(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => Err(AppError::InvalidArgument(
+            "GitHub approvals go through the review flow, not this control.".into(),
+        )),
+    }
+}
+
 /// A repo's issues, behind the provider abstraction. GitHub delegates to the
 /// existing `gh issue list`; GitLab maps `glab` issues onto the same neutral
 /// [`IssueInfo`](crate::github::issue::IssueInfo). `state` is `"open"` or
