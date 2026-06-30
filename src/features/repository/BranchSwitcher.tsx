@@ -4,6 +4,7 @@ import {
   ArrowUpIcon,
   CaretDownIcon,
   CheckIcon,
+  CloudArrowDownIcon,
   GitBranchIcon,
   GitPullRequestIcon,
   InfoIcon,
@@ -69,6 +70,7 @@ import {
   useMergePreview,
   usePrList,
   useRebaseBranch,
+  useRemoteBranches,
   useRenameBranch,
   useRepoStatus,
   useSetBranchArchived,
@@ -79,7 +81,7 @@ import {
   useUserWorktrees,
 } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
-import type { Branch } from "@/lib/git/types";
+import type { Branch, RemoteBranch } from "@/lib/git/types";
 import { listUserWorktrees } from "@/lib/git/worktree";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
@@ -190,6 +192,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   const [open, setOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  // Remote-only branches show expanded by default (the point is to see them);
+  // archived shows collapsed (it's intentionally-hidden clutter).
+  const [showRemote, setShowRemote] = useState(true);
   const [branchFilter, setBranchFilter] = useState("");
   // The branch row the keyboard nav last landed on (drives arrow-key movement).
   const [activeBranch, setActiveBranch] = useState<string | null>(null);
@@ -359,12 +364,40 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       ),
     [sortedBranches, bq],
   );
+  // Branches that live on a remote but aren't checked out locally yet — fetched
+  // only while the menu is open. Drop ones already represented by a local branch
+  // (its row already shows ahead/behind + PR) and the internal session branches;
+  // dedupe a branch that exists on multiple remotes to one row.
+  const remoteBranchesQuery = useRemoteBranches(repoPath, open);
+  const localNames = useMemo(
+    () => new Set(allBranches.map((b) => b.name)),
+    [allBranches],
+  );
+  const remoteOnly = useMemo(() => {
+    const seen = new Set<string>();
+    return (remoteBranchesQuery.data ?? [])
+      .filter(
+        (b) =>
+          !b.name.startsWith("gd/session/") &&
+          !localNames.has(b.name) &&
+          (!bq || b.name.toLowerCase().includes(bq)),
+      )
+      .filter((b) => (seen.has(b.name) ? false : (seen.add(b.name), true)))
+      .sort((a, b) => b.lastCommitDate.localeCompare(a.lastCommitDate));
+  }, [remoteBranchesQuery.data, localNames, bq]);
+  // Only label rows with their remote when there's more than one to disambiguate.
+  const multipleRemotes = useMemo(
+    () =>
+      new Set((remoteBranchesQuery.data ?? []).map((b) => b.remote)).size > 1,
+    [remoteBranchesQuery.data],
+  );
   // Arrow-key navigation over the visible rows (+ archived when expanded) so
   // keyboard users can move through branches instead of Tabbing each one. Enter
   // on the focused row checks it out via the row button's native click.
-  const navBranches = [
+  const navBranches: { name: string }[] = [
     ...visibleBranches,
     ...(showArchived ? archivedBranches : []),
+    ...(showRemote ? remoteOnly : []),
   ];
   const onBranchKeyDown = listKeyboardNav({
     items: navBranches,
@@ -877,6 +910,48 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     );
   };
 
+  // A remote-only branch: lighter than a local row (muted, a leading "bring it
+  // down" glyph). Clicking checks it out, which `git switch` turns into a local
+  // tracking branch — routed through `switchTo` so in-progress changes are handled.
+  const renderRemoteRow = (branch: RemoteBranch) => (
+    <ContextMenu key={`remote/${branch.remote}/${branch.name}`}>
+      <ContextMenuTrigger
+        render={
+          <button
+            type="button"
+            data-row={branch.name}
+            title={`Check out ${branch.name} — creates a local branch tracking ${branch.remote}/${branch.name}`}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
+            onClick={() => switchTo(branch.name)}
+          >
+            <CloudArrowDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate">{branch.name}</span>
+            {multipleRemotes && (
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {branch.remote}
+              </span>
+            )}
+            {branch.lastCommitDate && (
+              <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                {formatRelativeTime(branch.lastCommitDate)}
+              </span>
+            )}
+          </button>
+        }
+      />
+      <ContextMenuContent className="min-w-48">
+        <ContextMenuItem onClick={() => switchTo(branch.name)}>
+          Check out
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => copyText(branch.name, "Branch name copied")}
+        >
+          Copy branch name
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+
   return (
     <>
       <Popover.Root
@@ -935,9 +1010,12 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               </div>
               <div className="max-h-60 overflow-y-auto">
                 {visibleBranches.length === 0 &&
-                  archivedBranches.length === 0 && (
+                  archivedBranches.length === 0 &&
+                  remoteOnly.length === 0 && (
                     <p className="px-3 py-4 text-center text-xs text-muted-foreground">
-                      No branches match "{branchFilter.trim()}"
+                      {branchFilter.trim()
+                        ? `No branches match "${branchFilter.trim()}"`
+                        : "No branches"}
                     </p>
                   )}
                 {visibleBranches.map(renderBranchRow)}
@@ -957,6 +1035,25 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                       Archived ({archivedBranches.length})
                     </button>
                     {showArchived && archivedBranches.map(renderBranchRow)}
+                  </>
+                )}
+                {remoteOnly.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      onClick={() => setShowRemote((v) => !v)}
+                      title="Branches on your remotes you haven't checked out yet"
+                    >
+                      <CaretDownIcon
+                        className={`size-3 transition-transform ${
+                          showRemote ? "" : "-rotate-90"
+                        }`}
+                        weight="bold"
+                      />
+                      Remote ({remoteOnly.length})
+                    </button>
+                    {showRemote && remoteOnly.map(renderRemoteRow)}
                   </>
                 )}
               </div>

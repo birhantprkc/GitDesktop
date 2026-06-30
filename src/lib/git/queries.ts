@@ -117,6 +117,18 @@ export function useBranches(repo: string) {
   });
 }
 
+/** Branches that exist on a remote (reflecting the last fetch), for the switcher's
+ *  "Remote" group. `enabled` gates the fetch so it only runs while the menu is
+ *  open, like the divergence/worktree queries. */
+export function useRemoteBranches(repo: string, enabled = true) {
+  return useQuery({
+    queryKey: ["repo", repo, "remote-branches"] as const,
+    queryFn: () => api.gitRemoteBranches(repo),
+    enabled: enabled && Boolean(repo),
+    staleTime: 30_000,
+  });
+}
+
 const worktreeKey = (repo: string) => ["repo", repo, "user-worktrees"] as const;
 
 /** The repo's user-facing worktrees (session worktrees filtered out by the

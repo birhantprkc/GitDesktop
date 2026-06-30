@@ -60,6 +60,7 @@ import type {
   PunchCard,
   ReleaseDetails,
   ReleaseInfo,
+  RemoteBranch,
   RepoDependencies,
   RepoInfo,
   RepoLabel,
@@ -116,6 +117,9 @@ export const gitStatus = (repoPath: string) =>
 
 export const gitBranches = (repoPath: string) =>
   invoke<Branch[]>("git_branches", { repoPath });
+
+export const gitRemoteBranches = (repoPath: string) =>
+  invoke<RemoteBranch[]>("git_remote_branches", { repoPath });
 
 export const gitRepoOwners = (repoPaths: string[]) =>
   invoke<RepoOwner[]>("git_repo_owners", { repoPaths });

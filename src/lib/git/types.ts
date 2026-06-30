@@ -48,6 +48,17 @@ export interface Branch {
   archived: boolean;
 }
 
+/** A branch that exists on a remote but not locally — offered in the switcher so
+ *  it can be checked out (which creates a local tracking branch). */
+export interface RemoteBranch {
+  /** Short branch name, without the remote prefix (e.g. `feature/x`). */
+  name: string;
+  /** The remote it lives on (e.g. `origin`). */
+  remote: string;
+  /** ISO-8601 committer date of the branch tip (for recency sorting). */
+  lastCommitDate: string;
+}
+
 /** A local branch's ahead/behind counts vs. the default branch. */
 export interface BranchDivergence {
   name: string;

@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::git::runner::{run_git, run_git_mutating, run_git_raw, DEFAULT_TIMEOUT};
-use crate::git::types::{Branch, BranchDivergence};
+use crate::git::types::{Branch, BranchDivergence, RemoteBranch};
 use crate::state::AppState;
 
 fn validate_ref_name(name: &str) -> AppResult<()> {
@@ -48,6 +48,46 @@ pub async fn git_branches(repo_path: String) -> AppResult<Vec<Branch>> {
             upstream: upstream.filter(|u| !u.is_empty()).map(str::to_string),
             last_commit_date: date.unwrap_or("").to_string(),
             archived: archived.contains(name),
+        });
+    }
+    Ok(branches)
+}
+
+/// Branches that exist on a remote, for the switcher's "Remote" group. Returns
+/// every `refs/remotes/<remote>/<branch>` (skipping each remote's symbolic
+/// `HEAD`); the frontend drops the ones already checked out locally and the
+/// internal `gd/session/*` branches. The list reflects the last fetch.
+#[tauri::command]
+pub async fn git_remote_branches(repo_path: String) -> AppResult<Vec<RemoteBranch>> {
+    let out = run_git(
+        Some(&repo_path),
+        &[
+            "for-each-ref",
+            "refs/remotes",
+            "--format=%(refname:short)%00%(committerdate:iso8601-strict)",
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let mut branches = Vec::new();
+    for line in out.stdout_lossy().lines() {
+        let mut parts = line.split('\0');
+        let (Some(refname), date) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        // `%(refname:short)` is `<remote>/<branch>` (e.g. `origin/feature/x`).
+        // Split once so a branch name containing `/` stays intact.
+        let Some((remote, name)) = refname.split_once('/') else {
+            continue;
+        };
+        // Skip the remote's symbolic HEAD (`origin/HEAD` → points at the default).
+        if name == "HEAD" || name.is_empty() {
+            continue;
+        }
+        branches.push(RemoteBranch {
+            name: name.to_string(),
+            remote: remote.to_string(),
+            last_commit_date: date.unwrap_or("").to_string(),
         });
     }
     Ok(branches)

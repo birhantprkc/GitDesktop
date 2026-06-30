@@ -67,6 +67,7 @@ pub fn run() {
             git::repo::git_repo_owners,
             git::status::git_status,
             git::branches::git_branches,
+            git::branches::git_remote_branches,
             git::branches::git_checkout_branch,
             git::branches::git_create_branch,
             git::branches::git_rename_branch,
