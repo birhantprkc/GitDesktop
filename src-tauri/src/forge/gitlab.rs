@@ -714,6 +714,55 @@ pub async fn unapprove_pr(repo_path: &str, number: u64) -> AppResult<()> {
     Ok(())
 }
 
+// ── Merge requests (merge) ────────────────────────────────────────────────────
+//
+// MR merge — a SHARED control with GitHub's `gh pr merge`. GitLab's merge endpoint
+// controls `squash` (the one genuine per-MR knob) + `should_remove_source_branch`; the
+// merge-commit-vs-fast-forward shape is the PROJECT's `merge_method` setting, NOT a
+// per-MR choice. So we offer only `merge` (squash=false) and `squash` (squash=true) and
+// reject `rebase` (GitLab has no per-MR rebase-merge — that's the project setting plus a
+// separate async endpoint, deliberately out of scope). The optional `sha` guards against
+// merging a head the user never saw (GitLab 409s if it moved). Validated live against the
+// demo: squash+delete+sha happy path, sha-mismatch 409, and 405 on an unmergeable MR — all
+// exit non-zero carrying a message, so they surface via the existing toast.
+
+/// Merge a merge request. `strategy` is `merge` (merge commit) or `squash`; `rebase` is
+/// rejected (GitLab merges via the project's configured method). `sha`, when non-empty,
+/// must match the source branch HEAD or GitLab refuses — a stale-view safety guard.
+pub async fn merge_mr(
+    repo_path: &str,
+    number: u64,
+    strategy: &str,
+    delete_branch: bool,
+    sha: Option<&str>,
+) -> AppResult<()> {
+    let squash = match strategy {
+        "merge" => false,
+        "squash" => true,
+        other => {
+            return Err(AppError::InvalidArgument(format!(
+                "GitLab merges via the project's configured method; '{other}' isn't a per-MR option"
+            )));
+        }
+    };
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/merge_requests/{number}/merge");
+    let squash_arg = format!("squash={squash}");
+    let remove_arg = format!("should_remove_source_branch={delete_branch}");
+    let mut args = vec![
+        "api", "--method", "PUT", &endpoint, "-f", &squash_arg, "-f", &remove_arg,
+    ];
+    // Only guard on a non-empty SHA — an empty `sha=` would itself be rejected.
+    let sha_arg;
+    if let Some(s) = sha.filter(|s| !s.is_empty()) {
+        sha_arg = format!("sha={s}");
+        args.push("-f");
+        args.push(&sha_arg);
+    }
+    run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
 // ── Issues (read) ─────────────────────────────────────────────────────────────
 //
 // GitLab issues map onto the same neutral `IssueInfo`/`IssueDetails` the GitHub

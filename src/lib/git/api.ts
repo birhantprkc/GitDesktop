@@ -1223,12 +1223,23 @@ export const ghPrMinimizeComment = (
 export const ghPrUnminimizeComment = (repoPath: string, commentId: string) =>
   invoke<void>("gh_pr_unminimize_comment", { repoPath, commentId });
 
-export const ghPrMerge = (
+// MR merge is provider-neutral (GitHub via `gh pr merge`, GitLab via `glab`). `sha`
+// is GitLab's optional stale-view guard (it 409s if the head moved since the user
+// loaded the MR); GitHub has no analogue and ignores it.
+export const forgePrMerge = (
   repoPath: string,
   number: number,
   strategy: MergeStrategy,
   deleteBranch: boolean,
-) => invoke<void>("gh_pr_merge", { repoPath, number, strategy, deleteBranch });
+  sha?: string,
+) =>
+  invoke<void>("forge_pr_merge", {
+    repoPath,
+    number,
+    strategy,
+    deleteBranch,
+    sha: sha ?? null,
+  });
 
 export const forgePrClose = (repoPath: string, number: number) =>
   invoke<void>("forge_pr_close", { repoPath, number });

@@ -214,6 +214,7 @@ pub fn run() {
             forge::forge_pr_approvals,
             forge::forge_pr_approve,
             forge::forge_pr_unapprove,
+            forge::forge_pr_merge,
             github::pr::gh_status,
             github::pr::gh_accounts,
             github::pr::gh_switch_account,

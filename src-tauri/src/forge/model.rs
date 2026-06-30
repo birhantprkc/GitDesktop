@@ -151,6 +151,9 @@ pub struct Implemented {
     /// GitHub surfaces approval through the older review flow (the Review menu), not
     /// this control, so it's the one write GitHub leaves `false` (see `all`).
     pub mr_approve: bool,
+    /// Merging a merge/pull request (strategy + delete-source-branch). A shared
+    /// control — GitHub via `gh pr merge`, GitLab via `glab` — so it's true for both.
+    pub mr_merge: bool,
 }
 
 impl Implemented {
@@ -172,6 +175,7 @@ impl Implemented {
             mr_comment: true,
             mr_state: true,
             mr_approve: false,
+            mr_merge: true,
         }
     }
 
@@ -190,6 +194,7 @@ impl Implemented {
             mr_comment: false,
             mr_state: false,
             mr_approve: false,
+            mr_merge: false,
         }
     }
 
@@ -202,8 +207,8 @@ impl Implemented {
             // GitLab read ops arrive incrementally — merge requests, issues, CI
             // pipelines, and releases (read) are wired up; insights / repo actions
             // still degrade to "coming soon" until their impls land. WRITES land
-            // per-action: issue + MR comment and close/reopen, plus the GitLab-only
-            // MR approve/unapprove toggle. (MR merge / review stay GitHub-only for now.)
+            // per-action: issue + MR comment and close/reopen, the GitLab-only MR
+            // approve/unapprove toggle, and MR merge. (Full MR review stays GitHub-only.)
             Provider::GitLab => Self {
                 pull_requests: true,
                 issues: true,
@@ -217,6 +222,7 @@ impl Implemented {
                 mr_comment: true,
                 mr_state: true,
                 mr_approve: true,
+                mr_merge: true,
             },
             Provider::Bitbucket => Self::none(),
         }
@@ -356,20 +362,20 @@ mod tests {
         assert!(imp.releases);
         assert!(!imp.insights && !imp.repo_actions && !imp.publish);
         // First WRITES: issue + MR comment and close/reopen are wired up for GitLab,
-        // plus the GitLab-only MR approve/unapprove toggle.
+        // plus the GitLab-only MR approve/unapprove toggle and MR merge.
         assert!(imp.issue_comment && imp.issue_state);
-        assert!(imp.mr_comment && imp.mr_state && imp.mr_approve);
+        assert!(imp.mr_comment && imp.mr_state && imp.mr_approve && imp.mr_merge);
     }
 
     #[test]
     fn github_implements_issue_and_mr_writes_bitbucket_does_not() {
         let gh = Implemented::for_provider(Provider::GitHub);
         assert!(gh.issue_comment && gh.issue_state && gh.mr_comment && gh.mr_state);
-        // MR approve/unapprove is the one GitLab-only write — GitHub approves via the
-        // review flow, not this toggle.
-        assert!(!gh.mr_approve);
+        // MR merge is a shared control (both providers); approve/unapprove is the one
+        // GitLab-only write — GitHub approves via the review flow, not this toggle.
+        assert!(gh.mr_merge && !gh.mr_approve);
         let bb = Implemented::for_provider(Provider::Bitbucket);
         assert!(!bb.issue_comment && !bb.issue_state && !bb.mr_comment && !bb.mr_state);
-        assert!(!bb.mr_approve);
+        assert!(!bb.mr_approve && !bb.mr_merge);
     }
 }

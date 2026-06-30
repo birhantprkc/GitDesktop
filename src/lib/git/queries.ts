@@ -1443,6 +1443,7 @@ const NO_FORGE_STATUS: ForgeStatus = {
     mrComment: false,
     mrState: false,
     mrApprove: false,
+    mrMerge: false,
   },
 };
 
@@ -2307,7 +2308,16 @@ export function useMergePr(repo: string) {
       number: number;
       strategy: api.MergeStrategy;
       deleteBranch: boolean;
-    }) => api.ghPrMerge(repo, args.number, args.strategy, args.deleteBranch),
+      /** GitLab stale-view guard (the MR head sha); GitHub ignores it. */
+      sha?: string;
+    }) =>
+      api.forgePrMerge(
+        repo,
+        args.number,
+        args.strategy,
+        args.deleteBranch,
+        args.sha,
+      ),
   );
 }
 

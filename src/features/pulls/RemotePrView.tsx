@@ -157,6 +157,10 @@ export function RemotePrView({
   // approves via the Review menu above), so it's GitLab-only and gated on the forge
   // feature directly — NOT `canWrite || …`, which would duplicate the Review control.
   const canApprove = forgeFeatureReady(forge.data, "mrApprove");
+  // Merge is a SHARED control (GitHub `gh pr merge`, GitLab `glab`), so it uses the
+  // `canWrite || …` gate like comment/close — GitHub keeps it while forge-status is
+  // pending/failed; a ready GitLab repo enables it too.
+  const canMerge = canWrite || forgeFeatureReady(forge.data, "mrMerge");
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
@@ -294,7 +298,14 @@ export function RemotePrView({
 
   function confirmMerge() {
     mergePr.mutate(
-      { number, strategy: mergeStrategy, deleteBranch },
+      {
+        number,
+        strategy: mergeStrategy,
+        deleteBranch,
+        // GitLab stale-view guard: the head sha the user is looking at (the same oid
+        // the AI-review path uses). GitLab 409s if the head moved; GitHub ignores it.
+        sha: pr?.commits.at(-1)?.oid,
+      },
       {
         onSuccess: () => {
           toast.success(`Merged #${number}`);
@@ -326,6 +337,12 @@ export function RemotePrView({
     selectedPath && pr?.files.some((f) => f.path === selectedPath)
       ? selectedPath
       : (pr?.files[0]?.path ?? null);
+
+  // GitLab's merge sends a stale-view `sha` guard sourced from the MR's head commit
+  // (`pr.commits.at(-1)`). If the best-effort commits read failed, that's absent and
+  // we can't guard — so for GitLab we disable Merge rather than merge unguarded on an
+  // irreversible op; reloading refetches the head. (GitHub has no guard, so it's exempt.)
+  const mergeGuardMissing = provider === "gitlab" && pr?.commits.length === 0;
 
   // Approval display (GitLab-only): a quiet count shown only when there's something
   // to report — someone has approved, or a Premium project requires N approvals.
@@ -846,10 +863,10 @@ export function RemotePrView({
         />
       )}
 
-      {/* The open-MR footer hosts Close (a GitLab write) alongside Merge + Ready
-          (GitHub-only) — show it whenever either is available, and gate each
-          control individually so GitLab gets just Close. */}
-      {isOpen && (canChangeState || canWrite) && (
+      {/* The open-MR footer hosts Close + Merge (GitLab writes too) alongside Ready
+          (GitHub-only) — show it whenever any is available, and gate each control
+          individually. */}
+      {isOpen && (canChangeState || canMerge || canWrite) && (
         <div className="flex items-center gap-2 border-t p-3">
           {canWrite && pr.isDraft && (
             <Button
@@ -882,17 +899,19 @@ export function RemotePrView({
               Close
             </Button>
           )}
-          {canWrite && (
+          {canMerge && (
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
                   <Button
                     size="sm"
-                    disabled={busy || pr.isDraft}
+                    disabled={busy || pr.isDraft || mergeGuardMissing}
                     title={
                       pr.isDraft
-                        ? "Mark the PR ready before merging"
-                        : "Merge this pull request"
+                        ? `Mark the ${prNoun} ready before merging`
+                        : mergeGuardMissing
+                          ? "Reload to merge — couldn't load the head commit to guard the merge"
+                          : `Merge this ${prNoun}`
                     }
                   >
                     <GitMergeIcon data-icon="inline-start" />
@@ -902,12 +921,16 @@ export function RemotePrView({
                 }
               />
               <DropdownMenuContent align="end" className="w-56">
-                {(["merge", "squash", "rebase"] as const).map((s) => {
-                  const blocked = !isMergeMethodAllowed(
-                    rulesConfig,
-                    pr.baseRefName,
-                    s,
-                  );
+                {/* GitLab has no per-MR rebase-merge (that's the project's merge_method
+                    setting), so it gets only merge + squash. Branch-rule gating is
+                    GitHub branch-protection data, so it never applies to GitLab. */}
+                {(provider === "gitlab"
+                  ? (["merge", "squash"] as const)
+                  : (["merge", "squash", "rebase"] as const)
+                ).map((s) => {
+                  const blocked =
+                    provider !== "gitlab" &&
+                    !isMergeMethodAllowed(rulesConfig, pr.baseRefName, s);
                   return (
                     <DropdownMenuItem
                       key={s}
@@ -953,6 +976,8 @@ export function RemotePrView({
         open={mergeOpen}
         onClose={() => setMergeOpen(false)}
         number={number}
+        host={remoteLabel}
+        prNoun={prNoun}
         headRefName={pr.headRefName}
         baseRefName={pr.baseRefName}
         strategyLabel={MERGE_LABEL[mergeStrategy]}

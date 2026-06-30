@@ -459,6 +459,9 @@ export interface ForgeImplemented {
   /** Approving / unapproving a merge request via the bodyless toggle — GitLab-only
    *  (GitHub approves through the review flow), so it's false for GitHub. */
   mrApprove: boolean;
+  /** Merging a merge/pull request (strategy + delete-source-branch) — a shared
+   *  control, so true for both GitHub and GitLab. */
+  mrMerge: boolean;
 }
 
 /** A merge/pull request's approval summary — who has approved and whether the

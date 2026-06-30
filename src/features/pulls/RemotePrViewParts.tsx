@@ -97,6 +97,8 @@ export function MergePrDialog({
   open,
   onClose,
   number,
+  host,
+  prNoun,
   headRefName,
   baseRefName,
   strategyLabel,
@@ -108,6 +110,10 @@ export function MergePrDialog({
   open: boolean;
   onClose: () => void;
   number: number;
+  /** "GitHub" / "GitLab" — where the merge happens. */
+  host: string;
+  /** "pull request" / "merge request". */
+  prNoun: string;
   headRefName: string;
   baseRefName: string;
   strategyLabel: string;
@@ -125,11 +131,13 @@ export function MergePrDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Merge pull request #{number}?</DialogTitle>
+          <DialogTitle>
+            Merge {prNoun} #{number}?
+          </DialogTitle>
           <DialogDescription>
             {strategyLabel} — merges{" "}
             <span className="font-mono">{headRefName}</span> into{" "}
-            <span className="font-mono">{baseRefName}</span> on GitHub. This
+            <span className="font-mono">{baseRefName}</span> on {host}. This
             cannot be easily undone.
           </DialogDescription>
         </DialogHeader>

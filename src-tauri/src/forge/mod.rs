@@ -283,6 +283,30 @@ pub async fn forge_pr_unapprove(repo_path: String, number: u64) -> AppResult<()>
     }
 }
 
+/// Merge a merge/pull request, behind the abstraction. GitHub delegates to the
+/// existing `gh pr merge` UNCHANGED (it has no `sha` guard, so it's dropped); GitLab
+/// merges via `glab` — `merge`/`squash` only (no per-MR rebase) with an optional
+/// head-`sha` stale-view guard. `strategy` is `merge`/`squash`/`rebase` (rebase is
+/// GitHub-only; the GitLab arm rejects it).
+#[tauri::command]
+pub async fn forge_pr_merge(
+    repo_path: String,
+    number: u64,
+    strategy: String,
+    delete_branch: bool,
+    sha: Option<String>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::merge_mr(&repo_path, number, &strategy, delete_branch, sha.as_deref()).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => crate::github::pr::gh_pr_merge(repo_path, number, strategy, delete_branch).await,
+    }
+}
+
 /// A repo's issues, behind the provider abstraction. GitHub delegates to the
 /// existing `gh issue list`; GitLab maps `glab` issues onto the same neutral
 /// [`IssueInfo`](crate::github::issue::IssueInfo). `state` is `"open"` or

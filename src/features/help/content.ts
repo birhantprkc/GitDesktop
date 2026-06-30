@@ -391,10 +391,12 @@ from the branch diff and commit subjects{{/ai}}.
 Point the app at a **GitLab** repo and the same tab lists its **merge requests** (open and
 closed/merged) next to any local PRs. Open one for the description, comments, commits, and a
 highlighted **diff** (with an **Open on GitLab** link) — and the **first GitLab MR writes**:
-**comment** on it, **close / reopen** it, and **approve / unapprove** it (a reviewer action,
-with the approval count shown inline), right from the app. Full reviews (a comment or
-request-changes with a body), merging, and creating MRs from the app are coming soon; for now
-those live on GitLab. GitLab uses the GitLab
+**comment** on it, **close / reopen** it, **approve / unapprove** it (a reviewer action,
+with the approval count shown inline), and **merge** it — merge or squash, optionally deleting
+the source branch, guarded so it never merges a head you didn't see (GitLab applies the project's
+configured merge method, so there's no separate "rebase" option). Full reviews (a comment or
+request-changes with a body) and creating MRs from the app are coming soon; for now those live on
+GitLab. GitLab uses the GitLab
 CLI (\`glab\`) — run \`glab auth login\` once, no tokens stored. Its issues, CI pipelines, and
 releases read too (see their sections below).
 
