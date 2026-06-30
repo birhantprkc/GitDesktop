@@ -485,7 +485,8 @@ GitHub releases.
     body: `# GitHub Actions
 
 The **Actions** tab ({{kbd:tab-actions}}, in the More ▾ menu) is a cockpit for your GitHub
-Actions workflow runs (needs \`gh\` + a GitHub remote).
+Actions workflow runs (needs \`gh\` + a GitHub remote). **GitLab pipelines** show here too,
+read-only (see below).
 
 - The list shows recent runs with live status, refreshing while any run is active. Filter
   by text or scope to the current branch.
@@ -494,6 +495,14 @@ Actions workflow runs (needs \`gh\` + a GitHub remote).
 - **Run workflow…** manually dispatches a workflow (one with a \`workflow_dispatch\`
   trigger) on a branch you choose, including any **input parameters** it defines.
 - For a failed job, expand **failed-step logs** inline.
+
+## GitLab pipelines
+
+Point the app at a **GitLab** repo and the same tab lists its **pipelines** — newest first,
+filterable, optionally scoped to the current branch — with the header CI badge tracking the
+latest one. Open a pipeline for a **read-only** view of its **jobs** (status + durations);
+expand a job for its **log**. Re-running, cancelling, and dispatching pipelines from the app
+is coming soon; for now those actions live on GitLab.
 {{ai}}
 ## Debug with AI
 

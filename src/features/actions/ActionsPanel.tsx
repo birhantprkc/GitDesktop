@@ -22,8 +22,12 @@ import { StatusIcon, statusLabel } from "./status";
 
 export function ActionsPanel({ repoPath }: { repoPath: string }) {
   const forge = useForgeStatus(repoPath);
-  // CI is GitHub Actions only so far; a ready GitLab repo degrades to "coming soon".
+  // CI reads are provider-neutral now (GitHub Actions + GitLab pipelines): a ready
+  // repo lists runs either way. Dispatching a workflow is GitHub-only, so gate that
+  // one write affordance on "not a known read-only provider" (like the MR/issue views).
   const ghReady = forgeFeatureReady(forge.data, "ci");
+  const provider = forge.data?.provider;
+  const canWrite = provider !== "gitlab" && provider !== "bitbucket";
   const status = useRepoStatus(repoPath);
   const currentBranch = status.data?.branch.name ?? null;
 
@@ -76,35 +80,36 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
         >
           This branch
         </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          className="ml-auto"
-          disabled={!ghReady}
-          title={
-            ghReady
-              ? "Run a workflow"
-              : "Sign in with GitHub CLI to run workflows"
-          }
-          onClick={() => setRunOpen(true)}
-        >
-          <PlayIcon data-icon="inline-start" />
-          Run workflow…
-        </Button>
-        <Button
-          variant="outline"
-          size="icon-sm"
-          aria-label="Refresh runs"
-          disabled={!ghReady || runs.isFetching}
-          title={
-            ghReady ? "Refresh runs" : "Sign in with GitHub CLI to load runs"
-          }
-          onClick={() => runs.refetch()}
-        >
-          <ArrowClockwiseIcon
-            className={cn(runs.isFetching && "animate-spin")}
-          />
-        </Button>
+        <div className="ml-auto flex items-center gap-1">
+          {canWrite && (
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={!ghReady}
+              title={
+                ghReady
+                  ? "Run a workflow"
+                  : "Sign in with GitHub CLI to run workflows"
+              }
+              onClick={() => setRunOpen(true)}
+            >
+              <PlayIcon data-icon="inline-start" />
+              Run workflow…
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Refresh runs"
+            disabled={!ghReady || runs.isFetching}
+            title={ghReady ? "Refresh runs" : "Connect this repo to load runs"}
+            onClick={() => runs.refetch()}
+          >
+            <ArrowClockwiseIcon
+              className={cn(runs.isFetching && "animate-spin")}
+            />
+          </Button>
+        </div>
       </div>
       <div className="border-b p-2">
         <Input

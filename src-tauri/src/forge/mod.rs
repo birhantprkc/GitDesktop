@@ -228,6 +228,65 @@ pub async fn forge_issue_view(
     }
 }
 
+/// A repo's CI runs, behind the provider abstraction. GitHub delegates to
+/// `gh run list`; GitLab maps `glab` pipelines onto the same neutral
+/// [`WorkflowRun`](crate::github::actions::WorkflowRun). `limit` caps the count;
+/// `branch` optionally scopes to one ref. Reads only — re-run / cancel / dispatch
+/// stay GitHub-only.
+#[tauri::command]
+pub async fn forge_ci_run_list(
+    repo_path: String,
+    limit: u32,
+    branch: Option<String>,
+) -> AppResult<Vec<crate::github::actions::WorkflowRun>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::list_runs(&repo_path, limit, branch).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket pipelines aren't supported yet.".into(),
+        )),
+        _ => github::list_runs(&repo_path, limit, branch).await,
+    }
+}
+
+/// One CI run with its jobs, behind the abstraction.
+#[tauri::command]
+pub async fn forge_ci_run_view(
+    repo_path: String,
+    run_id: u64,
+) -> AppResult<crate::github::actions::RunDetail> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::view_run(&repo_path, run_id).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket pipelines aren't supported yet.".into(),
+        )),
+        _ => github::view_run(&repo_path, run_id).await,
+    }
+}
+
+/// The failed jobs' logs for one CI run, behind the abstraction.
+#[tauri::command]
+pub async fn forge_ci_run_failed_logs(repo_path: String, run_id: u64) -> AppResult<String> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::run_failed_logs(&repo_path, run_id).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket pipelines aren't supported yet.".into(),
+        )),
+        _ => github::run_failed_logs(&repo_path, run_id).await,
+    }
+}
+
+/// One CI job's log, behind the abstraction.
+#[tauri::command]
+pub async fn forge_ci_job_logs(repo_path: String, job_id: u64) -> AppResult<String> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::job_logs(&repo_path, job_id).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket pipelines aren't supported yet.".into(),
+        )),
+        _ => github::job_logs(&repo_path, job_id).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

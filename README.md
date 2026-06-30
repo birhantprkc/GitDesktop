@@ -46,10 +46,11 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   or failed), cancel, dispatch a workflow, and read failed-step logs — none of
   which GitHub Desktop does.
 - **GitLab too (read)** — via the **GitLab CLI (`glab`)**, browse and clone your
-  GitLab projects and read **merge requests** and **issues** in the same panels:
-  lists, plus read-only detail views (MR comments, commits, and a highlighted diff;
-  issue comments with a labels/assignees/milestone rail). Other GitLab surfaces
-  read "coming soon" for now; GitHub is unchanged.
+  GitLab projects and read **merge requests**, **issues**, and **CI pipelines** in
+  the same panels: lists, plus read-only detail views (MR comments/commits/diff;
+  issue comments with a labels/assignees/milestone rail; pipeline jobs with logs and
+  a branch CI badge). Other GitLab surfaces read "coming soon" for now; GitHub is
+  unchanged.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works
   in an isolated worktree, so your own checkout is never touched. Follow it
   **step by step** — every file it reads, edits, and command it runs — and

@@ -14,11 +14,12 @@ import { StatusIcon, statusLabel } from "./status";
  */
 export function BranchCiBadge({ repoPath }: { repoPath: string }) {
   const gh = useForgeStatus(repoPath);
-  // GitHub Actions only so far — no CI badge for GitLab until its CI read lands.
-  const ghReady = forgeFeatureReady(gh.data, "ci");
+  // Renders for any provider with CI read implemented — GitHub Actions or GitLab
+  // pipelines; useLatestRun routes through the provider-neutral forge_ci_run_list.
+  const ciReady = forgeFeatureReady(gh.data, "ci");
   const status = useRepoStatus(repoPath);
   const branch = status.data?.branch.name ?? null;
-  const latest = useLatestRun(repoPath, ghReady, branch);
+  const latest = useLatestRun(repoPath, ciReady, branch);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
   const selectRun = useUiStore((s) => s.selectRun);
 

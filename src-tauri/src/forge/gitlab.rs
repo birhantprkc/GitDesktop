@@ -17,6 +17,7 @@ use crate::forge::model::{
     Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, Implemented, Provider,
 };
 use crate::forge::Forge;
+use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::issue::{IssueDetails, IssueInfo, Milestone};
 use crate::github::pr::{
     PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrThreadOut, RepoLabel,
@@ -183,6 +184,23 @@ pub async fn clone_credential_config(clone_url: &str) -> AppResult<Vec<String>> 
 /// needs escaping for the paths GitLab allows (letters/digits/`_`/`-`/`.`).
 fn encode_project(path: &str) -> String {
     path.replace('/', "%2F")
+}
+
+/// Percent-encode a value for safe use inside a `glab api` query string. `glab`
+/// forwards the endpoint verbatim (it only encodes the path, not query values), so
+/// a value with a query-significant byte (`&`, `#`, `?`, `=`, `%`, space, …) must be
+/// encoded or it corrupts the query. Encodes everything outside RFC-3986 unreserved.
+fn encode_query_value(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// The project's full path (`group/name`) from the repo's origin remote.
@@ -766,6 +784,363 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
     })
 }
 
+// ── Pipelines (CI, read) ──────────────────────────────────────────────────────
+//
+// GitLab pipelines map onto the same neutral `WorkflowRun`/`RunDetail`/`RunJob`
+// the GitHub Actions panels render, so the frontend stays provider-agnostic. The
+// two models differ in two ways we bridge here:
+//   • GitLab has ONE `status` per pipeline/job; GitHub splits lifecycle (`status`)
+//     from result (`conclusion`). `map_ci_status` collapses GitLab's onto both.
+//   • GitHub nests run → jobs → steps; GitLab is pipeline → jobs (grouped by
+//     `stage`, no per-job steps via the API), so GitLab jobs map to neutral jobs
+//     with an empty `steps` list. Logs are per-job (`/jobs/<id>/trace`).
+// Reads only — re-run / cancel / dispatch stay GitHub-only and are hidden for
+// GitLab on the frontend.
+
+/// Failed-step logs can run to many MB; keep the tail (failures land at the end).
+const CI_RUN_LOG_CAP: usize = 200_000;
+/// Tighter per-job cap (a job log is also fed to the AI debugger).
+const CI_JOB_LOG_CAP: usize = 60_000;
+
+/// Collapse GitLab's single pipeline/job `status` onto GitHub's two-field model:
+/// `(lifecycle status, conclusion)`. A run/job is "active" while `status` isn't
+/// `"completed"`, so anything still in flight maps to a non-completed lifecycle and
+/// an empty conclusion; finished states carry their result in `conclusion`.
+fn map_ci_status(s: &str) -> (String, String) {
+    let (status, conclusion) = match s {
+        "success" => ("completed", "success"),
+        "failed" => ("completed", "failure"),
+        "canceled" | "cancelled" => ("completed", "cancelled"),
+        "skipped" => ("completed", "skipped"),
+        // A pipeline blocked on a manual job — closest neutral is "needs a human".
+        "manual" => ("completed", "action_required"),
+        "running" => ("in_progress", ""),
+        "pending" => ("pending", ""),
+        "created" | "preparing" => ("queued", ""),
+        "waiting_for_resource" | "scheduled" => ("waiting", ""),
+        // Unknown/new GitLab state — treat as finished-neutral rather than guess.
+        _ => ("completed", ""),
+    };
+    (status.to_string(), conclusion.to_string())
+}
+
+/// GitLab's pipeline `source` → a short label for the run's "workflow" slot
+/// (GitLab has no per-workflow name; the whole `.gitlab-ci.yml` is the pipeline).
+fn friendly_source(source: &str) -> String {
+    match source {
+        "push" => "Push",
+        "web" => "Manual",
+        "schedule" => "Schedule",
+        "merge_request_event" => "Merge request",
+        "trigger" => "Trigger",
+        "pipeline" => "Multi-project",
+        "api" => "API",
+        "external" | "external_pull_request_event" => "External",
+        "" => "Pipeline",
+        other => other,
+    }
+    .to_string()
+}
+
+/// Keep at most `cap` bytes, preferring the tail (CI failures land at the end), on
+/// a char boundary. Mirrors the GitHub log commands' truncation.
+fn tail_cap(text: String, cap: usize) -> String {
+    if text.len() <= cap {
+        return text;
+    }
+    let mut start = text.len() - cap;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("…(earlier output truncated)\n{}", &text[start..])
+}
+
+/// Clean a GitLab job trace into the plain text the log viewer expects: drop
+/// GitLab's `section_start/end:<ts>:<name>` fold markers, ANSI CSI escapes, and
+/// carriage returns — runner-formatting noise the GitHub `--log` path never emits.
+fn clean_trace(raw: &str) -> String {
+    // 1. Drop the markers FIRST, while the CR GitLab puts after the section name
+    //    still delimits it from the visible content. (Stripping CRs first would
+    //    fuse `…:prepare` into the following `Preparing…` and eat real output.)
+    let mut without_markers = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(idx) = rest.find("section_") {
+        without_markers.push_str(&rest[..idx]);
+        let tail = &rest[idx..];
+        let prefix = if tail.starts_with("section_start:") {
+            "section_start:"
+        } else if tail.starts_with("section_end:") {
+            "section_end:"
+        } else {
+            // A "section_" that isn't a marker — keep it and move past.
+            without_markers.push_str("section_");
+            rest = &tail["section_".len()..];
+            continue;
+        };
+        // Skip the prefix, the timestamp digits, ':' and the section name (which
+        // ends at the CR before the content — non-`[A-Za-z0-9_.-]`).
+        let after = &tail[prefix.len()..];
+        let digits_end = after
+            .char_indices()
+            .find(|(_, ch)| !ch.is_ascii_digit())
+            .map_or(after.len(), |(i, _)| i);
+        let named = after[digits_end..].strip_prefix(':').unwrap_or(&after[digits_end..]);
+        let name_end = named
+            .char_indices()
+            .find(|(_, ch)| !(ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-' || *ch == '.'))
+            .map_or(named.len(), |(i, _)| i);
+        rest = &named[name_end..];
+    }
+    without_markers.push_str(rest);
+
+    // 2. Strip ANSI CSI escapes (ESC `[` … final byte 0x40–0x7E) and carriage returns.
+    let mut out = String::with_capacity(without_markers.len());
+    let mut it = without_markers.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\u{1b}' {
+            if it.peek() == Some(&'[') {
+                it.next();
+                for n in it.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&n) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if c == '\r' {
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A GitLab pipeline as `glab api …/pipelines` returns it (list + detail core).
+#[derive(Deserialize)]
+struct GlabPipeline {
+    id: u64,
+    #[serde(default)]
+    iid: u64,
+    #[serde(default)]
+    sha: String,
+    #[serde(rename = "ref", default)]
+    git_ref: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    updated_at: String,
+    #[serde(default)]
+    web_url: String,
+    // GitLab 15.5+ pipeline name (from `workflow:name:`); usually absent.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+fn from_glab_pipeline(p: GlabPipeline) -> WorkflowRun {
+    let (status, conclusion) = map_ci_status(&p.status);
+    let workflow_name = friendly_source(&p.source);
+    let name = p.name.unwrap_or_default();
+    let display_title = if name.is_empty() {
+        format!("Pipeline #{}", p.iid)
+    } else {
+        name
+    };
+    WorkflowRun {
+        id: p.id,
+        number: p.iid,
+        display_title,
+        status,
+        conclusion,
+        workflow_name,
+        head_branch: p.git_ref,
+        event: p.source,
+        created_at: p.created_at,
+        // GitLab's list payload has no per-run start time (only detail does); the
+        // duration trend that uses it is GitHub-only-gated, so "" is harmless here.
+        started_at: String::new(),
+        updated_at: p.updated_at,
+        url: p.web_url,
+        head_sha: p.sha,
+    }
+}
+
+/// The commit a job ran against — its title gives the pipeline detail a real header.
+#[derive(Deserialize)]
+struct GlabJobCommit {
+    #[serde(default)]
+    title: String,
+}
+
+/// One job as `glab api …/pipelines/<id>/jobs` returns it.
+#[derive(Deserialize)]
+struct GlabJob {
+    id: u64,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    name: String,
+    // GitLab sends `null` for a not-yet-started/finished job — absorb it.
+    #[serde(default, deserialize_with = "null_to_default")]
+    started_at: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    finished_at: String,
+    #[serde(default)]
+    web_url: String,
+    #[serde(default)]
+    commit: Option<GlabJobCommit>,
+}
+
+fn from_glab_job(j: GlabJob) -> RunJob {
+    let (status, conclusion) = map_ci_status(&j.status);
+    RunJob {
+        id: j.id,
+        name: j.name,
+        status,
+        conclusion,
+        started_at: j.started_at,
+        completed_at: j.finished_at,
+        url: j.web_url,
+        // GitLab exposes no per-job steps via the API — the job is the leaf unit.
+        steps: Vec::new(),
+    }
+}
+
+/// Recent pipelines for this repo, newest first; optionally scoped to one branch.
+pub async fn list_runs(
+    repo_path: &str,
+    limit: u32,
+    branch: Option<String>,
+) -> AppResult<Vec<WorkflowRun>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let per_page = limit.clamp(1, 100);
+    let mut endpoint = format!("projects/{enc}/pipelines?per_page={per_page}");
+    if let Some(b) = branch.as_deref().filter(|s| !s.is_empty()) {
+        // Percent-encode: a branch with a query-significant char (`&`, `#`, `?`, `=`,
+        // `%`) would otherwise corrupt the query and silently return the wrong
+        // (unfiltered) pipeline set. `%2F` for `/` is accepted by GitLab's `ref`.
+        endpoint.push_str(&format!("&ref={}", encode_query_value(b)));
+    }
+    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+    let pipelines: Vec<GlabPipeline> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab pipelines: {e}")))?;
+    Ok(pipelines.into_iter().map(from_glab_pipeline).collect())
+}
+
+/// One pipeline with its jobs, mapped onto `RunDetail` (jobs have empty `steps`).
+pub async fn view_run(repo_path: &str, run_id: u64) -> AppResult<RunDetail> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/pipelines/{run_id}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let p: GlabPipeline = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab pipeline: {e}")))?;
+
+    // Jobs — GitLab returns newest-first; reverse to execution order (stage order),
+    // matching how view_pr reorders commits oldest-first.
+    let mut jobs: Vec<GlabJob> = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/pipelines/{run_id}/jobs?per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    .ok()
+    .and_then(|o| serde_json::from_str::<Vec<GlabJob>>(&o.stdout_lossy()).ok())
+    .unwrap_or_default();
+    jobs.reverse();
+
+    // Prefer the commit subject (free, from the jobs) for the header; else the
+    // pipeline name; else a stable "#iid".
+    let commit_title = jobs
+        .iter()
+        .find_map(|j| j.commit.as_ref())
+        .map(|c| c.title.clone())
+        .filter(|t| !t.is_empty());
+    let name = p.name.clone().unwrap_or_default();
+    let display_title = commit_title
+        .or_else(|| (!name.is_empty()).then_some(name))
+        .unwrap_or_else(|| format!("Pipeline #{}", p.iid));
+
+    let (status, conclusion) = map_ci_status(&p.status);
+    let workflow_name = friendly_source(&p.source);
+    Ok(RunDetail {
+        id: p.id,
+        number: p.iid,
+        display_title,
+        status,
+        conclusion,
+        workflow_name,
+        head_branch: p.git_ref,
+        event: p.source,
+        created_at: p.created_at,
+        url: p.web_url,
+        head_sha: p.sha,
+        jobs: jobs.into_iter().map(from_glab_job).collect(),
+    })
+}
+
+/// One job's log (`/jobs/<id>/trace`), cleaned of ANSI + section markers, tail-capped.
+pub async fn job_logs(repo_path: &str, job_id: u64) -> AppResult<String> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/jobs/{job_id}/trace")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let text = clean_trace(&out.stdout_lossy());
+    let text = if text.trim().is_empty() {
+        "This job produced no log output.".to_string()
+    } else {
+        text
+    };
+    Ok(tail_cap(text, CI_JOB_LOG_CAP))
+}
+
+/// The failed jobs' logs for a pipeline, concatenated — GitLab's analogue of
+/// `gh run view --log-failed` (which GitLab has no single endpoint for).
+pub async fn run_failed_logs(repo_path: &str, run_id: u64) -> AppResult<String> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let jobs: Vec<GlabJob> = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/pipelines/{run_id}/jobs?per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    .ok()
+    .and_then(|o| serde_json::from_str::<Vec<GlabJob>>(&o.stdout_lossy()).ok())
+    .unwrap_or_default();
+    let failed: Vec<&GlabJob> = jobs.iter().filter(|j| j.status == "failed").collect();
+    if failed.is_empty() {
+        return Ok("No failed jobs in this pipeline.".to_string());
+    }
+    let mut text = String::new();
+    for job in failed {
+        if text.len() > CI_RUN_LOG_CAP {
+            break;
+        }
+        let trace = run_glab(
+            Some(repo_path),
+            &["api", &format!("projects/{enc}/jobs/{}/trace", job.id)],
+            GLAB_NETWORK_TIMEOUT,
+        )
+        .await
+        .map(|o| clean_trace(&o.stdout_lossy()))
+        .unwrap_or_default();
+        text.push_str(&format!("===== {} =====\n", job.name));
+        text.push_str(trace.trim_end());
+        text.push_str("\n\n");
+    }
+    Ok(tail_cap(text, CI_RUN_LOG_CAP))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -779,8 +1154,8 @@ mod tests {
         // repo Some => forgeReady is true; MR reads are implemented…
         assert_eq!(s.repo.as_deref(), Some("group/repo"));
         assert!(s.implemented.pull_requests);
-        // …and issue reads; CI still degrades to "coming soon".
-        assert!(s.implemented.issues && !s.implemented.ci);
+        // …issue reads, and CI pipeline reads.
+        assert!(s.implemented.issues && s.implemented.ci);
         // GitLab capability profile (everything but Discussions).
         assert!(!s.capabilities.discussions && s.capabilities.labels);
     }
@@ -908,6 +1283,78 @@ mod tests {
     }
 
     #[test]
+    fn ci_status_maps_to_neutral_two_field_model() {
+        assert_eq!(map_ci_status("success"), ("completed".into(), "success".into()));
+        assert_eq!(map_ci_status("failed"), ("completed".into(), "failure".into()));
+        assert_eq!(map_ci_status("canceled"), ("completed".into(), "cancelled".into()));
+        assert_eq!(map_ci_status("skipped"), ("completed".into(), "skipped".into()));
+        assert_eq!(map_ci_status("manual"), ("completed".into(), "action_required".into()));
+        // In-flight states map to a non-completed lifecycle (so the UI keeps polling).
+        assert_eq!(map_ci_status("running"), ("in_progress".into(), String::new()));
+        assert_eq!(map_ci_status("pending"), ("pending".into(), String::new()));
+        assert_eq!(map_ci_status("created"), ("queued".into(), String::new()));
+    }
+
+    #[test]
+    fn maps_glab_pipeline_to_neutral_run() {
+        let json = r#"{
+            "id": 999,
+            "iid": 12,
+            "sha": "abc123",
+            "ref": "feature/dark-mode",
+            "status": "failed",
+            "source": "push",
+            "created_at": "2026-06-30T00:35:25Z",
+            "updated_at": "2026-06-30T00:35:53Z",
+            "web_url": "https://gitlab.com/g/r/-/pipelines/999",
+            "name": null
+        }"#;
+        let run = from_glab_pipeline(serde_json::from_str(json).unwrap());
+        assert_eq!(run.id, 999);
+        assert_eq!(run.number, 12);
+        // No pipeline name → a stable "#iid" title.
+        assert_eq!(run.display_title, "Pipeline #12");
+        assert_eq!(run.workflow_name, "Push");
+        assert_eq!(run.head_branch, "feature/dark-mode");
+        assert_eq!(run.status, "completed");
+        assert_eq!(run.conclusion, "failure");
+        assert_eq!(run.head_sha, "abc123");
+    }
+
+    #[test]
+    fn maps_glab_job_to_neutral_with_no_steps() {
+        // A not-yet-started job sends `started_at: null` — must absorb, not sink.
+        let json = r#"{
+            "id": 5151,
+            "status": "skipped",
+            "stage": "build",
+            "name": "build",
+            "started_at": null,
+            "finished_at": null,
+            "web_url": "https://gitlab.com/g/r/-/jobs/5151"
+        }"#;
+        let job = from_glab_job(serde_json::from_str(json).unwrap());
+        assert_eq!(job.id, 5151);
+        assert_eq!(job.name, "build");
+        assert_eq!(job.status, "completed");
+        assert_eq!(job.conclusion, "skipped");
+        assert_eq!(job.started_at, "");
+        assert!(job.steps.is_empty());
+    }
+
+    #[test]
+    fn cleans_gitlab_trace_of_ansi_and_section_markers() {
+        let raw = "\u{1b}[0Ksection_start:1718000000:prepare\rPreparing\u{1b}[0;m\nsection_end:1718000000:prepare\r\u{1b}[32;1mDone\u{1b}[0m\n";
+        let cleaned = clean_trace(raw);
+        assert!(!cleaned.contains('\u{1b}'), "ANSI escapes remain: {cleaned:?}");
+        assert!(!cleaned.contains('\r'));
+        assert!(!cleaned.contains("section_start"));
+        assert!(!cleaned.contains("section_end"));
+        assert!(cleaned.contains("Preparing"));
+        assert!(cleaned.contains("Done"));
+    }
+
+    #[test]
     fn counts_added_and_deleted_lines() {
         let diff = "@@ -1,2 +1,3 @@\n context\n-old\n+new\n+extra\n";
         assert_eq!(count_diff_lines(diff), (2, 1));
@@ -955,6 +1402,15 @@ mod tests {
     #[test]
     fn encodes_nested_project_path() {
         assert_eq!(encode_project("group/sub/repo"), "group%2Fsub%2Frepo");
+    }
+
+    #[test]
+    fn encodes_query_significant_chars_in_a_branch_ref() {
+        // The plain branch name survives; `/` and query-significant chars encode so
+        // `glab api`'s verbatim query can't be corrupted/split.
+        assert_eq!(encode_query_value("feature/dark-mode"), "feature%2Fdark-mode");
+        assert_eq!(encode_query_value("fix_bug.v2"), "fix_bug.v2");
+        assert_eq!(encode_query_value("a&b=c#d"), "a%26b%3Dc%23d");
     }
 
     // Sample JSON below mirrors the real `glab api projects` shape (validated live).

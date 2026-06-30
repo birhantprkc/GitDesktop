@@ -109,6 +109,35 @@ pub async fn view_issue(
     crate::github::issue::gh_issue_view(repo_path.to_string(), number).await
 }
 
+// ── CI / Actions (read) ──────────────────────────────────────────────────────
+//
+// Thin delegates to the existing gh-backed Actions reads, mirroring the PR/issue
+// ones. The write commands (re-run, cancel, dispatch) stay GitHub-only and aren't
+// fronted here.
+
+pub async fn list_runs(
+    repo_path: &str,
+    limit: u32,
+    branch: Option<String>,
+) -> AppResult<Vec<crate::github::actions::WorkflowRun>> {
+    crate::github::actions::gh_run_list(repo_path.to_string(), limit, branch).await
+}
+
+pub async fn view_run(
+    repo_path: &str,
+    run_id: u64,
+) -> AppResult<crate::github::actions::RunDetail> {
+    crate::github::actions::gh_run_view(repo_path.to_string(), run_id).await
+}
+
+pub async fn run_failed_logs(repo_path: &str, run_id: u64) -> AppResult<String> {
+    crate::github::actions::gh_run_failed_logs(repo_path.to_string(), run_id).await
+}
+
+pub async fn job_logs(repo_path: &str, job_id: u64) -> AppResult<String> {
+    crate::github::actions::gh_job_logs(repo_path.to_string(), job_id).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

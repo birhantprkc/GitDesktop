@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { useForgeStatus } from "@/lib/git/queries";
 import type { RunJob } from "@/lib/github/actions";
 import {
   isRunActive,
@@ -55,10 +56,16 @@ function duration(start: string, end: string): string {
 function JobRow({
   repoPath,
   job,
+  stepsExpected = true,
+  remoteLabel = "GitHub",
   onDebug,
 }: {
   repoPath: string;
   job: RunJob;
+  /** Whether this provider's jobs have steps (GitLab pipelines don't — suppress
+   *  the "no step details" placeholder for them; the job is the leaf unit). */
+  stepsExpected?: boolean;
+  remoteLabel?: string;
   onDebug?: () => void;
 }) {
   // Failed and in-progress jobs are the interesting ones — open them by default.
@@ -171,7 +178,7 @@ function JobRow({
           })}
         </ul>
       )}
-      {open && job.steps.length === 0 && (
+      {open && stepsExpected && job.steps.length === 0 && (
         <p className="py-1 pr-3 pl-10 text-[11px] text-muted-foreground">
           {isRunActive(job.status)
             ? "Waiting for steps…"
@@ -196,7 +203,7 @@ function JobRow({
                   className="inline-flex cursor-pointer items-center gap-1 underline-offset-2 hover:text-foreground hover:underline"
                 >
                   <ArrowSquareOutIcon className="size-3" />
-                  Watch live on GitHub
+                  Watch live on {remoteLabel}
                 </button>
               )}
             </p>
@@ -250,6 +257,13 @@ export function RunDetailView({
   const rerun = useRerunRun(repoPath);
   const cancel = useCancelRun(repoPath);
   const aiEnabled = useAiEnabled();
+  // Re-run / cancel are GitHub-only writes; on a GitLab repo this is read-only
+  // (the run still shows, with logs). Gate on "not a known read-only provider" so a
+  // GitHub run keeps its controls while forge-status is pending. GitLab pipelines
+  // also have no per-job steps, so the steps placeholder is suppressed for them.
+  const provider = useForgeStatus(repoPath).data?.provider;
+  const canWrite = provider !== "gitlab" && provider !== "bitbucket";
+  const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
   const [debugJob, setDebugJob] = useState<RunJob | null>(null);
   // Dialog visibility is tracked separately from the debug session so closing
   // the dialog just hides it (the run keeps streaming) and reopening resumes.
@@ -324,56 +338,59 @@ export function RunDetailView({
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {active ? (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={cancel.isPending}
-              onClick={doCancel}
-            >
-              {cancel.isPending ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <ProhibitIcon data-icon="inline-start" />
-              )}
-              Cancel run
-            </Button>
-          ) : (
-            <>
+          {canWrite &&
+            (active ? (
               <Button
                 variant="outline"
                 size="sm"
-                disabled={rerun.isPending}
-                onClick={() => doRerun(false)}
+                disabled={cancel.isPending}
+                onClick={doCancel}
               >
-                <ArrowClockwiseIcon data-icon="inline-start" />
-                Re-run all jobs
+                {cancel.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <ProhibitIcon data-icon="inline-start" />
+                )}
+                Cancel run
               </Button>
-              {failed && (
+            ) : (
+              <>
                 <Button
                   variant="outline"
                   size="sm"
                   disabled={rerun.isPending}
-                  onClick={() => doRerun(true)}
+                  onClick={() => doRerun(false)}
                 >
                   <ArrowClockwiseIcon data-icon="inline-start" />
-                  Re-run failed jobs
+                  Re-run all jobs
                 </Button>
-              )}
-            </>
-          )}
+                {failed && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={rerun.isPending}
+                    onClick={() => doRerun(true)}
+                  >
+                    <ArrowClockwiseIcon data-icon="inline-start" />
+                    Re-run failed jobs
+                  </Button>
+                )}
+              </>
+            ))}
           <Button
             variant="ghost"
             size="sm"
             className="ml-auto cursor-pointer"
             disabled={!run.url}
             title={
-              run.url ? "Open this run on GitHub" : "No GitHub URL for this run"
+              run.url
+                ? `Open this run on ${remoteLabel}`
+                : "No URL for this run"
             }
             onClick={() => run.url && openUrl(run.url)}
           >
             <ArrowSquareOutIcon data-icon="inline-start" />
-            View on GitHub
+            View on {remoteLabel}
           </Button>
         </div>
       </div>
@@ -396,6 +413,8 @@ export function RunDetailView({
                   key={job.id}
                   repoPath={repoPath}
                   job={job}
+                  stepsExpected={provider !== "gitlab"}
+                  remoteLabel={remoteLabel}
                   onDebug={
                     aiEnabled && isFailureConclusion(job.conclusion)
                       ? () => {
@@ -416,7 +435,7 @@ export function RunDetailView({
                 size="sm"
                 onClick={() => setShowLogs((v) => !v)}
               >
-                {showLogs ? "Hide failed-step logs" : "Show failed-step logs"}
+                {showLogs ? "Hide failed logs" : "Show failed logs"}
               </Button>
               {showLogs && (
                 <div className="mt-2">
@@ -435,7 +454,7 @@ export function RunDetailView({
                         "font-mono text-[11px] leading-relaxed whitespace-pre-wrap",
                       )}
                     >
-                      {logs.data?.trim() || "No failed-step logs available."}
+                      {logs.data?.trim() || "No failed logs available."}
                     </pre>
                   )}
                 </div>

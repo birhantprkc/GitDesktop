@@ -1,7 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useRef } from "react";
-import { useForgeStatus, useRepoStatus } from "@/lib/git/queries";
-import { ghRunList, isRunActive, type WorkflowRun } from "@/lib/github/actions";
+import {
+  forgeFeatureReady,
+  useForgeStatus,
+  useRepoStatus,
+} from "@/lib/git/queries";
+import {
+  forgeCiRunList,
+  isRunActive,
+  type WorkflowRun,
+} from "@/lib/github/actions";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { useSettings } from "@/lib/settings/queries";
 import { isFailureConclusion, statusLabel } from "./status";
@@ -17,18 +25,17 @@ export function useRunNotifications(repoPath: string) {
   const gh = useForgeStatus(repoPath);
   const status = useRepoStatus(repoPath);
   const branch = status.data?.branch.name ?? null;
-  // Workflow runs are a GitHub-Actions-only poll; GitLab CI notifications arrive
-  // with the CI read increment.
+  // Polled for any provider whose CI read is built — GitHub Actions and GitLab
+  // pipelines both map onto the same neutral run shape the diff below reads.
   const enabled =
     repoPath !== "" &&
-    gh.data?.provider === "github" &&
-    Boolean(gh.data?.repo) &&
+    forgeFeatureReady(gh.data, "ci") &&
     Boolean(branch) &&
     Boolean(settings.data?.notifications.actionRuns);
 
   const poll = useQuery({
     queryKey: ["repo", repoPath, "actions", "notify", branch ?? ""] as const,
-    queryFn: () => ghRunList(repoPath, 20, branch ?? undefined),
+    queryFn: () => forgeCiRunList(repoPath, 20, branch ?? undefined),
     enabled,
     refetchInterval: 45_000,
     refetchIntervalInBackground: true,

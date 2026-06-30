@@ -79,16 +79,25 @@ const ACTIVE_STATUSES = new Set([
 export const isRunActive = (status: string) => ACTIVE_STATUSES.has(status);
 
 // ── API wrappers ─────────────────────────────────────────────────────────────
+//
+// The CI READS go through the provider-neutral `forge_ci_*` commands (GitHub via
+// `gh run …`, GitLab via `glab` pipelines → the same `WorkflowRun`/`RunDetail`
+// shapes). The write mutations (re-run / cancel / dispatch) stay GitHub-only on
+// `gh_*` and are hidden for GitLab in the UI.
 
-export const ghRunList = (repoPath: string, limit: number, branch?: string) =>
-  invoke<WorkflowRun[]>("gh_run_list", {
+export const forgeCiRunList = (
+  repoPath: string,
+  limit: number,
+  branch?: string,
+) =>
+  invoke<WorkflowRun[]>("forge_ci_run_list", {
     repoPath,
     limit,
     branch: branch?.trim() || null,
   });
 
-export const ghRunView = (repoPath: string, runId: number) =>
-  invoke<RunDetail>("gh_run_view", { repoPath, runId });
+export const forgeCiRunView = (repoPath: string, runId: number) =>
+  invoke<RunDetail>("forge_ci_run_view", { repoPath, runId });
 
 export const ghRunRerun = (repoPath: string, runId: number, failed: boolean) =>
   invoke<void>("gh_run_rerun", { repoPath, runId, failed });
@@ -96,12 +105,12 @@ export const ghRunRerun = (repoPath: string, runId: number, failed: boolean) =>
 export const ghRunCancel = (repoPath: string, runId: number) =>
   invoke<void>("gh_run_cancel", { repoPath, runId });
 
-export const ghRunFailedLogs = (repoPath: string, runId: number) =>
-  invoke<string>("gh_run_failed_logs", { repoPath, runId });
+export const forgeCiRunFailedLogs = (repoPath: string, runId: number) =>
+  invoke<string>("forge_ci_run_failed_logs", { repoPath, runId });
 
 /** One job's failed-step logs (fallback: full job log), for AI debugging. */
-export const ghJobLogs = (repoPath: string, jobId: number) =>
-  invoke<string>("gh_job_logs", { repoPath, jobId });
+export const forgeCiJobLogs = (repoPath: string, jobId: number) =>
+  invoke<string>("forge_ci_job_logs", { repoPath, jobId });
 
 export const ghWorkflowList = (repoPath: string) =>
   invoke<Workflow[]>("gh_workflow_list", { repoPath });
@@ -123,7 +132,7 @@ export function useWorkflowRuns(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "actions", "runs", branch ?? ""] as const,
-    queryFn: () => ghRunList(repo, 40, branch),
+    queryFn: () => forgeCiRunList(repo, 40, branch),
     enabled,
     staleTime: 10_000,
     refetchInterval: (query) =>
@@ -136,7 +145,7 @@ export function useWorkflowRuns(
 export function useRunDetail(repo: string, runId: number | null) {
   return useQuery({
     queryKey: ["repo", repo, "actions", "run", runId ?? 0] as const,
-    queryFn: () => ghRunView(repo, runId ?? 0),
+    queryFn: () => forgeCiRunView(repo, runId ?? 0),
     enabled: runId !== null,
     refetchInterval: (query) =>
       query.state.data && isRunActive(query.state.data.status) ? 5000 : false,
@@ -155,7 +164,7 @@ export function useLatestRun(
   return useQuery({
     queryKey: ["repo", repo, "actions", "latest", branch ?? ""] as const,
     queryFn: async () =>
-      (await ghRunList(repo, 1, branch ?? undefined))[0] ?? null,
+      (await forgeCiRunList(repo, 1, branch ?? undefined))[0] ?? null,
     enabled: enabled && Boolean(branch),
     staleTime: 15_000,
     refetchInterval: (query) =>
@@ -180,7 +189,7 @@ export function useRunFailedLogs(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "actions", "run", runId ?? 0, "logs"] as const,
-    queryFn: () => ghRunFailedLogs(repo, runId ?? 0),
+    queryFn: () => forgeCiRunFailedLogs(repo, runId ?? 0),
     enabled: enabled && runId !== null,
     staleTime: 30_000,
   });
@@ -194,7 +203,7 @@ export function useJobLogs(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "actions", "job", jobId ?? 0, "logs"] as const,
-    queryFn: () => ghJobLogs(repo, jobId ?? 0),
+    queryFn: () => forgeCiJobLogs(repo, jobId ?? 0),
     enabled: enabled && jobId !== null,
     staleTime: 30_000,
   });
