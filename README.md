@@ -51,8 +51,9 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   comments/commits/diff; issue conversation with a labels/assignees/milestone rail;
   pipeline jobs with logs and a branch CI badge; release notes with asset links). And
   the first GitLab **writes** — **comment** on and **close / reopen** a GitLab issue
-  **or merge request**, plus **approve / unapprove** and **merge** (merge/squash) an MR,
-  right from the app. Other GitLab surfaces (full MR reviews, issue edit/labels, …) read
+  **or merge request**, edit an issue's or MR's **labels** and an issue's **assignees**, plus
+  **approve / unapprove** and **merge** (merge/squash) an MR, right from the app. Other GitLab
+  surfaces (full MR reviews, creating issues/MRs, editing an issue's title/body, …) read
   "coming soon" for now; GitHub is unchanged.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works
   in an isolated worktree, so your own checkout is never touched. Follow it

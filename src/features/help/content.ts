@@ -392,7 +392,7 @@ Point the app at a **GitLab** repo and the same tab lists its **merge requests**
 closed/merged) next to any local PRs. Open one for the description, comments, commits, and a
 highlighted **diff** (with an **Open on GitLab** link) — and the **first GitLab MR writes**:
 **comment** on it, **close / reopen** it, **approve / unapprove** it (a reviewer action,
-with the approval count shown inline), and **merge** it — merge or squash, optionally deleting
+with the approval count shown inline), edit its **labels**, and **merge** it — merge or squash, optionally deleting
 the source branch, guarded so it never merges a head you didn't see (GitLab applies the project's
 configured merge method, so there's no separate "rebase" option). Full reviews (a comment or
 request-changes with a body) and creating MRs from the app are coming soon; for now those live on
@@ -439,10 +439,10 @@ add labels, **close / reopen**, **lock**, and **transfer** an issue to another r
 
 Point the app at a **GitLab** repo and the same tab lists its **issues** (open and closed)
 next to any local issues. Open one to read the description and comments with a side rail of
-labels, assignees, and milestone — and the **first GitLab writes**: **comment** on the issue
-and **close / reopen** it, right from the app. Editing the title/body, labels, assignees, and
-creating issues still live on GitLab for now (use the **View on GitLab** link); the side rail
-stays read-only.
+labels, assignees, and milestone — and GitLab issue **writes**: **comment** on the issue,
+**close / reopen** it, and edit its **labels** and **assignees** right in the side rail. Editing
+the title/body and creating issues still live on GitLab for now (use the **View on GitLab**
+link); the milestone stays read-only.
 
 ## Local issues
 

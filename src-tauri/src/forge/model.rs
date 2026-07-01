@@ -154,6 +154,14 @@ pub struct Implemented {
     /// Merging a merge/pull request (strategy + delete-source-branch). A shared
     /// control — GitHub via `gh pr merge`, GitLab via `glab` — so it's true for both.
     pub mr_merge: bool,
+    /// Editing labels on an issue — a shared control (GitHub by node id, GitLab by
+    /// name), so true for both.
+    pub issue_labels: bool,
+    /// Editing labels on a merge/pull request — the same shared label control.
+    pub mr_labels: bool,
+    /// Setting an issue's assignees — a shared issue control. MR assignees aren't
+    /// fronted (GitHub PRs expose no assignee picker here), so there's no `mr_assignees`.
+    pub issue_assignees: bool,
 }
 
 impl Implemented {
@@ -176,6 +184,9 @@ impl Implemented {
             mr_state: true,
             mr_approve: false,
             mr_merge: true,
+            issue_labels: true,
+            mr_labels: true,
+            issue_assignees: true,
         }
     }
 
@@ -195,6 +206,9 @@ impl Implemented {
             mr_state: false,
             mr_approve: false,
             mr_merge: false,
+            issue_labels: false,
+            mr_labels: false,
+            issue_assignees: false,
         }
     }
 
@@ -208,7 +222,8 @@ impl Implemented {
             // pipelines, and releases (read) are wired up; insights / repo actions
             // still degrade to "coming soon" until their impls land. WRITES land
             // per-action: issue + MR comment and close/reopen, the GitLab-only MR
-            // approve/unapprove toggle, and MR merge. (Full MR review stays GitHub-only.)
+            // approve/unapprove toggle, MR merge, issue + MR labels, and issue
+            // assignees. (Full MR review stays GitHub-only.)
             Provider::GitLab => Self {
                 pull_requests: true,
                 issues: true,
@@ -223,6 +238,9 @@ impl Implemented {
                 mr_state: true,
                 mr_approve: true,
                 mr_merge: true,
+                issue_labels: true,
+                mr_labels: true,
+                issue_assignees: true,
             },
             Provider::Bitbucket => Self::none(),
         }
@@ -347,6 +365,8 @@ mod tests {
         // The lone exception: the bodyless approve/unapprove toggle is GitLab-only
         // (GitHub approves via the review flow), so GitHub leaves `mr_approve` false.
         assert!(!i.mr_approve);
+        // Labels (issue + MR) and issue assignees are shared controls — built for both.
+        assert!(i.issue_labels && i.mr_labels && i.issue_assignees);
     }
 
     #[test]
@@ -365,6 +385,8 @@ mod tests {
         // plus the GitLab-only MR approve/unapprove toggle and MR merge.
         assert!(imp.issue_comment && imp.issue_state);
         assert!(imp.mr_comment && imp.mr_state && imp.mr_approve && imp.mr_merge);
+        // Labels (issue + MR) and issue assignees now wired for GitLab too.
+        assert!(imp.issue_labels && imp.mr_labels && imp.issue_assignees);
     }
 
     #[test]
@@ -377,5 +399,6 @@ mod tests {
         let bb = Implemented::for_provider(Provider::Bitbucket);
         assert!(!bb.issue_comment && !bb.issue_state && !bb.mr_comment && !bb.mr_state);
         assert!(!bb.mr_approve && !bb.mr_merge);
+        assert!(!bb.issue_labels && !bb.mr_labels && !bb.issue_assignees);
     }
 }

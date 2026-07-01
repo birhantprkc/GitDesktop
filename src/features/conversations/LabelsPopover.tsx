@@ -18,11 +18,17 @@ import { LabelChip } from "./Thread";
 export function LabelsPopover({
   repoPath,
   enabled,
+  number,
+  target,
   labelableId,
   labels,
 }: {
   repoPath: string;
   enabled: boolean;
+  /** The issue/MR number — GitLab keys the write on it (GitHub uses `labelableId`). */
+  number: number;
+  /** Which surface these labels live on — GitLab's endpoint differs (issues vs MRs). */
+  target: "issue" | "mr";
   labelableId: string;
   labels: RepoLabel[];
 }) {
@@ -53,11 +59,22 @@ export function LabelsPopover({
     );
     const ids = (names: string[]) =>
       names.map((n) => idByName.get(n)).filter((id): id is string => !!id);
-    const addIds = ids([...draft].filter((n) => !applied.has(n)));
-    const removeIds = ids([...applied].filter((n) => !draft.has(n)));
-    if (addIds.length > 0 || removeIds.length > 0) {
+    const addNames = [...draft].filter((n) => !applied.has(n));
+    const removeNames = [...applied].filter((n) => !draft.has(n));
+    // Guard on NAMES, not ids: GitLab labels carry no node id, so an id-based guard
+    // would skip every GitLab edit. GitHub keys on the ids derived here; GitLab on
+    // the names — the forge command takes whichever pair its provider addresses by.
+    if (addNames.length > 0 || removeNames.length > 0) {
       editLabels.mutate(
-        { labelableId, addIds, removeIds },
+        {
+          target,
+          number,
+          labelableId,
+          addIds: ids(addNames),
+          removeIds: ids(removeNames),
+          addNames,
+          removeNames,
+        },
         { onError: toastError },
       );
     }

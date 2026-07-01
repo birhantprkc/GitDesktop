@@ -161,6 +161,8 @@ export function RemotePrView({
   // `canWrite || …` gate like comment/close — GitHub keeps it while forge-status is
   // pending/failed; a ready GitLab repo enables it too.
   const canMerge = canWrite || forgeFeatureReady(forge.data, "mrMerge");
+  // Labels are a shared control (both providers) — same `canWrite || …` gate.
+  const canEditLabels = canWrite || forgeFeatureReady(forge.data, "mrLabels");
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
@@ -498,10 +500,12 @@ export function RemotePrView({
           <span className="text-success">+{pr.additions}</span>
           <span className="text-destructive">-{pr.deletions}</span>
         </div>
-        {isOpen && canWrite ? (
+        {isOpen && canEditLabels ? (
           <LabelsPopover
             repoPath={repoPath}
             enabled
+            number={number}
+            target="mr"
             labelableId={pr.id}
             labels={pr.labels}
           />

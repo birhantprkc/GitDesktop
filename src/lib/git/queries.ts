@@ -743,7 +743,7 @@ export function usePrList(
 export function useRepoLabels(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "labels"] as const,
-    queryFn: () => api.ghRepoLabels(repo),
+    queryFn: () => api.forgeRepoLabels(repo),
     enabled,
     staleTime: 5 * 60_000,
   });
@@ -875,7 +875,7 @@ export function useCreateIssue(repo: string) {
 export function useAssignableUsers(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "assignable-users"] as const,
-    queryFn: () => api.ghAssignableUsers(repo),
+    queryFn: () => api.forgeAssignableUsers(repo),
     enabled,
     staleTime: 5 * 60_000,
   });
@@ -928,7 +928,7 @@ export function useSetIssueAssignees(repo: string) {
   return useOptimisticIssueMutation(
     repo,
     (args: { number: number; assignees: string[] }) =>
-      api.ghIssueSetAssignees(repo, args.number, args.assignees),
+      api.forgeIssueSetAssignees(repo, args.number, args.assignees),
     (issue, args) => ({ ...issue, assignees: args.assignees }),
   );
 }
@@ -1444,6 +1444,9 @@ const NO_FORGE_STATUS: ForgeStatus = {
     mrState: false,
     mrApprove: false,
     mrMerge: false,
+    issueLabels: false,
+    mrLabels: false,
+    issueAssignees: false,
   },
 };
 
@@ -2937,11 +2940,32 @@ export function useEditPr(repo: string) {
   );
 }
 
+/** Add/remove labels on an issue or MR (also used by GitHub-only Discussions).
+ *  GitHub uses the node-id path (`labelableId` + `addIds`/`removeIds`); GitLab uses
+ *  names (`target` + `number` + `addNames`/`removeNames`). The name/target/number
+ *  fields are optional so GitHub-only callers (Discussions) stay byte-identical. */
 export function useEditPrLabels(repo: string) {
   return useRepoMutation(
     repo,
-    (args: { labelableId: string; addIds: string[]; removeIds: string[] }) =>
-      api.ghPrEditLabels(repo, args.labelableId, args.addIds, args.removeIds),
+    (args: {
+      target?: "issue" | "mr";
+      number?: number;
+      labelableId: string;
+      addIds: string[];
+      removeIds: string[];
+      addNames?: string[];
+      removeNames?: string[];
+    }) =>
+      api.forgeEditLabels(
+        repo,
+        args.target ?? "issue",
+        args.number ?? 0,
+        args.labelableId,
+        args.addIds,
+        args.removeIds,
+        args.addNames ?? [],
+        args.removeNames ?? [],
+      ),
   );
 }
 

@@ -462,6 +462,14 @@ export interface ForgeImplemented {
   /** Merging a merge/pull request (strategy + delete-source-branch) — a shared
    *  control, so true for both GitHub and GitLab. */
   mrMerge: boolean;
+  /** Editing labels on an issue — a shared control (GitHub by node id, GitLab by
+   *  name), so true for both. */
+  issueLabels: boolean;
+  /** Editing labels on a merge/pull request — the same shared label control. */
+  mrLabels: boolean;
+  /** Setting an issue's assignees — a shared issue control. (No MR-assignee flag:
+   *  GitHub PRs expose no assignee picker here.) */
+  issueAssignees: boolean;
 }
 
 /** A merge/pull request's approval summary — who has approved and whether the

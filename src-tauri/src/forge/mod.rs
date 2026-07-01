@@ -469,6 +469,83 @@ pub async fn forge_issue_reopen(repo_path: String, number: u64) -> AppResult<()>
     }
 }
 
+/// The repo's labels for the label picker, behind the abstraction. GitHub lists them
+/// via GraphQL (each with a node id); GitLab lists project labels via `glab` (by name,
+/// no id). Used by both the issue and MR label pickers.
+#[tauri::command]
+pub async fn forge_repo_labels(
+    repo_path: String,
+) -> AppResult<Vec<crate::github::pr::RepoLabel>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::repo_labels(&repo_path).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket labels aren't supported yet.".into(),
+        )),
+        _ => github::repo_labels(&repo_path).await,
+    }
+}
+
+/// The repo's assignable users for the assignee picker, behind the abstraction.
+/// GitHub lists repo assignees; GitLab lists project members (usernames).
+#[tauri::command]
+pub async fn forge_assignable_users(repo_path: String) -> AppResult<Vec<String>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::assignable_users(&repo_path).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket assignees aren't supported yet.".into(),
+        )),
+        _ => github::assignable_users(&repo_path).await,
+    }
+}
+
+/// Add/remove labels on an issue or merge/pull request, behind the abstraction. A
+/// SHARED control: GitHub keys labels by GraphQL node id (`add_ids`/`remove_ids` on
+/// the `labelable_id`); GitLab keys them by name (`add_names`/`remove_names` on the
+/// numeric `number`). `target` is `"issue"` or `"mr"`. The caller passes both id and
+/// name deltas so each provider takes the pair it addresses by.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn forge_edit_labels(
+    repo_path: String,
+    target: String,
+    number: u64,
+    labelable_id: String,
+    add_ids: Vec<String>,
+    remove_ids: Vec<String>,
+    add_names: Vec<String>,
+    remove_names: Vec<String>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::edit_labels(&repo_path, &target, number, &add_names, &remove_names).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket labels aren't supported yet.".into(),
+        )),
+        _ => github::edit_labels(&repo_path, &labelable_id, add_ids, remove_ids).await,
+    }
+}
+
+/// Set an issue's assignees (the full desired set, by login), behind the abstraction.
+/// GitHub PATCHes the issue with the login set; GitLab resolves logins→ids and PUTs
+/// `assignee_ids`. MR assignees aren't fronted (GitHub PRs expose no assignee picker).
+#[tauri::command]
+pub async fn forge_issue_set_assignees(
+    repo_path: String,
+    number: u64,
+    assignees: Vec<String>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::set_issue_assignees(&repo_path, number, &assignees).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket assignees aren't supported yet.".into(),
+        )),
+        _ => github::set_issue_assignees(&repo_path, number, assignees).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -190,6 +190,44 @@ pub async fn reopen_issue(repo_path: &str, number: u64) -> AppResult<()> {
     crate::github::issue::gh_issue_reopen(repo_path.to_string(), number).await
 }
 
+// ── Labels & assignees (read + write) ─────────────────────────────────────────
+//
+// Thin delegates to the existing gh-backed label/assignee commands. Labels are a
+// shared control on both issues and MRs (GitHub keys them by GraphQL node id); issue
+// assignees are a shared issue control. GitHub is byte-identical to calling the
+// `gh_*` commands directly — the abstraction only adds the dispatch seam.
+
+pub async fn repo_labels(repo_path: &str) -> AppResult<Vec<crate::github::pr::RepoLabel>> {
+    crate::github::pr::gh_repo_labels(repo_path.to_string()).await
+}
+
+pub async fn assignable_users(repo_path: &str) -> AppResult<Vec<String>> {
+    crate::github::issue::gh_assignable_users(repo_path.to_string()).await
+}
+
+pub async fn edit_labels(
+    repo_path: &str,
+    labelable_id: &str,
+    add_ids: Vec<String>,
+    remove_ids: Vec<String>,
+) -> AppResult<()> {
+    crate::github::pr::gh_pr_edit_labels(
+        repo_path.to_string(),
+        labelable_id.to_string(),
+        add_ids,
+        remove_ids,
+    )
+    .await
+}
+
+pub async fn set_issue_assignees(
+    repo_path: &str,
+    number: u64,
+    assignees: Vec<String>,
+) -> AppResult<()> {
+    crate::github::issue::gh_issue_set_assignees(repo_path.to_string(), number, assignees).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

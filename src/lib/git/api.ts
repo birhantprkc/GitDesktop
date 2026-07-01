@@ -923,17 +923,17 @@ export const ghIssueCreate = (
     issueType,
   });
 
-export const ghAssignableUsers = (repoPath: string) =>
-  invoke<string[]>("gh_assignable_users", { repoPath });
+export const forgeAssignableUsers = (repoPath: string) =>
+  invoke<string[]>("forge_assignable_users", { repoPath });
 
 export const ghMilestones = (repoPath: string) =>
   invoke<Milestone[]>("gh_milestones", { repoPath });
 
-export const ghIssueSetAssignees = (
+export const forgeIssueSetAssignees = (
   repoPath: string,
   number: number,
   assignees: string[],
-) => invoke<void>("gh_issue_set_assignees", { repoPath, number, assignees });
+) => invoke<void>("forge_issue_set_assignees", { repoPath, number, assignees });
 
 export const ghIssueSetMilestone = (
   repoPath: string,
@@ -1513,8 +1513,8 @@ export const ghPrEdit = (
   body: string,
 ) => invoke<void>("gh_pr_edit", { repoPath, number, title, body });
 
-export const ghRepoLabels = (repoPath: string) =>
-  invoke<RepoLabel[]>("gh_repo_labels", { repoPath });
+export const forgeRepoLabels = (repoPath: string) =>
+  invoke<RepoLabel[]>("forge_repo_labels", { repoPath });
 
 /** GitHub's (classic) branch protection rules — read-only, for importing. */
 export const ghBranchProtections = (repoPath: string) =>
@@ -1545,17 +1545,29 @@ export const gitRunHookManager = (
   action: "install" | "update",
 ) => invoke<string>("git_run_hook_manager", { repoPath, manager, action });
 
-export const ghPrEditLabels = (
+/** Add/remove labels on an issue or MR. GitHub keys them by GraphQL node id
+ *  (`addIds`/`removeIds` on `labelableId`); GitLab keys them by name
+ *  (`addNames`/`removeNames` on `number`). Callers pass both; the forge command
+ *  takes whichever pair the repo's provider addresses by. `target` is "issue"|"mr". */
+export const forgeEditLabels = (
   repoPath: string,
+  target: "issue" | "mr",
+  number: number,
   labelableId: string,
   addIds: string[],
   removeIds: string[],
+  addNames: string[],
+  removeNames: string[],
 ) =>
-  invoke<void>("gh_pr_edit_labels", {
+  invoke<void>("forge_edit_labels", {
     repoPath,
+    target,
+    number,
     labelableId,
     addIds,
     removeIds,
+    addNames,
+    removeNames,
   });
 
 export const openWithProgram = (program: string, path: string) =>

@@ -28,22 +28,28 @@ import {
 } from "./IssueMetaPickers";
 import { IssueRelationships } from "./IssueRelations";
 
-/** The issue's right-hand metadata rail: type / assignees / labels / milestone
- *  pickers (which it owns the mutations for), plus relationships, development,
- *  and the GitHub-only Projects/Notifications link-outs. On a read-only provider
- *  (GitLab) every picker would mutate via `gh_*`, so it renders a static rail
- *  ({@link ReadOnlyIssueSidebar}) of just what the issue payload carries. */
+/** The issue's right-hand metadata rail. Three shapes by provider:
+ *  • GitHub (`canWrite`): the full interactive rail — type / assignees / labels /
+ *    milestone pickers plus relationships, development, and Projects/Notifications.
+ *  • GitLab (labels + assignees editable, the rest GitHub-only): a hybrid rail — the
+ *    Labels + Assignees pickers, a STATIC milestone, and a link out.
+ *  • Read-only (Bitbucket / not-ready): a static rail ({@link ReadOnlyIssueSidebar})
+ *    of just what the issue payload carries. */
 export function IssueSidebar({
   repoPath,
   number,
   issue,
   canWrite,
+  canEditLabels,
+  canEditAssignees,
   remoteLabel,
 }: {
   repoPath: string;
   number: number;
   issue: IssueDetails;
   canWrite: boolean;
+  canEditLabels: boolean;
+  canEditAssignees: boolean;
   remoteLabel: string;
 }) {
   const setAssignees = useSetIssueAssignees(repoPath);
@@ -51,8 +57,61 @@ export function IssueSidebar({
   const setType = useSetIssueType(repoPath);
   const onError = (e: unknown) => toastError(e);
 
-  if (!canWrite) {
+  // A provider we can only read from (Bitbucket, or a not-ready repo): static rail.
+  if (!canWrite && !canEditLabels && !canEditAssignees) {
     return <ReadOnlyIssueSidebar issue={issue} remoteLabel={remoteLabel} />;
+  }
+
+  // GitLab: Labels + Assignees are editable, but the GitHub-only surfaces (issue
+  // type, relationships, development, projects/notifications) aren't wired and
+  // milestone writes aren't either — a hybrid of the two editable pickers, a static
+  // milestone (when present), and a link out. The affordance carries the cue: a
+  // ghost-button picker means editable; a muted label + value means read-only.
+  if (!canWrite) {
+    return (
+      <aside className="w-64 shrink-0 space-y-4 overflow-y-auto border-l p-4">
+        {canEditLabels && (
+          <LabelsPopover
+            repoPath={repoPath}
+            enabled
+            number={number}
+            target="issue"
+            labelableId={issue.id}
+            labels={issue.labels}
+          />
+        )}
+        {canEditAssignees && (
+          <AssigneesPopover
+            repoPath={repoPath}
+            enabled
+            value={issue.assignees}
+            commitOnClose
+            onChange={(next) =>
+              setAssignees.mutate({ number, assignees: next }, { onError })
+            }
+          />
+        )}
+        {issue.milestone && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">
+              Milestone
+            </p>
+            <p className="text-xs">{issue.milestone.title}</p>
+          </div>
+        )}
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">Links</p>
+          <button
+            type="button"
+            onClick={() => openUrl(issue.url)}
+            className="flex cursor-pointer items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+          >
+            <ArrowSquareOutIcon className="size-3" />
+            View on {remoteLabel}
+          </button>
+        </div>
+      </aside>
+    );
   }
 
   return (
@@ -80,6 +139,8 @@ export function IssueSidebar({
       <LabelsPopover
         repoPath={repoPath}
         enabled
+        number={number}
+        target="issue"
         labelableId={issue.id}
         labels={issue.labels}
       />
@@ -128,7 +189,8 @@ export function IssueSidebar({
   );
 }
 
-/** The read-only metadata rail for a provider we only read from (GitLab): static
+/** The read-only metadata rail for a provider we only read from (Bitbucket, or a
+ *  not-ready repo — GitLab gets the editable hybrid rail above): static
  *  assignees / labels / milestone — exactly what the issue payload carries — plus
  *  one link out. No mutating pickers and none of the GitHub-only
  *  relationships/development/notifications surfaces (those fetch via `gh_*`).

@@ -116,6 +116,12 @@ export function RemoteIssueView({
   const canComment = canWrite || forgeFeatureReady(forge.data, "issueComment");
   const canChangeState =
     canWrite || forgeFeatureReady(forge.data, "issueState");
+  // Labels + assignees are shared controls (both providers) — same `canWrite || …`
+  // gate: GitHub keeps them up while forge-status is pending, GitLab un-gates when ready.
+  const canEditLabels =
+    canWrite || forgeFeatureReady(forge.data, "issueLabels");
+  const canEditAssignees =
+    canWrite || forgeFeatureReady(forge.data, "issueAssignees");
   const details = useIssueDetails(repoPath, number);
   const comment = useCommentIssue(repoPath);
   const closeIssue = useCloseIssue(repoPath);
@@ -676,6 +682,8 @@ export function RemoteIssueView({
           number={number}
           issue={issue}
           canWrite={canWrite}
+          canEditLabels={canEditLabels}
+          canEditAssignees={canEditAssignees}
           remoteLabel={remoteLabel}
         />
       </div>

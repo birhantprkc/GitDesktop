@@ -1012,6 +1012,161 @@ pub async fn reopen_issue(repo_path: &str, number: u64) -> AppResult<()> {
     set_issue_state(repo_path, number, "reopen").await
 }
 
+// ── Labels & assignees (read + write) ─────────────────────────────────────────
+//
+// Labels are a SHARED control on both issues and MRs (GitHub keys them by GraphQL
+// node id, GitLab by name); issue assignees are a shared issue control. The pickers
+// read the project's labels / members, then the writes apply a delta (labels) or a
+// full set (assignees). Both arg forms were validated live against the demo:
+//   • labels  → `add_labels=<csv>` / `remove_labels=<csv>` (delta, by name);
+//   • assignees → `assignee_ids=<comma-joined ids>` (set) or `=0` (clear). GitLab
+//     assigns by numeric id, so the write resolves usernames→ids from the members
+//     list. The `assignee_ids[]=…` array form 400s through glab's `-f`, hence the
+//     comma form; on the Free tier GitLab keeps only the first id (reconciled by
+//     refetch). MR assignees aren't fronted (GitHub PRs expose no assignee picker).
+
+/// The project's labels for the label picker, as neutral `RepoLabel`s. GitLab has no
+/// node id for a label (it addresses them by name), so `id` is left empty — the
+/// frontend's GitLab path keys the write on the name instead.
+pub async fn repo_labels(repo_path: &str) -> AppResult<Vec<RepoLabel>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/labels?per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let labels: Vec<GlabLabel> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab labels: {e}")))?;
+    Ok(labels
+        .into_iter()
+        .map(|l| RepoLabel {
+            id: String::new(),
+            name: l.name,
+            color: l.color.trim_start_matches('#').to_string(),
+        })
+        .collect())
+}
+
+/// A GitLab project member (assignee candidate). `id` is required to SET assignees —
+/// GitLab assigns by numeric id, not username, so the write resolves usernames→ids.
+#[derive(Deserialize)]
+struct GlabMember {
+    id: u64,
+    username: String,
+}
+
+/// The project's members (`members/all` = direct + inherited group members).
+async fn project_members(repo_path: &str) -> AppResult<Vec<GlabMember>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/members/all?per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab project members: {e}")))
+}
+
+/// The project's assignable users, as usernames (mirroring `gh_assignable_users`).
+/// `members/all` can list a user twice (direct + inherited), so dedupe by username.
+pub async fn assignable_users(repo_path: &str) -> AppResult<Vec<String>> {
+    let mut seen = std::collections::HashSet::new();
+    Ok(project_members(repo_path)
+        .await?
+        .into_iter()
+        .filter(|m| seen.insert(m.username.clone()))
+        .map(|m| m.username)
+        .collect())
+}
+
+/// Add/remove labels on an issue or MR by NAME (GitLab's `add_labels`/`remove_labels`
+/// delta fields). `target` is `"issue"` or `"mr"`. An empty add+remove is a no-op.
+pub async fn edit_labels(
+    repo_path: &str,
+    target: &str,
+    number: u64,
+    add: &[String],
+    remove: &[String],
+) -> AppResult<()> {
+    if add.is_empty() && remove.is_empty() {
+        return Ok(());
+    }
+    let path = match target {
+        "issue" => "issues",
+        "mr" => "merge_requests",
+        other => {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown label target: {other}"
+            )));
+        }
+    };
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/{path}/{number}");
+    let add_arg = format!("add_labels={}", add.join(","));
+    let remove_arg = format!("remove_labels={}", remove.join(","));
+    let mut args = vec!["api", "--method", "PUT", &endpoint];
+    if !add.is_empty() {
+        args.push("-f");
+        args.push(&add_arg);
+    }
+    if !remove.is_empty() {
+        args.push("-f");
+        args.push(&remove_arg);
+    }
+    run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+/// Set an issue's assignees to the desired set of usernames. GitLab assigns by
+/// numeric id, so resolve usernames→ids from the project members; an empty list
+/// clears all assignees (`assignee_ids=0`). A non-empty request that resolves to no
+/// known member errors rather than silently clearing.
+pub async fn set_issue_assignees(
+    repo_path: &str,
+    number: u64,
+    assignees: &[String],
+) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}");
+    let ids: Vec<u64> = if assignees.is_empty() {
+        Vec::new()
+    } else {
+        let members = project_members(repo_path).await.unwrap_or_default();
+        let by_name: HashMap<&str, u64> =
+            members.iter().map(|m| (m.username.as_str(), m.id)).collect();
+        assignees
+            .iter()
+            .filter_map(|u| by_name.get(u.as_str()).copied())
+            .collect()
+    };
+    // Don't let a resolution miss turn an assign into a clear (fail safe).
+    if !assignees.is_empty() && ids.is_empty() {
+        return Err(AppError::Glab(
+            "could not match the selected assignee(s) to GitLab project members".into(),
+        ));
+    }
+    // `assignee_ids=0` clears; otherwise the comma-joined id list (the `[]` array
+    // form 400s through glab's `-f`).
+    let value = if ids.is_empty() {
+        "0".to_string()
+    } else {
+        ids.iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let arg = format!("assignee_ids={value}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 // ── Pipelines (CI, read) ──────────────────────────────────────────────────────
 //
 // GitLab pipelines map onto the same neutral `WorkflowRun`/`RunDetail`/`RunJob`
