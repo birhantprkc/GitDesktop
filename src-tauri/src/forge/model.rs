@@ -162,6 +162,12 @@ pub struct Implemented {
     /// Setting an issue's assignees — a shared issue control. MR assignees aren't
     /// fronted (GitHub PRs expose no assignee picker here), so there's no `mr_assignees`.
     pub issue_assignees: bool,
+    /// Creating an issue from the app — a shared control (the same create dialog;
+    /// GitHub-only fields like milestone/org-type hide per provider).
+    pub issue_create: bool,
+    /// Creating a merge/pull request from the app (push the head branch + open) —
+    /// a shared control.
+    pub mr_create: bool,
 }
 
 impl Implemented {
@@ -187,6 +193,8 @@ impl Implemented {
             issue_labels: true,
             mr_labels: true,
             issue_assignees: true,
+            issue_create: true,
+            mr_create: true,
         }
     }
 
@@ -209,6 +217,8 @@ impl Implemented {
             issue_labels: false,
             mr_labels: false,
             issue_assignees: false,
+            issue_create: false,
+            mr_create: false,
         }
     }
 
@@ -222,8 +232,8 @@ impl Implemented {
             // pipelines, and releases (read) are wired up; insights / repo actions
             // still degrade to "coming soon" until their impls land. WRITES land
             // per-action: issue + MR comment and close/reopen, the GitLab-only MR
-            // approve/unapprove toggle, MR merge, issue + MR labels, and issue
-            // assignees. (Full MR review stays GitHub-only.)
+            // approve/unapprove toggle, MR merge, issue + MR labels, issue
+            // assignees, and issue/MR create. (Full MR review stays GitHub-only.)
             Provider::GitLab => Self {
                 pull_requests: true,
                 issues: true,
@@ -241,6 +251,8 @@ impl Implemented {
                 issue_labels: true,
                 mr_labels: true,
                 issue_assignees: true,
+                issue_create: true,
+                mr_create: true,
             },
             Provider::Bitbucket => Self::none(),
         }
@@ -367,6 +379,7 @@ mod tests {
         assert!(!i.mr_approve);
         // Labels (issue + MR) and issue assignees are shared controls — built for both.
         assert!(i.issue_labels && i.mr_labels && i.issue_assignees);
+        assert!(i.issue_create && i.mr_create);
     }
 
     #[test]
@@ -387,6 +400,8 @@ mod tests {
         assert!(imp.mr_comment && imp.mr_state && imp.mr_approve && imp.mr_merge);
         // Labels (issue + MR) and issue assignees now wired for GitLab too.
         assert!(imp.issue_labels && imp.mr_labels && imp.issue_assignees);
+        // …and creating issues + merge requests from the app.
+        assert!(imp.issue_create && imp.mr_create);
     }
 
     #[test]
@@ -400,5 +415,6 @@ mod tests {
         assert!(!bb.issue_comment && !bb.issue_state && !bb.mr_comment && !bb.mr_state);
         assert!(!bb.mr_approve && !bb.mr_merge);
         assert!(!bb.issue_labels && !bb.mr_labels && !bb.issue_assignees);
+        assert!(!bb.issue_create && !bb.mr_create);
     }
 }

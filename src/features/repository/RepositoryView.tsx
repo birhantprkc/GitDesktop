@@ -48,7 +48,11 @@ import { SessionList } from "@/features/sessions/SessionList";
 import { SessionView } from "@/features/sessions/SessionView";
 import { TagDetailView } from "@/features/tags/TagDetailView";
 import { TagsPanel } from "@/features/tags/TagsPanel";
-import { useForgeStatus, useRepoStatus } from "@/lib/git/queries";
+import {
+  forgeFeatureReady,
+  useForgeStatus,
+  useRepoStatus,
+} from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useAiEnabled, useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
@@ -111,11 +115,13 @@ export function RepositoryView() {
   const aiEnabled = useAiEnabled();
   const currentName = status.data?.branch?.name ?? null;
   const gh = useForgeStatus(repoPath ?? "");
-  // The palette create actions gated here (issue / PR / discussion / release) are
-  // all GitHub-only writes for now, so they stay disabled on a GitLab repo.
+  // Palette create actions: discussion / release stay GitHub-only writes; the
+  // issue / PR creates follow their per-action forge flags (GitHub + GitLab).
   const canGh =
     Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
     gh.data?.provider === "github";
+  const canCreateIssue = forgeFeatureReady(gh.data, "issueCreate");
+  const canCreatePr = forgeFeatureReady(gh.data, "mrCreate");
   // Tab switches are transitions: a heavy first render of the target panel
   // never blocks the click, and hidden Activities pre-render at low priority.
   const [, startTabTransition] = useTransition();
@@ -155,8 +161,8 @@ export function RepositoryView() {
   // to open its dialog. The panels also register these while visible (newest
   // wins), so on-tab the panel's own handler opens directly with full context.
   useHotkeyAction("create-local-issue", () => requestCreate("local-issue"));
-  useHotkeyAction("create-issue", () => requestCreate("issue"), canGh);
-  useHotkeyAction("create-pr", () => requestCreate("pr"), canGh);
+  useHotkeyAction("create-issue", () => requestCreate("issue"), canCreateIssue);
+  useHotkeyAction("create-pr", () => requestCreate("pr"), canCreatePr);
   useHotkeyAction("create-local-pr", () => requestCreate("local-pr"));
   useHotkeyAction(
     "create-discussion",

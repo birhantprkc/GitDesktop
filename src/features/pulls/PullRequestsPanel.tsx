@@ -71,16 +71,16 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
     stateFilter,
   });
 
-  // Creating a remote PR is GitHub-only for now (GitLab merge-request creation is
-  // a later, write-phase increment) — so even a ready GitLab repo can't open one
-  // here yet. The dialog picks the head/base branches itself.
-  const canCreateGhPr = ghReady && provider === "github";
+  // Creating a remote PR/MR follows its per-action write flag — ready GitHub AND
+  // GitLab repos both get the create dialog (provider-aware copy; the head branch
+  // is pushed first either way). The dialog picks the head/base branches itself.
+  const canCreateGhPr = forgeFeatureReady(gh.data, "mrCreate");
   const ghCreateReason = canCreateGhPr
     ? null
     : isGitLab
-      ? ghReady
-        ? "Creating GitLab merge requests in GitDesktop is coming soon."
-        : "Sign in to GitLab to work with merge requests here."
+      ? gh.data?.installed
+        ? "Sign in to GitLab (glab auth login) to work with merge requests here."
+        : "Install the GitLab CLI (glab) to work with merge requests here."
       : "Connect this repository to GitHub to open a pull request here.";
   const pendingCreate = useUiStore((s) => s.pendingCreate);
   const clearPendingCreate = useUiStore((s) => s.clearPendingCreate);
@@ -90,15 +90,17 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   useHotkeyAction("create-pr", () => setGhCreateOpen(true), canCreateGhPr);
 
   // Opened from the command palette / New menu via requestCreate (any tab).
+  // Re-check the gate: the requester's own gate can lag this panel's (e.g. a
+  // provider flip mid-flight) — never open a create dialog that can't submit.
   useEffect(() => {
     if (pendingCreate === "pr") {
-      setGhCreateOpen(true);
+      if (canCreateGhPr) setGhCreateOpen(true);
       clearPendingCreate();
     } else if (pendingCreate === "local-pr") {
       setCreateOpen(true);
       clearPendingCreate();
     }
-  }, [pendingCreate, clearPendingCreate]);
+  }, [pendingCreate, clearPendingCreate, canCreateGhPr]);
 
   // Arrow keys walk the visible rows, local section first like the list.
   const navTargets = [

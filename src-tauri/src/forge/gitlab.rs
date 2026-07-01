@@ -20,9 +20,10 @@ use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::issue::{IssueDetails, IssueInfo, Milestone};
 use crate::github::pr::{
-    ApprovalState, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrThreadOut,
-    RepoLabel,
+    ApprovalState, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrRef,
+    PrThreadOut, RepoLabel,
 };
+use crate::state::AppState;
 use crate::github::release::{ReleaseAsset, ReleaseDetails, ReleaseInfo};
 
 /// GitLab via the `glab` CLI. Carries the repo's host (gitlab.com today; a
@@ -1069,6 +1070,33 @@ async fn project_members(repo_path: &str) -> AppResult<Vec<GlabMember>> {
         .map_err(|e| AppError::Glab(format!("could not parse GitLab project members: {e}")))
 }
 
+/// Resolve assignee usernames to GitLab's numeric ids via the project members.
+/// Errors when the members can't be fetched (a 403/timeout must not read as "no
+/// match") or when ANY username fails to resolve (naming the misses) — an assignee
+/// write must never silently drop someone (fail safe; shared by the set + create
+/// paths). A miss is a picker-vs-submit race or a >100-member project (the members
+/// read is capped at one page).
+async fn resolve_assignee_ids(repo_path: &str, assignees: &[String]) -> AppResult<Vec<u64>> {
+    let members = project_members(repo_path).await?;
+    let by_name: HashMap<&str, u64> =
+        members.iter().map(|m| (m.username.as_str(), m.id)).collect();
+    let mut ids = Vec::with_capacity(assignees.len());
+    let mut missing: Vec<&str> = Vec::new();
+    for u in assignees {
+        match by_name.get(u.as_str()) {
+            Some(id) => ids.push(*id),
+            None => missing.push(u.as_str()),
+        }
+    }
+    if !missing.is_empty() {
+        return Err(AppError::Glab(format!(
+            "could not match {} to GitLab project members",
+            missing.join(", ")
+        )));
+    }
+    Ok(ids)
+}
+
 /// The project's assignable users, as usernames (mirroring `gh_assignable_users`).
 /// `members/all` can list a user twice (direct + inherited), so dedupe by username.
 pub async fn assignable_users(repo_path: &str) -> AppResult<Vec<String>> {
@@ -1130,23 +1158,13 @@ pub async fn set_issue_assignees(
 ) -> AppResult<()> {
     let enc = encode_project(&project_path(repo_path).await?);
     let endpoint = format!("projects/{enc}/issues/{number}");
+    // A resolution miss errors inside the resolver — it must never turn an assign
+    // into a partial assign or (worse) a clear.
     let ids: Vec<u64> = if assignees.is_empty() {
         Vec::new()
     } else {
-        let members = project_members(repo_path).await.unwrap_or_default();
-        let by_name: HashMap<&str, u64> =
-            members.iter().map(|m| (m.username.as_str(), m.id)).collect();
-        assignees
-            .iter()
-            .filter_map(|u| by_name.get(u.as_str()).copied())
-            .collect()
+        resolve_assignee_ids(repo_path, assignees).await?
     };
-    // Don't let a resolution miss turn an assign into a clear (fail safe).
-    if !assignees.is_empty() && ids.is_empty() {
-        return Err(AppError::Glab(
-            "could not match the selected assignee(s) to GitLab project members".into(),
-        ));
-    }
     // `assignee_ids=0` clears; otherwise the comma-joined id list (the `[]` array
     // form 400s through glab's `-f`).
     let value = if ids.is_empty() {
@@ -1165,6 +1183,158 @@ pub async fn set_issue_assignees(
     )
     .await?;
     Ok(())
+}
+
+// ── Issues & merge requests (create) ──────────────────────────────────────────
+//
+// Both creates POST through `glab api` and return the same neutral `PrRef`
+// (number + URL) the GitHub creates return, so the dialogs stay provider-agnostic.
+// Arg forms validated live against the demo: `labels=<csv>` (names) and
+// `assignee_ids=<csv>` (numeric ids, resolved from usernames like the assignee
+// write) on issue create; `source_branch`/`target_branch`/`title`/`description`
+// on MR create, with **draft = the `Draft:` title prefix** (GitLab has no draft
+// field on create — the response then carries `draft: true`). Note the created
+// issue's `web_url` comes back in GitLab's newer `/-/work_items/<iid>` form.
+
+/// The created issue/MR fields we need back (GitLab returns the full object).
+#[derive(Deserialize)]
+struct GlabCreated {
+    iid: u64,
+    web_url: String,
+}
+
+/// Create an issue with optional labels (by name) and assignees (by username —
+/// resolved to GitLab's numeric ids via the project members, erroring rather than
+/// silently dropping when none resolve). Milestone / org issue type aren't wired
+/// for GitLab (the dialog hides those pickers).
+pub async fn create_issue(
+    repo_path: &str,
+    title: &str,
+    body: &str,
+    labels: &[String],
+    assignees: &[String],
+) -> AppResult<PrRef> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "an issue title is required".into(),
+        ));
+    }
+    let labels_arg = (!labels.is_empty()).then(|| format!("labels={}", labels.join(",")));
+    let mut ids_arg = None;
+    if !assignees.is_empty() {
+        // Full resolution or error — never create with a silently-reduced set.
+        let ids = resolve_assignee_ids(repo_path, assignees).await?;
+        ids_arg = Some(format!(
+            "assignee_ids={}",
+            ids.iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues");
+    let title_arg = format!("title={title}");
+    let desc_arg = format!("description={body}");
+    let mut args = vec![
+        "api", "--method", "POST", &endpoint, "-f", &title_arg, "-f", &desc_arg,
+    ];
+    if let Some(a) = &labels_arg {
+        args.push("-f");
+        args.push(a);
+    }
+    if let Some(a) = &ids_arg {
+        args.push("-f");
+        args.push(a);
+    }
+    let out = run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
+    let created: GlabCreated = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the created issue: {e}")))?;
+    Ok(PrRef {
+        number: created.iid,
+        url: created.web_url,
+    })
+}
+
+/// Push `head` to origin, then open a merge request from `head` into `base`.
+/// The push injects glab's token as a one-shot git credential helper (the same
+/// trick as `forge_clone`) — git alone 401s on a private GitLab remote because
+/// glab's token isn't in git's credential store.
+pub async fn create_mr(
+    state: &AppState,
+    repo_path: &str,
+    base: &str,
+    head: &str,
+    title: &str,
+    body: &str,
+    draft: bool,
+) -> AppResult<PrRef> {
+    for b in [base, head] {
+        if b.is_empty() || b.starts_with('-') {
+            return Err(AppError::InvalidArgument(format!("invalid branch: {b}")));
+        }
+    }
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::InvalidArgument("an MR title is required".into()));
+    }
+
+    // An MR needs the branch on the remote first.
+    let origin =
+        crate::git::remote::git_remote_url(repo_path.to_string(), "origin".to_string()).await?;
+    let config = clone_credential_config(&origin).await?;
+    let mut push_args: Vec<&str> = Vec::new();
+    for entry in &config {
+        push_args.push("-c");
+        push_args.push(entry);
+    }
+    push_args.extend(["push", "-u", "origin", head]);
+    crate::git::runner::run_git_mutating(
+        state,
+        repo_path,
+        &push_args,
+        crate::git::runner::NETWORK_TIMEOUT,
+    )
+    .await?;
+
+    // GitLab drafts are the `Draft:` title prefix (no field on create).
+    let full_title = if draft && !title.to_ascii_lowercase().starts_with("draft:") {
+        format!("Draft: {title}")
+    } else {
+        title.to_string()
+    };
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/merge_requests");
+    let source_arg = format!("source_branch={head}");
+    let target_arg = format!("target_branch={base}");
+    let title_arg = format!("title={full_title}");
+    let desc_arg = format!("description={body}");
+    let out = run_glab(
+        Some(repo_path),
+        &[
+            "api",
+            "--method",
+            "POST",
+            &endpoint,
+            "-f",
+            &source_arg,
+            "-f",
+            &target_arg,
+            "-f",
+            &title_arg,
+            "-f",
+            &desc_arg,
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let created: GlabCreated = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the created merge request: {e}")))?;
+    Ok(PrRef {
+        number: created.iid,
+        url: created.web_url,
+    })
 }
 
 // ── Pipelines (CI, read) ──────────────────────────────────────────────────────

@@ -228,6 +228,31 @@ pub async fn set_issue_assignees(
     crate::github::issue::gh_issue_set_assignees(repo_path.to_string(), number, assignees).await
 }
 
+/// Create an issue — delegates to the gh-backed REST create with the full GitHub
+/// field set (labels/assignees/milestone/org issue type). (`gh_pr_create` has no
+/// delegate here: it takes Tauri `State` for the push, so `forge_pr_create`'s
+/// GitHub arm calls it directly, like `forge_pr_merge`.)
+pub async fn create_issue(
+    repo_path: &str,
+    title: &str,
+    body: &str,
+    labels: Vec<String>,
+    assignees: Vec<String>,
+    milestone: Option<u64>,
+    issue_type: Option<String>,
+) -> AppResult<crate::github::pr::PrRef> {
+    crate::github::issue::gh_issue_create(
+        repo_path.to_string(),
+        title.to_string(),
+        body.to_string(),
+        labels,
+        assignees,
+        milestone,
+        issue_type,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

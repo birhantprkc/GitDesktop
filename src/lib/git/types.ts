@@ -470,6 +470,11 @@ export interface ForgeImplemented {
   /** Setting an issue's assignees — a shared issue control. (No MR-assignee flag:
    *  GitHub PRs expose no assignee picker here.) */
   issueAssignees: boolean;
+  /** Creating an issue from the app — a shared control (GitHub-only fields like
+   *  milestone/org-type hide per provider in the dialog). */
+  issueCreate: boolean;
+  /** Creating a merge/pull request from the app (push head + open) — shared. */
+  mrCreate: boolean;
 }
 
 /** A merge/pull request's approval summary — who has approved and whether the

@@ -19,6 +19,7 @@ import { required, useAppForm } from "@/lib/form";
 import {
   useAddSubIssue,
   useCreateIssue,
+  useForgeStatus,
   useRepoLabels,
 } from "@/lib/git/queries";
 import type { IssueType } from "@/lib/git/types";
@@ -52,6 +53,11 @@ export function CreateIssueDialog({
   const createIssue = useCreateIssue(repoPath);
   const addSubIssue = useAddSubIssue(repoPath);
   const repoLabels = useRepoLabels(repoPath, open);
+  // Milestone and org issue type are GitHub-only pickers; the shared fields
+  // (title/body/labels/assignees) work on both providers.
+  const forge = useForgeStatus(repoPath);
+  const isGitLab = forge.data?.provider === "gitlab";
+  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
   const selectIssue = useUiStore((s) => s.selectIssue);
   const repoName = useUiStore((s) => s.repoName) ?? "";
   const aiEnabled = useAiEnabled();
@@ -148,7 +154,7 @@ export function CreateIssueDialog({
             <DialogDescription>
               {subIssueParentId
                 ? "Opens a new issue on GitHub and links it as a sub-issue."
-                : "Opens a new issue on GitHub for this repository."}
+                : `Opens a new issue on ${remoteLabel} for this repository.`}
             </DialogDescription>
           </DialogHeader>
 
@@ -273,18 +279,22 @@ export function CreateIssueDialog({
               value={assignees}
               onChange={setAssignees}
             />
-            <MilestoneMenu
-              repoPath={repoPath}
-              enabled={open}
-              value={milestone}
-              onChange={setMilestone}
-            />
-            <IssueTypeMenu
-              repoPath={repoPath}
-              enabled={open}
-              value={issueType}
-              onChange={setIssueType}
-            />
+            {!isGitLab && (
+              <>
+                <MilestoneMenu
+                  repoPath={repoPath}
+                  enabled={open}
+                  value={milestone}
+                  onChange={setMilestone}
+                />
+                <IssueTypeMenu
+                  repoPath={repoPath}
+                  enabled={open}
+                  value={issueType}
+                  onChange={setIssueType}
+                />
+              </>
+            )}
           </div>
 
           <DialogFooter>

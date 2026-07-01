@@ -860,7 +860,7 @@ export function useCreateIssue(repo: string) {
       milestone: number | null;
       type: string | null;
     }) =>
-      api.ghIssueCreate(
+      api.forgeIssueCreate(
         repo,
         args.title,
         args.body,
@@ -1447,6 +1447,8 @@ const NO_FORGE_STATUS: ForgeStatus = {
     issueLabels: false,
     mrLabels: false,
     issueAssignees: false,
+    issueCreate: false,
+    mrCreate: false,
   },
 };
 
@@ -2979,7 +2981,7 @@ export function useCreatePr(repo: string) {
       body: string;
       draft: boolean;
     }) =>
-      api.ghPrCreate(
+      api.forgePrCreate(
         repo,
         args.base,
         args.head,

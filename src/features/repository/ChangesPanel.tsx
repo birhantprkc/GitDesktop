@@ -155,8 +155,9 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   // comparison only runs while the tree is clean, so the daily loop never
   // pays for it.
   const gh = useForgeStatus(repoPath);
-  // The empty-state "View on GitHub" / "Create PR" suggestions are GitHub-only
-  // (they call gh); a GitLab repo skips them until its write phase lands.
+  // The empty-state "View on GitHub" suggestion is GitHub-only (a web link).
+  // The "Open pull request" suggestion is gated on proposeCount alone — it routes
+  // to the Compare tab, whose create affordance is provider-aware (GitHub + GitLab).
   const ghReady =
     Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
     gh.data?.provider === "github";

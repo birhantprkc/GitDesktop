@@ -21,16 +21,19 @@ commit list.
   **diff** (plus an "Open on GitLab" link) — and now **comment** on a GitLab MR,
   **close / reopen** it, **approve / unapprove** it (a GitLab reviewer action, with the
   approval count shown inline), and **merge** it (merge or squash, optionally deleting the
-  source branch — guarded so it never merges a head you didn't see), and edit its **labels**. The **Issues** panel reads GitLab
+  source branch — guarded so it never merges a head you didn't see), and edit its **labels**.
+  You can also **create a merge request** right from the app (the New menu, the command
+  palette, or the Compare tab) — it pushes your branch and opens the MR, draft included. The **Issues** panel reads GitLab
   too — its issues (open and closed) next to your local issues, and an issue view with the
   description, comments, and a side rail of labels, assignees, and milestone — now with GitLab
-  issue **writes**: **comment**, **close / reopen**, and editing **labels** and **assignees**
-  right in that side rail. And the
+  issue **writes**: **comment**, **close / reopen**, editing **labels** and **assignees**
+  right in that side rail, and **creating issues** (with labels and assignees) from the same
+  dialog GitHub uses. Publishing a **local** issue or PR to GitLab works too. And the
   **Actions** panel reads GitLab **CI pipelines** — the run list, a branch CI badge, and a
   read-only pipeline view with its **jobs** (status, durations, and per-job **logs**). The
   **Tags** panel reads GitLab **releases** too — alongside your local tags, with a **read-only**
   release view: notes, the Latest badge, and asset links (open in browser). The rest of the
-  GitLab surface (full MR reviews, creating MRs and issues, editing an issue's title/body, re-running/dispatching
+  GitLab surface (full MR reviews, editing an issue's title/body, re-running/dispatching
   pipelines, publishing releases, insights) reads **"coming soon"** for now — those panels degrade
   gracefully instead of breaking — and lands in later updates. GitHub repositories are
   completely unaffected. (Self-managed GitLab hosts and Bitbucket are still on the way.)

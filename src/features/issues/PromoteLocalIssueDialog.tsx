@@ -12,17 +12,17 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { forgeIssueComment } from "@/lib/git/api";
-import { useCreateIssue } from "@/lib/git/queries";
+import { useCreateIssue, useForgeStatus } from "@/lib/git/queries";
 import type { LocalIssue } from "@/lib/issues/local";
 import { useSaveLocalIssue } from "@/lib/issues/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 
 /**
- * Publishes a local issue to GitHub: opens a real issue with the same
- * title/description, **re-posts its comments** (so nothing is lost), then closes
- * the local issue with a link to its successor. Deliberately fires no
- * automations — the local issue's creation was the trigger point, not this.
+ * Publishes a local issue to the repo's provider (GitHub or GitLab): opens a real
+ * issue with the same title/description, **re-posts its comments** (so nothing is
+ * lost), then closes the local issue with a link to its successor. Deliberately
+ * fires no automations — the local issue's creation was the trigger point, not this.
  */
 export function PromoteLocalIssueDialog({
   repoPath,
@@ -38,6 +38,8 @@ export function PromoteLocalIssueDialog({
   const createIssue = useCreateIssue(repoPath);
   const save = useSaveLocalIssue(repoPath);
   const selectIssue = useUiStore((s) => s.selectIssue);
+  const forge = useForgeStatus(repoPath);
+  const remoteLabel = forge.data?.provider === "gitlab" ? "GitLab" : "GitHub";
   const [pending, setPending] = useState(false);
 
   const carried = issue.comments.filter((c) => c.body.trim());
@@ -48,7 +50,7 @@ export function PromoteLocalIssueDialog({
       const { number, url } = await createIssue.mutateAsync({
         title: issue.title,
         body: issue.body,
-        // Local labels are free-form and may not exist on GitHub; leave them off.
+        // Local labels are free-form and may not exist remotely; leave them off.
         labels: [],
         assignees: [],
         milestone: null,
@@ -66,7 +68,7 @@ export function PromoteLocalIssueDialog({
           ...issue.comments,
           {
             id: crypto.randomUUID(),
-            body: `Promoted to GitHub issue [#${number}](${url}).`,
+            body: `Promoted to ${remoteLabel} issue [#${number}](${url}).`,
             createdAt: new Date().toISOString(),
           },
         ],
@@ -88,9 +90,9 @@ export function PromoteLocalIssueDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Publish this issue to GitHub?</DialogTitle>
+          <DialogTitle>Publish this issue to {remoteLabel}?</DialogTitle>
           <DialogDescription>
-            Opens a new issue on GitHub with this title and description
+            Opens a new issue on {remoteLabel} with this title and description
             {carried.length > 0
               ? ` and re-posts its ${carried.length} comment${
                   carried.length === 1 ? "" : "s"
@@ -110,7 +112,7 @@ export function PromoteLocalIssueDialog({
           </Button>
           <Button onClick={promote} disabled={pending}>
             {pending && <Spinner data-icon="inline-start" />}
-            Publish to GitHub
+            Publish to {remoteLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

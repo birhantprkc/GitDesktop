@@ -394,8 +394,10 @@ highlighted **diff** (with an **Open on GitLab** link) — and the **first GitLa
 **comment** on it, **close / reopen** it, **approve / unapprove** it (a reviewer action,
 with the approval count shown inline), edit its **labels**, and **merge** it — merge or squash, optionally deleting
 the source branch, guarded so it never merges a head you didn't see (GitLab applies the project's
-configured merge method, so there's no separate "rebase" option). Full reviews (a comment or
-request-changes with a body) and creating MRs from the app are coming soon; for now those live on
+configured merge method, so there's no separate "rebase" option). **Creating a merge request**
+works from the app too ({{kbd:create-pr}}, the New menu, or the Compare tab) — it pushes your
+branch and opens the MR, with the same draft checkbox and AI description as GitHub. Full
+reviews (a comment or request-changes with a body) are coming soon; for now those live on
 GitLab. GitLab uses the GitLab
 CLI (\`glab\`) — run \`glab auth login\` once, no tokens stored. Its issues, CI pipelines, and
 releases read too (see their sections below).
@@ -405,7 +407,7 @@ releases read too (see their sections below).
 A **local PR** is the same review workflow against any two branches with **no remote at
 all** — describe it in Markdown, comment, label, approve, and merge locally. Local PRs
 are private to you and never written into the repo. When you're ready, **promote** a
-local PR to a real GitHub PR in one click, history preserved.
+local PR to a real GitHub PR or GitLab MR in one click, history preserved.
 {{ai}}
 ## AI review
 
@@ -440,15 +442,17 @@ add labels, **close / reopen**, **lock**, and **transfer** an issue to another r
 Point the app at a **GitLab** repo and the same tab lists its **issues** (open and closed)
 next to any local issues. Open one to read the description and comments with a side rail of
 labels, assignees, and milestone — and GitLab issue **writes**: **comment** on the issue,
-**close / reopen** it, and edit its **labels** and **assignees** right in the side rail. Editing
-the title/body and creating issues still live on GitLab for now (use the **View on GitLab**
+**close / reopen** it, and edit its **labels** and **assignees** right in the side rail.
+**Creating issues** works too — the New menu (or {{kbd:create-issue}} from the palette) opens
+the same dialog GitHub uses, with labels and assignees (milestone and type are GitHub-only
+pickers). Editing the title/body still lives on GitLab for now (use the **View on GitLab**
 link); the milestone stays read-only.
 
 ## Local issues
 
 A **local issue** is a private, offline to-do tracked in the app — create, edit, label,
-and close it with no remote. When it's ready to share, **promote** it to a GitHub issue
-in one click.
+and close it with no remote. When it's ready to share, **promote** it to a GitHub or
+GitLab issue in one click.
 {{ai}}
 ## Hand off to an agent
 

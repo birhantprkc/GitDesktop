@@ -4,6 +4,7 @@ import {
   ArrowCounterClockwiseIcon,
   DotsThreeIcon,
   GithubLogoIcon,
+  GitlabLogoIcon,
   PencilSimpleIcon,
   TagIcon,
   TrashIcon,
@@ -39,7 +40,7 @@ import { LocalComment } from "@/features/conversations/LocalComment";
 import { useLocalConversation } from "@/features/conversations/useLocalConversation";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { copyText } from "@/lib/clipboard";
-import { useForgeStatus } from "@/lib/git/queries";
+import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
 import {
   useDeleteLocalIssue,
   useLocalIssues,
@@ -333,15 +334,20 @@ export function LocalIssueView({
         <span className="flex-1" />
         {isOpen && (
           <>
-            {ghStatus.data?.provider === "github" && (
+            {forgeFeatureReady(ghStatus.data, "issueCreate") && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setPromoteOpen(true)}
-                title="Open this issue on GitHub, carrying its comments"
+                title={`Open this issue on ${ghStatus.data?.provider === "gitlab" ? "GitLab" : "GitHub"}, carrying its comments`}
               >
-                <GithubLogoIcon data-icon="inline-start" />
-                Publish to GitHub
+                {ghStatus.data?.provider === "gitlab" ? (
+                  <GitlabLogoIcon data-icon="inline-start" />
+                ) : (
+                  <GithubLogoIcon data-icon="inline-start" />
+                )}
+                Publish to{" "}
+                {ghStatus.data?.provider === "gitlab" ? "GitLab" : "GitHub"}
               </Button>
             )}
             <Button

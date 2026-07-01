@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CreateLocalPrDialog } from "@/features/pulls/CreateLocalPrDialog";
 import { CreatePrDialog } from "@/features/pulls/CreatePrDialog";
 import {
+  forgeFeatureReady,
   useBranches,
   useCompareBranches,
   useDefaultBranch,
@@ -54,13 +55,21 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
 
   const currentName = status.data?.branch?.name ?? null;
   const detached = status.data?.branch?.detached ?? false;
-  // Opening a PR (and the "PRs for this branch" probe) is GitHub-only for now —
-  // GitLab merge-request creation is a later write-phase increment.
-  const ghReady =
+  // Opening a PR/MR follows the per-action create flag (GitHub + GitLab). The
+  // "PRs for this branch" probe stays GitHub-only (`gh_prs_for_branch`), so a
+  // GitLab repo skips duplicate-MR detection here — GitLab itself rejects a
+  // duplicate source→target MR with a clear error that surfaces via the toast.
+  const ghProbe =
     Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
     gh.data?.provider === "github";
-  const branchPrs = usePrsForBranch(repoPath, currentName, ghReady);
-  const otherBranches = (branches.data ?? []).filter((b) => !b.isCurrent);
+  const isGitLab = gh.data?.provider === "gitlab";
+  const prNoun = isGitLab ? "merge request" : "pull request";
+  const branchPrs = usePrsForBranch(repoPath, currentName, ghProbe);
+  // Agent-session branches (`gd/session/*`) are app-internal — never offer them
+  // as a compare target (the PR button would even push one), like BranchSwitcher.
+  const otherBranches = (branches.data ?? []).filter(
+    (b) => !b.isCurrent && !b.name.startsWith("gd/session/"),
+  );
   const firstOther = otherBranches[0]?.name ?? null;
   const compareValid =
     compareBranch !== null &&
@@ -83,7 +92,7 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
 
   const ahead = comparison.data?.ahead ?? [];
   const behind = comparison.data?.behind ?? [];
-  const canPr = ghReady;
+  const canPr = forgeFeatureReady(gh.data, "mrCreate");
   // An open PR from the current branch into the compared branch already exists.
   const existingPr = (branchPrs.data ?? []).find(
     (p) => p.baseRefName === compareBranch,
@@ -174,11 +183,11 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
             title={
               ahead.length === 0
                 ? `${currentName} has no commits to propose onto ${compareBranch}`
-                : `Open a pull request into ${compareBranch}`
+                : `Open a ${prNoun} into ${compareBranch}`
             }
           >
             <GitPullRequestIcon data-icon="inline-start" />
-            Create pull request…
+            Create {prNoun}…
           </Button>
         )}
         {compareBranch && compareBranch !== currentName && (

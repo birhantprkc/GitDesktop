@@ -834,7 +834,10 @@ export const forgeClone = (
     dirName: dirName ?? null,
   });
 
-export const ghPrCreate = (
+/** Create a merge/pull request (pushes the head branch first). Provider-neutral:
+ *  GitHub via `gh pr create`, GitLab via `glab` with a one-shot credential-helper
+ *  push and draft mapped to the `Draft:` title prefix. */
+export const forgePrCreate = (
   repoPath: string,
   base: string,
   head: string,
@@ -842,7 +845,7 @@ export const ghPrCreate = (
   body: string,
   draft: boolean,
 ) =>
-  invoke<PrRef>("gh_pr_create", {
+  invoke<PrRef>("forge_pr_create", {
     repoPath,
     base,
     head,
@@ -896,15 +899,17 @@ export type IssueStateFilter = "open" | "closed";
 
 // Provider-neutral issue reads — like the PR reads above, the backend resolves the
 // repo's provider and dispatches (GitHub `gh`, GitLab `glab`), returning the same
-// neutral `IssueInfo`/`IssueDetails` shapes. Only the read path is provider-neutral;
-// the issue write mutations below stay on the GitHub-only `gh_issue_*` commands.
+// neutral `IssueInfo`/`IssueDetails` shapes. The writes go neutral per-action as
+// each lands (comment/state/labels/assignees/create); the rest stay `gh_issue_*`.
 export const forgeIssueList = (repoPath: string, state: IssueStateFilter) =>
   invoke<IssueInfo[]>("forge_issue_list", { repoPath, state });
 
 export const forgeIssueView = (repoPath: string, number: number) =>
   invoke<IssueDetails>("forge_issue_view", { repoPath, number });
 
-export const ghIssueCreate = (
+/** Create an issue. Provider-neutral: milestone/issueType are GitHub-only and
+ *  dropped by the GitLab arm (its dialog hides those pickers). */
+export const forgeIssueCreate = (
   repoPath: string,
   title: string,
   body: string,
@@ -913,7 +918,7 @@ export const ghIssueCreate = (
   milestone: number | null,
   issueType: string | null,
 ) =>
-  invoke<PrRef>("gh_issue_create", {
+  invoke<PrRef>("forge_issue_create", {
     repoPath,
     title,
     body,

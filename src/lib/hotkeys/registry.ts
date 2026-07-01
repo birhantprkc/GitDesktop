@@ -198,7 +198,7 @@ export const ACTIONS = [
   },
   {
     id: "create-issue",
-    label: "Create issue on GitHub",
+    label: "Create issue",
     category: "Repository",
     defaultBinding: null,
   },

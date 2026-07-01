@@ -219,6 +219,8 @@ pub fn run() {
             forge::forge_assignable_users,
             forge::forge_edit_labels,
             forge::forge_issue_set_assignees,
+            forge::forge_issue_create,
+            forge::forge_pr_create,
             github::pr::gh_status,
             github::pr::gh_accounts,
             github::pr::gh_switch_account,

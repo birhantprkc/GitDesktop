@@ -21,7 +21,7 @@ import type { AgentKind } from "@/lib/ai/agent";
 import { formatUsd } from "@/lib/ai/cost";
 import { extractPlanQuestions } from "@/lib/ai/prompt";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
-import { useForgeStatus } from "@/lib/git/queries";
+import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
 import { formatBinding } from "@/lib/hotkeys/binding";
 import { useUiStore } from "@/lib/stores/ui";
 import { CreateLocalIssueDialog } from "../issues/CreateLocalIssueDialog";
@@ -224,10 +224,9 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
   const gh = useForgeStatus(repoPath);
-  // "Create GitHub issue" is GitHub-only; a GitLab repo offers just the local issue.
-  const ghReady =
-    Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
-    gh.data?.provider === "github";
+  // The remote-issue handoff follows the per-action create flag (GitHub + GitLab).
+  const ghReady = forgeFeatureReady(gh.data, "issueCreate");
+  const remoteLabel = gh.data?.provider === "gitlab" ? "GitLab" : "GitHub";
   const [localOpen, setLocalOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -405,7 +404,7 @@ function PlanResult({ run, repoPath }: { run: PlanRun; repoPath: string }) {
                   </Button>
                   {ghReady && (
                     <Button variant="outline" size="sm" onClick={createGithub}>
-                      Create GitHub issue
+                      Create {remoteLabel} issue
                     </Button>
                   )}
                   <ImplementPlanButton run={run} />

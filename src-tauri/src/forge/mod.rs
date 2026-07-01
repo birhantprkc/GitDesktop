@@ -546,6 +546,64 @@ pub async fn forge_issue_set_assignees(
     }
 }
 
+/// Create an issue, behind the abstraction. Returns the new number + URL.
+/// GitHub sends the full field set; GitLab takes title/body/labels/assignees
+/// (milestone and org issue type have no wired GitLab analogue — the dialog hides
+/// those pickers, and the dispatch drops them like `forge_issue_close` drops the
+/// GitHub-only close reason).
+#[tauri::command]
+pub async fn forge_issue_create(
+    repo_path: String,
+    title: String,
+    body: String,
+    labels: Vec<String>,
+    assignees: Vec<String>,
+    milestone: Option<u64>,
+    issue_type: Option<String>,
+) -> AppResult<crate::github::pr::PrRef> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::create_issue(&repo_path, &title, &body, &labels, &assignees).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => {
+            github::create_issue(
+                &repo_path, &title, &body, labels, assignees, milestone, issue_type,
+            )
+            .await
+        }
+    }
+}
+
+/// Create a merge/pull request, behind the abstraction. Both arms push the head
+/// branch to origin first (an MR/PR needs it on the remote); GitLab injects glab's
+/// token as a one-shot git credential helper for that push, like `forge_clone`.
+/// GitHub delegates to the unchanged `gh pr create`; GitLab POSTs the MR with
+/// draft mapped to the `Draft:` title prefix. Returns the new number + URL.
+#[tauri::command]
+pub async fn forge_pr_create(
+    state: tauri::State<'_, crate::state::AppState>,
+    repo_path: String,
+    base: String,
+    head: String,
+    title: String,
+    body: String,
+    draft: bool,
+) -> AppResult<crate::github::pr::PrRef> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::create_mr(&state, &repo_path, &base, &head, &title, &body, draft).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => crate::github::pr::gh_pr_create(state, repo_path, base, head, title, body, draft)
+            .await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
