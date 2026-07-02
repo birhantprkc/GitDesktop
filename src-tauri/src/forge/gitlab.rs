@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 use crate::forge::glab::{run_glab, run_glab_raw, GLAB_NETWORK_TIMEOUT, GLAB_TIMEOUT};
@@ -1311,6 +1311,129 @@ pub async fn edit_issue(repo_path: &str, number: u64, title: &str, body: &str) -
         &[
             "api", "--method", "PUT", &endpoint, "-f", &title_arg, "-f", &desc_arg,
         ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Lock or unlock an issue's conversation (`discussion_locked`). Validated
+/// live. GitLab has no lock reasons — the shared UI hides the reason submenu
+/// per provider, and the read side already maps `discussion_locked` → `locked`.
+pub async fn lock_issue(repo_path: &str, number: u64, locked: bool) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}");
+    let lock_arg = format!("discussion_locked={locked}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &lock_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// The two fields the issue-move flow reads back (the target project's id, the
+/// moved issue's URL).
+#[derive(Deserialize)]
+struct GlabMoveTarget {
+    id: u64,
+}
+
+#[derive(Deserialize)]
+struct GlabMovedIssue {
+    web_url: String,
+}
+
+/// Move an issue to another project — GitLab's analogue of a GitHub transfer;
+/// returns the moved issue's URL. GitLab closes the original with a "moved"
+/// marker. `destination` is a full project path ("group/name"), resolved to the
+/// numeric id the move endpoint requires. Validated live.
+pub async fn move_issue(repo_path: &str, number: u64, destination: &str) -> AppResult<String> {
+    let destination = destination.trim().trim_matches('/');
+    if destination.is_empty() || destination.starts_with('-') {
+        return Err(AppError::InvalidArgument(
+            "a destination project is required".into(),
+        ));
+    }
+    if !destination.contains('/') {
+        return Err(AppError::InvalidArgument(
+            "the destination must be a full project path (like group/name)".into(),
+        ));
+    }
+    let dest_enc = encode_project(destination);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{dest_enc}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    .map_err(|e| {
+        AppError::Glab(format!(
+            "could not resolve the destination project \u{201c}{destination}\u{201d}: {e}"
+        ))
+    })?;
+    let target: GlabMoveTarget = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the destination project: {e}")))?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}/move");
+    let target_arg = format!("to_project_id={}", target.id);
+    let moved = run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint, "-f", &target_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    .map_err(|e| match e {
+        // GitLab folds several distinct causes into this one message — seen
+        // live when the TARGET project has issues disabled, not just on actual
+        // permission gaps. Spell out both so the fix is findable.
+        AppError::Glab(msg) if msg.contains("insufficient permissions") => AppError::Glab(
+            "GitLab refused the move — this needs Reporter access on both projects, \
+             and the destination must have issues enabled."
+                .into(),
+        ),
+        other => other,
+    })?;
+    let issue: GlabMovedIssue = serde_json::from_str(&moved.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the moved issue: {e}")))?;
+    Ok(issue.web_url)
+}
+
+/// Project paths the viewer is a member of, ON THIS REPO'S HOST — the Move
+/// dialog's destination suggestions. Runs in the repo so glab targets the
+/// repo's own (possibly self-managed) instance, unlike the account-scoped
+/// clone-browser listing which uses glab's default host.
+pub async fn member_projects(repo_path: &str) -> AppResult<Vec<String>> {
+    let out = run_glab(
+        Some(repo_path),
+        &[
+            "api",
+            "projects?membership=true&simple=true&archived=false&order_by=last_activity_at&per_page=100",
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    #[derive(Deserialize)]
+    struct GlabProjectPath {
+        path_with_namespace: String,
+    }
+    let projects: Vec<GlabProjectPath> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab projects: {e}")))?;
+    Ok(projects
+        .into_iter()
+        .map(|p| p.path_with_namespace)
+        .collect())
+}
+
+/// Permanently delete an issue. GitLab restricts this server-side to owners;
+/// the API's error surfaces as-is when the viewer can't.
+pub async fn delete_issue(repo_path: &str, number: u64) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
         GLAB_NETWORK_TIMEOUT,
     )
     .await?;
@@ -3097,9 +3220,1118 @@ pub async fn delete_release_asset(repo_path: &str, tag: &str, asset_name: &str) 
     Ok(())
 }
 
+// ── Repository settings & lifecycle ──────────────────────────────────────────
+//
+// The project-settings surface (`GET/PUT projects/:id` + the lifecycle
+// endpoints), all validated live. GitLab's settings model differs from
+// GitHub's where it matters — per-feature ACCESS LEVELS (enabled / private /
+// disabled) instead of has_* booleans, one `merge_method` enum instead of
+// three allow-flags, a `squash_option` enum — so it travels as its own
+// `GitLabRepoSettings` shape and the frontend renders a GitLab-shaped General
+// section, rather than forcing a lossy mapping onto the GitHub types. The
+// lifecycle actions (rename/archive/visibility/transfer/delete) DO share
+// GitHub's parameter shapes and dispatch behind neutral `forge_repo_*`
+// commands.
+
+/// The viewer's effective access to this project, from `permissions` on the
+/// project read: the max of the direct project grant and the inherited group
+/// grant. 40 = Maintainer (can edit settings), 50 = Owner (can transfer /
+/// delete / archive).
+#[derive(Deserialize)]
+struct GlabPermissions {
+    #[serde(default, deserialize_with = "null_to_default")]
+    project_access: Option<GlabAccessLevel>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    group_access: Option<GlabAccessLevel>,
+}
+
+#[derive(Deserialize, Default)]
+struct GlabAccessLevel {
+    #[serde(default)]
+    access_level: u8,
+}
+
+#[derive(Deserialize)]
+struct GlabProjectPermissions {
+    #[serde(default, deserialize_with = "null_to_default")]
+    permissions: Option<GlabPermissions>,
+}
+
+/// Whether the signed-in viewer can manage this project's settings
+/// (Maintainer+) and whether they hold the Owner-only lifecycle powers.
+pub async fn repo_admin(repo_path: &str) -> AppResult<(bool, bool)> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let p: GlabProjectPermissions = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab project: {e}")))?;
+    let mut level = p
+        .permissions
+        .map(|perms| {
+            let project = perms.project_access.map_or(0, |a| a.access_level);
+            let group = perms.group_access.map_or(0, |a| a.access_level);
+            project.max(group)
+        })
+        .unwrap_or(0);
+    // `permissions` only reflects a direct project/namespace-group grant —
+    // access inherited from an ancestor group or an invited group reads as
+    // null/null. Before concluding the viewer can't manage, ask the
+    // effective-membership endpoint (a 404 there = genuinely not a member).
+    if level < 40 {
+        if let Ok(user) = current_user(repo_path).await {
+            let endpoint = format!("projects/{enc}/members/all/{}", user.id);
+            if let Ok(out) =
+                run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await
+            {
+                if let Ok(m) = serde_json::from_str::<GlabAccessLevel>(&out.stdout_lossy()) {
+                    level = level.max(m.access_level);
+                }
+            }
+        }
+    }
+    Ok((level >= 40, level >= 50))
+}
+
+/// The GitLab project settings the app manages, as the frontend consumes them.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabRepoSettings {
+    pub description: Option<String>,
+    pub topics: Vec<String>,
+    pub default_branch: Option<String>,
+    /// "private" / "internal" / "public" (read-only here; changed in Danger zone).
+    pub visibility: String,
+    pub web_url: String,
+    /// The full path ("group/name") — the Danger-zone confirm phrase.
+    pub full_name: String,
+    /// The URL slug (what a rename edits).
+    pub path: String,
+    /// The display name.
+    pub name: String,
+    pub archived: bool,
+    /// Feature access levels: "enabled" / "private" (members only) / "disabled".
+    pub issues_access_level: String,
+    pub merge_requests_access_level: String,
+    pub wiki_access_level: String,
+    pub snippets_access_level: String,
+    pub forking_access_level: String,
+    /// "merge" / "rebase_merge" (semi-linear) / "ff".
+    pub merge_method: String,
+    /// "never" / "always" / "default_on" / "default_off".
+    pub squash_option: String,
+    pub remove_source_branch_after_merge: bool,
+    pub only_allow_merge_if_pipeline_succeeds: bool,
+    pub only_allow_merge_if_all_discussions_are_resolved: bool,
+}
+
+/// The raw project read for the settings surface. Optional scalars ride
+/// `null_to_default` — GitLab nulls fields (e.g. `remove_source_branch_after_merge`)
+/// rather than omitting them.
+#[derive(Deserialize)]
+struct GlabProjectSettings {
+    #[serde(default, deserialize_with = "null_to_default")]
+    description: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    topics: Vec<String>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    default_branch: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    visibility: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    web_url: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    path_with_namespace: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    path: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    name: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    archived: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    issues_access_level: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    merge_requests_access_level: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    wiki_access_level: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    snippets_access_level: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    forking_access_level: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    merge_method: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    squash_option: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    remove_source_branch_after_merge: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    only_allow_merge_if_pipeline_succeeds: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    only_allow_merge_if_all_discussions_are_resolved: bool,
+}
+
+fn settings_from_project(p: GlabProjectSettings) -> GitLabRepoSettings {
+    GitLabRepoSettings {
+        description: (!p.description.is_empty()).then_some(p.description),
+        topics: p.topics,
+        default_branch: (!p.default_branch.is_empty()).then_some(p.default_branch),
+        visibility: p.visibility,
+        web_url: p.web_url,
+        full_name: p.path_with_namespace,
+        path: p.path,
+        name: p.name,
+        archived: p.archived,
+        issues_access_level: p.issues_access_level,
+        merge_requests_access_level: p.merge_requests_access_level,
+        wiki_access_level: p.wiki_access_level,
+        snippets_access_level: p.snippets_access_level,
+        forking_access_level: p.forking_access_level,
+        merge_method: p.merge_method,
+        squash_option: p.squash_option,
+        remove_source_branch_after_merge: p.remove_source_branch_after_merge,
+        only_allow_merge_if_pipeline_succeeds: p.only_allow_merge_if_pipeline_succeeds,
+        only_allow_merge_if_all_discussions_are_resolved: p
+            .only_allow_merge_if_all_discussions_are_resolved,
+    }
+}
+
+pub async fn repo_settings(repo_path: &str) -> AppResult<GitLabRepoSettings> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let p: GlabProjectSettings = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab project: {e}")))?;
+    Ok(settings_from_project(p))
+}
+
+/// The settings the frontend sends back (everything the form manages).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabRepoSettingsInput {
+    pub description: String,
+    pub topics: Vec<String>,
+    pub default_branch: Option<String>,
+    pub issues_access_level: String,
+    pub merge_requests_access_level: String,
+    pub wiki_access_level: String,
+    pub snippets_access_level: String,
+    pub forking_access_level: String,
+    pub merge_method: String,
+    pub squash_option: String,
+    pub remove_source_branch_after_merge: bool,
+    pub only_allow_merge_if_pipeline_succeeds: bool,
+    pub only_allow_merge_if_all_discussions_are_resolved: bool,
+}
+
+const ACCESS_LEVELS: [&str; 3] = ["enabled", "private", "disabled"];
+const MERGE_METHODS: [&str; 3] = ["merge", "rebase_merge", "ff"];
+const SQUASH_OPTIONS: [&str; 4] = ["never", "always", "default_on", "default_off"];
+
+/// Batch-save the managed settings via one `PUT projects/:id` (topics ride the
+/// same PUT as a comma-joined list — validated live). Enum fields are checked
+/// here so a UI regression can't send GitLab a 400 with a cryptic message.
+pub async fn update_repo_settings(
+    repo_path: &str,
+    input: GitLabRepoSettingsInput,
+) -> AppResult<GitLabRepoSettings> {
+    for (field, value, allowed) in [
+        (
+            "issues",
+            &input.issues_access_level,
+            &ACCESS_LEVELS[..],
+        ),
+        (
+            "merge requests",
+            &input.merge_requests_access_level,
+            &ACCESS_LEVELS[..],
+        ),
+        ("wiki", &input.wiki_access_level, &ACCESS_LEVELS[..]),
+        (
+            "snippets",
+            &input.snippets_access_level,
+            &ACCESS_LEVELS[..],
+        ),
+        (
+            "forking",
+            &input.forking_access_level,
+            &ACCESS_LEVELS[..],
+        ),
+        ("merge method", &input.merge_method, &MERGE_METHODS[..]),
+        ("squash option", &input.squash_option, &SQUASH_OPTIONS[..]),
+    ] {
+        if !allowed.contains(&value.as_str()) {
+            return Err(AppError::InvalidArgument(format!(
+                "invalid {field} setting: {value}"
+            )));
+        }
+    }
+    // GitLab topics may contain spaces; only commas separate them.
+    if input.topics.iter().any(|t| t.contains(',')) {
+        return Err(AppError::InvalidArgument(
+            "topics must not contain commas".into(),
+        ));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}");
+    let description = format!("description={}", input.description);
+    let topics = format!("topics={}", input.topics.join(","));
+    let issues = format!("issues_access_level={}", input.issues_access_level);
+    let mrs = format!(
+        "merge_requests_access_level={}",
+        input.merge_requests_access_level
+    );
+    let wiki = format!("wiki_access_level={}", input.wiki_access_level);
+    let snippets = format!("snippets_access_level={}", input.snippets_access_level);
+    let forking = format!("forking_access_level={}", input.forking_access_level);
+    let merge_method = format!("merge_method={}", input.merge_method);
+    let squash = format!("squash_option={}", input.squash_option);
+    let remove_source = format!(
+        "remove_source_branch_after_merge={}",
+        input.remove_source_branch_after_merge
+    );
+    let pipeline = format!(
+        "only_allow_merge_if_pipeline_succeeds={}",
+        input.only_allow_merge_if_pipeline_succeeds
+    );
+    let discussions = format!(
+        "only_allow_merge_if_all_discussions_are_resolved={}",
+        input.only_allow_merge_if_all_discussions_are_resolved
+    );
+    let mut args: Vec<&str> = vec!["api", "--method", "PUT", &endpoint];
+    for arg in [
+        &description,
+        &topics,
+        &issues,
+        &mrs,
+        &wiki,
+        &snippets,
+        &forking,
+        &merge_method,
+        &squash,
+        &remove_source,
+        &pipeline,
+        &discussions,
+    ] {
+        args.push("-f");
+        args.push(arg);
+    }
+    // Only send a default branch when one is chosen (an empty project has none).
+    let default_branch = input
+        .default_branch
+        .as_deref()
+        .map(|b| format!("default_branch={b}"));
+    if let Some(db) = &default_branch {
+        args.push("-f");
+        args.push(db);
+    }
+    let out = run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
+    let p: GlabProjectSettings = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the updated project: {e}")))?;
+    Ok(settings_from_project(p))
+}
+
+/// Rename the project: both the display name and the URL slug, so the app and
+/// the web agree (GitLab redirects the old path). Validated live.
+pub async fn rename_repo(repo_path: &str, new_name: &str) -> AppResult<()> {
+    let new_name = new_name.trim();
+    // GitLab paths: alphanumeric start, then letters/digits/`.`/`-`/`_`.
+    let valid = new_name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+        && new_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    if !valid {
+        return Err(AppError::InvalidArgument(
+            "project names must start with a letter or digit and use only letters, digits, '.', '-' or '_'".into(),
+        ));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}");
+    let name_arg = format!("name={new_name}");
+    let path_arg = format!("path={new_name}");
+    run_glab(
+        Some(repo_path),
+        &[
+            "api", "--method", "PUT", &endpoint, "-f", &name_arg, "-f", &path_arg,
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Archive / unarchive the project (their own POST endpoints, not a PUT field).
+/// Validated live.
+pub async fn set_archived(repo_path: &str, archived: bool) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let action = if archived { "archive" } else { "unarchive" };
+    let endpoint = format!("projects/{enc}/{action}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Change the project's visibility ("private" / "internal" / "public").
+/// Validated live. gitlab.com restricts "internal" to legacy namespaces — that
+/// error surfaces as-is.
+pub async fn set_visibility(repo_path: &str, visibility: &str) -> AppResult<()> {
+    if !matches!(visibility, "private" | "internal" | "public") {
+        return Err(AppError::InvalidArgument(format!(
+            "unknown visibility: {visibility}"
+        )));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}");
+    let vis_arg = format!("visibility={visibility}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &vis_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Transfer the project to another namespace (a group path or username the
+/// viewer controls). Owner-only, enforced server-side.
+pub async fn transfer_repo(repo_path: &str, namespace: &str) -> AppResult<()> {
+    let namespace = namespace.trim().trim_matches('/');
+    if namespace.is_empty() || namespace.starts_with('-') {
+        return Err(AppError::InvalidArgument(
+            "a destination namespace is required".into(),
+        ));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let ns = encode_query_value(namespace);
+    let endpoint = format!("projects/{enc}/transfer?namespace={ns}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Permanently delete the project. Owner-only, enforced server-side; on
+/// gitlab.com the deletion may be scheduled (delayed) rather than immediate.
+pub async fn delete_repo(repo_path: &str) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+// ── Members ──────────────────────────────────────────────────────────────────
+//
+// The GitLab analogue of GitHub collaborators. Numeric access levels
+// (10 Guest … 50 Owner) instead of role names; a member can be DIRECT (added
+// on this project — editable here) or INHERITED from a group (read-only here).
+// Reads cap at 100 per list (the settings dialog's working range).
+
+/// A project member for the Members section. `id` is the GitLab user id, as a
+/// string (large ints don't survive the JS IPC boundary).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabMember {
+    pub id: String,
+    pub username: String,
+    pub avatar_url: String,
+    /// 10 Guest / 15 Planner / 20 Reporter / 30 Developer / 40 Maintainer / 50 Owner.
+    pub access_level: u8,
+    /// Added on this project directly (editable) vs inherited from a group.
+    pub direct: bool,
+}
+
+#[derive(Deserialize)]
+struct GlabProjectMember {
+    id: u64,
+    username: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    avatar_url: String,
+    #[serde(default)]
+    access_level: u8,
+}
+
+/// All pages of a members endpoint (capped at 10 × 100 — misclassifying a
+/// direct member past page 1 as inherited would hide their edit controls, so
+/// this can't ride a single-page read).
+async fn member_pages(repo_path: &str, enc: &str, path: &str) -> AppResult<Vec<GlabProjectMember>> {
+    let mut members = Vec::new();
+    for page in 1..=10 {
+        let endpoint = format!("projects/{enc}/{path}?per_page=100&page={page}");
+        let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+        let batch: Vec<GlabProjectMember> = serde_json::from_str(&out.stdout_lossy())
+            .map_err(|e| AppError::Glab(format!("could not parse GitLab members: {e}")))?;
+        let done = batch.len() < 100;
+        members.extend(batch);
+        if done {
+            break;
+        }
+    }
+    Ok(members)
+}
+
+/// All members (direct + inherited), with direct ones flagged editable. A user
+/// can be BOTH direct and inherited — `members/all` reports their highest
+/// level, but edits target the direct membership, so direct rows carry the
+/// DIRECT record's level (what a re-role actually changes).
+pub async fn list_members(repo_path: &str) -> AppResult<Vec<GitLabMember>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let all = member_pages(repo_path, &enc, "members/all").await?;
+    let direct = member_pages(repo_path, &enc, "members").await?;
+    let direct_levels: std::collections::HashMap<u64, u8> =
+        direct.iter().map(|m| (m.id, m.access_level)).collect();
+    Ok(all
+        .into_iter()
+        .map(|m| {
+            let direct_level = direct_levels.get(&m.id).copied();
+            GitLabMember {
+                direct: direct_level.is_some(),
+                id: m.id.to_string(),
+                username: m.username,
+                avatar_url: m.avatar_url,
+                access_level: direct_level.unwrap_or(m.access_level),
+            }
+        })
+        .collect())
+}
+
+/// The access levels the app offers (the classic five — Planner is newer and
+/// not accepted by older self-managed instances).
+fn validate_access_level(level: u8) -> AppResult<()> {
+    if !matches!(level, 10 | 20 | 30 | 40 | 50) {
+        return Err(AppError::InvalidArgument(format!(
+            "unknown access level: {level}"
+        )));
+    }
+    Ok(())
+}
+
+/// Add a member by username: resolve the user id (exact username match), then
+/// POST the membership. GitLab has no pending-invitation state for existing
+/// users — the grant is immediate.
+pub async fn add_member(repo_path: &str, username: &str, access_level: u8) -> AppResult<()> {
+    let username = username.trim();
+    if username.is_empty() || username.starts_with('-') {
+        return Err(AppError::InvalidArgument("a username is required".into()));
+    }
+    validate_access_level(access_level)?;
+    let user_q = encode_query_value(username);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("users?username={user_q}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    #[derive(Deserialize)]
+    struct GlabUser {
+        id: u64,
+        username: String,
+    }
+    let users: Vec<GlabUser> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab user lookup: {e}")))?;
+    let user = users
+        .into_iter()
+        .find(|u| u.username.eq_ignore_ascii_case(username))
+        .ok_or_else(|| AppError::Glab(format!("no GitLab user named {username}")))?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/members");
+    let user_arg = format!("user_id={}", user.id);
+    let level_arg = format!("access_level={access_level}");
+    run_glab(
+        Some(repo_path),
+        &[
+            "api", "--method", "POST", &endpoint, "-f", &user_arg, "-f", &level_arg,
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Change a direct member's access level.
+pub async fn update_member(repo_path: &str, user_id: &str, access_level: u8) -> AppResult<()> {
+    let user_id: u64 = user_id
+        .parse()
+        .map_err(|_| AppError::InvalidArgument("invalid member id".into()))?;
+    validate_access_level(access_level)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/members/{user_id}");
+    let level_arg = format!("access_level={access_level}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &level_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Remove a direct member from the project.
+pub async fn remove_member(repo_path: &str, user_id: &str) -> AppResult<()> {
+    let user_id: u64 = user_id
+        .parse()
+        .map_err(|_| AppError::InvalidArgument("invalid member id".into()))?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/members/{user_id}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+// ── Webhooks ─────────────────────────────────────────────────────────────────
+//
+// Project hooks (`projects/:id/hooks`), all validated live. GitLab models
+// events as per-hook boolean flags (no "send everything"); the secret token is
+// write-only (never returned); a failing hook gets auto-disabled and reports it
+// via `alert_status`. Delivery history is `hooks/:id/events` (request/response
+// inline — no separate detail read), with a per-event resend.
+
+/// The hook event flags the app manages, in display order.
+const HOOK_EVENTS: [&str; 10] = [
+    "push_events",
+    "tag_push_events",
+    "issues_events",
+    "merge_requests_events",
+    "note_events",
+    "pipeline_events",
+    "job_events",
+    "wiki_page_events",
+    "releases_events",
+    "deployment_events",
+];
+
+/// A project webhook as the frontend renders it. `id` as a string (IPC).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabHook {
+    pub id: String,
+    pub url: String,
+    /// The enabled event flags (the `HOOK_EVENTS` names).
+    pub events: Vec<String>,
+    pub enable_ssl_verification: bool,
+    /// "executable", or "disabled"/"temporarily_disabled" once GitLab
+    /// auto-disables a failing hook.
+    pub alert_status: String,
+    pub created_at: String,
+}
+
+fn hook_from_value(v: &serde_json::Value) -> Option<GitLabHook> {
+    let id = v.get("id")?.as_u64()?;
+    let events = HOOK_EVENTS
+        .iter()
+        .filter(|e| v.get(**e).and_then(|b| b.as_bool()).unwrap_or(false))
+        .map(|e| e.to_string())
+        .collect();
+    Some(GitLabHook {
+        id: id.to_string(),
+        url: v.get("url")?.as_str().unwrap_or_default().to_string(),
+        events,
+        enable_ssl_verification: v
+            .get("enable_ssl_verification")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(true),
+        alert_status: v
+            .get("alert_status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("executable")
+            .to_string(),
+        created_at: v
+            .get("created_at")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
+pub async fn list_hooks(repo_path: &str) -> AppResult<Vec<GitLabHook>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/hooks?per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let hooks: Vec<serde_json::Value> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab webhooks: {e}")))?;
+    // Per-item so one malformed hook doesn't sink the list.
+    Ok(hooks.iter().filter_map(hook_from_value).collect())
+}
+
+/// What the frontend sends for create/update. `token: None` leaves an existing
+/// secret unchanged on update (GitLab never returns it, so the form can't).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabHookInput {
+    pub url: String,
+    pub token: Option<String>,
+    pub enable_ssl_verification: bool,
+    pub events: Vec<String>,
+}
+
+/// The `-f` args shared by hook create/update: url + SSL + every known event
+/// flag set explicitly true/false (so unchecking sticks on update).
+fn hook_args(input: &GitLabHookInput) -> AppResult<Vec<String>> {
+    let url = input.url.trim();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(AppError::InvalidArgument(
+            "the payload URL must start with http:// or https://".into(),
+        ));
+    }
+    for e in &input.events {
+        if !HOOK_EVENTS.contains(&e.as_str()) {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown webhook event: {e}"
+            )));
+        }
+    }
+    if input.events.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "select at least one event".into(),
+        ));
+    }
+    let mut args = vec![format!("url={url}")];
+    for e in HOOK_EVENTS {
+        args.push(format!("{e}={}", input.events.iter().any(|x| x == e)));
+    }
+    args.push(format!(
+        "enable_ssl_verification={}",
+        input.enable_ssl_verification
+    ));
+    if let Some(token) = input.token.as_deref() {
+        if !token.is_empty() {
+            args.push(format!("token={token}"));
+        }
+    }
+    Ok(args)
+}
+
+pub async fn create_hook(repo_path: &str, input: GitLabHookInput) -> AppResult<()> {
+    let fields = hook_args(&input)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/hooks");
+    let mut args: Vec<&str> = vec!["api", "--method", "POST", &endpoint];
+    for f in &fields {
+        args.push("-f");
+        args.push(f);
+    }
+    run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+pub async fn update_hook(repo_path: &str, hook_id: &str, input: GitLabHookInput) -> AppResult<()> {
+    let hook_id: u64 = hook_id
+        .parse()
+        .map_err(|_| AppError::InvalidArgument("invalid webhook id".into()))?;
+    let fields = hook_args(&input)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/hooks/{hook_id}");
+    let mut args: Vec<&str> = vec!["api", "--method", "PUT", &endpoint];
+    for f in &fields {
+        args.push("-f");
+        args.push(f);
+    }
+    run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+pub async fn delete_hook(repo_path: &str, hook_id: &str) -> AppResult<()> {
+    let hook_id: u64 = hook_id
+        .parse()
+        .map_err(|_| AppError::InvalidArgument("invalid webhook id".into()))?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/hooks/{hook_id}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Fire a test event at the hook. GitLab relays the endpoint's own failure as
+/// an HTTP 422 whose body is the endpoint's response — the test FIRED in that
+/// case, so it's reported as delivered-but-rejected rather than "test failed"
+/// (seen live: a 405 HTML page from the target came back as the 422 message).
+pub async fn test_hook(repo_path: &str, hook_id: &str, trigger: &str) -> AppResult<()> {
+    let hook_id: u64 = hook_id
+        .parse()
+        .map_err(|_| AppError::InvalidArgument("invalid webhook id".into()))?;
+    if !HOOK_EVENTS.contains(&trigger) {
+        return Err(AppError::InvalidArgument(format!(
+            "unknown webhook trigger: {trigger}"
+        )));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/hooks/{hook_id}/test/{trigger}");
+    match run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        // GitLab answers 422 BOTH when the endpoint rejected the delivered
+        // event (relaying its response body — the event DID fire) and when the
+        // test couldn't fire at all (e.g. "Ensure the project has commits" for
+        // a push test on an empty repo). Keep the original message so the
+        // could-not-fire causes stay diagnosable, truncated because a relayed
+        // body can be a whole HTML page.
+        Err(AppError::Glab(msg)) if msg.contains("HTTP 422") => {
+            let detail: String = msg.chars().take(200).collect();
+            Err(AppError::Glab(format!(
+                "GitLab returned an error for the test — if the endpoint itself rejected the \
+                 event, it fired and appears in the delivery log. Details: {detail}"
+            )))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// One recorded delivery of a hook (`hooks/:id/events` row). Payloads ride
+/// along — GitLab returns them inline, so there's no separate detail read.
+/// `id` as a string (11-digit ids are already near JS's comfort zone).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabHookDelivery {
+    pub id: String,
+    /// e.g. "push_hooks".
+    pub trigger: String,
+    /// The endpoint's HTTP status ("405") or a failure word ("internal error").
+    pub response_status: String,
+    pub created_at: String,
+    /// Seconds.
+    pub duration: f64,
+    /// The request body, pretty-printed JSON.
+    pub request_payload: String,
+    /// The endpoint's response body.
+    pub response_payload: String,
+}
+
+pub async fn hook_events(repo_path: &str, hook_id: &str) -> AppResult<Vec<GitLabHookDelivery>> {
+    let hook_id: u64 = hook_id
+        .parse()
+        .map_err(|_| AppError::InvalidArgument("invalid webhook id".into()))?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/hooks/{hook_id}/events?per_page=20");
+    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+    let events: Vec<serde_json::Value> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the delivery log: {e}")))?;
+    Ok(events
+        .iter()
+        .filter_map(|v| {
+            Some(GitLabHookDelivery {
+                id: v.get("id")?.as_u64()?.to_string(),
+                trigger: v
+                    .get("trigger")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                response_status: match v.get("response_status") {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(serde_json::Value::Number(n)) => n.to_string(),
+                    _ => String::new(),
+                },
+                created_at: v
+                    .get("created_at")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                duration: v
+                    .get("execution_duration")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0),
+                request_payload: v
+                    .get("request_data")
+                    .map(|d| serde_json::to_string_pretty(d).unwrap_or_default())
+                    .unwrap_or_default(),
+                response_payload: v
+                    .get("response_body")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            })
+        })
+        .collect())
+}
+
+/// Re-deliver one recorded event. Validated live (returns the endpoint's new
+/// response status, which the refreshed delivery log shows anyway).
+pub async fn hook_event_resend(repo_path: &str, hook_id: &str, event_id: &str) -> AppResult<()> {
+    let hook_id: u64 = hook_id
+        .parse()
+        .map_err(|_| AppError::InvalidArgument("invalid webhook id".into()))?;
+    let event_id: u64 = event_id
+        .parse()
+        .map_err(|_| AppError::InvalidArgument("invalid delivery id".into()))?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/hooks/{hook_id}/events/{event_id}/resend");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+// ── CI/CD variables ──────────────────────────────────────────────────────────
+//
+// Project variables (`projects/:id/variables`), validated live. Unlike GitHub's
+// split secrets/variables stores, GitLab has ONE store where `masked` hides a
+// value in job logs (the API still returns it to maintainers) and `protected`
+// limits it to protected refs. Environment scoping is left at "*" (it's a
+// Premium feature).
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabVariable {
+    pub key: String,
+    pub value: String,
+    pub protected: bool,
+    pub masked: bool,
+    /// "*" for unscoped; a key can repeat with different scopes (a Premium
+    /// feature the app displays but doesn't create), so writes filter on it.
+    pub environment_scope: String,
+}
+
+#[derive(Deserialize)]
+struct GlabVariable {
+    key: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    value: String,
+    #[serde(default)]
+    protected: bool,
+    #[serde(default)]
+    masked: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    environment_scope: String,
+}
+
+pub async fn list_variables(repo_path: &str) -> AppResult<Vec<GitLabVariable>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    // Paginated (10 × 100 cap) — CI-heavy projects legitimately exceed 100
+    // variables, and a missing row here would read as "safe to re-create".
+    let mut vars: Vec<GlabVariable> = Vec::new();
+    for page in 1..=10 {
+        let endpoint = format!("projects/{enc}/variables?per_page=100&page={page}");
+        let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+        let batch: Vec<GlabVariable> = serde_json::from_str(&out.stdout_lossy())
+            .map_err(|e| AppError::Glab(format!("could not parse GitLab variables: {e}")))?;
+        let done = batch.len() < 100;
+        vars.extend(batch);
+        if done {
+            break;
+        }
+    }
+    Ok(vars
+        .into_iter()
+        .map(|v| GitLabVariable {
+            key: v.key,
+            value: v.value,
+            protected: v.protected,
+            masked: v.masked,
+            environment_scope: if v.environment_scope.is_empty() {
+                "*".to_string()
+            } else {
+                v.environment_scope
+            },
+        })
+        .collect())
+}
+
+fn validate_variable_key(key: &str) -> AppResult<()> {
+    let valid = !key.is_empty()
+        && key.len() <= 255
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        return Err(AppError::InvalidArgument(
+            "variable keys use only letters, digits, and underscores".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The `filter[environment_scope]` query suffix that disambiguates a key that
+/// exists at several scopes (without it, GitLab 409s "There are multiple
+/// variables with provided parameters").
+fn scope_filter(scope: &str) -> String {
+    format!(
+        "?filter%5Benvironment_scope%5D={}",
+        encode_query_value(scope)
+    )
+}
+
+/// Create (`create: true`) or update a variable. Split endpoints on GitLab —
+/// POST 400s on an existing key, PUT 404s on a missing one — and the form
+/// knows which it's doing. Updates address the exact `scope` (a key can exist
+/// at several environment scopes); creates land unscoped ("*").
+pub async fn set_variable(
+    repo_path: &str,
+    key: &str,
+    value: &str,
+    protected: bool,
+    masked: bool,
+    create: bool,
+    scope: &str,
+) -> AppResult<()> {
+    validate_variable_key(key)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let (method, endpoint) = if create {
+        ("POST", format!("projects/{enc}/variables"))
+    } else {
+        (
+            "PUT",
+            format!("projects/{enc}/variables/{key}{}", scope_filter(scope)),
+        )
+    };
+    let key_arg = format!("key={key}");
+    let value_arg = format!("value={value}");
+    let protected_arg = format!("protected={protected}");
+    let masked_arg = format!("masked={masked}");
+    let mut args = vec!["api", "--method", method, &endpoint, "-f", &value_arg];
+    if create {
+        args.push("-f");
+        args.push(&key_arg);
+    }
+    args.push("-f");
+    args.push(&protected_arg);
+    args.push("-f");
+    args.push(&masked_arg);
+    run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT)
+        .await
+        .map_err(|e| match e {
+            // GitLab enforces maskability server-side (length ≥ 8, one line,
+            // Base64-ish alphabet) with a curt 400 — spell it out.
+            AppError::Glab(msg) if masked && msg.contains("masked") => AppError::Glab(
+                "GitLab can't mask this value — masked values need at least 8 characters on a single line, without most special characters".into(),
+            ),
+            other => other,
+        })?;
+    Ok(())
+}
+
+pub async fn delete_variable(repo_path: &str, key: &str, scope: &str) -> AppResult<()> {
+    validate_variable_key(key)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/variables/{key}{}", scope_filter(scope));
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_project_permissions_with_null_group_access() {
+        // The exact shape observed live: a direct project grant, no group.
+        let json = r#"{
+            "permissions": {
+                "project_access": { "access_level": 50, "notification_level": 3 },
+                "group_access": null
+            }
+        }"#;
+        let p: GlabProjectPermissions = serde_json::from_str(json).unwrap();
+        let perms = p.permissions.unwrap();
+        assert_eq!(perms.project_access.map(|a| a.access_level), Some(50));
+        assert!(perms.group_access.is_none());
+    }
+
+    #[test]
+    fn maps_project_settings_with_nulled_fields() {
+        // GitLab nulls optional fields rather than omitting them.
+        let json = r#"{
+            "description": null,
+            "topics": ["alpha", "beta"],
+            "default_branch": "main",
+            "visibility": "private",
+            "web_url": "https://gitlab.com/g/r",
+            "path_with_namespace": "g/r",
+            "path": "r",
+            "name": "r",
+            "archived": false,
+            "issues_access_level": "enabled",
+            "merge_requests_access_level": "private",
+            "wiki_access_level": "disabled",
+            "snippets_access_level": "enabled",
+            "forking_access_level": "enabled",
+            "merge_method": "ff",
+            "squash_option": "default_off",
+            "remove_source_branch_after_merge": null,
+            "only_allow_merge_if_pipeline_succeeds": true,
+            "only_allow_merge_if_all_discussions_are_resolved": false
+        }"#;
+        let s = settings_from_project(serde_json::from_str(json).unwrap());
+        assert_eq!(s.description, None);
+        assert_eq!(s.default_branch.as_deref(), Some("main"));
+        assert_eq!(s.merge_requests_access_level, "private");
+        assert_eq!(s.merge_method, "ff");
+        assert!(!s.remove_source_branch_after_merge);
+        assert!(s.only_allow_merge_if_pipeline_succeeds);
+        assert_eq!(s.full_name, "g/r");
+    }
+
+    #[tokio::test]
+    async fn settings_update_rejects_invalid_enums_and_comma_topics() {
+        let valid = || GitLabRepoSettingsInput {
+            description: "d".into(),
+            topics: vec!["a".into()],
+            default_branch: Some("main".into()),
+            issues_access_level: "enabled".into(),
+            merge_requests_access_level: "enabled".into(),
+            wiki_access_level: "disabled".into(),
+            snippets_access_level: "private".into(),
+            forking_access_level: "enabled".into(),
+            merge_method: "merge".into(),
+            squash_option: "never".into(),
+            remove_source_branch_after_merge: true,
+            only_allow_merge_if_pipeline_succeeds: false,
+            only_allow_merge_if_all_discussions_are_resolved: false,
+        };
+        let mut bad_enum = valid();
+        bad_enum.merge_method = "octopus".into();
+        assert!(update_repo_settings("C:/nonexistent", bad_enum)
+            .await
+            .is_err());
+        let mut bad_topic = valid();
+        bad_topic.topics = vec!["a,b".into()];
+        assert!(update_repo_settings("C:/nonexistent", bad_topic)
+            .await
+            .is_err());
+    }
 
     #[test]
     fn ready_gitlab_repo_has_repo_and_merge_request_support() {

@@ -22,6 +22,8 @@ import type {
   ForgeImplemented,
   ForgeProvider,
   ForgeStatus,
+  GitLabHookInput,
+  GitLabRepoSettingsInput,
   IssueDetails,
   IssueReactions,
   IssueRelation,
@@ -1005,13 +1007,13 @@ export function useLockIssue(repo: string) {
   return useRepoMutation(
     repo,
     (args: { number: number; reason: api.LockReason | null }) =>
-      api.ghIssueLock(repo, args.number, args.reason),
+      api.forgeIssueLock(repo, args.number, args.reason),
   );
 }
 
 export function useUnlockIssue(repo: string) {
   return useRepoMutation(repo, (number: number) =>
-    api.ghIssueUnlock(repo, number),
+    api.forgeIssueUnlock(repo, number),
   );
 }
 
@@ -1347,13 +1349,13 @@ export function useTransferIssue(repo: string) {
   return useRepoMutation(
     repo,
     (args: { number: number; destination: string }) =>
-      api.ghIssueTransfer(repo, args.number, args.destination),
+      api.forgeIssueTransfer(repo, args.number, args.destination),
   );
 }
 
 export function useDeleteIssue(repo: string) {
   return useRepoMutation(repo, (number: number) =>
-    api.ghIssueDelete(repo, number),
+    api.forgeIssueDelete(repo, number),
   );
 }
 
@@ -1497,6 +1499,10 @@ const NO_FORGE_STATUS: ForgeStatus = {
     issueMilestone: false,
     issueReactions: false,
     mrReactions: false,
+    issueLock: false,
+    issueTransfer: false,
+    issueDelete: false,
+    repoSettings: false,
   },
 };
 
@@ -2492,10 +2498,12 @@ export function useSetRepoStar(repo: string) {
   });
 }
 
+/** The settings-management probe ({admin, owner}), behind the abstraction —
+ *  GitHub admin, or GitLab Maintainer/Owner. Gates the settings surface. */
 export function useRepoAdmin(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "admin"] as const,
-    queryFn: () => api.ghRepoAdmin(repo),
+    queryFn: () => api.forgeRepoAdmin(repo),
     enabled,
     staleTime: 5 * 60_000,
     retry: false,
@@ -2627,6 +2635,203 @@ export function useUpdateRepoSettings(repo: string) {
     onSuccess: (data) => queryClient.setQueryData(repoSettingsKey(repo), data),
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: repoSettingsKey(repo) }),
+  });
+}
+
+// The GitLab settings surface — its own query (the models are provider-shaped;
+// see GitLabRepoSettings) but the same key family, so lifecycle mutations'
+// invalidations hit both providers' reads.
+const glRepoSettingsKey = (repo: string) =>
+  ["repo", repo, "repo-settings", "gitlab"] as const;
+
+export function useGlRepoSettings(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: glRepoSettingsKey(repo),
+    queryFn: () => api.forgeGlRepoSettings(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useUpdateGlRepoSettings(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: GitLabRepoSettingsInput) =>
+      api.forgeGlRepoSettingsUpdate(repo, input),
+    // The PUT returns the fresh settings — seed the cache, then refetch.
+    onSuccess: (data) =>
+      queryClient.setQueryData(glRepoSettingsKey(repo), data),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glRepoSettingsKey(repo) }),
+  });
+}
+
+// The GitLab settings sub-surfaces: Members, Webhooks, CI/CD variables.
+const glMembersKey = (repo: string) => ["repo", repo, "gl-members"] as const;
+const glHooksKey = (repo: string) => ["repo", repo, "gl-webhooks"] as const;
+const glHookEventsKey = (repo: string, hookId: string) =>
+  ["repo", repo, "gl-webhook-events", hookId] as const;
+const glVariablesKey = (repo: string) =>
+  ["repo", repo, "gl-variables"] as const;
+
+export function useGlMembers(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: glMembersKey(repo),
+    queryFn: () => api.forgeGlMembers(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useGlAddMember(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { username: string; accessLevel: number }) =>
+      api.forgeGlMemberAdd(repo, a.username, a.accessLevel),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glMembersKey(repo) }),
+  });
+}
+
+export function useGlUpdateMember(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { userId: string; accessLevel: number }) =>
+      api.forgeGlMemberUpdate(repo, a.userId, a.accessLevel),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glMembersKey(repo) }),
+  });
+}
+
+export function useGlRemoveMember(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => api.forgeGlMemberRemove(repo, userId),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glMembersKey(repo) }),
+  });
+}
+
+export function useGlHooks(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: glHooksKey(repo),
+    queryFn: () => api.forgeGlHooks(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useGlCreateHook(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: GitLabHookInput) => api.forgeGlHookCreate(repo, input),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glHooksKey(repo) }),
+  });
+}
+
+export function useGlUpdateHook(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { hookId: string; input: GitLabHookInput }) =>
+      api.forgeGlHookUpdate(repo, a.hookId, a.input),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glHooksKey(repo) }),
+  });
+}
+
+export function useGlDeleteHook(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (hookId: string) => api.forgeGlHookDelete(repo, hookId),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glHooksKey(repo) }),
+  });
+}
+
+export function useGlTestHook(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { hookId: string; trigger: string }) =>
+      api.forgeGlHookTest(repo, a.hookId, a.trigger),
+    // A test lands in the delivery log (and can flip alert_status).
+    onSettled: (_d, _e, a) => {
+      queryClient.invalidateQueries({ queryKey: glHooksKey(repo) });
+      queryClient.invalidateQueries({
+        queryKey: glHookEventsKey(repo, a.hookId),
+      });
+    },
+  });
+}
+
+export function useGlHookEvents(repo: string, hookId: string | null) {
+  return useQuery({
+    queryKey: glHookEventsKey(repo, hookId ?? ""),
+    queryFn: () => api.forgeGlHookEvents(repo, hookId ?? ""),
+    enabled: hookId != null,
+    staleTime: 15_000,
+    retry: false,
+  });
+}
+
+export function useGlResendHookEvent(repo: string, hookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (eventId: string) =>
+      api.forgeGlHookResend(repo, hookId, eventId),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: glHookEventsKey(repo, hookId),
+      }),
+  });
+}
+
+export function useGlVariables(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: glVariablesKey(repo),
+    queryFn: () => api.forgeGlVariables(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useGlSetVariable(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: {
+      key: string;
+      value: string;
+      protected: boolean;
+      masked: boolean;
+      create: boolean;
+      scope: string;
+    }) => api.forgeGlVariableSet(repo, a),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glVariablesKey(repo) }),
+  });
+}
+
+export function useGlDeleteVariable(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { key: string; scope: string }) =>
+      api.forgeGlVariableDelete(repo, a.key, a.scope),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glVariablesKey(repo) }),
+  });
+}
+
+/** Project paths the viewer is a member of on this repo's host — the Move
+ *  dialog's destination suggestions (host-correct for self-managed GitLab). */
+export function useGlMemberProjects(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "gl-member-projects"] as const,
+    queryFn: () => api.forgeGlMemberProjects(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
   });
 }
 
@@ -2866,11 +3071,14 @@ export function useApplySecurity(repo: string) {
   });
 }
 
+// Lifecycle mutations dispatch behind the abstraction (GitHub repo / GitLab
+// project). `repoSettingsKey` invalidation prefix-matches the GitLab settings
+// key too, so both providers' reads refresh.
 export function useSetVisibility(repo: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (visibility: string) =>
-      api.ghRepoSetVisibility(repo, visibility),
+      api.forgeRepoSetVisibility(repo, visibility),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: repoSettingsKey(repo) });
       queryClient.invalidateQueries({ queryKey: securityKey(repo) });
@@ -2881,18 +3089,18 @@ export function useSetVisibility(repo: string) {
 export function useTransferRepo(repo: string) {
   return useMutation({
     mutationFn: (a: { newOwner: string; newName: string | null }) =>
-      api.ghRepoTransfer(repo, a.newOwner, a.newName),
+      api.forgeRepoTransfer(repo, a.newOwner, a.newName),
   });
 }
 
 export function useDeleteRepo(repo: string) {
-  return useMutation({ mutationFn: () => api.ghRepoDelete(repo) });
+  return useMutation({ mutationFn: () => api.forgeRepoDelete(repo) });
 }
 
 export function useSetArchived(repo: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (archived: boolean) => api.ghRepoSetArchived(repo, archived),
+    mutationFn: (archived: boolean) => api.forgeRepoSetArchived(repo, archived),
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: repoSettingsKey(repo) }),
   });
@@ -2900,7 +3108,7 @@ export function useSetArchived(repo: string) {
 
 export function useRenameRepo(repo: string) {
   return useMutation({
-    mutationFn: (newName: string) => api.ghRepoRename(repo, newName),
+    mutationFn: (newName: string) => api.forgeRepoRename(repo, newName),
   });
 }
 

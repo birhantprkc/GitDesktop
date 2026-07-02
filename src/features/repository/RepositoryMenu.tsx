@@ -106,17 +106,18 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   };
 
   // View-on-host / star work for GitHub and GitLab; forking on GitLab is a web
-  // link-out (the fork dialog's remote-rewiring flow is GitHub-only), and the
-  // admin-settings sub-surface stays GitHub-only.
+  // link-out (the fork dialog's remote-rewiring flow is GitHub-only).
   const canGh = forgeFeatureReady(gh.data, "repoActions");
   const isGitLab = gh.data?.provider === "gitlab";
   const remoteLabel = isGitLab ? "GitLab" : "GitHub";
   const starStatus = useRepoStarStatus(repoPath, canGh);
   const setStar = useSetRepoStar(repoPath);
   const starred = starStatus.data ?? false;
-  // Repo settings (webhooks) are admin-only AND GitHub-only; the menu item hides
-  // for everyone else (the admin probe is a gh call — never fire it for GitLab).
-  const admin = useRepoAdmin(repoPath, canGh && !isGitLab);
+  // Repo settings are admin-only, on both providers (GitHub admin / GitLab
+  // Maintainer+ — the probe dispatches per provider); the menu item hides for
+  // everyone else.
+  const settingsReady = forgeFeatureReady(gh.data, "repoSettings");
+  const admin = useRepoAdmin(repoPath, settingsReady);
   const editor = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
@@ -162,7 +163,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   useHotkeyAction(
     "repository-settings",
     () => setRepoSettingsOpen(true),
-    canGh && Boolean(admin.data),
+    settingsReady && Boolean(admin.data?.admin),
   );
   useHotkeyAction("branch-rules", () => setBranchRulesOpen(true));
   useHotkeyAction("git-hooks", () => setHooksOpen(true));
@@ -290,7 +291,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <LightningIcon />
           Automations…
         </DropdownMenuItem>
-        {canGh && admin.data && (
+        {settingsReady && admin.data?.admin && (
           <DropdownMenuItem onClick={() => setRepoSettingsOpen(true)}>
             <GearSixIcon />
             Repository settings…

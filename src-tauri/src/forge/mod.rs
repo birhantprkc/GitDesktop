@@ -72,9 +72,11 @@ pub(crate) fn remote_path(url: &str) -> Option<String> {
 
 /// Route a remote host to a **non-GitHub** provider, but only when it's
 /// unmistakably GitLab.com or Bitbucket Cloud. github.com, Enterprise servers,
-/// self-managed GitLab we can't yet recognize, and unknown hosts all return
-/// `None` — so the GitHub path runs and `gh`'s own (Enterprise-aware) detection
-/// stays authoritative. Self-managed GitLab gains a user host list in Phase 1.
+/// and unknown hosts all return `None` — so the GitHub path runs and `gh`'s own
+/// (Enterprise-aware) detection stays authoritative. Self-managed GitLab is the
+/// one exception, resolved separately in [`detect_non_github`] via glab's own
+/// signed-in host list (a custom domain is otherwise indistinguishable from
+/// GitHub Enterprise).
 fn provider_for_host(host: &str) -> Option<Provider> {
     match host {
         "gitlab.com" => Some(Provider::GitLab),
@@ -84,15 +86,49 @@ fn provider_for_host(host: &str) -> Option<Provider> {
 }
 
 /// Detect a non-GitHub provider from the repo's `origin` remote, with its host.
-/// `None` (→ GitHub path) when the `origin` URL can't be read (no remote, or any
-/// git error), is unparseable, or isn't a canonical GitLab/Bitbucket host — so
-/// GitHub stays the resilient default and `gh`'s own detection decides readiness.
+/// Canonical hosts match directly; any other host glab is signed in to (the
+/// `hosts:` keys of its config) is self-managed GitLab — glab carries per-host
+/// auth, so every downstream `glab` call just works there. `None` (→ GitHub
+/// path) when the `origin` URL can't be read (no remote, or any git error), is
+/// unparseable, or the host is unrecognized — so GitHub stays the resilient
+/// default and `gh`'s own detection decides readiness.
 async fn detect_non_github(repo_path: &str) -> Option<(Provider, String)> {
     let url = crate::git::remote::git_remote_url(repo_path.to_string(), "origin".to_string())
         .await
         .ok()?;
     let host = remote_host(&url)?;
-    provider_for_host(&host).map(|p| (p, host))
+    if let Some(p) = provider_for_host(&host) {
+        return Some((p, host));
+    }
+    // Skip the config read for the overwhelmingly common case.
+    if host == "github.com" {
+        return None;
+    }
+    if glab::known_hosts().await.contains(&host) {
+        return Some((Provider::GitLab, host));
+    }
+    None
+}
+
+/// The provider a host resolves to, as the lowercase tag the frontend keys
+/// labels on (`"github"` / `"gitlab"` / `"bitbucket"`), or `None` for hosts the
+/// app doesn't recognize (the UI treats those as GitHub, matching the routing
+/// above). `glab_hosts` is [`glab::known_hosts`], passed in so batch callers
+/// read the config once.
+pub(crate) fn provider_tag_for_host(host: &str, glab_hosts: &[String]) -> Option<&'static str> {
+    match provider_for_host(host) {
+        Some(Provider::GitLab) => Some("gitlab"),
+        Some(Provider::Bitbucket) => Some("bitbucket"),
+        Some(Provider::GitHub) | None => {
+            if host == "github.com" {
+                Some("github")
+            } else if glab_hosts.iter().any(|h| h == host) {
+                Some("gitlab")
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// Resolve a repo's hosted-integration status behind the provider abstraction.
@@ -699,6 +735,69 @@ pub async fn forge_issue_edit(
     }
 }
 
+/// Lock an issue's conversation, behind the abstraction. GitHub locks with an
+/// optional reason; GitLab's `discussion_locked` has none, so its arm ignores
+/// `reason` (the UI hides the reason submenu per provider — a stray reason must
+/// not fail the lock).
+#[tauri::command]
+pub async fn forge_issue_lock(
+    repo_path: String,
+    number: u64,
+    reason: Option<String>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::lock_issue(&repo_path, number, true).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::lock_issue(&repo_path, number, reason).await,
+    }
+}
+
+/// Unlock an issue's conversation, behind the abstraction.
+#[tauri::command]
+pub async fn forge_issue_unlock(repo_path: String, number: u64) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::lock_issue(&repo_path, number, false).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::unlock_issue(&repo_path, number).await,
+    }
+}
+
+/// Transfer (GitHub) / move (GitLab) an issue to another repository, behind the
+/// abstraction; returns the issue's new URL. `destination` is "owner/repo" on
+/// GitHub, a full "group/name" project path on GitLab.
+#[tauri::command]
+pub async fn forge_issue_transfer(
+    repo_path: String,
+    number: u64,
+    destination: String,
+) -> AppResult<String> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::move_issue(&repo_path, number, &destination).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::transfer_issue(&repo_path, number, &destination).await,
+    }
+}
+
+/// Permanently delete an issue, behind the abstraction. Both providers restrict
+/// this server-side (GitHub: admin/triage; GitLab: owner) — their errors
+/// surface as-is.
+#[tauri::command]
+pub async fn forge_issue_delete(repo_path: String, number: u64) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::delete_issue(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::delete_issue(&repo_path, number).await,
+    }
+}
+
 /// The repo's open/active milestones for the milestone picker, behind the
 /// abstraction. The neutral `Milestone.number` is GitHub's milestone number or
 /// GitLab's GLOBAL milestone id — whichever key that provider's write takes.
@@ -979,6 +1078,284 @@ pub async fn forge_repo_set_star(repo_path: String, starred: bool) -> AppResult<
             "Bitbucket repositories aren't supported yet.".into(),
         )),
         _ => github::repo_set_star(&repo_path, starred).await,
+    }
+}
+
+// ── Repository settings & lifecycle ──────────────────────────────────────────
+
+/// Whether the signed-in viewer can manage this repo's settings (`admin`), and
+/// whether they hold the owner-only lifecycle powers (`owner`). GitHub's admin
+/// role implies both; GitLab distinguishes Maintainer (settings) from Owner
+/// (transfer / delete / archive).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeRepoAdmin {
+    pub admin: bool,
+    pub owner: bool,
+}
+
+/// The settings-management probe, behind the abstraction — gates the
+/// "Repository settings…" surface.
+#[tauri::command]
+pub async fn forge_repo_admin(repo_path: String) -> AppResult<ForgeRepoAdmin> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            let (admin, owner) = gitlab::repo_admin(&repo_path).await?;
+            Ok(ForgeRepoAdmin { admin, owner })
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket repositories aren't supported yet.".into(),
+        )),
+        _ => {
+            let admin = crate::github::repo_settings::gh_repo_admin(repo_path).await?;
+            Ok(ForgeRepoAdmin {
+                admin,
+                owner: admin,
+            })
+        }
+    }
+}
+
+/// The GitLab project-settings read. GitLab-only — its settings model (feature
+/// access levels, one merge-method enum, a squash option) doesn't map onto
+/// GitHub's `RepoSettings`, so each provider keeps its own shaped surface
+/// (GitHub stays on `gh_repo_settings_get`).
+#[tauri::command]
+pub async fn forge_gl_repo_settings(repo_path: String) -> AppResult<gitlab::GitLabRepoSettings> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::repo_settings(&repo_path).await,
+        _ => Err(AppError::InvalidArgument(
+            "this repo isn't hosted on GitLab.".into(),
+        )),
+    }
+}
+
+/// Batch-save the GitLab project settings (the General section's Save).
+#[tauri::command]
+pub async fn forge_gl_repo_settings_update(
+    repo_path: String,
+    input: gitlab::GitLabRepoSettingsInput,
+) -> AppResult<gitlab::GitLabRepoSettings> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::update_repo_settings(&repo_path, input).await,
+        _ => Err(AppError::InvalidArgument(
+            "this repo isn't hosted on GitLab.".into(),
+        )),
+    }
+}
+
+/// The GitLab-only settings sub-surfaces (Members, Webhooks, CI/CD variables).
+/// Each guards on the detected provider like `forge_gl_repo_settings` — the
+/// GitHub dialog keeps its own gh-backed sections.
+macro_rules! gl_only {
+    ($repo_path:expr, $call:expr) => {
+        match detect_non_github(&$repo_path).await {
+            Some((Provider::GitLab, _)) => $call.await,
+            _ => Err(AppError::InvalidArgument(
+                "this repo isn't hosted on GitLab.".into(),
+            )),
+        }
+    };
+}
+
+#[tauri::command]
+pub async fn forge_gl_members(repo_path: String) -> AppResult<Vec<gitlab::GitLabMember>> {
+    gl_only!(repo_path, gitlab::list_members(&repo_path))
+}
+
+#[tauri::command]
+pub async fn forge_gl_member_add(
+    repo_path: String,
+    username: String,
+    access_level: u8,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::add_member(&repo_path, &username, access_level)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_gl_member_update(
+    repo_path: String,
+    user_id: String,
+    access_level: u8,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::update_member(&repo_path, &user_id, access_level)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_gl_member_remove(repo_path: String, user_id: String) -> AppResult<()> {
+    gl_only!(repo_path, gitlab::remove_member(&repo_path, &user_id))
+}
+
+#[tauri::command]
+pub async fn forge_gl_hooks(repo_path: String) -> AppResult<Vec<gitlab::GitLabHook>> {
+    gl_only!(repo_path, gitlab::list_hooks(&repo_path))
+}
+
+#[tauri::command]
+pub async fn forge_gl_hook_create(
+    repo_path: String,
+    input: gitlab::GitLabHookInput,
+) -> AppResult<()> {
+    gl_only!(repo_path, gitlab::create_hook(&repo_path, input))
+}
+
+#[tauri::command]
+pub async fn forge_gl_hook_update(
+    repo_path: String,
+    hook_id: String,
+    input: gitlab::GitLabHookInput,
+) -> AppResult<()> {
+    gl_only!(repo_path, gitlab::update_hook(&repo_path, &hook_id, input))
+}
+
+#[tauri::command]
+pub async fn forge_gl_hook_delete(repo_path: String, hook_id: String) -> AppResult<()> {
+    gl_only!(repo_path, gitlab::delete_hook(&repo_path, &hook_id))
+}
+
+#[tauri::command]
+pub async fn forge_gl_hook_test(
+    repo_path: String,
+    hook_id: String,
+    trigger: String,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::test_hook(&repo_path, &hook_id, &trigger)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_gl_hook_events(
+    repo_path: String,
+    hook_id: String,
+) -> AppResult<Vec<gitlab::GitLabHookDelivery>> {
+    gl_only!(repo_path, gitlab::hook_events(&repo_path, &hook_id))
+}
+
+#[tauri::command]
+pub async fn forge_gl_hook_resend(
+    repo_path: String,
+    hook_id: String,
+    event_id: String,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::hook_event_resend(&repo_path, &hook_id, &event_id)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_gl_variables(repo_path: String) -> AppResult<Vec<gitlab::GitLabVariable>> {
+    gl_only!(repo_path, gitlab::list_variables(&repo_path))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // one flat arg per form field, IPC-shaped
+pub async fn forge_gl_variable_set(
+    repo_path: String,
+    key: String,
+    value: String,
+    protected: bool,
+    masked: bool,
+    create: bool,
+    scope: String,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::set_variable(&repo_path, &key, &value, protected, masked, create, &scope)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_gl_variable_delete(
+    repo_path: String,
+    key: String,
+    scope: String,
+) -> AppResult<()> {
+    gl_only!(repo_path, gitlab::delete_variable(&repo_path, &key, &scope))
+}
+
+/// Project paths the viewer is a member of on THIS repo's host — the Move
+/// dialog's destination suggestions (host-correct for self-managed, unlike the
+/// account-scoped clone-browser listing).
+#[tauri::command]
+pub async fn forge_gl_member_projects(repo_path: String) -> AppResult<Vec<String>> {
+    gl_only!(repo_path, gitlab::member_projects(&repo_path))
+}
+
+/// Rename the repository, behind the abstraction. GitHub renames the repo
+/// (old links redirect); GitLab renames both the display name and the URL slug
+/// (old paths redirect).
+#[tauri::command]
+pub async fn forge_repo_rename(repo_path: String, new_name: String) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::rename_repo(&repo_path, &new_name).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket repositories aren't supported yet.".into(),
+        )),
+        _ => crate::github::lifecycle::gh_repo_rename(repo_path, new_name).await,
+    }
+}
+
+/// Archive / unarchive the repository, behind the abstraction.
+#[tauri::command]
+pub async fn forge_repo_set_archived(repo_path: String, archived: bool) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::set_archived(&repo_path, archived).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket repositories aren't supported yet.".into(),
+        )),
+        _ => crate::github::lifecycle::gh_repo_set_archived(repo_path, archived).await,
+    }
+}
+
+/// Change the repository's visibility, behind the abstraction (both providers
+/// take "public" / "private" / "internal", with provider-specific rules on
+/// "internal" enforced server-side).
+#[tauri::command]
+pub async fn forge_repo_set_visibility(repo_path: String, visibility: String) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::set_visibility(&repo_path, &visibility).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket repositories aren't supported yet.".into(),
+        )),
+        _ => crate::github::lifecycle::gh_repo_set_visibility(repo_path, visibility).await,
+    }
+}
+
+/// Transfer the repository to another owner/namespace, behind the abstraction.
+/// GitHub takes a user/org (with an optional rename); GitLab a namespace path.
+#[tauri::command]
+pub async fn forge_repo_transfer(
+    repo_path: String,
+    new_owner: String,
+    new_name: Option<String>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::transfer_repo(&repo_path, &new_owner).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket repositories aren't supported yet.".into(),
+        )),
+        _ => crate::github::lifecycle::gh_repo_transfer(repo_path, new_owner, new_name).await,
+    }
+}
+
+/// Permanently delete the repository on its provider, behind the abstraction.
+#[tauri::command]
+pub async fn forge_repo_delete(repo_path: String) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::delete_repo(&repo_path).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket repositories aren't supported yet.".into(),
+        )),
+        _ => crate::github::lifecycle::gh_repo_delete(repo_path).await,
     }
 }
 

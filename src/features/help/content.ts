@@ -120,9 +120,10 @@ monitor it was on — see **Settings → About** for the current coordinates.`,
     label: "Repository settings",
     body: `# Repository settings
 
-**Repository settings** (the repo ⋮ menu) manages your GitHub repository without leaving
-the app. It's organized as a sidebar of grouped sections; changes apply on GitHub
-immediately unless noted.
+**Repository settings** (the repo ⋮ menu) manages your GitHub repository — or GitLab
+project (see **GitLab projects** below) — without leaving the app. It's organized as a
+sidebar of grouped sections; changes apply on the host immediately unless noted. On
+GitHub it looks like this:
 
 - **General** — description, topics, homepage, default branch, features (issues,
   projects, wiki, discussions), pull-request merge options (allowed merge methods,
@@ -154,7 +155,31 @@ immediately unless noted.
   never touched.
 
 > Some options GitHub exposes to no app appear as **"Manage on GitHub"** links rather
-> than dead toggles.`,
+> than dead toggles.
+
+## GitLab projects
+
+The same dialog manages a **GitLab** project (it needs the **Maintainer** role; the
+menu item appears only when you have it):
+
+- **General** — description and topics (AI-generate works here too), default branch,
+  per-feature **access levels** (Issues, Merge requests, Wiki, Snippets, Forking — each
+  everyone / members-only / disabled), the **merge method** (merge commit, semi-linear,
+  fast-forward), the **squash policy**, and the merge checks (pipelines must succeed,
+  all threads resolved, delete source branch by default).
+- **Members** — add someone by username at a role (Guest … Owner), change a role
+  inline, or remove them. Members **inherited from a group** show read-only — they're
+  managed on the group.
+- **Variables** — the project's **CI/CD variables**: add, edit, and delete, with
+  **protected** (protected refs only) and **masked** (hidden in job logs) flags.
+- **Webhooks** — create, edit, and delete hooks with per-event triggers and a secret
+  token; **send a test event**; and debug with the **delivery log** — each delivery's
+  request/response payloads, with one-click **re-send**. A hook GitLab auto-disabled
+  after failures shows a **disabled** badge.
+- **Danger zone** — **rename** (name + path, old paths redirect),
+  **archive / unarchive**, **change visibility**, **transfer** to another namespace,
+  and **delete**. The Owner-only actions disable with an explanation when you're a
+  Maintainer.`,
   },
   {
     id: "changes",
@@ -405,7 +430,9 @@ works from the app too ({{kbd:create-pr}}, the New menu, or the Compare tab) —
 branch and opens the MR, with the same draft checkbox and AI description as GitHub, and the
 Compare tab points you at an **existing open MR** from your branch instead of creating a
 duplicate. GitLab uses the GitLab
-CLI (\`glab\`) — run \`glab auth login\` once, no tokens stored. Its issues, CI pipelines, and
+CLI (\`glab\`) — run \`glab auth login\` once, no tokens stored. **Self-managed GitLab works
+too**: sign \`glab\` in to your instance (\`glab auth login --hostname …\`) and the app
+recognizes repositories on that host automatically. Its issues, CI pipelines, and
 releases work too (see their sections below).
 
 ## Local PRs
@@ -451,10 +478,15 @@ next to any local issues. Open one to read the description and comments — and 
 issue **writes**: **comment** on the issue, **close / reopen** it, **edit** its title and
 description, **react** with emoji on the description and comments (GitLab's award emoji),
 and set its **labels**, **assignees**, and **milestone** right in the side
-rail. **Creating issues** works too — the New menu (or {{kbd:create-issue}} from the
+rail. The **More actions** menu works too: **lock / unlock** the conversation (GitLab
+locks without a reason, so there's no reason submenu), **duplicate** the issue, **move**
+it to another project you have access to (the original closes with a "moved" marker),
+and **delete** it (Owner-only). **Creating issues** works too — the New menu (or
+{{kbd:create-issue}} from the
 palette) opens the same dialog GitHub uses, with labels, assignees, and a milestone (the
 org issue type is the one GitHub-only picker). The repository menu works too: **View on
-GitLab**, **star / unstar**, and a **Fork on GitLab** link, and you can **publish** a
+GitLab**, **star / unstar**, and a **Fork on GitLab** link, **Repository settings**
+(see that section — the dialog manages GitLab projects too), and you can **publish** a
 local repository straight to GitLab (it creates the project, adds it as
 \`origin\`, and pushes).
 

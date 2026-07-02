@@ -28,6 +28,7 @@ import type {
   ExternalReviewItem,
   FileDiff,
   ForgeProvider,
+  ForgeRepoAdmin,
   ForgeRepoList,
   ForgeStatus,
   GeneratedNotes,
@@ -38,6 +39,13 @@ import type {
   GhSecret,
   GhVariable,
   GitInfo,
+  GitLabHook,
+  GitLabHookDelivery,
+  GitLabHookInput,
+  GitLabMember,
+  GitLabRepoSettings,
+  GitLabRepoSettingsInput,
+  GitLabVariable,
   HookDelivery,
   HookDeliveryDetail,
   HooksInfo,
@@ -990,14 +998,16 @@ export const ghIssueUnpin = (repoPath: string, number: number) =>
 
 export type LockReason = "off_topic" | "resolved" | "spam" | "too_heated";
 
-export const ghIssueLock = (
+/** Locks the conversation. `reason` is GitHub-only (GitLab locks without one —
+ *  its arm ignores it). */
+export const forgeIssueLock = (
   repoPath: string,
   number: number,
   reason: LockReason | null,
-) => invoke<void>("gh_issue_lock", { repoPath, number, reason });
+) => invoke<void>("forge_issue_lock", { repoPath, number, reason });
 
-export const ghIssueUnlock = (repoPath: string, number: number) =>
-  invoke<void>("gh_issue_unlock", { repoPath, number });
+export const forgeIssueUnlock = (repoPath: string, number: number) =>
+  invoke<void>("forge_issue_unlock", { repoPath, number });
 
 export const forgeIssueReactions = (repoPath: string, number: number) =>
   invoke<IssueReactions>("forge_issue_reactions", { repoPath, number });
@@ -1161,15 +1171,16 @@ export const forgeIssueEdit = (
   body: string,
 ) => invoke<void>("forge_issue_edit", { repoPath, number, title, body });
 
-/** Transfers an issue to `destination` ("OWNER/REPO"); returns the new URL. */
-export const ghIssueTransfer = (
+/** Transfers (GitHub) / moves (GitLab) an issue to `destination` — "owner/repo"
+ *  on GitHub, a full "group/name" project path on GitLab; returns the new URL. */
+export const forgeIssueTransfer = (
   repoPath: string,
   number: number,
   destination: string,
-) => invoke<string>("gh_issue_transfer", { repoPath, number, destination });
+) => invoke<string>("forge_issue_transfer", { repoPath, number, destination });
 
-export const ghIssueDelete = (repoPath: string, number: number) =>
-  invoke<void>("gh_issue_delete", { repoPath, number });
+export const forgeIssueDelete = (repoPath: string, number: number) =>
+  invoke<void>("forge_issue_delete", { repoPath, number });
 
 export const ghIssueRelations = (repoPath: string, number: number) =>
   invoke<IssueRelations>("gh_issue_relations", { repoPath, number });
@@ -1342,9 +1353,103 @@ export const forgeRepoStarStatus = (repoPath: string) =>
 export const forgeRepoSetStar = (repoPath: string, starred: boolean) =>
   invoke<void>("forge_repo_set_star", { repoPath, starred });
 
-/** Whether the signed-in user is an admin on this repo (gates settings UI). */
-export const ghRepoAdmin = (repoPath: string) =>
-  invoke<boolean>("gh_repo_admin", { repoPath });
+/** Whether the signed-in user can manage this repo's settings, behind the
+ *  abstraction (GitHub admin; GitLab Maintainer, with `owner` for the
+ *  Owner-only lifecycle actions). Gates the settings UI. */
+export const forgeRepoAdmin = (repoPath: string) =>
+  invoke<ForgeRepoAdmin>("forge_repo_admin", { repoPath });
+
+/** The GitLab project-settings read (GitLab repos only — GitHub stays on
+ *  `ghRepoSettingsGet`; the models are provider-shaped). */
+export const forgeGlRepoSettings = (repoPath: string) =>
+  invoke<GitLabRepoSettings>("forge_gl_repo_settings", { repoPath });
+
+/** Batch-save the GitLab project settings; returns the updated read. */
+export const forgeGlRepoSettingsUpdate = (
+  repoPath: string,
+  input: GitLabRepoSettingsInput,
+) =>
+  invoke<GitLabRepoSettings>("forge_gl_repo_settings_update", {
+    repoPath,
+    input,
+  });
+
+// The GitLab settings sub-surfaces (Members / Webhooks / CI/CD variables) —
+// GitLab repos only; the GitHub dialog keeps its gh-backed sections.
+export const forgeGlMembers = (repoPath: string) =>
+  invoke<GitLabMember[]>("forge_gl_members", { repoPath });
+
+export const forgeGlMemberAdd = (
+  repoPath: string,
+  username: string,
+  accessLevel: number,
+) => invoke<void>("forge_gl_member_add", { repoPath, username, accessLevel });
+
+export const forgeGlMemberUpdate = (
+  repoPath: string,
+  userId: string,
+  accessLevel: number,
+) => invoke<void>("forge_gl_member_update", { repoPath, userId, accessLevel });
+
+export const forgeGlMemberRemove = (repoPath: string, userId: string) =>
+  invoke<void>("forge_gl_member_remove", { repoPath, userId });
+
+export const forgeGlHooks = (repoPath: string) =>
+  invoke<GitLabHook[]>("forge_gl_hooks", { repoPath });
+
+export const forgeGlHookCreate = (repoPath: string, input: GitLabHookInput) =>
+  invoke<void>("forge_gl_hook_create", { repoPath, input });
+
+export const forgeGlHookUpdate = (
+  repoPath: string,
+  hookId: string,
+  input: GitLabHookInput,
+) => invoke<void>("forge_gl_hook_update", { repoPath, hookId, input });
+
+export const forgeGlHookDelete = (repoPath: string, hookId: string) =>
+  invoke<void>("forge_gl_hook_delete", { repoPath, hookId });
+
+export const forgeGlHookTest = (
+  repoPath: string,
+  hookId: string,
+  trigger: string,
+) => invoke<void>("forge_gl_hook_test", { repoPath, hookId, trigger });
+
+export const forgeGlHookEvents = (repoPath: string, hookId: string) =>
+  invoke<GitLabHookDelivery[]>("forge_gl_hook_events", { repoPath, hookId });
+
+export const forgeGlHookResend = (
+  repoPath: string,
+  hookId: string,
+  eventId: string,
+) => invoke<void>("forge_gl_hook_resend", { repoPath, hookId, eventId });
+
+export const forgeGlVariables = (repoPath: string) =>
+  invoke<GitLabVariable[]>("forge_gl_variables", { repoPath });
+
+export const forgeGlVariableSet = (
+  repoPath: string,
+  args: {
+    key: string;
+    value: string;
+    protected: boolean;
+    masked: boolean;
+    create: boolean;
+    /** The scope the write addresses ("*" for unscoped; creates always "*"). */
+    scope: string;
+  },
+) => invoke<void>("forge_gl_variable_set", { repoPath, ...args });
+
+export const forgeGlVariableDelete = (
+  repoPath: string,
+  key: string,
+  scope: string,
+) => invoke<void>("forge_gl_variable_delete", { repoPath, key, scope });
+
+/** Project paths the viewer is a member of on THIS repo's host — the Move
+ *  dialog's suggestions (host-correct for self-managed GitLab). */
+export const forgeGlMemberProjects = (repoPath: string) =>
+  invoke<string[]>("forge_gl_member_projects", { repoPath });
 
 /** The active gh token's OAuth scopes (for "needs gh auth refresh -s …" hints). */
 export const ghTokenScopes = (host?: string) =>
@@ -1472,23 +1577,25 @@ export const ghSecurityApply = (
   changes: { feature: SecurityFeature; enabled: boolean }[],
 ) => invoke<void>("gh_security_apply", { repoPath, changes });
 
-export const ghRepoSetVisibility = (repoPath: string, visibility: string) =>
-  invoke<void>("gh_repo_set_visibility", { repoPath, visibility });
+// Lifecycle actions dispatch behind the abstraction — the parameter shapes are
+// provider-neutral (GitLab's transfer takes a namespace path as `newOwner`).
+export const forgeRepoSetVisibility = (repoPath: string, visibility: string) =>
+  invoke<void>("forge_repo_set_visibility", { repoPath, visibility });
 
-export const ghRepoTransfer = (
+export const forgeRepoTransfer = (
   repoPath: string,
   newOwner: string,
   newName: string | null,
-) => invoke<void>("gh_repo_transfer", { repoPath, newOwner, newName });
+) => invoke<void>("forge_repo_transfer", { repoPath, newOwner, newName });
 
-export const ghRepoDelete = (repoPath: string) =>
-  invoke<void>("gh_repo_delete", { repoPath });
+export const forgeRepoDelete = (repoPath: string) =>
+  invoke<void>("forge_repo_delete", { repoPath });
 
-export const ghRepoSetArchived = (repoPath: string, archived: boolean) =>
-  invoke<void>("gh_repo_set_archived", { repoPath, archived });
+export const forgeRepoSetArchived = (repoPath: string, archived: boolean) =>
+  invoke<void>("forge_repo_set_archived", { repoPath, archived });
 
-export const ghRepoRename = (repoPath: string, newName: string) =>
-  invoke<void>("gh_repo_rename", { repoPath, newName });
+export const forgeRepoRename = (repoPath: string, newName: string) =>
+  invoke<void>("forge_repo_rename", { repoPath, newName });
 
 export const ghPagesGet = (repoPath: string) =>
   invoke<PagesInfo | null>("gh_pages_get", { repoPath });

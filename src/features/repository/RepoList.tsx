@@ -73,18 +73,21 @@ export function RepoList({
   const ownerByPath = new Map(
     (owners.data ?? []).map((o) => [o.path, o.owner]),
   );
-  // The origin host per repo — names the provider in the context menu.
-  const hostByPath = new Map((owners.data ?? []).map((o) => [o.path, o.host]));
+  // The resolved provider per repo — names it in the context menu. Resolved
+  // backend-side so self-managed GitLab hosts (glab's known hosts) label right.
+  const providerByPath = new Map(
+    (owners.data ?? []).map((o) => [o.path, o.provider]),
+  );
   // The owner each repo groups under. Prefer the value stored on the record
   // (synchronous → no reflow on open); fall back to the async query result for
   // a repo not yet backfilled. `OTHER_GROUP` only when neither is known.
   const ownerOf = (r: RecentRepo) =>
     r.owner || ownerByPath.get(r.path) || undefined;
 
-  // Backfill resolved owners + hosts onto the recent records so the NEXT open
-  // groups (and labels its context menu) synchronously. Fires once whenever a
-  // record's stored value is stale; the helper no-ops when nothing changed, so
-  // its settings refetch doesn't loop.
+  // Backfill resolved owners + hosts + providers onto the recent records so the
+  // NEXT open groups (and labels its context menu) synchronously. Fires once
+  // whenever a record's stored value is stale; the helper no-ops when nothing
+  // changed, so its settings refetch doesn't loop.
   // biome-ignore lint/correctness/useExhaustiveDependencies: mutate() is stable; rerun only on resolved owners / records
   useEffect(() => {
     const resolved = owners.data;
@@ -92,7 +95,9 @@ export function RepoList({
     const stale = resolved.some((o) => {
       const r = recents.find((rec) => rec.path === o.path);
       return (
-        (o.owner || undefined) !== r?.owner || (o.host || undefined) !== r?.host
+        (o.owner || undefined) !== r?.owner ||
+        (o.host || undefined) !== r?.host ||
+        (o.provider || undefined) !== r?.provider
       );
     });
     if (stale) persistOwners.mutate(resolved);
@@ -247,9 +252,14 @@ export function RepoList({
               <RepoMenuItems
                 repo={menuRepo}
                 owner={ownerOf(menuRepo) ?? null}
-                // Prefer the persisted host (right from the first frame); the
-                // live query covers repos not yet backfilled.
-                host={menuRepo.host ?? hostByPath.get(menuRepo.path) ?? null}
+                // Prefer the persisted provider (right from the first frame);
+                // the live query covers repos not yet backfilled, and the host
+                // compare covers records persisted before providers existed.
+                provider={
+                  menuRepo.provider ??
+                  providerByPath.get(menuRepo.path) ??
+                  (menuRepo.host === "gitlab.com" ? "gitlab" : null)
+                }
                 editor={editor}
                 editorName={editorName}
                 terminal={settings.data?.terminal}
@@ -344,7 +354,7 @@ function RepoRow({
 function RepoMenuItems({
   repo,
   owner,
-  host,
+  provider,
   editor,
   editorName,
   terminal,
@@ -354,8 +364,8 @@ function RepoMenuItems({
 }: {
   repo: RecentRepo;
   owner: string | null;
-  /** The origin remote's host — names the provider on the view item. */
-  host: string | null;
+  /** The resolved provider ("gitlab", …) — names it on the view item. */
+  provider: string | null;
   editor: string;
   editorName: string;
   terminal?: string;
@@ -387,9 +397,10 @@ function RepoMenuItems({
               .catch(toastError)
           }
         >
-          {/* Name the repo's actual host; unrecognized hosts route through gh
-              (Enterprise etc.), so GitHub is the honest default label. */}
-          View on {host === "gitlab.com" ? "GitLab" : "GitHub"}
+          {/* Name the repo's actual provider (incl. self-managed GitLab);
+              unrecognized hosts route through gh (Enterprise etc.), so GitHub
+              is the honest default label. */}
+          View on {provider === "gitlab" ? "GitLab" : "GitHub"}
         </ContextMenuItem>
       )}
       <ContextMenuItem

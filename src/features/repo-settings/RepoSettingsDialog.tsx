@@ -9,7 +9,7 @@ import {
   TrashIcon,
 } from "@phosphor-icons/react";
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
-import { Fragment, useMemo, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { NavRail, type NavRailGroup } from "@/components/NavRail";
 import { Badge } from "@/components/ui/badge";
@@ -34,11 +34,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { highlightJson } from "@/features/diff/shiki-highlighter";
 import { copyText } from "@/lib/clipboard";
 import {
   useCreateWebhook,
   useDeleteWebhook,
+  useForgeStatus,
   usePingWebhook,
   useRedeliverWebhook,
   useTestWebhook,
@@ -56,8 +56,12 @@ import { CollaboratorsSection } from "./CollaboratorsSection";
 import { DangerZone } from "./DangerZone";
 import { FundingSection } from "./FundingSection";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
+import { GitLabGeneralSection } from "./GitLabGeneralSection";
+import { GitLabMembersSection } from "./GitLabMembersSection";
+import { GitLabVariablesSection } from "./GitLabVariablesSection";
+import { GitLabWebhooksSection } from "./GitLabWebhooksSection";
 import { PagesSection } from "./PagesSection";
-import { AsyncListBody, InlineConfirm } from "./parts";
+import { AsyncListBody, DeliveryPayload, InlineConfirm } from "./parts";
 import { RulesetsSection } from "./RulesetsSection";
 import { SecretsSection } from "./SecretsSection";
 import { SecuritySection } from "./SecuritySection";
@@ -149,6 +153,31 @@ const RAIL_GROUPS: NavRailGroup[] = [
   },
 ];
 
+/** The GitLab rail: the sections with a GitLab implementation. The GitHub-only
+ *  buckets (Rulesets, Security, Pages, Sponsor) don't map onto GitLab's model
+ *  and stay off this rail rather than rendering dead ends; GitLab's one
+ *  variable store fills the Automation bucket alongside webhooks. */
+const GITLAB_RAIL_GROUPS: NavRailGroup[] = [
+  {
+    label: "Project",
+    items: [
+      { id: "general", label: "General" },
+      { id: "access", label: "Members" },
+    ],
+  },
+  {
+    label: "Automation",
+    items: [
+      { id: "secrets", label: "Variables" },
+      { id: "webhooks", label: "Webhooks" },
+    ],
+  },
+  {
+    separated: true,
+    items: [{ id: "danger", label: "Danger zone", destructive: true }],
+  },
+];
+
 export function RepoSettingsDialog({
   repoPath,
   open,
@@ -160,6 +189,21 @@ export function RepoSettingsDialog({
 }) {
   const [section, setSection] = useState<SectionId>("general");
   const reduceMotion = useReducedMotion();
+  // The dialog is provider-aware: each provider gets the sections its API
+  // supports, with the same rail + crossfade shell.
+  const forge = useForgeStatus(repoPath);
+  const isGitLab = forge.data?.provider === "gitlab";
+  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
+  // A remembered section from another repo may not exist on this rail.
+  const gitlabSections: SectionId[] = [
+    "general",
+    "access",
+    "secrets",
+    "webhooks",
+    "danger",
+  ];
+  const activeSection =
+    isGitLab && !gitlabSections.includes(section) ? "general" : section;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -170,15 +214,17 @@ export function RepoSettingsDialog({
         <DialogHeader>
           <DialogTitle>Repository settings</DialogTitle>
           <DialogDescription>
-            Manage this GitHub repository's settings and webhooks. Changes apply
-            on GitHub immediately.
+            Manage this {remoteLabel} {isGitLab ? "project's" : "repository's"}{" "}
+            settings
+            {isGitLab ? "" : " and webhooks"}. Changes apply on {remoteLabel}{" "}
+            immediately.
           </DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 min-w-0 flex-1 gap-4">
           <NavRail
             ariaLabel="Repository settings sections"
-            groups={RAIL_GROUPS}
-            activeId={section}
+            groups={isGitLab ? GITLAB_RAIL_GROUPS : RAIL_GROUPS}
+            activeId={activeSection}
             onSelect={(id) => setSection(id as SectionId)}
             className="w-40 overflow-y-auto"
           />
@@ -188,38 +234,54 @@ export function RepoSettingsDialog({
                 scrolls); instant under reduced motion. */}
             <AnimatePresence mode="wait" initial={false}>
               <m.div
-                key={section}
+                key={activeSection}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={reduceMotion ? { duration: 0 } : quickTransition}
               >
-                {section === "general" && (
-                  <GeneralSettingsSection repoPath={repoPath} open={open} />
-                )}
-                {section === "access" && (
-                  <CollaboratorsSection repoPath={repoPath} open={open} />
-                )}
-                {section === "rules" && (
+                {activeSection === "general" &&
+                  (isGitLab ? (
+                    <GitLabGeneralSection repoPath={repoPath} open={open} />
+                  ) : (
+                    <GeneralSettingsSection repoPath={repoPath} open={open} />
+                  ))}
+                {activeSection === "access" &&
+                  (isGitLab ? (
+                    <GitLabMembersSection repoPath={repoPath} open={open} />
+                  ) : (
+                    <CollaboratorsSection repoPath={repoPath} open={open} />
+                  ))}
+                {activeSection === "rules" && !isGitLab && (
                   <RulesetsSection repoPath={repoPath} open={open} />
                 )}
-                {section === "security" && (
+                {activeSection === "security" && !isGitLab && (
                   <SecuritySection repoPath={repoPath} open={open} />
                 )}
-                {section === "pages" && (
+                {activeSection === "pages" && !isGitLab && (
                   <PagesSection repoPath={repoPath} open={open} />
                 )}
-                {section === "sponsor" && (
+                {activeSection === "sponsor" && !isGitLab && (
                   <FundingSection repoPath={repoPath} open={open} />
                 )}
-                {section === "secrets" && (
-                  <SecretsSection repoPath={repoPath} open={open} />
-                )}
-                {section === "webhooks" && (
-                  <WebhooksSection repoPath={repoPath} open={open} />
-                )}
-                {section === "danger" && (
-                  <DangerZone repoPath={repoPath} open={open} />
+                {activeSection === "secrets" &&
+                  (isGitLab ? (
+                    <GitLabVariablesSection repoPath={repoPath} open={open} />
+                  ) : (
+                    <SecretsSection repoPath={repoPath} open={open} />
+                  ))}
+                {activeSection === "webhooks" &&
+                  (isGitLab ? (
+                    <GitLabWebhooksSection repoPath={repoPath} open={open} />
+                  ) : (
+                    <WebhooksSection repoPath={repoPath} open={open} />
+                  ))}
+                {activeSection === "danger" && (
+                  <DangerZone
+                    repoPath={repoPath}
+                    open={open}
+                    provider={isGitLab ? "gitlab" : "github"}
+                  />
                 )}
               </m.div>
             </AnimatePresence>
@@ -592,60 +654,6 @@ function DeliveryRow({
             </>
           )}
         </div>
-      )}
-    </div>
-  );
-}
-
-function DeliveryPayload({ label, body }: { label: string; body: string }) {
-  const trimmed = body.trim();
-  // Highlight as JSON when it looks like JSON and isn't huge (tokenizing a big
-  // blob would block); otherwise render it plain.
-  const lines = useMemo(
-    () =>
-      trimmed.length > 0 &&
-      trimmed.length < 50_000 &&
-      (trimmed.startsWith("{") || trimmed.startsWith("["))
-        ? highlightJson(body)
-        : null,
-    [body, trimmed],
-  );
-
-  return (
-    <div>
-      <div className="flex items-center justify-between">
-        <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
-        {trimmed.length > 0 && (
-          <button
-            type="button"
-            className="text-muted-foreground transition-colors hover:text-foreground"
-            title={`Copy ${label.toLowerCase()}`}
-            onClick={() => copyText(body, `${label} copied`)}
-          >
-            <CopyIcon className="size-3.5" />
-          </button>
-        )}
-      </div>
-      {trimmed.length > 0 ? (
-        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px]">
-          {lines
-            ? lines.map((line, i) => (
-                <Fragment key={i}>
-                  {i > 0 && "\n"}
-                  {line.map((t, j) => (
-                    <span
-                      key={j}
-                      style={t.color ? { color: t.color } : undefined}
-                    >
-                      {t.content}
-                    </span>
-                  ))}
-                </Fragment>
-              ))
-            : body}
-        </pre>
-      ) : (
-        <p className="mt-1 text-[11px] text-muted-foreground">(empty)</p>
       )}
     </div>
   );

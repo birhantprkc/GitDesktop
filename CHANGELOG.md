@@ -55,7 +55,30 @@ commit list.
   charts **GitLab pipeline durations and success rate** (the GitHub-only cards —
   community, traffic, dependencies — hide, with GitLab's web-only analytics linked
   instead). GitHub repositories are
-  completely unaffected. (Self-managed GitLab hosts and Bitbucket are still on the way.)
+  completely unaffected. (Bitbucket is still on the way.)
+- **Self-managed GitLab.** Everything above now works on your own GitLab instance,
+  not just gitlab.com — sign `glab` in to the host (`glab auth login --hostname …`)
+  and GitDesktop recognizes repositories on it automatically, labels them
+  correctly ("View on GitLab"), and routes every read and write through your
+  per-host `glab` credentials.
+- **GitLab issue lock, move, and delete.** The issue view's "More actions" menu now
+  works on GitLab: **lock / unlock** the conversation (GitLab locks without a
+  reason, so there's no reason submenu), **move** the issue to another project you
+  have access to (with project suggestions; the original closes with a "moved"
+  marker), **duplicate** it, and **delete** it (Owner-only, type-to-confirm).
+- **GitLab project settings.** The repository-settings dialog now manages GitLab
+  projects end to end: **General** (description, topics — AI-generate works here
+  too — default branch, per-feature access levels with proper
+  everyone/members-only/disabled tri-states, merge method, squash policy, and the
+  merge checks), **Members** (add/re-role/remove by username, with inherited group
+  members shown read-only), **Webhooks** (create/edit/delete with per-event
+  triggers and a secret token, send a test event, and debug with the **delivery
+  log** — request/response payloads and one-click **re-send**), **CI/CD
+  variables** (add/edit/delete, protected and masked flags), and the **Danger
+  zone** (rename with path redirect, archive/unarchive, visibility, transfer to
+  another namespace, delete — Owner-only actions explain themselves when you're
+  a Maintainer). Gated by your actual GitLab role, straight from the repository
+  menu.
 - **A browsable, persistent Agent sidebar.** Several quality-of-life upgrades to the Agent list:
   the **activity log now survives a restart** — reopening the app no longer drops a session's,
   plan's, or research run's **step-by-step tool log** (the full interleaved transcript of reads,

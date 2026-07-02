@@ -19,6 +19,11 @@ pub struct RepoOwner {
     /// the same URL — lets per-repo UI (the repo list's context menu) name the
     /// actual provider instead of guessing.
     pub host: Option<String>,
+    /// The provider that host routes to ("github" / "gitlab" / "bitbucket"),
+    /// including self-managed GitLab hosts glab is signed in to. `None` when
+    /// there's no host or it's unrecognized (the UI labels those GitHub,
+    /// matching the backend's gh-authoritative routing).
+    pub provider: Option<String>,
 }
 
 /// Owner segment + host of a git remote URL — handles
@@ -51,10 +56,12 @@ fn parse_owner_host(url: &str) -> (Option<String>, Option<String>) {
     (owner, host)
 }
 
-/// Resolves the owner + host for each repo path (from its `origin` remote),
-/// batched so the repo list/switcher can group repos by owner in one round-trip.
+/// Resolves the owner + host + provider for each repo path (from its `origin`
+/// remote), batched so the repo list/switcher can group repos by owner in one
+/// round-trip. The glab known-hosts config is read once for the whole batch.
 #[tauri::command]
 pub async fn git_repo_owners(repo_paths: Vec<String>) -> AppResult<Vec<RepoOwner>> {
+    let glab_hosts = crate::forge::glab::known_hosts().await;
     let mut out = Vec::with_capacity(repo_paths.len());
     for path in repo_paths {
         let (owner, host) = match run_git_raw(
@@ -67,7 +74,16 @@ pub async fn git_repo_owners(repo_paths: Vec<String>) -> AppResult<Vec<RepoOwner
             Ok(res) if res.code == 0 => parse_owner_host(res.stdout_lossy().trim()),
             _ => (None, None),
         };
-        out.push(RepoOwner { path, owner, host });
+        let provider = host
+            .as_deref()
+            .and_then(|h| crate::forge::provider_tag_for_host(h, &glab_hosts))
+            .map(str::to_string);
+        out.push(RepoOwner {
+            path,
+            owner,
+            host,
+            provider,
+        });
     }
     Ok(out)
 }

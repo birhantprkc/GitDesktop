@@ -284,7 +284,7 @@ pub async fn delete_release_asset(repo_path: &str, tag: &str, asset_name: &str) 
 // ── Issues (write) ───────────────────────────────────────────────────────────
 //
 // Thin delegates to the existing gh-backed issue mutations. The still-unfronted
-// remainder of the issue write surface (pin/lock, transfer, sub-issues, …) stays
+// remainder of the issue write surface (pin, sub-issues, close reason, …) stays
 // GitHub-only.
 
 pub async fn comment_issue(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
@@ -307,6 +307,23 @@ pub async fn edit_issue(repo_path: &str, number: u64, title: &str, body: &str) -
         body.to_string(),
     )
     .await
+}
+
+pub async fn lock_issue(repo_path: &str, number: u64, reason: Option<String>) -> AppResult<()> {
+    crate::github::issue::gh_issue_lock(repo_path.to_string(), number, reason).await
+}
+
+pub async fn unlock_issue(repo_path: &str, number: u64) -> AppResult<()> {
+    crate::github::issue::gh_issue_unlock(repo_path.to_string(), number).await
+}
+
+pub async fn transfer_issue(repo_path: &str, number: u64, destination: &str) -> AppResult<String> {
+    crate::github::issue::gh_issue_transfer(repo_path.to_string(), number, destination.to_string())
+        .await
+}
+
+pub async fn delete_issue(repo_path: &str, number: u64) -> AppResult<()> {
+    crate::github::issue::gh_issue_delete(repo_path.to_string(), number).await
 }
 
 // ── Milestones (read + write) ──────────────────────────────────────────────────

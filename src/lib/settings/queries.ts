@@ -87,7 +87,12 @@ export function usePersistRepoOwners() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (
-      owners: { path: string; owner: string | null; host: string | null }[],
+      owners: {
+        path: string;
+        owner: string | null;
+        host: string | null;
+        provider: string | null;
+      }[],
     ) => persistRepoOwners(owners),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: settingsKeys.settings }),

@@ -52,6 +52,7 @@ import {
   useEditPrComment,
   useForgeStatus,
   useGhRepos,
+  useGlMemberProjects,
   useIssueDetails,
   useIssueReactions,
   useLockIssue,
@@ -98,12 +99,12 @@ export function RemoteIssueView({
   number: number;
 }) {
   // The read view is provider-neutral. The remaining GitHub-only mutations
-  // (pin/lock/transfer/delete, sub-issues, close reason) route through `gh_*`
-  // commands and stay gated on `canWrite` — "not a known read-only provider"
-  // rather than `=== "github"`, so that while the (separate) forge-status query
-  // is still pending or after it fails, a GitHub issue keeps its write controls
-  // exactly as before — only an explicitly-detected GitLab/Bitbucket repo
-  // suppresses them.
+  // (pin, sub-issues, close reason) route through `gh_*` commands and stay
+  // gated on `canWrite` — "not a known read-only provider" rather than
+  // `=== "github"`, so that while the (separate) forge-status query is still
+  // pending or after it fails, a GitHub issue keeps its write controls exactly
+  // as before — only an explicitly-detected GitLab/Bitbucket repo suppresses
+  // them.
   const forge = useForgeStatus(repoPath);
   const provider = forge.data?.provider;
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
@@ -125,6 +126,15 @@ export function RemoteIssueView({
   const canEdit = canWrite || forgeFeatureReady(forge.data, "issueEdit");
   const canSetMilestone =
     canWrite || forgeFeatureReady(forge.data, "issueMilestone");
+  // Lock, transfer/move, delete, and duplicate are shared "More actions" too;
+  // pin stays GitHub-only via `canWrite`. GitLab locks without a reason and
+  // "moves" instead of transferring — labels/submenus branch on the provider.
+  const isGitLab = provider === "gitlab";
+  const canLock = canWrite || forgeFeatureReady(forge.data, "issueLock");
+  const canTransfer =
+    canWrite || forgeFeatureReady(forge.data, "issueTransfer");
+  const canDelete = canWrite || forgeFeatureReady(forge.data, "issueDelete");
+  const canDuplicate = canWrite || forgeFeatureReady(forge.data, "issueCreate");
   const details = useIssueDetails(repoPath, number);
   const comment = useCommentIssue(repoPath);
   const closeIssue = useCloseIssue(repoPath);
@@ -160,7 +170,15 @@ export function RemoteIssueView({
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferDest, setTransferDest] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const transferRepos = useGhRepos(transferOpen);
+  // Destination suggestions come from the viewer's repos on the SAME provider
+  // as this repo; each query only fires while its dialog variant is open. The
+  // GitLab list is repo-scoped so it targets the repo's own (possibly
+  // self-managed) host, not glab's default.
+  const transferRepos = useGhRepos(transferOpen && !isGitLab);
+  const transferProjects = useGlMemberProjects(
+    repoPath,
+    transferOpen && isGitLab,
+  );
 
   const onError = (e: unknown) => toastError(e);
 
@@ -254,7 +272,7 @@ export function RemoteIssueView({
       {
         onSuccess: (url) => {
           toast.success(
-            `Transferred #${number}`,
+            `${isGitLab ? "Moved" : "Transferred"} #${number}`,
             url
               ? {
                   description: url,
@@ -285,12 +303,16 @@ export function RemoteIssueView({
     });
   }
 
-  // Repo suggestions for the transfer destination (excludes archived repos,
-  // which can't receive transfers); only loaded while the dialog is open.
+  // Repo suggestions for the transfer/move destination (excludes archived
+  // repos, which can't receive issues); only loaded while the dialog is open.
   const repoQuery = transferDest.trim().toLowerCase();
-  const repoSuggestions = (transferRepos.data?.repos ?? [])
-    .filter((r) => !r.archived)
-    .map((r) => r.nameWithOwner)
+  const repoSuggestions = (
+    isGitLab
+      ? (transferProjects.data ?? [])
+      : (transferRepos.data?.repos ?? [])
+          .filter((r) => !r.archived)
+          .map((r) => r.nameWithOwner)
+  )
     .filter((n) => !repoQuery || n.toLowerCase().includes(repoQuery))
     .slice(0, 6);
 
@@ -336,7 +358,7 @@ export function RemoteIssueView({
             <ArrowSquareOutIcon data-icon="inline-start" />
             {remoteLabel}
           </Button>
-          {canWrite && (
+          {(canLock || canDuplicate || canTransfer || canDelete) && (
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
@@ -350,75 +372,103 @@ export function RemoteIssueView({
                 <DotsThreeIcon className="size-4" weight="bold" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-52">
-                <DropdownMenuItem
-                  onClick={() =>
-                    pinIssue.mutate(
-                      { number, pinned: !issue.isPinned },
-                      {
-                        onSuccess: () =>
-                          toast.success(issue.isPinned ? "Unpinned" : "Pinned"),
-                        onError,
-                      },
-                    )
-                  }
-                >
-                  {issue.isPinned ? "Unpin issue" : "Pin issue"}
-                </DropdownMenuItem>
-                {issue.locked ? (
+                {canWrite && (
                   <DropdownMenuItem
                     onClick={() =>
-                      unlockIssue.mutate(number, {
-                        onSuccess: () => toast.success("Conversation unlocked"),
-                        onError,
-                      })
+                      pinIssue.mutate(
+                        { number, pinned: !issue.isPinned },
+                        {
+                          onSuccess: () =>
+                            toast.success(
+                              issue.isPinned ? "Unpinned" : "Pinned",
+                            ),
+                          onError,
+                        },
+                      )
                     }
                   >
-                    Unlock conversation
+                    {issue.isPinned ? "Unpin issue" : "Pin issue"}
                   </DropdownMenuItem>
-                ) : (
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      Lock conversation…
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      {LOCK_REASONS.map(([label, reason]) => (
-                        <DropdownMenuItem
-                          key={reason ?? "none"}
-                          onClick={() =>
-                            lockIssue.mutate(
-                              { number, reason },
-                              {
-                                onSuccess: () =>
-                                  toast.success("Conversation locked"),
-                                onError,
-                              },
-                            )
-                          }
-                        >
-                          {label}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
                 )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={duplicateIssue}>
-                  Duplicate issue
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    setTransferDest("");
-                    setTransferOpen(true);
-                  }}
-                >
-                  Transfer issue…
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  variant="destructive"
-                  onClick={() => setDeleteOpen(true)}
-                >
-                  Delete issue…
-                </DropdownMenuItem>
+                {canLock &&
+                  (issue.locked ? (
+                    <DropdownMenuItem
+                      onClick={() =>
+                        unlockIssue.mutate(number, {
+                          onSuccess: () =>
+                            toast.success("Conversation unlocked"),
+                          onError,
+                        })
+                      }
+                    >
+                      Unlock conversation
+                    </DropdownMenuItem>
+                  ) : isGitLab ? (
+                    // GitLab locks without a reason — a plain item, no submenu.
+                    <DropdownMenuItem
+                      onClick={() =>
+                        lockIssue.mutate(
+                          { number, reason: null },
+                          {
+                            onSuccess: () =>
+                              toast.success("Conversation locked"),
+                            onError,
+                          },
+                        )
+                      }
+                    >
+                      Lock conversation
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>
+                        Lock conversation…
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>
+                        {LOCK_REASONS.map(([label, reason]) => (
+                          <DropdownMenuItem
+                            key={reason ?? "none"}
+                            onClick={() =>
+                              lockIssue.mutate(
+                                { number, reason },
+                                {
+                                  onSuccess: () =>
+                                    toast.success("Conversation locked"),
+                                  onError,
+                                },
+                              )
+                            }
+                          >
+                            {label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  ))}
+                {(canWrite || canLock) && <DropdownMenuSeparator />}
+                {canDuplicate && (
+                  <DropdownMenuItem onClick={duplicateIssue}>
+                    Duplicate issue
+                  </DropdownMenuItem>
+                )}
+                {canTransfer && (
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setTransferDest("");
+                      setTransferOpen(true);
+                    }}
+                  >
+                    {isGitLab ? "Move issue…" : "Transfer issue…"}
+                  </DropdownMenuItem>
+                )}
+                {canDelete && (
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => setDeleteOpen(true)}
+                  >
+                    Delete issue…
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -732,6 +782,7 @@ export function RemoteIssueView({
         suggestions={repoSuggestions}
         pending={transferIssue.isPending}
         onSubmit={submitTransfer}
+        move={isGitLab}
       />
 
       <DeleteIssueDialog
@@ -741,6 +792,10 @@ export function RemoteIssueView({
         title={issue.title}
         pending={deleteIssue.isPending}
         onConfirm={confirmDelete}
+        remoteLabel={remoteLabel}
+        roleHint={
+          isGitLab ? "needs Owner access" : "requires admin or triage access"
+        }
       />
     </div>
   );

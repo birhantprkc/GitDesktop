@@ -74,6 +74,10 @@ export interface RepoOwner {
   /** The origin remote's host (e.g. "github.com", "gitlab.com") — lets per-repo
    *  UI name the actual provider. */
   host: string | null;
+  /** The provider that host routes to ("github" / "gitlab" / "bitbucket"),
+   *  including self-managed GitLab hosts glab is signed in to. Null when
+   *  unrecognized — the UI labels those GitHub (gh stays authoritative). */
+  provider: string | null;
 }
 
 /** A git submodule and its state vs. the commit the parent records. */
@@ -511,6 +515,129 @@ export interface ForgeImplemented {
   issueReactions: boolean;
   /** Reactions on a merge/pull request + its comments — the same ReactionBar. */
   mrReactions: boolean;
+  /** Locking/unlocking an issue's conversation (GitHub with an optional
+   *  reason; GitLab has none, so the reason submenu hides per provider). */
+  issueLock: boolean;
+  /** Moving an issue to another repository/project (GitHub "transfer",
+   *  GitLab "move" — the same dialog). */
+  issueTransfer: boolean;
+  /** Permanently deleting an issue (server-side role checks apply). */
+  issueDelete: boolean;
+  /** The repository-settings dialog (admin probe + General / Danger zone and
+   *  the provider's extra sections). */
+  repoSettings: boolean;
+}
+
+/** Whether the viewer can manage this repo's settings (`admin`) and whether
+ *  they hold the owner-only lifecycle powers (`owner`). GitHub admin implies
+ *  both; GitLab distinguishes Maintainer from Owner. */
+export interface ForgeRepoAdmin {
+  admin: boolean;
+  owner: boolean;
+}
+
+/** GitLab project settings — its own shape rather than a lossy mapping onto
+ *  {@link RepoSettings}: features are ACCESS LEVELS (enabled / private /
+ *  disabled), the merge style is one enum, squash is a four-way option. */
+export interface GitLabRepoSettings {
+  description: string | null;
+  topics: string[];
+  defaultBranch: string | null;
+  /** "private" | "internal" | "public" — read-only here (Danger zone changes it). */
+  visibility: string;
+  webUrl: string;
+  /** Full path ("group/name") — the Danger-zone confirm phrase. */
+  fullName: string;
+  /** URL slug (what a rename edits). */
+  path: string;
+  /** Display name. */
+  name: string;
+  archived: boolean;
+  /** "enabled" | "private" (members only) | "disabled" */
+  issuesAccessLevel: string;
+  mergeRequestsAccessLevel: string;
+  wikiAccessLevel: string;
+  snippetsAccessLevel: string;
+  forkingAccessLevel: string;
+  /** "merge" | "rebase_merge" (semi-linear) | "ff" */
+  mergeMethod: string;
+  /** "never" | "always" | "default_on" | "default_off" */
+  squashOption: string;
+  removeSourceBranchAfterMerge: boolean;
+  onlyAllowMergeIfPipelineSucceeds: boolean;
+  onlyAllowMergeIfAllDiscussionsAreResolved: boolean;
+}
+
+/** The GitLab settings the General form sends back (the managed subset). */
+export type GitLabRepoSettingsInput = Omit<
+  GitLabRepoSettings,
+  | "visibility"
+  | "webUrl"
+  | "fullName"
+  | "path"
+  | "name"
+  | "archived"
+  | "description"
+> & { description: string };
+
+/** A GitLab project member. `id` is the user id as a string (IPC-safe). */
+export interface GitLabMember {
+  id: string;
+  username: string;
+  avatarUrl: string;
+  /** 10 Guest / 15 Planner / 20 Reporter / 30 Developer / 40 Maintainer / 50 Owner. */
+  accessLevel: number;
+  /** Added on this project directly (editable) vs inherited from a group. */
+  direct: boolean;
+}
+
+/** A GitLab project webhook. Events are per-hook boolean flags on GitLab —
+ *  `events` carries the enabled flag names ("push_events", …). */
+export interface GitLabHook {
+  id: string;
+  url: string;
+  events: string[];
+  enableSslVerification: boolean;
+  /** "executable", or "disabled"/"temporarily_disabled" once GitLab
+   *  auto-disables a failing hook. */
+  alertStatus: string;
+  createdAt: string;
+}
+
+/** What the webhook form sends. `token: null` leaves an existing secret
+ *  unchanged (GitLab never returns it). */
+export interface GitLabHookInput {
+  url: string;
+  token: string | null;
+  enableSslVerification: boolean;
+  events: string[];
+}
+
+/** One recorded delivery of a GitLab hook, payloads inline. */
+export interface GitLabHookDelivery {
+  id: string;
+  /** e.g. "push_hooks". */
+  trigger: string;
+  /** The endpoint's HTTP status ("405") or a failure word. */
+  responseStatus: string;
+  createdAt: string;
+  /** Seconds. */
+  duration: number;
+  requestPayload: string;
+  responsePayload: string;
+}
+
+/** A GitLab CI/CD variable — one store (vs GitHub's secrets/variables split):
+ *  `masked` hides the value in job logs, `protected` limits it to protected
+ *  refs; the API still returns values to maintainers. */
+export interface GitLabVariable {
+  key: string;
+  value: string;
+  protected: boolean;
+  masked: boolean;
+  /** "*" for unscoped. A key can repeat at different scopes (a Premium
+   *  feature the app displays but doesn't create) — writes address key+scope. */
+  environmentScope: string;
 }
 
 /** A merge/pull request's approval summary — who has approved and whether the

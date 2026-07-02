@@ -16,6 +16,10 @@ export interface RecentRepo {
   /** The origin remote's host (e.g. "gitlab.com"), stored alongside `owner` so
    *  the context menu names the right provider from the first frame. */
   host?: string;
+  /** The provider that host routes to ("github" / "gitlab" / "bitbucket") —
+   *  resolved backend-side (it knows glab's self-managed hosts) and stored so
+   *  labels are right from the first frame. Absent until first resolved. */
+  provider?: string;
 }
 
 /** What to call a repo in the UI: its alias when set, else its name. */
@@ -345,7 +349,12 @@ export async function addRecentRepo(repo: {
  * No-op when nothing changed, so it never loops with its own settings refetch.
  */
 export async function persistRepoOwners(
-  owners: { path: string; owner: string | null; host: string | null }[],
+  owners: {
+    path: string;
+    owner: string | null;
+    host: string | null;
+    provider: string | null;
+  }[],
 ): Promise<void> {
   if (owners.length === 0) return;
   const settings = await loadSettings();
@@ -356,9 +365,11 @@ export async function persistRepoOwners(
     if (!resolved) return r;
     const owner = resolved.owner || undefined;
     const host = resolved.host || undefined;
-    if (owner === r.owner && host === r.host) return r;
+    const provider = resolved.provider || undefined;
+    if (owner === r.owner && host === r.host && provider === r.provider)
+      return r;
     changed = true;
-    return { ...r, owner, host };
+    return { ...r, owner, host, provider };
   });
   if (!changed) return;
   await saveSettings({ ...settings, recentRepos });

@@ -272,8 +272,10 @@ function ReadOnlyIssueSidebar({
   );
 }
 
-/** Transfer-to-another-repo dialog. Presentational — the parent owns the
- *  mutation, the destination text, and the repo suggestions. */
+/** Transfer/move-to-another-repo dialog. Presentational — the parent owns the
+ *  mutation, the destination text, and the repo suggestions. `move` switches
+ *  the copy to GitLab's vocabulary (an issue "moves" to another project, and
+ *  the original closes with a "moved" marker rather than disappearing). */
 export function TransferIssueDialog({
   open,
   onClose,
@@ -283,6 +285,7 @@ export function TransferIssueDialog({
   suggestions,
   pending,
   onSubmit,
+  move = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -292,7 +295,9 @@ export function TransferIssueDialog({
   suggestions: string[];
   pending: boolean;
   onSubmit: () => void;
+  move?: boolean;
 }) {
+  const verb = move ? "Move" : "Transfer";
   return (
     <Dialog
       open={open}
@@ -309,10 +314,13 @@ export function TransferIssueDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Transfer issue #{number}</DialogTitle>
+            <DialogTitle>
+              {verb} issue #{number}
+            </DialogTitle>
             <DialogDescription>
-              Moves this issue to another repository you can push to. Its
-              comments, labels, and assignees move with it.
+              {move
+                ? "Moves this issue to another project with issues enabled. Its comments, labels, and milestone move with it; the original closes with a “moved” marker."
+                : "Moves this issue to another repository you can push to. Its comments, labels, and assignees move with it."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -320,7 +328,7 @@ export function TransferIssueDialog({
               autoFocus
               value={dest}
               onChange={(e) => onDestChange(e.target.value)}
-              placeholder="owner/repo"
+              placeholder={move ? "group/project" : "owner/repo"}
               autoComplete="off"
             />
             {suggestions.length > 0 && (
@@ -344,7 +352,7 @@ export function TransferIssueDialog({
             </Button>
             <Button type="submit" disabled={!dest.trim() || pending}>
               {pending && <Spinner data-icon="inline-start" />}
-              Transfer
+              {verb}
             </Button>
           </DialogFooter>
         </form>
@@ -353,7 +361,8 @@ export function TransferIssueDialog({
   );
 }
 
-/** Delete-issue confirm dialog. Presentational — the parent owns the mutation. */
+/** Delete-issue confirm dialog. Presentational — the parent owns the mutation
+ *  and passes the provider name + its role requirement for the warning copy. */
 export function DeleteIssueDialog({
   open,
   onClose,
@@ -361,6 +370,8 @@ export function DeleteIssueDialog({
   title,
   pending,
   onConfirm,
+  remoteLabel,
+  roleHint,
 }: {
   open: boolean;
   onClose: () => void;
@@ -368,6 +379,10 @@ export function DeleteIssueDialog({
   title: string;
   pending: boolean;
   onConfirm: () => void;
+  /** "GitHub" / "GitLab" — where the delete lands. */
+  remoteLabel: string;
+  /** The provider's role requirement (e.g. "requires admin or triage access"). */
+  roleHint: string;
 }) {
   return (
     <Dialog
@@ -380,8 +395,8 @@ export function DeleteIssueDialog({
         <DialogHeader>
           <DialogTitle>Delete issue #{number}?</DialogTitle>
           <DialogDescription>
-            This permanently deletes “{title}” on GitHub. This cannot be undone,
-            and requires admin or triage access.
+            This permanently deletes “{title}” on {remoteLabel}. This cannot be
+            undone, and {roleHint}.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

@@ -136,6 +136,10 @@ pub struct Implemented {
     pub repo_actions: bool,
     /// Publishing a local repo to the provider (create remote + push).
     pub publish: bool,
+    /// The repository-settings dialog (admin probe + General / Danger zone,
+    /// plus each provider's extra sections). Distinct from `repo_actions` so a
+    /// provider can have View/Star without the settings surface.
+    pub repo_settings: bool,
     // ── Writes (per-action): flip on as each mutation lands for a provider, so a
     //    read-only provider's detail views suppress just the writes it can't do
     //    yet (distinct from the panel-level read flags above). ──
@@ -209,6 +213,16 @@ pub struct Implemented {
     /// Reactions on a merge/pull request and its comments — the same shared
     /// ReactionBar.
     pub mr_reactions: bool,
+    /// Locking / unlocking an issue's conversation — a shared control (GitHub
+    /// locks with an optional reason; GitLab's `discussion_locked` has none, so
+    /// the reason submenu hides per provider).
+    pub issue_lock: bool,
+    /// Moving an issue to another repository/project — a shared control
+    /// (GitHub calls it transfer, GitLab move; same dialog).
+    pub issue_transfer: bool,
+    /// Permanently deleting an issue — a shared control (both providers
+    /// restrict it server-side to elevated roles).
+    pub issue_delete: bool,
 }
 
 impl Implemented {
@@ -225,6 +239,7 @@ impl Implemented {
             insights: true,
             repo_actions: true,
             publish: true,
+            repo_settings: true,
             issue_comment: true,
             issue_state: true,
             mr_comment: true,
@@ -251,6 +266,9 @@ impl Implemented {
             issue_milestone: true,
             issue_reactions: true,
             mr_reactions: true,
+            issue_lock: true,
+            issue_transfer: true,
+            issue_delete: true,
         }
     }
 
@@ -264,6 +282,7 @@ impl Implemented {
             insights: false,
             repo_actions: false,
             publish: false,
+            repo_settings: false,
             issue_comment: false,
             issue_state: false,
             mr_comment: false,
@@ -287,6 +306,9 @@ impl Implemented {
             issue_milestone: false,
             issue_reactions: false,
             mr_reactions: false,
+            issue_lock: false,
+            issue_transfer: false,
+            issue_delete: false,
         }
     }
 
@@ -301,7 +323,8 @@ impl Implemented {
             // per-action: issue + MR comment and close/reopen, the GitLab-only MR
             // approve/unapprove toggle, request-changes, and MR assignees, MR
             // merge, issue + MR labels, issue assignees, issue/MR create, issue +
-            // MR title/body edit, issue milestone, award-emoji reactions, pipeline
+            // MR title/body edit, issue milestone, award-emoji reactions, issue
+            // lock / move / delete, pipeline
             // retry / cancel / run, and release create / edit / delete / assets.
             Provider::GitLab => Self {
                 pull_requests: true,
@@ -312,10 +335,13 @@ impl Implemented {
                 // forge pipeline read. The GitHub-only cards (community /
                 // traffic / dependencies) hide per provider in the component.
                 insights: true,
-                // View/star (fork is a web link-out; admin settings and
-                // branch-rule import stay GitHub-only via provider guards).
+                // View/star (fork is a web link-out; branch-rule import stays
+                // GitHub-only via a provider guard).
                 repo_actions: true,
                 publish: true,
+                // The settings dialog: General + Danger zone (and the GitLab
+                // sections as they land), gated by the Maintainer/Owner probe.
+                repo_settings: true,
                 issue_comment: true,
                 issue_state: true,
                 mr_comment: true,
@@ -339,6 +365,9 @@ impl Implemented {
                 issue_milestone: true,
                 issue_reactions: true,
                 mr_reactions: true,
+                issue_lock: true,
+                issue_transfer: true,
+                issue_delete: true,
             },
             Provider::Bitbucket => Self::none(),
         }
