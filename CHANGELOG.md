@@ -85,6 +85,10 @@ commit list.
   another namespace, delete — Owner-only actions explain themselves when you're
   a Maintainer). Gated by your actual GitLab role, straight from the repository
   menu.
+- **GitLab protected branches.** Manage protected branches from repository
+  settings: protect a branch or wildcard with per-rule push/merge access levels
+  and a force-push policy, toggle force push in place, and unprotect — rules
+  inherited from a group show read-only.
 - **GitLab issue due dates and confidential issues.** Two GitLab-unique fields
   in the issue view's side rail: a **due date** (type a date and press Enter or
   pick from the calendar; one click clears it, and an open issue past its date

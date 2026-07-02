@@ -43,6 +43,7 @@ import type {
   GitLabHookDelivery,
   GitLabHookInput,
   GitLabMember,
+  GitLabProtectedBranch,
   GitLabRepoSettings,
   GitLabRepoSettingsInput,
   GitLabVariable,
@@ -1464,6 +1465,33 @@ export const forgeGlVariableDelete = (
   key: string,
   scope: string,
 ) => invoke<void>("forge_gl_variable_delete", { repoPath, key, scope });
+
+export const forgeGlProtectedBranches = (repoPath: string) =>
+  invoke<GitLabProtectedBranch[]>("forge_gl_protected_branches", { repoPath });
+
+export const forgeGlProtectedBranchCreate = (
+  repoPath: string,
+  args: {
+    name: string;
+    pushAccessLevel: number;
+    mergeAccessLevel: number;
+    allowForcePush: boolean;
+  },
+) => invoke<void>("forge_gl_protected_branch_create", { repoPath, ...args });
+
+export const forgeGlProtectedBranchUpdate = (
+  repoPath: string,
+  name: string,
+  allowForcePush: boolean,
+) =>
+  invoke<void>("forge_gl_protected_branch_update", {
+    repoPath,
+    name,
+    allowForcePush,
+  });
+
+export const forgeGlProtectedBranchDelete = (repoPath: string, name: string) =>
+  invoke<void>("forge_gl_protected_branch_delete", { repoPath, name });
 
 /** Project paths the viewer is a member of on THIS repo's host — the Move
  *  dialog's suggestions (host-correct for self-managed GitLab). */

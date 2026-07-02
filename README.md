@@ -67,7 +67,8 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   (create + push, straight from the app) — right from the app. **Project settings**
   too: the same settings dialog manages a GitLab project's **General** settings
   (description, topics, default branch, feature access levels, merge method and
-  squash policy), **Members**, **Webhooks** (with a delivery log and re-send),
+  squash policy), **Members**, **Protected branches** (per-rule push/merge access
+  levels and a force-push policy), **Webhooks** (with a delivery log and re-send),
   **CI/CD variables**, and the **Danger zone** (rename, archive, visibility,
   transfer, delete). **Self-managed GitLab** works wherever `glab` is signed in —
   the app recognizes any host from `glab auth login`. Insights charts

@@ -1311,6 +1311,57 @@ pub async fn forge_gl_variable_delete(
     gl_only!(repo_path, gitlab::delete_variable(&repo_path, &key, &scope))
 }
 
+/// The repo's protected branches, with per-action push/merge access levels.
+#[tauri::command]
+pub async fn forge_gl_protected_branches(
+    repo_path: String,
+) -> AppResult<Vec<gitlab::GitLabProtectedBranch>> {
+    gl_only!(repo_path, gitlab::list_protected_branches(&repo_path))
+}
+
+/// Protect a branch (or wildcard). Access levels are the Free-tier set {0, 30, 40}.
+#[tauri::command]
+pub async fn forge_gl_protected_branch_create(
+    repo_path: String,
+    name: String,
+    push_access_level: u8,
+    merge_access_level: u8,
+    allow_force_push: bool,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::create_protected_branch(
+            &repo_path,
+            &name,
+            push_access_level,
+            merge_access_level,
+            allow_force_push,
+        )
+    )
+}
+
+/// Update a protection. Only `allow_force_push` takes effect on Free tier.
+#[tauri::command]
+pub async fn forge_gl_protected_branch_update(
+    repo_path: String,
+    name: String,
+    allow_force_push: bool,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::update_protected_branch(&repo_path, &name, allow_force_push)
+    )
+}
+
+/// Remove a branch protection.
+#[tauri::command]
+pub async fn forge_gl_protected_branch_delete(repo_path: String, name: String) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::delete_protected_branch(&repo_path, &name)
+    )
+}
+
 /// Project paths the viewer is a member of on THIS repo's host — the Move
 /// dialog's destination suggestions (host-correct for self-managed, unlike the
 /// account-scoped clone-browser listing).

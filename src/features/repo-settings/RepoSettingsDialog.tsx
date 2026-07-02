@@ -58,6 +58,7 @@ import { FundingSection } from "./FundingSection";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { GitLabGeneralSection } from "./GitLabGeneralSection";
 import { GitLabMembersSection } from "./GitLabMembersSection";
+import { GitLabProtectedBranchesSection } from "./GitLabProtectedBranchesSection";
 import { GitLabVariablesSection } from "./GitLabVariablesSection";
 import { GitLabWebhooksSection } from "./GitLabWebhooksSection";
 import { PagesSection } from "./PagesSection";
@@ -166,6 +167,10 @@ const GITLAB_RAIL_GROUPS: NavRailGroup[] = [
     ],
   },
   {
+    label: "Repository",
+    items: [{ id: "rules", label: "Protected branches" }],
+  },
+  {
     label: "Automation",
     items: [
       { id: "secrets", label: "Variables" },
@@ -198,6 +203,7 @@ export function RepoSettingsDialog({
   const gitlabSections: SectionId[] = [
     "general",
     "access",
+    "rules",
     "secrets",
     "webhooks",
     "danger",
@@ -255,9 +261,15 @@ export function RepoSettingsDialog({
                   ) : (
                     <CollaboratorsSection repoPath={repoPath} open={open} />
                   ))}
-                {activeSection === "rules" && !isGitLab && (
-                  <RulesetsSection repoPath={repoPath} open={open} />
-                )}
+                {activeSection === "rules" &&
+                  (isGitLab ? (
+                    <GitLabProtectedBranchesSection
+                      repoPath={repoPath}
+                      open={open}
+                    />
+                  ) : (
+                    <RulesetsSection repoPath={repoPath} open={open} />
+                  ))}
                 {activeSection === "security" && !isGitLab && (
                   <SecuritySection repoPath={repoPath} open={open} />
                 )}

@@ -23,6 +23,7 @@ import type {
   ForgeProvider,
   ForgeStatus,
   GitLabHookInput,
+  GitLabProtectedBranch,
   GitLabRepoSettingsInput,
   IssueDetails,
   IssueReactions,
@@ -2843,6 +2844,72 @@ export function useGlDeleteVariable(repo: string) {
       api.forgeGlVariableDelete(repo, a.key, a.scope),
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: glVariablesKey(repo) }),
+  });
+}
+
+const glProtectedBranchesKey = (repo: string) =>
+  ["repo", repo, "gl-protected-branches"] as const;
+
+export function useGlProtectedBranches(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: glProtectedBranchesKey(repo),
+    queryFn: () => api.forgeGlProtectedBranches(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useGlProtectBranch(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: {
+      name: string;
+      pushAccessLevel: number;
+      mergeAccessLevel: number;
+      allowForcePush: boolean;
+    }) => api.forgeGlProtectedBranchCreate(repo, a),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: glProtectedBranchesKey(repo),
+      }),
+  });
+}
+
+/** Force-push is the only row-editable field; glab spawns a process per call
+ *  (~1s+), so patch the cached row optimistically or the Switch visibly lags
+ *  and snaps back. */
+export function useGlUpdateProtectedBranch(repo: string) {
+  const queryClient = useQueryClient();
+  const key = glProtectedBranchesKey(repo);
+  return useMutation({
+    mutationFn: (a: { name: string; allowForcePush: boolean }) =>
+      api.forgeGlProtectedBranchUpdate(repo, a.name, a.allowForcePush),
+    onMutate: async (a) => {
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<GitLabProtectedBranch[]>(key);
+      queryClient.setQueryData<GitLabProtectedBranch[]>(key, (rows) =>
+        rows?.map((r) =>
+          r.name === a.name ? { ...r, allowForcePush: a.allowForcePush } : r,
+        ),
+      );
+      return { prev };
+    },
+    onError: (_e, _a, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(key, ctx.prev);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
+  });
+}
+
+export function useGlUnprotectBranch(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.forgeGlProtectedBranchDelete(repo, name),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: glProtectedBranchesKey(repo),
+      }),
   });
 }
 

@@ -645,6 +645,27 @@ export interface GitLabVariable {
   environmentScope: string;
 }
 
+/** One access-level entry in a protected branch's push/merge allow list.
+ *  Free tier carries a single {0,30,40} role; Premium can add multiple entries
+ *  (users/groups/deploy keys), each with its own `description`. */
+export interface GitLabAccessLevelEntry {
+  accessLevel: number;
+  description: string;
+}
+
+/** A GitLab protected branch rule. Access levels are set at creation time (the
+ *  REST API ignores level changes on update on Free tier), so only
+ *  `allowForcePush` is row-editable. `inherited` rules come from a group and
+ *  are managed there, not here. */
+export interface GitLabProtectedBranch {
+  id: string;
+  name: string;
+  pushLevels: GitLabAccessLevelEntry[];
+  mergeLevels: GitLabAccessLevelEntry[];
+  allowForcePush: boolean;
+  inherited: boolean;
+}
+
 /** A merge/pull request's approval summary — who has approved and whether the
  *  signed-in viewer has. Only GitLab produces it today; the GitLab-only
  *  approve/unapprove toggle and Request-changes control read it (gated on

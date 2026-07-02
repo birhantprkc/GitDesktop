@@ -171,6 +171,10 @@ menu item appears only when you have it):
 - **Members** — add someone by username at a role (Guest … Owner), change a role
   inline, or remove them. Members **inherited from a group** show read-only — they're
   managed on the group.
+- **Protected branches** — protect a branch or wildcard with per-rule **allowed to
+  push** / **allowed to merge** access levels and an **allow force push** toggle;
+  unprotect with a confirm. Rules **inherited from a group** show read-only. Access
+  levels are set when you protect a branch — to change them, unprotect and re-protect.
 - **Variables** — the project's **CI/CD variables**: add, edit, and delete, with
   **protected** (protected refs only) and **masked** (hidden in job logs) flags.
 - **Webhooks** — create, edit, and delete hooks with per-event triggers and a secret

@@ -92,6 +92,7 @@ export function GitLabMembersSection({
           <Select
             value={String(level)}
             onValueChange={(v) => v && setLevel(Number(v))}
+            itemToStringLabel={(v) => roleLabel(Number(v))}
           >
             <SelectTrigger size="sm" className="w-28">
               <SelectValue />

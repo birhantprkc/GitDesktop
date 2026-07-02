@@ -4310,6 +4310,192 @@ pub async fn delete_variable(repo_path: &str, key: &str, scope: &str) -> AppResu
     Ok(())
 }
 
+// ── Protected branches ────────────────────────────────────────────────────────
+//
+// Project protected branches (`projects/:id/protected_branches`), validated live
+// on gitlab.com Free tier. Each protection carries per-action access-level lists
+// (push/merge); on Free tier the levels are one of {0 = no one, 30 = developers +
+// maintainers, 40 = maintainers}. Only `allow_force_push` is updatable on Free —
+// access-level PATCH params are silently ignored — so this package exposes no
+// level-editing surface. `unprotect_access_levels` / `code_owner_approval_required`
+// are Premium concepts and deliberately not surfaced.
+
+/// One entry in a protection's push/merge access-level list, projected onto the
+/// camelCase shape the frontend consumes.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabAccessLevelEntry {
+    pub access_level: u8,
+    /// GitLab's `access_level_description` verbatim (e.g. "Maintainers").
+    pub description: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabProtectedBranch {
+    /// Stringified — GitLab ids are large ints that lose precision as JS numbers.
+    pub id: String,
+    pub name: String,
+    pub push_levels: Vec<GitLabAccessLevelEntry>,
+    pub merge_levels: Vec<GitLabAccessLevelEntry>,
+    pub allow_force_push: bool,
+    pub inherited: bool,
+}
+
+#[derive(Deserialize)]
+struct GlabProtectedAccessLevel {
+    #[serde(default)]
+    access_level: u8,
+    #[serde(default, deserialize_with = "null_to_default")]
+    access_level_description: String,
+}
+
+#[derive(Deserialize)]
+struct GlabProtectedBranch {
+    #[serde(default)]
+    id: u64,
+    #[serde(default, deserialize_with = "null_to_default")]
+    name: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    push_access_levels: Vec<GlabProtectedAccessLevel>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    merge_access_levels: Vec<GlabProtectedAccessLevel>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    allow_force_push: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    inherited: bool,
+}
+
+fn map_protected_branch(pb: GlabProtectedBranch) -> GitLabProtectedBranch {
+    let map_levels = |levels: Vec<GlabProtectedAccessLevel>| {
+        levels
+            .into_iter()
+            .map(|l| GitLabAccessLevelEntry {
+                access_level: l.access_level,
+                description: l.access_level_description,
+            })
+            .collect()
+    };
+    GitLabProtectedBranch {
+        id: pb.id.to_string(),
+        name: pb.name,
+        push_levels: map_levels(pb.push_access_levels),
+        merge_levels: map_levels(pb.merge_access_levels),
+        allow_force_push: pb.allow_force_push,
+        inherited: pb.inherited,
+    }
+}
+
+/// A protection's `name` must survive as a single path segment (`update`/`delete`
+/// address it in the URL) and can't be blank.
+fn validate_branch_name(name: &str) -> AppResult<()> {
+    if name.trim().is_empty() {
+        return Err(AppError::InvalidArgument("branch name can't be empty".into()));
+    }
+    Ok(())
+}
+
+/// Push/merge access levels are constrained to the Free-tier set on create.
+fn validate_protected_access_level(level: u8) -> AppResult<()> {
+    if !matches!(level, 0 | 30 | 40) {
+        return Err(AppError::InvalidArgument(
+            "access level must be 0 (no one), 30 (developers + maintainers), or 40 (maintainers)"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+pub async fn list_protected_branches(repo_path: &str) -> AppResult<Vec<GitLabProtectedBranch>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let mut branches: Vec<GlabProtectedBranch> = Vec::new();
+    for page in 1..=10 {
+        let endpoint = format!("projects/{enc}/protected_branches?per_page=100&page={page}");
+        let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+        let batch: Vec<GlabProtectedBranch> = serde_json::from_str(&out.stdout_lossy())
+            .map_err(|e| {
+                AppError::Glab(format!("could not parse GitLab protected branches: {e}"))
+            })?;
+        let done = batch.len() < 100;
+        branches.extend(batch);
+        if done {
+            break;
+        }
+    }
+    Ok(branches.into_iter().map(map_protected_branch).collect())
+}
+
+/// Protect a branch (or wildcard, e.g. `release/*`). Free tier accepts push/merge
+/// levels from {0, 30, 40}. Ignores the 201 body — the list re-fetches.
+pub async fn create_protected_branch(
+    repo_path: &str,
+    name: &str,
+    push_access_level: u8,
+    merge_access_level: u8,
+    allow_force_push: bool,
+) -> AppResult<()> {
+    validate_branch_name(name)?;
+    validate_protected_access_level(push_access_level)?;
+    validate_protected_access_level(merge_access_level)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/protected_branches");
+    let name_arg = format!("name={name}");
+    let push_arg = format!("push_access_level={push_access_level}");
+    let merge_arg = format!("merge_access_level={merge_access_level}");
+    let force_arg = format!("allow_force_push={allow_force_push}");
+    run_glab(
+        Some(repo_path),
+        &[
+            "api", "--method", "POST", &endpoint, "-f", &name_arg, "-f", &push_arg, "-f",
+            &merge_arg, "-f", &force_arg,
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Update a protection. On Free tier only `allow_force_push` takes effect —
+/// access-level params are silently ignored by GitLab, so we don't send them.
+pub async fn update_protected_branch(
+    repo_path: &str,
+    name: &str,
+    allow_force_push: bool,
+) -> AppResult<()> {
+    validate_branch_name(name)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    // The name rides the URL as a single path segment — percent-encode it so
+    // wildcards (`*`) and `/` in wildcard names survive.
+    let endpoint = format!(
+        "projects/{enc}/protected_branches/{}",
+        encode_query_value(name)
+    );
+    let force_arg = format!("allow_force_push={allow_force_push}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PATCH", &endpoint, "-f", &force_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_protected_branch(repo_path: &str, name: &str) -> AppResult<()> {
+    validate_branch_name(name)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!(
+        "projects/{enc}/protected_branches/{}",
+        encode_query_value(name)
+    );
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4949,5 +5135,56 @@ mod tests {
         assert_eq!(reviewers[0].state, "requested_changes");
         assert_eq!(reviewers[0].user.as_ref().unwrap().id, 7);
         assert!(reviewers[2].user.is_none());
+    }
+
+    #[test]
+    fn maps_protected_branch_from_live_shape() {
+        // The exact object captured live from gitlab.com Free tier.
+        let json = r#"{"id":267905477,"name":"main","push_access_levels":[{"id":325719801,"access_level":40,"access_level_description":"Maintainers","deploy_key_id":null,"user_id":null,"group_id":null}],"merge_access_levels":[{"id":290254592,"access_level":40,"access_level_description":"Maintainers","user_id":null,"group_id":null}],"allow_force_push":false,"unprotect_access_levels":[],"code_owner_approval_required":false,"inherited":false}"#;
+        let pb: GlabProtectedBranch = serde_json::from_str(json).unwrap();
+        let mapped = map_protected_branch(pb);
+        assert_eq!(mapped.id, "267905477");
+        assert_eq!(mapped.name, "main");
+        assert_eq!(mapped.push_levels.len(), 1);
+        assert_eq!(mapped.push_levels[0].access_level, 40);
+        assert_eq!(mapped.push_levels[0].description, "Maintainers");
+        assert_eq!(mapped.merge_levels.len(), 1);
+        assert_eq!(mapped.merge_levels[0].access_level, 40);
+        assert_eq!(mapped.merge_levels[0].description, "Maintainers");
+        assert!(!mapped.allow_force_push);
+        assert!(!mapped.inherited);
+    }
+
+    #[test]
+    fn protected_branch_tolerates_null_and_missing_fields() {
+        // GitLab nulls scalars rather than omitting them; missing collections/bools
+        // must fall back to defaults so a single quirk doesn't sink the whole parse.
+        let json = r#"{"id":1,"name":"main","push_access_levels":[],"allow_force_push":null}"#;
+        let pb: GlabProtectedBranch = serde_json::from_str(json).unwrap();
+        let mapped = map_protected_branch(pb);
+        assert!(!mapped.allow_force_push);
+        assert!(!mapped.inherited);
+        assert!(mapped.merge_levels.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_protected_branch_rejects_bad_access_level() {
+        // The guard returns early, before any glab spawn or network access.
+        let err = create_protected_branch("/repo", "main", 20, 40, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+    }
+
+    #[tokio::test]
+    async fn protected_branch_ops_reject_blank_name() {
+        let err = create_protected_branch("/repo", "   ", 40, 40, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+        let err = update_protected_branch("/repo", "", false).await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+        let err = delete_protected_branch("/repo", "  ").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
     }
 }
