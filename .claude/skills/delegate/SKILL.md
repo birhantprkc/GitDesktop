@@ -113,8 +113,14 @@ Out of scope: <adjacent things it must leave alone>
    empty, boundaries) and visual polish, before declaring done.
 4. **Batch fix rounds:** collect ALL findings for a package into ONE
    SendMessage to the owning implementer (every extra round replays the
-   agent's whole context). Re-review = the delta + prior findings only, not
-   the full protocol again.
+   agent's whole context — ~100k tokens even for a one-line diff). Re-review
+   = the delta + prior findings only, not the full protocol again.
+5. **Trivial-fix exception (user-authorized 2026-07-02):** the orchestrator
+   may apply a trivial fix directly instead of a fix round — ≤ ~3 lines,
+   confirmed by the spec-reviewer or by live validation, and changing no
+   contract, API, or design. Disclose every such fix in the report and re-run
+   the package's verification. Anything beyond trivial still round-trips to
+   the owning implementer; this never loosens the no-git-mutation rule.
 
 ## Phase 5 — Close out
 

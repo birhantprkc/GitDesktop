@@ -65,8 +65,10 @@ agent verifies. **/delegate requires Fable as the main conversation model**
 (the agents themselves are pinned to Opus regardless) — non-Fable sessions
 work inline instead. Both agents preload the `gd-conventions` skill — the repo
 playbook of hard rules and gotchas (`.claude/skills/gd-conventions/SKILL.md`).
-Only `implementer` may write files in this repo; every other spawned agent is
-strictly read-only, and **no agent ever commits or mutates git state — the
-user commits their own work.** (This section addresses the main conversation:
+Only `implementer` may write files in this repo — plus the orchestrator for
+trivial ≤ ~3-line reviewer/live-confirmed fixes during a /delegate run (see
+the skill's Phase 4); every other spawned agent is strictly read-only, and
+**no agent ever commits or mutates git state — the user commits their own
+work.** (This section addresses the main conversation:
 if you are a dispatched subagent working a package, do your package — never
 re-delegate or spawn further agents.)
