@@ -1370,6 +1370,38 @@ pub async fn forge_gl_member_projects(repo_path: String) -> AppResult<Vec<String
     gl_only!(repo_path, gitlab::member_projects(&repo_path))
 }
 
+/// Read a merge request's auto-merge state (armed flag, detailed merge status,
+/// head-pipeline summary). GitLab-only — the frontend gates the auto-merge
+/// affordance on this; GitHub has no in-app PR auto-merge control here.
+#[tauri::command]
+pub async fn forge_gl_mr_merge_state(
+    repo_path: String,
+    number: u64,
+) -> AppResult<gitlab::GitLabMrMergeState> {
+    gl_only!(repo_path, gitlab::mr_merge_state(&repo_path, number))
+}
+
+/// Arm auto-merge (merge-when-pipeline-succeeds) on a merge request. GitLab-only.
+#[tauri::command]
+pub async fn forge_gl_mr_auto_merge(
+    repo_path: String,
+    number: u64,
+    strategy: String,
+    delete_branch: bool,
+    sha: Option<String>,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::auto_merge_mr(&repo_path, number, &strategy, delete_branch, sha.as_deref())
+    )
+}
+
+/// Cancel a merge request's armed auto-merge. GitLab-only.
+#[tauri::command]
+pub async fn forge_gl_mr_cancel_auto_merge(repo_path: String, number: u64) -> AppResult<()> {
+    gl_only!(repo_path, gitlab::cancel_auto_merge_mr(&repo_path, number))
+}
+
 /// Rename the repository, behind the abstraction. GitHub renames the repo
 /// (old links redirect); GitLab renames both the display name and the URL slug
 /// (old paths redirect).

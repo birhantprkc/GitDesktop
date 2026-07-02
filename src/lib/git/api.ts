@@ -43,6 +43,7 @@ import type {
   GitLabHookDelivery,
   GitLabHookInput,
   GitLabMember,
+  GitLabMrMergeState,
   GitLabProtectedBranch,
   GitLabRepoSettings,
   GitLabRepoSettingsInput,
@@ -1335,6 +1336,33 @@ export const forgePrMerge = (
     deleteBranch,
     sha: sha ?? null,
   });
+
+// GitLab auto-merge (merge-when-pipeline-succeeds) — GitLab-only, gated on
+// `implemented.mrAutoMerge`. The merge/pipeline state drives the arm affordance
+// and the "auto-merge enabled" footer indicator.
+export const forgeGlMrMergeState = (repoPath: string, number: number) =>
+  invoke<GitLabMrMergeState>("forge_gl_mr_merge_state", { repoPath, number });
+
+// Arm auto-merge with a strategy ("merge" | "squash"; "rebase" is rejected
+// backend-side). `sha` is the same stale-view guard as a plain merge — GitLab
+// 409s if the head moved. 405s when the pipeline already finished (a race).
+export const forgeGlMrAutoMerge = (
+  repoPath: string,
+  number: number,
+  strategy: MergeStrategy,
+  deleteBranch: boolean,
+  sha?: string,
+) =>
+  invoke<void>("forge_gl_mr_auto_merge", {
+    repoPath,
+    number,
+    strategy,
+    deleteBranch,
+    sha: sha ?? null,
+  });
+
+export const forgeGlMrCancelAutoMerge = (repoPath: string, number: number) =>
+  invoke<void>("forge_gl_mr_cancel_auto_merge", { repoPath, number });
 
 export const forgePrClose = (repoPath: string, number: number) =>
   invoke<void>("forge_pr_close", { repoPath, number });

@@ -469,6 +469,10 @@ export interface ForgeImplemented {
   /** Merging a merge/pull request (strategy + delete-source-branch) — a shared
    *  control, so true for both GitHub and GitLab. */
   mrMerge: boolean;
+  /** Arming merge-when-pipeline-succeeds (auto-merge) on an MR while its head
+   *  pipeline is in flight — GitLab-only like `mrApprove` (GitHub has no in-app
+   *  PR auto-merge), so it's false for GitHub. */
+  mrAutoMerge: boolean;
   /** Editing labels on an issue — a shared control (GitHub by node id, GitLab by
    *  name), so true for both. */
   issueLabels: boolean;
@@ -683,6 +687,20 @@ export interface ApprovalState {
    *  Request-changes control's pressed state. Cleared by approving (or removing
    *  yourself as a reviewer on GitLab); the direct undo is Premium-only. */
   viewerRequestedChanges: boolean;
+}
+
+/** A GitLab MR's merge/auto-merge state — the auto-merge (merge-when-pipeline-
+ *  succeeds) control's driver. Only GitLab produces it (`implemented.mrAutoMerge`);
+ *  GitHub has no in-app PR auto-merge. */
+export interface GitLabMrMergeState {
+  /** Whether merge-when-pipeline-succeeds is armed on the MR. */
+  autoMergeEnabled: boolean;
+  /** GitLab's detailed_merge_status ("mergeable", "ci_still_running", "checking", …). */
+  detailedMergeStatus: string;
+  /** Head pipeline status ("running", "pending", "success", …); "" when the MR has no pipeline. */
+  pipelineStatus: string;
+  /** Head pipeline web URL; "" when no pipeline. */
+  pipelineUrl: string;
 }
 
 /** Provider-neutral analogue of {@link GhStatus}: is the hosted integration usable

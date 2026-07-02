@@ -1012,6 +1012,20 @@ pub async fn merge_mr(
     delete_branch: bool,
     sha: Option<&str>,
 ) -> AppResult<()> {
+    merge_mr_inner(repo_path, number, strategy, delete_branch, sha, false).await
+}
+
+/// The shared body behind `merge_mr` and `auto_merge_mr` — same endpoint, same
+/// strategy validation, same `sha` guard. The only difference is the extra
+/// `merge_when_pipeline_succeeds` flag, so both wrappers can't drift apart.
+async fn merge_mr_inner(
+    repo_path: &str,
+    number: u64,
+    strategy: &str,
+    delete_branch: bool,
+    sha: Option<&str>,
+    when_pipeline_succeeds: bool,
+) -> AppResult<()> {
     let squash = match strategy {
         "merge" => false,
         "squash" => true,
@@ -1022,6 +1036,35 @@ pub async fn merge_mr(
         }
     };
     let enc = encode_project(&project_path(repo_path).await?);
+    // GitLab's merge-time `squash` / `should_remove_source_branch` params can set
+    // but not clear the MR's persisted `squash` / `remove_source_branch` attributes
+    // (validated live; which the deferred merge consults is inconsistent) — set the
+    // attributes first so the chosen strategy always governs (an MR the author
+    // flagged "squash on accept" or born under the project's delete-source default
+    // would otherwise ignore the user's choice). This is a pre-mutation guard: if
+    // the attribute update fails we must NOT fall through to the irreversible merge.
+    // (A project with a locked squash policy — squash_option always/never — may
+    // reject this PUT; that surfaces as a loud toast before any merge, which is the
+    // honest failure mode. Note the attribute name is `remove_source_branch`, not
+    // the merge endpoint's `should_remove_source_branch`.)
+    let mr_endpoint = format!("projects/{enc}/merge_requests/{number}");
+    let attr_squash_arg = format!("squash={squash}");
+    let attr_remove_arg = format!("remove_source_branch={delete_branch}");
+    run_glab(
+        Some(repo_path),
+        &[
+            "api",
+            "--method",
+            "PUT",
+            &mr_endpoint,
+            "-f",
+            &attr_squash_arg,
+            "-f",
+            &attr_remove_arg,
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
     let endpoint = format!("projects/{enc}/merge_requests/{number}/merge");
     let squash_arg = format!("squash={squash}");
     let remove_arg = format!("should_remove_source_branch={delete_branch}");
@@ -1035,7 +1078,152 @@ pub async fn merge_mr(
         args.push("-f");
         args.push(&sha_arg);
     }
+    if when_pipeline_succeeds {
+        args.push("-f");
+        args.push("merge_when_pipeline_succeeds=true");
+    }
     run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+// ── Merge requests (auto-merge / merge-when-pipeline-succeeds) ─────────────────
+//
+// GitLab's "auto-merge" (MWPS) arms the merge endpoint to complete server-side
+// once the head pipeline goes green — a GitLab-ONLY control (`mr_auto_merge`),
+// unlike the shared `merge_mr`: GitHub has no in-app PR auto-merge here. The
+// arm reuses the merge endpoint with `merge_when_pipeline_succeeds=true`; the
+// read exposes the MR's armed flag + detailed merge status + head-pipeline
+// summary so the UI can decide whether to offer the affordance; cancel disarms.
+// All three validated live against gitlab.com (Free): arm while the pipeline is
+// running → 200 with the flag set and `detailed_merge_status: ci_still_running`;
+// a stale `sha` → 409 (propagates like merge); arming a finished pipeline → 405
+// (a race the UI gates against). Cancel's gotcha lives on `cancel_auto_merge_mr`.
+
+/// The head pipeline of an MR, as the slim MR GET embeds it (present only when
+/// the MR has a pipeline). Both scalars are null-tolerant — GitLab nulls fields.
+#[derive(Deserialize)]
+struct GlabHeadPipelineBrief {
+    #[serde(default, deserialize_with = "null_to_default")]
+    status: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    web_url: String,
+}
+
+/// The MR fields the auto-merge read needs, from the slim `merge_requests/{iid}`
+/// GET (not `/changes`). GitLab returns `null` for these scalars in some states,
+/// so each is null-tolerant.
+#[derive(Deserialize)]
+struct GlabMrMergeState {
+    #[serde(default, deserialize_with = "null_to_default")]
+    merge_when_pipeline_succeeds: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    detailed_merge_status: String,
+    #[serde(default)]
+    head_pipeline: Option<GlabHeadPipelineBrief>,
+}
+
+/// The auto-merge state the MR panel gates its affordance on: whether auto-merge
+/// is armed, GitLab's detailed merge status, and the head pipeline's status +
+/// web URL (empty strings when the MR has no pipeline).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabMrMergeState {
+    /// MR.merge_when_pipeline_succeeds — whether auto-merge is armed.
+    pub auto_merge_enabled: bool,
+    /// MR.detailed_merge_status (e.g. "mergeable", "ci_still_running", "checking").
+    pub detailed_merge_status: String,
+    /// MR.head_pipeline.status ("running", "pending", "success", …); "" when the MR has no pipeline.
+    pub pipeline_status: String,
+    /// MR.head_pipeline.web_url; "" when no pipeline.
+    pub pipeline_url: String,
+}
+
+/// Read the MR's auto-merge state (armed flag, detailed merge status, head
+/// pipeline summary) from the slim MR GET. `head_pipeline` is null when the MR
+/// has no pipeline → the pipeline fields map to empty strings.
+pub async fn mr_merge_state(repo_path: &str, number: u64) -> AppResult<GitLabMrMergeState> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/merge_requests/{number}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let mr: GlabMrMergeState = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab merge state: {e}")))?;
+    let (pipeline_status, pipeline_url) = mr
+        .head_pipeline
+        .map(|p| (p.status, p.web_url))
+        .unwrap_or_default();
+    Ok(GitLabMrMergeState {
+        auto_merge_enabled: mr.merge_when_pipeline_succeeds,
+        detailed_merge_status: mr.detailed_merge_status,
+        pipeline_status,
+        pipeline_url,
+    })
+}
+
+/// Arm auto-merge (merge-when-pipeline-succeeds) on a merge request — the merge
+/// endpoint with the MWPS flag set. Same strategy/`sha`/delete-branch semantics
+/// as `merge_mr`; a stale `sha` → 409 and a finished pipeline → 405, both
+/// propagating via `run_glab` (the UI gates the affordance on a live pipeline).
+pub async fn auto_merge_mr(
+    repo_path: &str,
+    number: u64,
+    strategy: &str,
+    delete_branch: bool,
+    sha: Option<&str>,
+) -> AppResult<()> {
+    merge_mr_inner(repo_path, number, strategy, delete_branch, sha, true).await
+}
+
+/// The GitLab service-error envelope glab can return in a body WITH a zero exit
+/// (`{"message":"…","status":"error","http_status":406}`) — the shape that makes
+/// a cancel look successful. Leniently parsed: both fields optional.
+#[derive(Deserialize)]
+struct GlabServiceError {
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+/// Detect GitLab's exit-0 service-error body. Returns the error message when the
+/// body carries `status: "error"` (falling back to a generic message when the
+/// `message` field is absent), else `None`. Any body without that marker — the
+/// success shape, which is unspecified and must NOT be required to be MR-like —
+/// is treated as success.
+fn service_error_message(body: &str) -> Option<String> {
+    let parsed: GlabServiceError = serde_json::from_str(body).ok()?;
+    if parsed.status.as_deref() == Some("error") {
+        Some(
+            parsed
+                .message
+                .unwrap_or_else(|| "GitLab rejected the request".into()),
+        )
+    } else {
+        None
+    }
+}
+
+/// Cancel a merge request's armed auto-merge (disarm MWPS). CRITICAL: when there
+/// is nothing to cancel, glab exits 0 and the failure lives ONLY in the response
+/// body (`{"message":"Can't cancel the automatic merge","status":"error",…}`), so
+/// a zero-exit body must be inspected for that error marker; a non-zero exit
+/// already propagates via `run_glab`.
+pub async fn cancel_auto_merge_mr(repo_path: &str, number: u64) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint =
+        format!("projects/{enc}/merge_requests/{number}/cancel_merge_when_pipeline_succeeds");
+    let out = run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    if let Some(msg) = service_error_message(&out.stdout_lossy()) {
+        return Err(AppError::Glab(msg));
+    }
     Ok(())
 }
 
@@ -4628,6 +4816,81 @@ mod tests {
         assert_eq!(map_mr_state("closed"), "CLOSED");
         assert_eq!(map_mr_state("locked"), "CLOSED");
         assert_eq!(map_mr_state("merged"), "MERGED");
+    }
+
+    // The auto-merge read's mapping lives inline in the async `mr_merge_state`,
+    // which can't run without a live glab; these mirror it on the internal
+    // deserialize struct so the field mapping (incl. the null → "" fallback) is
+    // covered by a pure test.
+    fn to_public_merge_state(mr: GlabMrMergeState) -> GitLabMrMergeState {
+        let (pipeline_status, pipeline_url) = mr
+            .head_pipeline
+            .map(|p| (p.status, p.web_url))
+            .unwrap_or_default();
+        GitLabMrMergeState {
+            auto_merge_enabled: mr.merge_when_pipeline_succeeds,
+            detailed_merge_status: mr.detailed_merge_status,
+            pipeline_status,
+            pipeline_url,
+        }
+    }
+
+    #[test]
+    fn maps_mr_merge_state_with_head_pipeline() {
+        // The live shape while armed with a running pipeline.
+        let json = r#"{
+            "iid": 6,
+            "merge_when_pipeline_succeeds": true,
+            "detailed_merge_status": "ci_still_running",
+            "head_pipeline": {
+                "status": "running",
+                "web_url": "https://gitlab.com/g/r/-/pipelines/42"
+            }
+        }"#;
+        let s = to_public_merge_state(serde_json::from_str(json).unwrap());
+        assert!(s.auto_merge_enabled);
+        assert_eq!(s.detailed_merge_status, "ci_still_running");
+        assert_eq!(s.pipeline_status, "running");
+        assert_eq!(s.pipeline_url, "https://gitlab.com/g/r/-/pipelines/42");
+    }
+
+    #[test]
+    fn mr_merge_state_tolerates_nulls_and_missing_pipeline() {
+        // GitLab nulls the scalars and sends a null head_pipeline for an MR with
+        // no pipeline — all four fields fall back to false / "".
+        let json = r#"{
+            "iid": 6,
+            "merge_when_pipeline_succeeds": null,
+            "detailed_merge_status": null,
+            "head_pipeline": null
+        }"#;
+        let s = to_public_merge_state(serde_json::from_str(json).unwrap());
+        assert!(!s.auto_merge_enabled);
+        assert_eq!(s.detailed_merge_status, "");
+        assert_eq!(s.pipeline_status, "");
+        assert_eq!(s.pipeline_url, "");
+    }
+
+    #[test]
+    fn service_error_message_detects_cancel_error_body_only() {
+        // The exact live exit-0 body when nothing is armed to cancel.
+        let err =
+            r#"{"message":"Can't cancel the automatic merge","status":"error","http_status":406}"#;
+        assert_eq!(
+            service_error_message(err).as_deref(),
+            Some("Can't cancel the automatic merge")
+        );
+        // A plain success-ish body and empty input are NOT errors.
+        assert_eq!(service_error_message(r#"{"iid": 6}"#), None);
+        assert_eq!(service_error_message(""), None);
+    }
+
+    #[tokio::test]
+    async fn auto_merge_rejects_invalid_strategy() {
+        // The arm path shares merge_mr's strategy validation — "rebase" is not a
+        // per-MR option and must fail before any remote call.
+        let r = auto_merge_mr("C:/nonexistent", 1, "rebase", false, None).await;
+        assert!(matches!(r, Err(AppError::InvalidArgument(_))));
     }
 
     #[test]

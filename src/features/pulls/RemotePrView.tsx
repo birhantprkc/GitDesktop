@@ -4,6 +4,7 @@ import {
   CaretDownIcon,
   CheckCircleIcon,
   CircleIcon,
+  ClockCountdownIcon,
   DotsThreeIcon,
   GitBranchIcon,
   GitMergeIcon,
@@ -24,6 +25,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Markdown } from "@/components/ui/markdown";
@@ -58,6 +60,7 @@ import type {
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
   forgeFeatureReady,
+  PIPELINE_IN_FLIGHT,
   prDiffOptions,
   useApprovePr,
   useCheckoutPr,
@@ -67,6 +70,9 @@ import {
   useEditPr,
   useEditPrComment,
   useForgeStatus,
+  useGlArmAutoMerge,
+  useGlCancelAutoMerge,
+  useGlMrMergeState,
   useMergePr,
   useMinimizeComment,
   usePrApprovals,
@@ -168,6 +174,9 @@ export function RemotePrView({
   // `canWrite || …` gate like comment/close — GitHub keeps it while forge-status is
   // pending/failed; a ready GitLab repo enables it too.
   const canMerge = canWrite || forgeFeatureReady(forge.data, "mrMerge");
+  // Auto-merge (merge-when-pipeline-succeeds) is GitLab-only like the approve toggle
+  // (GitHub has no in-app PR auto-merge), so the flag alone gates — never `canWrite || …`.
+  const canAutoMerge = forgeFeatureReady(forge.data, "mrAutoMerge");
   // Labels are a shared control (both providers) — same `canWrite || …` gate.
   const canEditLabels = canWrite || forgeFeatureReady(forge.data, "mrLabels");
   // MR assignees are GitLab-only like the approve toggle (GitHub PRs have no
@@ -195,6 +204,15 @@ export function RemotePrView({
   const approvePr = useApprovePr(repoPath);
   const unapprovePr = useUnapprovePr(repoPath);
   const requestChangesPr = useRequestChangesPr(repoPath);
+  // Auto-merge state (GitLab-only): read only for a ready GitLab repo with an open
+  // MR (null disables the read for GitHub / closed MRs). It polls server-side so the
+  // view notices the pipeline completing and the auto-merge firing.
+  const mergeState = useGlMrMergeState(
+    repoPath,
+    canAutoMerge && details.data?.state === "OPEN" ? number : null,
+  );
+  const armAutoMerge = useGlArmAutoMerge(repoPath);
+  const cancelAutoMerge = useGlCancelAutoMerge(repoPath);
   const editComment = useEditPrComment(repoPath);
   const deleteComment = useDeletePrComment(repoPath);
   const minimizeComment = useMinimizeComment(repoPath);
@@ -236,6 +254,9 @@ export function RemotePrView({
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeStrategy, setMergeStrategy] = useState<MergeStrategy>("merge");
   const [deleteBranch, setDeleteBranch] = useState(false);
+  // Whether the open merge dialog is arming auto-merge (vs merging now) — set by
+  // the dropdown item that opened it, read by confirmMerge + the dialog copy.
+  const [mergeAuto, setMergeAuto] = useState(false);
   const edit = useEditTitleBody({
     onSave: async ({ title, body }) => {
       await editPr.mutateAsync({ number, title, body });
@@ -351,14 +372,34 @@ export function RemotePrView({
   }
 
   function confirmMerge() {
+    // GitLab stale-view guard: the head sha the user is looking at (the same oid
+    // the AI-review path uses). GitLab 409s if the head moved; GitHub ignores it.
+    const sha = pr?.commits.at(-1)?.oid;
+    if (mergeAuto) {
+      // Arm merge-when-pipeline-succeeds instead of merging now (GitLab-only).
+      armAutoMerge.mutate(
+        { number, strategy: mergeStrategy, deleteBranch, sha },
+        {
+          onSuccess: () => {
+            setMergeOpen(false);
+            toast.success(
+              "Auto-merge enabled — merges when the pipeline passes",
+            );
+          },
+          onError: (e) => {
+            onError(e);
+            setMergeOpen(false);
+          },
+        },
+      );
+      return;
+    }
     mergePr.mutate(
       {
         number,
         strategy: mergeStrategy,
         deleteBranch,
-        // GitLab stale-view guard: the head sha the user is looking at (the same oid
-        // the AI-review path uses). GitLab 409s if the head moved; GitHub ignores it.
-        sha: pr?.commits.at(-1)?.oid,
+        sha,
       },
       {
         onSuccess: () => {
@@ -397,6 +438,14 @@ export function RemotePrView({
   // we can't guard — so for GitLab we disable Merge rather than merge unguarded on an
   // irreversible op; reloading refetches the head. (GitHub has no guard, so it's exempt.)
   const mergeGuardMissing = provider === "gitlab" && pr?.commits.length === 0;
+
+  // Auto-merge derived state (GitLab-only). The arm affordance shows only while the
+  // head pipeline is in flight; the footer indicator shows once armed. Both classify
+  // the pipeline status against the same shared in-flight set as the poll.
+  const pipelineInFlight = (PIPELINE_IN_FLIGHT as readonly string[]).includes(
+    mergeState.data?.pipelineStatus ?? "",
+  );
+  const autoMergeArmed = mergeState.data?.autoMergeEnabled ?? false;
 
   // Approval display (GitLab-only): a quiet count shown only when there's something
   // to report — someone has approved, or a Premium project requires N approvals.
@@ -443,6 +492,8 @@ export function RemotePrView({
     approvePr.isPending ||
     unapprovePr.isPending ||
     requestChangesPr.isPending ||
+    armAutoMerge.isPending ||
+    cancelAutoMerge.isPending ||
     readyPr.isPending;
 
   function saveCommentEdit(commentId: string, body: string) {
@@ -1007,6 +1058,36 @@ export function RemotePrView({
               Ready for review
             </Button>
           )}
+          {/* Auto-merge armed indicator + cancel (GitLab-only) — sits on the left,
+              opposite Close/Merge. Not color-alone: icon + words. */}
+          {canAutoMerge && autoMergeArmed && (
+            <div className="flex items-center gap-2">
+              <span
+                className="flex items-center gap-1 text-xs text-info"
+                title={
+                  mergeState.data?.pipelineStatus
+                    ? `Merges when the pipeline passes — pipeline: ${mergeState.data.pipelineStatus}`
+                    : "Merges when the pipeline passes"
+                }
+              >
+                <ClockCountdownIcon className="size-3.5 shrink-0" />
+                Auto-merge enabled
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  cancelAutoMerge.mutate(number, {
+                    onSuccess: () => toast.success("Auto-merge canceled"),
+                    onError,
+                  })
+                }
+              >
+                Cancel auto-merge
+              </Button>
+            </div>
+          )}
           <span className="flex-1" />
           {canChangeState && (
             <Button
@@ -1062,6 +1143,7 @@ export function RemotePrView({
                       onClick={() => {
                         setMergeStrategy(s);
                         setDeleteBranch(false);
+                        setMergeAuto(false);
                         setMergeOpen(true);
                       }}
                     >
@@ -1070,6 +1152,28 @@ export function RemotePrView({
                     </DropdownMenuItem>
                   );
                 })}
+                {/* GitLab auto-merge: while the head pipeline is in flight (and not
+                    already armed), offer merge-when-pipeline-succeeds variants that
+                    arm via the same confirm dialog. */}
+                {canAutoMerge && pipelineInFlight && !autoMergeArmed && (
+                  <>
+                    <DropdownMenuSeparator />
+                    {(["merge", "squash"] as const).map((s) => (
+                      <DropdownMenuItem
+                        key={`auto-${s}`}
+                        title="Merges when the running pipeline succeeds"
+                        onClick={() => {
+                          setMergeStrategy(s);
+                          setDeleteBranch(false);
+                          setMergeAuto(true);
+                          setMergeOpen(true);
+                        }}
+                      >
+                        Auto-merge: {MERGE_LABEL[s]}
+                      </DropdownMenuItem>
+                    ))}
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -1107,8 +1211,9 @@ export function RemotePrView({
         strategyLabel={MERGE_LABEL[mergeStrategy]}
         deleteBranch={deleteBranch}
         onDeleteBranchChange={setDeleteBranch}
-        pending={mergePr.isPending}
+        pending={mergeAuto ? armAutoMerge.isPending : mergePr.isPending}
         onConfirm={confirmMerge}
+        auto={mergeAuto}
       />
 
       <EditTitleBodyDialog

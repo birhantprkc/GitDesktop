@@ -106,6 +106,7 @@ export function MergePrDialog({
   onDeleteBranchChange,
   pending,
   onConfirm,
+  auto = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -121,6 +122,9 @@ export function MergePrDialog({
   onDeleteBranchChange: (v: boolean) => void;
   pending: boolean;
   onConfirm: () => void;
+  /** Arms merge-when-pipeline-succeeds instead of merging now (GitLab-only) —
+   *  reframes the copy + confirm button; the delete-branch checkbox rides the arm. */
+  auto?: boolean;
 }) {
   return (
     <Dialog
@@ -132,13 +136,25 @@ export function MergePrDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            Merge {prNoun} #{number}?
+            {auto ? "Auto-merge" : "Merge"} {prNoun} #{number}?
           </DialogTitle>
           <DialogDescription>
-            {strategyLabel} — merges{" "}
-            <span className="font-mono">{headRefName}</span> into{" "}
-            <span className="font-mono">{baseRefName}</span> on {host}. This
-            cannot be easily undone.
+            {auto ? (
+              <>
+                {strategyLabel} when the pipeline passes — merges{" "}
+                <span className="font-mono">{headRefName}</span> into{" "}
+                <span className="font-mono">{baseRefName}</span> on {host} once
+                the running pipeline succeeds. This cannot be easily undone once
+                it merges.
+              </>
+            ) : (
+              <>
+                {strategyLabel} — merges{" "}
+                <span className="font-mono">{headRefName}</span> into{" "}
+                <span className="font-mono">{baseRefName}</span> on {host}. This
+                cannot be easily undone.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
@@ -156,7 +172,7 @@ export function MergePrDialog({
           </Button>
           <Button disabled={pending} onClick={onConfirm}>
             {pending && <Spinner data-icon="inline-start" />}
-            {strategyLabel}
+            {auto ? "Enable auto-merge" : strategyLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

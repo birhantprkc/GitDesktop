@@ -55,7 +55,8 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   (award emoji on descriptions and comments), edit **labels** and
   **assignees** (issues *and* MRs), set an issue's **milestone**,
   **approve / unapprove**, **request changes on**, and **merge** (merge/squash) an
-  MR, **create issues and
+  MR — including **auto-merge** (merge when the pipeline succeeds, cancelable in
+  place) while a pipeline is running, **create issues and
   merge requests** (push-and-open, drafts included, duplicate-MR detection —
   publishing local issues/PRs to
   GitLab works too), **lock / unlock** an issue's conversation, **move** an issue

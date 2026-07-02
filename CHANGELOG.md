@@ -12,6 +12,11 @@ commit list.
 
 ### Added
 
+- **GitLab auto-merge.** Arm merge-when-pipeline-succeeds from the merge request
+  view while a pipeline is running — the merge menu offers auto-merge (merge or
+  squash) variants, and once armed the footer shows an "Auto-merge enabled"
+  indicator you can cancel in place. GitLab merges it for you when the pipeline
+  passes.
 - **Copy the branch name or HEAD SHA.** The repository menu (and command palette)
   gained two clipboard actions alongside "copy the repo path": **Copy branch name**
   copies the current branch, and **Copy HEAD SHA** copies the full commit SHA of

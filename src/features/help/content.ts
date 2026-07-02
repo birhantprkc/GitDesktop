@@ -430,7 +430,10 @@ you approve), **react** with emoji on the description and comments,
 edit its **labels** and **assignees**, and **merge**
 it — merge or squash, optionally deleting
 the source branch, guarded so it never merges a head you didn't see (GitLab applies the project's
-configured merge method, so there's no separate "rebase" option). **Creating a merge request**
+configured merge method, so there's no separate "rebase" option). While a pipeline is running the
+merge menu also offers **auto-merge** (merge when the pipeline succeeds) — GitLab merges it for
+you once the pipeline passes, and an **Auto-merge enabled** indicator in the footer lets you cancel
+it in place. **Creating a merge request**
 works from the app too ({{kbd:create-pr}}, the New menu, or the Compare tab) — it pushes your
 branch and opens the MR, with the same draft checkbox and AI description as GitHub, and the
 Compare tab points you at an **existing open MR** from your branch instead of creating a

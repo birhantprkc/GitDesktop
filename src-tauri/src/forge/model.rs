@@ -158,6 +158,10 @@ pub struct Implemented {
     /// Merging a merge/pull request (strategy + delete-source-branch). A shared
     /// control — GitHub via `gh pr merge`, GitLab via `glab` — so it's true for both.
     pub mr_merge: bool,
+    /// Arming/cancelling GitLab auto-merge (merge-when-pipeline-succeeds). GitLab-only:
+    /// this app has no in-app GitHub PR auto-merge control, so like `mr_approve` the
+    /// flag stays `false` for GitHub (see `all`).
+    pub mr_auto_merge: bool,
     /// Editing labels on an issue — a shared control (GitHub by node id, GitLab by
     /// name), so true for both.
     pub issue_labels: bool,
@@ -253,6 +257,8 @@ impl Implemented {
             mr_state: true,
             mr_approve: false,
             mr_merge: true,
+            // Like `mr_approve`: no in-app GitHub PR auto-merge control here.
+            mr_auto_merge: false,
             issue_labels: true,
             mr_labels: true,
             issue_assignees: true,
@@ -299,6 +305,7 @@ impl Implemented {
             mr_state: false,
             mr_approve: false,
             mr_merge: false,
+            mr_auto_merge: false,
             issue_labels: false,
             mr_labels: false,
             issue_assignees: false,
@@ -361,6 +368,7 @@ impl Implemented {
                 mr_state: true,
                 mr_approve: true,
                 mr_merge: true,
+                mr_auto_merge: true,
                 issue_labels: true,
                 mr_labels: true,
                 issue_assignees: true,
@@ -507,6 +515,9 @@ mod tests {
         // The lone exception: the bodyless approve/unapprove toggle is GitLab-only
         // (GitHub approves via the review flow), so GitHub leaves `mr_approve` false.
         assert!(!i.mr_approve);
+        // Auto-merge (MWPS) is a GitLab-only control too — no in-app GitHub PR
+        // auto-merge here, so GitHub stays false.
+        assert!(!i.mr_auto_merge);
         // Labels (issue + MR) and issue assignees are shared controls — built for both.
         assert!(i.issue_labels && i.mr_labels && i.issue_assignees);
         assert!(i.issue_create && i.mr_create);
@@ -540,6 +551,8 @@ mod tests {
         // plus the GitLab-only MR approve/unapprove toggle and MR merge.
         assert!(imp.issue_comment && imp.issue_state);
         assert!(imp.mr_comment && imp.mr_state && imp.mr_approve && imp.mr_merge);
+        // …plus the GitLab-only auto-merge (MWPS) arm/cancel control.
+        assert!(imp.mr_auto_merge);
         // Labels (issue + MR) and issue assignees now wired for GitLab too.
         assert!(imp.issue_labels && imp.mr_labels && imp.issue_assignees);
         // …and creating issues + merge requests from the app.
@@ -564,9 +577,11 @@ mod tests {
         // MR merge is a shared control (both providers); approve/unapprove is the one
         // GitLab-only write — GitHub approves via the review flow, not this toggle.
         assert!(gh.mr_merge && !gh.mr_approve);
+        // Auto-merge is GitLab-only (no in-app GitHub PR auto-merge).
+        assert!(!gh.mr_auto_merge);
         let bb = Implemented::for_provider(Provider::Bitbucket);
         assert!(!bb.issue_comment && !bb.issue_state && !bb.mr_comment && !bb.mr_state);
-        assert!(!bb.mr_approve && !bb.mr_merge);
+        assert!(!bb.mr_approve && !bb.mr_merge && !bb.mr_auto_merge);
         assert!(!bb.issue_labels && !bb.mr_labels && !bb.issue_assignees);
         assert!(!bb.issue_create && !bb.mr_create);
         assert!(!bb.ci_rerun && !bb.ci_cancel && !bb.ci_dispatch);

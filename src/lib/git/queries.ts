@@ -1504,6 +1504,7 @@ const NO_FORGE_STATUS: ForgeStatus = {
     mrState: false,
     mrApprove: false,
     mrMerge: false,
+    mrAutoMerge: false,
     issueLabels: false,
     mrLabels: false,
     issueAssignees: false,
@@ -2440,6 +2441,72 @@ export function useMergePr(repo: string) {
         args.deleteBranch,
         args.sha,
       ),
+  );
+}
+
+/** GitLab pipeline statuses that count as "in flight" — the auto-merge affordance
+ *  is only offered while a pipeline hasn't settled, and the merge-state poll runs
+ *  fast while one is running. Both the view and this query classify against it. */
+export const PIPELINE_IN_FLIGHT = [
+  "created",
+  "waiting_for_resource",
+  "preparing",
+  "pending",
+  "running",
+] as const;
+
+/** A GitLab MR's merge/auto-merge state — drives the auto-merge dropdown items
+ *  and the "auto-merge enabled" footer indicator. Pass `null` when auto-merge
+ *  isn't shown (GitHub, or a closed MR) so the read doesn't fire.
+ *
+ *  Polls: the merge fires SERVER-side once the pipeline passes, so the view has
+ *  to notice both the pipeline completing (which un-gates / re-gates the arm
+ *  affordance) and the auto-merge itself — neither emits a client event. Poll
+ *  fast while armed or a pipeline is in flight, slowly otherwise. */
+export function useGlMrMergeState(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr", number ?? 0, "gl-merge-state"] as const,
+    queryFn: () => api.forgeGlMrMergeState(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 5_000,
+    retry: false,
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (!d) return false;
+      return d.autoMergeEnabled ||
+        (PIPELINE_IN_FLIGHT as readonly string[]).includes(d.pipelineStatus)
+        ? 8_000
+        : 30_000;
+    },
+  });
+}
+
+/** Arm auto-merge (merge-when-pipeline-succeeds) on a GitLab MR. Default repo-wide
+ *  invalidation is deliberate: an arm can race into an immediate merge when the
+ *  pipeline just passed, so the whole MR view must refresh. */
+export function useGlArmAutoMerge(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      number: number;
+      strategy: api.MergeStrategy;
+      deleteBranch: boolean;
+      /** Stale-view guard (the MR head sha) — GitLab 409s if the head moved. */
+      sha?: string;
+    }) =>
+      api.forgeGlMrAutoMerge(
+        repo,
+        args.number,
+        args.strategy,
+        args.deleteBranch,
+        args.sha,
+      ),
+  );
+}
+
+export function useGlCancelAutoMerge(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.forgeGlMrCancelAutoMerge(repo, number),
   );
 }
 
