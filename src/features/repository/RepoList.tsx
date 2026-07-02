@@ -73,24 +73,28 @@ export function RepoList({
   const ownerByPath = new Map(
     (owners.data ?? []).map((o) => [o.path, o.owner]),
   );
+  // The origin host per repo — names the provider in the context menu.
+  const hostByPath = new Map((owners.data ?? []).map((o) => [o.path, o.host]));
   // The owner each repo groups under. Prefer the value stored on the record
   // (synchronous → no reflow on open); fall back to the async query result for
   // a repo not yet backfilled. `OTHER_GROUP` only when neither is known.
   const ownerOf = (r: RecentRepo) =>
     r.owner || ownerByPath.get(r.path) || undefined;
 
-  // Backfill resolved owners onto the recent records so the NEXT open groups
-  // synchronously. Fires once whenever a record's stored owner is stale; the
-  // helper no-ops when nothing changed, so its settings refetch doesn't loop.
+  // Backfill resolved owners + hosts onto the recent records so the NEXT open
+  // groups (and labels its context menu) synchronously. Fires once whenever a
+  // record's stored value is stale; the helper no-ops when nothing changed, so
+  // its settings refetch doesn't loop.
   // biome-ignore lint/correctness/useExhaustiveDependencies: mutate() is stable; rerun only on resolved owners / records
   useEffect(() => {
     const resolved = owners.data;
     if (!resolved?.length) return;
-    const stale = resolved.some(
-      (o) =>
-        (o.owner || undefined) !==
-        recents.find((r) => r.path === o.path)?.owner,
-    );
+    const stale = resolved.some((o) => {
+      const r = recents.find((rec) => rec.path === o.path);
+      return (
+        (o.owner || undefined) !== r?.owner || (o.host || undefined) !== r?.host
+      );
+    });
     if (stale) persistOwners.mutate(resolved);
   }, [owners.data, recents]);
 
@@ -243,6 +247,9 @@ export function RepoList({
               <RepoMenuItems
                 repo={menuRepo}
                 owner={ownerOf(menuRepo) ?? null}
+                // Prefer the persisted host (right from the first frame); the
+                // live query covers repos not yet backfilled.
+                host={menuRepo.host ?? hostByPath.get(menuRepo.path) ?? null}
                 editor={editor}
                 editorName={editorName}
                 terminal={settings.data?.terminal}
@@ -337,6 +344,7 @@ function RepoRow({
 function RepoMenuItems({
   repo,
   owner,
+  host,
   editor,
   editorName,
   terminal,
@@ -346,6 +354,8 @@ function RepoMenuItems({
 }: {
   repo: RecentRepo;
   owner: string | null;
+  /** The origin remote's host — names the provider on the view item. */
+  host: string | null;
   editor: string;
   editorName: string;
   terminal?: string;
@@ -377,7 +387,9 @@ function RepoMenuItems({
               .catch(toastError)
           }
         >
-          View on GitHub
+          {/* Name the repo's actual host; unrecognized hosts route through gh
+              (Enterprise etc.), so GitHub is the honest default label. */}
+          View on {host === "gitlab.com" ? "GitLab" : "GitHub"}
         </ContextMenuItem>
       )}
       <ContextMenuItem

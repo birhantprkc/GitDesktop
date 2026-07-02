@@ -186,7 +186,9 @@ export const ACTIONS = [
   },
   {
     id: "view-on-github",
-    label: "View on GitHub",
+    // Registry labels are static (no provider context here) — the action opens
+    // the repo on whichever host it lives on.
+    label: "View on GitHub/GitLab",
     category: "Repository",
     defaultBinding: "mod+shift+g",
   },

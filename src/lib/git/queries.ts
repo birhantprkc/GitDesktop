@@ -718,11 +718,14 @@ export function usePublishRepo(repo: string) {
 }
 
 /** Which providers this machine can publish to — drives the publish buttons for
- *  a repo with no hosted remote yet. */
+ *  a repo with no hosted remote yet. Honors the cold-start test mode like
+ *  `useForgeStatus` (the probe hits the real CLIs otherwise). */
 export function usePublishTargets(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "publish-targets"] as const,
-    queryFn: () => api.forgePublishTargets(repo),
+    queryFn: COLD_START_NO_GH
+      ? () => Promise.resolve({ github: false, gitlab: false })
+      : () => api.forgePublishTargets(repo),
     enabled,
     staleTime: 60_000,
     retry: false,

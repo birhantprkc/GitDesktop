@@ -1011,6 +1011,7 @@ pub async fn forge_publish_targets(repo_path: String) -> AppResult<PublishTarget
 /// wires `origin`, and pushes with the one-shot credential helper. GitLab has no
 /// homepage field (the dialog hides it) and drops it here.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // mirrors gh_publish_repo's field set + provider
 pub async fn forge_publish_repo(
     state: tauri::State<'_, crate::state::AppState>,
     provider: Provider,

@@ -296,9 +296,8 @@ impl Implemented {
     pub const fn for_provider(provider: Provider) -> Self {
         match provider {
             Provider::GitHub => Self::all(),
-            // GitLab read ops arrive incrementally — merge requests, issues, CI
-            // pipelines, and releases (read) are wired up; insights still
-            // degrades to "coming soon" until its impl lands. WRITES land
+            // GitLab reads are fully wired — merge requests, issues, CI
+            // pipelines, releases, and insights. WRITES land
             // per-action: issue + MR comment and close/reopen, the GitLab-only MR
             // approve/unapprove toggle, request-changes, and MR assignees, MR
             // merge, issue + MR labels, issue assignees, issue/MR create, issue +
@@ -309,7 +308,10 @@ impl Implemented {
                 issues: true,
                 ci: true,
                 releases: true,
-                insights: false,
+                // The board's core charts are local git; the CI card rides the
+                // forge pipeline read. The GitHub-only cards (community /
+                // traffic / dependencies) hide per provider in the component.
+                insights: true,
                 // View/star (fork is a web link-out; admin settings and
                 // branch-rule import stay GitHub-only via provider guards).
                 repo_actions: true,
@@ -487,10 +489,9 @@ mod tests {
         assert!(cap.issues && imp.issues);
         assert!(cap.ci && imp.ci);
         assert!(imp.releases);
-        // Insights is the one panel still degrading to "coming soon"; repo
-        // actions (view/star) + publish are wired.
-        assert!(!imp.insights);
-        assert!(imp.repo_actions && imp.publish);
+        // Every panel is wired now — insights (local charts + CI card), repo
+        // actions (view/star), and publish.
+        assert!(imp.insights && imp.repo_actions && imp.publish);
         // First WRITES: issue + MR comment and close/reopen are wired up for GitLab,
         // plus the GitLab-only MR approve/unapprove toggle and MR merge.
         assert!(imp.issue_comment && imp.issue_state);

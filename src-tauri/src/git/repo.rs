@@ -15,43 +15,59 @@ pub struct RepoOwner {
     /// Owner parsed from the `origin` remote (e.g. "octocat"), or None when
     /// the repo has no origin remote.
     pub owner: Option<String>,
+    /// The origin remote's host (e.g. "github.com", "gitlab.com"), parsed from
+    /// the same URL — lets per-repo UI (the repo list's context menu) name the
+    /// actual provider instead of guessing.
+    pub host: Option<String>,
 }
 
-/// Owner segment of a git remote URL — handles `https://host/owner/repo(.git)`
-/// and scp-style `git@host:owner/repo(.git)`. None if it can't be parsed.
-fn parse_owner(url: &str) -> Option<String> {
+/// Owner segment + host of a git remote URL — handles
+/// `https://host/owner/repo(.git)` and scp-style `git@host:owner/repo(.git)`.
+/// None if it can't be parsed.
+fn parse_owner_host(url: &str) -> (Option<String>, Option<String>) {
     let url = url.trim().trim_end_matches('/');
     let url = url.strip_suffix(".git").unwrap_or(url);
-    // Drop the scheme+host (or scp `user@host:`) to get the `owner/repo` path.
-    let path = if let Some(idx) = url.find("://") {
-        url[idx + 3..].split_once('/').map(|(_, rest)| rest)?
+    // Split into host and the `owner/repo` path (scheme or scp form).
+    let (host, path) = if let Some(idx) = url.find("://") {
+        let rest = &url[idx + 3..];
+        match rest.split_once('/') {
+            Some((h, p)) => (h, p),
+            None => return (None, None),
+        }
     } else if let Some(colon) = url.rfind(':') {
-        &url[colon + 1..]
+        let head = &url[..colon];
+        let host = head.rsplit('@').next().unwrap_or(head);
+        (host, &url[colon + 1..])
     } else {
-        return None;
+        return (None, None);
     };
+    // Strip credentials and a port from the host.
+    let host = host.rsplit('@').next().unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     // owner is the segment immediately before the repo name.
-    (segs.len() >= 2).then(|| segs[segs.len() - 2].to_string())
+    let owner = (segs.len() >= 2).then(|| segs[segs.len() - 2].to_string());
+    let host = (!host.is_empty()).then_some(host);
+    (owner, host)
 }
 
-/// Resolves the owner for each repo path (from its `origin` remote), batched so
-/// the repo list/switcher can group repos by owner in one round-trip.
+/// Resolves the owner + host for each repo path (from its `origin` remote),
+/// batched so the repo list/switcher can group repos by owner in one round-trip.
 #[tauri::command]
 pub async fn git_repo_owners(repo_paths: Vec<String>) -> AppResult<Vec<RepoOwner>> {
     let mut out = Vec::with_capacity(repo_paths.len());
     for path in repo_paths {
-        let owner = match run_git_raw(
+        let (owner, host) = match run_git_raw(
             Some(&path),
             &["remote", "get-url", "origin"],
             DEFAULT_TIMEOUT,
         )
         .await
         {
-            Ok(res) if res.code == 0 => parse_owner(res.stdout_lossy().trim()),
-            _ => None,
+            Ok(res) if res.code == 0 => parse_owner_host(res.stdout_lossy().trim()),
+            _ => (None, None),
         };
-        out.push(RepoOwner { path, owner });
+        out.push(RepoOwner { path, owner, host });
     }
     Ok(out)
 }
@@ -320,4 +336,32 @@ fn time_year() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     (1970 + secs / 31_557_600).to_string()
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::parse_owner_host;
+
+    #[test]
+    fn parses_owner_and_host_from_common_remote_forms() {
+        assert_eq!(
+            parse_owner_host("https://github.com/octocat/repo.git"),
+            (Some("octocat".into()), Some("github.com".into()))
+        );
+        assert_eq!(
+            parse_owner_host("git@gitlab.com:group/repo.git"),
+            (Some("group".into()), Some("gitlab.com".into()))
+        );
+        // Subgroups: the owner is the segment before the repo name.
+        assert_eq!(
+            parse_owner_host("https://gitlab.com/group/sub/repo"),
+            (Some("sub".into()), Some("gitlab.com".into()))
+        );
+        // Credentials + port strip from the host.
+        assert_eq!(
+            parse_owner_host("https://user@gitlab.acme.com:8443/g/r.git"),
+            (Some("g".into()), Some("gitlab.acme.com".into()))
+        );
+        assert_eq!(parse_owner_host("not-a-url"), (None, None));
+    }
 }

@@ -13,6 +13,9 @@ export interface RecentRepo {
    *  query resolves; backfilled from `gitRepoOwners` and refreshed in the
    *  background. Absent until first resolved; empty remote clears it. */
   owner?: string;
+  /** The origin remote's host (e.g. "gitlab.com"), stored alongside `owner` so
+   *  the context menu names the right provider from the first frame. */
+  host?: string;
 }
 
 /** What to call a repo in the UI: its alias when set, else its name. */
@@ -335,24 +338,27 @@ export async function addRecentRepo(repo: {
 }
 
 /**
- * Stores resolved repo owners onto the matching recent-repo records so the
- * repo list groups synchronously (no async-driven reflow on open). Touches
- * only records whose stored owner actually changed; an empty remote clears it.
+ * Stores resolved repo owners (+ hosts) onto the matching recent-repo records
+ * so the repo list groups synchronously (no async-driven reflow on open) and
+ * the context menu names the right provider from the first frame. Touches only
+ * records whose stored values actually changed; an empty remote clears them.
  * No-op when nothing changed, so it never loops with its own settings refetch.
  */
 export async function persistRepoOwners(
-  owners: { path: string; owner: string | null }[],
+  owners: { path: string; owner: string | null; host: string | null }[],
 ): Promise<void> {
   if (owners.length === 0) return;
   const settings = await loadSettings();
-  const ownerOf = new Map(owners.map((o) => [o.path, o.owner || undefined]));
+  const byPath = new Map(owners.map((o) => [o.path, o]));
   let changed = false;
   const recentRepos = settings.recentRepos.map((r) => {
-    if (!ownerOf.has(r.path)) return r;
-    const owner = ownerOf.get(r.path);
-    if (owner === r.owner) return r;
+    const resolved = byPath.get(r.path);
+    if (!resolved) return r;
+    const owner = resolved.owner || undefined;
+    const host = resolved.host || undefined;
+    if (owner === r.owner && host === r.host) return r;
     changed = true;
-    return { ...r, owner };
+    return { ...r, owner, host };
   });
   if (!changed) return;
   await saveSettings({ ...settings, recentRepos });

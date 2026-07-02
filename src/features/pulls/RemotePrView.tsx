@@ -619,8 +619,11 @@ export function RemotePrView({
           </div>
         )}
         <div className="flex gap-1 pt-1">
+          {/* The AI Review tab needs only the diff (forge-neutral) and a way to
+              post the result as a comment — so it follows canComment, which
+              covers GitLab MRs too (canWrite implies canComment for GitHub). */}
           {(
-            (aiEnabled && canWrite
+            (aiEnabled && canComment
               ? ["conversation", "commits", "files", "review"]
               : ["conversation", "commits", "files"]) as Section[]
           ).map((s) => (
@@ -643,7 +646,7 @@ export function RemotePrView({
         </div>
       </header>
 
-      {aiEnabled && canWrite && section === "review" && (
+      {aiEnabled && canComment && section === "review" && (
         <PrReviewPanel
           prKind="remote"
           prRef={String(number)}

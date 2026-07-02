@@ -9,7 +9,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { openInTerminal } from "@/lib/git/api";
-import { useForgeStatus, usePublishTargets } from "@/lib/git/queries";
+import {
+  useForgeStatus,
+  usePublishTargets,
+  useRemotes,
+} from "@/lib/git/queries";
 import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -45,12 +49,17 @@ export function ForgeNotReady({
   // A repo with no hosted remote has nothing to detect a provider from, so
   // publish targets are probed explicitly (which CLIs are installed + signed
   // in). This is what lets a glab-only machine publish to GitLab even while the
-  // gh ladder below is still asking for the GitHub CLI.
+  // gh ladder below is still asking for the GitHub CLI. Gated on the repo
+  // actually having NO origin: provider is ALSO null for repos whose remote gh
+  // simply can't identify (gh signed out, an unrecognized host) — publishing
+  // those would create an orphan project and then fail adding `origin`.
   const installed = Boolean(forge.data?.installed);
   const authed = Boolean(forge.data?.authenticated);
+  const remotes = useRemotes(repoPath);
+  const noOrigin = remotes.isSuccess && !remotes.data.includes("origin");
   const targets = usePublishTargets(
     repoPath,
-    provider == null && Boolean(forge.data),
+    provider == null && Boolean(forge.data) && noOrigin,
   );
 
   // GitLab: `glab` is wired (status detects install + sign-in), but read
@@ -128,7 +137,7 @@ export function ForgeNotReady({
 
   // GitHub: the install → sign-in → publish ladder — plus a GitLab publish
   // path whenever glab is ready (a no-remote repo can go to either provider).
-  const glabPublish = targets.data?.gitlab === true;
+  const glabPublish = noOrigin && targets.data?.gitlab === true;
 
   return (
     <div className="space-y-2.5 px-3 py-4 text-xs text-muted-foreground">

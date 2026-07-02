@@ -1919,31 +1919,46 @@ pub async fn repo_url(repo_path: &str) -> AppResult<String> {
     Ok(p.web_url)
 }
 
-/// One starrer entry (`GET …/starrers` nests the user).
+/// One of the viewer's starred projects (only the path is needed).
 #[derive(Deserialize)]
-struct GlabStarrer {
-    #[serde(default)]
-    user: Option<GlabMrUser>,
+struct GlabStarredProject {
+    path_with_namespace: String,
 }
 
-/// Whether the signed-in viewer has starred this project — the starrers list
-/// filtered by username (`search` matches names/usernames; we confirm exactly).
+/// Whether the signed-in viewer has starred this project. Reads the VIEWER's
+/// starred list filtered by the project name and matches the full path — the
+/// project-side starrers list is unusable here (`search` also matches display
+/// names and pages at 20, so a common username on a popular repo false-negatives
+/// off page one, which the 304-tolerant star write would then turn into a
+/// permanently dead button).
 pub async fn repo_star_status(repo_path: &str) -> AppResult<bool> {
+    let path = project_path(repo_path).await?;
     let me = current_user(repo_path).await?;
-    let enc = encode_project(&project_path(repo_path).await?);
-    let endpoint = format!(
-        "projects/{enc}/starrers?search={}",
-        encode_query_value(&me.username)
-    );
-    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
-    let starrers: Vec<GlabStarrer> = serde_json::from_str(&out.stdout_lossy())
-        .map_err(|e| AppError::Glab(format!("could not parse GitLab starrers: {e}")))?;
-    Ok(starrers.iter().any(|s| {
-        s.user
-            .as_ref()
-            .map(|u| u.username == me.username)
-            .unwrap_or(false)
-    }))
+    let name = path.rsplit('/').next().unwrap_or(&path);
+    // `search` also matches names/descriptions, so a common path tail can match
+    // far more than one project — walk pages (capped) rather than trust page 1;
+    // a missed star turns the button permanently dead via the 304-tolerant write.
+    for page in 1..=10u32 {
+        let endpoint = format!(
+            "users/{}/starred_projects?search={}&per_page=100&page={page}",
+            me.id,
+            encode_query_value(name)
+        );
+        let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+        let starred: Vec<GlabStarredProject> = serde_json::from_str(&out.stdout_lossy())
+            .map_err(|e| {
+                AppError::Glab(format!("could not parse GitLab starred projects: {e}"))
+            })?;
+        if starred.iter().any(|p| p.path_with_namespace == path) {
+            return Ok(true);
+        }
+        if starred.len() < 100 {
+            return Ok(false);
+        }
+    }
+    // >1000 matching starred projects — beyond the cap, report unstarred rather
+    // than keep walking (the star write is 304-tolerant either way).
+    Ok(false)
 }
 
 /// Star or unstar the project. GitLab answers HTTP 304 when the state already
@@ -2015,6 +2030,56 @@ pub async fn publish_repo(
         return Err(AppError::InvalidArgument("invalid description".into()));
     }
 
+    // Every local precondition is checked BEFORE the mutating create — a guard
+    // that fires after it would strand an orphaned GitLab project whose name
+    // then blocks every retry with "has already been taken".
+    let branch_out = crate::git::runner::run_git(
+        Some(repo_path),
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        crate::git::runner::NETWORK_TIMEOUT,
+    )
+    .await
+    .map_err(|e| {
+        // An unborn branch (fresh `git init`, no commits) makes rev-parse fail
+        // with "ambiguous argument 'HEAD'" — translate just that; any other
+        // failure (not a repo, git missing, …) keeps its real message.
+        match &e {
+            AppError::Git { stderr, .. }
+                if stderr.contains("ambiguous argument")
+                    || stderr.contains("unknown revision") =>
+            {
+                AppError::InvalidArgument(
+                    "make an initial commit before publishing (this repository has none yet)"
+                        .into(),
+                )
+            }
+            _ => e,
+        }
+    })?;
+    let branch = branch_out.stdout_lossy().trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        return Err(AppError::InvalidArgument(
+            "check out a branch before publishing (detached HEAD)".into(),
+        ));
+    }
+    // An origin remote may have appeared since the UI's (cached) no-origin
+    // check — adding one externally then publishing would otherwise strand an
+    // orphaned project when the post-create `remote add` fails.
+    if crate::git::runner::run_git_raw(
+        Some(repo_path),
+        &["remote", "get-url", "origin"],
+        crate::git::runner::DEFAULT_TIMEOUT,
+    )
+    .await
+    .map(|o| o.code == 0)
+    .unwrap_or(false)
+    {
+        return Err(AppError::InvalidArgument(
+            "this repository already has an origin remote — push to it instead".into(),
+        ));
+    }
+    let me = current_user(repo_path).await?;
+
     let visibility = if private { "--private" } else { "--public" };
     let mut args: Vec<&str> = vec!["repo", "create", name, visibility];
     if !description.is_empty() {
@@ -2030,40 +2095,44 @@ pub async fn publish_repo(
     }
     run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
 
+    // The project now exists — from here on, any failure must SAY so, or a
+    // retry (which re-creates) reads as an inexplicable "name already taken".
+    let created_hint = format!(
+        "the project WAS created at {}/{name} on GitLab — add it as a remote and \
+         push manually, or delete it there and retry",
+        me.username
+    );
+
     // `glab repo create` does not wire a remote (validated live) — resolve the
     // created project's URLs and do it ourselves, then push the current branch.
-    let me = current_user(repo_path).await?;
     let enc = encode_project(&format!("{}/{name}", me.username));
-    let out = run_glab(
+    let project: GlabProjectRef = match run_glab(
         Some(repo_path),
         &["api", &format!("projects/{enc}")],
         GLAB_NETWORK_TIMEOUT,
     )
-    .await?;
-    let project: GlabProjectRef = serde_json::from_str(&out.stdout_lossy())
-        .map_err(|e| AppError::Glab(format!("could not parse the created project: {e}")))?;
+    .await
+    .and_then(|out| {
+        serde_json::from_str(&out.stdout_lossy())
+            .map_err(|e| AppError::Glab(format!("could not parse the created project: {e}")))
+    }) {
+        Ok(p) => p,
+        Err(e) => return Err(AppError::Glab(format!("{e} ({created_hint})"))),
+    };
 
-    let branch_out = crate::git::runner::run_git(
-        Some(repo_path),
-        &["rev-parse", "--abbrev-ref", "HEAD"],
-        crate::git::runner::NETWORK_TIMEOUT,
-    )
-    .await?;
-    let branch = branch_out.stdout_lossy().trim().to_string();
-    if branch.is_empty() || branch == "HEAD" {
-        return Err(AppError::InvalidArgument(
-            "check out a branch before publishing (detached HEAD)".into(),
-        ));
-    }
-
-    crate::git::runner::run_git_mutating(
+    if let Err(e) = crate::git::runner::run_git_mutating(
         state,
         repo_path,
         &["remote", "add", "origin", &project.http_url_to_repo],
         crate::git::runner::NETWORK_TIMEOUT,
     )
-    .await?;
+    .await
+    {
+        return Err(AppError::Glab(format!("{e} ({created_hint})")));
+    }
 
+    // A push failure after this point self-recovers: origin exists, so the repo
+    // flips GitLab-ready and the normal Push button takes over.
     let config = clone_credential_config(&project.http_url_to_repo).await?;
     let mut push_args: Vec<&str> = Vec::new();
     for entry in &config {
@@ -2418,10 +2487,13 @@ fn from_glab_pipeline(p: GlabPipeline) -> WorkflowRun {
         workflow_name,
         head_branch: p.git_ref,
         event: p.source,
-        created_at: p.created_at,
-        // GitLab's list payload has no per-run start time (only detail does); the
-        // duration trend that uses it is GitHub-only-gated, so "" is harmless here.
-        started_at: String::new(),
+        // GitLab's LIST payload has no per-run start time (only the detail
+        // does), so created_at stands in for both — the Insights duration trend
+        // (created → updated) then includes queue time, a slight overstatement
+        // that's still an honest trend. Never leave it empty: the chart filters
+        // on startedAt and would silently drop every GitLab pipeline.
+        created_at: p.created_at.clone(),
+        started_at: p.created_at,
         updated_at: p.updated_at,
         url: p.web_url,
         head_sha: p.sha,

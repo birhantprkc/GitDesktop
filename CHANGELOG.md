@@ -26,7 +26,8 @@ commit list.
   clears it), **react with emoji** on the description and comments (GitLab's award
   emoji, the same reaction bar as GitHub), **merge** it (merge or squash, optionally deleting the
   source branch — guarded so it never merges a head you didn't see), and edit its **labels**
-  and **assignees**.
+  and **assignees**. The **AI Review tab** works on GitLab MRs too — run a code review or
+  security audit of the MR diff and post it as a comment.
   You can also **create a merge request** right from the app (the New menu, the command
   palette, or the Compare tab) — it pushes your branch and opens the MR, draft included, and
   the Compare tab now spots an **existing open MR** from your branch and offers **View**
@@ -50,9 +51,10 @@ commit list.
   and "Create issue on GitLab" — and you can **publish a local repository to GitLab**:
   the publish dialog (and the sync bar's Publish button) now offers **GitHub or GitLab**
   when both CLIs are signed in, creates the project, adds it as `origin`, and pushes.
-  Insights is the one GitLab surface still reading
-  **"coming soon"** — that panel degrades
-  gracefully instead of breaking — and lands in a later update. GitHub repositories are
+  **Insights** rounds it out: the local-git charts always worked, and the CI card now
+  charts **GitLab pipeline durations and success rate** (the GitHub-only cards —
+  community, traffic, dependencies — hide, with GitLab's web-only analytics linked
+  instead). GitHub repositories are
   completely unaffected. (Self-managed GitLab hosts and Bitbucket are still on the way.)
 - **A browsable, persistent Agent sidebar.** Several quality-of-life upgrades to the Agent list:
   the **activity log now survives a restart** — reopening the app no longer drops a session's,

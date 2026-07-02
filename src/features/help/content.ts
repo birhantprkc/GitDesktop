@@ -96,10 +96,11 @@ filter box — jump between repos without returning to the welcome screen.
 
 Click the **⋮** menu next to the repo name for repo-wide actions:
 
-- **View on GitHub** ({{kbd:view-on-github}}), open a **terminal** at the repo root
-  ({{kbd:open-in-terminal}}), **show in your file manager** ({{kbd:show-in-explorer}}),
-  or **open in your editor** ({{kbd:open-in-editor}}).
-- On GitHub: **Star** the repository, **create an issue**, or **Fork** it.
+- **View on GitHub / GitLab** ({{kbd:view-on-github}}), open a **terminal** at the repo
+  root ({{kbd:open-in-terminal}}), **show in your file manager**
+  ({{kbd:show-in-explorer}}), or **open in your editor** ({{kbd:open-in-editor}}).
+- On the host: **Star** the repository, **create an issue**, or **Fork** it (on GitLab,
+  forking opens the web fork page).
 - **Insights** (analytics), **manage files**, **submodules**, the **remote URL**,
   **branch rules**, **git hooks**, {{ai}}**automations**, {{/ai}}**repository settings**,
   an **alias**, copy the repo path, and remove the repo from the list.
@@ -416,7 +417,8 @@ local PR to a real GitHub PR or GitLab MR in one click, history preserved.
 {{ai}}
 ## AI review
 
-On any PR, run a streamed **code review** or a focused **security audit** of its changes
+On any PR — GitHub or a GitLab MR — run a streamed **code review** or a focused
+**security audit** of its changes
 using your chosen review model, and optionally post the result as a comment. A general
 review can build on prior reviews as soft context. With a CLI agent (Claude, Copilot, or
 opencode), a **repo-aware** toggle lets the reviewer read the repo's files for deeper
@@ -553,19 +555,21 @@ to jump to that run. You can also get an OS **notification** when a run finishes
     body: `# Insights
 
 The **Insights** tab ({{kbd:tab-insights}}, in the More ▾ menu) is a dashboard of
-repository analytics, mixing local Git history with GitHub data.
+repository analytics, mixing local Git history with hosted data (GitHub or GitLab).
 
 - **Repository statistics** — commits, contributors, branch and tag counts, sizes, and a
   language-makeup bar.
 - **Commit activity** — commits per week, and a **code-frequency** chart of additions and
   deletions over time.
 - **Top contributors** and a **punch card** heatmap of commits by day and hour.
-- **Community health** — stars, forks, watchers, and a health percentage.
-- **Actions usage** — recent run duration and success rate.
-- **Traffic** — 14-day views, clones, and top referrers (needs push access).
-- **Dependencies** — what the repo depends on.
-- Quick links jump to the matching GitHub pages (Pulse, Network, Forks, Dependents,
-  Actions) for anything best viewed there.`,
+- **CI usage** — recent run duration and success rate (GitHub workflow runs, or GitLab
+  pipelines).
+- On GitHub: **community health** (stars, forks, watchers, a health percentage),
+  **traffic** (14-day views, clones, and top referrers — needs push access), and
+  **dependencies**.
+- Quick links jump to the pages best viewed on the web — GitHub's Pulse, Network, Forks,
+  Dependents, and Actions, or GitLab's Activity, CI/CD analytics, and value stream
+  analytics.`,
   },
   {
     id: "agent",

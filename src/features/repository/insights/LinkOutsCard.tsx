@@ -17,6 +17,50 @@ const LINKS: { label: string; suffix: string; publicOnly?: boolean }[] = [
   { label: "Actions performance", suffix: "/actions/metrics/performance" },
 ];
 
+// GitLab's analytics equivalents also only render on the web. Branch-scoped
+// pages (contributor graphs) are omitted — their URLs need a ref and don't
+// redirect reliably.
+const GITLAB_LINKS: { label: string; suffix: string }[] = [
+  { label: "Activity", suffix: "/activity" },
+  { label: "CI/CD analytics", suffix: "/-/pipelines/charts" },
+  {
+    label: "Value stream analytics",
+    suffix: "/-/analytics/value_stream_analytics",
+  },
+];
+
+export function GitLabLinkOutsCard({ repoPath }: { repoPath: string }) {
+  async function open(suffix: string) {
+    try {
+      const url = await forgeRepoUrl(repoPath);
+      await openUrl(`${url}${suffix}`);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">
+        These insights only render on the web:
+      </p>
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        {GITLAB_LINKS.map((l) => (
+          <Button
+            key={l.label}
+            variant="outline"
+            size="sm"
+            className="cursor-pointer justify-start"
+            onClick={() => open(l.suffix)}
+          >
+            <ArrowSquareOutIcon data-icon="inline-start" />
+            {l.label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function LinkOutsCard({
   repoPath,
   isPublic,

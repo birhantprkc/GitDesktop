@@ -35,6 +35,7 @@ import {
 } from "@/lib/git/auto-fetch";
 import {
   useFetchRemote,
+  useForgeStatus,
   usePublishTargets,
   usePull,
   usePush,
@@ -52,6 +53,7 @@ import { PublishDialog } from "./PublishDialog";
 export function SyncControls({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
   const remotes = useRemotes(repoPath);
+  const gh = useForgeStatus(repoPath);
   const settings = useSettings();
   const repoName = useUiStore((s) => s.repoName);
   const fetchRemote = useFetchRemote(repoPath);
@@ -67,11 +69,16 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
 
   // A repo with no `origin` (e.g. created locally in GitDesktop) can't push;
   // offer to create the GitHub/GitLab repo instead. Which providers can take it
-  // is probed explicitly — there's no remote to detect one from.
+  // is probed explicitly — there's no remote to detect one from. The (usually
+  // warm) forge-status cache keeps the button enabled for the common GitHub
+  // case while that probe is still in flight, avoiding a flash of disabled.
   const noOrigin = remotes.isSuccess && !remotes.data.includes("origin");
   const hasOrigin = remotes.isSuccess && remotes.data.includes("origin");
+  const ghCliReady = Boolean(gh.data?.installed && gh.data?.authenticated);
   const targets = usePublishTargets(repoPath, noOrigin);
-  const canPublish = Boolean(targets.data?.github || targets.data?.gitlab);
+  const canPublish = Boolean(
+    ghCliReady || targets.data?.github || targets.data?.gitlab,
+  );
   const bothTargets = Boolean(targets.data?.github && targets.data?.gitlab);
 
   const head = status.data?.branch;
@@ -195,11 +202,15 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
             size="sm"
             disabled={!canPublish}
             onClick={() => {
-              setPublishProvider(targets.data?.gitlab ? "gitlab" : "github");
+              setPublishProvider(
+                targets.data?.gitlab && !targets.data.github
+                  ? "gitlab"
+                  : "github",
+              );
               setPublishOpen(true);
             }}
             title={
-              targets.data?.gitlab
+              targets.data?.gitlab && !targets.data.github
                 ? "Create a GitLab project and push this repository"
                 : canPublish
                   ? "Create a GitHub repository and push this one"

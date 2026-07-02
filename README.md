@@ -61,8 +61,8 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   GitLab works too), **retry / cancel / run pipelines** (with CI/CD variables), and
   **publish / edit / delete releases** with asset uploads, **star** the project
   ("View on GitLab" and a fork link too), and **publish a local repo to GitLab**
-  (create + push, straight from the app) — right from the app. Insights is the
-  one GitLab surface still reading "coming soon"; GitHub is unchanged.
+  (create + push, straight from the app) — right from the app. Insights charts
+  GitLab pipelines alongside the local-git analytics. GitHub is unchanged.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works
   in an isolated worktree, so your own checkout is never touched. Follow it
   **step by step** — every file it reads, edits, and command it runs — and

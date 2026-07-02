@@ -71,6 +71,9 @@ export interface BranchDivergence {
 export interface RepoOwner {
   path: string;
   owner: string | null;
+  /** The origin remote's host (e.g. "github.com", "gitlab.com") — lets per-repo
+   *  UI name the actual provider. */
+  host: string | null;
 }
 
 /** A git submodule and its state vs. the commit the parent records. */
