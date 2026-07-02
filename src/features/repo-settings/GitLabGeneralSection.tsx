@@ -128,6 +128,19 @@ const SQUASH_OPTIONS = [
   { value: "never", label: "Do not allow" },
 ] as const;
 
+/** Base UI's <Select> resolves the selected value → its display label from an
+ *  `items` map; without it a closed select falls back to the raw value (so the
+ *  trigger reads "enabled" / "merge" / "default_off" until the popup is opened). */
+const ACCESS_LEVEL_ITEMS: Record<string, string> = Object.fromEntries(
+  ACCESS_LEVELS.map((o) => [o.value, o.label]),
+);
+const MERGE_METHOD_ITEMS: Record<string, string> = Object.fromEntries(
+  MERGE_METHODS.map((o) => [o.value, o.label]),
+);
+const SQUASH_OPTION_ITEMS: Record<string, string> = Object.fromEntries(
+  SQUASH_OPTIONS.map((o) => [o.value, o.label]),
+);
+
 /** Comma-separated text → GitLab's topic list (topics may contain spaces, so
  *  only commas separate; trimmed, deduped). */
 function parseTopics(text: string): string[] {
@@ -260,6 +273,7 @@ function GitLabGeneralForm({
         <div className="space-y-1.5">
           <Label htmlFor="gl-repo-default-branch">Default branch</Label>
           <Select
+            items={Object.fromEntries(branchOptions.map((b) => [b, b]))}
             value={form.defaultBranch ?? ""}
             onValueChange={(v) => {
               if (v) set("defaultBranch", v);
@@ -284,19 +298,20 @@ function GitLabGeneralForm({
         <p className="text-[11px] text-muted-foreground">
           “Members only” limits a feature to people with access to the project.
         </p>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3">
           {FEATURES.map(({ key, label }) => (
-            <div key={key} className="flex items-center justify-between gap-2">
+            <div key={key} className="space-y-1.5">
               <Label htmlFor={`gl-feature-${key}`} className="text-xs">
                 {label}
               </Label>
               <Select
+                items={ACCESS_LEVEL_ITEMS}
                 value={form[key]}
                 onValueChange={(v) => {
                   if (v) set(key, v);
                 }}
               >
-                <SelectTrigger id={`gl-feature-${key}`} className="w-44">
+                <SelectTrigger id={`gl-feature-${key}`} className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -318,6 +333,7 @@ function GitLabGeneralForm({
           <div className="space-y-1.5">
             <Label htmlFor="gl-merge-method">Merge method</Label>
             <Select
+              items={MERGE_METHOD_ITEMS}
               value={form.mergeMethod}
               onValueChange={(v) => {
                 if (v) set("mergeMethod", v);
@@ -338,6 +354,7 @@ function GitLabGeneralForm({
           <div className="space-y-1.5">
             <Label htmlFor="gl-squash-option">Squash commits</Label>
             <Select
+              items={SQUASH_OPTION_ITEMS}
               value={form.squashOption}
               onValueChange={(v) => {
                 if (v) set("squashOption", v);
