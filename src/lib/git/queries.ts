@@ -972,6 +972,27 @@ export function useSetIssueMilestone(repo: string) {
   );
 }
 
+/** Toggle an issue's GitLab-only confidential flag, with the optimistic
+ *  cache patch every other issue-field mutation uses. */
+export function useSetIssueConfidential(repo: string) {
+  return useOptimisticIssueMutation(
+    repo,
+    (args: { number: number; confidential: boolean }) =>
+      api.forgeGlIssueSetConfidential(repo, args.number, args.confidential),
+    (issue, args) => ({ ...issue, confidential: args.confidential }),
+  );
+}
+
+/** Set ("YYYY-MM-DD") or clear (null) an issue's GitLab-only due date. */
+export function useSetIssueDueDate(repo: string) {
+  return useOptimisticIssueMutation(
+    repo,
+    (args: { number: number; dueDate: string | null }) =>
+      api.forgeGlIssueSetDueDate(repo, args.number, args.dueDate),
+    (issue, args) => ({ ...issue, dueDate: args.dueDate }),
+  );
+}
+
 export function useIssueTypes(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "issue-types"] as const,
@@ -1502,6 +1523,8 @@ const NO_FORGE_STATUS: ForgeStatus = {
     issueLock: false,
     issueTransfer: false,
     issueDelete: false,
+    issueConfidential: false,
+    issueDueDate: false,
     repoSettings: false,
   },
 };

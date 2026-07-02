@@ -1158,6 +1158,35 @@ macro_rules! gl_only {
     };
 }
 
+/// Mark an issue confidential (members-only) or public again. GitLab-unique —
+/// GitHub has no confidential-issue concept, so this is `gl_only` rather than a
+/// neutral `forge_issue_*` dispatch.
+#[tauri::command]
+pub async fn forge_gl_issue_set_confidential(
+    repo_path: String,
+    number: u64,
+    confidential: bool,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::set_issue_confidential(&repo_path, number, confidential)
+    )
+}
+
+/// Set (`Some("YYYY-MM-DD")`) or clear an issue's due date. GitLab-unique —
+/// GitHub issues have no due dates.
+#[tauri::command]
+pub async fn forge_gl_issue_set_due_date(
+    repo_path: String,
+    number: u64,
+    due_date: Option<String>,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::set_issue_due_date(&repo_path, number, due_date.as_deref())
+    )
+}
+
 #[tauri::command]
 pub async fn forge_gl_members(repo_path: String) -> AppResult<Vec<gitlab::GitLabMember>> {
     gl_only!(repo_path, gitlab::list_members(&repo_path))

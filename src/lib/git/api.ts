@@ -980,6 +980,25 @@ export const forgeIssueSetMilestone = (
   milestone: number | null,
 ) => invoke<void>("forge_issue_set_milestone", { repoPath, number, milestone });
 
+/** Mark an issue confidential (members-only) or public — GitLab-only. */
+export const forgeGlIssueSetConfidential = (
+  repoPath: string,
+  number: number,
+  confidential: boolean,
+) =>
+  invoke<void>("forge_gl_issue_set_confidential", {
+    repoPath,
+    number,
+    confidential,
+  });
+
+/** Set ("YYYY-MM-DD") or clear (null) an issue's due date — GitLab-only. */
+export const forgeGlIssueSetDueDate = (
+  repoPath: string,
+  number: number,
+  dueDate: string | null,
+) => invoke<void>("forge_gl_issue_set_due_date", { repoPath, number, dueDate });
+
 /** The repo's enabled issue types (empty when the owner defines none). */
 export const ghIssueTypes = (repoPath: string) =>
   invoke<IssueType[]>("gh_issue_types", { repoPath });

@@ -10,11 +10,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { LabelsPopover } from "@/features/conversations/LabelsPopover";
 import { AuthorAvatar, LabelChip } from "@/features/conversations/Thread";
 import {
   useSetIssueAssignees,
+  useSetIssueConfidential,
+  useSetIssueDueDate,
   useSetIssueMilestone,
   useSetIssueType,
 } from "@/lib/git/queries";
@@ -43,6 +47,8 @@ export function IssueSidebar({
   canEditLabels,
   canEditAssignees,
   canSetMilestone,
+  canSetConfidential,
+  canSetDueDate,
   remoteLabel,
 }: {
   repoPath: string;
@@ -52,15 +58,27 @@ export function IssueSidebar({
   canEditLabels: boolean;
   canEditAssignees: boolean;
   canSetMilestone: boolean;
+  /** GitLab-unique fields — false for GitHub (no confidential/due-date concept). */
+  canSetConfidential: boolean;
+  canSetDueDate: boolean;
   remoteLabel: string;
 }) {
   const setAssignees = useSetIssueAssignees(repoPath);
   const setMilestone = useSetIssueMilestone(repoPath);
   const setType = useSetIssueType(repoPath);
+  const setConfidential = useSetIssueConfidential(repoPath);
+  const setDueDate = useSetIssueDueDate(repoPath);
   const onError = (e: unknown) => toastError(e);
 
   // A provider we can only read from (Bitbucket, or a not-ready repo): static rail.
-  if (!canWrite && !canEditLabels && !canEditAssignees && !canSetMilestone) {
+  if (
+    !canWrite &&
+    !canEditLabels &&
+    !canEditAssignees &&
+    !canSetMilestone &&
+    !canSetConfidential &&
+    !canSetDueDate
+  ) {
     return <ReadOnlyIssueSidebar issue={issue} remoteLabel={remoteLabel} />;
   }
 
@@ -112,6 +130,25 @@ export function IssueSidebar({
               <p className="text-xs">{issue.milestone.title}</p>
             </div>
           )
+        )}
+        {canSetDueDate && (
+          <DueDateRow
+            value={issue.dueDate}
+            open={issue.state === "OPEN"}
+            pending={setDueDate.isPending}
+            onChange={(dueDate) =>
+              setDueDate.mutate({ number, dueDate }, { onError })
+            }
+          />
+        )}
+        {canSetConfidential && (
+          <ConfidentialRow
+            value={issue.confidential}
+            pending={setConfidential.isPending}
+            onChange={(confidential) =>
+              setConfidential.mutate({ number, confidential }, { onError })
+            }
+          />
         )}
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-muted-foreground">Links</p>
@@ -203,6 +240,118 @@ export function IssueSidebar({
   );
 }
 
+/** Whether a due date lies before today, in LOCAL time (`Date`/`toISOString`
+ *  is UTC and would flip "past due" up to a day around midnight — Temporal's
+ *  PlainDate is calendar math with no timezone to get wrong; WebView2 ≥ 149
+ *  ships it). Degrades to false (never crashes the rail) on a malformed API
+ *  date or a pre-Temporal runtime. */
+function isPastDue(dueDate: string): boolean {
+  try {
+    const due = Temporal.PlainDate.from(dueDate);
+    return Temporal.PlainDate.compare(due, Temporal.Now.plainDateISO()) < 0;
+  } catch {
+    return false;
+  }
+}
+
+/** The GitLab-only due-date rail row. Commits on BLUR (or Enter), not
+ *  per-keystroke: on the native input's year segment every digit yields a
+ *  "complete" date ("2" → year 0002), so an onChange commit would fire a
+ *  mutation per keystroke with garbage intermediate dates (caught live).
+ *  While mid-edit the value also passes through "", which must not read as a
+ *  clear — clearing is the explicit Clear button instead. */
+function DueDateRow({
+  value,
+  open,
+  pending,
+  onChange,
+}: {
+  /** "YYYY-MM-DD" or null. */
+  value: string | null;
+  /** Whether the issue is open — only then does a past date read "past due". */
+  open: boolean;
+  pending: boolean;
+  onChange: (date: string | null) => void;
+}) {
+  const pastDue = open && value !== null && isPastDue(value);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <Label
+          htmlFor="issue-due-date"
+          className="text-xs font-medium text-muted-foreground"
+        >
+          Due date
+        </Label>
+        {value !== null && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="text-muted-foreground"
+            disabled={pending}
+            onClick={() => onChange(null)}
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+      {/* Uncontrolled while focused (key remounts on external change) so the
+          segment editing never fights a controlled re-render; blur commits. */}
+      <Input
+        key={value ?? ""}
+        id="issue-due-date"
+        type="date"
+        defaultValue={value ?? ""}
+        className="h-7"
+        onBlur={(e) => {
+          const next = e.target.value;
+          if (next && next !== value) onChange(next);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+      />
+      {pastDue && <p className="text-[11px] text-destructive">Past due</p>}
+    </div>
+  );
+}
+
+/** The GitLab-only confidential rail row — hides the issue from non-members. */
+function ConfidentialRow({
+  value,
+  pending,
+  onChange,
+}: {
+  value: boolean;
+  pending: boolean;
+  onChange: (confidential: boolean) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <Label
+          htmlFor="issue-confidential"
+          className="text-xs font-medium text-muted-foreground"
+        >
+          Confidential
+        </Label>
+        <Switch
+          id="issue-confidential"
+          checked={value}
+          disabled={pending}
+          onCheckedChange={onChange}
+        />
+      </div>
+      {value && (
+        <p className="text-[11px] text-muted-foreground">
+          Only visible to project members.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** The read-only metadata rail for a provider we only read from (Bitbucket, or a
  *  not-ready repo — GitLab gets the editable hybrid rail above): static
  *  assignees / labels / milestone — exactly what the issue payload carries — plus
@@ -219,7 +368,9 @@ function ReadOnlyIssueSidebar({
   const hasMeta =
     issue.assignees.length > 0 ||
     issue.labels.length > 0 ||
-    issue.milestone !== null;
+    issue.milestone !== null ||
+    issue.dueDate !== null ||
+    issue.confidential;
 
   return (
     <aside className="w-64 shrink-0 space-y-4 overflow-y-auto border-l p-4">
@@ -250,6 +401,20 @@ function ReadOnlyIssueSidebar({
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-muted-foreground">Milestone</p>
           <p className="text-xs">{issue.milestone.title}</p>
+        </div>
+      )}
+      {issue.dueDate && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">Due date</p>
+          <p className="text-xs">{issue.dueDate}</p>
+        </div>
+      )}
+      {issue.confidential && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">
+            Confidential
+          </p>
+          <p className="text-xs">Only visible to project members.</p>
         </div>
       )}
       {!hasMeta && (

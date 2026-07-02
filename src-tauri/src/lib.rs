@@ -247,6 +247,8 @@ pub fn run() {
             forge::forge_repo_delete,
             forge::forge_milestones,
             forge::forge_issue_set_milestone,
+            forge::forge_gl_issue_set_confidential,
+            forge::forge_gl_issue_set_due_date,
             forge::forge_issue_reactions,
             forge::forge_pr_reactions,
             forge::forge_add_reaction,

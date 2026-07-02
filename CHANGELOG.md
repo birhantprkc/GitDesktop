@@ -85,6 +85,11 @@ commit list.
   another namespace, delete — Owner-only actions explain themselves when you're
   a Maintainer). Gated by your actual GitLab role, straight from the repository
   menu.
+- **GitLab issue due dates and confidential issues.** Two GitLab-unique fields
+  in the issue view's side rail: a **due date** (type a date and press Enter or
+  pick from the calendar; one click clears it, and an open issue past its date
+  reads **Past due**) and a **confidential** toggle that hides the issue from
+  non-members. GitLab-only — the rail on GitHub repositories is unchanged.
 - **A browsable, persistent Agent sidebar.** Several quality-of-life upgrades to the Agent list:
   the **activity log now survives a restart** — reopening the app no longer drops a session's,
   plan's, or research run's **step-by-step tool log** (the full interleaved transcript of reads,

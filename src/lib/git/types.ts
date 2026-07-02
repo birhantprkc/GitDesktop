@@ -523,6 +523,11 @@ export interface ForgeImplemented {
   issueTransfer: boolean;
   /** Permanently deleting an issue (server-side role checks apply). */
   issueDelete: boolean;
+  /** Marking an issue confidential (members-only). GitLab-unique — false for
+   *  GitHub, which has no confidential-issue concept. */
+  issueConfidential: boolean;
+  /** Setting/clearing an issue's due date. GitLab-unique — false for GitHub. */
+  issueDueDate: boolean;
   /** The repository-settings dialog (admin probe + General / Danger zone and
    *  the provider's extra sections). */
   repoSettings: boolean;
@@ -1217,6 +1222,10 @@ export interface IssueDetails {
   locked: boolean;
   /** GitHub's lock reason (off_topic/resolved/spam/too_heated) or null. */
   activeLockReason: string | null;
+  /** GitLab-only: the issue is hidden from non-members. Always false on GitHub. */
+  confidential: boolean;
+  /** GitLab-only: "YYYY-MM-DD" or null. GitHub issues have no due dates. */
+  dueDate: string | null;
   /** Conversation comments (shared shape with PRs). */
   comments: PrThreadOut[];
   labels: RepoLabel[];

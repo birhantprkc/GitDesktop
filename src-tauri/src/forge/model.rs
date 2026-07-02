@@ -223,6 +223,13 @@ pub struct Implemented {
     /// Permanently deleting an issue — a shared control (both providers
     /// restrict it server-side to elevated roles).
     pub issue_delete: bool,
+    /// Marking an issue confidential (members-only). GitLab-unique — GitHub has
+    /// no confidential-issue concept, so like `mr_approve` this stays `false`
+    /// for GitHub (see `all`).
+    pub issue_confidential: bool,
+    /// Setting / clearing an issue's due date. GitLab-unique — GitHub issues
+    /// have no due dates, so the flag stays `false` for GitHub (see `all`).
+    pub issue_due_date: bool,
 }
 
 impl Implemented {
@@ -269,6 +276,9 @@ impl Implemented {
             issue_lock: true,
             issue_transfer: true,
             issue_delete: true,
+            // Like `mr_approve`: GitLab-unique issue fields with no GitHub analogue.
+            issue_confidential: false,
+            issue_due_date: false,
         }
     }
 
@@ -309,6 +319,8 @@ impl Implemented {
             issue_lock: false,
             issue_transfer: false,
             issue_delete: false,
+            issue_confidential: false,
+            issue_due_date: false,
         }
     }
 
@@ -324,7 +336,8 @@ impl Implemented {
             // approve/unapprove toggle, request-changes, and MR assignees, MR
             // merge, issue + MR labels, issue assignees, issue/MR create, issue +
             // MR title/body edit, issue milestone, award-emoji reactions, issue
-            // lock / move / delete, pipeline
+            // lock / move / delete, the GitLab-unique confidential + due-date
+            // fields, pipeline
             // retry / cancel / run, and release create / edit / delete / assets.
             Provider::GitLab => Self {
                 pull_requests: true,
@@ -368,6 +381,8 @@ impl Implemented {
                 issue_lock: true,
                 issue_transfer: true,
                 issue_delete: true,
+                issue_confidential: true,
+                issue_due_date: true,
             },
             Provider::Bitbucket => Self::none(),
         }

@@ -59,7 +59,8 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   merge requests** (push-and-open, drafts included, duplicate-MR detection —
   publishing local issues/PRs to
   GitLab works too), **lock / unlock** an issue's conversation, **move** an issue
-  to another project, **delete** an issue,
+  to another project, **delete** an issue, set an issue's **due date** (with a
+  past-due cue) or mark it **confidential** (GitLab-unique, right in the rail),
   **retry / cancel / run pipelines** (with CI/CD variables), and
   **publish / edit / delete releases** with asset uploads, **star** the project
   ("View on GitLab" and a fork link too), and **publish a local repo to GitLab**

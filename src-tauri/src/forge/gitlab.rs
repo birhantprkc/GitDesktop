@@ -1130,6 +1130,11 @@ struct GlabIssueDetail {
     // load this issue"). `null_to_default` absorbs both null and missing.
     #[serde(default, deserialize_with = "null_to_default")]
     discussion_locked: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    confidential: bool,
+    /// "YYYY-MM-DD" or null.
+    #[serde(default)]
+    due_date: Option<String>,
 }
 
 /// The repo's issues for the Issues list. `state` is `"open"` or `"closed"`.
@@ -1237,6 +1242,8 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
         is_pinned: false,
         locked: issue.discussion_locked,
         active_lock_reason: None,
+        confidential: issue.confidential,
+        due_date: issue.due_date,
         comments,
         labels,
     })
@@ -1481,6 +1488,58 @@ pub async fn set_issue_milestone(
     run_glab(
         Some(repo_path),
         &["api", "--method", "PUT", &endpoint, "-f", &milestone_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Mark an issue confidential (visible to project members only) or public again.
+/// GitLab-only — GitHub has no confidential-issue concept.
+pub async fn set_issue_confidential(
+    repo_path: &str,
+    number: u64,
+    confidential: bool,
+) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}");
+    let arg = format!("confidential={confidential}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Set (`Some("YYYY-MM-DD")`) or clear (`None` → empty string, validated live) an
+/// issue's due date. GitLab-only — GitHub has no issue due dates.
+pub async fn set_issue_due_date(
+    repo_path: &str,
+    number: u64,
+    due_date: Option<&str>,
+) -> AppResult<()> {
+    // The value rides a raw `-f due_date=…` field; keep the grammar strict so a
+    // malformed date fails here with a clear message instead of a GitLab 400.
+    if let Some(d) = due_date {
+        let valid = d.len() == 10
+            && d.bytes().enumerate().all(|(i, b)| match i {
+                4 | 7 => b == b'-',
+                _ => b.is_ascii_digit(),
+            });
+        if !valid {
+            return Err(AppError::InvalidArgument(format!(
+                "due date must be YYYY-MM-DD, got \"{d}\""
+            )));
+        }
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}");
+    let arg = format!("due_date={}", due_date.unwrap_or(""));
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &arg],
         GLAB_NETWORK_TIMEOUT,
     )
     .await?;

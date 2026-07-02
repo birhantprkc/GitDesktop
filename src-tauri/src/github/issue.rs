@@ -203,6 +203,10 @@ pub struct IssueDetails {
     pub is_pinned: bool,
     pub locked: bool,
     pub active_lock_reason: Option<String>,
+    /// GitLab-only: the issue is hidden from non-members. Always false on GitHub.
+    pub confidential: bool,
+    /// GitLab-only: "YYYY-MM-DD" or None. GitHub has no issue due dates.
+    pub due_date: Option<String>,
     pub comments: Vec<PrThreadOut>,
     pub labels: Vec<RepoLabel>,
 }
@@ -253,6 +257,8 @@ pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDet
         is_pinned: raw.is_pinned,
         locked: lock.locked,
         active_lock_reason: lock.reason,
+        confidential: false,
+        due_date: None,
         comments: raw
             .comments
             .into_iter()

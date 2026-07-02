@@ -479,7 +479,10 @@ next to any local issues. Open one to read the description and comments — and 
 issue **writes**: **comment** on the issue, **close / reopen** it, **edit** its title and
 description, **react** with emoji on the description and comments (GitLab's award emoji),
 and set its **labels**, **assignees**, and **milestone** right in the side
-rail. The **More actions** menu works too: **lock / unlock** the conversation (GitLab
+rail. The rail also carries two GitLab-unique fields: a **due date** (type a date and
+press Enter, or pick from the calendar; **Clear** removes it, and an open issue past
+its date reads "Past due") and a **confidential** toggle (hides the issue from
+non-members). The **More actions** menu works too: **lock / unlock** the conversation (GitLab
 locks without a reason, so there's no reason submenu), **duplicate** the issue, **move**
 it to another project you have access to (the original closes with a "moved" marker),
 and **delete** it (Owner-only). **Creating issues** works too — the New menu (or

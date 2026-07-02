@@ -135,6 +135,11 @@ export function RemoteIssueView({
     canWrite || forgeFeatureReady(forge.data, "issueTransfer");
   const canDelete = canWrite || forgeFeatureReady(forge.data, "issueDelete");
   const canDuplicate = canWrite || forgeFeatureReady(forge.data, "issueCreate");
+  // Confidential + due date are GitLab-UNIQUE (no GitHub analogue), so unlike
+  // the shared controls above there's no `canWrite ||` arm — the flag alone
+  // gates, and it's false for GitHub.
+  const canSetConfidential = forgeFeatureReady(forge.data, "issueConfidential");
+  const canSetDueDate = forgeFeatureReady(forge.data, "issueDueDate");
   const details = useIssueDetails(repoPath, number);
   const comment = useCommentIssue(repoPath);
   const closeIssue = useCloseIssue(repoPath);
@@ -741,6 +746,8 @@ export function RemoteIssueView({
           canEditLabels={canEditLabels}
           canEditAssignees={canEditAssignees}
           canSetMilestone={canSetMilestone}
+          canSetConfidential={canSetConfidential}
+          canSetDueDate={canSetDueDate}
           remoteLabel={remoteLabel}
         />
       </div>
