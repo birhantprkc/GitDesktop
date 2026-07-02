@@ -1278,6 +1278,11 @@ pub struct ApprovalState {
     pub approvals_required: u32,
     /// Approvals still needed (`0` on Free).
     pub approvals_left: u32,
+    /// Whether the signed-in viewer has a "requested changes" reviewer state on
+    /// this MR — the GitLab-only Request-changes control's pressed state. Cleared
+    /// server-side by approving (validated live) or by removing the viewer from
+    /// the reviewers; the direct undo mutation is Premium-only.
+    pub viewer_requested_changes: bool,
 }
 
 const PR_VIEW_FIELDS: &str = "id,number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup,labels";

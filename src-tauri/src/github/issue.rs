@@ -634,8 +634,9 @@ pub async fn gh_issue_unlock(repo_path: String, number: u64) -> AppResult<()> {
     Ok(())
 }
 
-/// Reactions for an issue's body + each comment (keyed by comment node id).
-/// Kept separate from `gh_issue_view` so it loads in parallel and adds no
+/// Reactions for an issue's body + each comment, keyed by the comment's id as
+/// the thread carries it (a GraphQL node id here; the GitLab impl keys by note
+/// id). Kept separate from `gh_issue_view` so it loads in parallel and adds no
 /// latency to the conversation — `viewerHasReacted` requires GraphQL, which the
 /// `gh issue view` CLI JSON doesn't expose.
 #[derive(Serialize)]

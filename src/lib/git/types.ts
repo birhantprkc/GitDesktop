@@ -470,8 +470,8 @@ export interface ForgeImplemented {
   /** Setting an issue's assignees — a shared issue control. (MR assignees are the
    *  separate GitLab-only `mrAssignees` below.) */
   issueAssignees: boolean;
-  /** Creating an issue from the app — a shared control (GitHub-only fields like
-   *  milestone/org-type hide per provider in the dialog). */
+  /** Creating an issue from the app — a shared control (the GitHub-only org
+   *  issue type hides per provider in the dialog; milestone works on both). */
   issueCreate: boolean;
   /** Creating a merge/pull request from the app (push head + open) — shared. */
   mrCreate: boolean;
@@ -491,11 +491,29 @@ export interface ForgeImplemented {
   /** Setting a merge request's assignees — GitLab-only like `mrApprove` (GitHub
    *  PRs expose no assignee picker here), so it's false for GitHub. */
   mrAssignees: boolean;
+  /** Requesting changes on an MR (the blocking reviewer state) — GitLab-only
+   *  like `mrApprove` (GitHub requests changes via its Review menu). */
+  mrRequestChanges: boolean;
+  /** Editing an existing issue's title/body — the shared edit dialog. */
+  issueEdit: boolean;
+  /** Editing an existing merge/pull request's title/body — the same shared
+   *  edit control. */
+  mrEdit: boolean;
+  /** Setting or clearing an issue's milestone — the shared picker. `Milestone.
+   *  number` is whatever key the provider's write takes (GitHub milestone
+   *  number, GitLab global milestone id). */
+  issueMilestone: boolean;
+  /** Reactions on an issue + its comments — the shared ReactionBar (GitHub
+   *  reacts by node id, GitLab awards emoji by issue/note id). */
+  issueReactions: boolean;
+  /** Reactions on a merge/pull request + its comments — the same ReactionBar. */
+  mrReactions: boolean;
 }
 
 /** A merge/pull request's approval summary — who has approved and whether the
  *  signed-in viewer has. Only GitLab produces it today; the GitLab-only
- *  approve/unapprove toggle reads it (gated on `implemented.mrApprove`). */
+ *  approve/unapprove toggle and Request-changes control read it (gated on
+ *  `implemented.mrApprove` / `implemented.mrRequestChanges`). */
 export interface ApprovalState {
   /** Whether the viewer has approved — the toggle's driver (Approve ↔ Revoke). */
   viewerHasApproved: boolean;
@@ -505,6 +523,10 @@ export interface ApprovalState {
   approvalsRequired: number;
   /** Approvals still needed (0 on Free). */
   approvalsLeft: number;
+  /** Whether the viewer holds a "requested changes" reviewer state — the
+   *  Request-changes control's pressed state. Cleared by approving (or removing
+   *  yourself as a reviewer on GitLab); the direct undo is Premium-only. */
+  viewerRequestedChanges: boolean;
 }
 
 /** Provider-neutral analogue of {@link GhStatus}: is the hosted integration usable
@@ -917,7 +939,8 @@ export interface Reaction {
 
 export interface IssueReactions {
   body: Reaction[];
-  /** Reactions per comment, keyed by the comment's GraphQL node id. */
+  /** Reactions per comment, keyed by the comment's id as the thread carries it
+   *  (a GraphQL node id on GitHub, a numeric note id on GitLab). */
   comments: Record<string, Reaction[]>;
 }
 

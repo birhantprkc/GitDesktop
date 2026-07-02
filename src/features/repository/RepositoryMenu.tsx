@@ -47,7 +47,7 @@ import { HooksDialog } from "@/features/hooks/HooksDialog";
 import { RepoSettingsDialog } from "@/features/repo-settings/RepoSettingsDialog";
 import { copyText } from "@/lib/clipboard";
 import {
-  ghRepoUrl,
+  forgeRepoUrl,
   openInTerminal,
   openWithDefault,
   openWithProgram,
@@ -105,14 +105,18 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     lastOpenedAt: "",
   };
 
-  // View-on-host / fork / star / admin settings are GitHub-only operations; a
-  // GitLab repo hides them until its repo-management surface lands.
+  // View-on-host / star work for GitHub and GitLab; forking on GitLab is a web
+  // link-out (the fork dialog's remote-rewiring flow is GitHub-only), and the
+  // admin-settings sub-surface stays GitHub-only.
   const canGh = forgeFeatureReady(gh.data, "repoActions");
+  const isGitLab = gh.data?.provider === "gitlab";
+  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
   const starStatus = useRepoStarStatus(repoPath, canGh);
   const setStar = useSetRepoStar(repoPath);
   const starred = starStatus.data ?? false;
-  // Repo settings (webhooks) are admin-only; the menu item hides for everyone else.
-  const admin = useRepoAdmin(repoPath, canGh);
+  // Repo settings (webhooks) are admin-only AND GitHub-only; the menu item hides
+  // for everyone else (the admin probe is a gh call — never fire it for GitLab).
+  const admin = useRepoAdmin(repoPath, canGh && !isGitLab);
   const editor = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
@@ -121,7 +125,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
 
   async function openWeb(suffix = "") {
     try {
-      const url = await ghRepoUrl(repoPath);
+      const url = await forgeRepoUrl(repoPath);
       await openUrl(`${url}${suffix}`);
     } catch (e) {
       onError(e);
@@ -131,8 +135,12 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   // Every menu entry doubles as a hotkey/palette action with the same gates.
   useHotkeyAction("view-on-github", () => openWeb(), canGh);
   // create-issue is the in-app dialog (registered in RepositoryView + IssuesPanel);
-  // the "Create issue on GitHub" menu item below still opens the web page directly.
-  useHotkeyAction("fork-repository", () => setForkOpen(true), canGh);
+  // the "Create issue on GitHub/GitLab" menu item below still opens the web page.
+  useHotkeyAction(
+    "fork-repository",
+    () => (isGitLab ? openWeb("/-/forks/new") : setForkOpen(true)),
+    canGh,
+  );
   useHotkeyAction("open-in-terminal", () =>
     openInTerminal(
       repoPath,
@@ -199,7 +207,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <>
             <DropdownMenuItem onClick={() => openWeb()}>
               <ArrowSquareOutIcon />
-              View on GitHub
+              View on {remoteLabel}
             </DropdownMenuItem>
             <DropdownMenuItem
               disabled={setStar.isPending}
@@ -218,14 +226,28 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
               <StarIcon weight={starred ? "fill" : "regular"} />
               {starred ? "Unstar repository" : "Star repository"}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => openWeb("/issues/new")}>
+            <DropdownMenuItem
+              onClick={() =>
+                openWeb(isGitLab ? "/-/issues/new" : "/issues/new")
+              }
+            >
               <WarningCircleIcon />
-              Create issue on GitHub
+              Create issue on {remoteLabel}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setForkOpen(true)}>
-              <GitForkIcon />
-              Fork repository…
-            </DropdownMenuItem>
+            {isGitLab ? (
+              // The fork dialog's flow (fork + rewire remotes + set-default) is
+              // GitHub-only; GitLab forks from its web page instead of hiding
+              // the affordance.
+              <DropdownMenuItem onClick={() => openWeb("/-/forks/new")}>
+                <GitForkIcon />
+                Fork on GitLab…
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem onClick={() => setForkOpen(true)}>
+                <GitForkIcon />
+                Fork repository…
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
           </>
         )}

@@ -56,15 +56,13 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
   const currentName = status.data?.branch?.name ?? null;
   const detached = status.data?.branch?.detached ?? false;
   // Opening a PR/MR follows the per-action create flag (GitHub + GitLab). The
-  // "PRs for this branch" probe stays GitHub-only (`gh_prs_for_branch`), so a
-  // GitLab repo skips duplicate-MR detection here — GitLab itself rejects a
-  // duplicate source→target MR with a clear error that surfaces via the toast.
-  const ghProbe =
-    Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
-    gh.data?.provider === "github";
+  // "PRs for this branch" duplicate probe (`forge_prs_for_branch`) fires for any
+  // provider whose PR reads are built, so an existing open PR/MR from this branch
+  // flips the affordance to "View" instead of "Create".
+  const prProbe = forgeFeatureReady(gh.data, "pullRequests");
   const isGitLab = gh.data?.provider === "gitlab";
   const prNoun = isGitLab ? "merge request" : "pull request";
-  const branchPrs = usePrsForBranch(repoPath, currentName, ghProbe);
+  const branchPrs = usePrsForBranch(repoPath, currentName, prProbe);
   // Agent-session branches (`gd/session/*`) are app-internal — never offer them
   // as a compare target (the PR button would even push one), like BranchSwitcher.
   const otherBranches = (branches.data ?? []).filter(
@@ -169,7 +167,7 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
             title={existingPr.title}
           >
             <ArrowSquareOutIcon data-icon="inline-start" />
-            View pull request #{existingPr.number}
+            View {prNoun} #{existingPr.number}
             {existingPr.isDraft ? " (draft)" : ""}
           </Button>
         )}

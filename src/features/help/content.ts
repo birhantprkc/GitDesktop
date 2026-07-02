@@ -390,16 +390,20 @@ from the branch diff and commit subjects{{/ai}}.
 
 Point the app at a **GitLab** repo and the same tab lists its **merge requests** (open and
 closed/merged) next to any local PRs. Open one for the description, comments, commits, and a
-highlighted **diff** (with an **Open on GitLab** link) — and the **first GitLab MR writes**:
-**comment** on it, **close / reopen** it, **approve / unapprove** it (a reviewer action,
-with the approval count shown inline), edit its **labels** and **assignees**, and **merge**
+highlighted **diff** (with an **Open on GitLab** link) — and the GitLab MR writes:
+**comment** on it, **close / reopen** it, **edit** its title and description,
+**approve / unapprove** it (a reviewer action,
+with the approval count shown inline), **request changes** (the blocking reviewer state —
+it adds you as a reviewer if needed, posts your drafted comment alongside, and clears when
+you approve), **react** with emoji on the description and comments,
+edit its **labels** and **assignees**, and **merge**
 it — merge or squash, optionally deleting
 the source branch, guarded so it never merges a head you didn't see (GitLab applies the project's
 configured merge method, so there's no separate "rebase" option). **Creating a merge request**
 works from the app too ({{kbd:create-pr}}, the New menu, or the Compare tab) — it pushes your
-branch and opens the MR, with the same draft checkbox and AI description as GitHub. Full
-reviews (a comment or request-changes with a body) are coming soon; for now those live on
-GitLab. GitLab uses the GitLab
+branch and opens the MR, with the same draft checkbox and AI description as GitHub, and the
+Compare tab points you at an **existing open MR** from your branch instead of creating a
+duplicate. GitLab uses the GitLab
 CLI (\`glab\`) — run \`glab auth login\` once, no tokens stored. Its issues, CI pipelines, and
 releases work too (see their sections below).
 
@@ -441,13 +445,16 @@ add labels, **close / reopen**, **lock**, and **transfer** an issue to another r
 ## GitLab issues
 
 Point the app at a **GitLab** repo and the same tab lists its **issues** (open and closed)
-next to any local issues. Open one to read the description and comments with a side rail of
-labels, assignees, and milestone — and GitLab issue **writes**: **comment** on the issue,
-**close / reopen** it, and edit its **labels** and **assignees** right in the side rail.
-**Creating issues** works too — the New menu (or {{kbd:create-issue}} from the palette) opens
-the same dialog GitHub uses, with labels and assignees (milestone and type are GitHub-only
-pickers). Editing the title/body still lives on GitLab for now (use the **View on GitLab**
-link); the milestone stays read-only.
+next to any local issues. Open one to read the description and comments — and the GitLab
+issue **writes**: **comment** on the issue, **close / reopen** it, **edit** its title and
+description, **react** with emoji on the description and comments (GitLab's award emoji),
+and set its **labels**, **assignees**, and **milestone** right in the side
+rail. **Creating issues** works too — the New menu (or {{kbd:create-issue}} from the
+palette) opens the same dialog GitHub uses, with labels, assignees, and a milestone (the
+org issue type is the one GitHub-only picker). The repository menu works too: **View on
+GitLab**, **star / unstar**, and a **Fork on GitLab** link, and you can **publish** a
+local repository straight to GitLab (it creates the project, adds it as
+\`origin\`, and pushes).
 
 ## Local issues
 

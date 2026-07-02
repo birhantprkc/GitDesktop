@@ -53,8 +53,8 @@ export function CreateIssueDialog({
   const createIssue = useCreateIssue(repoPath);
   const addSubIssue = useAddSubIssue(repoPath);
   const repoLabels = useRepoLabels(repoPath, open);
-  // Milestone and org issue type are GitHub-only pickers; the shared fields
-  // (title/body/labels/assignees) work on both providers.
+  // The org issue type is a GitHub-only picker; the shared fields
+  // (title/body/labels/assignees/milestone) work on both providers.
   const forge = useForgeStatus(repoPath);
   const isGitLab = forge.data?.provider === "gitlab";
   const remoteLabel = isGitLab ? "GitLab" : "GitHub";
@@ -279,21 +279,19 @@ export function CreateIssueDialog({
               value={assignees}
               onChange={setAssignees}
             />
+            <MilestoneMenu
+              repoPath={repoPath}
+              enabled={open}
+              value={milestone}
+              onChange={setMilestone}
+            />
             {!isGitLab && (
-              <>
-                <MilestoneMenu
-                  repoPath={repoPath}
-                  enabled={open}
-                  value={milestone}
-                  onChange={setMilestone}
-                />
-                <IssueTypeMenu
-                  repoPath={repoPath}
-                  enabled={open}
-                  value={issueType}
-                  onChange={setIssueType}
-                />
-              </>
+              <IssueTypeMenu
+                repoPath={repoPath}
+                enabled={open}
+                value={issueType}
+                onChange={setIssueType}
+              />
             )}
           </div>
 

@@ -76,6 +76,7 @@ import {
   useReadyPr,
   useReopenPr,
   useRepoStatus,
+  useRequestChangesPr,
   useReviewPr,
   useSetPrAssignees,
   useToggleReaction,
@@ -136,29 +137,33 @@ export function RemotePrView({
   number: number;
 }) {
   const queryClient = useQueryClient();
-  // The read view is provider-neutral, but every mutation here (merge, comment,
-  // review, edit, reactions, labels, checkout) routes through GitHub-only `gh_*`
-  // commands — so on a GitLab repo this is strictly read-only. We gate writes on
-  // "not a known read-only provider" rather than `=== "github"`, so that while the
-  // (separate) forge-status query is still pending or after it fails, a GitHub PR
-  // keeps its write controls exactly as before — only an explicitly-detected
-  // GitLab/Bitbucket repo suppresses them.
+  // The read view is provider-neutral. The remaining GitHub-only mutations (full
+  // reviews, ready-for-review, checkout helpers) route through `gh_*` commands
+  // and stay gated on `canWrite` — "not a known read-only provider" rather than
+  // `=== "github"`, so that while the (separate) forge-status query is still
+  // pending or after it fails, a GitHub PR keeps its write controls exactly as
+  // before — only an explicitly-detected GitLab/Bitbucket repo suppresses them.
   const forge = useForgeStatus(repoPath);
   const provider = forge.data?.provider;
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
   const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
   const prNoun = provider === "gitlab" ? "merge request" : "pull request";
-  // GitLab MR WRITES land per-action (full reviews and title/body edits stay
-  // GitHub-only via `canWrite`). Each shared control is
+  // GitLab MR WRITES land per-action (full reviews stay GitHub-only via
+  // `canWrite`). Each shared control is
   // `canWrite || forgeFeatureReady(...)` so GitHub keeps its controls while a
   // forge-status query is pending/failed (canWrite default-true) AND a ready GitLab
   // repo positively enables just these.
   const canComment = canWrite || forgeFeatureReady(forge.data, "mrComment");
   const canChangeState = canWrite || forgeFeatureReady(forge.data, "mrState");
+  // Title/body editing is a shared control too.
+  const canEdit = canWrite || forgeFeatureReady(forge.data, "mrEdit");
   // GitLab's approve/unapprove is a bodyless toggle with no GitHub analogue (GitHub
   // approves via the Review menu above), so it's GitLab-only and gated on the forge
   // feature directly — NOT `canWrite || …`, which would duplicate the Review control.
   const canApprove = forgeFeatureReady(forge.data, "mrApprove");
+  // Request-changes follows the same GitLab-only shape (GitHub's lives in the
+  // Review menu): a one-shot blocking reviewer state, cleared by approving.
+  const canRequestChanges = forgeFeatureReady(forge.data, "mrRequestChanges");
   // Merge is a SHARED control (GitHub `gh pr merge`, GitLab `glab`), so it uses the
   // `canWrite || …` gate like comment/close — GitHub keeps it while forge-status is
   // pending/failed; a ready GitLab repo enables it too.
@@ -178,26 +183,33 @@ export function RemotePrView({
   const mergePr = useMergePr(repoPath);
   const closePr = useClosePr(repoPath);
   const reopenPr = useReopenPr(repoPath);
-  // Approval state drives the GitLab-only toggle; only fetched for a ready GitLab
-  // repo with an open MR (null disables the read for GitHub / closed MRs).
+  // Approval + reviewer state drives the GitLab-only approve toggle and
+  // Request-changes control; only fetched for a ready GitLab repo with an open MR
+  // (null disables the read for GitHub / closed MRs).
   const approvals = usePrApprovals(
     repoPath,
-    canApprove && details.data?.state === "OPEN" ? number : null,
+    (canApprove || canRequestChanges) && details.data?.state === "OPEN"
+      ? number
+      : null,
   );
   const approvePr = useApprovePr(repoPath);
   const unapprovePr = useUnapprovePr(repoPath);
+  const requestChangesPr = useRequestChangesPr(repoPath);
   const editComment = useEditPrComment(repoPath);
   const deleteComment = useDeletePrComment(repoPath);
   const minimizeComment = useMinimizeComment(repoPath);
   const unminimizeComment = useUnminimizeComment(repoPath);
   const readyPr = useReadyPr(repoPath);
   const editPr = useEditPr(repoPath);
-  // Reactions are a GitHub-only mutation surface; don't fetch them for GitLab.
-  const reactions = usePrReactions(repoPath, canWrite ? number : null);
+  // Reactions are a shared control (GitLab awards emoji); the fetch is gated so
+  // it never fires for a provider whose reactions aren't wired (Bitbucket).
+  const canReact = canWrite || forgeFeatureReady(forge.data, "mrReactions");
+  const reactions = usePrReactions(repoPath, canReact ? number : null);
   const toggleReactionMutation = useToggleReaction(
     repoPath,
     ["repo", repoPath, "pr", number, "reactions"] as const,
     details.data?.id ?? "",
+    { target: "mr", number },
   );
   const [section, setSection] = useState<Section>("conversation");
   const pendingPrSection = useUiStore((s) => s.pendingPrSection);
@@ -276,6 +288,9 @@ export function RemotePrView({
           : login && !prev.approvedBy.includes(login)
             ? [...prev.approvedBy, login]
             : prev.approvedBy,
+        // Approving clears a requested-changes reviewer state server-side
+        // (validated live); unapproving doesn't restore it.
+        viewerRequestedChanges: approved ? prev.viewerRequestedChanges : false,
       });
     }
     action.mutate(number, {
@@ -288,6 +303,37 @@ export function RemotePrView({
         onError(e);
       },
     });
+  }
+
+  // Request changes — one-shot (the direct undo is Premium-only on GitLab;
+  // approving, which clears the state, is the natural Free-tier exit). Same
+  // optimistic flip as the approve toggle: the state lives in the separate
+  // approvals query, so waiting on the write + refetch would look broken.
+  function requestChanges() {
+    // Already requested: the button is a focusable state indicator (its title
+    // says how to clear); a re-click must not fire the Premium-only undo path.
+    if (approvals.data?.viewerRequestedChanges) return;
+    const key = ["repo", repoPath, "pr", number, "approvals"] as const;
+    const prev = queryClient.getQueryData<ApprovalState>(key);
+    if (prev) {
+      queryClient.setQueryData<ApprovalState>(key, {
+        ...prev,
+        viewerRequestedChanges: true,
+      });
+    }
+    requestChangesPr.mutate(
+      { number, body: composeBody.trim() },
+      {
+        onSuccess: () => {
+          toast.success("Requested changes");
+          setComposeBody("");
+        },
+        onError: (e) => {
+          if (prev) queryClient.setQueryData(key, prev);
+          onError(e);
+        },
+      },
+    );
   }
 
   function submitComment() {
@@ -396,6 +442,7 @@ export function RemotePrView({
     reopenPr.isPending ||
     approvePr.isPending ||
     unapprovePr.isPending ||
+    requestChangesPr.isPending ||
     readyPr.isPending;
 
   function saveCommentEdit(commentId: string, body: string) {
@@ -471,7 +518,7 @@ export function RemotePrView({
                 Checkout
               </Button>
             ))}
-          {isOpen && canWrite && (
+          {isOpen && canEdit && (
             <Button
               variant="outline"
               size="xs"
@@ -675,7 +722,7 @@ export function RemotePrView({
                       >
                         Copy markdown
                       </DropdownMenuItem>
-                      {isOpen && canWrite && (
+                      {isOpen && canEdit && (
                         <DropdownMenuItem
                           onClick={() =>
                             edit.openEdit({ title: pr.title, body: pr.body })
@@ -687,7 +734,7 @@ export function RemotePrView({
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
-                {canWrite && (
+                {canReact && (
                   <ReactionBar
                     reactions={reactions.data?.body ?? []}
                     onToggle={(content, active) =>
@@ -742,10 +789,10 @@ export function RemotePrView({
                         : undefined
                     }
                     reactions={
-                      canWrite ? reactions.data?.comments[c.id] : undefined
+                      canReact ? reactions.data?.comments[c.id] : undefined
                     }
                     onToggleReaction={
-                      canWrite
+                      canReact
                         ? (content, active) =>
                             toggleReaction(c.id, content, active)
                         : undefined
@@ -861,6 +908,40 @@ export function RemotePrView({
                       </span>
                     )}
                   </>
+                )}
+                {isOpen && canRequestChanges && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    // One-shot: once requested, the button becomes the state
+                    // indicator (GitLab's direct undo is Premium-only — approve,
+                    // or remove yourself as a reviewer on GitLab, to clear). It
+                    // stays FOCUSABLE in that state (the click no-ops via the
+                    // handler) so keyboard/AT users can still reach the how-to-
+                    // clear title. Same disable-on-unknown posture as the
+                    // approve toggle.
+                    disabled={busy || approvals.isPending || approvals.isError}
+                    aria-pressed={approval?.viewerRequestedChanges ?? false}
+                    onClick={requestChanges}
+                    title={
+                      approvals.isError
+                        ? "Couldn't load review state"
+                        : approval?.viewerRequestedChanges
+                          ? "You've requested changes — approve, or remove yourself as a reviewer on GitLab, to clear"
+                          : composeBody.trim()
+                            ? "Request changes, posting your draft as a comment"
+                            : `Request changes on this ${prNoun} (adds you as a reviewer)`
+                    }
+                    className={cn(
+                      approval?.viewerRequestedChanges &&
+                        "border-warning/40 text-warning",
+                    )}
+                  >
+                    <XCircleIcon data-icon="inline-start" />
+                    {approval?.viewerRequestedChanges
+                      ? "Changes requested"
+                      : "Request changes"}
+                  </Button>
                 )}
                 {composeBody.trim() && (
                   <Button
@@ -1031,8 +1112,8 @@ export function RemotePrView({
         form={edit.form}
         open={edit.open}
         onOpenChange={edit.setOpen}
-        title="Edit pull request"
-        description={`Updates the title and description of #${number} on GitHub.`}
+        title={`Edit ${prNoun}`}
+        description={`Updates the title and description of #${number} on ${remoteLabel}.`}
         contentClassName="sm:max-w-lg"
         bodyTextareaClassName="max-h-72 min-h-24 resize-y font-mono"
       />

@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { copyText } from "@/lib/clipboard";
 import {
-  ghRepoUrl,
+  forgeRepoUrl,
   openInTerminal,
   openWithDefault,
   openWithProgram,
@@ -372,7 +372,7 @@ function RepoMenuItems({
       {owner && (
         <ContextMenuItem
           onClick={() =>
-            ghRepoUrl(repo.path)
+            forgeRepoUrl(repo.path)
               .then((url) => openUrl(url))
               .catch(toastError)
           }

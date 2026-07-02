@@ -163,7 +163,7 @@ pub struct Implemented {
     /// separate GitLab-only `mr_assignees` below — GitHub PRs have no picker here.)
     pub issue_assignees: bool,
     /// Creating an issue from the app — a shared control (the same create dialog;
-    /// GitHub-only fields like milestone/org-type hide per provider).
+    /// the GitHub-only org issue type hides per provider — milestone works on both).
     pub issue_create: bool,
     /// Creating a merge/pull request from the app (push the head branch + open) —
     /// a shared control.
@@ -187,6 +187,28 @@ pub struct Implemented {
     /// assignee picker in this app (issue assignees are the shared control), so
     /// like `mr_approve` this flag stays `false` for GitHub (see `all`).
     pub mr_assignees: bool,
+    /// Requesting changes on a merge request — the blocking reviewer state.
+    /// GitLab-only like `mr_approve`: GitHub requests changes through its Review
+    /// menu (`gh_pr_review`), not this control, so the flag stays `false` for
+    /// GitHub (see `all`).
+    pub mr_request_changes: bool,
+    /// Editing an existing issue's title/body — a shared control (the same edit
+    /// dialog; GitHub PATCHes the issue, GitLab PUTs title/description).
+    pub issue_edit: bool,
+    /// Editing an existing merge/pull request's title/body — the same shared
+    /// edit control.
+    pub mr_edit: bool,
+    /// Setting or clearing an issue's milestone — a shared control (the same
+    /// picker; GitHub keys on the milestone number, GitLab on the GLOBAL
+    /// milestone id, which is what each provider's list read returns).
+    pub issue_milestone: bool,
+    /// Reactions on an issue and its comments — a shared control (the same
+    /// ReactionBar; GitHub reacts by GraphQL node id, GitLab awards emoji by
+    /// issue/note id).
+    pub issue_reactions: bool,
+    /// Reactions on a merge/pull request and its comments — the same shared
+    /// ReactionBar.
+    pub mr_reactions: bool,
 }
 
 impl Implemented {
@@ -222,6 +244,13 @@ impl Implemented {
             // Like `mr_approve`: GitHub PRs have no assignee picker in this app, so
             // the MR-assignees control is GitLab-only.
             mr_assignees: false,
+            // Like `mr_approve`: GitHub requests changes via its Review menu.
+            mr_request_changes: false,
+            issue_edit: true,
+            mr_edit: true,
+            issue_milestone: true,
+            issue_reactions: true,
+            mr_reactions: true,
         }
     }
 
@@ -252,6 +281,12 @@ impl Implemented {
             release_create: false,
             release_edit: false,
             mr_assignees: false,
+            mr_request_changes: false,
+            issue_edit: false,
+            mr_edit: false,
+            issue_milestone: false,
+            issue_reactions: false,
+            mr_reactions: false,
         }
     }
 
@@ -262,21 +297,23 @@ impl Implemented {
         match provider {
             Provider::GitHub => Self::all(),
             // GitLab read ops arrive incrementally — merge requests, issues, CI
-            // pipelines, and releases (read) are wired up; insights / repo actions
-            // still degrade to "coming soon" until their impls land. WRITES land
+            // pipelines, and releases (read) are wired up; insights still
+            // degrades to "coming soon" until its impl lands. WRITES land
             // per-action: issue + MR comment and close/reopen, the GitLab-only MR
-            // approve/unapprove toggle and MR assignees, MR merge, issue + MR
-            // labels, issue assignees, issue/MR create, pipeline retry / cancel /
-            // run, and release create / edit / delete / assets. (Full MR review
-            // stays GitHub-only.)
+            // approve/unapprove toggle, request-changes, and MR assignees, MR
+            // merge, issue + MR labels, issue assignees, issue/MR create, issue +
+            // MR title/body edit, issue milestone, award-emoji reactions, pipeline
+            // retry / cancel / run, and release create / edit / delete / assets.
             Provider::GitLab => Self {
                 pull_requests: true,
                 issues: true,
                 ci: true,
                 releases: true,
                 insights: false,
-                repo_actions: false,
-                publish: false,
+                // View/star (fork is a web link-out; admin settings and
+                // branch-rule import stay GitHub-only via provider guards).
+                repo_actions: true,
+                publish: true,
                 issue_comment: true,
                 issue_state: true,
                 mr_comment: true,
@@ -294,6 +331,12 @@ impl Implemented {
                 release_create: true,
                 release_edit: true,
                 mr_assignees: true,
+                mr_request_changes: true,
+                issue_edit: true,
+                mr_edit: true,
+                issue_milestone: true,
+                issue_reactions: true,
+                mr_reactions: true,
             },
             Provider::Bitbucket => Self::none(),
         }
@@ -424,8 +467,13 @@ mod tests {
         // CI actions and release management are shared controls too.
         assert!(i.ci_rerun && i.ci_cancel && i.ci_dispatch);
         assert!(i.release_create && i.release_edit);
-        // MR assignees mirror mr_approve: GitLab-only, so GitHub stays false.
-        assert!(!i.mr_assignees);
+        // MR assignees and request-changes mirror mr_approve: GitLab-only controls
+        // (GitHub's analogues live in its own Review menu / nowhere), so GitHub
+        // stays false.
+        assert!(!i.mr_assignees && !i.mr_request_changes);
+        // Title/body editing, issue milestones, and reactions are shared controls.
+        assert!(i.issue_edit && i.mr_edit && i.issue_milestone);
+        assert!(i.issue_reactions && i.mr_reactions);
     }
 
     #[test]
@@ -439,7 +487,10 @@ mod tests {
         assert!(cap.issues && imp.issues);
         assert!(cap.ci && imp.ci);
         assert!(imp.releases);
-        assert!(!imp.insights && !imp.repo_actions && !imp.publish);
+        // Insights is the one panel still degrading to "coming soon"; repo
+        // actions (view/star) + publish are wired.
+        assert!(!imp.insights);
+        assert!(imp.repo_actions && imp.publish);
         // First WRITES: issue + MR comment and close/reopen are wired up for GitLab,
         // plus the GitLab-only MR approve/unapprove toggle and MR merge.
         assert!(imp.issue_comment && imp.issue_state);
@@ -453,6 +504,12 @@ mod tests {
         assert!(imp.ci_rerun && imp.ci_cancel && imp.ci_dispatch);
         assert!(imp.release_create && imp.release_edit);
         assert!(imp.mr_assignees);
+        // …and title/body editing plus issue milestones.
+        assert!(imp.issue_edit && imp.mr_edit && imp.issue_milestone);
+        // …and the GitLab-only request-changes reviewer state.
+        assert!(imp.mr_request_changes);
+        // …and award-emoji reactions on issues and MRs.
+        assert!(imp.issue_reactions && imp.mr_reactions);
     }
 
     #[test]
@@ -469,5 +526,8 @@ mod tests {
         assert!(!bb.issue_create && !bb.mr_create);
         assert!(!bb.ci_rerun && !bb.ci_cancel && !bb.ci_dispatch);
         assert!(!bb.release_create && !bb.release_edit && !bb.mr_assignees);
+        assert!(!bb.issue_edit && !bb.mr_edit && !bb.issue_milestone);
+        assert!(!bb.mr_request_changes);
+        assert!(!bb.issue_reactions && !bb.mr_reactions);
     }
 }

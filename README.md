@@ -51,13 +51,18 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   comments/commits/diff; issue conversation with a labels/assignees/milestone rail;
   pipeline jobs with logs and a branch CI badge; release notes with asset links). And
   GitLab **writes** — **comment** on and **close / reopen** a GitLab issue
-  **or merge request**, edit **labels** and **assignees** (issues *and* MRs),
-  **approve / unapprove** and **merge** (merge/squash) an MR, **create issues and
-  merge requests** (push-and-open, drafts included — publishing local issues/PRs to
+  **or merge request**, **edit titles and descriptions**, **react** with emoji
+  (award emoji on descriptions and comments), edit **labels** and
+  **assignees** (issues *and* MRs), set an issue's **milestone**,
+  **approve / unapprove**, **request changes on**, and **merge** (merge/squash) an
+  MR, **create issues and
+  merge requests** (push-and-open, drafts included, duplicate-MR detection —
+  publishing local issues/PRs to
   GitLab works too), **retry / cancel / run pipelines** (with CI/CD variables), and
-  **publish / edit / delete releases** with asset uploads — right from the app. Only a
-  few GitLab surfaces (full MR reviews, editing an issue's title/body, …) still read
-  "coming soon"; GitHub is unchanged.
+  **publish / edit / delete releases** with asset uploads, **star** the project
+  ("View on GitLab" and a fork link too), and **publish a local repo to GitLab**
+  (create + push, straight from the app) — right from the app. Insights is the
+  one GitLab surface still reading "coming soon"; GitHub is unchanged.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works
   in an isolated worktree, so your own checkout is never touched. Follow it
   **step by step** — every file it reads, edits, and command it runs — and

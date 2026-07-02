@@ -168,6 +168,22 @@ pub async fn forge_pr_list(
     }
 }
 
+/// Open merge/pull requests whose head is `head`, behind the abstraction — the
+/// ComparePanel duplicate probe ("View" instead of "Create" once one exists).
+#[tauri::command]
+pub async fn forge_prs_for_branch(
+    repo_path: String,
+    head: String,
+) -> AppResult<Vec<crate::github::pr::PrInfo>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::prs_for_branch(&repo_path, &head).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => github::prs_for_branch(&repo_path, &head).await,
+    }
+}
+
 /// Full details for one merge/pull request's read view, behind the abstraction.
 #[tauri::command]
 pub async fn forge_pr_view(
@@ -196,8 +212,8 @@ pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> 
 }
 
 /// Post a comment on a merge/pull request, behind the abstraction. GitHub delegates
-/// to `gh pr comment`; GitLab posts a note via `glab`. Merge / approve / review stay
-/// GitHub-only (hidden for GitLab on the frontend).
+/// to `gh pr comment`; GitLab posts a note via `glab`. (Full reviews stay
+/// GitHub-only — approve/merge/edit each have their own forge command.)
 #[tauri::command]
 pub async fn forge_pr_comment(repo_path: String, number: u64, body: String) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
@@ -230,6 +246,48 @@ pub async fn forge_pr_reopen(repo_path: String, number: u64) -> AppResult<()> {
             "Bitbucket merge requests aren't supported yet.".into(),
         )),
         _ => github::reopen_pr(&repo_path, number).await,
+    }
+}
+
+/// Request changes on a merge request (the blocking reviewer state), with an
+/// optional comment. GitLab-only, like the approve/unapprove toggle: GitHub
+/// requests changes through its own Review menu (`gh_pr_review`), and the
+/// frontend gates this on `implemented.mrRequestChanges` (false for GitHub), so
+/// the GitHub arm is never reached — it errors defensively.
+#[tauri::command]
+pub async fn forge_pr_request_changes(
+    repo_path: String,
+    number: u64,
+    body: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::request_changes_mr(&repo_path, number, &body).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => Err(AppError::InvalidArgument(
+            "GitHub requests changes through the Review menu.".into(),
+        )),
+    }
+}
+
+/// Edit a merge/pull request's title/body, behind the abstraction — the shared
+/// edit dialog. GitHub PATCHes the pull; GitLab PUTs title/description.
+#[tauri::command]
+pub async fn forge_pr_edit(
+    repo_path: String,
+    number: u64,
+    title: String,
+    body: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::edit_mr(&repo_path, number, &title, &body).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => github::edit_pr(&repo_path, number, &title, &body).await,
     }
 }
 
@@ -623,6 +681,140 @@ pub async fn forge_issue_reopen(repo_path: String, number: u64) -> AppResult<()>
     }
 }
 
+/// Edit an issue's title/body, behind the abstraction — the shared edit dialog.
+/// GitHub PATCHes the issue; GitLab PUTs title/description.
+#[tauri::command]
+pub async fn forge_issue_edit(
+    repo_path: String,
+    number: u64,
+    title: String,
+    body: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::edit_issue(&repo_path, number, &title, &body).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::edit_issue(&repo_path, number, &title, &body).await,
+    }
+}
+
+/// The repo's open/active milestones for the milestone picker, behind the
+/// abstraction. The neutral `Milestone.number` is GitHub's milestone number or
+/// GitLab's GLOBAL milestone id — whichever key that provider's write takes.
+#[tauri::command]
+pub async fn forge_milestones(
+    repo_path: String,
+) -> AppResult<Vec<crate::github::issue::Milestone>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::list_milestones(&repo_path).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket milestones aren't supported yet.".into(),
+        )),
+        _ => github::milestones(&repo_path).await,
+    }
+}
+
+/// Reactions for an issue + its comments, behind the abstraction. GitLab maps
+/// award emoji onto the same shape (comments keyed by note id; GitHub keys them
+/// by GraphQL node id — either way the id the thread already carries).
+#[tauri::command]
+pub async fn forge_issue_reactions(
+    repo_path: String,
+    number: u64,
+) -> AppResult<crate::github::issue::IssueReactions> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::issue_reactions(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::issue_reactions(&repo_path, number).await,
+    }
+}
+
+/// Reactions for a merge/pull request + its comments, behind the abstraction.
+#[tauri::command]
+pub async fn forge_pr_reactions(
+    repo_path: String,
+    number: u64,
+) -> AppResult<crate::github::issue::IssueReactions> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::mr_reactions(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket merge requests aren't supported yet.".into(),
+        )),
+        _ => github::pr_reactions(&repo_path, number).await,
+    }
+}
+
+/// Add the viewer's reaction, behind the abstraction. The subject is carried in
+/// BOTH provider vocabularies (the shared-control different-identifiers rule):
+/// GitHub uses `subject_id` (a GraphQL node id — body or comment) and ignores
+/// `target`/`number`; GitLab uses `target` (`"issue"`/`"mr"`) + `number`, with
+/// `subject_id` empty for the body or the note id for a comment. Discussions
+/// (GitHub-only) ride the GitHub arm with `target: "discussion"`.
+#[tauri::command]
+pub async fn forge_add_reaction(
+    repo_path: String,
+    target: String,
+    number: u64,
+    subject_id: String,
+    content: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            let note_id = (!subject_id.is_empty()).then_some(subject_id.as_str());
+            gitlab::add_reaction(&repo_path, &target, number, note_id, &content).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket reactions aren't supported yet.".into(),
+        )),
+        _ => github::add_reaction(&repo_path, &subject_id, &content).await,
+    }
+}
+
+/// Remove the viewer's reaction, behind the abstraction (same subject carriage
+/// as `forge_add_reaction`; GitLab resolves the award id server-side).
+#[tauri::command]
+pub async fn forge_remove_reaction(
+    repo_path: String,
+    target: String,
+    number: u64,
+    subject_id: String,
+    content: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            let note_id = (!subject_id.is_empty()).then_some(subject_id.as_str());
+            gitlab::remove_reaction(&repo_path, &target, number, note_id, &content).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket reactions aren't supported yet.".into(),
+        )),
+        _ => github::remove_reaction(&repo_path, &subject_id, &content).await,
+    }
+}
+
+/// Set (or, with `None`, clear) an issue's milestone, behind the abstraction.
+/// `milestone` is whatever `forge_milestones` returned as `number` for the
+/// chosen entry.
+#[tauri::command]
+pub async fn forge_issue_set_milestone(
+    repo_path: String,
+    number: u64,
+    milestone: Option<u64>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::set_issue_milestone(&repo_path, number, milestone).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::set_issue_milestone(&repo_path, number, milestone).await,
+    }
+}
+
 /// The repo's labels for the label picker, behind the abstraction. GitHub lists them
 /// via GraphQL (each with a node id); GitLab lists project labels via `glab` (by name,
 /// no id). Used by both the issue and MR label pickers.
@@ -724,10 +916,10 @@ pub async fn forge_mr_set_assignees(
 }
 
 /// Create an issue, behind the abstraction. Returns the new number + URL.
-/// GitHub sends the full field set; GitLab takes title/body/labels/assignees
-/// (milestone and org issue type have no wired GitLab analogue — the dialog hides
-/// those pickers, and the dispatch drops them like `forge_issue_close` drops the
-/// GitHub-only close reason).
+/// GitHub sends the full field set; GitLab takes everything but the org issue
+/// type (no GitLab analogue — the dialog hides that picker, and the dispatch
+/// drops it like `forge_issue_close` drops the GitHub-only close reason).
+/// `milestone` is whatever `forge_milestones` returned as `number`.
 #[tauri::command]
 pub async fn forge_issue_create(
     repo_path: String,
@@ -740,7 +932,7 @@ pub async fn forge_issue_create(
 ) -> AppResult<crate::github::pr::PrRef> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => {
-            gitlab::create_issue(&repo_path, &title, &body, &labels, &assignees).await
+            gitlab::create_issue(&repo_path, &title, &body, &labels, &assignees, milestone).await
         }
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
             "Bitbucket issues aren't supported yet.".into(),
@@ -750,6 +942,95 @@ pub async fn forge_issue_create(
                 &repo_path, &title, &body, labels, assignees, milestone, issue_type,
             )
             .await
+        }
+    }
+}
+
+/// The repo's web URL for "View on GitHub/GitLab", behind the abstraction.
+#[tauri::command]
+pub async fn forge_repo_url(repo_path: String) -> AppResult<String> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::repo_url(&repo_path).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket repositories aren't supported yet.".into(),
+        )),
+        _ => github::repo_url(&repo_path).await,
+    }
+}
+
+/// Whether the signed-in viewer has starred this repo, behind the abstraction.
+#[tauri::command]
+pub async fn forge_repo_star_status(repo_path: String) -> AppResult<bool> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::repo_star_status(&repo_path).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket repositories aren't supported yet.".into(),
+        )),
+        _ => github::repo_star_status(&repo_path).await,
+    }
+}
+
+/// Star / unstar this repo, behind the abstraction.
+#[tauri::command]
+pub async fn forge_repo_set_star(repo_path: String, starred: bool) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::repo_set_star(&repo_path, starred).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket repositories aren't supported yet.".into(),
+        )),
+        _ => github::repo_set_star(&repo_path, starred).await,
+    }
+}
+
+/// Which providers this machine can publish a local repo to. A repo with no
+/// hosted remote has nothing to detect a provider from, so the publish UI asks
+/// explicitly and offers each ready target.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishTargets {
+    pub github: bool,
+    pub gitlab: bool,
+}
+
+#[tauri::command]
+pub async fn forge_publish_targets(repo_path: String) -> AppResult<PublishTargets> {
+    let gh = crate::github::pr::gh_status(repo_path)
+        .await
+        .map(|s| s.installed && s.authenticated)
+        .unwrap_or(false);
+    let gl = gitlab::cli_ready().await;
+    Ok(PublishTargets {
+        github: gh,
+        gitlab: gl,
+    })
+}
+
+/// Publish a local repo, behind the abstraction. The PROVIDER IS EXPLICIT — a
+/// not-yet-published repo has no remote to detect one from. GitHub creates +
+/// pushes via `gh repo create --push`; GitLab creates via `glab repo create`,
+/// wires `origin`, and pushes with the one-shot credential helper. GitLab has no
+/// homepage field (the dialog hides it) and drops it here.
+#[tauri::command]
+pub async fn forge_publish_repo(
+    state: tauri::State<'_, crate::state::AppState>,
+    provider: Provider,
+    repo_path: String,
+    name: String,
+    private: bool,
+    description: String,
+    homepage: String,
+    topics: Vec<String>,
+) -> AppResult<String> {
+    match provider {
+        Provider::GitLab => {
+            gitlab::publish_repo(&state, &repo_path, &name, private, &description, &topics).await
+        }
+        Provider::Bitbucket => Err(AppError::InvalidArgument(
+            "Bitbucket publishing isn't supported yet.".into(),
+        )),
+        Provider::GitHub => {
+            github::publish_repo(&repo_path, &name, private, &description, &homepage, topics)
+                .await
         }
     }
 }

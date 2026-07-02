@@ -51,8 +51,11 @@ export function BranchRulesDialog({
   const savePersonal = useSaveBranchRules(repoPath);
   const saveShared = useSaveSharedBranchRules(repoPath);
   const gh = useForgeStatus(repoPath);
-  // Importing branch protections is a GitHub-only operation for now.
-  const ghReady = forgeFeatureReady(gh.data, "repoActions");
+  // Importing branch protections is a GitHub-only operation for now — the
+  // repoActions flag is on for GitLab too (view/star), so the provider check is
+  // load-bearing here.
+  const ghReady =
+    forgeFeatureReady(gh.data, "repoActions") && gh.data?.provider === "github";
   const [importing, setImporting] = useState(false);
   const [draft, setDraft] = useState<BranchRulesConfig>(EMPTY_BRANCH_RULES);
   const [testName, setTestName] = useState("");

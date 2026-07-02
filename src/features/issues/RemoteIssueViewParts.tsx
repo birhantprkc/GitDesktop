@@ -31,8 +31,8 @@ import { IssueRelationships } from "./IssueRelations";
 /** The issue's right-hand metadata rail. Three shapes by provider:
  *  • GitHub (`canWrite`): the full interactive rail — type / assignees / labels /
  *    milestone pickers plus relationships, development, and Projects/Notifications.
- *  • GitLab (labels + assignees editable, the rest GitHub-only): a hybrid rail — the
- *    Labels + Assignees pickers, a STATIC milestone, and a link out.
+ *  • GitLab (labels / assignees / milestone editable, the rest GitHub-only): a
+ *    hybrid rail — the three pickers and a link out.
  *  • Read-only (Bitbucket / not-ready): a static rail ({@link ReadOnlyIssueSidebar})
  *    of just what the issue payload carries. */
 export function IssueSidebar({
@@ -42,6 +42,7 @@ export function IssueSidebar({
   canWrite,
   canEditLabels,
   canEditAssignees,
+  canSetMilestone,
   remoteLabel,
 }: {
   repoPath: string;
@@ -50,6 +51,7 @@ export function IssueSidebar({
   canWrite: boolean;
   canEditLabels: boolean;
   canEditAssignees: boolean;
+  canSetMilestone: boolean;
   remoteLabel: string;
 }) {
   const setAssignees = useSetIssueAssignees(repoPath);
@@ -58,15 +60,15 @@ export function IssueSidebar({
   const onError = (e: unknown) => toastError(e);
 
   // A provider we can only read from (Bitbucket, or a not-ready repo): static rail.
-  if (!canWrite && !canEditLabels && !canEditAssignees) {
+  if (!canWrite && !canEditLabels && !canEditAssignees && !canSetMilestone) {
     return <ReadOnlyIssueSidebar issue={issue} remoteLabel={remoteLabel} />;
   }
 
-  // GitLab: Labels + Assignees are editable, but the GitHub-only surfaces (issue
-  // type, relationships, development, projects/notifications) aren't wired and
-  // milestone writes aren't either — a hybrid of the two editable pickers, a static
-  // milestone (when present), and a link out. The affordance carries the cue: a
-  // ghost-button picker means editable; a muted label + value means read-only.
+  // GitLab: Labels + Assignees + Milestone are editable, but the GitHub-only
+  // surfaces (issue type, relationships, development, projects/notifications)
+  // aren't wired — a hybrid of the editable pickers and a link out. The affordance
+  // carries the cue: a ghost-button picker means editable; a muted label + value
+  // means read-only.
   if (!canWrite) {
     return (
       <aside className="w-64 shrink-0 space-y-4 overflow-y-auto border-l p-4">
@@ -91,13 +93,25 @@ export function IssueSidebar({
             }
           />
         )}
-        {issue.milestone && (
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground">
-              Milestone
-            </p>
-            <p className="text-xs">{issue.milestone.title}</p>
-          </div>
+        {canSetMilestone ? (
+          <MilestoneMenu
+            repoPath={repoPath}
+            enabled
+            value={issue.milestone?.number ?? null}
+            valueLabel={issue.milestone?.title}
+            onChange={(m, title) =>
+              setMilestone.mutate({ number, milestone: m, title }, { onError })
+            }
+          />
+        ) : (
+          issue.milestone && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground">
+                Milestone
+              </p>
+              <p className="text-xs">{issue.milestone.title}</p>
+            </div>
+          )
         )}
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-muted-foreground">Links</p>

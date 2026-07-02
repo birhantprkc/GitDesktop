@@ -1,7 +1,7 @@
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/button";
-import { ghRepoUrl } from "@/lib/git/api";
+import { forgeRepoUrl } from "@/lib/git/api";
 import { useActiveGhHost } from "@/lib/git/host";
 import { toastError } from "@/lib/toast";
 
@@ -26,7 +26,7 @@ export function LinkOutsCard({
 }) {
   async function open(suffix: string) {
     try {
-      const url = await ghRepoUrl(repoPath);
+      const url = await forgeRepoUrl(repoPath);
       await openUrl(`${url}${suffix}`);
     } catch (e) {
       toastError(e);
@@ -38,7 +38,7 @@ export function LinkOutsCard({
   const canStarHistory = host === "github.com";
   async function openStars() {
     try {
-      const url = await ghRepoUrl(repoPath);
+      const url = await forgeRepoUrl(repoPath);
       const slug = url
         .replace(/^https?:\/\/github\.com\//, "")
         .replace(/\/$/, "");

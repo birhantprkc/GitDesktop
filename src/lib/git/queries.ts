@@ -698,13 +698,15 @@ export function usePublishRepo(repo: string) {
   return useRepoMutation(
     repo,
     (args: {
+      provider: "github" | "gitlab";
       name: string;
       isPrivate: boolean;
       description: string;
       homepage: string;
       topics: string[];
     }) =>
-      api.ghPublishRepo(
+      api.forgePublishRepo(
+        args.provider,
         repo,
         args.name,
         args.isPrivate,
@@ -715,6 +717,18 @@ export function usePublishRepo(repo: string) {
   );
 }
 
+/** Which providers this machine can publish to — drives the publish buttons for
+ *  a repo with no hosted remote yet. */
+export function usePublishTargets(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "publish-targets"] as const,
+    queryFn: () => api.forgePublishTargets(repo),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 export function usePrsForBranch(
   repo: string,
   head: string | null,
@@ -722,7 +736,7 @@ export function usePrsForBranch(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "prs", head ?? ""] as const,
-    queryFn: () => api.ghPrsForBranch(repo, head ?? ""),
+    queryFn: () => api.forgePrsForBranch(repo, head ?? ""),
     enabled: enabled && head !== null,
     staleTime: 30_000,
   });
@@ -804,7 +818,7 @@ export function usePrefetchPr(repo: string) {
 export function usePrReactions(repo: string, number: number | null) {
   return useQuery({
     queryKey: ["repo", repo, "pr", number ?? 0, "reactions"] as const,
-    queryFn: () => api.ghPrReactions(repo, number ?? 0),
+    queryFn: () => api.forgePrReactions(repo, number ?? 0),
     enabled: number !== null,
     staleTime: 30_000,
   });
@@ -885,7 +899,7 @@ export function useAssignableUsers(repo: string, enabled: boolean) {
 export function useMilestones(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "milestones"] as const,
-    queryFn: () => api.ghMilestones(repo),
+    queryFn: () => api.forgeMilestones(repo),
     enabled,
     staleTime: 5 * 60_000,
   });
@@ -942,7 +956,7 @@ export function useSetIssueMilestone(repo: string) {
       milestone: number | null;
       /** Title for the optimistic chip (backend takes only the number). */
       title?: string | null;
-    }) => api.ghIssueSetMilestone(repo, args.number, args.milestone),
+    }) => api.forgeIssueSetMilestone(repo, args.number, args.milestone),
     (issue, args) => ({
       ...issue,
       milestone:
@@ -1001,7 +1015,7 @@ export function useUnlockIssue(repo: string) {
 export function useIssueReactions(repo: string, number: number | null) {
   return useQuery({
     queryKey: ["repo", repo, "issue", number ?? 0, "reactions"] as const,
-    queryFn: () => api.ghIssueReactions(repo, number ?? 0),
+    queryFn: () => api.forgeIssueReactions(repo, number ?? 0),
     enabled: number !== null,
     staleTime: 30_000,
   });
@@ -1037,13 +1051,19 @@ function patchReactionList(
 /**
  * Toggles the viewer's reaction with an optimistic cache update + rollback, so
  * the chip responds instantly instead of waiting on a refetch. `reactionsKey`
- * is the issue/discussion reactions query; `bodyId` is the issue/discussion
- * node id (anything else is a comment id). Works for issues and discussions.
+ * is the reactions query; `bodyId` is the issue/PR/discussion body's id
+ * (anything else is a comment id). `opts` carries the GitLab-side subject
+ * (containing issue/MR — GitHub keys purely on node ids and ignores it);
+ * discussions are GitHub-only, so the default rides the GitHub arm untouched.
  */
 export function useToggleReaction(
   repo: string,
   reactionsKey: QueryKey,
   bodyId: string,
+  opts: { target: api.ReactionTarget; number: number } = {
+    target: "discussion",
+    number: 0,
+  },
 ) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -1053,8 +1073,20 @@ export function useToggleReaction(
       active: boolean;
     }) =>
       args.active
-        ? api.ghRemoveReaction(repo, args.subjectId, args.content)
-        : api.ghAddReaction(repo, args.subjectId, args.content),
+        ? api.forgeRemoveReaction(
+            repo,
+            opts.target,
+            opts.number,
+            args.subjectId,
+            args.content,
+          )
+        : api.forgeAddReaction(
+            repo,
+            opts.target,
+            opts.number,
+            args.subjectId,
+            args.content,
+          ),
     onMutate: async (args) => {
       await queryClient.cancelQueries({ queryKey: reactionsKey });
       const prev = queryClient.getQueryData<IssueReactions>(reactionsKey);
@@ -1304,7 +1336,7 @@ export function useEditIssue(repo: string) {
   return useRepoMutation(
     repo,
     (args: { number: number; title: string; body: string }) =>
-      api.ghIssueEdit(repo, args.number, args.title, args.body),
+      api.forgeIssueEdit(repo, args.number, args.title, args.body),
   );
 }
 
@@ -1456,6 +1488,12 @@ const NO_FORGE_STATUS: ForgeStatus = {
     releaseCreate: false,
     releaseEdit: false,
     mrAssignees: false,
+    mrRequestChanges: false,
+    issueEdit: false,
+    mrEdit: false,
+    issueMilestone: false,
+    issueReactions: false,
+    mrReactions: false,
   },
 };
 
@@ -2313,6 +2351,15 @@ export function useUnapprovePr(repo: string) {
   );
 }
 
+/** Request changes on an MR with an optional comment (GitLab-only, gated on
+ *  `implemented.mrRequestChanges`). The caller patches the approvals cache
+ *  optimistically, like the approve toggle. */
+export function useRequestChangesPr(repo: string) {
+  return useRepoMutation(repo, (args: { number: number; body: string }) =>
+    api.forgePrRequestChanges(repo, args.number, args.body),
+  );
+}
+
 /**
  * Set an MR's assignees (GitLab-only, gated on `implemented.mrAssignees`) with
  * an optimistic patch of the PR-details cache + rollback, mirroring
@@ -2416,7 +2463,7 @@ export function useForkRepo(repo: string) {
 export function useRepoStarStatus(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "star-status"] as const,
-    queryFn: () => api.ghRepoStarStatus(repo),
+    queryFn: () => api.forgeRepoStarStatus(repo),
     enabled,
     staleTime: 5 * 60_000,
     retry: false,
@@ -2427,7 +2474,7 @@ export function useSetRepoStar(repo: string) {
   const queryClient = useQueryClient();
   const key = ["repo", repo, "star-status"] as const;
   return useMutation({
-    mutationFn: (starred: boolean) => api.ghRepoSetStar(repo, starred),
+    mutationFn: (starred: boolean) => api.forgeRepoSetStar(repo, starred),
     // Optimistic: flip the cached star state at once, roll back on failure.
     onMutate: async (starred: boolean) => {
       await queryClient.cancelQueries({ queryKey: key });
@@ -2975,7 +3022,7 @@ export function useEditPr(repo: string) {
   return useRepoMutation(
     repo,
     (args: { number: number; title: string; body: string }) =>
-      api.ghPrEdit(repo, args.number, args.title, args.body),
+      api.forgePrEdit(repo, args.number, args.title, args.body),
   );
 }
 

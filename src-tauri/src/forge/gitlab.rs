@@ -19,7 +19,7 @@ use crate::forge::model::{
 };
 use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
-use crate::github::issue::{IssueDetails, IssueInfo, Milestone};
+use crate::github::issue::{IssueDetails, IssueInfo, IssueReactions, Milestone, Reaction};
 use crate::github::pr::{
     ApprovalState, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrRef,
     PrThreadOut, RepoLabel,
@@ -308,6 +308,26 @@ pub async fn list_prs(repo_path: &str, state: &str) -> AppResult<Vec<PrInfo>> {
     Ok(prs)
 }
 
+/// Open MRs whose source branch is `head` — the ComparePanel duplicate probe,
+/// mirroring `gh_prs_for_branch` (lets the UI offer "View merge request" instead
+/// of "Create" once one already exists). The branch lands in a query VALUE, which
+/// glab does not URL-encode — encode it here so a `/`- or `&`-bearing branch name
+/// can't split the query into silently-unfiltered results.
+pub async fn prs_for_branch(repo_path: &str, head: &str) -> AppResult<Vec<PrInfo>> {
+    if head.is_empty() || head.starts_with('-') {
+        return Err(AppError::InvalidArgument(format!("invalid branch: {head}")));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!(
+        "projects/{enc}/merge_requests?source_branch={}&state=opened&per_page=100",
+        encode_query_value(head)
+    );
+    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+    let mrs: Vec<GlabMr> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab merge requests: {e}")))?;
+    Ok(mrs.into_iter().map(from_glab_mr).collect())
+}
+
 /// One changed file as the MR `/changes` endpoint returns it.
 #[derive(Deserialize)]
 struct GlabChange {
@@ -594,11 +614,11 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
 
 // ── Merge requests (write) ────────────────────────────────────────────────────
 //
-// Comment (note), close/reopen, approve/unapprove, and merge — mirroring the
-// gh_pr_* commands and dispatching through forge_pr_*. (Full reviews and MR body
-// editing stay GitHub-only.) Same glab `-f` raw-field + `state_event` shape as the
-// issue writes (validated live against the demo). Unlike issue close, MR close has
-// no reason on either platform.
+// Comment (note), close/reopen, title/body edit, approve/unapprove, and merge —
+// mirroring the gh_pr_* commands and dispatching through forge_pr_*. (Full reviews
+// stay GitHub-only.) Same glab `-f` raw-field + `state_event` shape as the issue
+// writes (validated live against the demo). Unlike issue close, MR close has no
+// reason on either platform.
 
 /// Post a comment (note) on a merge request.
 pub async fn comment_mr(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
@@ -639,7 +659,32 @@ pub async fn reopen_mr(repo_path: &str, number: u64) -> AppResult<()> {
     set_mr_state(repo_path, number, "reopen").await
 }
 
-// ── Merge requests (approvals) ────────────────────────────────────────────────
+/// Edit a merge request's title/description. Mirrors `gh_pr_edit` (empty-title
+/// guard; an empty body clears the description). Validated live: `-f` keeps
+/// multi-line/comma/`=`/`@`/leading-`-` values intact.
+pub async fn edit_mr(repo_path: &str, number: u64, title: &str, body: &str) -> AppResult<()> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "a merge request title is required".into(),
+        ));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/merge_requests/{number}");
+    let title_arg = format!("title={title}");
+    let desc_arg = format!("description={body}");
+    run_glab(
+        Some(repo_path),
+        &[
+            "api", "--method", "PUT", &endpoint, "-f", &title_arg, "-f", &desc_arg,
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+// ── Merge requests (approvals & reviewer states) ──────────────────────────────
 //
 // GitLab's approve/unapprove is a bodyless toggle with no GitHub analogue (GitHub
 // approves through the review flow), so it surfaces as a GitLab-only control gated
@@ -649,6 +694,13 @@ pub async fn reopen_mr(repo_path: &str, number: u64) -> AppResult<()> {
 // the toggle keys on `user_has_approved` instead and a real permission error surfaces
 // via the action's toast. Validated live against the demo (approve adds the viewer to
 // `approved_by`; unapprove reverts it).
+//
+// Request-changes (the blocking reviewer state, `implemented.mr_request_changes`)
+// rides the same read: the reviewers endpoint carries a per-reviewer `state`
+// (`unreviewed` / `requested_changes` / `approved` — validated live on Free). The
+// WRITE is GraphQL-only (`mergeRequestRequestChanges`, works on Free) and requires
+// the viewer to BE a reviewer first; approving clears the state (validated), while
+// the direct undo mutation is Premium-only ("Invalid license" on Free).
 
 /// One entry of a GitLab MR's `approved_by` list.
 #[derive(Deserialize)]
@@ -670,7 +722,48 @@ struct GlabApprovals {
     approvals_left: u32,
 }
 
+/// A reviewer's user object as the reviewers endpoint nests it (full user payload;
+/// we keep the numeric id — needed to preserve existing reviewers on a PUT — and
+/// the username).
+#[derive(Deserialize)]
+struct GlabReviewerUser {
+    id: u64,
+    username: String,
+}
+
+/// One entry of `GET …/merge_requests/<n>/reviewers`.
+#[derive(Deserialize)]
+struct GlabReviewer {
+    #[serde(default)]
+    user: Option<GlabReviewerUser>,
+    /// `unreviewed` / `requested_changes` / `approved` (validated live).
+    #[serde(default)]
+    state: String,
+}
+
+/// The MR's reviewers with their review states.
+async fn mr_reviewers(repo_path: &str, enc: &str, number: u64) -> AppResult<Vec<GlabReviewer>> {
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/merge_requests/{number}/reviewers")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab reviewers: {e}")))
+}
+
+/// The signed-in user's id + username (`glab api user`).
+async fn current_user(repo_path: &str) -> AppResult<GlabReviewerUser> {
+    let out = run_glab(Some(repo_path), &["api", "user"], GLAB_NETWORK_TIMEOUT).await?;
+    serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab user: {e}")))
+}
+
 /// The viewer's + the MR's approval state, mapped onto the neutral `ApprovalState`.
+/// Also folds in the viewer's requested-changes reviewer state — all three reads
+/// must succeed (a wrong-but-confident review state is worse than a disabled
+/// control, so no best-effort fallbacks here).
 pub async fn pr_approvals(repo_path: &str, number: u64) -> AppResult<ApprovalState> {
     let enc = encode_project(&project_path(repo_path).await?);
     let out = run_glab(
@@ -681,6 +774,14 @@ pub async fn pr_approvals(repo_path: &str, number: u64) -> AppResult<ApprovalSta
     .await?;
     let a: GlabApprovals = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Glab(format!("could not parse GitLab approvals: {e}")))?;
+    let me = current_user(repo_path).await?;
+    let viewer_requested_changes = mr_reviewers(repo_path, &enc, number)
+        .await?
+        .into_iter()
+        .any(|r| {
+            r.state == "requested_changes"
+                && r.user.map(|u| u.username == me.username).unwrap_or(false)
+        });
     Ok(ApprovalState {
         viewer_has_approved: a.user_has_approved,
         approved_by: a
@@ -690,6 +791,7 @@ pub async fn pr_approvals(repo_path: &str, number: u64) -> AppResult<ApprovalSta
             .collect(),
         approvals_required: a.approvals_required,
         approvals_left: a.approvals_left,
+        viewer_requested_changes,
     })
 }
 
@@ -716,6 +818,175 @@ pub async fn unapprove_pr(repo_path: &str, number: u64) -> AppResult<()> {
         GLAB_NETWORK_TIMEOUT,
     )
     .await?;
+    Ok(())
+}
+
+/// The GraphQL envelope for `mergeRequestRequestChanges` — mutation-level errors
+/// come back inside `data`, query/auth-level errors at the top level.
+#[derive(Deserialize)]
+struct GlabGqlRequestChangesEnvelope {
+    #[serde(default)]
+    data: Option<GlabGqlRequestChangesData>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    errors: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct GlabGqlRequestChangesData {
+    #[serde(rename = "mergeRequestRequestChanges")]
+    request_changes: Option<GlabGqlRequestChangesErrors>,
+}
+
+#[derive(Deserialize)]
+struct GlabGqlRequestChangesErrors {
+    #[serde(default, deserialize_with = "null_to_default")]
+    errors: Vec<String>,
+}
+
+/// Replace the MR's reviewers with `ids` (`0` clears — the assignees CSV shape).
+async fn set_mr_reviewer_ids(repo_path: &str, enc: &str, number: u64, ids: &[u64]) -> AppResult<()> {
+    let endpoint = format!("projects/{enc}/merge_requests/{number}");
+    let ids_arg = format!(
+        "reviewer_ids={}",
+        if ids.is_empty() {
+            "0".to_string()
+        } else {
+            ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
+        }
+    );
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &ids_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Request changes on a merge request (the blocking reviewer state), with an
+/// optional comment. All forms validated live on the Free-tier demo:
+/// - The GraphQL mutation `mergeRequestRequestChanges` works on Free but requires
+///   the viewer to BE a reviewer ("Reviewer not found") — so we add them first
+///   when needed, keeping the existing reviewers ahead of the viewer in the PUT.
+///   Free allows a single reviewer and keeps only the FIRST id, so that order
+///   never displaces an existing reviewer — we re-read and error honestly when
+///   the viewer didn't stick, rather than silently bumping someone.
+/// - Approving clears the state; the direct undo mutation is Premium-only.
+pub async fn request_changes_mr(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
+    let path = project_path(repo_path).await?;
+    // The path is embedded in a quoted GraphQL string; GitLab paths can't contain
+    // quotes/backslashes, so reject rather than escape if one ever shows up.
+    if path.contains('"') || path.contains('\\') {
+        return Err(AppError::InvalidArgument(format!(
+            "unexpected characters in project path: {path}"
+        )));
+    }
+    let enc = encode_project(&path);
+
+    // Make the viewer a reviewer if they aren't one yet (existing reviewers first).
+    let me = current_user(repo_path).await?;
+    let reviewers = mr_reviewers(repo_path, &enc, number).await?;
+    let existing_ids: Vec<u64> = reviewers
+        .iter()
+        .filter_map(|r| r.user.as_ref().map(|u| u.id))
+        .collect();
+    let added_viewer = !existing_ids.contains(&me.id);
+    if added_viewer {
+        let mut ids = existing_ids.clone();
+        ids.push(me.id);
+        set_mr_reviewer_ids(repo_path, &enc, number, &ids).await?;
+        let now = mr_reviewers(repo_path, &enc, number).await?;
+        let now_ids: Vec<u64> = now
+            .iter()
+            .filter_map(|r| r.user.as_ref().map(|u| u.id))
+            .collect();
+        if !now_ids.contains(&me.id) {
+            // Single-reviewer tier: the PUT kept only the FIRST id. With one
+            // pre-existing reviewer nothing changed (ours was appended last);
+            // with several (multi-reviewer data retained across a tier
+            // downgrade) that same PUT just dropped the rest — attempt a
+            // restore and DISCLOSE the drop rather than report a clean no-op
+            // (the restore runs through the same keep-first filter, so
+            // verification on GitLab is the honest ask).
+            let lost: Vec<String> = reviewers
+                .iter()
+                .filter_map(|r| r.user.as_ref())
+                .filter(|u| !now_ids.contains(&u.id))
+                .map(|u| u.username.clone())
+                .collect();
+            if !lost.is_empty() {
+                let _ = set_mr_reviewer_ids(repo_path, &enc, number, &existing_ids).await;
+                return Err(AppError::Glab(format!(
+                    "Couldn't add you as a reviewer (this GitLab tier allows one \
+                     reviewer), and GitLab may have dropped reviewer(s) {} in the \
+                     attempt — please verify the reviewers on GitLab.",
+                    lost.join(", ")
+                )));
+            }
+            return Err(AppError::Glab(
+                "Couldn't add you as a reviewer (this GitLab tier allows one \
+                 reviewer, and the merge request already has one) — request \
+                 changes on GitLab instead."
+                    .into(),
+            ));
+        }
+    }
+
+    // The mutation itself. On failure, best-effort restore the reviewer list we
+    // changed above so a failed action doesn't leave the viewer as a reviewer.
+    let query = format!(
+        "mutation {{ mergeRequestRequestChanges(input: {{ projectPath: \"{path}\", iid: \"{number}\" }}) {{ errors }} }}"
+    );
+    let query_arg = format!("query={query}");
+    let result = run_glab(
+        Some(repo_path),
+        &["api", "graphql", "-f", &query_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await;
+    let mutation_result = result.and_then(|out| {
+        let env: GlabGqlRequestChangesEnvelope = serde_json::from_str(&out.stdout_lossy())
+            .map_err(|e| AppError::Glab(format!("could not parse the GitLab response: {e}")))?;
+        if !env.errors.is_empty() {
+            let msgs: Vec<String> = env
+                .errors
+                .iter()
+                .map(|e| {
+                    e.get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown GraphQL error")
+                        .to_string()
+                })
+                .collect();
+            return Err(AppError::Glab(msgs.join("; ")));
+        }
+        // With no top-level errors a compliant response always carries the
+        // mutation payload — a missing/null one is an unexpected shape, not a
+        // success (wrong-but-confident is worse than an error here).
+        let payload = env.data.and_then(|d| d.request_changes).ok_or_else(|| {
+            AppError::Glab("unexpected GitLab response (no mutation payload)".into())
+        })?;
+        if !payload.errors.is_empty() {
+            return Err(AppError::Glab(payload.errors.join("; ")));
+        }
+        Ok(())
+    });
+    if let Err(e) = mutation_result {
+        if added_viewer {
+            let _ = set_mr_reviewer_ids(repo_path, &enc, number, &existing_ids).await;
+        }
+        return Err(e);
+    }
+
+    // The optional review comment rides as a plain note. The state change above
+    // already stood, so a note failure must say so rather than read as a no-op.
+    if !body.trim().is_empty() {
+        if let Err(e) = comment_mr(repo_path, number, body).await {
+            return Err(AppError::Glab(format!(
+                "Changes were requested, but posting the comment failed: {e}"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -772,11 +1043,10 @@ pub async fn merge_mr(
 //
 // GitLab issues map onto the same neutral `IssueInfo`/`IssueDetails` the GitHub
 // panels render, so the frontend stays provider-agnostic. As with MRs we go
-// through `glab api` addressing the project by its URL-encoded full path. Only
-// reads are wired up; every issue *mutation* (comment/close/label/assign/…) stays
-// GitHub-only and is hidden for GitLab on the frontend, so the GitLab fields the
-// mutations would need (node id, lock reason, pinned, org issue type) are left
-// empty rather than mislabeled.
+// through `glab api` addressing the project by its URL-encoded full path. The
+// GitLab fields the still-unwired mutations would need (node id, lock reason,
+// pinned, org issue type) are left empty rather than mislabeled — the wired
+// writes (see the write section below) key on the iid, names, or global ids.
 
 /// Map GitLab's issue state (`opened`/`closed`) onto the neutral `"OPEN"/"CLOSED"`
 /// the frontend expects. (Issues, unlike MRs, never have a `merged` state.)
@@ -822,11 +1092,15 @@ fn from_glab_issue(i: GlabIssue) -> IssueInfo {
     }
 }
 
-/// A GitLab milestone as embedded in an issue payload (its `iid` is the per-project
-/// number, mirroring how `Milestone.number` is used on GitHub).
+/// A GitLab milestone as embedded in an issue payload or listed by the milestones
+/// endpoint. We keep the GLOBAL `id` — not the `iid` — because the milestone write
+/// keys on `milestone_id`, and `iid` is project-scoped for project milestones but
+/// group-scoped for group milestones (a collision waiting to happen). The neutral
+/// `Milestone.number` carries this id everywhere on GitLab (list, detail, write),
+/// so the picker's selection lookup and the mutation agree.
 #[derive(Deserialize)]
 struct GlabMilestone {
-    iid: u64,
+    id: u64,
     title: String,
 }
 
@@ -936,9 +1210,10 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
         .collect();
 
     Ok(IssueDetails {
-        // No GraphQL node id on GitLab; the GitLab mutations key on the iid (labels
-        // by name), and reaction/sub-issue mutations stay GitHub-only — so an empty
-        // id is fine.
+        // No GraphQL node id on GitLab; the GitLab mutations key on the iid
+        // (labels by name), and the empty id doubles as the reactions "body"
+        // subject (`forge_add_reaction` reads "" as the issue body). Sub-issue
+        // mutations stay GitHub-only.
         id: String::new(),
         number: issue.iid,
         title: issue.title,
@@ -948,12 +1223,11 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
         created_at: issue.created_at,
         url: issue.web_url,
         assignees: issue.assignees.into_iter().map(|a| a.username).collect(),
-        // The read-only rail shows only the title; `number` is display-only here
-        // (milestone mutations are GitHub-only). GitLab's `iid` is project-scoped
-        // for project milestones but group-scoped for group milestones — fine while
-        // unused, but revisit before making the milestone actionable for GitLab.
+        // `number` is GitLab's GLOBAL milestone id (see `GlabMilestone`) — the same
+        // key `list_milestones` returns and `set_issue_milestone` writes, so the
+        // picker's current-value lookup matches the option list.
         milestone: issue.milestone.map(|m| Milestone {
-            number: m.iid,
+            number: m.id,
             title: m.title,
         }),
         // GitLab's issue "type" (issue/incident/task) isn't GitHub's org-defined
@@ -970,14 +1244,14 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
 
 // ── Issues (write) ────────────────────────────────────────────────────────────
 //
-// The first GitLab WRITE actions: post a comment (note) and close/reopen. They
-// mirror gh_issue_comment/close/reopen and dispatch through forge_issue_*; the
-// frontend un-gates just these for GitLab (every other issue write stays GitHub-
-// only). The GitHub close `reason` (completed/not_planned) has no GitLab analogue,
-// so the dispatch drops it before calling close_issue. `glab api -f key=value` is a
-// RAW string field (no `@file` interpretation, unlike `-F`), so a body starting
-// with `@` or carrying newlines is safe (glab is a real .exe — no BatBadBut shim
-// refusal of newline argv; both validated live against the demo).
+// Comment (note), close/reopen, title/body edit, and milestone — mirroring the
+// gh_issue_* commands and dispatching through forge_issue_* (labels/assignees/
+// create live in their own sections below). The GitHub close `reason`
+// (completed/not_planned) has no GitLab analogue, so the dispatch drops it before
+// calling close_issue. `glab api -f key=value` is a RAW string field (no `@file`
+// interpretation, unlike `-F`), so a body starting with `@` or carrying newlines
+// is safe (glab is a real .exe — no BatBadBut shim refusal of newline argv; all
+// validated live against the demo).
 
 /// Post a comment (note) on an issue.
 pub async fn comment_issue(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
@@ -1016,6 +1290,406 @@ pub async fn close_issue(repo_path: &str, number: u64) -> AppResult<()> {
 
 pub async fn reopen_issue(repo_path: &str, number: u64) -> AppResult<()> {
     set_issue_state(repo_path, number, "reopen").await
+}
+
+/// Edit an issue's title/description. Mirrors `gh_issue_edit` (empty-title guard;
+/// an empty body clears the description). Validated live: `-f` keeps
+/// multi-line/comma/`=`/`@`/leading-`-` values intact.
+pub async fn edit_issue(repo_path: &str, number: u64, title: &str, body: &str) -> AppResult<()> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "an issue title is required".into(),
+        ));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}");
+    let title_arg = format!("title={title}");
+    let desc_arg = format!("description={body}");
+    run_glab(
+        Some(repo_path),
+        &[
+            "api", "--method", "PUT", &endpoint, "-f", &title_arg, "-f", &desc_arg,
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+// ── Milestones (read + write) ─────────────────────────────────────────────────
+//
+// The milestone picker's option list plus the issue milestone write. Everything
+// keys on GitLab's GLOBAL milestone id (see `GlabMilestone`): the list returns it
+// as the neutral `Milestone.number`, the issue detail carries the same id, and the
+// write sends it as `milestone_id` — so the picker's selection lookup, the chip,
+// and the mutation all agree. Set/clear validated live (`milestone_id=0` clears).
+
+/// Active milestones for the milestone picker — project milestones plus ancestor
+/// group milestones (`include_ancestor_groups=true`; GitLab issues commonly use a
+/// group milestone, and the global-id write accepts either kind).
+pub async fn list_milestones(repo_path: &str) -> AppResult<Vec<Milestone>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!(
+        "projects/{enc}/milestones?state=active&include_ancestor_groups=true&per_page=100"
+    );
+    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+    let milestones: Vec<GlabMilestone> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab milestones: {e}")))?;
+    Ok(milestones
+        .into_iter()
+        .map(|m| Milestone {
+            number: m.id,
+            title: m.title,
+        })
+        .collect())
+}
+
+/// Set (`Some(global milestone id)`) or clear (`None` → `milestone_id=0`) an
+/// issue's milestone.
+pub async fn set_issue_milestone(
+    repo_path: &str,
+    number: u64,
+    milestone: Option<u64>,
+) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}");
+    let milestone_arg = format!("milestone_id={}", milestone.unwrap_or(0));
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &milestone_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+// ── Reactions (award emoji) ───────────────────────────────────────────────────
+//
+// GitLab reactions are "award emoji" on issues, MRs, and notes. They map onto the
+// SAME neutral `IssueReactions`/`Reaction` shape the GitHub panels render, with
+// GitLab's award names translated to GitHub's ReactionContent enum (the 8 the
+// ReactionBar knows); awards outside that set (GitLab allows the full emoji
+// palette) are deliberately dropped — they stay visible on GitLab itself.
+// Read strategy (all validated live): notes' awards come from ONE GraphQL query
+// (`Note.awardEmoji`, with `currentUser` riding along for viewer detection) since
+// per-note REST reads would be N+1 glab process spawns; the BODY awards come from
+// GraphQL too for MRs (`MergeRequest.awardEmoji`) but REST for issues — the
+// GraphQL `Issue` type exposes no `awardEmoji` field. Writes are REST: add =
+// `POST …/award_emoji -f name=<award>` (a duplicate add 404s "has already been
+// taken" — treated as already-on), remove = list, find the viewer's award by
+// name, `DELETE …/award_emoji/<id>`.
+// KNOWN CAP: every award list (REST reads + the GraphQL connections + the
+// remove-path lookup) covers the first 100 awards per subject — past that,
+// tallies undercount and a remove whose award sits beyond the page silently
+// no-ops until a refetch. Accepted for now (a single subject with >100
+// reactions is rare); revisit with pagination if it ever bites.
+
+/// GitLab award name → GitHub ReactionContent enum (the neutral vocabulary).
+fn award_to_reaction(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "thumbsup" => "THUMBS_UP",
+        "thumbsdown" => "THUMBS_DOWN",
+        "smile" => "LAUGH",
+        "confused" => "CONFUSED",
+        "heart" => "HEART",
+        "tada" => "HOORAY",
+        "rocket" => "ROCKET",
+        "eyes" => "EYES",
+        _ => return None,
+    })
+}
+
+/// GitHub ReactionContent enum → GitLab award name (the toggle's direction).
+fn reaction_to_award(content: &str) -> AppResult<&'static str> {
+    Ok(match content {
+        "THUMBS_UP" => "thumbsup",
+        "THUMBS_DOWN" => "thumbsdown",
+        "LAUGH" => "smile",
+        "CONFUSED" => "confused",
+        "HEART" => "heart",
+        "HOORAY" => "tada",
+        "ROCKET" => "rocket",
+        "EYES" => "eyes",
+        other => {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown reaction: {other}"
+            )));
+        }
+    })
+}
+
+/// One award as both the REST list and the GraphQL `awardEmoji.nodes` carry it.
+#[derive(Deserialize)]
+struct GlabAward {
+    #[serde(default)]
+    id: u64,
+    name: String,
+    #[serde(default)]
+    user: Option<GlabMrUser>,
+}
+
+/// Fold a flat award list into the neutral per-content tallies, keeping only the
+/// GitHub-8 vocabulary. `viewer` marks `viewer_reacted`.
+fn tally_awards(awards: Vec<GlabAward>, viewer: &str) -> Vec<Reaction> {
+    let mut out: Vec<Reaction> = Vec::new();
+    for award in awards {
+        let Some(content) = award_to_reaction(&award.name) else {
+            continue;
+        };
+        let by_viewer = award
+            .user
+            .as_ref()
+            .map(|u| u.username == viewer)
+            .unwrap_or(false);
+        if let Some(r) = out.iter_mut().find(|r| r.content == content) {
+            r.count += 1;
+            r.viewer_reacted = r.viewer_reacted || by_viewer;
+        } else {
+            out.push(Reaction {
+                content: content.to_string(),
+                count: 1,
+                viewer_reacted: by_viewer,
+            });
+        }
+    }
+    out
+}
+
+// The GraphQL award-read envelope (shape validated live). Note ids come back as
+// gids (`gid://gitlab/Note/<id>`); the numeric tail matches the REST note id the
+// thread keys comments by.
+#[derive(Deserialize)]
+struct GqlAwardEnvelope {
+    data: Option<GqlAwardData>,
+}
+#[derive(Deserialize)]
+struct GqlAwardData {
+    #[serde(rename = "currentUser")]
+    current_user: Option<GlabUser>,
+    project: Option<GqlAwardProject>,
+}
+#[derive(Deserialize)]
+struct GqlAwardProject {
+    issue: Option<GqlAwardTarget>,
+    #[serde(rename = "mergeRequest")]
+    merge_request: Option<GqlAwardTarget>,
+}
+#[derive(Deserialize)]
+struct GqlAwardTarget {
+    #[serde(rename = "awardEmoji")]
+    award_emoji: Option<GqlAwardNodes>,
+    notes: Option<GqlNoteNodes>,
+}
+#[derive(Deserialize)]
+struct GqlAwardNodes {
+    #[serde(default, deserialize_with = "null_to_default")]
+    nodes: Vec<GlabAward>,
+}
+#[derive(Deserialize)]
+struct GqlNoteNodes {
+    #[serde(default, deserialize_with = "null_to_default")]
+    nodes: Vec<GqlNote>,
+}
+#[derive(Deserialize)]
+struct GqlNote {
+    id: String,
+    #[serde(default)]
+    system: bool,
+    #[serde(rename = "awardEmoji")]
+    award_emoji: Option<GqlAwardNodes>,
+}
+
+/// Extract the numeric tail of a `gid://gitlab/Note/<id>` gid — the REST note id
+/// the frontend's comment thread is keyed by.
+fn gid_tail(gid: &str) -> String {
+    gid.rsplit('/').next().unwrap_or(gid).to_string()
+}
+
+/// Run the one-shot GraphQL award read for an issue or MR and map it onto the
+/// neutral shape. `body_awards_from_gql` is false for issues (no
+/// `Issue.awardEmoji` in the schema — the caller fetches body awards via REST).
+/// Returns the viewer's username too, so that caller can tally without another
+/// `glab api user` spawn.
+async fn award_read(
+    repo_path: &str,
+    path: &str,
+    target_field: &str,
+    number: u64,
+    body_awards_from_gql: bool,
+) -> AppResult<(IssueReactions, String)> {
+    if path.contains('"') || path.contains('\\') {
+        return Err(AppError::InvalidArgument(format!(
+            "unexpected characters in project path: {path}"
+        )));
+    }
+    let award_sel = if body_awards_from_gql {
+        "awardEmoji { nodes { name user { username } } } "
+    } else {
+        ""
+    };
+    let query = format!(
+        "{{ currentUser {{ username }} project(fullPath: \"{path}\") {{ {target_field}(iid: \"{number}\") {{ {award_sel}notes {{ nodes {{ id system awardEmoji {{ nodes {{ name user {{ username }} }} }} }} }} }} }} }}"
+    );
+    let query_arg = format!("query={query}");
+    let out = run_glab(
+        Some(repo_path),
+        &["api", "graphql", "-f", &query_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let env: GqlAwardEnvelope = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab awards: {e}")))?;
+    let data = env
+        .data
+        .ok_or_else(|| AppError::Glab("could not load GitLab awards".into()))?;
+    let viewer = data.current_user.map(|u| u.username).unwrap_or_default();
+    let target = data
+        .project
+        .and_then(|p| if target_field == "issue" { p.issue } else { p.merge_request })
+        .ok_or_else(|| AppError::Glab("GitLab returned no such issue/MR".into()))?;
+    let body = tally_awards(
+        target.award_emoji.map(|a| a.nodes).unwrap_or_default(),
+        &viewer,
+    );
+    let mut comments = HashMap::new();
+    for note in target.notes.map(|n| n.nodes).unwrap_or_default() {
+        if note.system {
+            continue;
+        }
+        let awards = note.award_emoji.map(|a| a.nodes).unwrap_or_default();
+        if awards.is_empty() {
+            continue;
+        }
+        comments.insert(gid_tail(&note.id), tally_awards(awards, &viewer));
+    }
+    Ok((IssueReactions { body, comments }, viewer))
+}
+
+/// Reactions for an issue: REST for the body awards (no `Issue.awardEmoji` in
+/// GraphQL) + the GraphQL note read.
+pub async fn issue_reactions(repo_path: &str, number: u64) -> AppResult<IssueReactions> {
+    let path = project_path(repo_path).await?;
+    let enc = encode_project(&path);
+    let (mut reactions, viewer) = award_read(repo_path, &path, "issue", number, false).await?;
+    let out = run_glab(
+        Some(repo_path),
+        &[
+            "api",
+            &format!("projects/{enc}/issues/{number}/award_emoji?per_page=100"),
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let awards: Vec<GlabAward> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab awards: {e}")))?;
+    reactions.body = tally_awards(awards, &viewer);
+    Ok(reactions)
+}
+
+/// Reactions for a merge request: one GraphQL read covers body + notes.
+pub async fn mr_reactions(repo_path: &str, number: u64) -> AppResult<IssueReactions> {
+    let path = project_path(repo_path).await?;
+    Ok(award_read(repo_path, &path, "mergeRequest", number, true)
+        .await?
+        .0)
+}
+
+/// The award endpoint for a subject: the issue/MR body (`note_id` None) or one
+/// of its notes. `target` is `"issue"` or `"mr"`.
+fn award_endpoint(enc: &str, target: &str, number: u64, note_id: Option<&str>) -> AppResult<String> {
+    let seg = match target {
+        "issue" => "issues",
+        "mr" => "merge_requests",
+        other => {
+            return Err(AppError::InvalidArgument(format!(
+                "unknown reaction target: {other}"
+            )));
+        }
+    };
+    Ok(match note_id {
+        Some(id) => format!("projects/{enc}/{seg}/{number}/notes/{id}/award_emoji"),
+        None => format!("projects/{enc}/{seg}/{number}/award_emoji"),
+    })
+}
+
+/// Add the viewer's award. A duplicate add (GitLab 404s "has already been
+/// taken", validated live) means the state is already what the user wanted —
+/// a no-op success, mirroring `remove_reaction`'s missing-award case; erroring
+/// would roll back the optimistic chip and toast for nothing.
+pub async fn add_reaction(
+    repo_path: &str,
+    target: &str,
+    number: u64,
+    note_id: Option<&str>,
+    content: &str,
+) -> AppResult<()> {
+    let award = reaction_to_award(content)?;
+    if let Some(id) = note_id {
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(AppError::InvalidArgument(format!("invalid note id: {id}")));
+        }
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = award_endpoint(&enc, target, number, note_id)?;
+    let name_arg = format!("name={award}");
+    match run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint, "-f", &name_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(AppError::Glab(msg)) if msg.contains("already been taken") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Remove the viewer's award: list the subject's awards, find the viewer's by
+/// name, DELETE it by id. A missing award (already removed elsewhere) is a no-op
+/// success — the state matches what the user asked for.
+pub async fn remove_reaction(
+    repo_path: &str,
+    target: &str,
+    number: u64,
+    note_id: Option<&str>,
+    content: &str,
+) -> AppResult<()> {
+    let award = reaction_to_award(content)?;
+    if let Some(id) = note_id {
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(AppError::InvalidArgument(format!("invalid note id: {id}")));
+        }
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = award_endpoint(&enc, target, number, note_id)?;
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("{endpoint}?per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let awards: Vec<GlabAward> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab awards: {e}")))?;
+    let viewer = current_user(repo_path).await?.username;
+    let Some(mine) = awards.into_iter().find(|a| {
+        a.name == award
+            && a.user
+                .as_ref()
+                .map(|u| u.username == viewer)
+                .unwrap_or(false)
+    }) else {
+        return Ok(());
+    };
+    let del = format!("{endpoint}/{}", mine.id);
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &del],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
 }
 
 // ── Labels & assignees (read + write) ─────────────────────────────────────────
@@ -1211,16 +1885,214 @@ pub async fn set_mr_assignees(
     set_target_assignees(repo_path, "merge_requests", number, assignees).await
 }
 
+// ── Repository actions & publish ──────────────────────────────────────────────
+//
+// View (web URL), star/unstar, and publishing a local repo to GitLab. Forking
+// stays a web link-out for GitLab (the fork+remote-rewire flow is GitHub-only for
+// now), and the admin-settings / branch-rule-import sub-surfaces stay GitHub-only
+// — the frontend guards those on the provider, not just `repo_actions`.
+// All validated live: `starrers?search=<username>` answers "has the viewer
+// starred it" (exact-match filter); re-starring returns HTTP 304 (treated as
+// already-done); `glab repo create <name>` creates the project (visibility /
+// description / repeated `-t` topics all land) but does NOT wire a remote — the
+// publish flow adds `origin` itself and pushes with the one-shot glab credential
+// helper (the same trick as clone/create-MR).
+
+/// The project fields the repo-action reads need.
+#[derive(Deserialize)]
+struct GlabProjectRef {
+    web_url: String,
+    http_url_to_repo: String,
+}
+
+/// The repo's web URL (project home) for "View on GitLab".
+pub async fn repo_url(repo_path: &str) -> AppResult<String> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let p: GlabProjectRef = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab project: {e}")))?;
+    Ok(p.web_url)
+}
+
+/// One starrer entry (`GET …/starrers` nests the user).
+#[derive(Deserialize)]
+struct GlabStarrer {
+    #[serde(default)]
+    user: Option<GlabMrUser>,
+}
+
+/// Whether the signed-in viewer has starred this project — the starrers list
+/// filtered by username (`search` matches names/usernames; we confirm exactly).
+pub async fn repo_star_status(repo_path: &str) -> AppResult<bool> {
+    let me = current_user(repo_path).await?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!(
+        "projects/{enc}/starrers?search={}",
+        encode_query_value(&me.username)
+    );
+    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+    let starrers: Vec<GlabStarrer> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab starrers: {e}")))?;
+    Ok(starrers.iter().any(|s| {
+        s.user
+            .as_ref()
+            .map(|u| u.username == me.username)
+            .unwrap_or(false)
+    }))
+}
+
+/// Star or unstar the project. GitLab answers HTTP 304 when the state already
+/// matches (validated live) — that's the outcome the user asked for, not an
+/// error.
+pub async fn repo_set_star(repo_path: &str, starred: bool) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let action = if starred { "star" } else { "unstar" };
+    let endpoint = format!("projects/{enc}/{action}");
+    match run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(AppError::Glab(msg)) if msg.contains("HTTP 304") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Whether glab is installed + signed in — the "can this machine publish to
+/// GitLab?" probe for repos with no hosted remote yet (there's nothing to detect
+/// a provider from, so publish targets are asked for explicitly).
+pub async fn cli_ready() -> bool {
+    if run_glab_raw(None, &["--version"], GLAB_TIMEOUT)
+        .await
+        .map(|o| o.code == 0)
+        .unwrap_or(false)
+    {
+        run_glab_raw(None, &["auth", "status"], GLAB_TIMEOUT)
+            .await
+            .map(|o| o.code == 0)
+            .unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+/// Publish a local repo to GitLab: create the project (in the user's namespace),
+/// add it as `origin`, and push the current branch with the one-shot glab
+/// credential helper. Returns the project's web URL. GitLab has no homepage
+/// field, and publishing into a group isn't wired yet — the dialog says so.
+pub async fn publish_repo(
+    state: &AppState,
+    repo_path: &str,
+    name: &str,
+    private: bool,
+    description: &str,
+    topics: &[String],
+) -> AppResult<String> {
+    let name = name.trim();
+    if name.is_empty() || name.starts_with('-') {
+        return Err(AppError::InvalidArgument(
+            "a project name is required".into(),
+        ));
+    }
+    if name.contains('/') {
+        return Err(AppError::InvalidArgument(
+            "Publishing into a GitLab group isn't supported yet — use a plain \
+             project name (it lands in your namespace)."
+                .into(),
+        ));
+    }
+    let description = description.trim();
+    // glab treats a lone "-" description as "open an editor" — never from an app.
+    if description == "-" {
+        return Err(AppError::InvalidArgument("invalid description".into()));
+    }
+
+    let visibility = if private { "--private" } else { "--public" };
+    let mut args: Vec<&str> = vec!["repo", "create", name, visibility];
+    if !description.is_empty() {
+        args.push("-d");
+        args.push(description);
+    }
+    for topic in topics {
+        // Topics are lowercased [a-z0-9-] upstream; skip anything flag-shaped.
+        if !topic.is_empty() && !topic.starts_with('-') {
+            args.push("-t");
+            args.push(topic);
+        }
+    }
+    run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
+
+    // `glab repo create` does not wire a remote (validated live) — resolve the
+    // created project's URLs and do it ourselves, then push the current branch.
+    let me = current_user(repo_path).await?;
+    let enc = encode_project(&format!("{}/{name}", me.username));
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let project: GlabProjectRef = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the created project: {e}")))?;
+
+    let branch_out = crate::git::runner::run_git(
+        Some(repo_path),
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        crate::git::runner::NETWORK_TIMEOUT,
+    )
+    .await?;
+    let branch = branch_out.stdout_lossy().trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        return Err(AppError::InvalidArgument(
+            "check out a branch before publishing (detached HEAD)".into(),
+        ));
+    }
+
+    crate::git::runner::run_git_mutating(
+        state,
+        repo_path,
+        &["remote", "add", "origin", &project.http_url_to_repo],
+        crate::git::runner::NETWORK_TIMEOUT,
+    )
+    .await?;
+
+    let config = clone_credential_config(&project.http_url_to_repo).await?;
+    let mut push_args: Vec<&str> = Vec::new();
+    for entry in &config {
+        push_args.push("-c");
+        push_args.push(entry);
+    }
+    push_args.extend(["push", "-u", "origin", &branch]);
+    crate::git::runner::run_git_mutating(
+        state,
+        repo_path,
+        &push_args,
+        crate::git::runner::NETWORK_TIMEOUT,
+    )
+    .await?;
+
+    Ok(project.web_url)
+}
+
 // ── Issues & merge requests (create) ──────────────────────────────────────────
 //
 // Both creates POST through `glab api` and return the same neutral `PrRef`
 // (number + URL) the GitHub creates return, so the dialogs stay provider-agnostic.
-// Arg forms validated live against the demo: `labels=<csv>` (names) and
+// Arg forms validated live against the demo: `labels=<csv>` (names),
 // `assignee_ids=<csv>` (numeric ids, resolved from usernames like the assignee
-// write) on issue create; `source_branch`/`target_branch`/`title`/`description`
-// on MR create, with **draft = the `Draft:` title prefix** (GitLab has no draft
-// field on create — the response then carries `draft: true`). Note the created
-// issue's `web_url` comes back in GitLab's newer `/-/work_items/<iid>` form.
+// write), and `milestone_id=<global id>` on issue create;
+// `source_branch`/`target_branch`/`title`/`description` on MR create, with
+// **draft = the `Draft:` title prefix** (GitLab has no draft field on create —
+// the response then carries `draft: true`). Note the created issue's `web_url`
+// comes back in GitLab's newer `/-/work_items/<iid>` form.
 
 /// The created issue/MR fields we need back (GitLab returns the full object).
 #[derive(Deserialize)]
@@ -1229,16 +2101,18 @@ struct GlabCreated {
     web_url: String,
 }
 
-/// Create an issue with optional labels (by name) and assignees (by username —
+/// Create an issue with optional labels (by name), assignees (by username —
 /// resolved to GitLab's numeric ids via the project members, erroring rather than
-/// silently dropping when none resolve). Milestone / org issue type aren't wired
-/// for GitLab (the dialog hides those pickers).
+/// silently dropping when none resolve), and milestone (by GLOBAL milestone id,
+/// as `list_milestones` returns; validated live). GitHub's org issue type has no
+/// GitLab analogue (the dialog hides that picker).
 pub async fn create_issue(
     repo_path: &str,
     title: &str,
     body: &str,
     labels: &[String],
     assignees: &[String],
+    milestone: Option<u64>,
 ) -> AppResult<PrRef> {
     let title = title.trim();
     if title.is_empty() {
@@ -1263,6 +2137,7 @@ pub async fn create_issue(
     let endpoint = format!("projects/{enc}/issues");
     let title_arg = format!("title={title}");
     let desc_arg = format!("description={body}");
+    let milestone_arg = milestone.map(|m| format!("milestone_id={m}"));
     let mut args = vec![
         "api", "--method", "POST", &endpoint, "-f", &title_arg, "-f", &desc_arg,
     ];
@@ -1271,6 +2146,10 @@ pub async fn create_issue(
         args.push(a);
     }
     if let Some(a) = &ids_arg {
+        args.push("-f");
+        args.push(a);
+    }
+    if let Some(a) = &milestone_arg {
         args.push("-f");
         args.push(a);
     }
@@ -2274,7 +3153,7 @@ mod tests {
             "author": { "username": "alice" },
             "labels": ["enhancement", "ui"],
             "assignees": [{ "username": "bob" }, { "username": "carol" }],
-            "milestone": { "iid": 3, "title": "v1.0" },
+            "milestone": { "id": 7495818, "iid": 3, "title": "v1.0" },
             "discussion_locked": true
         }"#;
         let issue: GlabIssueDetail = serde_json::from_str(json).unwrap();
@@ -2282,7 +3161,8 @@ mod tests {
         assert_eq!(issue.assignees.len(), 2);
         assert_eq!(issue.assignees[0].username, "bob");
         let m = issue.milestone.as_ref().unwrap();
-        assert_eq!(m.iid, 3);
+        // The GLOBAL id, not the project-scoped iid (the write keys on milestone_id).
+        assert_eq!(m.id, 7495818);
         assert_eq!(m.title, "v1.0");
         assert!(issue.discussion_locked);
     }
@@ -2600,5 +3480,111 @@ mod tests {
         )
         .unwrap();
         assert_eq!(release_published_at(&r), "2026-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn request_changes_envelope_parses_all_three_outcomes() {
+        // Success, a mutation-level error (inside `data`), and a top-level GraphQL
+        // error (bad query / auth / license) — all shapes seen live.
+        let ok = r#"{"data":{"mergeRequestRequestChanges":{"errors":[]}}}"#;
+        let env: GlabGqlRequestChangesEnvelope = serde_json::from_str(ok).unwrap();
+        assert!(env.errors.is_empty());
+        assert!(env.data.unwrap().request_changes.unwrap().errors.is_empty());
+
+        let refused = r#"{"data":{"mergeRequestRequestChanges":{"errors":["Reviewer not found"]}}}"#;
+        let env: GlabGqlRequestChangesEnvelope = serde_json::from_str(refused).unwrap();
+        assert_eq!(
+            env.data.unwrap().request_changes.unwrap().errors,
+            vec!["Reviewer not found"]
+        );
+
+        let top = r#"{"errors":[{"message":"syntax error"}],"data":null}"#;
+        let env: GlabGqlRequestChangesEnvelope = serde_json::from_str(top).unwrap();
+        assert_eq!(env.errors.len(), 1);
+        assert!(env.data.is_none());
+    }
+
+    #[test]
+    fn awards_map_tally_and_round_trip() {
+        // The GitHub-8 map both ways; anything else drops from the tally (GitLab
+        // allows the full emoji palette — those stay visible on GitLab itself).
+        for (award, content) in [
+            ("thumbsup", "THUMBS_UP"),
+            ("thumbsdown", "THUMBS_DOWN"),
+            ("smile", "LAUGH"),
+            ("confused", "CONFUSED"),
+            ("heart", "HEART"),
+            ("tada", "HOORAY"),
+            ("rocket", "ROCKET"),
+            ("eyes", "EYES"),
+        ] {
+            assert_eq!(award_to_reaction(award), Some(content));
+            assert_eq!(reaction_to_award(content).unwrap(), award);
+        }
+        assert_eq!(award_to_reaction("bowtie"), None);
+        assert!(reaction_to_award("SPARKLES").is_err());
+
+        let awards: Vec<GlabAward> = serde_json::from_str(
+            r#"[
+                { "id": 1, "name": "thumbsup", "user": { "username": "alice" } },
+                { "id": 2, "name": "thumbsup", "user": { "username": "me" } },
+                { "id": 3, "name": "bowtie", "user": { "username": "me" } },
+                { "id": 4, "name": "rocket", "user": { "username": "bob" } }
+            ]"#,
+        )
+        .unwrap();
+        let tally = tally_awards(awards, "me");
+        assert_eq!(tally.len(), 2);
+        let thumbs = tally.iter().find(|r| r.content == "THUMBS_UP").unwrap();
+        assert_eq!(thumbs.count, 2);
+        assert!(thumbs.viewer_reacted);
+        let rocket = tally.iter().find(|r| r.content == "ROCKET").unwrap();
+        assert_eq!(rocket.count, 1);
+        assert!(!rocket.viewer_reacted);
+    }
+
+    #[test]
+    fn award_gql_envelope_maps_notes_by_numeric_gid_tail() {
+        // The live shape: note ids are gids; system notes and award-less notes
+        // stay out of the comments map; currentUser drives viewer_reacted.
+        let json = r#"{"data":{
+            "currentUser":{"username":"me"},
+            "project":{"mergeRequest":{
+                "awardEmoji":{"nodes":[{"name":"heart","user":{"username":"me"}}]},
+                "notes":{"nodes":[
+                    {"id":"gid://gitlab/Note/111","system":false,
+                     "awardEmoji":{"nodes":[{"name":"eyes","user":{"username":"bob"}}]}},
+                    {"id":"gid://gitlab/Note/222","system":true,
+                     "awardEmoji":{"nodes":[{"name":"eyes","user":{"username":"bob"}}]}},
+                    {"id":"gid://gitlab/Note/333","system":false,
+                     "awardEmoji":{"nodes":[]}}
+                ]}
+            }}
+        }}"#;
+        let env: GqlAwardEnvelope = serde_json::from_str(json).unwrap();
+        let data = env.data.unwrap();
+        assert_eq!(data.current_user.unwrap().username, "me");
+        let mr = data.project.unwrap().merge_request.unwrap();
+        assert_eq!(mr.award_emoji.as_ref().unwrap().nodes.len(), 1);
+        let notes = mr.notes.unwrap().nodes;
+        assert_eq!(notes.len(), 3);
+        assert_eq!(gid_tail(&notes[0].id), "111");
+        assert!(notes[1].system);
+    }
+
+    #[test]
+    fn reviewers_parse_states_and_tolerate_missing_user() {
+        // The reviewers endpoint nests full user payloads; `state` is the
+        // per-reviewer review state (requested_changes drives the pressed UI).
+        let json = r#"[
+            { "user": { "id": 7, "username": "alice", "name": "Alice" }, "state": "requested_changes" },
+            { "user": { "id": 9, "username": "bob" }, "state": "unreviewed" },
+            { "state": "approved" }
+        ]"#;
+        let reviewers: Vec<GlabReviewer> = serde_json::from_str(json).unwrap();
+        assert_eq!(reviewers.len(), 3);
+        assert_eq!(reviewers[0].state, "requested_changes");
+        assert_eq!(reviewers[0].user.as_ref().unwrap().id, 7);
+        assert!(reviewers[2].user.is_none());
     }
 }

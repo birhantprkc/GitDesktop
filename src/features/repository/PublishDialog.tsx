@@ -34,11 +34,15 @@ function parseTopics(text: string): string[] {
 
 export function PublishDialog({
   repoPath,
+  provider,
   defaultName,
   open,
   onOpenChange,
 }: {
   repoPath: string;
+  /** Chosen explicitly by the caller — an unpublished repo has no remote to
+   *  detect a provider from. */
+  provider: "github" | "gitlab";
   defaultName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -46,6 +50,8 @@ export function PublishDialog({
   const publish = usePublishRepo(repoPath);
   const aiEnabled = useAiEnabled();
   const descGen = useGenerateRepoDescription(repoPath);
+  const isGitLab = provider === "gitlab";
+  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
 
   const form = useAppForm({
     defaultValues: {
@@ -58,6 +64,7 @@ export function PublishDialog({
     onSubmit: async ({ value }) => {
       try {
         const url = await publish.mutateAsync({
+          provider,
           name: value.name.trim(),
           isPrivate: value.isPrivate,
           description: value.description,
@@ -102,12 +109,19 @@ export function PublishDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Publish repository</DialogTitle>
+            <DialogTitle>Publish to {remoteLabel}</DialogTitle>
             <DialogDescription>
-              Creates a GitHub repository, adds it as{" "}
-              <span className="font-mono">origin</span>, and pushes the current
-              branch. Use <span className="font-mono">owner/name</span> to
-              publish under an organization.
+              Creates a {isGitLab ? "GitLab project" : "GitHub repository"},
+              adds it as <span className="font-mono">origin</span>, and pushes
+              the current branch.{" "}
+              {isGitLab ? (
+                <>It lands in your namespace (groups aren't supported yet).</>
+              ) : (
+                <>
+                  Use <span className="font-mono">owner/name</span> to publish
+                  under an organization.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           {/* Fields scroll; header and submit footer stay pinned. */}
@@ -177,14 +191,17 @@ export function PublishDialog({
                 />
               )}
             </form.AppField>
-            <form.AppField name="homepage">
-              {(field) => (
-                <field.TextField
-                  label="Homepage (optional)"
-                  placeholder="https://…"
-                />
-              )}
-            </form.AppField>
+            {/* GitLab projects have no homepage field — the arm drops it. */}
+            {!isGitLab && (
+              <form.AppField name="homepage">
+                {(field) => (
+                  <field.TextField
+                    label="Homepage (optional)"
+                    placeholder="https://…"
+                  />
+                )}
+              </form.AppField>
+            )}
           </div>
 
           <DialogFooter className="sm:items-center">

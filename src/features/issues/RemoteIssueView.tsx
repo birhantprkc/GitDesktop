@@ -97,19 +97,18 @@ export function RemoteIssueView({
   repoPath: string;
   number: number;
 }) {
-  // The read view is provider-neutral, but every mutation here (comment, edit,
-  // close/reopen, labels, reactions, pin/lock/transfer/delete, sub-issues) routes
-  // through GitHub-only `gh_*` commands — so on a GitLab repo this is strictly
-  // read-only. We gate writes on "not a known read-only provider" rather than
-  // `=== "github"`, so that while the (separate) forge-status query is still
-  // pending or after it fails, a GitHub issue keeps its write controls exactly as
-  // before — only an explicitly-detected GitLab/Bitbucket repo suppresses them.
+  // The read view is provider-neutral. The remaining GitHub-only mutations
+  // (pin/lock/transfer/delete, sub-issues, close reason) route through `gh_*`
+  // commands and stay gated on `canWrite` — "not a known read-only provider"
+  // rather than `=== "github"`, so that while the (separate) forge-status query
+  // is still pending or after it fails, a GitHub issue keeps its write controls
+  // exactly as before — only an explicitly-detected GitLab/Bitbucket repo
+  // suppresses them.
   const forge = useForgeStatus(repoPath);
   const provider = forge.data?.provider;
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
   const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
-  // The first GitLab WRITES land per-action: commenting + close/reopen are wired up
-  // (the rest of the issue write surface stays GitHub-only via `canWrite`). Each is
+  // GitLab WRITES land per-action. Each shared control is
   // `canWrite || forgeFeatureReady(...)` so GitHub keeps its controls while a
   // forge-status query is pending/failed (canWrite default-true) AND a ready GitLab
   // repo positively enables just these.
@@ -122,6 +121,10 @@ export function RemoteIssueView({
     canWrite || forgeFeatureReady(forge.data, "issueLabels");
   const canEditAssignees =
     canWrite || forgeFeatureReady(forge.data, "issueAssignees");
+  // Title/body editing and the milestone picker are shared controls too.
+  const canEdit = canWrite || forgeFeatureReady(forge.data, "issueEdit");
+  const canSetMilestone =
+    canWrite || forgeFeatureReady(forge.data, "issueMilestone");
   const details = useIssueDetails(repoPath, number);
   const comment = useCommentIssue(repoPath);
   const closeIssue = useCloseIssue(repoPath);
@@ -138,12 +141,15 @@ export function RemoteIssueView({
   const deleteIssue = useDeleteIssue(repoPath);
   const selectIssue = useUiStore((s) => s.selectIssue);
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
-  // Reactions are a GitHub-only mutation surface; don't fetch them for GitLab.
-  const reactions = useIssueReactions(repoPath, canWrite ? number : null);
+  // Reactions are a shared control (GitLab awards emoji); the fetch is gated so
+  // it never fires for a provider whose reactions aren't wired (Bitbucket).
+  const canReact = canWrite || forgeFeatureReady(forge.data, "issueReactions");
+  const reactions = useIssueReactions(repoPath, canReact ? number : null);
   const toggleReactionMutation = useToggleReaction(
     repoPath,
     ["repo", repoPath, "issue", number, "reactions"] as const,
     details.data?.id ?? "",
+    { target: "issue", number },
   );
 
   const [composeBody, setComposeBody] = useState("");
@@ -307,7 +313,7 @@ export function RemoteIssueView({
               body={issue.body}
             />
           )}
-          {isOpen && canWrite && (
+          {isOpen && canEdit && (
             <Button
               variant="outline"
               size="xs"
@@ -481,7 +487,7 @@ export function RemoteIssueView({
                       >
                         Copy markdown
                       </DropdownMenuItem>
-                      {isOpen && canWrite && (
+                      {isOpen && canEdit && (
                         <DropdownMenuItem
                           onClick={() =>
                             edit.openEdit({
@@ -503,7 +509,7 @@ export function RemoteIssueView({
                     No description provided.
                   </p>
                 )}
-                {canWrite && (
+                {canReact && (
                   <ReactionBar
                     reactions={reactions.data?.body ?? []}
                     onToggle={(content, active) =>
@@ -545,10 +551,10 @@ export function RemoteIssueView({
                       : undefined
                   }
                   reactions={
-                    canWrite ? reactions.data?.comments[c.id] : undefined
+                    canReact ? reactions.data?.comments[c.id] : undefined
                   }
                   onToggleReaction={
-                    canWrite
+                    canReact
                       ? (content, active) =>
                           toggleReaction(c.id, content, active)
                       : undefined
@@ -563,8 +569,8 @@ export function RemoteIssueView({
             </div>
           </ScrollArea>
           {/* Comment is allowed after the issue closes too, matching GitHub. On
-              GitLab the composer + close/reopen show (the first writes), but the
-              GitHub-only close-reason dropdown stays hidden (GitLab has no reasons);
+              GitLab the composer + close/reopen show, but the GitHub-only
+              close-reason dropdown stays hidden (GitLab has no reasons);
               Bitbucket has neither, so the whole bar hides. */}
           {(canComment || canChangeState) && (
             <div className="space-y-2 border-t p-3">
@@ -684,6 +690,7 @@ export function RemoteIssueView({
           canWrite={canWrite}
           canEditLabels={canEditLabels}
           canEditAssignees={canEditAssignees}
+          canSetMilestone={canSetMilestone}
           remoteLabel={remoteLabel}
         />
       </div>
@@ -693,7 +700,7 @@ export function RemoteIssueView({
         open={edit.open}
         onOpenChange={edit.setOpen}
         title="Edit issue"
-        description={`Updates the title and description of #${number} on GitHub.`}
+        description={`Updates the title and description of #${number} on ${remoteLabel}.`}
         contentClassName="sm:max-w-lg"
         bodyTextareaClassName="max-h-72 min-h-24 resize-y font-mono"
       />

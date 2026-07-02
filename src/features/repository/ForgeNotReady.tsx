@@ -1,6 +1,7 @@
 import {
   ArrowSquareOutIcon,
   GithubLogoIcon,
+  GitlabLogoIcon,
   TerminalIcon,
   UploadSimpleIcon,
 } from "@phosphor-icons/react";
@@ -8,7 +9,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { openInTerminal } from "@/lib/git/api";
-import { useForgeStatus } from "@/lib/git/queries";
+import { useForgeStatus, usePublishTargets } from "@/lib/git/queries";
 import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -36,8 +37,21 @@ export function ForgeNotReady({
   const settings = useSettings();
   const repoName = useUiStore((s) => s.repoName);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [publishProvider, setPublishProvider] = useState<"github" | "gitlab">(
+    "github",
+  );
 
   const provider = forge.data?.provider;
+  // A repo with no hosted remote has nothing to detect a provider from, so
+  // publish targets are probed explicitly (which CLIs are installed + signed
+  // in). This is what lets a glab-only machine publish to GitLab even while the
+  // gh ladder below is still asking for the GitHub CLI.
+  const installed = Boolean(forge.data?.installed);
+  const authed = Boolean(forge.data?.authenticated);
+  const targets = usePublishTargets(
+    repoPath,
+    provider == null && Boolean(forge.data),
+  );
 
   // GitLab: `glab` is wired (status detects install + sign-in), but read
   // operations aren't built yet — walk the glab setup ladder, then say so. (A
@@ -112,9 +126,9 @@ export function ForgeNotReady({
     );
   }
 
-  // GitHub: the install → sign-in → publish ladder.
-  const installed = Boolean(forge.data?.installed);
-  const authed = Boolean(forge.data?.authenticated);
+  // GitHub: the install → sign-in → publish ladder — plus a GitLab publish
+  // path whenever glab is ready (a no-remote repo can go to either provider).
+  const glabPublish = targets.data?.gitlab === true;
 
   return (
     <div className="space-y-2.5 px-3 py-4 text-xs text-muted-foreground">
@@ -159,25 +173,42 @@ export function ForgeNotReady({
       ) : (
         <>
           <p>
-            This repository isn't on GitHub yet. Publish it to use {feature}{" "}
+            This repository isn't published yet. Publish it to use {feature}{" "}
             here.
           </p>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setPublishOpen(true)}
+            onClick={() => {
+              setPublishProvider("github");
+              setPublishOpen(true);
+            }}
           >
             <UploadSimpleIcon data-icon="inline-start" />
             Publish to GitHub…
           </Button>
-          <PublishDialog
-            repoPath={repoPath}
-            defaultName={repoName ?? ""}
-            open={publishOpen}
-            onOpenChange={setPublishOpen}
-          />
         </>
       )}
+      {glabPublish && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setPublishProvider("gitlab");
+            setPublishOpen(true);
+          }}
+        >
+          <GitlabLogoIcon data-icon="inline-start" />
+          Publish to GitLab…
+        </Button>
+      )}
+      <PublishDialog
+        repoPath={repoPath}
+        provider={publishProvider}
+        defaultName={repoName ?? ""}
+        open={publishOpen}
+        onOpenChange={setPublishOpen}
+      />
     </div>
   );
 }

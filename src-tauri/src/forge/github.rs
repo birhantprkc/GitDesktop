@@ -93,9 +93,27 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
 
 // ── Merge requests (write) ───────────────────────────────────────────────────
 //
-// Thin delegates to the existing gh-backed PR mutations — comment + close/reopen.
-// Merge dispatches straight to `gh_pr_merge` inside `forge_pr_merge` (no delegate
-// here); review / edit stay GitHub-only and aren't fronted.
+// Thin delegates to the existing gh-backed PR mutations — comment, close/reopen,
+// title/body edit, and the duplicate probe. Merge dispatches straight to
+// `gh_pr_merge` inside `forge_pr_merge` (no delegate here); full reviews stay
+// GitHub-only and aren't fronted.
+
+pub async fn edit_pr(repo_path: &str, number: u64, title: &str, body: &str) -> AppResult<()> {
+    crate::github::pr::gh_pr_edit(
+        repo_path.to_string(),
+        number,
+        title.to_string(),
+        body.to_string(),
+    )
+    .await
+}
+
+pub async fn prs_for_branch(
+    repo_path: &str,
+    head: &str,
+) -> AppResult<Vec<crate::github::pr::PrInfo>> {
+    crate::github::pr::gh_prs_for_branch(repo_path.to_string(), head.to_string()).await
+}
 
 pub async fn comment_pr(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
     crate::github::pr::gh_pr_comment(repo_path.to_string(), number, body.to_string()).await
@@ -265,9 +283,9 @@ pub async fn delete_release_asset(repo_path: &str, tag: &str, asset_name: &str) 
 
 // ── Issues (write) ───────────────────────────────────────────────────────────
 //
-// Thin delegates to the existing gh-backed issue mutations — the first writes
-// fronted behind the abstraction. The rest of the issue write surface (labels,
-// assignees, edit, reactions, pin/lock, …) stays GitHub-only and isn't fronted.
+// Thin delegates to the existing gh-backed issue mutations. The still-unfronted
+// remainder of the issue write surface (pin/lock, transfer, sub-issues, …) stays
+// GitHub-only.
 
 pub async fn comment_issue(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
     crate::github::issue::gh_issue_comment(repo_path.to_string(), number, body.to_string()).await
@@ -279,6 +297,110 @@ pub async fn close_issue(repo_path: &str, number: u64, reason: &str) -> AppResul
 
 pub async fn reopen_issue(repo_path: &str, number: u64) -> AppResult<()> {
     crate::github::issue::gh_issue_reopen(repo_path.to_string(), number).await
+}
+
+pub async fn edit_issue(repo_path: &str, number: u64, title: &str, body: &str) -> AppResult<()> {
+    crate::github::issue::gh_issue_edit(
+        repo_path.to_string(),
+        number,
+        title.to_string(),
+        body.to_string(),
+    )
+    .await
+}
+
+// ── Milestones (read + write) ──────────────────────────────────────────────────
+//
+// Thin delegates for the milestone picker's option list and the issue milestone
+// write. GitHub keys on the milestone number; the GitLab impl keys on its global
+// milestone id — both travel as the neutral `Milestone.number`.
+
+pub async fn milestones(repo_path: &str) -> AppResult<Vec<crate::github::issue::Milestone>> {
+    crate::github::issue::gh_milestones(repo_path.to_string()).await
+}
+
+// ── Repository actions & publish ───────────────────────────────────────────────
+//
+// Thin delegates for View/star and publish. Fork keeps calling `gh_repo_fork`
+// directly (its remote-rewiring flow is GitHub-only; GitLab forks via a web
+// link-out), and the admin/branch-rule sub-surfaces stay on their gh_* commands.
+
+pub async fn repo_url(repo_path: &str) -> AppResult<String> {
+    crate::github::pr::gh_repo_url(repo_path.to_string()).await
+}
+
+pub async fn repo_star_status(repo_path: &str) -> AppResult<bool> {
+    crate::github::pr::gh_repo_star_status(repo_path.to_string()).await
+}
+
+pub async fn repo_set_star(repo_path: &str, starred: bool) -> AppResult<()> {
+    crate::github::pr::gh_repo_set_star(repo_path.to_string(), starred).await
+}
+
+pub async fn publish_repo(
+    repo_path: &str,
+    name: &str,
+    private: bool,
+    description: &str,
+    homepage: &str,
+    topics: Vec<String>,
+) -> AppResult<String> {
+    crate::github::pr::gh_publish_repo(
+        repo_path.to_string(),
+        name.to_string(),
+        private,
+        description.to_string(),
+        homepage.to_string(),
+        topics,
+    )
+    .await
+}
+
+// ── Reactions ──────────────────────────────────────────────────────────────────
+//
+// Thin delegates to the gh-backed reaction reads and the node-id-keyed toggle.
+// GitHub subjects are GraphQL node ids, so the add/remove delegates ignore the
+// target/number the GitLab arm needs — the frontend carries both (the shared-
+// control different-identifiers pattern).
+
+pub async fn issue_reactions(
+    repo_path: &str,
+    number: u64,
+) -> AppResult<crate::github::issue::IssueReactions> {
+    crate::github::issue::gh_issue_reactions(repo_path.to_string(), number).await
+}
+
+pub async fn pr_reactions(
+    repo_path: &str,
+    number: u64,
+) -> AppResult<crate::github::issue::IssueReactions> {
+    crate::github::pr::gh_pr_reactions(repo_path.to_string(), number).await
+}
+
+pub async fn add_reaction(repo_path: &str, subject_id: &str, content: &str) -> AppResult<()> {
+    crate::github::issue::gh_add_reaction(
+        repo_path.to_string(),
+        subject_id.to_string(),
+        content.to_string(),
+    )
+    .await
+}
+
+pub async fn remove_reaction(repo_path: &str, subject_id: &str, content: &str) -> AppResult<()> {
+    crate::github::issue::gh_remove_reaction(
+        repo_path.to_string(),
+        subject_id.to_string(),
+        content.to_string(),
+    )
+    .await
+}
+
+pub async fn set_issue_milestone(
+    repo_path: &str,
+    number: u64,
+    milestone: Option<u64>,
+) -> AppResult<()> {
+    crate::github::issue::gh_issue_set_milestone(repo_path.to_string(), number, milestone).await
 }
 
 // ── Labels & assignees (read + write) ─────────────────────────────────────────
