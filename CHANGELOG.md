@@ -12,6 +12,12 @@ commit list.
 
 ### Added
 
+- **Copy the branch name or HEAD SHA.** The repository menu (and command palette)
+  gained two clipboard actions alongside "copy the repo path": **Copy branch name**
+  copies the current branch, and **Copy HEAD SHA** copies the full commit SHA of
+  `HEAD` — each with a quick confirmation toast. Each disables when its value
+  isn't available: Copy branch name on a detached HEAD, and Copy HEAD SHA in a
+  fresh repo with no commits yet.
 - **GitLab, in the same panels.** GitDesktop now speaks GitLab as well as GitHub,
   through the **GitLab CLI (`glab`)** — same delegated-auth model as `gh`, no tokens stored.
   Point the app at a GitLab repo (or **browse and clone your GitLab projects** from the

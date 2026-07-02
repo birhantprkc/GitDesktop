@@ -301,6 +301,18 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "copy-branch-name",
+    label: "Copy branch name",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "copy-head-sha",
+    label: "Copy HEAD SHA",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
     id: "remove-repository",
     label: "Remove repository",
     category: "Repository",

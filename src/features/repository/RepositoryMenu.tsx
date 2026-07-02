@@ -58,6 +58,7 @@ import {
   useForkRepo,
   useRepoAdmin,
   useRepoStarStatus,
+  useRepoStatus,
   useSetRepoStar,
   useSubmodules,
 } from "@/lib/git/queries";
@@ -121,6 +122,15 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   const editor = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
+
+  // Current branch name + HEAD OID, for the copy actions. The two go null
+  // independently: a detached HEAD nulls only `name` (the OID is still a real
+  // SHA), and an unborn/empty repo nulls only `oid` (the branch name is still
+  // present). Each item disables on its own value, and the palette handlers
+  // explain why rather than copying "null".
+  const status = useRepoStatus(repoPath);
+  const branchName = status.data?.branch.name ?? null;
+  const headOid = status.data?.branch.oid ?? null;
 
   const onError = (e: unknown) => toastError(e);
 
@@ -187,6 +197,16 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   useHotkeyAction("repo-alias", () => setAliasTarget(repoEntry));
   useHotkeyAction("copy-repo-path", () =>
     copyText(repoPath, "Repository path copied"),
+  );
+  useHotkeyAction("copy-branch-name", () =>
+    branchName
+      ? copyText(branchName, "Branch name copied")
+      : toast.error("Detached HEAD — no branch to copy"),
+  );
+  useHotkeyAction("copy-head-sha", () =>
+    headOid
+      ? copyText(headOid, "HEAD SHA copied")
+      : toast.error("No commits yet — nothing to copy"),
   );
   useHotkeyAction("remove-repository", () => setRemoveTarget(repoEntry));
 
@@ -328,6 +348,24 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         >
           <CopyIcon />
           Copy repository path
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!branchName}
+          title={branchName ? undefined : "Detached HEAD — no branch to copy"}
+          onClick={() =>
+            branchName && copyText(branchName, "Branch name copied")
+          }
+        >
+          <CopyIcon />
+          Copy branch name
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!headOid}
+          title={headOid ? undefined : "No commits yet — nothing to copy"}
+          onClick={() => headOid && copyText(headOid, "HEAD SHA copied")}
+        >
+          <CopyIcon />
+          Copy HEAD SHA
         </DropdownMenuItem>
         <DropdownMenuItem
           variant="destructive"

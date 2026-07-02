@@ -103,7 +103,8 @@ Click the **⋮** menu next to the repo name for repo-wide actions:
   forking opens the web fork page).
 - **Insights** (analytics), **manage files**, **submodules**, the **remote URL**,
   **branch rules**, **git hooks**, {{ai}}**automations**, {{/ai}}**repository settings**,
-  an **alias**, copy the repo path, and remove the repo from the list.
+  an **alias**, copy the repo path, copy the branch name, copy the HEAD SHA, and
+  remove the repo from the list.
 
 ## Aliases
 
