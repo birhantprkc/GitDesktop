@@ -65,11 +65,16 @@ export function TagDetailView({
   const gh = useForgeStatus(repoPath);
   // Release reads are provider-neutral; a tag with no release stays just a tag.
   const ghReady = forgeFeatureReady(gh.data, "releases");
-  // Release WRITES (publish/edit/delete/assets) are GitHub-only; GitLab releases are
-  // read-only, so suppress every write affordance and relabel the external link.
+  // Release WRITES are SHARED controls: `canWrite || forgeFeatureReady` keeps
+  // GitHub's buttons up while forge-status is pending and positively enables a
+  // ready GitLab repo. GitLab has no draft/pre-release/latest concepts, so those
+  // toggles hide there (`isGitLab`), and its assets stay link-style rows.
   const provider = gh.data?.provider;
+  const isGitLab = provider === "gitlab";
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
-  const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
+  const canManage = canWrite || forgeFeatureReady(gh.data, "releaseEdit");
+  const canCreate = canWrite || forgeFeatureReady(gh.data, "releaseCreate");
+  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
   // Ask the provider for a release only when connected; otherwise it's just a tag.
   const release = useReleaseDetails(repoPath, ghReady ? tag : null);
   const tagList = useTagList(repoPath);
@@ -137,8 +142,8 @@ export function TagDetailView({
           <div className="flex items-start gap-2">
             <h2 className="text-sm font-medium">{rel.name || rel.tagName}</h2>
             <span className="flex-1" />
-            {/* Publish/Edit/Delete are GitHub-only; GitLab releases are read-only. */}
-            {canWrite && (
+            {/* Publish only ever shows on GitHub (GitLab has no drafts). */}
+            {canManage && (
               <>
                 {rel.isDraft && (
                   <Button
@@ -229,8 +234,8 @@ export function TagDetailView({
                   Assets ({rel.assets.length})
                 </h3>
                 <span className="flex-1" />
-                {/* Uploading assets is GitHub-only; GitLab assets are read-only. */}
-                {canWrite && (
+                {/* GitHub attaches a binary; GitLab uploads + links the file. */}
+                {canManage && (
                   <Button
                     variant="ghost"
                     size="xs"
@@ -296,17 +301,40 @@ export function TagDetailView({
                     ) : (
                       // GitLab asset links carry no size/download count — open the
                       // link in the browser rather than show GitHub-style stats.
-                      a.url && (
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={`Open ${a.name}`}
-                          className="cursor-pointer"
-                          onClick={() => openUrl(a.url)}
-                        >
-                          <ArrowSquareOutIcon />
-                        </Button>
-                      )
+                      // Deleting the link is still offered once writes are ready.
+                      <>
+                        {a.url && (
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={`Open ${a.name}`}
+                            className="cursor-pointer"
+                            onClick={() => openUrl(a.url)}
+                          >
+                            <ArrowSquareOutIcon />
+                          </Button>
+                        )}
+                        {canManage && (
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={`Delete ${a.name}`}
+                            className="text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                            onClick={() =>
+                              deleteAsset.mutate(
+                                { tag, assetName: a.name },
+                                {
+                                  onSuccess: () =>
+                                    toast.success("Asset deleted"),
+                                  onError,
+                                },
+                              )
+                            }
+                          >
+                            <TrashIcon />
+                          </Button>
+                        )}
+                      </>
                     )}
                   </div>
                 ))
@@ -343,7 +371,7 @@ export function TagDetailView({
               <DialogHeader>
                 <DialogTitle>Edit release</DialogTitle>
                 <DialogDescription>
-                  Updates {rel.tagName} on GitHub.
+                  Updates {rel.tagName} on {remoteLabel}.
                 </DialogDescription>
               </DialogHeader>
               {/* Fields scroll; header and submit footer stay pinned. */}
@@ -361,22 +389,25 @@ export function TagDetailView({
                   rows={8}
                   textareaClassName="max-h-72 min-h-24 resize-y font-mono"
                 />
-                <div className="flex flex-wrap gap-x-6 gap-y-2">
-                  <label className="flex cursor-pointer items-center gap-2 text-xs">
-                    <Switch
-                      checked={editPrerelease}
-                      onCheckedChange={setEditPrerelease}
-                    />
-                    Pre-release
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-2 text-xs">
-                    <Switch
-                      checked={editLatest}
-                      onCheckedChange={setEditLatest}
-                    />
-                    Latest release
-                  </label>
-                </div>
+                {/* GitLab has neither pre-release nor a per-release latest flag. */}
+                {!isGitLab && (
+                  <div className="flex flex-wrap gap-x-6 gap-y-2">
+                    <label className="flex cursor-pointer items-center gap-2 text-xs">
+                      <Switch
+                        checked={editPrerelease}
+                        onCheckedChange={setEditPrerelease}
+                      />
+                      Pre-release
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 text-xs">
+                      <Switch
+                        checked={editLatest}
+                        onCheckedChange={setEditLatest}
+                      />
+                      Latest release
+                    </label>
+                  </div>
+                )}
               </div>
               <DialogFooter>
                 <Button
@@ -402,7 +433,7 @@ export function TagDetailView({
             <DialogHeader>
               <DialogTitle>Delete release {rel.tagName}?</DialogTitle>
               <DialogDescription>
-                Removes the GitHub release. This cannot be undone.
+                Removes the {remoteLabel} release. This cannot be undone.
               </DialogDescription>
             </DialogHeader>
             <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
@@ -456,8 +487,7 @@ export function TagDetailView({
         <div className="flex items-start gap-2">
           <h2 className="font-mono text-sm font-medium">{tag}</h2>
           <span className="flex-1" />
-          {/* Creating a release is GitHub-only; GitLab tags are read-only here. */}
-          {ghReady && canWrite && (
+          {ghReady && canCreate && (
             <Button
               variant="outline"
               size="xs"
@@ -485,7 +515,8 @@ export function TagDetailView({
         )}
         {!ghReady && (
           <p className="text-[11px] text-muted-foreground">
-            Connect this repository to GitHub to publish a release for this tag.
+            Connect this repository to GitHub or GitLab to publish a release for
+            this tag.
           </p>
         )}
       </div>

@@ -115,13 +115,14 @@ export function RepositoryView() {
   const aiEnabled = useAiEnabled();
   const currentName = status.data?.branch?.name ?? null;
   const gh = useForgeStatus(repoPath ?? "");
-  // Palette create actions: discussion / release stay GitHub-only writes; the
-  // issue / PR creates follow their per-action forge flags (GitHub + GitLab).
+  // Palette create actions: discussion stays a GitHub-only write; the issue /
+  // PR / release creates follow their per-action forge flags (GitHub + GitLab).
   const canGh =
     Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
     gh.data?.provider === "github";
   const canCreateIssue = forgeFeatureReady(gh.data, "issueCreate");
   const canCreatePr = forgeFeatureReady(gh.data, "mrCreate");
+  const canCreateRelease = forgeFeatureReady(gh.data, "releaseCreate");
   // Tab switches are transitions: a heavy first render of the target panel
   // never blocks the click, and hidden Activities pre-render at low priority.
   const [, startTabTransition] = useTransition();
@@ -169,7 +170,11 @@ export function RepositoryView() {
     () => requestCreate("discussion"),
     canGh,
   );
-  useHotkeyAction("create-release", () => requestCreate("release"), canGh);
+  useHotkeyAction(
+    "create-release",
+    () => requestCreate("release"),
+    canCreateRelease,
+  );
   useHotkeyAction("create-tag", () => requestCreate("tag"));
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open. No

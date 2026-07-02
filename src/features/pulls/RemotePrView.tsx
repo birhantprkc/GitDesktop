@@ -46,6 +46,7 @@ import {
   Thread,
 } from "@/features/conversations/Thread";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
+import { AssigneesPopover } from "@/features/issues/IssueMetaPickers";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
@@ -76,6 +77,7 @@ import {
   useReopenPr,
   useRepoStatus,
   useReviewPr,
+  useSetPrAssignees,
   useToggleReaction,
   useUnapprovePr,
   useUnminimizeComment,
@@ -146,8 +148,8 @@ export function RemotePrView({
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
   const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
   const prNoun = provider === "gitlab" ? "merge request" : "pull request";
-  // The first GitLab MR WRITES land per-action: commenting + close/reopen are wired
-  // up (merge / approve / review / edit stay GitHub-only via `canWrite`). Each is
+  // GitLab MR WRITES land per-action (full reviews and title/body edits stay
+  // GitHub-only via `canWrite`). Each shared control is
   // `canWrite || forgeFeatureReady(...)` so GitHub keeps its controls while a
   // forge-status query is pending/failed (canWrite default-true) AND a ready GitLab
   // repo positively enables just these.
@@ -163,9 +165,13 @@ export function RemotePrView({
   const canMerge = canWrite || forgeFeatureReady(forge.data, "mrMerge");
   // Labels are a shared control (both providers) — same `canWrite || …` gate.
   const canEditLabels = canWrite || forgeFeatureReady(forge.data, "mrLabels");
+  // MR assignees are GitLab-only like the approve toggle (GitHub PRs have no
+  // assignee picker here), so the flag alone gates — never `canWrite || …`.
+  const canEditAssignees = forgeFeatureReady(forge.data, "mrAssignees");
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
+  const setAssignees = useSetPrAssignees(repoPath);
   const comment = useCommentPr(repoPath);
   const checkout = useCheckoutPr(repoPath);
   const repoStatus = useRepoStatus(repoPath);
@@ -514,6 +520,36 @@ export function RemotePrView({
             <div className="flex flex-wrap items-center gap-1.5">
               {pr.labels.map((label) => (
                 <LabelChip key={label.name} label={label} />
+              ))}
+            </div>
+          )
+        )}
+        {/* GitLab-only assignee picker (same affordance as the issue sidebar);
+            a closed/merged MR falls back to read-only chips like the labels row.
+            GitHub PRs carry no assignees, so they show nothing here, as before. */}
+        {isOpen && canEditAssignees ? (
+          <AssigneesPopover
+            repoPath={repoPath}
+            enabled
+            value={pr.assignees}
+            commitOnClose
+            onChange={(next) =>
+              setAssignees.mutate(
+                { number, assignees: next },
+                { onError: toastError },
+              )
+            }
+          />
+        ) : (
+          pr.assignees.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {pr.assignees.map((login) => (
+                <span
+                  key={login}
+                  className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                >
+                  @{login}
+                </span>
               ))}
             </div>
           )

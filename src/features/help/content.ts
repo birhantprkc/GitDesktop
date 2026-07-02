@@ -392,7 +392,8 @@ Point the app at a **GitLab** repo and the same tab lists its **merge requests**
 closed/merged) next to any local PRs. Open one for the description, comments, commits, and a
 highlighted **diff** (with an **Open on GitLab** link) — and the **first GitLab MR writes**:
 **comment** on it, **close / reopen** it, **approve / unapprove** it (a reviewer action,
-with the approval count shown inline), edit its **labels**, and **merge** it — merge or squash, optionally deleting
+with the approval count shown inline), edit its **labels** and **assignees**, and **merge**
+it — merge or squash, optionally deleting
 the source branch, guarded so it never merges a head you didn't see (GitLab applies the project's
 configured merge method, so there's no separate "rebase" option). **Creating a merge request**
 works from the app too ({{kbd:create-pr}}, the New menu, or the Compare tab) — it pushes your
@@ -400,7 +401,7 @@ branch and opens the MR, with the same draft checkbox and AI description as GitH
 reviews (a comment or request-changes with a body) are coming soon; for now those live on
 GitLab. GitLab uses the GitLab
 CLI (\`glab\`) — run \`glab auth login\` once, no tokens stored. Its issues, CI pipelines, and
-releases read too (see their sections below).
+releases work too (see their sections below).
 
 ## Local PRs
 
@@ -482,7 +483,8 @@ part in GitHub Discussions for the repo. (Discussions must be enabled on the rep
     body: `# Releases & tags
 
 The **Tags** tab ({{kbd:tab-tags}}, in the More ▾ menu) manages your repository's tags and
-releases — GitHub releases (full read/write) and **GitLab** releases (read-only, see below).
+releases — GitHub and **GitLab** releases both (the GitLab section below covers the
+provider differences).
 
 - See every tag and **create a tag** (also available from a commit in History).
 - **Create a release** from a tag: set the title and notes, mark it a **pre-release** or
@@ -493,10 +495,13 @@ releases — GitHub releases (full read/write) and **GitLab** releases (read-onl
 ## GitLab releases
 
 Point the app at a **GitLab** repo and the **Tags** tab lists its **releases** alongside your
-local tags (release rows carry the **Latest** badge). Open one for a **read-only** view: the
-release **notes**, who published it and when, and any **asset links** — click to open them in
-your browser. Publishing, editing, or deleting releases from the app is coming soon; for now
-those actions live on GitLab.`,
+local tags (release rows carry the **Latest** badge). Open one to read the release **notes**,
+who published it and when, and its **asset links** — click to open them in your browser. The
+release actions work here too: **publish a release** (from an existing tag or a new one
+created from a target branch/commit), **edit** its title and notes, **delete** it (optionally
+deleting the tag), **upload** a file as an asset link, and **delete asset links**. GitLab has
+no draft or pre-release concept and picks the latest release itself, so those GitHub toggles
+don't appear.`,
   },
   {
     id: "actions",
@@ -504,8 +509,8 @@ those actions live on GitLab.`,
     body: `# GitHub Actions
 
 The **Actions** tab ({{kbd:tab-actions}}, in the More ▾ menu) is a cockpit for your GitHub
-Actions workflow runs (needs \`gh\` + a GitHub remote). **GitLab pipelines** show here too,
-read-only (see below).
+Actions workflow runs (needs \`gh\` + a GitHub remote). **GitLab pipelines** show here too
+(see below).
 
 - The list shows recent runs with live status, refreshing while any run is active. Filter
   by text or scope to the current branch.
@@ -519,9 +524,10 @@ read-only (see below).
 
 Point the app at a **GitLab** repo and the same tab lists its **pipelines** — newest first,
 filterable, optionally scoped to the current branch — with the header CI badge tracking the
-latest one. Open a pipeline for a **read-only** view of its **jobs** (status + durations);
-expand a job for its **log**. Re-running, cancelling, and dispatching pipelines from the app
-is coming soon; for now those actions live on GitLab.
+latest one. Open a pipeline to see its **jobs** (status + durations); expand a job for its
+**log**. The pipeline actions work here too: **Cancel** a running pipeline, **Retry** a
+failed or canceled one (GitLab restarts its failed jobs), and **Run pipeline…** starts a
+fresh pipeline on a branch or tag, with optional **CI/CD variables**.
 {{ai}}
 ## Debug with AI
 

@@ -22,12 +22,17 @@ import { StatusIcon, statusLabel } from "./status";
 
 export function ActionsPanel({ repoPath }: { repoPath: string }) {
   const forge = useForgeStatus(repoPath);
-  // CI reads are provider-neutral now (GitHub Actions + GitLab pipelines): a ready
-  // repo lists runs either way. Dispatching a workflow is GitHub-only, so gate that
-  // one write affordance on "not a known read-only provider" (like the MR/issue views).
+  // CI reads are provider-neutral (GitHub Actions + GitLab pipelines): a ready
+  // repo lists runs either way. Starting a run is a SHARED write — `canWrite ||
+  // forgeFeatureReady` keeps GitHub's button up while forge-status is pending and
+  // positively enables a ready GitLab repo (which runs a pipeline on a ref rather
+  // than dispatching a workflow — the dialog adapts).
   const ghReady = forgeFeatureReady(forge.data, "ci");
   const provider = forge.data?.provider;
+  const isGitLab = provider === "gitlab";
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
+  const canDispatch = canWrite || forgeFeatureReady(forge.data, "ciDispatch");
+  const runNoun = isGitLab ? "pipeline" : "workflow";
   const status = useRepoStatus(repoPath);
   const currentBranch = status.data?.branch.name ?? null;
 
@@ -81,20 +86,22 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
           This branch
         </Button>
         <div className="ml-auto flex items-center gap-1">
-          {canWrite && (
+          {canDispatch && (
             <Button
               variant="ghost"
               size="xs"
               disabled={!ghReady}
               title={
                 ghReady
-                  ? "Run a workflow"
-                  : "Sign in with GitHub CLI to run workflows"
+                  ? `Run a ${runNoun}`
+                  : isGitLab
+                    ? "Sign in with the GitLab CLI (glab) to run pipelines"
+                    : "Sign in with GitHub CLI to run workflows"
               }
               onClick={() => setRunOpen(true)}
             >
               <PlayIcon data-icon="inline-start" />
-              Run workflow…
+              Run {runNoun}…
             </Button>
           )}
           <Button

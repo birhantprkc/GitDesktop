@@ -159,8 +159,8 @@ pub struct Implemented {
     pub issue_labels: bool,
     /// Editing labels on a merge/pull request — the same shared label control.
     pub mr_labels: bool,
-    /// Setting an issue's assignees — a shared issue control. MR assignees aren't
-    /// fronted (GitHub PRs expose no assignee picker here), so there's no `mr_assignees`.
+    /// Setting an issue's assignees — a shared issue control. (MR assignees are the
+    /// separate GitLab-only `mr_assignees` below — GitHub PRs have no picker here.)
     pub issue_assignees: bool,
     /// Creating an issue from the app — a shared control (the same create dialog;
     /// GitHub-only fields like milestone/org-type hide per provider).
@@ -168,6 +168,25 @@ pub struct Implemented {
     /// Creating a merge/pull request from the app (push the head branch + open) —
     /// a shared control.
     pub mr_create: bool,
+    /// Re-running a finished CI run — a shared control. GitHub re-runs all or just
+    /// failed jobs; GitLab's retry restarts failed/canceled jobs only (there is no
+    /// GitLab "re-run all", so that one button stays GitHub-only in the UI).
+    pub ci_rerun: bool,
+    /// Cancelling an in-flight CI run — a shared control.
+    pub ci_cancel: bool,
+    /// Manually starting a CI run — a shared control (GitHub dispatches a workflow;
+    /// GitLab runs a new pipeline on a ref, with variables instead of inputs).
+    pub ci_dispatch: bool,
+    /// Publishing a new release — a shared control (the same create dialog; the
+    /// GitHub-only draft/pre-release/latest toggles hide per provider).
+    pub release_create: bool,
+    /// Managing an existing release (edit title/notes, delete, upload assets,
+    /// delete assets) — a shared control.
+    pub release_edit: bool,
+    /// Setting a merge request's assignees. GitLab-only: GitHub PRs expose no
+    /// assignee picker in this app (issue assignees are the shared control), so
+    /// like `mr_approve` this flag stays `false` for GitHub (see `all`).
+    pub mr_assignees: bool,
 }
 
 impl Implemented {
@@ -195,6 +214,14 @@ impl Implemented {
             issue_assignees: true,
             issue_create: true,
             mr_create: true,
+            ci_rerun: true,
+            ci_cancel: true,
+            ci_dispatch: true,
+            release_create: true,
+            release_edit: true,
+            // Like `mr_approve`: GitHub PRs have no assignee picker in this app, so
+            // the MR-assignees control is GitLab-only.
+            mr_assignees: false,
         }
     }
 
@@ -219,6 +246,12 @@ impl Implemented {
             issue_assignees: false,
             issue_create: false,
             mr_create: false,
+            ci_rerun: false,
+            ci_cancel: false,
+            ci_dispatch: false,
+            release_create: false,
+            release_edit: false,
+            mr_assignees: false,
         }
     }
 
@@ -232,8 +265,10 @@ impl Implemented {
             // pipelines, and releases (read) are wired up; insights / repo actions
             // still degrade to "coming soon" until their impls land. WRITES land
             // per-action: issue + MR comment and close/reopen, the GitLab-only MR
-            // approve/unapprove toggle, MR merge, issue + MR labels, issue
-            // assignees, and issue/MR create. (Full MR review stays GitHub-only.)
+            // approve/unapprove toggle and MR assignees, MR merge, issue + MR
+            // labels, issue assignees, issue/MR create, pipeline retry / cancel /
+            // run, and release create / edit / delete / assets. (Full MR review
+            // stays GitHub-only.)
             Provider::GitLab => Self {
                 pull_requests: true,
                 issues: true,
@@ -253,6 +288,12 @@ impl Implemented {
                 issue_assignees: true,
                 issue_create: true,
                 mr_create: true,
+                ci_rerun: true,
+                ci_cancel: true,
+                ci_dispatch: true,
+                release_create: true,
+                release_edit: true,
+                mr_assignees: true,
             },
             Provider::Bitbucket => Self::none(),
         }
@@ -380,6 +421,11 @@ mod tests {
         // Labels (issue + MR) and issue assignees are shared controls — built for both.
         assert!(i.issue_labels && i.mr_labels && i.issue_assignees);
         assert!(i.issue_create && i.mr_create);
+        // CI actions and release management are shared controls too.
+        assert!(i.ci_rerun && i.ci_cancel && i.ci_dispatch);
+        assert!(i.release_create && i.release_edit);
+        // MR assignees mirror mr_approve: GitLab-only, so GitHub stays false.
+        assert!(!i.mr_assignees);
     }
 
     #[test]
@@ -402,6 +448,11 @@ mod tests {
         assert!(imp.issue_labels && imp.mr_labels && imp.issue_assignees);
         // …and creating issues + merge requests from the app.
         assert!(imp.issue_create && imp.mr_create);
+        // …and pipeline retry/cancel/run, release management, and the GitLab-only
+        // MR assignees picker.
+        assert!(imp.ci_rerun && imp.ci_cancel && imp.ci_dispatch);
+        assert!(imp.release_create && imp.release_edit);
+        assert!(imp.mr_assignees);
     }
 
     #[test]
@@ -416,5 +467,7 @@ mod tests {
         assert!(!bb.mr_approve && !bb.mr_merge);
         assert!(!bb.issue_labels && !bb.mr_labels && !bb.issue_assignees);
         assert!(!bb.issue_create && !bb.mr_create);
+        assert!(!bb.ci_rerun && !bb.ci_cancel && !bb.ci_dispatch);
+        assert!(!bb.release_create && !bb.release_edit && !bb.mr_assignees);
     }
 }

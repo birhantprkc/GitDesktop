@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { useForgeStatus } from "@/lib/git/queries";
+import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
 import type { RunJob } from "@/lib/github/actions";
 import {
   isRunActive,
@@ -257,12 +257,17 @@ export function RunDetailView({
   const rerun = useRerunRun(repoPath);
   const cancel = useCancelRun(repoPath);
   const aiEnabled = useAiEnabled();
-  // Re-run / cancel are GitHub-only writes; on a GitLab repo this is read-only
-  // (the run still shows, with logs). Gate on "not a known read-only provider" so a
-  // GitHub run keeps its controls while forge-status is pending. GitLab pipelines
-  // also have no per-job steps, so the steps placeholder is suppressed for them.
-  const provider = useForgeStatus(repoPath).data?.provider;
+  // Re-run and cancel are SHARED writes (GitHub + GitLab): `canWrite || …` keeps
+  // GitHub's controls up while forge-status is pending and positively enables a
+  // ready GitLab repo. GitLab's retry restarts failed+canceled jobs only, so it
+  // gets a single "Retry pipeline" button — "Re-run all jobs" has no GitLab
+  // analogue and stays on `canWrite` (GitHub-only). GitLab pipelines also have no
+  // per-job steps, so the steps placeholder is suppressed for them.
+  const forge = useForgeStatus(repoPath);
+  const provider = forge.data?.provider;
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
+  const canRerun = canWrite || forgeFeatureReady(forge.data, "ciRerun");
+  const canCancel = canWrite || forgeFeatureReady(forge.data, "ciCancel");
   const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
   const [debugJob, setDebugJob] = useState<RunJob | null>(null);
   // Dialog visibility is tracked separately from the debug session so closing
@@ -274,6 +279,13 @@ export function RunDetailView({
   const run = detail.data;
   const active = run ? isRunActive(run.status) : false;
   const failed = run ? isFailureConclusion(run.conclusion) : false;
+  // GitLab's retry also covers a canceled pipeline (its retry restarts
+  // failed + canceled jobs), so the Retry button shows for both conclusions.
+  const retryable = failed || run?.conclusion === "cancelled";
+  // A manual/blocked GitLab pipeline maps to completed/action_required, but
+  // GitLab's cancel endpoint does cancel it — keep Cancel available there.
+  const gitlabBlocked =
+    provider === "gitlab" && run?.conclusion === "action_required";
 
   function doRerun(failedOnly: boolean) {
     rerun.mutate(
@@ -281,7 +293,11 @@ export function RunDetailView({
       {
         onSuccess: () =>
           toast.success(
-            failedOnly ? "Re-running failed jobs" : "Re-running workflow",
+            provider === "gitlab"
+              ? "Retrying pipeline"
+              : failedOnly
+                ? "Re-running failed jobs"
+                : "Re-running workflow",
           ),
         onError: toastError,
       },
@@ -338,45 +354,60 @@ export function RunDetailView({
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {canWrite &&
-            (active ? (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={cancel.isPending}
-                onClick={doCancel}
-              >
-                {cancel.isPending ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <ProhibitIcon data-icon="inline-start" />
-                )}
-                Cancel run
-              </Button>
-            ) : (
-              <>
+          {active || gitlabBlocked
+            ? canCancel && (
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={rerun.isPending}
-                  onClick={() => doRerun(false)}
+                  disabled={cancel.isPending}
+                  onClick={doCancel}
                 >
-                  <ArrowClockwiseIcon data-icon="inline-start" />
-                  Re-run all jobs
+                  {cancel.isPending ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <ProhibitIcon data-icon="inline-start" />
+                  )}
+                  Cancel run
                 </Button>
-                {failed && (
+              )
+            : provider === "gitlab"
+              ? canRerun &&
+                retryable && (
                   <Button
                     variant="outline"
                     size="sm"
                     disabled={rerun.isPending}
+                    title="Restart this pipeline's failed and canceled jobs"
                     onClick={() => doRerun(true)}
                   >
                     <ArrowClockwiseIcon data-icon="inline-start" />
-                    Re-run failed jobs
+                    Retry pipeline
                   </Button>
+                )
+              : canWrite && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={rerun.isPending}
+                      onClick={() => doRerun(false)}
+                    >
+                      <ArrowClockwiseIcon data-icon="inline-start" />
+                      Re-run all jobs
+                    </Button>
+                    {failed && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={rerun.isPending}
+                        onClick={() => doRerun(true)}
+                      >
+                        <ArrowClockwiseIcon data-icon="inline-start" />
+                        Re-run failed jobs
+                      </Button>
+                    )}
+                  </>
                 )}
-              </>
-            ))}
           <Button
             variant="ghost"
             size="sm"

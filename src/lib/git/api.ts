@@ -388,10 +388,10 @@ export const gitListTags = (repoPath: string) =>
 
 // ── Releases ────────────────────────────────────────────────────────────────
 //
-// Reads go through the provider-neutral `forge_release_*` (GitHub via `gh`, GitLab
-// via `glab`); the GitHub path is byte-identical to the old `gh_release_*`. Writes
-// (create / edit / delete / asset management) stay GitHub-only (`gh_release_*`) and
-// are hidden for GitLab on the frontend.
+// Reads AND writes go through the provider-neutral `forge_release_*` (GitHub via
+// `gh`, GitLab via `glab`); the GitHub path is byte-identical to the old
+// `gh_release_*`. The GitHub-only pieces stay `gh_*`: notes generation (GitHub's
+// changelog API) and asset download (GitLab assets are links the browser opens).
 
 export const forgeReleaseList = (repoPath: string) =>
   invoke<ReleaseInfo[]>("forge_release_list", { repoPath });
@@ -399,7 +399,7 @@ export const forgeReleaseList = (repoPath: string) =>
 export const forgeReleaseView = (repoPath: string, tag: string) =>
   invoke<ReleaseDetails>("forge_release_view", { repoPath, tag });
 
-export const ghReleaseCreate = (
+export const forgeReleaseCreate = (
   repoPath: string,
   tag: string,
   title: string,
@@ -409,7 +409,7 @@ export const ghReleaseCreate = (
   draft: boolean,
   latest: boolean,
 ) =>
-  invoke<string>("gh_release_create", {
+  invoke<string>("forge_release_create", {
     repoPath,
     tag,
     title,
@@ -420,7 +420,7 @@ export const ghReleaseCreate = (
     latest,
   });
 
-export const ghReleaseEdit = (
+export const forgeReleaseEdit = (
   repoPath: string,
   tag: string,
   title: string,
@@ -429,7 +429,7 @@ export const ghReleaseEdit = (
   draft: boolean,
   latest: boolean,
 ) =>
-  invoke<void>("gh_release_edit", {
+  invoke<void>("forge_release_edit", {
     repoPath,
     tag,
     title,
@@ -453,23 +453,23 @@ export const ghReleaseGenerateNotes = (
     previousTag,
   });
 
-export const ghReleaseDelete = (
+export const forgeReleaseDelete = (
   repoPath: string,
   tag: string,
   cleanupTag: boolean,
-) => invoke<void>("gh_release_delete", { repoPath, tag, cleanupTag });
+) => invoke<void>("forge_release_delete", { repoPath, tag, cleanupTag });
 
-export const ghReleaseUploadAsset = (
+export const forgeReleaseUploadAsset = (
   repoPath: string,
   tag: string,
   filePath: string,
-) => invoke<void>("gh_release_upload_asset", { repoPath, tag, filePath });
+) => invoke<void>("forge_release_upload_asset", { repoPath, tag, filePath });
 
-export const ghReleaseDeleteAsset = (
+export const forgeReleaseDeleteAsset = (
   repoPath: string,
   tag: string,
   assetName: string,
-) => invoke<void>("gh_release_delete_asset", { repoPath, tag, assetName });
+) => invoke<void>("forge_release_delete_asset", { repoPath, tag, assetName });
 
 export const ghReleaseDownloadAsset = (
   repoPath: string,
@@ -939,6 +939,13 @@ export const forgeIssueSetAssignees = (
   number: number,
   assignees: string[],
 ) => invoke<void>("forge_issue_set_assignees", { repoPath, number, assignees });
+
+/** Set an MR's assignees — GitLab-only (GitHub PRs have no assignee picker). */
+export const forgeMrSetAssignees = (
+  repoPath: string,
+  number: number,
+  assignees: string[],
+) => invoke<void>("forge_mr_set_assignees", { repoPath, number, assignees });
 
 export const ghIssueSetMilestone = (
   repoPath: string,

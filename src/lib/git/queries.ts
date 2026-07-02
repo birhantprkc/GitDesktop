@@ -26,6 +26,7 @@ import type {
   IssueReactions,
   IssueRelation,
   IssueType,
+  PrDetails,
   Reaction,
   RepoOp,
   RepoRole,
@@ -1449,6 +1450,12 @@ const NO_FORGE_STATUS: ForgeStatus = {
     issueAssignees: false,
     issueCreate: false,
     mrCreate: false,
+    ciRerun: false,
+    ciCancel: false,
+    ciDispatch: false,
+    releaseCreate: false,
+    releaseEdit: false,
+    mrAssignees: false,
   },
 };
 
@@ -1978,7 +1985,7 @@ export function useCreateRelease(repo: string) {
       draft: boolean;
       latest: boolean;
     }) =>
-      api.ghReleaseCreate(
+      api.forgeReleaseCreate(
         repo,
         args.tag,
         args.title,
@@ -2002,7 +2009,7 @@ export function useEditRelease(repo: string) {
       draft: boolean;
       latest: boolean;
     }) =>
-      api.ghReleaseEdit(
+      api.forgeReleaseEdit(
         repo,
         args.tag,
         args.title,
@@ -2024,19 +2031,19 @@ export function useGithubReleaseNotes(repo: string) {
 
 export function useDeleteRelease(repo: string) {
   return useRepoMutation(repo, (args: { tag: string; cleanupTag: boolean }) =>
-    api.ghReleaseDelete(repo, args.tag, args.cleanupTag),
+    api.forgeReleaseDelete(repo, args.tag, args.cleanupTag),
   );
 }
 
 export function useUploadReleaseAsset(repo: string) {
   return useRepoMutation(repo, (args: { tag: string; filePath: string }) =>
-    api.ghReleaseUploadAsset(repo, args.tag, args.filePath),
+    api.forgeReleaseUploadAsset(repo, args.tag, args.filePath),
   );
 }
 
 export function useDeleteReleaseAsset(repo: string) {
   return useRepoMutation(repo, (args: { tag: string; assetName: string }) =>
-    api.ghReleaseDeleteAsset(repo, args.tag, args.assetName),
+    api.forgeReleaseDeleteAsset(repo, args.tag, args.assetName),
   );
 }
 
@@ -2304,6 +2311,36 @@ export function useUnapprovePr(repo: string) {
   return useRepoMutation(repo, (number: number) =>
     api.forgePrUnapprove(repo, number),
   );
+}
+
+/**
+ * Set an MR's assignees (GitLab-only, gated on `implemented.mrAssignees`) with
+ * an optimistic patch of the PR-details cache + rollback, mirroring
+ * `useSetIssueAssignees` — the picker's chips update instantly instead of
+ * waiting on the PUT + refetch (glab spawns a process per call).
+ */
+export function useSetPrAssignees(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; assignees: string[] }) =>
+      api.forgeMrSetAssignees(repo, args.number, args.assignees),
+    onMutate: async (args) => {
+      const key = ["repo", repo, "pr", args.number] as const;
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<PrDetails>(key);
+      queryClient.setQueryData<PrDetails>(key, (d) =>
+        d ? { ...d, assignees: args.assignees } : d,
+      );
+      return { prev, key };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: (_d, _e, args) =>
+      queryClient.invalidateQueries({
+        queryKey: ["repo", repo, "pr", args.number],
+      }),
+  });
 }
 
 export function useMergePr(repo: string) {

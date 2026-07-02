@@ -1252,6 +1252,10 @@ pub struct PrDetails {
     pub comments: Vec<PrThreadOut>,
     pub checks: Vec<PrCheckOut>,
     pub labels: Vec<RepoLabel>,
+    /// Assignee usernames. Only GitLab fills this — the MR-assignees picker is
+    /// GitLab-only (`implemented.mrAssignees`), so the GitHub view doesn't request
+    /// assignees and leaves it empty.
+    pub assignees: Vec<String>,
 }
 
 /// A merge/pull request's approval summary — who has approved and whether the
@@ -1374,6 +1378,7 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
             })
             .collect(),
         labels: raw.labels,
+        assignees: Vec::new(),
     })
 }
 

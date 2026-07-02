@@ -1,11 +1,12 @@
 //! The GitLab [`Forge`](super::Forge) implementation, via the `glab` CLI.
 //!
-//! **Phase 1, increment 1 ships STATUS only.** It detects whether `glab` is
-//! installed and signed in, but leaves `repo` unset — a GitLab repo therefore
-//! reports *not ready*, so every hosted panel keeps showing `ForgeNotReady`
-//! (now a `glab` setup ladder) instead of firing GitHub `gh_*` data calls that
-//! don't work against GitLab. Read operations (MRs / issues / pipelines) + the
-//! `repo` field that flips it to *ready* land in later increments.
+//! Every operation maps GitLab's JSON onto the SAME neutral models the GitHub
+//! panels already render (`PrInfo`, `IssueDetails`, `WorkflowRun`, `ReleaseInfo`,
+//! …), so the frontend stays provider-agnostic. Reads cover MRs, issues, CI
+//! pipelines, and releases; writes land per-action behind `Implemented` flags
+//! (comment, close/reopen, approve, merge, labels, assignees, create, pipeline
+//! retry/cancel/run, release management). Which features are wired up is declared
+//! in `model.rs::Implemented::for_provider` — flip flags there as impls land.
 
 use std::collections::HashMap;
 
@@ -339,6 +340,8 @@ struct GlabMrChanges {
     #[serde(default)]
     author: Option<GlabMrUser>,
     #[serde(default, deserialize_with = "null_to_default")]
+    assignees: Vec<GlabMrUser>,
+    #[serde(default, deserialize_with = "null_to_default")]
     labels: Vec<String>,
     #[serde(default, deserialize_with = "null_to_default")]
     changes: Vec<GlabChange>,
@@ -542,8 +545,8 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         .collect();
 
     Ok(PrDetails {
-        // No GraphQL node id on GitLab; label/reaction mutations are GitHub-only and
-        // hidden for GitLab, so an empty id is fine.
+        // No GraphQL node id on GitLab; the GitLab mutations key on the iid (labels
+        // by name, assignees by resolved numeric id), so an empty id is fine.
         id: String::new(),
         number: mr.iid,
         title: mr.title,
@@ -562,6 +565,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         comments,
         checks: Vec::new(),
         labels,
+        assignees: mr.assignees.into_iter().map(|a| a.username).collect(),
     })
 }
 
@@ -590,11 +594,11 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
 
 // ── Merge requests (write) ────────────────────────────────────────────────────
 //
-// The first GitLab MR writes: comment (note) + close/reopen, mirroring
-// gh_pr_comment/close/reopen and dispatching through forge_pr_*. The frontend
-// un-gates just these for GitLab (merge / approve / review / edit stay GitHub-only).
-// Same glab `-f` raw-field + `state_event` shape as the issue writes (validated live
-// against the demo). Unlike issue close, MR close has no reason on either platform.
+// Comment (note), close/reopen, approve/unapprove, and merge — mirroring the
+// gh_pr_* commands and dispatching through forge_pr_*. (Full reviews and MR body
+// editing stay GitHub-only.) Same glab `-f` raw-field + `state_event` shape as the
+// issue writes (validated live against the demo). Unlike issue close, MR close has
+// no reason on either platform.
 
 /// Post a comment (note) on a merge request.
 pub async fn comment_mr(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
@@ -932,8 +936,9 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
         .collect();
 
     Ok(IssueDetails {
-        // No GraphQL node id on GitLab; label/reaction/sub-issue mutations are
-        // GitHub-only and hidden for GitLab, so an empty id is fine.
+        // No GraphQL node id on GitLab; the GitLab mutations key on the iid (labels
+        // by name), and reaction/sub-issue mutations stay GitHub-only — so an empty
+        // id is fine.
         id: String::new(),
         number: issue.iid,
         title: issue.title,
@@ -1024,7 +1029,7 @@ pub async fn reopen_issue(repo_path: &str, number: u64) -> AppResult<()> {
 //     assigns by numeric id, so the write resolves usernames→ids from the members
 //     list. The `assignee_ids[]=…` array form 400s through glab's `-f`, hence the
 //     comma form; on the Free tier GitLab keeps only the first id (reconciled by
-//     refetch). MR assignees aren't fronted (GitHub PRs expose no assignee picker).
+//     refetch). The same PUT works on MRs (GitLab-only — GitHub PRs have no picker).
 
 /// The project's labels for the label picker, as neutral `RepoLabel`s. GitLab has no
 /// node id for a label (it addresses them by name), so `id` is left empty — the
@@ -1147,17 +1152,19 @@ pub async fn edit_labels(
     Ok(())
 }
 
-/// Set an issue's assignees to the desired set of usernames. GitLab assigns by
-/// numeric id, so resolve usernames→ids from the project members; an empty list
-/// clears all assignees (`assignee_ids=0`). A non-empty request that resolves to no
-/// known member errors rather than silently clearing.
-pub async fn set_issue_assignees(
+/// Set an issue's or MR's assignees to the desired set of usernames — the two
+/// endpoints differ only in the path segment. GitLab assigns by numeric id, so
+/// resolve usernames→ids from the project members; an empty list clears all
+/// assignees (`assignee_ids=0`). A non-empty request that resolves to no known
+/// member errors rather than silently clearing.
+async fn set_target_assignees(
     repo_path: &str,
+    target_segment: &str,
     number: u64,
     assignees: &[String],
 ) -> AppResult<()> {
     let enc = encode_project(&project_path(repo_path).await?);
-    let endpoint = format!("projects/{enc}/issues/{number}");
+    let endpoint = format!("projects/{enc}/{target_segment}/{number}");
     // A resolution miss errors inside the resolver — it must never turn an assign
     // into a partial assign or (worse) a clear.
     let ids: Vec<u64> = if assignees.is_empty() {
@@ -1183,6 +1190,25 @@ pub async fn set_issue_assignees(
     )
     .await?;
     Ok(())
+}
+
+/// Set an issue's assignees (usernames; empty clears).
+pub async fn set_issue_assignees(
+    repo_path: &str,
+    number: u64,
+    assignees: &[String],
+) -> AppResult<()> {
+    set_target_assignees(repo_path, "issues", number, assignees).await
+}
+
+/// Set a merge request's assignees (usernames; empty clears). GitLab-only — GitHub
+/// PRs have no assignee picker in this app.
+pub async fn set_mr_assignees(
+    repo_path: &str,
+    number: u64,
+    assignees: &[String],
+) -> AppResult<()> {
+    set_target_assignees(repo_path, "merge_requests", number, assignees).await
 }
 
 // ── Issues & merge requests (create) ──────────────────────────────────────────
@@ -1347,8 +1373,9 @@ pub async fn create_mr(
 //   • GitHub nests run → jobs → steps; GitLab is pipeline → jobs (grouped by
 //     `stage`, no per-job steps via the API), so GitLab jobs map to neutral jobs
 //     with an empty `steps` list. Logs are per-job (`/jobs/<id>/trace`).
-// Reads only — re-run / cancel / dispatch stay GitHub-only and are hidden for
-// GitLab on the frontend.
+// Writes (retry / cancel / run) live at the end of this section. GitLab's retry
+// restarts failed+canceled jobs only — there is no "re-run all" on an existing
+// pipeline, so that one control stays GitHub-only in the UI.
 
 /// Failed-step logs can run to many MB; keep the tail (failures land at the end).
 const CI_RUN_LOG_CAP: usize = 200_000;
@@ -1694,6 +1721,82 @@ pub async fn run_failed_logs(repo_path: &str, run_id: u64) -> AppResult<String> 
     Ok(tail_cap(text, CI_RUN_LOG_CAP))
 }
 
+/// Retry a pipeline (`run_id` is the global pipeline id the runs list carries).
+/// GitLab restarts the failed + canceled jobs of the pipeline — the analogue of
+/// GitHub's "re-run failed jobs"; a full re-run of an existing pipeline doesn't
+/// exist on GitLab (a *new* pipeline on the ref is a different thing).
+pub async fn retry_run(repo_path: &str, run_id: u64) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/pipelines/{run_id}/retry");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Cancel an in-flight pipeline. (GitLab treats cancel on an already-finished
+/// pipeline as a no-op 200, so a stale view can't error here.)
+pub async fn cancel_run(repo_path: &str, run_id: u64) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/pipelines/{run_id}/cancel");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// A CI/CD variable key must be a valid env-var name. The `key:value` token
+/// `glab ci run --variables-env` takes splits on the FIRST colon, so anything
+/// beyond `[A-Za-z_][A-Za-z0-9_]*` (a colon especially) would corrupt the value.
+fn valid_variable_key(k: &str) -> bool {
+    !k.is_empty()
+        && !k.starts_with(|c: char| c.is_ascii_digit())
+        && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// One `--variables` token: glab reads the flag's value through a CSV reader
+/// (pflag StringSlice), so a bare comma in a VALUE would split it into bogus
+/// extra `key:value` entries — silently corrupting the variables. A fully
+/// CSV-quoted field (embedded quotes doubled) passes commas and quotes through
+/// intact (validated live: `"REGIONS:a,b"` → one variable `a,b`).
+fn variable_token(key: &str, value: &str) -> String {
+    format!("\"{key}:{}\"", value.replace('"', "\"\""))
+}
+
+/// Manually run a new pipeline on a ref — GitLab's analogue of a workflow
+/// dispatch. `variables` become CI/CD env variables via `glab ci run`'s
+/// `--variables key:value` tokens, CSV-quoted (see [`variable_token`]) — the
+/// REST `variables[]` array form doesn't survive glab's `-f` field encoding, so
+/// the purpose-built subcommand is the safe path.
+pub async fn run_pipeline(
+    repo_path: &str,
+    git_ref: &str,
+    variables: &HashMap<String, String>,
+) -> AppResult<()> {
+    if git_ref.is_empty() || git_ref.starts_with('-') {
+        return Err(AppError::InvalidArgument(format!("invalid ref: {git_ref}")));
+    }
+    let mut args: Vec<String> = vec!["ci".into(), "run".into(), "-b".into(), git_ref.into()];
+    for (k, v) in variables {
+        if !valid_variable_key(k) {
+            return Err(AppError::InvalidArgument(format!(
+                "invalid variable name: {k} (letters, digits and _ only)"
+            )));
+        }
+        args.push("--variables".into());
+        args.push(variable_token(k, v));
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_glab(Some(repo_path), &arg_refs, GLAB_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
 // ── Releases (read) ───────────────────────────────────────────────────────────
 //
 // GitLab releases map onto the same neutral `ReleaseInfo`/`ReleaseDetails` the
@@ -1707,9 +1810,10 @@ pub async fn run_failed_logs(repo_path: &str, run_id: u64) -> AppResult<String> 
 //   • GitLab release assets are `links` (named URLs, no size/download count) plus
 //     auto-generated source archives; we surface only the user `links` — mirroring
 //     `gh`, which likewise omits source archives — with size/downloads 0, so the
-//     read-only UI renders them as plain external links, not downloadable binaries.
-// Reads only — create / edit / delete / asset upload stay GitHub-only and are
-// hidden for GitLab on the frontend.
+//     UI renders them as plain external links, not downloadable binaries.
+// Writes (create / edit / delete / asset upload+delete) live at the end of this
+// section; the GitHub-only draft / prerelease / latest toggles are dropped by the
+// forge dispatch before reaching here.
 
 #[derive(Deserialize)]
 struct GlabReleaseAuthor {
@@ -1875,6 +1979,171 @@ pub async fn view_release(repo_path: &str, tag: &str) -> AppResult<ReleaseDetail
     let r: GlabRelease = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Glab(format!("could not parse GitLab release: {e}")))?;
     Ok(release_details(r))
+}
+
+/// Publish a release; returns its web URL (`_links.self`). `target` is the ref to
+/// create the tag from when the tag doesn't exist yet — the dialog only sends it
+/// for a brand-new tag, and GitLab requires it then (a clear server error surfaces
+/// if it's missing). Empty title/notes are simply omitted, mirroring the gh path.
+pub async fn create_release(
+    repo_path: &str,
+    tag: &str,
+    title: &str,
+    notes: &str,
+    target: &str,
+) -> AppResult<String> {
+    if tag.is_empty() || tag.starts_with('-') {
+        return Err(AppError::InvalidArgument(format!("invalid tag: {tag}")));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/releases");
+    let mut args: Vec<String> = vec![
+        "api".into(),
+        "--method".into(),
+        "POST".into(),
+        endpoint,
+        "-f".into(),
+        format!("tag_name={tag}"),
+    ];
+    if !target.trim().is_empty() {
+        args.push("-f".into());
+        args.push(format!("ref={}", target.trim()));
+    }
+    if !title.trim().is_empty() {
+        args.push("-f".into());
+        args.push(format!("name={}", title.trim()));
+    }
+    if !notes.trim().is_empty() {
+        args.push("-f".into());
+        args.push(format!("description={notes}"));
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = run_glab(Some(repo_path), &arg_refs, GLAB_NETWORK_TIMEOUT).await?;
+    let r: GlabRelease = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse created GitLab release: {e}")))?;
+    Ok(r.links.self_url)
+}
+
+/// Edit a release's title and/or notes. Empty fields are left unchanged (the gh
+/// path likewise only passes non-empty `--title`/`--notes`); when both are empty
+/// there's nothing to send, so it's a no-op.
+pub async fn edit_release(repo_path: &str, tag: &str, title: &str, notes: &str) -> AppResult<()> {
+    if tag.is_empty() {
+        return Err(AppError::InvalidArgument("a tag is required".into()));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let enc_tag = encode_query_value(tag);
+    let endpoint = format!("projects/{enc}/releases/{enc_tag}");
+    let mut args: Vec<String> = vec!["api".into(), "--method".into(), "PUT".into(), endpoint];
+    if !title.trim().is_empty() {
+        args.push("-f".into());
+        args.push(format!("name={}", title.trim()));
+    }
+    if !notes.trim().is_empty() {
+        args.push("-f".into());
+        args.push(format!("description={notes}"));
+    }
+    if args.len() == 4 {
+        return Ok(());
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_glab(Some(repo_path), &arg_refs, GLAB_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+/// Delete a release; `cleanup_tag` also deletes the git tag afterwards (mirroring
+/// `gh release delete --cleanup-tag` — GitLab's release delete never touches the tag).
+pub async fn delete_release(repo_path: &str, tag: &str, cleanup_tag: bool) -> AppResult<()> {
+    if tag.is_empty() {
+        return Err(AppError::InvalidArgument("a tag is required".into()));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let enc_tag = encode_query_value(tag);
+    let endpoint = format!("projects/{enc}/releases/{enc_tag}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    if cleanup_tag {
+        let tag_endpoint = format!("projects/{enc}/repository/tags/{enc_tag}");
+        run_glab(
+            Some(repo_path),
+            &["api", "--method", "DELETE", &tag_endpoint],
+            GLAB_NETWORK_TIMEOUT,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Upload a file as a release asset via `glab release upload` — it uploads to the
+/// project and attaches an asset link named after the file, with a direct download
+/// URL. glab parses `#` in the file argument as its display-name separator
+/// (`file#name#type`), so a `#`-bearing path can't be passed unambiguously — reject
+/// it rather than upload under a mangled name.
+pub async fn upload_release_asset(repo_path: &str, tag: &str, file_path: &str) -> AppResult<()> {
+    if tag.is_empty() || tag.starts_with('-') {
+        return Err(AppError::InvalidArgument(format!("invalid tag: {tag}")));
+    }
+    if file_path.is_empty() || file_path.starts_with('-') {
+        return Err(AppError::InvalidArgument("a file is required".into()));
+    }
+    if file_path.contains('#') {
+        return Err(AppError::InvalidArgument(
+            "GitLab uploads can't handle a '#' in the file path — rename or move the file first."
+                .into(),
+        ));
+    }
+    run_glab(
+        Some(repo_path),
+        &["release", "upload", tag, file_path],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Delete a release asset link by its display name. GitLab keys links by a
+/// server-side id, so resolve the name against the release's links first; a
+/// missing name errors (the view may be stale) rather than deleting the wrong link.
+pub async fn delete_release_asset(repo_path: &str, tag: &str, asset_name: &str) -> AppResult<()> {
+    #[derive(Deserialize)]
+    struct Link {
+        id: u64,
+        #[serde(default)]
+        name: String,
+    }
+    if tag.is_empty() {
+        return Err(AppError::InvalidArgument("a tag is required".into()));
+    }
+    if asset_name.is_empty() {
+        return Err(AppError::InvalidArgument("an asset name is required".into()));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let enc_tag = encode_query_value(tag);
+    let list_endpoint = format!("projects/{enc}/releases/{enc_tag}/assets/links");
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &list_endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let links: Vec<Link> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab release assets: {e}")))?;
+    let link = links
+        .into_iter()
+        .find(|l| l.name == asset_name)
+        .ok_or_else(|| AppError::Glab(format!("no release asset named {asset_name}")))?;
+    let del_endpoint = format!("projects/{enc}/releases/{enc_tag}/assets/links/{}", link.id);
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &del_endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2276,6 +2545,52 @@ mod tests {
         assert!(!infos[0].is_latest, "an upcoming release is never latest");
         assert!(infos[1].is_latest, "the newest published release is latest");
         assert!(!infos[2].is_latest);
+    }
+
+    #[test]
+    fn pipeline_variable_keys_reject_colon_and_flaggy_names() {
+        // The `key:value` token splits on the FIRST colon — a colon-bearing key
+        // would silently corrupt the value, and a leading digit isn't an env var.
+        assert!(valid_variable_key("DEPLOY_ENV"));
+        assert!(valid_variable_key("_private"));
+        assert!(valid_variable_key("key2"));
+        assert!(!valid_variable_key(""));
+        assert!(!valid_variable_key("has:colon"));
+        assert!(!valid_variable_key("has space"));
+        assert!(!valid_variable_key("2leading"));
+        assert!(!valid_variable_key("-flag"));
+    }
+
+    #[test]
+    fn pipeline_variable_values_survive_commas_and_quotes() {
+        // glab CSV-splits the --variables flag value; the token must be a fully
+        // quoted CSV field with embedded quotes doubled (forms validated live).
+        assert_eq!(variable_token("KEY", "simple"), "\"KEY:simple\"");
+        assert_eq!(variable_token("REGIONS", "us-east-1,eu-west-1"), "\"REGIONS:us-east-1,eu-west-1\"");
+        assert_eq!(variable_token("NOTE", "say \"hi\", ok"), "\"NOTE:say \"\"hi\"\", ok\"");
+        assert_eq!(variable_token("MSG", "hello: world"), "\"MSG:hello: world\"");
+    }
+
+    #[test]
+    fn mr_changes_parse_assignees_present_null_and_missing() {
+        // GitLab sends `assignees: []` normally, but nullable collections must
+        // tolerate an explicit `null` (the null_to_default trap) and absence.
+        let base = r#""iid": 1, "web_url": "u", "title": "t", "target_branch": "main",
+            "source_branch": "f", "state": "opened""#;
+        let with = format!(
+            r#"{{ {base}, "assignees": [ {{ "username": "alice" }}, {{ "username": "bob" }} ] }}"#
+        );
+        let mr: GlabMrChanges = serde_json::from_str(&with).unwrap();
+        let names: Vec<String> = mr.assignees.into_iter().map(|a| a.username).collect();
+        assert_eq!(names, vec!["alice", "bob"]);
+
+        let with_null = format!(r#"{{ {base}, "assignees": null }}"#);
+        let mr: GlabMrChanges = serde_json::from_str(&with_null).unwrap();
+        assert!(mr.assignees.is_empty());
+
+        let missing = format!("{{ {base} }}");
+        let mr: GlabMrChanges = serde_json::from_str(&missing).unwrap();
+        assert!(mr.assignees.is_empty());
     }
 
     #[test]

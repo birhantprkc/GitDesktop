@@ -93,9 +93,9 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
 
 // ── Merge requests (write) ───────────────────────────────────────────────────
 //
-// Thin delegates to the existing gh-backed PR mutations — comment + close/reopen,
-// the first MR writes fronted behind the abstraction. Merge / approve / review /
-// edit stay GitHub-only and aren't fronted here.
+// Thin delegates to the existing gh-backed PR mutations — comment + close/reopen.
+// Merge dispatches straight to `gh_pr_merge` inside `forge_pr_merge` (no delegate
+// here); review / edit stay GitHub-only and aren't fronted.
 
 pub async fn comment_pr(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
     crate::github::pr::gh_pr_comment(repo_path.to_string(), number, body.to_string()).await
@@ -127,11 +127,10 @@ pub async fn view_issue(
     crate::github::issue::gh_issue_view(repo_path.to_string(), number).await
 }
 
-// ── CI / Actions (read) ──────────────────────────────────────────────────────
+// ── CI / Actions ─────────────────────────────────────────────────────────────
 //
-// Thin delegates to the existing gh-backed Actions reads, mirroring the PR/issue
-// ones. The write commands (re-run, cancel, dispatch) stay GitHub-only and aren't
-// fronted here.
+// Thin delegates to the existing gh-backed Actions commands, mirroring the
+// PR/issue ones — reads plus the re-run / cancel / dispatch writes.
 
 pub async fn list_runs(
     repo_path: &str,
@@ -156,10 +155,34 @@ pub async fn job_logs(repo_path: &str, job_id: u64) -> AppResult<String> {
     crate::github::actions::gh_job_logs(repo_path.to_string(), job_id).await
 }
 
-// ── Releases (read) ──────────────────────────────────────────────────────────
+pub async fn rerun_run(repo_path: &str, run_id: u64, failed: bool) -> AppResult<()> {
+    crate::github::actions::gh_run_rerun(repo_path.to_string(), run_id, failed).await
+}
+
+pub async fn cancel_run(repo_path: &str, run_id: u64) -> AppResult<()> {
+    crate::github::actions::gh_run_cancel(repo_path.to_string(), run_id).await
+}
+
+pub async fn dispatch_ci(
+    repo_path: &str,
+    workflow: &str,
+    git_ref: &str,
+    inputs: std::collections::HashMap<String, String>,
+) -> AppResult<()> {
+    crate::github::actions::gh_workflow_run(
+        repo_path.to_string(),
+        workflow.to_string(),
+        git_ref.to_string(),
+        inputs,
+    )
+    .await
+}
+
+// ── Releases ─────────────────────────────────────────────────────────────────
 //
-// Thin delegates to the existing gh-backed release reads. Create / edit / delete
-// and the asset commands stay GitHub-only and aren't fronted here.
+// Thin delegates to the existing gh-backed release commands — reads plus the
+// create / edit / delete / asset writes. (Notes generation and asset download
+// stay GitHub-only `gh_*` commands: GitLab has no analogue.)
 
 pub async fn list_releases(repo_path: &str) -> AppResult<Vec<crate::github::release::ReleaseInfo>> {
     crate::github::release::gh_release_list(repo_path.to_string()).await
@@ -170,6 +193,74 @@ pub async fn view_release(
     tag: &str,
 ) -> AppResult<crate::github::release::ReleaseDetails> {
     crate::github::release::gh_release_view(repo_path.to_string(), tag.to_string()).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_release(
+    repo_path: &str,
+    tag: &str,
+    title: &str,
+    notes: &str,
+    target: &str,
+    prerelease: bool,
+    draft: bool,
+    latest: bool,
+) -> AppResult<String> {
+    crate::github::release::gh_release_create(
+        repo_path.to_string(),
+        tag.to_string(),
+        title.to_string(),
+        notes.to_string(),
+        target.to_string(),
+        prerelease,
+        draft,
+        latest,
+    )
+    .await
+}
+
+pub async fn edit_release(
+    repo_path: &str,
+    tag: &str,
+    title: &str,
+    notes: &str,
+    prerelease: bool,
+    draft: bool,
+    latest: bool,
+) -> AppResult<()> {
+    crate::github::release::gh_release_edit(
+        repo_path.to_string(),
+        tag.to_string(),
+        title.to_string(),
+        notes.to_string(),
+        prerelease,
+        draft,
+        latest,
+    )
+    .await
+}
+
+pub async fn delete_release(repo_path: &str, tag: &str, cleanup_tag: bool) -> AppResult<()> {
+    crate::github::release::gh_release_delete(repo_path.to_string(), tag.to_string(), cleanup_tag)
+        .await
+}
+
+pub async fn upload_release_asset(repo_path: &str, tag: &str, file_path: &str) -> AppResult<()> {
+    crate::github::release::gh_release_upload_asset(
+        repo_path.to_string(),
+        tag.to_string(),
+        file_path.to_string(),
+    )
+    .await
+}
+
+pub async fn delete_release_asset(repo_path: &str, tag: &str, asset_name: &str) -> AppResult<()> {
+    crate::github::release::gh_release_delete_asset(
+        repo_path.to_string(),
+        tag.to_string(),
+        asset_name.to_string(),
+    )
+    .await
 }
 
 // ── Issues (write) ───────────────────────────────────────────────────────────

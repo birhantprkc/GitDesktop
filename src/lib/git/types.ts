@@ -467,14 +467,30 @@ export interface ForgeImplemented {
   issueLabels: boolean;
   /** Editing labels on a merge/pull request — the same shared label control. */
   mrLabels: boolean;
-  /** Setting an issue's assignees — a shared issue control. (No MR-assignee flag:
-   *  GitHub PRs expose no assignee picker here.) */
+  /** Setting an issue's assignees — a shared issue control. (MR assignees are the
+   *  separate GitLab-only `mrAssignees` below.) */
   issueAssignees: boolean;
   /** Creating an issue from the app — a shared control (GitHub-only fields like
    *  milestone/org-type hide per provider in the dialog). */
   issueCreate: boolean;
   /** Creating a merge/pull request from the app (push head + open) — shared. */
   mrCreate: boolean;
+  /** Re-running a finished CI run — shared. (GitLab retries failed+canceled jobs
+   *  only; "re-run all" stays a GitHub-only affordance.) */
+  ciRerun: boolean;
+  /** Cancelling an in-flight CI run — shared. */
+  ciCancel: boolean;
+  /** Manually starting a CI run — shared (GitHub dispatches a workflow; GitLab
+   *  runs a new pipeline on a ref, with variables instead of inputs). */
+  ciDispatch: boolean;
+  /** Publishing a new release — shared (the GitHub-only draft/pre-release/latest
+   *  toggles hide per provider in the dialog). */
+  releaseCreate: boolean;
+  /** Managing an existing release (edit, delete, upload/delete assets) — shared. */
+  releaseEdit: boolean;
+  /** Setting a merge request's assignees — GitLab-only like `mrApprove` (GitHub
+   *  PRs expose no assignee picker here), so it's false for GitHub. */
+  mrAssignees: boolean;
 }
 
 /** A merge/pull request's approval summary — who has approved and whether the
@@ -839,6 +855,9 @@ export interface PrDetails {
   comments: PrThreadOut[];
   checks: PrCheckOut[];
   labels: RepoLabel[];
+  /** Assignee usernames. Only GitLab fills this — the MR-assignees picker is
+   *  GitLab-only (`implemented.mrAssignees`); GitHub leaves it empty. */
+  assignees: string[];
 }
 
 /** One review item on a GitHub PR (a submitted review, an inline review comment,

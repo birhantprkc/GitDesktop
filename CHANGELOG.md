@@ -12,29 +12,34 @@ commit list.
 
 ### Added
 
-- **GitLab, in the same panels (read).** GitDesktop now speaks GitLab as well as GitHub,
+- **GitLab, in the same panels.** GitDesktop now speaks GitLab as well as GitHub,
   through the **GitLab CLI (`glab`)** — same delegated-auth model as `gh`, no tokens stored.
   Point the app at a GitLab repo (or **browse and clone your GitLab projects** from the
   **GitLab** tab in the clone dialog) and the **Pull Requests** panel lists its **merge
   requests** right alongside any local PRs — open and closed/merged, searchable and
   filterable. Open one for the description, comments, commits, and a syntax-highlighted
-  **diff** (plus an "Open on GitLab" link) — and now **comment** on a GitLab MR,
+  **diff** (plus an "Open on GitLab" link) — and **comment** on a GitLab MR,
   **close / reopen** it, **approve / unapprove** it (a GitLab reviewer action, with the
-  approval count shown inline), and **merge** it (merge or squash, optionally deleting the
-  source branch — guarded so it never merges a head you didn't see), and edit its **labels**.
+  approval count shown inline), **merge** it (merge or squash, optionally deleting the
+  source branch — guarded so it never merges a head you didn't see), and edit its **labels**
+  and **assignees**.
   You can also **create a merge request** right from the app (the New menu, the command
-  palette, or the Compare tab) — it pushes your branch and opens the MR, draft included. The **Issues** panel reads GitLab
+  palette, or the Compare tab) — it pushes your branch and opens the MR, draft included. The **Issues** panel speaks GitLab
   too — its issues (open and closed) next to your local issues, and an issue view with the
-  description, comments, and a side rail of labels, assignees, and milestone — now with GitLab
+  description, comments, and a side rail of labels, assignees, and milestone — with GitLab
   issue **writes**: **comment**, **close / reopen**, editing **labels** and **assignees**
   right in that side rail, and **creating issues** (with labels and assignees) from the same
-  dialog GitHub uses. Publishing a **local** issue or PR to GitLab works too. And the
-  **Actions** panel reads GitLab **CI pipelines** — the run list, a branch CI badge, and a
-  read-only pipeline view with its **jobs** (status, durations, and per-job **logs**). The
-  **Tags** panel reads GitLab **releases** too — alongside your local tags, with a **read-only**
-  release view: notes, the Latest badge, and asset links (open in browser). The rest of the
-  GitLab surface (full MR reviews, editing an issue's title/body, re-running/dispatching
-  pipelines, publishing releases, insights) reads **"coming soon"** for now — those panels degrade
+  dialog GitHub uses. Publishing a **local** issue or PR to GitLab works too. The
+  **Actions** panel covers GitLab **CI pipelines** — the run list, a branch CI badge, a
+  pipeline view with its **jobs** (status, durations, and per-job **logs**), plus the
+  actions: **cancel** a running pipeline, **retry** a failed or canceled one, and
+  **run a fresh pipeline** on any branch or tag with optional **CI/CD variables**. The
+  **Tags** panel manages GitLab **releases** too — alongside your local tags: read the
+  notes, the Latest badge, and asset links (open in browser), and **publish**, **edit**,
+  and **delete** releases, **upload** files as asset links, and remove them (GitLab has no
+  draft/pre-release toggles — it picks the latest release itself). The rest of the
+  GitLab surface (full MR reviews, editing an issue's title/body, insights) reads
+  **"coming soon"** for now — those panels degrade
   gracefully instead of breaking — and lands in later updates. GitHub repositories are
   completely unaffected. (Self-managed GitLab hosts and Bitbucket are still on the way.)
 - **A browsable, persistent Agent sidebar.** Several quality-of-life upgrades to the Agent list:

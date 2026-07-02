@@ -50,6 +50,7 @@ import { useAppForm } from "@/lib/form";
 import {
   useBranches,
   useCreateRelease,
+  useForgeStatus,
   useGithubReleaseNotes,
   useRecentCommits,
   useRepoStatus,
@@ -100,6 +101,10 @@ export function CreateReleaseDialog({
   const createRelease = useCreateRelease(repoPath);
   const githubNotes = useGithubReleaseNotes(repoPath);
   const aiNotes = useGenerateReleaseNotes(repoPath);
+  // GitLab has no draft/pre-release/latest concepts and no auto-notes API, so
+  // those checkboxes and the "From GitHub" generator hide there (AI notes still
+  // work — they fall back to local commits).
+  const isGitLab = useForgeStatus(repoPath).data?.provider === "gitlab";
   const status = useRepoStatus(repoPath);
   const tagList = useTagList(repoPath);
   const branches = useBranches(repoPath);
@@ -250,8 +255,8 @@ export function CreateReleaseDialog({
               {initialTag ? `Release ${initialTag}` : "New release"}
             </DialogTitle>
             <DialogDescription>
-              Publishes a GitHub release. A new tag is created from the target
-              on publish.
+              Publishes a {isGitLab ? "GitLab" : "GitHub"} release. A new tag is
+              created from the target on publish.
             </DialogDescription>
           </DialogHeader>
 
@@ -318,7 +323,11 @@ export function CreateReleaseDialog({
                 <div className="space-y-1.5">
                   <Label>Target</Label>
                   <TargetPicker
-                    branches={(branches.data ?? []).map((b) => b.name)}
+                    // Agent-session branches are app-internal — never a release
+                    // target (same rule as BranchSwitcher).
+                    branches={(branches.data ?? [])
+                      .map((b) => b.name)
+                      .filter((n) => !n.startsWith("gd/session/"))}
                     commits={recent.data ?? []}
                     value={target}
                     onChange={(v) => form.setFieldValue("target", v)}
@@ -386,7 +395,9 @@ export function CreateReleaseDialog({
                 rows={8}
                 textareaClassName="max-h-72 min-h-32 resize-y font-mono"
                 actions={
-                  busyGenerating ? (
+                  // GitLab's only generator is the AI one — with AI hidden the
+                  // menu would hold a single disabled item, so hide it entirely.
+                  isGitLab && !aiEnabled ? undefined : busyGenerating ? (
                     <Button
                       type="button"
                       variant="ghost"
@@ -417,9 +428,11 @@ export function CreateReleaseDialog({
                         <CaretDownIcon data-icon="inline-end" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="min-w-56">
-                        <DropdownMenuItem onClick={generateFromGithub}>
-                          From GitHub (commits & PRs)
-                        </DropdownMenuItem>
+                        {!isGitLab && (
+                          <DropdownMenuItem onClick={generateFromGithub}>
+                            From GitHub (commits & PRs)
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem
                           disabled={!aiEnabled}
                           title={
@@ -438,32 +451,35 @@ export function CreateReleaseDialog({
               />
             </div>
 
-            <div className="flex flex-wrap gap-x-6 gap-y-2">
-              <form.AppField name="latest">
-                {(field) => (
-                  <field.CheckboxField
-                    label="Set as the latest release"
-                    className="flex cursor-pointer items-center gap-2 text-xs"
-                  />
-                )}
-              </form.AppField>
-              <form.AppField name="prerelease">
-                {(field) => (
-                  <field.CheckboxField
-                    label="Pre-release"
-                    className="flex cursor-pointer items-center gap-2 text-xs"
-                  />
-                )}
-              </form.AppField>
-              <form.AppField name="draft">
-                {(field) => (
-                  <field.CheckboxField
-                    label="Save as draft"
-                    className="flex cursor-pointer items-center gap-2 text-xs"
-                  />
-                )}
-              </form.AppField>
-            </div>
+            {/* GitLab computes "latest" itself and has no pre-release/draft. */}
+            {!isGitLab && (
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                <form.AppField name="latest">
+                  {(field) => (
+                    <field.CheckboxField
+                      label="Set as the latest release"
+                      className="flex cursor-pointer items-center gap-2 text-xs"
+                    />
+                  )}
+                </form.AppField>
+                <form.AppField name="prerelease">
+                  {(field) => (
+                    <field.CheckboxField
+                      label="Pre-release"
+                      className="flex cursor-pointer items-center gap-2 text-xs"
+                    />
+                  )}
+                </form.AppField>
+                <form.AppField name="draft">
+                  {(field) => (
+                    <field.CheckboxField
+                      label="Save as draft"
+                      className="flex cursor-pointer items-center gap-2 text-xs"
+                    />
+                  )}
+                </form.AppField>
+              </div>
+            )}
           </div>
 
           <DialogFooter>

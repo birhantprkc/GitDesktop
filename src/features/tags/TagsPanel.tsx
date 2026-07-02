@@ -54,10 +54,10 @@ function ReleaseBadges({ release }: { release: ReleaseInfo }) {
 export function TagsPanel({ repoPath }: { repoPath: string }) {
   const gh = useForgeStatus(repoPath);
   // Release READS are provider-neutral (GitHub + GitLab); the badge/detail light up
-  // for any provider with releases implemented. Publishing a release is GitHub-only,
-  // gated separately below (canCreateRelease).
+  // for any provider with releases implemented. Publishing follows the per-action
+  // create flag (GitHub + GitLab — the dialog hides the GitHub-only toggles there).
   const ghReady = forgeFeatureReady(gh.data, "releases");
-  const canCreateRelease = ghReady && gh.data?.provider === "github";
+  const canCreateRelease = forgeFeatureReady(gh.data, "releaseCreate");
   const tagList = useTagList(repoPath);
   const releaseList = useReleaseList(repoPath, ghReady);
   const status = useRepoStatus(repoPath);
@@ -78,15 +78,17 @@ export function TagsPanel({ repoPath }: { repoPath: string }) {
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
 
   // Opened from the command palette / New menu via requestCreate (any tab).
+  // Re-check the release gate here — the palette registration gates too, but a
+  // pending request must not open the dialog on a repo that can't publish.
   useEffect(() => {
     if (pendingCreate === "release") {
-      setCreateReleaseOpen(true);
+      if (canCreateRelease) setCreateReleaseOpen(true);
       clearPendingCreate();
     } else if (pendingCreate === "tag") {
       setNewTagOpen(true);
       clearPendingCreate();
     }
-  }, [pendingCreate, clearPendingCreate]);
+  }, [pendingCreate, clearPendingCreate, canCreateRelease]);
 
   const tags = tagList.data ?? [];
   const releases = releaseList.data ?? [];
@@ -157,8 +159,8 @@ export function TagsPanel({ repoPath }: { repoPath: string }) {
                 canCreateRelease
                   ? undefined
                   : gh.data?.provider === "gitlab"
-                    ? "Publishing releases isn't supported for GitLab yet — releases are read-only."
-                    : "Connect this repository to GitHub to publish a release."
+                    ? "Sign in with the GitLab CLI (glab) to publish a release."
+                    : "Connect this repository to GitHub or GitLab to publish a release."
               }
               onClick={() => setCreateReleaseOpen(true)}
             >

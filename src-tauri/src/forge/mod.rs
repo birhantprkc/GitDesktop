@@ -3,11 +3,11 @@
 //! where a repo is hosted.
 //!
 //! Per `docs/multi-provider-support.md` (decisions locked 2026-06-29): GitHub stays
-//! on `gh`, GitLab will use the `glab` CLI, and Bitbucket Cloud will use direct
-//! HTTP — all behind the [`Forge`] trait. **Phase 0 ships the scaffold and GitHub
-//! impl only**, with zero behavior change: `forge_status` simply produces a neutral
-//! [`ForgeStatus`] (GitHub delegates to the existing `gh_status`), and GitLab /
-//! Bitbucket are recognized but report not-ready until their impls land.
+//! on `gh`, GitLab uses the `glab` CLI, and Bitbucket Cloud (not yet built) will use
+//! direct HTTP — all behind the [`Forge`] trait. Each `forge_*` command dispatches
+//! on the detected provider: the GitHub arm delegates to the existing `gh_*`
+//! commands (byte-identical), the GitLab arm to `gitlab.rs`. Which features each
+//! provider has wired up is declared in `model.rs::Implemented`.
 
 pub mod github;
 pub mod gitlab;
@@ -310,7 +310,7 @@ pub async fn forge_pr_merge(
 /// A repo's issues, behind the provider abstraction. GitHub delegates to the
 /// existing `gh issue list`; GitLab maps `glab` issues onto the same neutral
 /// [`IssueInfo`](crate::github::issue::IssueInfo). `state` is `"open"` or
-/// `"closed"`. Issue *writes* stay GitHub-only (hidden for GitLab on the frontend).
+/// `"closed"`.
 #[tauri::command]
 pub async fn forge_issue_list(
     repo_path: String,
@@ -343,8 +343,7 @@ pub async fn forge_issue_view(
 /// A repo's CI runs, behind the provider abstraction. GitHub delegates to
 /// `gh run list`; GitLab maps `glab` pipelines onto the same neutral
 /// [`WorkflowRun`](crate::github::actions::WorkflowRun). `limit` caps the count;
-/// `branch` optionally scopes to one ref. Reads only — re-run / cancel / dispatch
-/// stay GitHub-only.
+/// `branch` optionally scopes to one ref.
 #[tauri::command]
 pub async fn forge_ci_run_list(
     repo_path: String,
@@ -399,10 +398,56 @@ pub async fn forge_ci_job_logs(repo_path: String, job_id: u64) -> AppResult<Stri
     }
 }
 
+/// Re-run a finished CI run, behind the abstraction. GitHub re-runs all jobs or
+/// (`failed`) just the failed ones; GitLab's retry restarts failed + canceled jobs
+/// only — its single semantic — so the GitLab arm ignores `failed` (the UI only
+/// offers the retry button there; "re-run all" stays GitHub-only).
+#[tauri::command]
+pub async fn forge_ci_run_rerun(repo_path: String, run_id: u64, failed: bool) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::retry_run(&repo_path, run_id).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket pipelines aren't supported yet.".into(),
+        )),
+        _ => github::rerun_run(&repo_path, run_id, failed).await,
+    }
+}
+
+/// Cancel an in-flight CI run, behind the abstraction.
+#[tauri::command]
+pub async fn forge_ci_run_cancel(repo_path: String, run_id: u64) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::cancel_run(&repo_path, run_id).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket pipelines aren't supported yet.".into(),
+        )),
+        _ => github::cancel_run(&repo_path, run_id).await,
+    }
+}
+
+/// Manually start a CI run, behind the abstraction. GitHub dispatches `workflow`
+/// (id or file name) on `git_ref` with `inputs`; GitLab runs a new pipeline on the
+/// ref with `inputs` as CI/CD variables — it has no per-workflow dispatch, so the
+/// GitLab arm ignores `workflow` (the UI sends it empty there).
+#[tauri::command]
+pub async fn forge_ci_dispatch(
+    repo_path: String,
+    workflow: String,
+    git_ref: String,
+    inputs: std::collections::HashMap<String, String>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::run_pipeline(&repo_path, &git_ref, &inputs).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket pipelines aren't supported yet.".into(),
+        )),
+        _ => github::dispatch_ci(&repo_path, &workflow, &git_ref, inputs).await,
+    }
+}
+
 /// A repo's releases (list view), behind the provider abstraction. GitHub delegates
 /// to `gh release list`; GitLab maps `glab` releases onto the same neutral
-/// [`ReleaseInfo`](crate::github::release::ReleaseInfo). Reads only — create / edit /
-/// delete / asset management stay GitHub-only (hidden for GitLab on the frontend).
+/// [`ReleaseInfo`](crate::github::release::ReleaseInfo).
 #[tauri::command]
 pub async fn forge_release_list(
     repo_path: String,
@@ -428,6 +473,115 @@ pub async fn forge_release_view(
             "Bitbucket releases aren't supported yet.".into(),
         )),
         _ => github::view_release(&repo_path, &tag).await,
+    }
+}
+
+/// Publish a release, behind the abstraction; returns its web URL. The
+/// draft / prerelease / latest toggles are GitHub concepts — GitLab has none of
+/// the three, so its arm drops them (the create dialog hides those fields there,
+/// like the issue dialog's milestone/type).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn forge_release_create(
+    repo_path: String,
+    tag: String,
+    title: String,
+    notes: String,
+    target: String,
+    prerelease: bool,
+    draft: bool,
+    latest: bool,
+) -> AppResult<String> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::create_release(&repo_path, &tag, &title, &notes, &target).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket releases aren't supported yet.".into(),
+        )),
+        _ => {
+            github::create_release(
+                &repo_path, &tag, &title, &notes, &target, prerelease, draft, latest,
+            )
+            .await
+        }
+    }
+}
+
+/// Edit a release's title/notes (GitHub also its draft/prerelease/latest state),
+/// behind the abstraction. The GitLab arm drops the GitHub-only toggles.
+#[tauri::command]
+pub async fn forge_release_edit(
+    repo_path: String,
+    tag: String,
+    title: String,
+    notes: String,
+    prerelease: bool,
+    draft: bool,
+    latest: bool,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::edit_release(&repo_path, &tag, &title, &notes).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket releases aren't supported yet.".into(),
+        )),
+        _ => github::edit_release(&repo_path, &tag, &title, &notes, prerelease, draft, latest).await,
+    }
+}
+
+/// Delete a release (optionally its git tag too), behind the abstraction.
+#[tauri::command]
+pub async fn forge_release_delete(
+    repo_path: String,
+    tag: String,
+    cleanup_tag: bool,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::delete_release(&repo_path, &tag, cleanup_tag).await,
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket releases aren't supported yet.".into(),
+        )),
+        _ => github::delete_release(&repo_path, &tag, cleanup_tag).await,
+    }
+}
+
+/// Upload a file as a release asset, behind the abstraction. GitHub attaches a
+/// binary; GitLab uploads to the project and links it as a release asset (its
+/// assets are links, so the row renders as a link — no size/download stats).
+#[tauri::command]
+pub async fn forge_release_upload_asset(
+    repo_path: String,
+    tag: String,
+    file_path: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::upload_release_asset(&repo_path, &tag, &file_path).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket releases aren't supported yet.".into(),
+        )),
+        _ => github::upload_release_asset(&repo_path, &tag, &file_path).await,
+    }
+}
+
+/// Delete a release asset by its display name, behind the abstraction. GitLab
+/// assets are links with server-side ids, so its arm resolves the name to the
+/// link id first.
+#[tauri::command]
+pub async fn forge_release_delete_asset(
+    repo_path: String,
+    tag: String,
+    asset_name: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::delete_release_asset(&repo_path, &tag, &asset_name).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket releases aren't supported yet.".into(),
+        )),
+        _ => github::delete_release_asset(&repo_path, &tag, &asset_name).await,
     }
 }
 
@@ -528,7 +682,7 @@ pub async fn forge_edit_labels(
 
 /// Set an issue's assignees (the full desired set, by login), behind the abstraction.
 /// GitHub PATCHes the issue with the login set; GitLab resolves logins→ids and PUTs
-/// `assignee_ids`. MR assignees aren't fronted (GitHub PRs expose no assignee picker).
+/// `assignee_ids`.
 #[tauri::command]
 pub async fn forge_issue_set_assignees(
     repo_path: String,
@@ -543,6 +697,29 @@ pub async fn forge_issue_set_assignees(
             "Bitbucket assignees aren't supported yet.".into(),
         )),
         _ => github::set_issue_assignees(&repo_path, number, assignees).await,
+    }
+}
+
+/// Set a merge request's assignees, behind the abstraction. GitLab-only, like
+/// `forge_pr_approvals`: GitHub PRs have no assignee picker in this app (the
+/// `mrAssignees` flag stays false there), so the GitHub arm is never reachable
+/// from the UI and errors defensively.
+#[tauri::command]
+pub async fn forge_mr_set_assignees(
+    repo_path: String,
+    number: u64,
+    assignees: Vec<String>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::set_mr_assignees(&repo_path, number, &assignees).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket assignees aren't supported yet.".into(),
+        )),
+        _ => Err(AppError::InvalidArgument(
+            "Pull request assignees aren't editable here for GitHub.".into(),
+        )),
     }
 }
 
