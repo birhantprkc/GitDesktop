@@ -85,7 +85,9 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   **Claude Code**, **Codex**, **GitHub Copilot**, or **opencode** (whose free
   hosted models need no key at all), no extra subscription. Sandbox its writes in a
   **Docker/Podman container**, or rely on each CLI's own worktree confinement on
-  the host. Drive each turn with **slash commands and skills** — built-in
+  the host — and give a repo **extra tools inside that container** (e.g. Playwright)
+  by committing a `.gitdesktop/agent.Dockerfile`, which GitDesktop builds into a
+  per-repo image after you review and confirm it. Drive each turn with **slash commands and skills** — built-in
   starters, custom commands you define, and the selected agent's own commands and
   **Agent Skills** (project *and* global, including the shared `.agents/skills`) —
   plus `@file` mentions, a model/reasoning-effort picker, and terminal-style

@@ -5,6 +5,14 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -13,9 +21,12 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import {
+  buildCustomImage,
   type ContainerStatus,
+  customImageStatus,
   detectContainerSandbox,
   prepareContainerSandbox,
+  scaffoldCustomDockerfile,
 } from "@/lib/ai/sandbox";
 import { toastError } from "@/lib/toast";
 
@@ -48,6 +59,7 @@ export function AgentSandboxField({
   onNodeVersion,
   providers,
   onProviders,
+  repoPath,
 }: {
   value: "worktree" | "container";
   onChange: (value: "worktree" | "container") => void;
@@ -55,6 +67,8 @@ export function AgentSandboxField({
   onNodeVersion: (v: string) => void;
   providers: AgentId[];
   onProviders: (v: AgentId[]) => void;
+  /** The open repo, for the per-repo custom-image row (null = no repo open). */
+  repoPath: string | null;
 }) {
   const enabled = value === "container";
   const status = useQuery({
@@ -163,6 +177,12 @@ export function AgentSandboxField({
             building={building}
             onBuild={buildImage}
           />
+          {repoPath && (
+            <CustomImageSection
+              repoPath={repoPath}
+              basePresent={!!status.data?.imagePresent}
+            />
+          )}
         </div>
       )}
     </div>
@@ -270,5 +290,256 @@ function Row({
       )}
       <span>{children}</span>
     </p>
+  );
+}
+
+/** A compact `size="xs"` action button matching the base-image line's build buttons. */
+function ActionButton({
+  label,
+  busyLabel,
+  loading,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  busyLabel?: string;
+  loading?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      size="xs"
+      variant="outline"
+      className="ml-2 shrink-0"
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {loading ? (
+        <>
+          <Spinner className="size-3" />
+          {busyLabel ?? "Working…"}
+        </>
+      ) : (
+        label
+      )}
+    </Button>
+  );
+}
+
+/**
+ * A per-repo custom-image status line, shown below the base-image line when the active repo
+ * ships a `.gitdesktop/agent.Dockerfile`. Mirrors the `Row` idiom (icon + text, never color
+ * alone). The build runs the Dockerfile's arbitrary commands, so it is gated behind a review
+ * dialog — the confirm-to-build guard against an untrusted repo.
+ */
+function CustomImageSection({
+  repoPath,
+  basePresent,
+}: {
+  repoPath: string;
+  /** Whether the managed base image is built — the custom image is `FROM` it, so a build
+   *  can't run until it exists. Scaffolding/reviewing stays available regardless. */
+  basePresent: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const status = useQuery({
+    queryKey: ["agentCustomImage", repoPath],
+    queryFn: () => customImageStatus(repoPath),
+    staleTime: 30_000,
+  });
+  const [busy, setBusy] = useState<"scaffold" | "build" | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+
+  const refresh = () =>
+    queryClient.invalidateQueries({ queryKey: ["agentCustomImage", repoPath] });
+
+  async function scaffold() {
+    setBusy("scaffold");
+    try {
+      const created = await scaffoldCustomDockerfile(repoPath);
+      toast.success(
+        created
+          ? "Added .gitdesktop/agent.Dockerfile — edit it to add tools, then build the image"
+          : ".gitdesktop/agent.Dockerfile already exists",
+      );
+      await refresh();
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function build(force: boolean) {
+    setBusy("build");
+    try {
+      // Pass the reviewed contents so the backend refuses to build if the file changed on
+      // disk since the dialog opened (only ever build what the user actually saw).
+      await buildCustomImage(repoPath, status.data?.dockerfile ?? "", force);
+      toast.success(force ? "Custom image rebuilt" : "Custom image built");
+      setReviewOpen(false);
+      await refresh();
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const data = status.data;
+  if (!data) return null; // first load — the base line above already carries the state
+
+  if (data.state === "none") {
+    return (
+      <Row tone="muted">
+        This repo uses the base image. Add a custom Dockerfile to layer extra
+        tools (e.g. Playwright) into its container sessions.
+        <ActionButton
+          label="Add custom tools…"
+          busyLabel="Adding…"
+          loading={busy === "scaffold"}
+          disabled={busy !== null}
+          onClick={scaffold}
+        />
+      </Row>
+    );
+  }
+
+  const built = data.state === "built";
+  const invalid = data.state === "invalid";
+  const canBuild = !invalid; // "needsBuild" or "built"
+
+  return (
+    <>
+      <Row tone={built ? "ok" : invalid ? "warn" : "muted"}>
+        {invalid
+          ? "This repo's .gitdesktop/agent.Dockerfile can't be used as-is — open it to see why."
+          : built
+            ? "Container sessions for this repo run in its custom image."
+            : "This repo has a custom Dockerfile that isn't built yet."}
+        <ActionButton
+          label={
+            invalid
+              ? "View Dockerfile"
+              : built
+                ? "View / Rebuild…"
+                : "Review & build…"
+          }
+          disabled={busy !== null}
+          onClick={() => setReviewOpen(true)}
+        />
+      </Row>
+      <ReviewDialog
+        open={reviewOpen}
+        onOpenChange={(o) => {
+          if (busy !== "build") setReviewOpen(o);
+        }}
+        dockerfile={data.dockerfile ?? ""}
+        error={data.error}
+        canBuild={canBuild}
+        basePresent={basePresent}
+        built={built}
+        building={busy === "build"}
+        onBuild={() => build(built)}
+      />
+    </>
+  );
+}
+
+/** The confirm-to-build review dialog: shows the Dockerfile (read-only) + a trust caution
+ *  before running its build commands. The build action is omitted for an invalid file. */
+function ReviewDialog({
+  open,
+  onOpenChange,
+  dockerfile,
+  error,
+  canBuild,
+  basePresent,
+  built,
+  building,
+  onBuild,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  dockerfile: string;
+  error: string | null;
+  canBuild: boolean;
+  basePresent: boolean;
+  built: boolean;
+  building: boolean;
+  onBuild: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {built ? "Rebuild custom agent image" : "Build custom agent image"}
+          </DialogTitle>
+          <DialogDescription>
+            This builds a per-repo image from .gitdesktop/agent.Dockerfile and
+            runs the commands in it. Only build repositories you trust.
+          </DialogDescription>
+        </DialogHeader>
+        {error && (
+          <p className="flex items-start gap-1.5 text-xs text-foreground">
+            <WarningCircleIcon
+              weight="fill"
+              className="mt-0.5 size-3.5 shrink-0"
+              aria-hidden
+            />
+            <span>{error}</span>
+          </p>
+        )}
+        <pre className="max-h-72 overflow-auto whitespace-pre rounded-md border border-border bg-muted/50 p-3 font-mono text-[11px] leading-relaxed">
+          {dockerfile}
+        </pre>
+        {canBuild && !basePresent && (
+          <p className="flex items-start gap-1.5 text-xs text-foreground">
+            <WarningCircleIcon
+              weight="fill"
+              className="mt-0.5 size-3.5 shrink-0"
+              aria-hidden
+            />
+            <span>
+              Build the base agent image first (the line above this one in
+              Settings), then build this custom image.
+            </span>
+          </p>
+        )}
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={building}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          {canBuild && (
+            <Button
+              type="button"
+              size="sm"
+              disabled={building || !basePresent}
+              onClick={onBuild}
+            >
+              {building ? (
+                <>
+                  <Spinner className="size-3" />
+                  {built ? "Rebuilding…" : "Building…"}
+                </>
+              ) : built ? (
+                "Rebuild (no cache)"
+              ) : (
+                "Build image"
+              )}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
