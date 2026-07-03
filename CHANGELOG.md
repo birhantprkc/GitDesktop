@@ -12,6 +12,15 @@ commit list.
 
 ### Added
 
+- **Per-repo custom agent container image.** A repository can now add extra tools to its
+  containerized agent sessions — e.g. Playwright for browser tests — by committing a
+  `.gitdesktop/agent.Dockerfile` that starts `FROM gitdesktop-agent:latest`. GitDesktop
+  builds it into a per-repo image (layered on the managed agent base) and runs that repo's
+  container sessions and Test shell in it. Manage it under **Settings → AI → Agent session
+  isolation**: a status line shows whether the custom image is built, **Review & build**
+  shows the Dockerfile and asks you to confirm before building (the build runs the file's
+  commands, so it never happens automatically — the guard for a cloned repo you don't fully
+  trust), and **Add custom tools…** scaffolds a starter Dockerfile for you to edit and commit.
 - **GitLab time tracking.** Track time on a GitLab issue or merge request without
   leaving the app: set an **estimate** (e.g. `3h`) and log **spent** time (e.g.
   `45m`, or subtract with `-15m`), with a progress bar and an "over" note when

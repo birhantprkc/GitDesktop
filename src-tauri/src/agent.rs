@@ -1991,12 +1991,15 @@ pub async fn agent_session(
             // Enable opencode's Exa-backed websearch tool (webfetch works regardless).
             container_env.push(("OPENCODE_ENABLE_EXA", "1".to_string()));
         }
+        // Use the repo's per-repo custom image when it's built, else the managed base.
+        let image = crate::agent_sandbox::resolve_session_image(&runtime, &worktree_path).await;
         let args = crate::agent_sandbox::build_run_args(
             &runtime_name,
             agent_name,
             &worktree_path,
             &home,
             &name,
+            &image,
             skills.as_deref().and_then(Path::to_str),
             npm_cache.as_deref().and_then(Path::to_str),
             &container_env,

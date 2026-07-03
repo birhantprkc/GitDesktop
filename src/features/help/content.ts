@@ -752,7 +752,11 @@ Every session is sandboxed. By default it runs in a **worktree** (a separate wor
 on a session branch). Optionally, run it inside a **Docker or Podman container** for a
 stronger sandbox — with a built-in **terminal** ({{kbd:agent-toggle-terminal}}) running
 *inside* the container, where you choose which dev-server port(s) to publish before it
-starts. Set the default in **Settings → AI**.
+starts. Set the default in **Settings → AI**. A repo can also layer **extra tools** into
+that container: commit a \`.gitdesktop/agent.Dockerfile\` (it must start
+\`FROM gitdesktop-agent:latest\`), and — after you review and confirm it in
+**Settings → AI** — GitDesktop builds it into a per-repo image this repo's container
+sessions then run in.
 
 ## Finishing up
 

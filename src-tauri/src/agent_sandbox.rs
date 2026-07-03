@@ -45,6 +45,15 @@ use crate::error::{AppError, AppResult};
 pub const IMAGE: &str = "gitdesktop-agent:latest";
 const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Tag prefix for a per-repo DERIVED image — the managed base plus the repo's
+/// `.gitdesktop/agent.Dockerfile` extra layers. The tag body is a content hash so a
+/// changed Dockerfile (or a rebuilt base) becomes a new tag = "rebuild needed".
+const CUSTOM_IMAGE_PREFIX: &str = "gitdesktop-agent-custom";
+/// A repo's custom Dockerfile MUST start with this so the derived image inherits the
+/// hardened managed base (non-root `node`, ca-certs, the agent CLIs). Everything after is
+/// arbitrary — gated by confirm-to-build, never auto-run.
+const CUSTOM_DOCKERFILE_FROM: &str = "FROM gitdesktop-agent:latest";
+
 /// npm package for a **container-capable** agent. `None` for an agent we can't run
 /// in the container.
 fn agent_npm_package(agent: &str) -> Option<&'static str> {
@@ -359,8 +368,18 @@ pub async fn agent_container_prepare(
     }
     build_args.push(ctx_str);
 
-    let mut cmd = Command::new(&bin);
-    cmd.args(&build_args)
+    let result = run_build(&bin, &build_args).await;
+    let _ = std::fs::remove_dir_all(&ctx); // clean the context regardless
+    result
+}
+
+/// Runs a `<rt> build …` invocation with the build timeout, no console window on Windows,
+/// and a tail of the build log on failure. Shared by the base-image build
+/// (`agent_container_prepare`) and the per-repo derived-image build; each caller manages
+/// its own temp context dir.
+async fn run_build(bin: &Path, build_args: &[String]) -> AppResult<()> {
+    let mut cmd = Command::new(bin);
+    cmd.args(build_args)
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -368,10 +387,8 @@ pub async fn agent_container_prepare(
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     cmd.kill_on_drop(true);
-
-    let result = tokio::time::timeout(BUILD_TIMEOUT, cmd.output()).await;
-    let _ = std::fs::remove_dir_all(&ctx); // clean the context regardless
-    let out = result
+    let out = tokio::time::timeout(BUILD_TIMEOUT, cmd.output())
+        .await
         .map_err(|_| AppError::Timeout(BUILD_TIMEOUT.as_secs()))?
         .map_err(AppError::Io)?;
     if !out.status.success() {
@@ -392,6 +409,239 @@ pub async fn agent_container_prepare(
     }
     Ok(())
 }
+
+// --- per-repo derived (custom) image -----------------------------------------
+//
+// A repo can layer extra tools (e.g. Playwright) onto the managed base by committing a
+// `.gitdesktop/agent.Dockerfile` that starts `FROM gitdesktop-agent:latest`. GitDesktop
+// builds that into a per-repo image tagged by a content hash, and container sessions (plus
+// the Test shell) for that repo run in it. The build runs the Dockerfile's arbitrary
+// commands, so it is ONLY ever user-initiated after a review + confirm — never automatic —
+// the guard against a cloned/untrusted repo. The tag's existence doubles as the "built"
+// record: a changed Dockerfile (or a rebuilt base) hashes to a new tag, so it reads as
+// "needs build" until the user confirms again.
+
+/// The repo-relative custom Dockerfile path (`<repo>/.gitdesktop/agent.Dockerfile`).
+fn custom_dockerfile_path(worktree_path: &str) -> PathBuf {
+    Path::new(worktree_path)
+        .join(".gitdesktop")
+        .join("agent.Dockerfile")
+}
+
+/// Reads a repo/worktree's custom agent Dockerfile if present (absent is the common case
+/// → the repo uses the base image).
+fn read_custom_dockerfile(worktree_path: &str) -> Option<String> {
+    std::fs::read_to_string(custom_dockerfile_path(worktree_path)).ok()
+}
+
+/// The first non-blank, non-comment line of a Dockerfile — its `FROM`.
+fn first_instruction(dockerfile: &str) -> Option<&str> {
+    dockerfile
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+}
+
+/// A custom Dockerfile is valid only when its first instruction is exactly
+/// `FROM gitdesktop-agent:latest` (case-insensitive keyword, exact image), so the derived
+/// image inherits the hardened managed base rather than an arbitrary one.
+fn custom_dockerfile_valid(dockerfile: &str) -> bool {
+    let Some(line) = first_instruction(dockerfile) else {
+        return false;
+    };
+    let mut toks = line.split_whitespace();
+    matches!(toks.next(), Some(kw) if kw.eq_ignore_ascii_case("FROM"))
+        && toks.next() == Some("gitdesktop-agent:latest")
+        && toks.next().is_none()
+}
+
+/// FNV-1a of the base image Id + the Dockerfile bytes → the derived image tag. A changed
+/// Dockerfile OR a rebuilt base changes the hash (a new tag = rebuild needed).
+/// Dependency-free, matching `test_container_name`; collision risk is negligible here.
+fn derived_tag(base_image_id: &str, dockerfile: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in base_image_id
+        .bytes()
+        .chain(std::iter::once(0u8))
+        .chain(dockerfile.bytes())
+    {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{CUSTOM_IMAGE_PREFIX}:{hash:016x}")
+}
+
+/// The managed base image's content Id (`<rt> image inspect --format {{.Id}}`), or `None`
+/// when the base isn't built (a derived image can't exist without it).
+async fn base_image_id(bin: &Path) -> Option<String> {
+    match run_capture(
+        bin,
+        &["image", "inspect", "--format", "{{.Id}}", IMAGE],
+        DETECT_TIMEOUT,
+    )
+    .await
+    {
+        Ok((0, out)) if !out.trim().is_empty() => Some(out.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// Whether an image with `tag` exists locally.
+async fn image_exists(bin: &Path, tag: &str) -> bool {
+    matches!(
+        run_capture(bin, &["image", "inspect", tag], DETECT_TIMEOUT).await,
+        Ok((0, _))
+    )
+}
+
+/// The image a container session / Test shell should run for `worktree_path`: the repo's
+/// per-repo derived image when it is valid AND built, else the managed base. Best-effort —
+/// any missing piece falls back to the base so a session always launches.
+pub(crate) async fn resolve_session_image(bin: &Path, worktree_path: &str) -> String {
+    if let Some(dockerfile) = read_custom_dockerfile(worktree_path) {
+        if custom_dockerfile_valid(&dockerfile) {
+            if let Some(id) = base_image_id(bin).await {
+                let tag = derived_tag(&id, &dockerfile);
+                if image_exists(bin, &tag).await {
+                    return tag;
+                }
+            }
+        }
+    }
+    IMAGE.to_string()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomImageStatus {
+    /// "none" (no Dockerfile), "invalid" (bad `FROM`), "needsBuild", or "built".
+    pub state: &'static str,
+    /// The Dockerfile's contents, for the View Dockerfile affordance (present for every
+    /// state except "none").
+    pub dockerfile: Option<String>,
+    /// A human explanation for the "invalid" state.
+    pub error: Option<String>,
+}
+
+/// Reports the state of a repo's per-repo custom agent image (from its
+/// `.gitdesktop/agent.Dockerfile`) for the Settings sandbox affordance. `none` when the
+/// repo ships no custom Dockerfile — it uses the base image.
+#[tauri::command]
+pub async fn agent_custom_image_status(worktree_path: String) -> AppResult<CustomImageStatus> {
+    let Some(dockerfile) = read_custom_dockerfile(&worktree_path) else {
+        return Ok(CustomImageStatus {
+            state: "none",
+            dockerfile: None,
+            error: None,
+        });
+    };
+    if !custom_dockerfile_valid(&dockerfile) {
+        return Ok(CustomImageStatus {
+            state: "invalid",
+            dockerfile: Some(dockerfile),
+            error: Some(format!(
+                "The first instruction must be `{CUSTOM_DOCKERFILE_FROM}` so the image builds on the managed base."
+            )),
+        });
+    }
+    // Valid → is it built? Needs the runtime + the base image to compute the tag.
+    let built = match detect_runtime().await {
+        Some((bin, _)) => match base_image_id(&bin).await {
+            Some(id) => image_exists(&bin, &derived_tag(&id, &dockerfile)).await,
+            None => false,
+        },
+        None => false,
+    };
+    Ok(CustomImageStatus {
+        state: if built { "built" } else { "needsBuild" },
+        dockerfile: Some(dockerfile),
+        error: None,
+    })
+}
+
+/// Builds (or rebuilds with `force`) a repo's custom agent image from its
+/// `.gitdesktop/agent.Dockerfile`, layered on the managed base. **User-initiated only** —
+/// this runs the Dockerfile's arbitrary build-time commands, so the UI shows the file and
+/// requires an explicit confirm before ever calling this (never automatic), the guard
+/// against a cloned/untrusted repo.
+#[tauri::command]
+pub async fn agent_build_custom_image(worktree_path: String, force: bool) -> AppResult<()> {
+    let Some(dockerfile) = read_custom_dockerfile(&worktree_path) else {
+        return Err(AppError::InvalidArgument(
+            "this repository has no .gitdesktop/agent.Dockerfile".into(),
+        ));
+    };
+    if !custom_dockerfile_valid(&dockerfile) {
+        return Err(AppError::InvalidArgument(format!(
+            "the custom Dockerfile must start with `{CUSTOM_DOCKERFILE_FROM}`"
+        )));
+    }
+    let (bin, _) = detect_runtime()
+        .await
+        .ok_or_else(|| AppError::Command("Docker or Podman is not installed.".into()))?;
+    if !runtime_ready(&bin).await {
+        return Err(AppError::Command(
+            "Docker/Podman is installed but its engine isn't running. Start it and try again."
+                .into(),
+        ));
+    }
+    let id = base_image_id(&bin).await.ok_or_else(|| {
+        AppError::Command(
+            "Build the base agent image first (Settings → container isolation), then build the custom image."
+                .into(),
+        )
+    })?;
+    let tag = derived_tag(&id, &dockerfile);
+
+    let ctx = std::env::temp_dir().join(format!("gd-agent-custom-{}", std::process::id()));
+    std::fs::create_dir_all(&ctx)?;
+    std::fs::write(ctx.join("Dockerfile"), &dockerfile)?;
+    let ctx_str = ctx.to_string_lossy().into_owned();
+
+    // No `--pull`: the FROM is the LOCAL managed base, not a registry image (a pull would
+    // fail). `--no-cache` on rebuild re-runs the RUN layers to pick up tool updates.
+    let mut build_args: Vec<String> = vec![
+        "build".into(),
+        "-t".into(),
+        tag,
+        "--label".into(),
+        "gdderived=1".into(),
+    ];
+    if force {
+        build_args.push("--no-cache".into());
+    }
+    build_args.push(ctx_str);
+
+    let result = run_build(&bin, &build_args).await;
+    let _ = std::fs::remove_dir_all(&ctx);
+    result
+}
+
+/// Writes a starter `.gitdesktop/agent.Dockerfile` into the repo for the user to edit +
+/// commit (scaffold local, never auto-commit). Returns `false` without touching anything
+/// if one already exists. Creates `.gitdesktop/` as needed.
+#[tauri::command]
+pub fn agent_scaffold_custom_dockerfile(repo_path: String) -> AppResult<bool> {
+    let dir = Path::new(&repo_path);
+    if !dir.is_dir() {
+        return Err(AppError::InvalidArgument(format!(
+            "not a directory: {repo_path}"
+        )));
+    }
+    let file = custom_dockerfile_path(&repo_path);
+    if file.exists() {
+        return Ok(false);
+    }
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&file, CUSTOM_DOCKERFILE_STARTER)?;
+    Ok(true)
+}
+
+/// The scaffolded starter — a valid, no-op derived Dockerfile (the example tool line is
+/// commented out) that the user edits to add tools.
+const CUSTOM_DOCKERFILE_STARTER: &str = "# Custom agent container image for this repository.\n#\n# GitDesktop builds this into a per-repo image layered on its managed agent base, and runs\n# containerized agent sessions (and the Test shell) for this repo inside it. It MUST start\n# with `FROM gitdesktop-agent:latest`. Everything below is yours to add — but note the\n# image is only ever (re)built after you review it and confirm, so a build runs your\n# commands. Switch to `USER root` to install system packages, then back to `USER node`.\n#\n# Example: add Playwright + Chromium for browser tests.\nFROM gitdesktop-agent:latest\nUSER root\n# RUN npx -y playwright@latest install --with-deps chromium\nUSER node\n";
 
 // --- per-session claude-home (mounted, holds creds + transcript) -------------
 
@@ -624,6 +874,9 @@ pub(crate) async fn container_shell_command(
     // Clear any stale stopped container with this name so `--name` can't collide.
     let _ = run_capture(&bin_path, &["rm", "-f", &name], DETECT_TIMEOUT).await;
 
+    // Use the repo's per-repo custom image when it's built, else the managed base — so the
+    // Test shell matches the environment a container session for this repo runs in.
+    let image = resolve_session_image(&bin_path, worktree_path).await;
     let mount = format!("{}:/workspace", to_mount_source(worktree_path, &rt));
     let mut args: Vec<String> =
         vec!["run".into(), "-it".into(), "--rm".into(), "--name".into(), name];
@@ -636,7 +889,7 @@ pub(crate) async fn container_shell_command(
     args.push(mount);
     args.push("-w".into());
     args.push("/workspace".into());
-    args.push(IMAGE.into());
+    args.push(image);
     args.push("bash".into());
     let tip = if host_ports.is_empty() {
         "Tip: no ports were published - re-open with a port to reach a dev server from your browser.".to_string()
@@ -774,6 +1027,8 @@ pub(crate) fn build_run_args(
     worktree_path: &str,
     home_path: &Path,
     container_name: &str,
+    // The image tag to run: the managed base, or a repo's derived custom image.
+    image: &str,
     // Host path to the global skills store to mount read-only (None = don't mount).
     skills_src: Option<&str>,
     // Host path to the shared npm cache to mount at `~/.npm` (None = don't mount).
@@ -868,7 +1123,7 @@ pub(crate) fn build_run_args(
         "4g".into(),
         "--pids-limit".into(),
         "1024".into(),
-        IMAGE.into(),
+        image.into(),
     ]);
     // Name the agent CLI as the in-container command. The image inherits the `node`
     // base entrypoint, which execs its args directly BUT prepends `node` to a leading
@@ -915,6 +1170,7 @@ mod tests {
             "/repos/wt",
             &home,
             "gd-agent-s1",
+            IMAGE,
             None,
             None,
             &[],
@@ -927,12 +1183,12 @@ mod tests {
         assert!(args.iter().any(|a| a.ends_with(":/home/node/.claude")));
         // Codex mounts its home at ~/.codex instead.
         let codex = build_run_args(
-            "docker", "codex", "/repos/wt", &home, "n", None, None, &[], &inner,
+            "docker", "codex", "/repos/wt", &home, "n", IMAGE, None, None, &[], &inner,
         );
         assert!(codex.iter().any(|a| a.ends_with(":/home/node/.codex")));
         // opencode mounts its XDG data dir.
         let oc = build_run_args(
-            "docker", "opencode", "/repos/wt", &home, "n", None, None, &[], &inner,
+            "docker", "opencode", "/repos/wt", &home, "n", IMAGE, None, None, &[], &inner,
         );
         assert!(oc
             .iter()
@@ -949,7 +1205,7 @@ mod tests {
     fn copilot_passes_token_env_by_name_only() {
         let home = PathBuf::from("/data/agent-home/s1/copilot");
         let inner = vec!["-p".to_string(), "hi".to_string()];
-        let cp = build_run_args("docker", "copilot", "/repos/wt", &home, "n", None, None, &[], &inner);
+        let cp = build_run_args("docker", "copilot", "/repos/wt", &home, "n", IMAGE, None, None, &[], &inner);
         // Token is passed through by NAME (no `=value`) so it never lands in argv.
         let e = cp.iter().position(|a| a == "-e").expect("has -e");
         assert_eq!(cp[e + 1], "COPILOT_GITHUB_TOKEN");
@@ -960,7 +1216,7 @@ mod tests {
         let img = cp.iter().position(|a| a == IMAGE).unwrap();
         assert_eq!(cp[img + 1], "copilot");
         // Other agents get no token env passthrough.
-        let claude = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, None, &[], &inner);
+        let claude = build_run_args("docker", "claude", "/repos/wt", &home, "n", IMAGE, None, None, &[], &inner);
         assert!(!claude.iter().any(|a| a == "COPILOT_GITHUB_TOKEN"));
     }
 
@@ -974,17 +1230,17 @@ mod tests {
             "/home/u/.agents/skills"
         };
         // Claude reads only ~/.claude/skills; the mount is read-only.
-        let cl = build_run_args("docker", "claude", "/repos/wt", &home, "n", Some(src), None, &[], &inner);
+        let cl = build_run_args("docker", "claude", "/repos/wt", &home, "n", IMAGE, Some(src), None, &[], &inner);
         assert!(cl
             .iter()
             .any(|a| a.ends_with(":/home/node/.claude/skills:ro")));
         // Every other agent reads the vendor-neutral ~/.agents/skills.
-        let cx = build_run_args("docker", "codex", "/repos/wt", &home, "n", Some(src), None, &[], &inner);
+        let cx = build_run_args("docker", "codex", "/repos/wt", &home, "n", IMAGE, Some(src), None, &[], &inner);
         assert!(cx
             .iter()
             .any(|a| a.ends_with(":/home/node/.agents/skills:ro")));
         // No source → no skills mount at all.
-        let none = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, None, &[], &inner);
+        let none = build_run_args("docker", "claude", "/repos/wt", &home, "n", IMAGE, None, None, &[], &inner);
         assert!(!none.iter().any(|a| a.contains("/skills:ro")));
     }
 
@@ -1007,6 +1263,7 @@ mod tests {
             "/repos/wt",
             &home,
             "n",
+            IMAGE,
             None,
             Some(cache),
             &env,
@@ -1020,7 +1277,7 @@ mod tests {
             .any(|m| m == "OPENCODE_CONFIG=/home/node/.local/share/opencode/opencode-mcp.json"));
         // None → neither appears.
         let none = build_run_args(
-            "docker", "opencode", "/repos/wt", &home, "n", None, None, &[], &inner,
+            "docker", "opencode", "/repos/wt", &home, "n", IMAGE, None, None, &[], &inner,
         );
         assert!(!none.iter().any(|m| m.ends_with(":/home/node/.npm")));
         assert!(!none.iter().any(|m| m.starts_with("OPENCODE_CONFIG=")));
@@ -1055,9 +1312,9 @@ mod tests {
     fn linux_podman_adds_keep_id_docker_does_not() {
         let home = PathBuf::from("/data/agent-home/s1/claude");
         let inner = vec!["-p".to_string()];
-        let podman = build_run_args("podman", "claude", "/repos/wt", &home, "n", None, None, &[], &inner);
+        let podman = build_run_args("podman", "claude", "/repos/wt", &home, "n", IMAGE, None, None, &[], &inner);
         assert!(podman.iter().any(|a| a == "--userns=keep-id"));
-        let docker = build_run_args("docker", "claude", "/repos/wt", &home, "n", None, None, &[], &inner);
+        let docker = build_run_args("docker", "claude", "/repos/wt", &home, "n", IMAGE, None, None, &[], &inner);
         assert!(!docker.iter().any(|a| a == "--userns=keep-id"));
     }
 
@@ -1133,5 +1390,52 @@ mod tests {
             config_signature("24", &["claude".into(), "codex".into()]),
             "node24-claude-codex"
         );
+    }
+
+    #[test]
+    fn custom_dockerfile_valid_requires_managed_base_from() {
+        assert!(custom_dockerfile_valid(
+            "FROM gitdesktop-agent:latest\nRUN echo hi\n"
+        ));
+        // Leading comments + blank lines before FROM are fine; the keyword is case-insensitive.
+        assert!(custom_dockerfile_valid(
+            "# my tools\n\nfrom gitdesktop-agent:latest\n"
+        ));
+        // Wrong/arbitrary base, an extra token (multi-stage `AS`), or no FROM are rejected.
+        assert!(!custom_dockerfile_valid("FROM node:24-slim\n"));
+        assert!(!custom_dockerfile_valid(
+            "FROM gitdesktop-agent:latest AS build\n"
+        ));
+        assert!(!custom_dockerfile_valid("RUN echo hi\n"));
+        assert!(!custom_dockerfile_valid(""));
+    }
+
+    #[test]
+    fn derived_tag_is_deterministic_and_content_sensitive() {
+        let df = "FROM gitdesktop-agent:latest\nRUN x\n";
+        let t = derived_tag("sha256:abc", df);
+        assert!(t.starts_with("gitdesktop-agent-custom:"));
+        assert_eq!(t.len(), "gitdesktop-agent-custom:".len() + 16); // 16 hex chars
+        assert_eq!(t, derived_tag("sha256:abc", df)); // deterministic
+        // A changed Dockerfile OR a rebuilt base (new id) yields a different tag.
+        assert_ne!(
+            t,
+            derived_tag("sha256:abc", "FROM gitdesktop-agent:latest\nRUN y\n")
+        );
+        assert_ne!(t, derived_tag("sha256:def", df));
+    }
+
+    #[test]
+    fn build_run_args_uses_the_given_image() {
+        let home = PathBuf::from("/data/agent-home/s1/claude");
+        let inner = vec!["-p".to_string()];
+        let tag = "gitdesktop-agent-custom:00ff00ff00ff00ff";
+        let a = build_run_args(
+            "docker", "claude", "/repos/wt", &home, "n", tag, None, None, &[], &inner,
+        );
+        // The given (custom) image tag is what runs, and the CLI command follows it.
+        let img = a.iter().position(|x| x == tag).expect("custom image present");
+        assert_eq!(a[img + 1], "claude");
+        assert!(!a.iter().any(|x| x == IMAGE)); // the base tag is not used
     }
 }

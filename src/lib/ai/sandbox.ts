@@ -33,6 +33,34 @@ export const prepareContainerSandbox = (
 export const cleanupContainerSandbox = (sessionId: string) =>
   invoke<void>("agent_sandbox_cleanup", { sessionId });
 
+/** The state of a repo's per-repo custom agent image, built from its
+ *  `.gitdesktop/agent.Dockerfile` (layered on the managed base). */
+export interface CustomImageStatus {
+  /** "none" (no Dockerfile), "invalid" (bad FROM), "needsBuild", or "built". */
+  state: "none" | "invalid" | "needsBuild" | "built";
+  /** The Dockerfile's contents, for the review affordance (present for every state
+   *  except "none"). */
+  dockerfile: string | null;
+  /** Why the Dockerfile was rejected — only set for "invalid". */
+  error: string | null;
+}
+
+/** Reports whether the active repo ships a `.gitdesktop/agent.Dockerfile` and whether its
+ *  derived image is built, invalid, or missing. `none` = the repo uses the base image. */
+export const customImageStatus = (worktreePath: string) =>
+  invoke<CustomImageStatus>("agent_custom_image_status", { worktreePath });
+
+/** Builds (or, with `force`, rebuilds without cache) a repo's custom agent image from its
+ *  `.gitdesktop/agent.Dockerfile`. User-initiated only — the build runs the Dockerfile's
+ *  arbitrary commands, so call this only after the user has reviewed the file. */
+export const buildCustomImage = (worktreePath: string, force: boolean) =>
+  invoke<void>("agent_build_custom_image", { worktreePath, force });
+
+/** Writes a starter `.gitdesktop/agent.Dockerfile` into the repo for the user to edit +
+ *  commit (never auto-committed). Resolves `false` without writing if one already exists. */
+export const scaffoldCustomDockerfile = (repoPath: string) =>
+  invoke<boolean>("agent_scaffold_custom_dockerfile", { repoPath });
+
 /** Opens an interactive shell in a container with the session's worktree mounted,
  *  so a container session can be tested in its matching Linux env. `ports` are the
  *  dev-server ports to publish to the host loopback — each a bare `"5173"` or a

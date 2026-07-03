@@ -58,6 +58,7 @@ import type { AiProviderId, AiSettings } from "@/lib/ai/types";
 import { required, useAppForm, withForm } from "@/lib/form";
 import { deleteSecret, setSecret } from "@/lib/git/api";
 import { settingsKeys, useSecretPreview } from "@/lib/settings/queries";
+import { useUiStore } from "@/lib/stores/ui";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
 import { AgentSandboxField } from "./AgentSandboxField";
@@ -615,6 +616,7 @@ export const AiProviderSection = withForm({
       form.store,
       (s) => s.values.agentImageProviders,
     );
+    const repoPath = useUiStore((s) => s.repoPath);
     const allowedHosts = useSelector(
       form.store,
       (s) => s.values.aiAllowedHosts,
@@ -885,6 +887,7 @@ export const AiProviderSection = withForm({
             }
             providers={agentImageProviders}
             onProviders={(v) => form.setFieldValue("agentImageProviders", v)}
+            repoPath={repoPath}
           />
         </div>
 
