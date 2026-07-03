@@ -76,6 +76,11 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   transfer, delete). **Self-managed GitLab** works wherever `glab` is signed in —
   the app recognizes any host from `glab auth login`. Insights charts
   GitLab pipelines alongside the local-git analytics. GitHub is unchanged.
+- **Bitbucket Cloud (read)** — connect with an **Atlassian API token**
+  (Settings → Accounts), then **browse & clone** your Bitbucket repositories and
+  read **pull requests** (diffs, comments, build statuses) and watch **Pipelines**
+  (with step logs) in the same panels. Bitbucket has retired its native issue
+  tracker (issues live in Jira), so issues aren't shown for Bitbucket repositories.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works
   in an isolated worktree, so your own checkout is never touched. Follow it
   **step by step** — every file it reads, edits, and command it runs — and

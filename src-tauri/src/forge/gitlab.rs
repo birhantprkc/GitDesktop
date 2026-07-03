@@ -192,22 +192,11 @@ fn encode_project(path: &str) -> String {
     path.replace('/', "%2F")
 }
 
-/// Percent-encode a value for safe use inside a `glab api` query string. `glab`
+/// Percent-encode a value for safe use inside a `glab api` query string — `glab`
 /// forwards the endpoint verbatim (it only encodes the path, not query values), so
-/// a value with a query-significant byte (`&`, `#`, `?`, `=`, `%`, space, …) must be
-/// encoded or it corrupts the query. Encodes everything outside RFC-3986 unreserved.
-fn encode_query_value(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
+/// a query-significant byte must be encoded or it corrupts the query. Shared with
+/// the Bitbucket provider, hence it lives in the parent `forge` module.
+use crate::forge::encode_query_value;
 
 /// The project's full path (`group/name`) from the repo's origin remote.
 async fn project_path(repo_path: &str) -> AppResult<String> {
@@ -234,7 +223,7 @@ fn map_mr_state(state: &str) -> String {
 /// whole issue parse when GitLab returned `discussion_locked: null` instead of
 /// `false`. Applied to the optional scalars and the collections GitLab could null
 /// out (it returns `[]` today, but the same one-quirk-away fragility bit us once).
-fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+pub(crate) fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Default + Deserialize<'de>,
@@ -2910,6 +2899,8 @@ fn from_glab_job(j: GlabJob) -> RunJob {
         url: j.web_url,
         // GitLab exposes no per-job steps via the API — the job is the leaf unit.
         steps: Vec::new(),
+        // GitLab job logs are addressed by the numeric job id, not a log ref.
+        log_ref: None,
     }
 }
 

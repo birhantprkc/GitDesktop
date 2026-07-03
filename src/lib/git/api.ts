@@ -7,6 +7,7 @@ import {
 } from "@/lib/test-mode";
 import type {
   ApprovalState,
+  BbAccountInfo,
   BlameLine,
   Branch,
   BranchComparison,
@@ -836,6 +837,28 @@ export const forgeStatus = (repoPath: string) =>
 /** The signed-in user's repositories on a provider, for the clone browser. */
 export const forgeListRepos = (provider: ForgeProvider) =>
   invoke<ForgeRepoList>("forge_list_repos", { provider });
+
+// ── Bitbucket account (Atlassian API token) ──────────────────────────────────
+//
+// Bitbucket Cloud auth is an Atlassian API token used with the account email
+// (HTTP Basic); the token lives in the OS keychain, never returned by anything.
+// In cold-start test mode there's no keychain, so `forgeBbAccount` reports
+// "not connected" (null) rather than reaching for a Tauri command.
+
+/** Validate an Atlassian API token against GET /2.0/user and, on success, save
+ *  it to the keychain. Throws (nothing saved) on an invalid token or a network
+ *  failure — the message distinguishes the two. */
+export const forgeBbSetAccount = (email: string, token: string) =>
+  invoke<BbAccountInfo>("forge_bb_set_account", { email, token });
+
+/** Remove the saved Bitbucket token from the keychain. */
+export const forgeBbClearAccount = () => invoke<void>("forge_bb_clear_account");
+
+/** The saved Bitbucket account (fast keyring check, no network); null when none. */
+export const forgeBbAccount = () =>
+  COLD_START
+    ? Promise.resolve<BbAccountInfo | null>(null)
+    : invoke<BbAccountInfo | null>("forge_bb_account");
 
 /** Clone a repo for a provider, supplying provider auth that plain `git clone`
  *  lacks (a private GitLab repo authenticates via glab's token). Returns the

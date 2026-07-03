@@ -40,6 +40,10 @@ export interface RunJob {
   completedAt: string;
   url: string;
   steps: RunStep[];
+  /** Present on Bitbucket jobs (a pipeline step) — the log reference its logs are
+   *  fetched by (`forge_bb_step_logs`). Absent for GitHub/GitLab, whose job logs
+   *  come from `forge_ci_job_logs`. */
+  logRef?: string;
 }
 
 export interface RunDetail {
@@ -115,6 +119,23 @@ export const forgeCiRunFailedLogs = (repoPath: string, runId: number) =>
 /** One job's failed-step logs (fallback: full job log), for AI debugging. */
 export const forgeCiJobLogs = (repoPath: string, jobId: number) =>
   invoke<string>("forge_ci_job_logs", { repoPath, jobId });
+
+/** A Bitbucket pipeline step's logs (cleaned/capped). Bitbucket jobs carry a
+ *  `logRef` instead of a numeric job id, and `forge_ci_job_logs` errors for
+ *  them — so a job with a `logRef` fetches here instead. */
+export const forgeBbStepLogs = (repoPath: string, logRef: string) =>
+  invoke<string>("forge_bb_step_logs", { repoPath, logRef });
+
+/** A job's logs, dispatched by provider: Bitbucket steps (carrying a `logRef`)
+ *  go through `forge_bb_step_logs`; GitHub/GitLab jobs through the id-keyed
+ *  `forge_ci_job_logs`. */
+export const forgeJobLogs = (
+  repoPath: string,
+  job: { id: number; logRef?: string },
+) =>
+  job.logRef
+    ? forgeBbStepLogs(repoPath, job.logRef)
+    : forgeCiJobLogs(repoPath, job.id);
 
 /** Play (start) a manual GitLab CI job awaiting a manual trigger — GitLab-only,
  *  gated on `implemented.ciJobPlay`; errors on other providers. */
@@ -206,16 +227,22 @@ export function useRunFailedLogs(
   });
 }
 
-/** One job's logs (failed steps, or the full log), fetched only when expanded. */
+/** One job's logs (failed steps, or the full log), fetched only when expanded.
+ *  The job's `logRef` (Bitbucket steps) routes the fetch to `forge_bb_step_logs`;
+ *  GitHub/GitLab jobs (no `logRef`) go through the id-keyed `forge_ci_job_logs`.
+ *  The query key stays distinct per job either way. */
 export function useJobLogs(
   repo: string,
-  jobId: number | null,
+  job: { id: number; logRef?: string } | null,
   enabled: boolean,
 ) {
+  // Bitbucket steps are keyed by logRef (their numeric id can collide across a
+  // run's jobs); GitHub/GitLab jobs by their unique id.
+  const jobKey = job?.logRef ?? String(job?.id ?? 0);
   return useQuery({
-    queryKey: ["repo", repo, "actions", "job", jobId ?? 0, "logs"] as const,
-    queryFn: () => forgeCiJobLogs(repo, jobId ?? 0),
-    enabled: enabled && jobId !== null,
+    queryKey: ["repo", repo, "actions", "job", jobKey, "logs"] as const,
+    queryFn: () => forgeJobLogs(repo, job ?? { id: 0 }),
+    enabled: enabled && job !== null,
     staleTime: 30_000,
   });
 }

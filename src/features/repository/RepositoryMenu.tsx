@@ -54,6 +54,7 @@ import {
 } from "@/lib/git/api";
 import {
   forgeFeatureReady,
+  forgeSupports,
   useForgeStatus,
   useForkRepo,
   useRepoAdmin,
@@ -62,6 +63,7 @@ import {
   useSetRepoStar,
   useSubmodules,
 } from "@/lib/git/queries";
+import { providerLabel } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import type { RecentRepo } from "@/lib/settings/api";
 import { useSettings } from "@/lib/settings/queries";
@@ -106,12 +108,20 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     lastOpenedAt: "",
   };
 
-  // View-on-host / star work for GitHub and GitLab; forking on GitLab is a web
-  // link-out (the fork dialog's remote-rewiring flow is GitHub-only).
+  // View-on-host works for GitHub, GitLab, and Bitbucket (forge_repo_url is
+  // implemented everywhere); the other host actions gate on capability. Forking
+  // on GitLab/Bitbucket is a web link-out (the fork dialog's remote-rewiring
+  // flow is GitHub-only); starring and creating issues on the host are hidden
+  // where the platform lacks them (Bitbucket has no stars and its issue tracker
+  // is retired).
+  const provider = gh.data?.provider;
   const canGh = forgeFeatureReady(gh.data, "repoActions");
-  const isGitLab = gh.data?.provider === "gitlab";
-  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
-  const starStatus = useRepoStarStatus(repoPath, canGh);
+  const isGitLab = provider === "gitlab";
+  const isBitbucket = provider === "bitbucket";
+  const remoteLabel = providerLabel(provider);
+  const canStar = canGh && forgeSupports(gh.data, "stars");
+  const canCreateHostIssue = canGh && forgeSupports(gh.data, "issues");
+  const starStatus = useRepoStarStatus(repoPath, canStar);
   const setStar = useSetRepoStar(repoPath);
   const starred = starStatus.data ?? false;
   // Repo settings are admin-only, on both providers (GitHub admin / GitLab
@@ -143,15 +153,20 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     }
   }
 
+  // Fork: GitHub uses the remote-rewiring dialog; GitLab and Bitbucket fork from
+  // their web page (the dialog's flow is GitHub-only). Bitbucket's fork URL is
+  // <repo>/fork; GitLab's is <repo>/-/forks/new.
+  const forkAction = () => {
+    if (isGitLab) return openWeb("/-/forks/new");
+    if (isBitbucket) return openWeb("/fork");
+    return setForkOpen(true);
+  };
+
   // Every menu entry doubles as a hotkey/palette action with the same gates.
   useHotkeyAction("view-on-github", () => openWeb(), canGh);
   // create-issue is the in-app dialog (registered in RepositoryView + IssuesPanel);
-  // the "Create issue on GitHub/GitLab" menu item below still opens the web page.
-  useHotkeyAction(
-    "fork-repository",
-    () => (isGitLab ? openWeb("/-/forks/new") : setForkOpen(true)),
-    canGh,
-  );
+  // the "Create issue on {host}" menu item below still opens the web page.
+  useHotkeyAction("fork-repository", forkAction, canGh);
   useHotkeyAction("open-in-terminal", () =>
     openInTerminal(
       repoPath,
@@ -191,7 +206,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           ),
         onError,
       }),
-    canGh && !setStar.isPending,
+    canStar && !setStar.isPending,
   );
   useHotkeyAction("change-remote-url", () => setRemoteUrlOpen(true));
   useHotkeyAction("repo-alias", () => setAliasTarget(repoEntry));
@@ -230,38 +245,42 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
               <ArrowSquareOutIcon />
               View on {remoteLabel}
             </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={setStar.isPending}
-              onClick={() =>
-                setStar.mutate(!starred, {
-                  onSuccess: () =>
-                    toast.success(
-                      starred
-                        ? "Star removed"
-                        : `Starred ${gh.data?.repo ?? "repository"}`,
-                    ),
-                  onError,
-                })
-              }
-            >
-              <StarIcon weight={starred ? "fill" : "regular"} />
-              {starred ? "Unstar repository" : "Star repository"}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() =>
-                openWeb(isGitLab ? "/-/issues/new" : "/issues/new")
-              }
-            >
-              <WarningCircleIcon />
-              Create issue on {remoteLabel}
-            </DropdownMenuItem>
-            {isGitLab ? (
+            {canStar && (
+              <DropdownMenuItem
+                disabled={setStar.isPending}
+                onClick={() =>
+                  setStar.mutate(!starred, {
+                    onSuccess: () =>
+                      toast.success(
+                        starred
+                          ? "Star removed"
+                          : `Starred ${gh.data?.repo ?? "repository"}`,
+                      ),
+                    onError,
+                  })
+                }
+              >
+                <StarIcon weight={starred ? "fill" : "regular"} />
+                {starred ? "Unstar repository" : "Star repository"}
+              </DropdownMenuItem>
+            )}
+            {canCreateHostIssue && (
+              <DropdownMenuItem
+                onClick={() =>
+                  openWeb(isGitLab ? "/-/issues/new" : "/issues/new")
+                }
+              >
+                <WarningCircleIcon />
+                Create issue on {remoteLabel}
+              </DropdownMenuItem>
+            )}
+            {isGitLab || isBitbucket ? (
               // The fork dialog's flow (fork + rewire remotes + set-default) is
-              // GitHub-only; GitLab forks from its web page instead of hiding
-              // the affordance.
-              <DropdownMenuItem onClick={() => openWeb("/-/forks/new")}>
+              // GitHub-only; GitLab/Bitbucket fork from their web page instead of
+              // hiding the affordance.
+              <DropdownMenuItem onClick={forkAction}>
                 <GitForkIcon />
-                Fork on GitLab…
+                Fork on {remoteLabel}…
               </DropdownMenuItem>
             ) : (
               <DropdownMenuItem onClick={() => setForkOpen(true)}>

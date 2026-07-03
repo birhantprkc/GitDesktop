@@ -64,6 +64,7 @@ import {
   useUnlockIssue,
   useUnminimizeComment,
 } from "@/lib/git/queries";
+import { providerLabel } from "@/lib/git/types";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
@@ -108,7 +109,7 @@ export function RemoteIssueView({
   const forge = useForgeStatus(repoPath);
   const provider = forge.data?.provider;
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
-  const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
+  const remoteLabel = providerLabel(provider);
   // GitLab WRITES land per-action. Each shared control is
   // `canWrite || forgeFeatureReady(...)` so GitHub keeps its controls while a
   // forge-status query is pending/failed (canWrite default-true) AND a ready GitLab

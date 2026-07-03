@@ -89,7 +89,7 @@ import {
   useUnapprovePr,
   useUnminimizeComment,
 } from "@/lib/git/queries";
-import type { ApprovalState } from "@/lib/git/types";
+import { type ApprovalState, providerLabel } from "@/lib/git/types";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -156,7 +156,7 @@ export function RemotePrView({
   const forge = useForgeStatus(repoPath);
   const provider = forge.data?.provider;
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
-  const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
+  const remoteLabel = providerLabel(provider);
   const prNoun = provider === "gitlab" ? "merge request" : "pull request";
   // GitLab MR WRITES land per-action (full reviews stay GitHub-only via
   // `canWrite`). Each shared control is

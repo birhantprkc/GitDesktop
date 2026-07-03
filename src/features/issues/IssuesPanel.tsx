@@ -1,9 +1,15 @@
-import { CheckCircleIcon, CircleDashedIcon } from "@phosphor-icons/react";
+import {
+  ArrowSquareOutIcon,
+  CheckCircleIcon,
+  CircleDashedIcon,
+} from "@phosphor-icons/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
 import { ConversationListPanel } from "@/features/conversations/ConversationListPanel";
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
-import type { IssueStateFilter } from "@/lib/git/api";
+import { forgeRepoUrl, type IssueStateFilter } from "@/lib/git/api";
 import {
   forgeFeatureReady,
   useForgeStatus,
@@ -11,24 +17,45 @@ import {
   useIssueList,
   usePrefetchIssue,
 } from "@/lib/git/queries";
+import { providerLabel } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useLocalIssues } from "@/lib/issues/queries";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
+import { toastError } from "@/lib/toast";
 import { CreateIssueDialog } from "./CreateIssueDialog";
 import { CreateLocalIssueDialog } from "./CreateLocalIssueDialog";
+
+/** Bitbucket has retired its native issue tracker (deleted platform-wide
+ *  2026-08-20), so a connected Bitbucket repo has no issues to list — issues
+ *  moved to Jira. Explain that instead of prompting a connection. */
+function BitbucketIssuesSunset({ repoPath }: { repoPath: string }) {
+  return (
+    <div className="space-y-2.5 px-3 py-4 text-xs text-muted-foreground">
+      <p>
+        Bitbucket has retired its native issue tracker — issues for Bitbucket
+        repositories live in Jira.
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        className="cursor-pointer"
+        onClick={() => forgeRepoUrl(repoPath).then(openUrl).catch(toastError)}
+      >
+        <ArrowSquareOutIcon data-icon="inline-start" />
+        View repository on Bitbucket
+      </Button>
+    </div>
+  );
+}
 
 export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const gh = useForgeStatus(repoPath);
   const provider = gh.data?.provider;
   const isGitLab = provider === "gitlab";
-  const remoteLabel =
-    provider === "gitlab"
-      ? "GitLab"
-      : provider === "bitbucket"
-        ? "Bitbucket"
-        : "GitHub";
+  const isBitbucket = provider === "bitbucket";
+  const remoteLabel = providerLabel(provider);
   // Issue *reads* are provider-neutral (the panel-level `issues` flag); issue
   // *creation* follows its own per-action write flag — ready GitHub AND GitLab
   // repos both offer the create dialog (which hides GitHub-only fields per
@@ -130,15 +157,21 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
       stateFilter={stateFilter}
       onStateFilter={setStateFilter}
       newMenu={{
-        ghLabel: isGitLab ? "Issue on GitLab…" : "Issue on GitHub…",
+        ghLabel: isBitbucket
+          ? "Issue on Bitbucket…"
+          : isGitLab
+            ? "Issue on GitLab…"
+            : "Issue on GitHub…",
         ghDisabled: !canCreateGh,
         ghReason: canCreateGh
           ? undefined
-          : isGitLab
-            ? gh.data?.installed
-              ? "Sign in to GitLab (glab auth login) to open issues here."
-              : "Install the GitLab CLI (glab) to open issues here."
-            : "Connect this repository to GitHub to open an issue.",
+          : isBitbucket
+            ? "Bitbucket has retired its native issue tracker — issues for Bitbucket repositories live in Jira."
+            : isGitLab
+              ? gh.data?.installed
+                ? "Sign in to GitLab (glab auth login) to open issues here."
+                : "Install the GitLab CLI (glab) to open issues here."
+              : "Connect this repository to GitHub to open an issue.",
         onGh: () => setCreateOpen(true),
         localLabel: "Local issue…",
         onLocal: () => setCreateLocalOpen(true),
@@ -185,6 +218,9 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
       onToggleArchived={() => setShowArchived((v) => !v)}
       ghPending={gh.isPending}
       ghReady={ghReady}
+      remoteNotReadySlot={
+        isBitbucket ? <BitbucketIssuesSunset repoPath={repoPath} /> : undefined
+      }
       listPending={issueList.isPending}
       stateRemote={issues}
       visibleRemote={visible}

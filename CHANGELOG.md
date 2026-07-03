@@ -21,6 +21,13 @@ commit list.
   shows the Dockerfile and asks you to confirm before building (the build runs the file's
   commands, so it never happens automatically — the guard for a cloned repo you don't fully
   trust), and **Add custom tools…** scaffolds a starter Dockerfile for you to edit and commit.
+- **Bitbucket Cloud (read).** Connect Bitbucket in **Settings → Accounts** with an
+  **Atlassian API token** (created at id.atlassian.com, used with your Atlassian
+  account email; stored in your OS keychain), then **browse & clone** your Bitbucket
+  repositories and read **pull requests** (diffs, comments, build statuses) and watch
+  **Pipelines** with step logs — all in the same panels as GitHub and GitLab. Bitbucket
+  has retired its native issue tracker (issues now live in Jira), so issues aren't shown
+  for Bitbucket repositories.
 - **GitLab time tracking.** Track time on a GitLab issue or merge request without
   leaving the app: set an **estimate** (e.g. `3h`) and log **spent** time (e.g.
   `45m`, or subtract with `-15m`), with a progress bar and an "over" note when

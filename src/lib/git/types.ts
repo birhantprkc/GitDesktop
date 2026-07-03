@@ -423,6 +423,25 @@ export interface GhStatus {
 /** The hosting platform backing a repo's hosted features. */
 export type ForgeProvider = "github" | "gitlab" | "bitbucket";
 
+/** The human label for a provider. Null/undefined (an unrecognized host that
+ *  routes through gh) reads as "GitHub" — gh stays the authoritative default. */
+export function providerLabel(
+  provider: ForgeProvider | null | undefined,
+): "GitHub" | "GitLab" | "Bitbucket" {
+  if (provider === "gitlab") return "GitLab";
+  if (provider === "bitbucket") return "Bitbucket";
+  return "GitHub";
+}
+
+/** A signed-in Bitbucket Cloud account (validated against GET /2.0/user before
+ *  the token is saved). The token itself is never returned by anything. */
+export interface BbAccountInfo {
+  /** The Atlassian account email — the HTTP Basic username for API-token auth. */
+  email: string;
+  username: string | null;
+  displayName: string | null;
+}
+
 /** What a provider (and this repo on it) supports, so panels show only the
  *  controls that work instead of erroring. GitHub is all-true; GitLab/Bitbucket
  *  follow the parity matrix. Grows as more panels move behind capability gates. */

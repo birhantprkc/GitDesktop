@@ -1,5 +1,6 @@
 import {
   ArrowSquareOutIcon,
+  GearSixIcon,
   GithubLogoIcon,
   GitlabLogoIcon,
   TerminalIcon,
@@ -18,6 +19,10 @@ import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { PublishDialog } from "./PublishDialog";
+
+/** Where a Bitbucket / Atlassian API token is created. */
+const ATLASSIAN_TOKEN_URL =
+  "https://id.atlassian.com/manage-profile/security/api-tokens";
 
 /**
  * Shared "this hosted feature isn't available" empty state for the Pull
@@ -42,6 +47,7 @@ export function ForgeNotReady({
   const forge = useForgeStatus(repoPath);
   const settings = useSettings();
   const repoName = useUiStore((s) => s.repoName);
+  const openSettings = useUiStore((s) => s.openSettings);
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishProvider, setPublishProvider] = useState<"github" | "gitlab">(
     "github",
@@ -128,15 +134,45 @@ export function ForgeNotReady({
     );
   }
 
-  // Bitbucket: recognized, integration not built yet.
+  // Bitbucket: read integration via an Atlassian API token. Walk the connect
+  // ladder — no token saved → connect; a saved token that won't authenticate →
+  // update it. Both deep-link to Settings → Accounts in one atomic navigation.
   if (provider === "bitbucket") {
     return (
-      <div className="px-3 py-4 text-xs text-muted-foreground">
-        <p>
-          This repository is hosted on Bitbucket, which GitDesktop doesn't
-          support yet — {feature} are only available for GitHub repositories for
-          now.
-        </p>
+      <div className="space-y-2.5 px-3 py-4 text-xs text-muted-foreground">
+        {!installed ? (
+          <p>
+            Connect your Bitbucket account with an Atlassian API token to see{" "}
+            {feature} here.
+          </p>
+        ) : (
+          <p>
+            GitDesktop couldn't sign in to Bitbucket with the saved token — it
+            may be expired, revoked, or missing scopes. Update it in Settings →
+            Accounts.
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => openSettings("accounts")}
+          >
+            <GearSixIcon data-icon="inline-start" />
+            Open Settings → Accounts
+          </Button>
+          {!installed && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="cursor-pointer"
+              onClick={() => openUrl(ATLASSIAN_TOKEN_URL)}
+            >
+              <ArrowSquareOutIcon data-icon="inline-start" />
+              Create an API token
+            </Button>
+          )}
+        </div>
       </div>
     );
   }

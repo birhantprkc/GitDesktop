@@ -17,6 +17,10 @@ pub enum AppError {
     GlabNotFound,
     #[error("{0}")]
     Glab(String),
+    #[error("{0}")]
+    Bitbucket(String),
+    #[error("No Bitbucket account is connected. Add your Atlassian API token in Settings → Accounts.")]
+    BitbucketNotConfigured,
     #[error("keychain error: {0}")]
     Keyring(String),
     #[error("invalid argument: {0}")]
@@ -48,6 +52,8 @@ impl Serialize for AppError {
             AppError::Gh(_) => "gh",
             AppError::GlabNotFound => "glabNotFound",
             AppError::Glab(_) => "glab",
+            AppError::Bitbucket(_) => "bitbucket",
+            AppError::BitbucketNotConfigured => "bitbucketNotConfigured",
             AppError::Keyring(_) => "keyring",
             AppError::InvalidArgument(_) => "invalidArgument",
             AppError::Command(_) => "command",

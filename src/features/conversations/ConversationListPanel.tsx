@@ -68,6 +68,11 @@ export function ConversationListPanel<L, R>(props: {
   ghReady: boolean;
   /** The provider's display name for the section header (default "GitHub"). */
   remoteLabel?: string;
+  /** Replaces the ForgeNotReady ladder in the not-ready branch when the host
+   *  can't support this feature at all (e.g. Bitbucket's retired issue tracker),
+   *  so the section explains the platform reality instead of prompting a
+   *  connection that would never surface anything. */
+  remoteNotReadySlot?: ReactNode;
   listPending: boolean;
   stateRemote: R[];
   visibleRemote: R[];
@@ -105,6 +110,7 @@ export function ConversationListPanel<L, R>(props: {
     ghPending,
     ghReady,
     remoteLabel = "GitHub",
+    remoteNotReadySlot,
     listPending,
     repoPath,
     feature,
@@ -212,7 +218,9 @@ export function ConversationListPanel<L, R>(props: {
               <Skeleton className="h-9 w-full" />
             </div>
           ) : !ghReady ? (
-            <ForgeNotReady repoPath={repoPath} feature={feature} />
+            (remoteNotReadySlot ?? (
+              <ForgeNotReady repoPath={repoPath} feature={feature} />
+            ))
           ) : listPending ? (
             <div className="space-y-2 p-3">
               {Array.from({ length: remoteSkeletonRows }, (_, i) => (

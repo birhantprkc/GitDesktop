@@ -9,12 +9,15 @@
 //! commands (byte-identical), the GitLab arm to `gitlab.rs`. Which features each
 //! provider has wired up is declared in `model.rs::Implemented`.
 
+pub mod bitbucket;
 pub mod github;
 pub mod gitlab;
 pub mod glab;
+pub mod http;
 pub mod model;
 
 use crate::error::{AppError, AppResult};
+use crate::forge::bitbucket::BitbucketForge;
 use crate::forge::github::GitHubForge;
 use crate::forge::gitlab::GitLabForge;
 use crate::forge::model::{ForgeRepoList, ForgeStatus, Provider};
@@ -68,6 +71,25 @@ pub(crate) fn remote_path(url: &str) -> Option<String> {
     let path = path.trim_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
     (!path.is_empty()).then(|| path.to_string())
+}
+
+/// Percent-encode a value for safe use inside an API query string, encoding
+/// everything outside the RFC-3986 unreserved set. A value with a
+/// query-significant byte (`&`, `#`, `?`, `=`, `%`, space, `/`, …) must be
+/// encoded or it corrupts the query. Shared by the GitLab (`glab api`) and
+/// Bitbucket (HTTP) providers, which both interpolate untrusted values (branch
+/// names, search terms) into query strings.
+pub(crate) fn encode_query_value(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// Route a remote host to a **non-GitHub** provider, but only when it's
@@ -137,10 +159,12 @@ pub(crate) fn provider_tag_for_host(host: &str, glab_hosts: &[String]) -> Option
 pub async fn resolve_status(repo_path: &str) -> AppResult<ForgeStatus> {
     if let Some((provider, host)) = detect_non_github(repo_path).await {
         return match provider {
-            // GitLab probes glab for install/auth (read ops not built yet, so it
-            // reports not-ready); Bitbucket is still a recognized-only stub.
+            // GitLab probes glab for install/auth; Bitbucket probes the keyring
+            // token + `/user` over HTTP. Both report their real readiness (unbuilt
+            // panels degrade via the `implemented` flags).
             Provider::GitLab => GitLabForge::new(host).status(repo_path).await,
-            _ => Ok(ForgeStatus::unimplemented(provider, host)),
+            Provider::Bitbucket => BitbucketForge::new(host).status(repo_path).await,
+            Provider::GitHub => GitHubForge.status(repo_path).await,
         };
     }
     GitHubForge.status(repo_path).await
@@ -154,6 +178,47 @@ pub async fn forge_status(repo_path: String) -> AppResult<ForgeStatus> {
     resolve_status(&repo_path).await
 }
 
+// ── Bitbucket account (Settings → Accounts) ───────────────────────────────────
+//
+// Bitbucket Cloud has no CLI to carry credentials (unlike gh/glab), so its token
+// is managed here: connect (validate + store), disconnect (clear), and read (the
+// stored account, no network). The token is stored in the OS keyring and is NEVER
+// returned to the frontend.
+
+/// Connect a Bitbucket account: validate the Atlassian email + API token against
+/// `GET /2.0/user` BEFORE persisting (nothing is stored if validation fails), then
+/// keep email/token/username in the keyring. Returns the account info sans token.
+#[tauri::command]
+pub async fn forge_bb_set_account(
+    email: String,
+    token: String,
+) -> AppResult<bitbucket::BbAccountInfo> {
+    bitbucket::set_account(&email, &token).await
+}
+
+/// Disconnect the Bitbucket account (delete all stored entries; a missing entry is
+/// tolerated).
+#[tauri::command]
+pub async fn forge_bb_clear_account() -> AppResult<()> {
+    bitbucket::clear_account().await
+}
+
+/// The stored Bitbucket account, if any — a keyring existence read only (no
+/// network). `None` when no token is stored.
+#[tauri::command]
+pub async fn forge_bb_account() -> AppResult<Option<bitbucket::BbAccountInfo>> {
+    bitbucket::account().await
+}
+
+/// One Bitbucket pipeline step's log, by its `log_ref` (`"{pipeline_uuid}/{step_uuid}"`
+/// with RAW braced UUIDs — the value a `RunJob.logRef` carries). Bitbucket steps have
+/// no numeric id, so this is the step-log path (the numeric `forge_ci_job_logs` arm
+/// errors for Bitbucket).
+#[tauri::command]
+pub async fn forge_bb_step_logs(repo_path: String, log_ref: String) -> AppResult<String> {
+    bitbucket::step_logs(&repo_path, &log_ref).await
+}
+
 /// The signed-in user's repositories on a provider, for the clone browser.
 /// Dispatches by provider — GitHub via `gh`, GitLab via `glab`; Bitbucket isn't
 /// implemented yet. Account-scoped (no repo path), unlike `forge_status`.
@@ -162,9 +227,7 @@ pub async fn forge_list_repos(provider: Provider) -> AppResult<ForgeRepoList> {
     match provider {
         Provider::GitHub => github::list_repos().await,
         Provider::GitLab => gitlab::list_repos().await,
-        Provider::Bitbucket => Err(AppError::InvalidArgument(
-            "Bitbucket repository listing isn't supported yet.".into(),
-        )),
+        Provider::Bitbucket => bitbucket::list_repos().await,
     }
 }
 
@@ -197,9 +260,7 @@ pub async fn forge_pr_list(
 ) -> AppResult<Vec<crate::github::pr::PrInfo>> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::list_prs(&repo_path, &state).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::list_prs(&repo_path, &state).await,
         _ => github::list_prs(&repo_path, &state).await,
     }
 }
@@ -213,9 +274,7 @@ pub async fn forge_prs_for_branch(
 ) -> AppResult<Vec<crate::github::pr::PrInfo>> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::prs_for_branch(&repo_path, &head).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::prs_for_branch(&repo_path, &head).await,
         _ => github::prs_for_branch(&repo_path, &head).await,
     }
 }
@@ -228,9 +287,7 @@ pub async fn forge_pr_view(
 ) -> AppResult<crate::github::pr::PrDetails> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::view_pr(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::view_pr(&repo_path, number).await,
         _ => github::view_pr(&repo_path, number).await,
     }
 }
@@ -240,9 +297,7 @@ pub async fn forge_pr_view(
 pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::diff_pr(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::diff_pr(&repo_path, number).await,
         _ => github::diff_pr(&repo_path, number).await,
     }
 }
@@ -446,9 +501,7 @@ pub async fn forge_ci_run_list(
 ) -> AppResult<Vec<crate::github::actions::WorkflowRun>> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::list_runs(&repo_path, limit, branch).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::list_runs(&repo_path, limit, branch).await,
         _ => github::list_runs(&repo_path, limit, branch).await,
     }
 }
@@ -461,9 +514,7 @@ pub async fn forge_ci_run_view(
 ) -> AppResult<crate::github::actions::RunDetail> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::view_run(&repo_path, run_id).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::view_run(&repo_path, run_id).await,
         _ => github::view_run(&repo_path, run_id).await,
     }
 }
@@ -473,9 +524,7 @@ pub async fn forge_ci_run_view(
 pub async fn forge_ci_run_failed_logs(repo_path: String, run_id: u64) -> AppResult<String> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::run_failed_logs(&repo_path, run_id).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::run_failed_logs(&repo_path, run_id).await,
         _ => github::run_failed_logs(&repo_path, run_id).await,
     }
 }
@@ -485,8 +534,10 @@ pub async fn forge_ci_run_failed_logs(repo_path: String, run_id: u64) -> AppResu
 pub async fn forge_ci_job_logs(repo_path: String, job_id: u64) -> AppResult<String> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::job_logs(&repo_path, job_id).await,
+        // Bitbucket steps are addressed by braced UUID, not a numeric id — the
+        // frontend fetches their logs via `forge_bb_step_logs` using RunJob.logRef.
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
+            "Bitbucket step logs are fetched by step reference.".into(),
         )),
         _ => github::job_logs(&repo_path, job_id).await,
     }
@@ -1050,9 +1101,7 @@ pub async fn forge_issue_create(
 pub async fn forge_repo_url(repo_path: String) -> AppResult<String> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::repo_url(&repo_path).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket repositories aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::repo_url(&repo_path).await,
         _ => github::repo_url(&repo_path).await,
     }
 }

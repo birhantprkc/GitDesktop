@@ -75,12 +75,15 @@ impl Capabilities {
                 webhooks: true,
                 approvals: true,
             },
-            // Bitbucket Cloud: no labels, milestones, stars, reactions, draft PRs,
-            // or discussions; PRs/CI(pipelines)/webhooks/approvals do work.
+            // Bitbucket Cloud: no labels, milestones, stars, reactions, or
+            // discussions; PRs/CI(pipelines)/webhooks/approvals do work. Draft PRs
+            // ARE supported (since 2024, the `draft` bool on the PR object). The
+            // native issue tracker is being deleted platform-wide 2026-08-20, so
+            // issues is false.
             Provider::Bitbucket => Self {
                 pull_requests: true,
-                draft_prs: false,
-                issues: true,
+                draft_prs: true,
+                issues: false,
                 labels: false,
                 milestones: false,
                 reactions: false,
@@ -414,7 +417,16 @@ impl Implemented {
                 time_tracking: true,
                 issue_links: true,
             },
-            Provider::Bitbucket => Self::none(),
+            // Bitbucket Cloud reads (Phase 3): PR list/view/diff, CI pipelines, and
+            // repo View/URL are wired over direct HTTP. Everything else — issues (the
+            // native tracker sunsets 2026-08-20), writes, releases, insights, settings
+            // — is unbuilt and stays false, so those panels degrade to "coming soon".
+            Provider::Bitbucket => Self {
+                pull_requests: true,
+                ci: true,
+                repo_actions: true,
+                ..Self::none()
+            },
         }
     }
 }
@@ -446,24 +458,6 @@ pub struct ForgeStatus {
     /// Which of those capabilities GitDesktop has actually built for this provider
     /// — drives per-feature "coming soon" gating distinct from `capabilities`.
     pub implemented: Implemented,
-}
-
-impl ForgeStatus {
-    /// A "recognized, but not yet wired up" status for a provider whose impl
-    /// hasn't landed (GitLab/Bitbucket during the phased rollout): the host is
-    /// known and capabilities advertised, but the integration reports not-ready.
-    pub fn unimplemented(provider: Provider, host: String) -> Self {
-        Self {
-            provider: Some(provider),
-            installed: false,
-            authenticated: false,
-            repo: None,
-            host: Some(host),
-            login: None,
-            capabilities: Capabilities::for_provider(provider),
-            implemented: Implemented::for_provider(provider),
-        }
-    }
 }
 
 /// A repository as listed for cloning — neutral across providers (the clone
@@ -518,9 +512,11 @@ mod tests {
     #[test]
     fn bitbucket_drops_unsupported_features() {
         let c = Capabilities::for_provider(Provider::Bitbucket);
-        assert!(!c.labels && !c.milestones && !c.stars && !c.reactions && !c.draft_prs && !c.discussions);
-        // …but the core flow still works.
-        assert!(c.pull_requests && c.ci && c.webhooks && c.approvals);
+        assert!(!c.labels && !c.milestones && !c.stars && !c.reactions && !c.discussions);
+        // Issues are off — the native tracker sunsets 2026-08-20.
+        assert!(!c.issues);
+        // …but the core flow still works, and draft PRs are supported.
+        assert!(c.pull_requests && c.ci && c.webhooks && c.approvals && c.draft_prs);
     }
 
     #[test]
@@ -608,6 +604,10 @@ mod tests {
         // Auto-merge is GitLab-only (no in-app GitHub PR auto-merge).
         assert!(!gh.mr_auto_merge);
         let bb = Implemented::for_provider(Provider::Bitbucket);
+        // Bitbucket reads that ARE built (Phase 3): PRs, CI pipelines, repo actions.
+        assert!(bb.pull_requests && bb.ci && bb.repo_actions);
+        // …but nothing else — issues stay off, no releases/insights/settings/publish.
+        assert!(!bb.issues && !bb.releases && !bb.insights && !bb.repo_settings && !bb.publish);
         assert!(!bb.issue_comment && !bb.issue_state && !bb.mr_comment && !bb.mr_state);
         assert!(!bb.mr_approve && !bb.mr_merge && !bb.mr_auto_merge);
         assert!(!bb.issue_labels && !bb.mr_labels && !bb.issue_assignees);

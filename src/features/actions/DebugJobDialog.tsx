@@ -20,7 +20,7 @@ import { PROVIDER_LABELS } from "@/lib/ai/providers";
 import { useAiTextStream } from "@/lib/ai/stream";
 import type { AiSettings } from "@/lib/ai/types";
 import { copyText } from "@/lib/clipboard";
-import { forgeCiJobLogs, type RunJob } from "@/lib/github/actions";
+import { forgeJobLogs, type RunJob } from "@/lib/github/actions";
 import { useSettings } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
 import { isFailureConclusion } from "./status";
@@ -62,7 +62,7 @@ export function DebugJobDialog({
     setLoadingLogs(true);
     let logs: string;
     try {
-      logs = await forgeCiJobLogs(repoPath, j.id);
+      logs = await forgeJobLogs(repoPath, j);
     } catch (e) {
       toastError(e);
       return;

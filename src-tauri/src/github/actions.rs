@@ -99,6 +99,14 @@ pub struct RunJob {
     pub url: String,
     #[serde(default)]
     pub steps: Vec<RunStep>,
+    /// Provider-specific reference for fetching this job's log when it can't be
+    /// addressed by a numeric id. Bitbucket steps have no numeric id (only braced
+    /// UUIDs), so its jobs carry `Some("{pipeline_uuid}/{step_uuid}")` for the
+    /// `forge_bb_step_logs` command; GitHub and GitLab jobs use their numeric id
+    /// and leave this `None`. Skipped in serialization when absent so existing gh
+    /// JSON parsing is unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_ref: Option<String>,
 }
 
 /// A run plus its jobs/steps, for the detail view.

@@ -1616,6 +1616,18 @@ export function useSwitchAccount() {
   });
 }
 
+/** The saved Bitbucket account (Atlassian API token), or null when none. A fast
+ *  keyring check — no network. Connecting/disconnecting invalidates this key and
+ *  the forge-status queries so open Bitbucket repos flip ready without a restart. */
+export function useBbAccount() {
+  return useQuery({
+    queryKey: ["bb-account"] as const,
+    queryFn: api.forgeBbAccount,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 /** The "no hosted integration" status cold-start test mode forces. */
 const NO_FORGE_STATUS: ForgeStatus = {
   provider: null,
