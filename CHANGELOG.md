@@ -553,6 +553,9 @@ commit list.
 
 ### Changed
 
+- **The GitLab clone browser lists your most recently active projects first.** The listing
+  is capped at 100 projects, so ordering by activity also means anything past the cap is
+  the least-recently-active — not an arbitrary hundred.
 - **Sharper AI security reviews.** The security-review prompt was rebuilt to cut false
   positives and surface real, exploitable issues. Every finding must now spell out a
   concrete exploit scenario (no attack path, no finding) and carries a **confidence score**,

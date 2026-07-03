@@ -138,7 +138,9 @@ fn from_glab_project(p: GlabProject) -> ForgeRepo {
 /// The signed-in GitLab user's projects, for the clone browser. Uses the `glab
 /// api` REST escape hatch (validated live — mirrors `gh api`); `membership=true`
 /// = projects the user belongs to. Caps at 100 for now (`--paginate` for >100 is
-/// a follow-up — its multi-page output format needs its own validation).
+/// a follow-up — its multi-page output format needs its own validation);
+/// ordering by activity means the cap drops the least-recently-active projects
+/// rather than an arbitrary 100.
 pub async fn list_repos() -> AppResult<ForgeRepoList> {
     let viewer = run_glab(None, &["api", "user"], GLAB_TIMEOUT)
         .await
@@ -148,7 +150,7 @@ pub async fn list_repos() -> AppResult<ForgeRepoList> {
         .unwrap_or_default();
     let out = run_glab(
         None,
-        &["api", "projects?membership=true&per_page=100"],
+        &["api", "projects?membership=true&order_by=last_activity_at&per_page=100"],
         GLAB_NETWORK_TIMEOUT,
     )
     .await?;
