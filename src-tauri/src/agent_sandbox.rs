@@ -462,14 +462,21 @@ fn first_instruction(dockerfile: &str) -> Option<&str> {
 /// `# syntax=<image>` makes it fetch an arbitrary remote build *frontend* that can ignore the
 /// `FROM` boundary and run build-time code the reviewer never saw. Docker only honours them in
 /// the unbroken run of comment lines at the very top (a blank line or an instruction ends that
-/// run), so we scan exactly that region and reject any we find.
+/// run), and only after a **single** `#` — so we scan that region, skip `##…` lines (ordinary
+/// comments, e.g. a directive deliberately commented out), and reject any real directive we find.
 fn leading_parser_directive(dockerfile: &str) -> Option<String> {
     for raw in dockerfile.lines() {
         let line = raw.trim();
-        if line.is_empty() || !line.starts_with('#') {
+        // A blank line or an instruction (no leading `#`) ends the directive block.
+        let Some(rest) = line.strip_prefix('#') else {
             break;
+        };
+        // `##…` is an ordinary comment — Docker only treats `# name=value` (one `#`) as a
+        // directive — so skip it rather than mis-reading it as `# name=value`.
+        if rest.starts_with('#') {
+            continue;
         }
-        if let Some((name, _value)) = line.trim_start_matches('#').trim().split_once('=') {
+        if let Some((name, _value)) = rest.trim().split_once('=') {
             let name = name.trim().to_ascii_lowercase();
             if name == "syntax" || name == "escape" {
                 return Some(name);
@@ -1505,6 +1512,11 @@ mod tests {
         ));
         assert!(!custom_dockerfile_valid(
             "# escape=`\nFROM gitdesktop-agent:latest\n"
+        ));
+        // A directive commented out with `##` is an ordinary comment (Docker ignores it as a
+        // directive), so it's accepted — only a single-`#` `# syntax=`/`# escape=` is a real one.
+        assert!(custom_dockerfile_valid(
+            "## syntax=docker/dockerfile:1\nFROM gitdesktop-agent:latest\n"
         ));
         // An ordinary leading comment (no `key=value`) is fine, and a `key=value` line that
         // isn't in the top directive block (e.g. an `ENV`) doesn't trip the directive scan.
