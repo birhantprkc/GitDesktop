@@ -40,7 +40,14 @@ fn parse_owner_host(url: &str) -> (Option<String>, Option<String>) {
             None => return (None, None),
         }
     } else if let Some(colon) = url.rfind(':') {
+        // A Windows drive-path remote (`C:\path\to\repo`, `C:/path/to/repo`)
+        // looks like the scp form to `rfind(':')`, but the text before the colon
+        // is a single drive letter — it has no owner/host. Bail so we don't
+        // persist a bogus host ("c") + owner ("to") onto RecentRepo.
         let head = &url[..colon];
+        if head.len() == 1 && head.as_bytes()[0].is_ascii_alphabetic() {
+            return (None, None);
+        }
         let host = head.rsplit('@').next().unwrap_or(head);
         (host, &url[colon + 1..])
     } else {
@@ -379,5 +386,14 @@ mod owner_tests {
             (Some("g".into()), Some("gitlab.acme.com".into()))
         );
         assert_eq!(parse_owner_host("not-a-url"), (None, None));
+    }
+
+    #[test]
+    fn windows_drive_path_remotes_have_no_owner_or_host() {
+        // A local-path origin (backslash or forward-slash form) must not be
+        // misparsed as scp-style `host:owner/repo`.
+        assert_eq!(parse_owner_host(r"C:\path\to\repo"), (None, None));
+        assert_eq!(parse_owner_host("C:/path/to/repo"), (None, None));
+        assert_eq!(parse_owner_host("c:/x/y"), (None, None));
     }
 }

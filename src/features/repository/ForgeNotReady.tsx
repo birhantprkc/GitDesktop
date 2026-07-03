@@ -27,8 +27,10 @@ import { PublishDialog } from "./PublishDialog";
  * requests", "workflow runs").
  *
  * Provider-aware: GitHub walks the gh setup ladder (install → sign in →
- * publish); GitLab walks the analogous glab ladder (until its read ops land);
- * Bitbucket — recognized but not yet implemented — says so plainly.
+ * publish); GitLab walks the analogous glab ladder (install → sign in), then —
+ * if glab is ready but the repo still isn't resolvable to a GitLab project —
+ * points at `glab auth status`; Bitbucket — recognized but not yet implemented
+ * — says so plainly.
  */
 export function ForgeNotReady({
   repoPath,
@@ -62,8 +64,9 @@ export function ForgeNotReady({
     provider == null && Boolean(forge.data) && noOrigin,
   );
 
-  // GitLab: `glab` is wired (status detects install + sign-in), but read
-  // operations aren't built yet — walk the glab setup ladder, then say so. (A
+  // GitLab: `glab` is wired (status detects install + sign-in) — walk the glab
+  // setup ladder (install → sign in). If glab is already ready, this repo just
+  // couldn't be resolved to a GitLab project; point at `glab auth status`. (A
   // not-ready GitHub repo has provider `null`, so it skips this and falls through
   // to the gh ladder below, unchanged.)
   if (provider === "gitlab") {
@@ -116,7 +119,10 @@ export function ForgeNotReady({
     return (
       <div className="px-3 py-4 text-xs text-muted-foreground">
         <p>
-          GitLab support is on the way — {feature} aren't available here yet.
+          GitDesktop couldn't connect this repository to GitLab, so {feature}{" "}
+          aren't available here. Run{" "}
+          <span className="font-mono text-foreground">glab auth status</span> in
+          a terminal to check the host's connection.
         </p>
       </div>
     );

@@ -242,6 +242,31 @@ pub async fn git_checkout_branch(
     Ok(())
 }
 
+/// Check out a remote-only branch as a new local tracking branch of a SPECIFIC
+/// remote. We pass `--track <remote>/<name>` explicitly rather than plain
+/// `switch <name>` because when the same branch name exists on 2+ remotes git's
+/// DWIM refuses ("matched multiple remote tracking branches"), and even in the
+/// single-remote case the switcher row promised the user this exact remote — so
+/// we honor it by construction instead of trusting git's guess.
+#[tauri::command]
+pub async fn git_checkout_remote_branch(
+    state: State<'_, AppState>,
+    repo_path: String,
+    remote: String,
+    name: String,
+) -> AppResult<()> {
+    validate_ref_name(&remote)?;
+    validate_ref_name(&name)?;
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["switch", "--track", &format!("{remote}/{name}")],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn git_create_branch(
     state: State<'_, AppState>,

@@ -61,6 +61,7 @@ import {
   useBranchDivergence,
   useBranches,
   useCheckoutBranch,
+  useCheckoutRemoteBranch,
   useCreateBranch,
   useDefaultBranch,
   useDeleteBranch,
@@ -172,6 +173,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const defaultBranch = useDefaultBranch(repoPath);
   const stashCount = useStashCount(repoPath);
   const checkout = useCheckoutBranch(repoPath);
+  const checkoutRemote = useCheckoutRemoteBranch(repoPath);
   const createBranch = useCreateBranch(repoPath);
   const renameBranch = useRenameBranch(repoPath);
   const deleteBranch = useDeleteBranch(repoPath);
@@ -219,7 +221,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     mergeStrategy,
     pickerMode === "merge",
   );
-  const [switchTarget, setSwitchTarget] = useState<string | null>(null);
+  // The pending switch target. `remote` is set only for remote-only rows, which
+  // check out via `--track <remote>/<name>` (honoring the row's promised remote
+  // + dodging multi-remote DWIM ambiguity); local switches leave it null.
+  const [switchTarget, setSwitchTarget] = useState<{
+    name: string;
+    remote: string | null;
+  } | null>(null);
   // A branch checked out in another worktree, awaiting confirm to open it.
   const [worktreeSwitchTarget, setWorktreeSwitchTarget] = useState<{
     name: string;
@@ -438,7 +446,34 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     );
   }
 
-  function switchTo(name: string) {
+  // Dispatch the actual checkout — remote-only targets track a specific remote,
+  // local targets use plain switch. Both share the guards in `switchTo`.
+  function runCheckout(
+    target: { name: string; remote: string | null },
+    opts?: { onError?: (e: unknown) => void },
+  ) {
+    if (target.remote) {
+      checkoutRemote.mutate({ remote: target.remote, name: target.name }, opts);
+    } else {
+      checkout.mutate(target.name, opts);
+    }
+  }
+
+  async function runCheckoutAsync(target: {
+    name: string;
+    remote: string | null;
+  }) {
+    if (target.remote) {
+      await checkoutRemote.mutateAsync({
+        remote: target.remote,
+        name: target.name,
+      });
+    } else {
+      await checkout.mutateAsync(target.name);
+    }
+  }
+
+  function switchTo(name: string, remote: string | null = null) {
     if (amending) return; // guarded by the disabled trigger; belt-and-suspenders
     setOpen(false);
     // A branch that's checked out in another worktree can't be checked out here
@@ -450,17 +485,17 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     }
     // with work in progress, let the user choose to bring or stash it
     if (hasChanges) {
-      setSwitchTarget(name);
+      setSwitchTarget({ name, remote });
       return;
     }
-    checkout.mutate(name, { onError });
+    runCheckout({ name, remote }, { onError });
   }
 
   function bringAndSwitch() {
     if (!switchTarget) return;
     const target = switchTarget;
     setSwitchTarget(null);
-    checkout.mutate(target, { onError });
+    runCheckout(target, { onError });
   }
 
   async function stashAndSwitch() {
@@ -469,9 +504,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     setSwitchTarget(null);
     try {
       await stashAll.mutateAsync(undefined);
-      await checkout.mutateAsync(target);
+      await runCheckoutAsync(target);
       toast.success(
-        `Stashed changes and switched to ${target} — "Pop latest stash" restores them`,
+        `Stashed changes and switched to ${target.name} — "Pop latest stash" restores them`,
       );
     } catch (e) {
       onError(e);
@@ -712,6 +747,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   const busy =
     checkout.isPending ||
+    checkoutRemote.isPending ||
     mergeBranch.isPending ||
     rebaseBranch.isPending ||
     updateBranchFrom.isPending;
@@ -922,7 +958,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             data-row={branch.name}
             title={`Check out ${branch.name} — creates a local branch tracking ${branch.remote}/${branch.name}`}
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
-            onClick={() => switchTo(branch.name)}
+            onClick={() => switchTo(branch.name, branch.remote)}
           >
             <CloudArrowDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate">{branch.name}</span>
@@ -940,7 +976,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         }
       />
       <ContextMenuContent className="min-w-48">
-        <ContextMenuItem onClick={() => switchTo(branch.name)}>
+        <ContextMenuItem onClick={() => switchTo(branch.name, branch.remote)}>
           Check out
         </ContextMenuItem>
         <ContextMenuItem
@@ -1558,9 +1594,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
           <DialogHeader>
             <DialogTitle>You have changes in progress</DialogTitle>
             <DialogDescription>
-              Bring your uncommitted changes along to {switchTarget}, or stash
-              them so {currentLabel} stays as you left it. "Pop latest stash"
-              restores stashed changes later.
+              Bring your uncommitted changes along to {switchTarget?.name}, or
+              stash them so {currentLabel} stays as you left it. "Pop latest
+              stash" restores stashed changes later.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1569,12 +1605,19 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             </Button>
             <Button
               variant="outline"
-              disabled={stashAll.isPending || checkout.isPending}
+              disabled={
+                stashAll.isPending ||
+                checkout.isPending ||
+                checkoutRemote.isPending
+              }
               onClick={stashAndSwitch}
             >
               Stash and switch
             </Button>
-            <Button disabled={checkout.isPending} onClick={bringAndSwitch}>
+            <Button
+              disabled={checkout.isPending || checkoutRemote.isPending}
+              onClick={bringAndSwitch}
+            >
               Bring changes
             </Button>
           </DialogFooter>

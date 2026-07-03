@@ -136,7 +136,12 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
             <Skeleton className="h-10 w-full" />
           </div>
         ) : !ghReady ? (
-          <ForgeNotReady repoPath={repoPath} feature="workflow runs" />
+          <ForgeNotReady
+            repoPath={repoPath}
+            feature={
+              forge.data?.provider === "gitlab" ? "pipelines" : "workflow runs"
+            }
+          />
         ) : runs.isPending ? (
           <div className="space-y-2 p-3">
             <Skeleton className="h-10 w-full" />

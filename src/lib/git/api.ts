@@ -140,6 +140,12 @@ export const gitRepoOwners = (repoPaths: string[]) =>
 export const gitCheckoutBranch = (repoPath: string, name: string) =>
   invoke<void>("git_checkout_branch", { repoPath, name });
 
+export const gitCheckoutRemoteBranch = (
+  repoPath: string,
+  remote: string,
+  name: string,
+) => invoke<void>("git_checkout_remote_branch", { repoPath, remote, name });
+
 export const gitCreateBranch = (
   repoPath: string,
   name: string,

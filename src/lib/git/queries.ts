@@ -1980,6 +1980,12 @@ export function useCheckoutBranch(repo: string) {
   );
 }
 
+export function useCheckoutRemoteBranch(repo: string) {
+  return useRepoMutation(repo, (args: { remote: string; name: string }) =>
+    api.gitCheckoutRemoteBranch(repo, args.remote, args.name),
+  );
+}
+
 export function useCreateBranch(repo: string) {
   return useRepoMutation(
     repo,

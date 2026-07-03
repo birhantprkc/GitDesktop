@@ -488,6 +488,15 @@ commit list.
 
 ### Fixed
 
+- **Checking out a remote-only branch that lives on more than one remote now works.**
+  Clicking a remote branch in the branch switcher used to fail with *"matched multiple
+  remote tracking branches"* when the same branch name existed on two or more remotes.
+  The switcher now creates the local branch tracking exactly the remote shown on that
+  row, so the checkout matches what the row promised.
+- **Windows local-path repositories are no longer mislabeled with a bogus owner or host.**
+  A repository whose `origin` points at a local path (e.g. `C:\path\to\repo`) was
+  misread as a hosted remote, tagging it with a nonsensical owner and host. Local-path
+  remotes are now recognized as having neither.
 - **The review-model picker no longer changes your global default.** Switching the provider
   or model in a pull request's **Review** panel now applies to **that review only** — it no
   longer overwrites the default review model in Settings → AI. The panel shows a small note
