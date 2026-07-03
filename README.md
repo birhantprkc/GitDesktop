@@ -61,8 +61,10 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   publishing local issues/PRs to
   GitLab works too), **lock / unlock** an issue's conversation, **move** an issue
   to another project, **delete** an issue, set an issue's **due date** (with a
-  past-due cue) or mark it **confidential** (GitLab-unique, right in the rail),
-  **retry / cancel / run pipelines** (with CI/CD variables), and
+  past-due cue) or mark it **confidential**, **track time** (estimate + spent) on
+  an issue *or* MR and **link related issues** (all GitLab-unique, right in the
+  rail), **retry / cancel / run pipelines** (with CI/CD variables) and **play a
+  manual pipeline job**, and
   **publish / edit / delete releases** with asset uploads, **star** the project
   ("View on GitLab" and a fork link too), and **publish a local repo to GitLab**
   (create + push, straight from the app) — right from the app. **Project settings**

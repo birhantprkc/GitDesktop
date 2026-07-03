@@ -25,6 +25,7 @@ import type {
   GitLabHookInput,
   GitLabProtectedBranch,
   GitLabRepoSettingsInput,
+  GitLabTimeStats,
   IssueDetails,
   IssueReactions,
   IssueRelation,
@@ -994,6 +995,152 @@ export function useSetIssueDueDate(repo: string) {
   );
 }
 
+// ── GitLab time tracking + related issues ────────────────────────────────────
+
+const issueTimeStatsKey = (repo: string, number: number) =>
+  ["repo", repo, "issue", number, "time-stats"] as const;
+const mrTimeStatsKey = (repo: string, number: number) =>
+  ["repo", repo, "pr", number, "time-stats"] as const;
+
+/** An issue's GitLab time-tracking stats (estimate + spent). Pass `null` when
+ *  the section isn't shown so the read doesn't fire. */
+export function useGlIssueTimeStats(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: issueTimeStatsKey(repo, number ?? 0),
+    queryFn: () => api.forgeGlIssueTimeStats(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/** An MR's GitLab time-tracking stats. Pass `null` when the summary isn't shown. */
+export function useGlMrTimeStats(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: mrTimeStatsKey(repo, number ?? 0),
+    queryFn: () => api.forgeGlMrTimeStats(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/**
+ * A time-tracking write (set-estimate / add-spent) whose response IS the fresh
+ * {@link GitLabTimeStats}: on success we write it straight into the matching
+ * time-stats query key (no refetch needed), then invalidate the issue/MR view
+ * (the time estimate can surface elsewhere). `statsKey` picks the issue vs MR
+ * cache; `viewKey` is the details query to nudge.
+ */
+function useTimeTrackingMutation(
+  repo: string,
+  statsKey: (repo: string, number: number) => readonly unknown[],
+  viewKey: (repo: string, number: number) => readonly unknown[],
+  mutationFn: (args: {
+    number: number;
+    duration: string | null;
+  }) => Promise<GitLabTimeStats>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: (stats, args) => {
+      queryClient.setQueryData<GitLabTimeStats>(
+        statsKey(repo, args.number),
+        stats,
+      );
+      // `exact` — the stats key extends the view key, so a prefix invalidation
+      // would mark the stats we just wrote stale and refetch them for nothing.
+      queryClient.invalidateQueries({
+        queryKey: viewKey(repo, args.number),
+        exact: true,
+      });
+    },
+  });
+}
+
+const issueViewKey = (repo: string, number: number) =>
+  ["repo", repo, "issue", number] as const;
+const mrViewKey = (repo: string, number: number) =>
+  ["repo", repo, "pr", number] as const;
+
+export function useSetIssueTimeEstimate(repo: string) {
+  return useTimeTrackingMutation(
+    repo,
+    issueTimeStatsKey,
+    issueViewKey,
+    (args) => api.forgeGlIssueSetTimeEstimate(repo, args.number, args.duration),
+  );
+}
+
+export function useAddIssueSpentTime(repo: string) {
+  return useTimeTrackingMutation(
+    repo,
+    issueTimeStatsKey,
+    issueViewKey,
+    (args) => api.forgeGlIssueAddSpentTime(repo, args.number, args.duration),
+  );
+}
+
+export function useSetMrTimeEstimate(repo: string) {
+  return useTimeTrackingMutation(repo, mrTimeStatsKey, mrViewKey, (args) =>
+    api.forgeGlMrSetTimeEstimate(repo, args.number, args.duration),
+  );
+}
+
+export function useAddMrSpentTime(repo: string) {
+  return useTimeTrackingMutation(repo, mrTimeStatsKey, mrViewKey, (args) =>
+    api.forgeGlMrAddSpentTime(repo, args.number, args.duration),
+  );
+}
+
+const issueLinksKey = (repo: string, number: number) =>
+  ["repo", repo, "issue", number, "links"] as const;
+
+/** An issue's GitLab related-issue links. Pass `null` when the section isn't
+ *  shown so the read doesn't fire. */
+export function useGlIssueLinks(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: issueLinksKey(repo, number ?? 0),
+    queryFn: () => api.forgeGlIssueLinks(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/** Link this issue to another (relates_to). Links are symmetric server-side, so
+ *  the target's own links list is invalidated too. */
+export function useLinkIssue(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; targetNumber: number }) =>
+      api.forgeGlIssueLink(repo, args.number, args.targetNumber),
+    onSuccess: (_d, args) => {
+      queryClient.invalidateQueries({
+        queryKey: issueLinksKey(repo, args.number),
+      });
+      queryClient.invalidateQueries({
+        queryKey: issueLinksKey(repo, args.targetNumber),
+      });
+    },
+  });
+}
+
+/** Remove a related-issue link by its `linkId`. Invalidates the source's links;
+ *  the other side is refreshed on its next open (its `linkId` differs). */
+export function useUnlinkIssue(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; linkId: string }) =>
+      api.forgeGlIssueUnlink(repo, args.number, args.linkId),
+    onSuccess: (_d, args) =>
+      queryClient.invalidateQueries({
+        queryKey: issueLinksKey(repo, args.number),
+      }),
+  });
+}
+
 export function useIssueTypes(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "issue-types"] as const,
@@ -1528,6 +1675,9 @@ const NO_FORGE_STATUS: ForgeStatus = {
     issueConfidential: false,
     issueDueDate: false,
     repoSettings: false,
+    ciJobPlay: false,
+    timeTracking: false,
+    issueLinks: false,
   },
 };
 

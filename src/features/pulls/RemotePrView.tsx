@@ -95,7 +95,11 @@ import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { PrReviewPanel } from "./PrReviewPanel";
-import { MergePrDialog, PrFilesPane } from "./RemotePrViewParts";
+import {
+  MergePrDialog,
+  MrTimeTracking,
+  PrFilesPane,
+} from "./RemotePrViewParts";
 
 type Section = "conversation" | "commits" | "files" | "review";
 
@@ -182,6 +186,8 @@ export function RemotePrView({
   // MR assignees are GitLab-only like the approve toggle (GitHub PRs have no
   // assignee picker here), so the flag alone gates — never `canWrite || …`.
   const canEditAssignees = forgeFeatureReady(forge.data, "mrAssignees");
+  // Time tracking is GitLab-only too (GitHub has no built-in time tracking).
+  const canTrackTime = forgeFeatureReady(forge.data, "timeTracking");
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
@@ -651,6 +657,12 @@ export function RemotePrView({
               ))}
             </div>
           )
+        )}
+        {/* GitLab-only time-tracking summary (clock + est/spent); a popover with
+            the estimate/add-spent controls while the MR is open, static once
+            closed. GitHub never mounts it (gated on the flag). */}
+        {canTrackTime && (
+          <MrTimeTracking repoPath={repoPath} number={number} open={isOpen} />
         )}
         {pr.checks.length > 0 && (
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">

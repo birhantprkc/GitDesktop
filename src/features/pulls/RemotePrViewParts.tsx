@@ -1,3 +1,4 @@
+import { ClockIcon } from "@phosphor-icons/react";
 import type { ComponentProps } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -9,11 +10,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffContent } from "@/features/diff/DiffSurface";
+import { TimeTrackingControls } from "@/features/issues/RemoteIssueViewParts";
+import {
+  useAddMrSpentTime,
+  useGlMrTimeStats,
+  useSetMrTimeEstimate,
+} from "@/lib/git/queries";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
+import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 type PrFile = { path: string; additions: number; deletions: number };
@@ -177,5 +190,100 @@ export function MergePrDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * The GitLab-only MR time-tracking summary for the header meta area: a compact
+ * "Xh est · Ym spent" (zero parts omitted). For an OPEN MR it's a popover
+ * trigger wrapping the same estimate/add-spent controls as the issue rail; for a
+ * closed/merged MR it's a static line, and it renders nothing at all when there's
+ * no time to show. GitHub is zero-diff — the caller only mounts this behind the
+ * `timeTracking` flag.
+ */
+export function MrTimeTracking({
+  repoPath,
+  number,
+  open,
+}: {
+  repoPath: string;
+  number: number;
+  /** Whether the MR is open — only then are the editing controls offered. */
+  open: boolean;
+}) {
+  const stats = useGlMrTimeStats(repoPath, number);
+  const setEstimate = useSetMrTimeEstimate(repoPath);
+  const addSpent = useAddMrSpentTime(repoPath);
+  const onError = (e: unknown) => toastError(e);
+
+  const data = stats.data;
+  const humanEstimate = data?.humanTimeEstimate ?? "";
+  const humanSpent = data?.humanTotalTimeSpent ?? "";
+  const hasAny =
+    (data?.timeEstimate ?? 0) > 0 || (data?.totalTimeSpent ?? 0) > 0;
+
+  // Nothing to show and the MR is closed → render nothing (GitHub also lands
+  // here via `hasAny` staying false, but the caller already gates on the flag).
+  if (!hasAny && !open) return null;
+
+  const summary = (
+    <span className="flex items-center gap-1">
+      <ClockIcon className="size-3 shrink-0" aria-hidden />
+      {hasAny
+        ? [
+            humanEstimate ? `${humanEstimate} est` : null,
+            humanSpent ? `${humanSpent} spent` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        : "Track time"}
+    </span>
+  );
+
+  // Closed MR: a static, non-interactive summary.
+  if (!open) {
+    return (
+      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+        {summary}
+      </span>
+    );
+  }
+
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="xs"
+            className="text-muted-foreground"
+            aria-label="Time tracking"
+          />
+        }
+      >
+        {summary}
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64">
+        <p className="text-xs font-medium text-muted-foreground">
+          Time tracking
+        </p>
+        {stats.isPending ? (
+          <p className="text-[11px] text-muted-foreground">Loading…</p>
+        ) : (
+          <TimeTrackingControls
+            stats={data}
+            editable
+            pending={setEstimate.isPending || addSpent.isPending}
+            idPrefix="mr"
+            onSetEstimate={(duration) =>
+              setEstimate.mutate({ number, duration }, { onError })
+            }
+            onAddSpent={(duration) =>
+              addSpent.mutate({ number, duration }, { onError })
+            }
+          />
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }

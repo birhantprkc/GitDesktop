@@ -116,6 +116,11 @@ export const forgeCiRunFailedLogs = (repoPath: string, runId: number) =>
 export const forgeCiJobLogs = (repoPath: string, jobId: number) =>
   invoke<string>("forge_ci_job_logs", { repoPath, jobId });
 
+/** Play (start) a manual GitLab CI job awaiting a manual trigger — GitLab-only,
+ *  gated on `implemented.ciJobPlay`; errors on other providers. */
+export const forgeGlCiPlayJob = (repoPath: string, jobId: number) =>
+  invoke<void>("forge_gl_ci_play_job", { repoPath, jobId });
+
 export const ghWorkflowList = (repoPath: string) =>
   invoke<Workflow[]>("gh_workflow_list", { repoPath });
 
@@ -241,6 +246,15 @@ export function useRerunRun(repo: string) {
 export function useCancelRun(repo: string) {
   return useActionsMutation(repo, (runId: number) =>
     forgeCiRunCancel(repo, runId),
+  );
+}
+
+/** Play a manual GitLab CI job (GitLab-only). Invalidating the Actions subtree
+ *  refreshes the run detail + list; the job goes active and the existing 5s
+ *  poll takes over. */
+export function usePlayCiJob(repo: string) {
+  return useActionsMutation(repo, (jobId: number) =>
+    forgeGlCiPlayJob(repo, jobId),
   );
 }
 

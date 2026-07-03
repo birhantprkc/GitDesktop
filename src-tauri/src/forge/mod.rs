@@ -1402,6 +1402,124 @@ pub async fn forge_gl_mr_cancel_auto_merge(repo_path: String, number: u64) -> Ap
     gl_only!(repo_path, gitlab::cancel_auto_merge_mr(&repo_path, number))
 }
 
+/// Play (start) a manual CI job. GitLab-only — GitHub Actions has no per-job
+/// manual play, so this is `gl_only` rather than a neutral forge dispatch.
+#[tauri::command]
+pub async fn forge_gl_ci_play_job(repo_path: String, job_id: u64) -> AppResult<()> {
+    gl_only!(repo_path, gitlab::play_job(&repo_path, job_id))
+}
+
+/// An issue's time-tracking stats (estimate + spent). GitLab-only — GitHub has no
+/// native time tracking.
+#[tauri::command]
+pub async fn forge_gl_issue_time_stats(
+    repo_path: String,
+    number: u64,
+) -> AppResult<gitlab::GitLabTimeStats> {
+    gl_only!(repo_path, gitlab::issue_time_stats(&repo_path, number))
+}
+
+/// A merge request's time-tracking stats (estimate + spent). GitLab-only.
+#[tauri::command]
+pub async fn forge_gl_mr_time_stats(
+    repo_path: String,
+    number: u64,
+) -> AppResult<gitlab::GitLabTimeStats> {
+    gl_only!(repo_path, gitlab::mr_time_stats(&repo_path, number))
+}
+
+/// Set (or, when the duration is blank, reset) an issue's time estimate; returns
+/// the updated stats. GitLab-only.
+#[tauri::command]
+pub async fn forge_gl_issue_set_time_estimate(
+    repo_path: String,
+    number: u64,
+    duration: Option<String>,
+) -> AppResult<gitlab::GitLabTimeStats> {
+    gl_only!(
+        repo_path,
+        gitlab::issue_set_time_estimate(&repo_path, number, duration.as_deref())
+    )
+}
+
+/// Add to (or, when the duration is blank, reset) an issue's spent time; returns
+/// the updated stats. GitLab-only.
+#[tauri::command]
+pub async fn forge_gl_issue_add_spent_time(
+    repo_path: String,
+    number: u64,
+    duration: Option<String>,
+) -> AppResult<gitlab::GitLabTimeStats> {
+    gl_only!(
+        repo_path,
+        gitlab::issue_add_spent_time(&repo_path, number, duration.as_deref())
+    )
+}
+
+/// Set (or, when the duration is blank, reset) a merge request's time estimate;
+/// returns the updated stats. GitLab-only.
+#[tauri::command]
+pub async fn forge_gl_mr_set_time_estimate(
+    repo_path: String,
+    number: u64,
+    duration: Option<String>,
+) -> AppResult<gitlab::GitLabTimeStats> {
+    gl_only!(
+        repo_path,
+        gitlab::mr_set_time_estimate(&repo_path, number, duration.as_deref())
+    )
+}
+
+/// Add to (or, when the duration is blank, reset) a merge request's spent time;
+/// returns the updated stats. GitLab-only.
+#[tauri::command]
+pub async fn forge_gl_mr_add_spent_time(
+    repo_path: String,
+    number: u64,
+    duration: Option<String>,
+) -> AppResult<gitlab::GitLabTimeStats> {
+    gl_only!(
+        repo_path,
+        gitlab::mr_add_spent_time(&repo_path, number, duration.as_deref())
+    )
+}
+
+/// An issue's related issues (links). GitLab-only — GitHub has no native issue
+/// links.
+#[tauri::command]
+pub async fn forge_gl_issue_links(
+    repo_path: String,
+    number: u64,
+) -> AppResult<Vec<gitlab::GitLabLinkedIssue>> {
+    gl_only!(repo_path, gitlab::issue_links(&repo_path, number))
+}
+
+/// Link an issue to another issue (in this repo) as related. GitLab-only.
+#[tauri::command]
+pub async fn forge_gl_issue_link(
+    repo_path: String,
+    number: u64,
+    target_number: u64,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::link_issue(&repo_path, number, target_number)
+    )
+}
+
+/// Remove an issue link by its link id. GitLab-only.
+#[tauri::command]
+pub async fn forge_gl_issue_unlink(
+    repo_path: String,
+    number: u64,
+    link_id: String,
+) -> AppResult<()> {
+    gl_only!(
+        repo_path,
+        gitlab::unlink_issue(&repo_path, number, &link_id)
+    )
+}
+
 /// Rename the repository, behind the abstraction. GitHub renames the repo
 /// (old links redirect); GitLab renames both the display name and the URL slug
 /// (old paths redirect).

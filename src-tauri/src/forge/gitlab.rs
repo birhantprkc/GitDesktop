@@ -3072,6 +3072,22 @@ pub async fn cancel_run(repo_path: &str, run_id: u64) -> AppResult<()> {
     Ok(())
 }
 
+/// Play (start) a manual CI job — a pipeline job configured `when: manual`. The
+/// job id is GitLab's global job id (from the run's job list), not an iid. A
+/// non-manual (already-started) job → HTTP 400 "Unplayable Job", which `run_glab`
+/// surfaces as an error (glab exits non-zero), so no body-sniffing is needed.
+pub async fn play_job(repo_path: &str, job_id: u64) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/jobs/{job_id}/play");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "POST", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 /// A CI/CD variable key must be a valid env-var name. The `key:value` token
 /// `glab ci run --variables-env` takes splits on the FIRST colon, so anything
 /// beyond `[A-Za-z_][A-Za-z0-9_]*` (a colon especially) would corrupt the value.
@@ -4684,6 +4700,306 @@ pub async fn delete_protected_branch(repo_path: &str, name: &str) -> AppResult<(
     Ok(())
 }
 
+// ── Time tracking (issues & merge requests) ───────────────────────────────────
+//
+// GitLab-only: estimate + spent time on issues and MRs, a GitLab-unique surface
+// with no GitHub analogue (`time_tracking`). The read (`time_stats`) and both
+// writes (`time_estimate`/`add_spent_time`) return the SAME `time_stats` object,
+// so every command resolves to a `GitLabTimeStats`. Issue and MR endpoints are
+// exactly symmetric under `issues/{n}/…` vs `merge_requests/{n}/…`. Durations are
+// GitLab's human strings ("3h", "45m", and even negative "-15m" — passed through;
+// the server validates, rejecting bad input with a non-zero exit + message). An
+// absent/blank duration routes to the matching reset endpoint. Validated live.
+
+/// The neutral time-tracking stats the frontend renders. GitLab returns
+/// `human_*` as `null` when the underlying seconds are zero, so those map to "".
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabTimeStats {
+    /// Estimated time, in seconds.
+    pub time_estimate: u64,
+    /// Total time spent, in seconds.
+    pub total_time_spent: u64,
+    /// GitLab's human-readable estimate ("3h"); "" when the estimate is zero.
+    pub human_time_estimate: String,
+    /// GitLab's human-readable total spent ("45m"); "" when zero.
+    pub human_total_time_spent: String,
+}
+
+/// The raw `time_stats` payload GitLab returns from the read and both writes.
+/// `human_*` come back `null` when the corresponding seconds are zero, so they're
+/// null-tolerant and map onto the empty string.
+#[derive(Deserialize)]
+struct GlabTimeStats {
+    #[serde(default)]
+    time_estimate: u64,
+    #[serde(default)]
+    total_time_spent: u64,
+    #[serde(default)]
+    human_time_estimate: Option<String>,
+    #[serde(default)]
+    human_total_time_spent: Option<String>,
+}
+
+fn from_glab_time_stats(s: GlabTimeStats) -> GitLabTimeStats {
+    GitLabTimeStats {
+        time_estimate: s.time_estimate,
+        total_time_spent: s.total_time_spent,
+        human_time_estimate: s.human_time_estimate.unwrap_or_default(),
+        human_total_time_spent: s.human_total_time_spent.unwrap_or_default(),
+    }
+}
+
+/// Whether a target is an issue or a merge request, for the symmetric endpoints.
+#[derive(Clone, Copy)]
+enum TimeTarget {
+    Issue,
+    MergeRequest,
+}
+
+impl TimeTarget {
+    /// The endpoint path segment (`issues` / `merge_requests`).
+    fn segment(self) -> &'static str {
+        match self {
+            TimeTarget::Issue => "issues",
+            TimeTarget::MergeRequest => "merge_requests",
+        }
+    }
+}
+
+/// Which time-tracking write action — set an estimate vs. add spent time. Pairs
+/// each with its reset counterpart so [`time_write_endpoint`] can route a blank
+/// duration to the reset endpoint (see the duration→endpoint routing rule).
+#[derive(Clone, Copy)]
+enum TimeWrite {
+    Estimate,
+    Spent,
+}
+
+/// Route a time-tracking write to its endpoint suffix based on the duration: a
+/// non-empty (trimmed) duration hits the set/add endpoint; a `None` or
+/// blank/whitespace-only duration hits the reset endpoint. Pure — unit-tested.
+fn time_write_endpoint(action: TimeWrite, duration: Option<&str>) -> &'static str {
+    let has_duration = duration.map(|d| !d.trim().is_empty()).unwrap_or(false);
+    match (action, has_duration) {
+        (TimeWrite::Estimate, true) => "time_estimate",
+        (TimeWrite::Estimate, false) => "reset_time_estimate",
+        (TimeWrite::Spent, true) => "add_spent_time",
+        (TimeWrite::Spent, false) => "reset_spent_time",
+    }
+}
+
+/// Read a target's time-tracking stats (`GET …/{target}/{n}/time_stats`).
+async fn time_stats(
+    repo_path: &str,
+    target: TimeTarget,
+    number: u64,
+) -> AppResult<GitLabTimeStats> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/{}/{number}/time_stats", target.segment());
+    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+    let s: GlabTimeStats = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab time stats: {e}")))?;
+    Ok(from_glab_time_stats(s))
+}
+
+/// Apply a time-tracking write (set estimate / add spent — or their reset when
+/// `duration` is blank) and return the updated stats. The set/add endpoints take
+/// a raw `-f duration=…` field; the reset endpoints take none.
+async fn write_time(
+    repo_path: &str,
+    target: TimeTarget,
+    number: u64,
+    action: TimeWrite,
+    duration: Option<&str>,
+) -> AppResult<GitLabTimeStats> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let suffix = time_write_endpoint(action, duration);
+    let endpoint = format!("projects/{enc}/{}/{number}/{suffix}", target.segment());
+    let is_reset = suffix.starts_with("reset_");
+    let mut args = vec!["api", "--method", "POST", &endpoint];
+    let duration_arg;
+    if !is_reset {
+        // Non-empty by construction (blank routed to reset above); trim so a
+        // padded value doesn't reach the server verbatim.
+        duration_arg = format!("duration={}", duration.unwrap_or("").trim());
+        args.push("-f");
+        args.push(&duration_arg);
+    }
+    let out = run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
+    let s: GlabTimeStats = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab time stats: {e}")))?;
+    Ok(from_glab_time_stats(s))
+}
+
+/// An issue's time-tracking stats.
+pub async fn issue_time_stats(repo_path: &str, number: u64) -> AppResult<GitLabTimeStats> {
+    time_stats(repo_path, TimeTarget::Issue, number).await
+}
+
+/// A merge request's time-tracking stats.
+pub async fn mr_time_stats(repo_path: &str, number: u64) -> AppResult<GitLabTimeStats> {
+    time_stats(repo_path, TimeTarget::MergeRequest, number).await
+}
+
+/// Set (or, when blank, reset) an issue's time estimate; returns the new stats.
+pub async fn issue_set_time_estimate(
+    repo_path: &str,
+    number: u64,
+    duration: Option<&str>,
+) -> AppResult<GitLabTimeStats> {
+    write_time(repo_path, TimeTarget::Issue, number, TimeWrite::Estimate, duration).await
+}
+
+/// Add to (or, when blank, reset) an issue's spent time; returns the new stats.
+pub async fn issue_add_spent_time(
+    repo_path: &str,
+    number: u64,
+    duration: Option<&str>,
+) -> AppResult<GitLabTimeStats> {
+    write_time(repo_path, TimeTarget::Issue, number, TimeWrite::Spent, duration).await
+}
+
+/// Set (or, when blank, reset) a merge request's time estimate; returns new stats.
+pub async fn mr_set_time_estimate(
+    repo_path: &str,
+    number: u64,
+    duration: Option<&str>,
+) -> AppResult<GitLabTimeStats> {
+    write_time(
+        repo_path,
+        TimeTarget::MergeRequest,
+        number,
+        TimeWrite::Estimate,
+        duration,
+    )
+    .await
+}
+
+/// Add to (or, when blank, reset) a merge request's spent time; returns new stats.
+pub async fn mr_add_spent_time(
+    repo_path: &str,
+    number: u64,
+    duration: Option<&str>,
+) -> AppResult<GitLabTimeStats> {
+    write_time(
+        repo_path,
+        TimeTarget::MergeRequest,
+        number,
+        TimeWrite::Spent,
+        duration,
+    )
+    .await
+}
+
+// ── Related issues (issue links) ──────────────────────────────────────────────
+//
+// GitLab-only: link two issues as "related" (`issue_links`), a GitLab-unique
+// surface with no GitHub analogue. Links are symmetric — the same link appears on
+// both issues. The list endpoint returns full issue objects each augmented with
+// `issue_link_id` (the link's own id, needed for delete) and `link_type`. Create
+// takes the target by `target_project_id` (the plain "owner/repo" path, NOT
+// url-encoded) + `target_issue_iid`; delete keys on the `issue_link_id`. All
+// validated live against a real GitLab project.
+
+/// One linked issue as `GET …/issues/{n}/links` returns it — a full issue object
+/// augmented with the link's own id and type. Only the fields the neutral
+/// `GitLabLinkedIssue` needs are deserialized; `state` is null-tolerant like the
+/// other issue reads.
+#[derive(Deserialize)]
+struct GlabLinkedIssue {
+    issue_link_id: u64,
+    iid: u64,
+    #[serde(default)]
+    title: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    state: String,
+    #[serde(default)]
+    link_type: String,
+    #[serde(default)]
+    web_url: String,
+}
+
+/// A related issue (issue link) as the frontend renders it. `link_id` is the
+/// link's own id serialized as a string (repo rule: ids over IPC as strings);
+/// `state` is the neutral UPPERCASE form.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabLinkedIssue {
+    /// The `issue_link_id` (the link itself), as a string — passed back to unlink.
+    pub link_id: String,
+    /// The linked issue's iid.
+    pub number: u64,
+    pub title: String,
+    /// Neutral UPPERCASE state ("OPEN" / "CLOSED").
+    pub state: String,
+    /// The link type, e.g. "relates_to".
+    pub link_type: String,
+    pub web_url: String,
+}
+
+fn from_glab_linked_issue(l: GlabLinkedIssue) -> GitLabLinkedIssue {
+    GitLabLinkedIssue {
+        link_id: l.issue_link_id.to_string(),
+        number: l.iid,
+        title: l.title,
+        state: map_issue_state(&l.state),
+        link_type: l.link_type,
+        web_url: l.web_url,
+    }
+}
+
+/// An issue's related issues (links).
+pub async fn issue_links(repo_path: &str, number: u64) -> AppResult<Vec<GitLabLinkedIssue>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}/links");
+    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+    let links: Vec<GlabLinkedIssue> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab issue links: {e}")))?;
+    Ok(links.into_iter().map(from_glab_linked_issue).collect())
+}
+
+/// Link `number` to `target_number` (both iids in this project) as related. The
+/// target project is this repo's own path (a plain "owner/repo", not url-encoded
+/// in the field value — validated live). The link is symmetric, so it shows on
+/// both issues afterward.
+pub async fn link_issue(repo_path: &str, number: u64, target_number: u64) -> AppResult<()> {
+    let path = project_path(repo_path).await?;
+    let enc = encode_project(&path);
+    let endpoint = format!("projects/{enc}/issues/{number}/links");
+    let target_project_arg = format!("target_project_id={path}");
+    let target_issue_arg = format!("target_issue_iid={target_number}");
+    run_glab(
+        Some(repo_path),
+        &[
+            "api",
+            "--method",
+            "POST",
+            &endpoint,
+            "-f",
+            &target_project_arg,
+            "-f",
+            &target_issue_arg,
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Remove an issue link by its `link_id` (the `issue_link_id` from the list).
+pub async fn unlink_issue(repo_path: &str, number: u64, link_id: &str) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}/links/{link_id}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5449,5 +5765,104 @@ mod tests {
         assert!(matches!(err, AppError::InvalidArgument(_)));
         let err = delete_protected_branch("/repo", "  ").await.unwrap_err();
         assert!(matches!(err, AppError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn maps_time_stats_with_null_human_fields() {
+        // The exact live shape after setting an estimate with no spent time:
+        // human_total_time_spent is null, which must map onto "".
+        let json = r#"{
+            "time_estimate": 10800,
+            "total_time_spent": 0,
+            "human_time_estimate": "3h",
+            "human_total_time_spent": null
+        }"#;
+        let s = from_glab_time_stats(serde_json::from_str(json).unwrap());
+        assert_eq!(s.time_estimate, 10800);
+        assert_eq!(s.total_time_spent, 0);
+        assert_eq!(s.human_time_estimate, "3h");
+        assert_eq!(s.human_total_time_spent, "");
+    }
+
+    #[test]
+    fn maps_time_stats_all_zero_nulls_both_human_fields() {
+        // A freshly reset target: both human fields null → "".
+        let json = r#"{
+            "time_estimate": 0,
+            "total_time_spent": 0,
+            "human_time_estimate": null,
+            "human_total_time_spent": null
+        }"#;
+        let s = from_glab_time_stats(serde_json::from_str(json).unwrap());
+        assert_eq!(s.human_time_estimate, "");
+        assert_eq!(s.human_total_time_spent, "");
+    }
+
+    #[test]
+    fn time_write_endpoint_routes_set_vs_reset() {
+        // A real duration hits the set/add endpoint…
+        assert_eq!(
+            time_write_endpoint(TimeWrite::Estimate, Some("3h")),
+            "time_estimate"
+        );
+        assert_eq!(
+            time_write_endpoint(TimeWrite::Spent, Some("45m")),
+            "add_spent_time"
+        );
+        // …negative durations are still real durations (server-validated).
+        assert_eq!(
+            time_write_endpoint(TimeWrite::Spent, Some("-15m")),
+            "add_spent_time"
+        );
+        // None or blank/whitespace-only routes to the reset endpoint.
+        assert_eq!(
+            time_write_endpoint(TimeWrite::Estimate, None),
+            "reset_time_estimate"
+        );
+        assert_eq!(
+            time_write_endpoint(TimeWrite::Estimate, Some("")),
+            "reset_time_estimate"
+        );
+        assert_eq!(
+            time_write_endpoint(TimeWrite::Spent, Some("   ")),
+            "reset_spent_time"
+        );
+    }
+
+    #[test]
+    fn maps_linked_issue_to_neutral() {
+        // The live shape: a full issue object augmented with issue_link_id + link_type.
+        let json = r#"{
+            "issue_link_id": 812,
+            "iid": 4,
+            "title": "Related crash on startup",
+            "state": "opened",
+            "link_type": "relates_to",
+            "web_url": "https://gitlab.com/g/r/-/issues/4"
+        }"#;
+        let l = from_glab_linked_issue(serde_json::from_str(json).unwrap());
+        // issue_link_id serialized as a STRING (repo id-over-IPC rule).
+        assert_eq!(l.link_id, "812");
+        assert_eq!(l.number, 4);
+        assert_eq!(l.title, "Related crash on startup");
+        // opened → OPEN.
+        assert_eq!(l.state, "OPEN");
+        assert_eq!(l.link_type, "relates_to");
+        assert_eq!(l.web_url, "https://gitlab.com/g/r/-/issues/4");
+    }
+
+    #[test]
+    fn linked_issue_maps_closed_state() {
+        let json = r#"{
+            "issue_link_id": 900,
+            "iid": 9,
+            "title": "Fixed elsewhere",
+            "state": "closed",
+            "link_type": "relates_to",
+            "web_url": "https://gitlab.com/g/r/-/issues/9"
+        }"#;
+        let l = from_glab_linked_issue(serde_json::from_str(json).unwrap());
+        // closed → CLOSED.
+        assert_eq!(l.state, "CLOSED");
     }
 }

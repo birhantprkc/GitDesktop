@@ -12,6 +12,17 @@ commit list.
 
 ### Added
 
+- **GitLab time tracking.** Track time on a GitLab issue or merge request without
+  leaving the app: set an **estimate** (e.g. `3h`) and log **spent** time (e.g.
+  `45m`, or subtract with `-15m`), with a progress bar and an "over" note when
+  spent exceeds the estimate. Issues show it in the side rail; merge requests show
+  a compact clock summary in the header that opens the same controls in a popover.
+- **GitLab related issues.** Link a GitLab issue to other issues in the project
+  right from its side rail — pick one from the inline search, open a linked issue,
+  or unlink it. Read-only once the issue is closed.
+- **Play manual GitLab jobs.** A manual pipeline job — one that waits for a manual
+  trigger — now shows a **Run job** button in the pipeline detail view that plays
+  it, so you don't have to switch to GitLab to start it.
 - **GitLab auto-merge.** Arm merge-when-pipeline-succeeds from the merge request
   view while a pipeline is running — the merge menu offers auto-merge (merge or
   squash) variants, and once armed the footer shows an "Auto-merge enabled"

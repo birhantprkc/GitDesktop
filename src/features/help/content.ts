@@ -427,7 +427,8 @@ highlighted **diff** (with an **Open on GitLab** link) — and the GitLab MR wri
 with the approval count shown inline), **request changes** (the blocking reviewer state —
 it adds you as a reviewer if needed, posts your drafted comment alongside, and clears when
 you approve), **react** with emoji on the description and comments,
-edit its **labels** and **assignees**, and **merge**
+edit its **labels** and **assignees**, track **time** on it (a clock summary in the
+header opens a popover to set an estimate and log spent time), and **merge**
 it — merge or squash, optionally deleting
 the source branch, guarded so it never merges a head you didn't see (GitLab applies the project's
 configured merge method, so there's no separate "rebase" option). While a pipeline is running the
@@ -486,10 +487,13 @@ next to any local issues. Open one to read the description and comments — and 
 issue **writes**: **comment** on the issue, **close / reopen** it, **edit** its title and
 description, **react** with emoji on the description and comments (GitLab's award emoji),
 and set its **labels**, **assignees**, and **milestone** right in the side
-rail. The rail also carries two GitLab-unique fields: a **due date** (type a date and
+rail. The rail also carries GitLab-unique fields: a **due date** (type a date and
 press Enter, or pick from the calendar; **Clear** removes it, and an open issue past
-its date reads "Past due") and a **confidential** toggle (hides the issue from
-non-members). The **More actions** menu works too: **lock / unlock** the conversation (GitLab
+its date reads "Past due"), a **confidential** toggle (hides the issue from
+non-members), **time tracking** (type an **estimate** like \`3h\`, log **spent** time
+like \`45m\` or subtract with \`-15m\`, with a progress bar and an "over" note when
+spent exceeds the estimate), and **related issues** (link other issues in this project,
+with an inline picker; open one from the rail or unlink it). The **More actions** menu works too: **lock / unlock** the conversation (GitLab
 locks without a reason, so there's no reason submenu), **duplicate** the issue, **move**
 it to another project you have access to (the original closes with a "moved" marker),
 and **delete** it (Owner-only). **Creating issues** works too — the New menu (or
@@ -579,7 +583,8 @@ filterable, optionally scoped to the current branch — with the header CI badge
 latest one. Open a pipeline to see its **jobs** (status + durations); expand a job for its
 **log**. The pipeline actions work here too: **Cancel** a running pipeline, **Retry** a
 failed or canceled one (GitLab restarts its failed jobs), and **Run pipeline…** starts a
-fresh pipeline on a branch or tag, with optional **CI/CD variables**.
+fresh pipeline on a branch or tag, with optional **CI/CD variables**. A **manual job** —
+one that waits for a manual trigger — shows a **Run job** button that plays it.
 {{ai}}
 ## Debug with AI
 

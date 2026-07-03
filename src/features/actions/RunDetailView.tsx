@@ -3,6 +3,7 @@ import {
   ArrowSquareOutIcon,
   CaretDownIcon,
   CaretRightIcon,
+  PlayIcon,
   ProhibitIcon,
   SparkleIcon,
 } from "@phosphor-icons/react";
@@ -19,6 +20,7 @@ import {
   isRunActive,
   useCancelRun,
   useJobLogs,
+  usePlayCiJob,
   useRerunRun,
   useRunDetail,
   useRunFailedLogs,
@@ -59,6 +61,8 @@ function JobRow({
   stepsExpected = true,
   remoteLabel = "GitHub",
   onDebug,
+  onPlay,
+  playing = false,
 }: {
   repoPath: string;
   job: RunJob;
@@ -67,6 +71,10 @@ function JobRow({
   stepsExpected?: boolean;
   remoteLabel?: string;
   onDebug?: () => void;
+  /** Play a manual GitLab job awaiting a manual trigger (GitLab-only). */
+  onPlay?: () => void;
+  /** Whether the play mutation is in flight for THIS job. */
+  playing?: boolean;
 }) {
   // Failed and in-progress jobs are the interesting ones — open them by default.
   const [open, setOpen] = useState(
@@ -119,6 +127,23 @@ function JobRow({
             </span>
           )}
         </button>
+        {onPlay && (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="mr-2 shrink-0 text-muted-foreground"
+            disabled={playing}
+            aria-label={`Run job ${job.name}`}
+            onClick={onPlay}
+          >
+            {playing ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <PlayIcon data-icon="inline-start" />
+            )}
+            Run job
+          </Button>
+        )}
         {onDebug && (
           <Button
             variant="ghost"
@@ -256,6 +281,7 @@ export function RunDetailView({
   const detail = useRunDetail(repoPath, runId);
   const rerun = useRerunRun(repoPath);
   const cancel = useCancelRun(repoPath);
+  const playJob = usePlayCiJob(repoPath);
   const aiEnabled = useAiEnabled();
   // Re-run and cancel are SHARED writes (GitHub + GitLab): `canWrite || …` keeps
   // GitHub's controls up while forge-status is pending and positively enables a
@@ -268,6 +294,10 @@ export function RunDetailView({
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
   const canRerun = canWrite || forgeFeatureReady(forge.data, "ciRerun");
   const canCancel = canWrite || forgeFeatureReady(forge.data, "ciCancel");
+  // Playing a manual job is GitLab-only (no GitHub analogue here), so the flag
+  // alone gates — never `canWrite || …`. With the gate GitHub never matches the
+  // manual-job shape anyway.
+  const canPlay = forgeFeatureReady(forge.data, "ciJobPlay");
   const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
   const [debugJob, setDebugJob] = useState<RunJob | null>(null);
   // Dialog visibility is tracked separately from the debug session so closing
@@ -310,6 +340,18 @@ export function RunDetailView({
       onError: toastError,
     });
   }
+
+  function doPlay(jobId: number) {
+    playJob.mutate(jobId, {
+      onSuccess: () => toast.success("Starting job…"),
+      onError: toastError,
+    });
+  }
+
+  // A manual GitLab job arrives as completed + action_required; with the flag
+  // gate GitHub never matches (its manual approvals work differently).
+  const isManualJob = (job: RunJob) =>
+    job.status === "completed" && job.conclusion === "action_required";
 
   if (detail.isPending) {
     return (
@@ -454,6 +496,12 @@ export function RunDetailView({
                         }
                       : undefined
                   }
+                  onPlay={
+                    canPlay && isManualJob(job)
+                      ? () => doPlay(job.id)
+                      : undefined
+                  }
+                  playing={playJob.isPending && playJob.variables === job.id}
                 />
               ))}
             </div>

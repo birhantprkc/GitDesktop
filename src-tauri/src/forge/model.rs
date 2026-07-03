@@ -234,6 +234,17 @@ pub struct Implemented {
     /// Setting / clearing an issue's due date. GitLab-unique — GitHub issues
     /// have no due dates, so the flag stays `false` for GitHub (see `all`).
     pub issue_due_date: bool,
+    /// Playing a manual CI job (GitLab pipelines' `when: manual` jobs).
+    /// GitLab-unique — GitHub Actions has no per-job manual play, so like
+    /// `mr_approve` this stays `false` for GitHub (see `all`).
+    pub ci_job_play: bool,
+    /// Time tracking on issues and merge requests (estimate + spent time).
+    /// GitLab-unique — GitHub has no native time tracking, so the flag stays
+    /// `false` for GitHub (see `all`).
+    pub time_tracking: bool,
+    /// Related issues (issue links). GitLab-unique — GitHub has no native issue
+    /// links, so like `mr_approve` this stays `false` for GitHub (see `all`).
+    pub issue_links: bool,
 }
 
 impl Implemented {
@@ -285,6 +296,11 @@ impl Implemented {
             // Like `mr_approve`: GitLab-unique issue fields with no GitHub analogue.
             issue_confidential: false,
             issue_due_date: false,
+            // Like `mr_approve`: GitLab-unique — no per-job manual play, native
+            // time tracking, or issue links on GitHub.
+            ci_job_play: false,
+            time_tracking: false,
+            issue_links: false,
         }
     }
 
@@ -328,6 +344,9 @@ impl Implemented {
             issue_delete: false,
             issue_confidential: false,
             issue_due_date: false,
+            ci_job_play: false,
+            time_tracking: false,
+            issue_links: false,
         }
     }
 
@@ -391,6 +410,9 @@ impl Implemented {
                 issue_delete: true,
                 issue_confidential: true,
                 issue_due_date: true,
+                ci_job_play: true,
+                time_tracking: true,
+                issue_links: true,
             },
             Provider::Bitbucket => Self::none(),
         }
@@ -531,6 +553,10 @@ mod tests {
         // Title/body editing, issue milestones, and reactions are shared controls.
         assert!(i.issue_edit && i.mr_edit && i.issue_milestone);
         assert!(i.issue_reactions && i.mr_reactions);
+        // CI job play, time tracking, and issue links mirror mr_approve: GitLab-only
+        // (GitHub has no per-job manual play, native time tracking, or issue links),
+        // so GitHub stays false.
+        assert!(!i.ci_job_play && !i.time_tracking && !i.issue_links);
     }
 
     #[test]
@@ -568,6 +594,8 @@ mod tests {
         assert!(imp.mr_request_changes);
         // …and award-emoji reactions on issues and MRs.
         assert!(imp.issue_reactions && imp.mr_reactions);
+        // …and the GitLab-only CI job play, time tracking, and issue links.
+        assert!(imp.ci_job_play && imp.time_tracking && imp.issue_links);
     }
 
     #[test]
@@ -589,5 +617,6 @@ mod tests {
         assert!(!bb.issue_edit && !bb.mr_edit && !bb.issue_milestone);
         assert!(!bb.mr_request_changes);
         assert!(!bb.issue_reactions && !bb.mr_reactions);
+        assert!(!bb.ci_job_play && !bb.time_tracking && !bb.issue_links);
     }
 }

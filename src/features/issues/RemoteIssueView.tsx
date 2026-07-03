@@ -140,6 +140,9 @@ export function RemoteIssueView({
   // gates, and it's false for GitHub.
   const canSetConfidential = forgeFeatureReady(forge.data, "issueConfidential");
   const canSetDueDate = forgeFeatureReady(forge.data, "issueDueDate");
+  // Time tracking + related issues are GitLab-unique too — flag alone gates.
+  const canTrackTime = forgeFeatureReady(forge.data, "timeTracking");
+  const canLinkIssues = forgeFeatureReady(forge.data, "issueLinks");
   const details = useIssueDetails(repoPath, number);
   const comment = useCommentIssue(repoPath);
   const closeIssue = useCloseIssue(repoPath);
@@ -748,6 +751,8 @@ export function RemoteIssueView({
           canSetMilestone={canSetMilestone}
           canSetConfidential={canSetConfidential}
           canSetDueDate={canSetDueDate}
+          canTrackTime={canTrackTime}
+          canLinkIssues={canLinkIssues}
           remoteLabel={remoteLabel}
         />
       </div>

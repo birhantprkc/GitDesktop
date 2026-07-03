@@ -535,6 +535,15 @@ export interface ForgeImplemented {
   /** The repository-settings dialog (admin probe + General / Danger zone and
    *  the provider's extra sections). */
   repoSettings: boolean;
+  /** Playing a manual CI job (a job awaiting a manual "play"). GitLab-unique —
+   *  false for GitHub, whose manual approvals work differently. */
+  ciJobPlay: boolean;
+  /** Time tracking (estimate + spent) on issues and MRs. GitLab-unique — false
+   *  for GitHub, which has no built-in time tracking. */
+  timeTracking: boolean;
+  /** Related-issue links (relates_to) on issues. GitLab-unique — false for
+   *  GitHub (its issue relationships are sub-issues/dependencies instead). */
+  issueLinks: boolean;
 }
 
 /** Whether the viewer can manage this repo's settings (`admin`) and whether
@@ -687,6 +696,34 @@ export interface ApprovalState {
    *  Request-changes control's pressed state. Cleared by approving (or removing
    *  yourself as a reviewer on GitLab); the direct undo is Premium-only. */
   viewerRequestedChanges: boolean;
+}
+
+/** A GitLab issue/MR's time-tracking summary. Seconds are the raw values; the
+ *  human strings are GitLab's own formatting ("3h", "1d 2h") and are "" when the
+ *  matching value is unset. GitLab-only (`implemented.timeTracking`). */
+export interface GitLabTimeStats {
+  /** Estimate, in seconds (0 when unset). */
+  timeEstimate: number;
+  /** Total time spent, in seconds (0 when unset). */
+  totalTimeSpent: number;
+  /** Human estimate ("3h"); "" when unset. */
+  humanTimeEstimate: string;
+  /** Human total spent ("1d 2h"); "" when unset. */
+  humanTotalTimeSpent: string;
+}
+
+/** A related issue linked to another via a `relates_to` link. GitLab-only
+ *  (`implemented.issueLinks`); `linkId` addresses the link for removal. */
+export interface GitLabLinkedIssue {
+  /** The link's own id (used to unlink), as a string (IPC-safe). */
+  linkId: string;
+  number: number;
+  title: string;
+  /** "OPEN" or "CLOSED". */
+  state: string;
+  /** "relates_to" (the only link type the app creates). */
+  linkType: string;
+  webUrl: string;
 }
 
 /** A GitLab MR's merge/auto-merge state — the auto-merge (merge-when-pipeline-
