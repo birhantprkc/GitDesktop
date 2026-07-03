@@ -28,6 +28,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -53,6 +54,11 @@ const CUSTOM_IMAGE_PREFIX: &str = "gitdesktop-agent-custom";
 /// hardened managed base (non-root `node`, ca-certs, the agent CLIs). Everything after is
 /// arbitrary — gated by confirm-to-build, never auto-run.
 const CUSTOM_DOCKERFILE_FROM: &str = "FROM gitdesktop-agent:latest";
+
+/// Monotonic suffix for build-context temp dirs, so two concurrent builds (two Settings
+/// panels, or two repos) never share a context dir and overwrite each other's Dockerfile —
+/// `process::id()` alone is constant for the process, so it can't disambiguate concurrent calls.
+static BUILD_CTX_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// npm package for a **container-capable** agent. `None` for an agent we can't run
 /// in the container.
@@ -353,7 +359,11 @@ pub async fn agent_container_prepare(
     // Write the Dockerfile into an empty temp context dir and build from it,
     // rather than piping it on stdin — `build -` reads stdin differently across
     // Docker and Podman, so a real (tiny) context dir is the portable form.
-    let ctx = std::env::temp_dir().join(format!("gd-agent-build-{}", std::process::id()));
+    let ctx = std::env::temp_dir().join(format!(
+        "gd-agent-build-{}-{}",
+        std::process::id(),
+        BUILD_CTX_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&ctx)?;
     std::fs::write(ctx.join("Dockerfile"), &dockerfile)?;
     let ctx_str = ctx.to_string_lossy().into_owned();
@@ -428,10 +438,15 @@ fn custom_dockerfile_path(worktree_path: &str) -> PathBuf {
         .join("agent.Dockerfile")
 }
 
-/// Reads a repo/worktree's custom agent Dockerfile if present (absent is the common case
-/// → the repo uses the base image).
-fn read_custom_dockerfile(worktree_path: &str) -> Option<String> {
-    std::fs::read_to_string(custom_dockerfile_path(worktree_path)).ok()
+/// Reads a repo/worktree's custom agent Dockerfile. `Ok(None)` = no file (the common case →
+/// the repo uses the base image); `Err` = the file exists but couldn't be read (permissions,
+/// bad encoding) — surfaced rather than silently treated as "no custom image".
+fn read_custom_dockerfile(worktree_path: &str) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(custom_dockerfile_path(worktree_path)) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// The first non-blank, non-comment line of a Dockerfile — its `FROM`.
@@ -442,17 +457,57 @@ fn first_instruction(dockerfile: &str) -> Option<&str> {
         .find(|l| !l.is_empty() && !l.starts_with('#'))
 }
 
-/// A custom Dockerfile is valid only when its first instruction is exactly
-/// `FROM gitdesktop-agent:latest` (case-insensitive keyword, exact image), so the derived
-/// image inherits the hardened managed base rather than an arbitrary one.
+/// The name of a Docker **parser directive** (`syntax` / `escape`) in the leading comment
+/// block, if present. Parser directives are processed by BuildKit BEFORE any instruction —
+/// `# syntax=<image>` makes it fetch an arbitrary remote build *frontend* that can ignore the
+/// `FROM` boundary and run build-time code the reviewer never saw. Docker only honours them in
+/// the unbroken run of comment lines at the very top (a blank line or an instruction ends that
+/// run), so we scan exactly that region and reject any we find.
+fn leading_parser_directive(dockerfile: &str) -> Option<String> {
+    for raw in dockerfile.lines() {
+        let line = raw.trim();
+        if line.is_empty() || !line.starts_with('#') {
+            break;
+        }
+        if let Some((name, _value)) = line.trim_start_matches('#').trim().split_once('=') {
+            let name = name.trim().to_ascii_lowercase();
+            if name == "syntax" || name == "escape" {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+/// Validates a repo's custom Dockerfile against the security contract, returning the
+/// user-facing reason on failure: no build-altering parser directives (see
+/// [`leading_parser_directive`]), and a first instruction of exactly
+/// `FROM gitdesktop-agent:latest` (case-insensitive keyword, exact image) so the derived image
+/// inherits the hardened managed base rather than an arbitrary one.
+fn validate_custom_dockerfile(dockerfile: &str) -> Result<(), String> {
+    if let Some(name) = leading_parser_directive(dockerfile) {
+        return Err(format!(
+            "Remove the `# {name}=` parser directive — BuildKit runs it before any instruction, so it can pull an arbitrary build frontend and bypass the managed base."
+        ));
+    }
+    let valid_from = first_instruction(dockerfile).is_some_and(|line| {
+        let mut toks = line.split_whitespace();
+        matches!(toks.next(), Some(kw) if kw.eq_ignore_ascii_case("FROM"))
+            && toks.next() == Some("gitdesktop-agent:latest")
+            && toks.next().is_none()
+    });
+    if valid_from {
+        Ok(())
+    } else {
+        Err(format!(
+            "The first instruction must be `{CUSTOM_DOCKERFILE_FROM}` so the image builds on the managed base."
+        ))
+    }
+}
+
+/// Bool form of [`validate_custom_dockerfile`] for callers that only branch on validity.
 fn custom_dockerfile_valid(dockerfile: &str) -> bool {
-    let Some(line) = first_instruction(dockerfile) else {
-        return false;
-    };
-    let mut toks = line.split_whitespace();
-    matches!(toks.next(), Some(kw) if kw.eq_ignore_ascii_case("FROM"))
-        && toks.next() == Some("gitdesktop-agent:latest")
-        && toks.next().is_none()
+    validate_custom_dockerfile(dockerfile).is_ok()
 }
 
 /// FNV-1a of the base image Id + the Dockerfile bytes → the derived image tag. A changed
@@ -498,7 +553,7 @@ async fn image_exists(bin: &Path, tag: &str) -> bool {
 /// per-repo derived image when it is valid AND built, else the managed base. Best-effort —
 /// any missing piece falls back to the base so a session always launches.
 pub(crate) async fn resolve_session_image(bin: &Path, worktree_path: &str) -> String {
-    if let Some(dockerfile) = read_custom_dockerfile(worktree_path) {
+    if let Ok(Some(dockerfile)) = read_custom_dockerfile(worktree_path) {
         if custom_dockerfile_valid(&dockerfile) {
             if let Some(id) = base_image_id(bin).await {
                 let tag = derived_tag(&id, &dockerfile);
@@ -528,20 +583,28 @@ pub struct CustomImageStatus {
 /// repo ships no custom Dockerfile — it uses the base image.
 #[tauri::command]
 pub async fn agent_custom_image_status(worktree_path: String) -> AppResult<CustomImageStatus> {
-    let Some(dockerfile) = read_custom_dockerfile(&worktree_path) else {
-        return Ok(CustomImageStatus {
-            state: "none",
-            dockerfile: None,
-            error: None,
-        });
+    let dockerfile = match read_custom_dockerfile(&worktree_path) {
+        Ok(Some(contents)) => contents,
+        Ok(None) => {
+            return Ok(CustomImageStatus {
+                state: "none",
+                dockerfile: None,
+                error: None,
+            });
+        }
+        Err(e) => {
+            return Ok(CustomImageStatus {
+                state: "invalid",
+                dockerfile: None,
+                error: Some(format!("Couldn't read .gitdesktop/agent.Dockerfile: {e}")),
+            });
+        }
     };
-    if !custom_dockerfile_valid(&dockerfile) {
+    if let Err(reason) = validate_custom_dockerfile(&dockerfile) {
         return Ok(CustomImageStatus {
             state: "invalid",
             dockerfile: Some(dockerfile),
-            error: Some(format!(
-                "The first instruction must be `{CUSTOM_DOCKERFILE_FROM}` so the image builds on the managed base."
-            )),
+            error: Some(reason),
         });
     }
     // Valid → is it built? Needs the runtime + the base image to compute the tag.
@@ -565,17 +628,25 @@ pub async fn agent_custom_image_status(worktree_path: String) -> AppResult<Custo
 /// requires an explicit confirm before ever calling this (never automatic), the guard
 /// against a cloned/untrusted repo.
 #[tauri::command]
-pub async fn agent_build_custom_image(worktree_path: String, force: bool) -> AppResult<()> {
-    let Some(dockerfile) = read_custom_dockerfile(&worktree_path) else {
+pub async fn agent_build_custom_image(
+    worktree_path: String,
+    expected_dockerfile: String,
+    force: bool,
+) -> AppResult<()> {
+    let Some(dockerfile) = read_custom_dockerfile(&worktree_path)? else {
         return Err(AppError::InvalidArgument(
             "this repository has no .gitdesktop/agent.Dockerfile".into(),
         ));
     };
-    if !custom_dockerfile_valid(&dockerfile) {
-        return Err(AppError::InvalidArgument(format!(
-            "the custom Dockerfile must start with `{CUSTOM_DOCKERFILE_FROM}`"
-        )));
+    // TOCTOU guard: build ONLY the exact bytes the user reviewed in the dialog. If the file
+    // changed on disk since it was shown (e.g. a `git pull` in a terminal while the dialog was
+    // open), refuse rather than silently building unreviewed content.
+    if dockerfile != expected_dockerfile {
+        return Err(AppError::InvalidArgument(
+            "The Dockerfile changed since you reviewed it. Reopen the review to see the current contents, then build.".into(),
+        ));
     }
+    validate_custom_dockerfile(&dockerfile).map_err(AppError::InvalidArgument)?;
     let (bin, _) = detect_runtime()
         .await
         .ok_or_else(|| AppError::Command("Docker or Podman is not installed.".into()))?;
@@ -593,7 +664,11 @@ pub async fn agent_build_custom_image(worktree_path: String, force: bool) -> App
     })?;
     let tag = derived_tag(&id, &dockerfile);
 
-    let ctx = std::env::temp_dir().join(format!("gd-agent-custom-{}", std::process::id()));
+    let ctx = std::env::temp_dir().join(format!(
+        "gd-agent-custom-{}-{}",
+        std::process::id(),
+        BUILD_CTX_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&ctx)?;
     std::fs::write(ctx.join("Dockerfile"), &dockerfile)?;
     let ctx_str = ctx.to_string_lossy().into_owned();
@@ -621,7 +696,7 @@ pub async fn agent_build_custom_image(worktree_path: String, force: bool) -> App
 /// commit (scaffold local, never auto-commit). Returns `false` without touching anything
 /// if one already exists. Creates `.gitdesktop/` as needed.
 #[tauri::command]
-pub fn agent_scaffold_custom_dockerfile(repo_path: String) -> AppResult<bool> {
+pub async fn agent_scaffold_custom_dockerfile(repo_path: String) -> AppResult<bool> {
     let dir = Path::new(&repo_path);
     if !dir.is_dir() {
         return Err(AppError::InvalidArgument(format!(
@@ -629,19 +704,33 @@ pub fn agent_scaffold_custom_dockerfile(repo_path: String) -> AppResult<bool> {
         )));
     }
     let file = custom_dockerfile_path(&repo_path);
-    if file.exists() {
+    if tokio::fs::try_exists(&file).await.unwrap_or(false) {
         return Ok(false);
     }
     if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent)?;
+        tokio::fs::create_dir_all(parent).await?;
     }
-    std::fs::write(&file, CUSTOM_DOCKERFILE_STARTER)?;
+    tokio::fs::write(&file, CUSTOM_DOCKERFILE_STARTER).await?;
     Ok(true)
 }
 
 /// The scaffolded starter — a valid, no-op derived Dockerfile (the example tool line is
 /// commented out) that the user edits to add tools.
-const CUSTOM_DOCKERFILE_STARTER: &str = "# Custom agent container image for this repository.\n#\n# GitDesktop builds this into a per-repo image layered on its managed agent base, and runs\n# containerized agent sessions (and the Test shell) for this repo inside it. It MUST start\n# with `FROM gitdesktop-agent:latest`. Everything below is yours to add — but note the\n# image is only ever (re)built after you review it and confirm, so a build runs your\n# commands. Switch to `USER root` to install system packages, then back to `USER node`.\n#\n# Example: add Playwright + Chromium for browser tests.\nFROM gitdesktop-agent:latest\nUSER root\n# RUN npx -y playwright@latest install --with-deps chromium\nUSER node\n";
+const CUSTOM_DOCKERFILE_STARTER: &str = concat!(
+    "# Custom agent container image for this repository.\n",
+    "#\n",
+    "# GitDesktop builds this into a per-repo image layered on its managed agent base, and runs\n",
+    "# containerized agent sessions (and the Test shell) for this repo inside it. It MUST start\n",
+    "# with `FROM gitdesktop-agent:latest`. Everything below is yours to add — but note the\n",
+    "# image is only ever (re)built after you review it and confirm, so a build runs your\n",
+    "# commands. Switch to `USER root` to install system packages, then back to `USER node`.\n",
+    "#\n",
+    "# Example: add Playwright + Chromium for browser tests.\n",
+    "FROM gitdesktop-agent:latest\n",
+    "USER root\n",
+    "# RUN npx -y playwright@latest install --with-deps chromium\n",
+    "USER node\n",
+);
 
 // --- per-session claude-home (mounted, holds creds + transcript) -------------
 
@@ -1408,6 +1497,20 @@ mod tests {
         ));
         assert!(!custom_dockerfile_valid("RUN echo hi\n"));
         assert!(!custom_dockerfile_valid(""));
+        // `# syntax=` / `# escape=` parser directives at the very top are rejected: BuildKit
+        // runs them before any instruction and `# syntax=` can load an arbitrary build frontend
+        // that bypasses the managed base — even though the `FROM` line itself looks correct.
+        assert!(!custom_dockerfile_valid(
+            "# syntax=docker/dockerfile:1\nFROM gitdesktop-agent:latest\n"
+        ));
+        assert!(!custom_dockerfile_valid(
+            "# escape=`\nFROM gitdesktop-agent:latest\n"
+        ));
+        // An ordinary leading comment (no `key=value`) is fine, and a `key=value` line that
+        // isn't in the top directive block (e.g. an `ENV`) doesn't trip the directive scan.
+        assert!(custom_dockerfile_valid(
+            "# tools for this repo\nFROM gitdesktop-agent:latest\nENV FOO=bar\n"
+        ));
     }
 
     #[test]

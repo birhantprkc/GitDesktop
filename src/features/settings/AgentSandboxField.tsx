@@ -177,8 +177,11 @@ export function AgentSandboxField({
             building={building}
             onBuild={buildImage}
           />
-          {repoPath && status.data?.imagePresent && (
-            <CustomImageSection repoPath={repoPath} />
+          {repoPath && (
+            <CustomImageSection
+              repoPath={repoPath}
+              basePresent={!!status.data?.imagePresent}
+            />
           )}
         </div>
       )}
@@ -331,7 +334,15 @@ function ActionButton({
  * alone). The build runs the Dockerfile's arbitrary commands, so it is gated behind a review
  * dialog — the confirm-to-build guard against an untrusted repo.
  */
-function CustomImageSection({ repoPath }: { repoPath: string }) {
+function CustomImageSection({
+  repoPath,
+  basePresent,
+}: {
+  repoPath: string;
+  /** Whether the managed base image is built — the custom image is `FROM` it, so a build
+   *  can't run until it exists. Scaffolding/reviewing stays available regardless. */
+  basePresent: boolean;
+}) {
   const queryClient = useQueryClient();
   const status = useQuery({
     queryKey: ["agentCustomImage", repoPath],
@@ -364,7 +375,9 @@ function CustomImageSection({ repoPath }: { repoPath: string }) {
   async function build(force: boolean) {
     setBusy("build");
     try {
-      await buildCustomImage(repoPath, force);
+      // Pass the reviewed contents so the backend refuses to build if the file changed on
+      // disk since the dialog opened (only ever build what the user actually saw).
+      await buildCustomImage(repoPath, status.data?.dockerfile ?? "", force);
       toast.success(force ? "Custom image rebuilt" : "Custom image built");
       setReviewOpen(false);
       await refresh();
@@ -381,8 +394,8 @@ function CustomImageSection({ repoPath }: { repoPath: string }) {
   if (data.state === "none") {
     return (
       <Row tone="muted">
-        This repo uses the base image. Add a custom Dockerfile to layer extra tools (e.g.
-        Playwright) into its container sessions.
+        This repo uses the base image. Add a custom Dockerfile to layer extra
+        tools (e.g. Playwright) into its container sessions.
         <ActionButton
           label="Add custom tools…"
           busyLabel="Adding…"
@@ -402,12 +415,18 @@ function CustomImageSection({ repoPath }: { repoPath: string }) {
     <>
       <Row tone={built ? "ok" : invalid ? "warn" : "muted"}>
         {invalid
-          ? "This repo's .gitdesktop/agent.Dockerfile must start with FROM gitdesktop-agent:latest."
+          ? "This repo's .gitdesktop/agent.Dockerfile can't be used as-is — open it to see why."
           : built
             ? "Container sessions for this repo run in its custom image."
             : "This repo has a custom Dockerfile that isn't built yet."}
         <ActionButton
-          label={canBuild && !built ? "Review & build…" : "View Dockerfile"}
+          label={
+            invalid
+              ? "View Dockerfile"
+              : built
+                ? "View / Rebuild…"
+                : "Review & build…"
+          }
           disabled={busy !== null}
           onClick={() => setReviewOpen(true)}
         />
@@ -420,6 +439,7 @@ function CustomImageSection({ repoPath }: { repoPath: string }) {
         dockerfile={data.dockerfile ?? ""}
         error={data.error}
         canBuild={canBuild}
+        basePresent={basePresent}
         built={built}
         building={busy === "build"}
         onBuild={() => build(built)}
@@ -436,6 +456,7 @@ function ReviewDialog({
   dockerfile,
   error,
   canBuild,
+  basePresent,
   built,
   building,
   onBuild,
@@ -445,6 +466,7 @@ function ReviewDialog({
   dockerfile: string;
   error: string | null;
   canBuild: boolean;
+  basePresent: boolean;
   built: boolean;
   building: boolean;
   onBuild: () => void;
@@ -457,8 +479,8 @@ function ReviewDialog({
             {built ? "Rebuild custom agent image" : "Build custom agent image"}
           </DialogTitle>
           <DialogDescription>
-            This builds a per-repo image from .gitdesktop/agent.Dockerfile and runs the
-            commands in it. Only build repositories you trust.
+            This builds a per-repo image from .gitdesktop/agent.Dockerfile and
+            runs the commands in it. Only build repositories you trust.
           </DialogDescription>
         </DialogHeader>
         {error && (
@@ -474,6 +496,19 @@ function ReviewDialog({
         <pre className="max-h-72 overflow-auto whitespace-pre rounded-md border border-border bg-muted/50 p-3 font-mono text-[11px] leading-relaxed">
           {dockerfile}
         </pre>
+        {canBuild && !basePresent && (
+          <p className="flex items-start gap-1.5 text-xs text-foreground">
+            <WarningCircleIcon
+              weight="fill"
+              className="mt-0.5 size-3.5 shrink-0"
+              aria-hidden
+            />
+            <span>
+              Build the base agent image first (the line above this one in
+              Settings), then build this custom image.
+            </span>
+          </p>
+        )}
         <DialogFooter>
           <Button
             type="button"
@@ -485,7 +520,12 @@ function ReviewDialog({
             Cancel
           </Button>
           {canBuild && (
-            <Button type="button" size="sm" disabled={building} onClick={onBuild}>
+            <Button
+              type="button"
+              size="sm"
+              disabled={building || !basePresent}
+              onClick={onBuild}
+            >
               {building ? (
                 <>
                   <Spinner className="size-3" />

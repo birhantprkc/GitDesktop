@@ -52,9 +52,19 @@ export const customImageStatus = (worktreePath: string) =>
 
 /** Builds (or, with `force`, rebuilds without cache) a repo's custom agent image from its
  *  `.gitdesktop/agent.Dockerfile`. User-initiated only — the build runs the Dockerfile's
- *  arbitrary commands, so call this only after the user has reviewed the file. */
-export const buildCustomImage = (worktreePath: string, force: boolean) =>
-  invoke<void>("agent_build_custom_image", { worktreePath, force });
+ *  arbitrary commands, so call this only after the user has reviewed the file. Pass the
+ *  reviewed contents as `expectedDockerfile`: the backend refuses to build if the file changed
+ *  on disk since it was shown, so it only ever builds exactly what the user saw. */
+export const buildCustomImage = (
+  worktreePath: string,
+  expectedDockerfile: string,
+  force: boolean,
+) =>
+  invoke<void>("agent_build_custom_image", {
+    worktreePath,
+    expectedDockerfile,
+    force,
+  });
 
 /** Writes a starter `.gitdesktop/agent.Dockerfile` into the repo for the user to edit +
  *  commit (never auto-committed). Resolves `false` without writing if one already exists. */
