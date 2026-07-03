@@ -569,6 +569,14 @@ commit list.
   first-class category, with a carve-out so GitDesktop's own intentional embedding of repo,
   PR, and diff content into its AI prompts isn't mistaken for a vulnerability. Applies to
   both the quick (diff-only) and repo-aware security reviews, on any provider.
+- **Higher-signal AI code reviews.** The general code-review prompt was tightened to
+  raise signal without narrowing its scope. Findings are now ordered by severity with
+  clear definitions for **blocker**, **should-fix**, and **nit**; the real ones must
+  cite the concrete case that triggers them (the input, state, or code path), not just
+  an assertion; and the reviewer is told to include a finding only when it's confident,
+  skip formatting a linter already handles, and never let nits crowd out the real
+  issues. It stays a broad review — correctness, edge cases, security smells,
+  performance, clarity, and tests — and runs on any provider, including local models.
 - **A steadier, tidier agent composer.** The task box (Delegate, Plan, and the
   in-conversation reply) now docks to the bottom of its panel like a terminal: the
   text grows **upward** so the action row and **Send** never drift as you type. The
