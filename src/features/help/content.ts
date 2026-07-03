@@ -60,8 +60,8 @@ From the welcome screen (or the repo switcher in the header):
 
 - **Open repository** ({{kbd:add-local-repository}}) — point at a folder that's already
   a Git repo.
-- **Clone repository** ({{kbd:clone-repository}}) — clone from a URL, or browse your
-  GitHub repos.
+- **Clone repository** ({{kbd:clone-repository}}) — clone from a URL, or browse and
+  clone your **GitHub** or **GitLab** repos from their tabs.
 - **Create repository** ({{kbd:new-repository}}) — start a new repo with an optional
   README, \`.gitignore\`, and license.
 
@@ -96,13 +96,15 @@ filter box — jump between repos without returning to the welcome screen.
 
 Click the **⋮** menu next to the repo name for repo-wide actions:
 
-- **View on GitHub** ({{kbd:view-on-github}}), open a **terminal** at the repo root
-  ({{kbd:open-in-terminal}}), **show in your file manager** ({{kbd:show-in-explorer}}),
-  or **open in your editor** ({{kbd:open-in-editor}}).
-- On GitHub: **Star** the repository, **create an issue**, or **Fork** it.
+- **View on GitHub / GitLab** ({{kbd:view-on-github}}), open a **terminal** at the repo
+  root ({{kbd:open-in-terminal}}), **show in your file manager**
+  ({{kbd:show-in-explorer}}), or **open in your editor** ({{kbd:open-in-editor}}).
+- On the host: **Star** the repository, **create an issue**, or **Fork** it (on GitLab,
+  forking opens the web fork page).
 - **Insights** (analytics), **manage files**, **submodules**, the **remote URL**,
   **branch rules**, **git hooks**, {{ai}}**automations**, {{/ai}}**repository settings**,
-  an **alias**, copy the repo path, and remove the repo from the list.
+  an **alias**, copy the repo path, copy the branch name, copy the HEAD SHA, and
+  remove the repo from the list.
 
 ## Aliases
 
@@ -119,9 +121,10 @@ monitor it was on — see **Settings → About** for the current coordinates.`,
     label: "Repository settings",
     body: `# Repository settings
 
-**Repository settings** (the repo ⋮ menu) manages your GitHub repository without leaving
-the app. It's organized as a sidebar of grouped sections; changes apply on GitHub
-immediately unless noted.
+**Repository settings** (the repo ⋮ menu) manages your GitHub repository — or GitLab
+project (see **GitLab projects** below) — without leaving the app. It's organized as a
+sidebar of grouped sections; changes apply on the host immediately unless noted. On
+GitHub it looks like this:
 
 - **General** — description, topics, homepage, default branch, features (issues,
   projects, wiki, discussions), pull-request merge options (allowed merge methods,
@@ -153,7 +156,35 @@ immediately unless noted.
   never touched.
 
 > Some options GitHub exposes to no app appear as **"Manage on GitHub"** links rather
-> than dead toggles.`,
+> than dead toggles.
+
+## GitLab projects
+
+The same dialog manages a **GitLab** project (it needs the **Maintainer** role; the
+menu item appears only when you have it):
+
+- **General** — description and topics (AI-generate works here too), default branch,
+  per-feature **access levels** (Issues, Merge requests, Wiki, Snippets, Forking — each
+  everyone / members-only / disabled), the **merge method** (merge commit, semi-linear,
+  fast-forward), the **squash policy**, and the merge checks (pipelines must succeed,
+  all threads resolved, delete source branch by default).
+- **Members** — add someone by username at a role (Guest … Owner), change a role
+  inline, or remove them. Members **inherited from a group** show read-only — they're
+  managed on the group.
+- **Protected branches** — protect a branch or wildcard with per-rule **allowed to
+  push** / **allowed to merge** access levels and an **allow force push** toggle;
+  unprotect with a confirm. Rules **inherited from a group** show read-only. Access
+  levels are set when you protect a branch — to change them, unprotect and re-protect.
+- **Variables** — the project's **CI/CD variables**: add, edit, and delete, with
+  **protected** (protected refs only) and **masked** (hidden in job logs) flags.
+- **Webhooks** — create, edit, and delete hooks with per-event triggers and a secret
+  token; **send a test event**; and debug with the **delivery log** — each delivery's
+  request/response payloads, with one-click **re-send**. A hook GitLab auto-disabled
+  after failures shows a **disabled** badge.
+- **Danger zone** — **rename** (name + path, old paths redirect),
+  **archive / unarchive**, **change visibility**, **transfer** to another namespace,
+  and **delete**. The Owner-only actions disable with an explanation when you're a
+  Maintainer.`,
   },
   {
     id: "changes",
@@ -365,8 +396,9 @@ keyless Claude Code / Codex agents, and skips files matched by your AI ignore pa
     label: "Pull requests",
     body: `# Pull requests
 
-The **Pull Requests** tab ({{kbd:tab-pulls}}) manages both GitHub PRs and local PRs.
-(GitHub PRs need \`gh\` installed and authenticated.)
+The **Pull Requests** tab ({{kbd:tab-pulls}}) manages GitHub PRs, GitLab merge requests,
+and local PRs. (Hosted PRs/MRs need the matching CLI — \`gh\` or \`glab\` — installed and
+authenticated.)
 
 ## GitHub PRs
 
@@ -385,16 +417,44 @@ Create a PR with **Create pull request** ({{kbd:create-pr}}) or from the Compare
 a **draft** if you like{{ai}}, optionally with an **AI-generated** title and description
 from the branch diff and commit subjects{{/ai}}.
 
+## GitLab merge requests
+
+Point the app at a **GitLab** repo and the same tab lists its **merge requests** (open and
+closed/merged) next to any local PRs. Open one for the description, comments, commits, and a
+highlighted **diff** (with an **Open on GitLab** link) — and the GitLab MR writes:
+**comment** on it, **close / reopen** it, **edit** its title and description,
+**approve / unapprove** it (a reviewer action,
+with the approval count shown inline), **request changes** (the blocking reviewer state —
+it adds you as a reviewer if needed, posts your drafted comment alongside, and clears when
+you approve), **react** with emoji on the description and comments,
+edit its **labels** and **assignees**, track **time** on it (a clock summary in the
+header opens a popover to set an estimate and log spent time), and **merge**
+it — merge or squash, optionally deleting
+the source branch, guarded so it never merges a head you didn't see (GitLab applies the project's
+configured merge method, so there's no separate "rebase" option). While a pipeline is running the
+merge menu also offers **auto-merge** (merge when the pipeline succeeds) — GitLab merges it for
+you once the pipeline passes, and an **Auto-merge enabled** indicator in the footer lets you cancel
+it in place. **Creating a merge request**
+works from the app too ({{kbd:create-pr}}, the New menu, or the Compare tab) — it pushes your
+branch and opens the MR, with the same draft checkbox and AI description as GitHub, and the
+Compare tab points you at an **existing open MR** from your branch instead of creating a
+duplicate. GitLab uses the GitLab
+CLI (\`glab\`) — run \`glab auth login\` once, no tokens stored. **Self-managed GitLab works
+too**: sign \`glab\` in to your instance (\`glab auth login --hostname …\`) and the app
+recognizes repositories on that host automatically. Its issues, CI pipelines, and
+releases work too (see their sections below).
+
 ## Local PRs
 
 A **local PR** is the same review workflow against any two branches with **no remote at
 all** — describe it in Markdown, comment, label, approve, and merge locally. Local PRs
 are private to you and never written into the repo. When you're ready, **promote** a
-local PR to a real GitHub PR in one click, history preserved.
+local PR to a real GitHub PR or GitLab MR in one click, history preserved.
 {{ai}}
 ## AI review
 
-On any PR, run a streamed **code review** or a focused **security audit** of its changes
+On any PR — GitHub or a GitLab MR — run a streamed **code review** or a focused
+**security audit** of its changes
 using your chosen review model, and optionally post the result as a comment. A general
 review can build on prior reviews as soft context. With a CLI agent (Claude, Copilot, or
 opencode), a **repo-aware** toggle lets the reviewer read the repo's files for deeper
@@ -405,8 +465,9 @@ context (slower). See *AI & automations* to pick the review model.{{/ai}}`,
     label: "Issues",
     body: `# Issues
 
-The **Issues** tab ({{kbd:tab-issues}}, in the More ▾ menu) manages both GitHub issues and
-private local issues.
+The **Issues** tab ({{kbd:tab-issues}}, in the More ▾ menu) manages GitHub issues, GitLab
+issues, and private local issues. (The **GitLab issues** section below covers exactly which
+GitLab actions are available.)
 
 ## GitHub issues
 
@@ -419,11 +480,36 @@ add labels, **close / reopen**, **lock**, and **transfer** an issue to another r
 - **Development** — see linked PRs and branches, and **create a branch** wired to the
   issue.
 
+## GitLab issues
+
+Point the app at a **GitLab** repo and the same tab lists its **issues** (open and closed)
+next to any local issues. Open one to read the description and comments — and the GitLab
+issue **writes**: **comment** on the issue, **close / reopen** it, **edit** its title and
+description, **react** with emoji on the description and comments (GitLab's award emoji),
+and set its **labels**, **assignees**, and **milestone** right in the side
+rail. The rail also carries GitLab-unique fields: a **due date** (type a date and
+press Enter, or pick from the calendar; **Clear** removes it, and an open issue past
+its date reads "Past due"), a **confidential** toggle (hides the issue from
+non-members), **time tracking** (type an **estimate** like \`3h\`, log **spent** time
+like \`45m\` or subtract with \`-15m\`, with a progress bar and an "over" note when
+spent exceeds the estimate), and **related issues** (link other issues in this project,
+with an inline picker; open one from the rail or unlink it). The **More actions** menu works too: **lock / unlock** the conversation (GitLab
+locks without a reason, so there's no reason submenu), **duplicate** the issue, **move**
+it to another project you have access to (the original closes with a "moved" marker),
+and **delete** it (Owner-only). **Creating issues** works too — the New menu (or
+{{kbd:create-issue}} from the
+palette) opens the same dialog GitHub uses, with labels, assignees, and a milestone (the
+org issue type is the one GitHub-only picker). The repository menu works too: **View on
+GitLab**, **star / unstar**, and a **Fork on GitLab** link, **Repository settings**
+(see that section — the dialog manages GitLab projects too), and you can **publish** a
+local repository straight to GitLab (it creates the project, adds it as
+\`origin\`, and pushes).
+
 ## Local issues
 
 A **local issue** is a private, offline to-do tracked in the app — create, edit, label,
-and close it with no remote. When it's ready to share, **promote** it to a GitHub issue
-in one click.
+and close it with no remote. When it's ready to share, **promote** it to a GitHub or
+GitLab issue in one click.
 {{ai}}
 ## Hand off to an agent
 
@@ -453,13 +539,25 @@ part in GitHub Discussions for the repo. (Discussions must be enabled on the rep
     body: `# Releases & tags
 
 The **Tags** tab ({{kbd:tab-tags}}, in the More ▾ menu) manages your repository's tags and
-GitHub releases.
+releases — GitHub and **GitLab** releases both (the GitLab section below covers the
+provider differences).
 
 - See every tag and **create a tag** (also available from a commit in History).
 - **Create a release** from a tag: set the title and notes, mark it a **pre-release** or
   **draft**, and publish. Releases show badges (**Latest**, **Pre-release**, **Draft**).
 {{ai}}- **Generate release notes with AI** — draft the notes from the commits and
-  changelog between this tag and the previous one, then edit before publishing.{{/ai}}`,
+  changelog between this tag and the previous one, then edit before publishing.{{/ai}}
+
+## GitLab releases
+
+Point the app at a **GitLab** repo and the **Tags** tab lists its **releases** alongside your
+local tags (release rows carry the **Latest** badge). Open one to read the release **notes**,
+who published it and when, and its **asset links** — click to open them in your browser. The
+release actions work here too: **publish a release** (from an existing tag or a new one
+created from a target branch/commit), **edit** its title and notes, **delete** it (optionally
+deleting the tag), **upload** a file as an asset link, and **delete asset links**. GitLab has
+no draft or pre-release concept and picks the latest release itself, so those GitHub toggles
+don't appear.`,
   },
   {
     id: "actions",
@@ -467,7 +565,8 @@ GitHub releases.
     body: `# GitHub Actions
 
 The **Actions** tab ({{kbd:tab-actions}}, in the More ▾ menu) is a cockpit for your GitHub
-Actions workflow runs (needs \`gh\` + a GitHub remote).
+Actions workflow runs (needs \`gh\` + a GitHub remote). **GitLab pipelines** show here too
+(see below).
 
 - The list shows recent runs with live status, refreshing while any run is active. Filter
   by text or scope to the current branch.
@@ -476,6 +575,16 @@ Actions workflow runs (needs \`gh\` + a GitHub remote).
 - **Run workflow…** manually dispatches a workflow (one with a \`workflow_dispatch\`
   trigger) on a branch you choose, including any **input parameters** it defines.
 - For a failed job, expand **failed-step logs** inline.
+
+## GitLab pipelines
+
+Point the app at a **GitLab** repo and the same tab lists its **pipelines** — newest first,
+filterable, optionally scoped to the current branch — with the header CI badge tracking the
+latest one. Open a pipeline to see its **jobs** (status + durations); expand a job for its
+**log**. The pipeline actions work here too: **Cancel** a running pipeline, **Retry** a
+failed or canceled one (GitLab restarts its failed jobs), and **Run pipeline…** starts a
+fresh pipeline on a branch or tag, with optional **CI/CD variables**. A **manual job** —
+one that waits for a manual trigger — shows a **Run job** button that plays it.
 {{ai}}
 ## Debug with AI
 
@@ -494,19 +603,21 @@ to jump to that run. You can also get an OS **notification** when a run finishes
     body: `# Insights
 
 The **Insights** tab ({{kbd:tab-insights}}, in the More ▾ menu) is a dashboard of
-repository analytics, mixing local Git history with GitHub data.
+repository analytics, mixing local Git history with hosted data (GitHub or GitLab).
 
 - **Repository statistics** — commits, contributors, branch and tag counts, sizes, and a
   language-makeup bar.
 - **Commit activity** — commits per week, and a **code-frequency** chart of additions and
   deletions over time.
 - **Top contributors** and a **punch card** heatmap of commits by day and hour.
-- **Community health** — stars, forks, watchers, and a health percentage.
-- **Actions usage** — recent run duration and success rate.
-- **Traffic** — 14-day views, clones, and top referrers (needs push access).
-- **Dependencies** — what the repo depends on.
-- Quick links jump to the matching GitHub pages (Pulse, Network, Forks, Dependents,
-  Actions) for anything best viewed there.`,
+- **CI usage** — recent run duration and success rate (GitHub workflow runs, or GitLab
+  pipelines).
+- On GitHub: **community health** (stars, forks, watchers, a health percentage),
+  **traffic** (14-day views, clones, and top referrers — needs push access), and
+  **dependencies**.
+- Quick links jump to the pages best viewed on the web — GitHub's Pulse, Network, Forks,
+  Dependents, and Actions, or GitLab's Activity, CI/CD analytics, and value stream
+  analytics.`,
   },
   {
     id: "agent",

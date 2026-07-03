@@ -7,6 +7,8 @@ export interface AppError {
     | "gitNotFound"
     | "ghNotFound"
     | "gh"
+    | "glabNotFound"
+    | "glab"
     | "keyring"
     | "invalidArgument"
     | "command"

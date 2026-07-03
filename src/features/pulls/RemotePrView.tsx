@@ -4,6 +4,7 @@ import {
   CaretDownIcon,
   CheckCircleIcon,
   CircleIcon,
+  ClockCountdownIcon,
   DotsThreeIcon,
   GitBranchIcon,
   GitMergeIcon,
@@ -24,6 +25,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Markdown } from "@/components/ui/markdown";
@@ -46,6 +48,7 @@ import {
   Thread,
 } from "@/features/conversations/Thread";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
+import { AssigneesPopover } from "@/features/issues/IssueMetaPickers";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
@@ -56,31 +59,47 @@ import type {
 } from "@/lib/git/api";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
+  forgeFeatureReady,
+  PIPELINE_IN_FLIGHT,
   prDiffOptions,
+  useApprovePr,
   useCheckoutPr,
   useClosePr,
   useCommentPr,
   useDeletePrComment,
   useEditPr,
   useEditPrComment,
+  useForgeStatus,
+  useGlArmAutoMerge,
+  useGlCancelAutoMerge,
+  useGlMrMergeState,
   useMergePr,
   useMinimizeComment,
+  usePrApprovals,
   usePrDetails,
   usePrDiff,
   usePrReactions,
   useReadyPr,
   useReopenPr,
   useRepoStatus,
+  useRequestChangesPr,
   useReviewPr,
+  useSetPrAssignees,
   useToggleReaction,
+  useUnapprovePr,
   useUnminimizeComment,
 } from "@/lib/git/queries";
+import type { ApprovalState } from "@/lib/git/types";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { PrReviewPanel } from "./PrReviewPanel";
-import { MergePrDialog, PrFilesPane } from "./RemotePrViewParts";
+import {
+  MergePrDialog,
+  MrTimeTracking,
+  PrFilesPane,
+} from "./RemotePrViewParts";
 
 type Section = "conversation" | "commits" | "files" | "review";
 
@@ -128,26 +147,93 @@ export function RemotePrView({
   number: number;
 }) {
   const queryClient = useQueryClient();
+  // The read view is provider-neutral. The remaining GitHub-only mutations (full
+  // reviews, ready-for-review, checkout helpers) route through `gh_*` commands
+  // and stay gated on `canWrite` — "not a known read-only provider" rather than
+  // `=== "github"`, so that while the (separate) forge-status query is still
+  // pending or after it fails, a GitHub PR keeps its write controls exactly as
+  // before — only an explicitly-detected GitLab/Bitbucket repo suppresses them.
+  const forge = useForgeStatus(repoPath);
+  const provider = forge.data?.provider;
+  const canWrite = provider !== "gitlab" && provider !== "bitbucket";
+  const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
+  const prNoun = provider === "gitlab" ? "merge request" : "pull request";
+  // GitLab MR WRITES land per-action (full reviews stay GitHub-only via
+  // `canWrite`). Each shared control is
+  // `canWrite || forgeFeatureReady(...)` so GitHub keeps its controls while a
+  // forge-status query is pending/failed (canWrite default-true) AND a ready GitLab
+  // repo positively enables just these.
+  const canComment = canWrite || forgeFeatureReady(forge.data, "mrComment");
+  const canChangeState = canWrite || forgeFeatureReady(forge.data, "mrState");
+  // Title/body editing is a shared control too.
+  const canEdit = canWrite || forgeFeatureReady(forge.data, "mrEdit");
+  // GitLab's approve/unapprove is a bodyless toggle with no GitHub analogue (GitHub
+  // approves via the Review menu above), so it's GitLab-only and gated on the forge
+  // feature directly — NOT `canWrite || …`, which would duplicate the Review control.
+  const canApprove = forgeFeatureReady(forge.data, "mrApprove");
+  // Request-changes follows the same GitLab-only shape (GitHub's lives in the
+  // Review menu): a one-shot blocking reviewer state, cleared by approving.
+  const canRequestChanges = forgeFeatureReady(forge.data, "mrRequestChanges");
+  // Merge is a SHARED control (GitHub `gh pr merge`, GitLab `glab`), so it uses the
+  // `canWrite || …` gate like comment/close — GitHub keeps it while forge-status is
+  // pending/failed; a ready GitLab repo enables it too.
+  const canMerge = canWrite || forgeFeatureReady(forge.data, "mrMerge");
+  // Auto-merge (merge-when-pipeline-succeeds) is GitLab-only like the approve toggle
+  // (GitHub has no in-app PR auto-merge), so the flag alone gates — never `canWrite || …`.
+  const canAutoMerge = forgeFeatureReady(forge.data, "mrAutoMerge");
+  // Labels are a shared control (both providers) — same `canWrite || …` gate.
+  const canEditLabels = canWrite || forgeFeatureReady(forge.data, "mrLabels");
+  // MR assignees are GitLab-only like the approve toggle (GitHub PRs have no
+  // assignee picker here), so the flag alone gates — never `canWrite || …`.
+  const canEditAssignees = forgeFeatureReady(forge.data, "mrAssignees");
+  // Time tracking is GitLab-only too (GitHub has no built-in time tracking).
+  const canTrackTime = forgeFeatureReady(forge.data, "timeTracking");
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
+  const setAssignees = useSetPrAssignees(repoPath);
   const comment = useCommentPr(repoPath);
   const checkout = useCheckoutPr(repoPath);
   const repoStatus = useRepoStatus(repoPath);
   const mergePr = useMergePr(repoPath);
   const closePr = useClosePr(repoPath);
   const reopenPr = useReopenPr(repoPath);
+  // Approval + reviewer state drives the GitLab-only approve toggle and
+  // Request-changes control; only fetched for a ready GitLab repo with an open MR
+  // (null disables the read for GitHub / closed MRs).
+  const approvals = usePrApprovals(
+    repoPath,
+    (canApprove || canRequestChanges) && details.data?.state === "OPEN"
+      ? number
+      : null,
+  );
+  const approvePr = useApprovePr(repoPath);
+  const unapprovePr = useUnapprovePr(repoPath);
+  const requestChangesPr = useRequestChangesPr(repoPath);
+  // Auto-merge state (GitLab-only): read only for a ready GitLab repo with an open
+  // MR (null disables the read for GitHub / closed MRs). It polls server-side so the
+  // view notices the pipeline completing and the auto-merge firing.
+  const mergeState = useGlMrMergeState(
+    repoPath,
+    canAutoMerge && details.data?.state === "OPEN" ? number : null,
+  );
+  const armAutoMerge = useGlArmAutoMerge(repoPath);
+  const cancelAutoMerge = useGlCancelAutoMerge(repoPath);
   const editComment = useEditPrComment(repoPath);
   const deleteComment = useDeletePrComment(repoPath);
   const minimizeComment = useMinimizeComment(repoPath);
   const unminimizeComment = useUnminimizeComment(repoPath);
   const readyPr = useReadyPr(repoPath);
   const editPr = useEditPr(repoPath);
-  const reactions = usePrReactions(repoPath, number);
+  // Reactions are a shared control (GitLab awards emoji); the fetch is gated so
+  // it never fires for a provider whose reactions aren't wired (Bitbucket).
+  const canReact = canWrite || forgeFeatureReady(forge.data, "mrReactions");
+  const reactions = usePrReactions(repoPath, canReact ? number : null);
   const toggleReactionMutation = useToggleReaction(
     repoPath,
     ["repo", repoPath, "pr", number, "reactions"] as const,
     details.data?.id ?? "",
+    { target: "mr", number },
   );
   const [section, setSection] = useState<Section>("conversation");
   const pendingPrSection = useUiStore((s) => s.pendingPrSection);
@@ -174,6 +260,9 @@ export function RemotePrView({
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeStrategy, setMergeStrategy] = useState<MergeStrategy>("merge");
   const [deleteBranch, setDeleteBranch] = useState(false);
+  // Whether the open merge dialog is arming auto-merge (vs merging now) — set by
+  // the dropdown item that opened it, read by confirmMerge + the dialog copy.
+  const [mergeAuto, setMergeAuto] = useState(false);
   const edit = useEditTitleBody({
     onSave: async ({ title, body }) => {
       await editPr.mutateAsync({ number, title, body });
@@ -205,6 +294,75 @@ export function RemotePrView({
     );
   }
 
+  // GitLab approve/unapprove — a single toggle keyed on whether the viewer has
+  // approved. `user_can_approve` is unreliable on Free (false even when approving
+  // works), so we don't pre-disable; a genuine permission error surfaces via toast.
+  // The status lives in a *separate* glab query, so we flip it OPTIMISTICALLY here:
+  // otherwise the label lags a click by a full approve-POST + approvals-refetch and
+  // looks broken. The success invalidation reconciles the real count; errors roll back.
+  function toggleApproval() {
+    const approved = approvals.data?.viewerHasApproved ?? false;
+    const action = approved ? unapprovePr : approvePr;
+    const key = ["repo", repoPath, "pr", number, "approvals"] as const;
+    const prev = queryClient.getQueryData<ApprovalState>(key);
+    const login = forge.data?.login ?? "";
+    if (prev) {
+      queryClient.setQueryData<ApprovalState>(key, {
+        ...prev,
+        viewerHasApproved: !approved,
+        approvedBy: approved
+          ? prev.approvedBy.filter((u) => u !== login)
+          : login && !prev.approvedBy.includes(login)
+            ? [...prev.approvedBy, login]
+            : prev.approvedBy,
+        // Approving clears a requested-changes reviewer state server-side
+        // (validated live); unapproving doesn't restore it.
+        viewerRequestedChanges: approved ? prev.viewerRequestedChanges : false,
+      });
+    }
+    action.mutate(number, {
+      onSuccess: () =>
+        toast.success(
+          approved ? "Approval revoked" : `Approved this ${prNoun}`,
+        ),
+      onError: (e) => {
+        if (prev) queryClient.setQueryData(key, prev);
+        onError(e);
+      },
+    });
+  }
+
+  // Request changes — one-shot (the direct undo is Premium-only on GitLab;
+  // approving, which clears the state, is the natural Free-tier exit). Same
+  // optimistic flip as the approve toggle: the state lives in the separate
+  // approvals query, so waiting on the write + refetch would look broken.
+  function requestChanges() {
+    // Already requested: the button is a focusable state indicator (its title
+    // says how to clear); a re-click must not fire the Premium-only undo path.
+    if (approvals.data?.viewerRequestedChanges) return;
+    const key = ["repo", repoPath, "pr", number, "approvals"] as const;
+    const prev = queryClient.getQueryData<ApprovalState>(key);
+    if (prev) {
+      queryClient.setQueryData<ApprovalState>(key, {
+        ...prev,
+        viewerRequestedChanges: true,
+      });
+    }
+    requestChangesPr.mutate(
+      { number, body: composeBody.trim() },
+      {
+        onSuccess: () => {
+          toast.success("Requested changes");
+          setComposeBody("");
+        },
+        onError: (e) => {
+          if (prev) queryClient.setQueryData(key, prev);
+          onError(e);
+        },
+      },
+    );
+  }
+
   function submitComment() {
     if (!composeBody.trim()) return;
     comment.mutate(
@@ -220,8 +378,35 @@ export function RemotePrView({
   }
 
   function confirmMerge() {
+    // GitLab stale-view guard: the head sha the user is looking at (the same oid
+    // the AI-review path uses). GitLab 409s if the head moved; GitHub ignores it.
+    const sha = pr?.commits.at(-1)?.oid;
+    if (mergeAuto) {
+      // Arm merge-when-pipeline-succeeds instead of merging now (GitLab-only).
+      armAutoMerge.mutate(
+        { number, strategy: mergeStrategy, deleteBranch, sha },
+        {
+          onSuccess: () => {
+            setMergeOpen(false);
+            toast.success(
+              "Auto-merge enabled — merges when the pipeline passes",
+            );
+          },
+          onError: (e) => {
+            onError(e);
+            setMergeOpen(false);
+          },
+        },
+      );
+      return;
+    }
     mergePr.mutate(
-      { number, strategy: mergeStrategy, deleteBranch },
+      {
+        number,
+        strategy: mergeStrategy,
+        deleteBranch,
+        sha,
+      },
       {
         onSuccess: () => {
           toast.success(`Merged #${number}`);
@@ -254,6 +439,31 @@ export function RemotePrView({
       ? selectedPath
       : (pr?.files[0]?.path ?? null);
 
+  // GitLab's merge sends a stale-view `sha` guard sourced from the MR's head commit
+  // (`pr.commits.at(-1)`). If the best-effort commits read failed, that's absent and
+  // we can't guard — so for GitLab we disable Merge rather than merge unguarded on an
+  // irreversible op; reloading refetches the head. (GitHub has no guard, so it's exempt.)
+  const mergeGuardMissing = provider === "gitlab" && pr?.commits.length === 0;
+
+  // Auto-merge derived state (GitLab-only). The arm affordance shows only while the
+  // head pipeline is in flight; the footer indicator shows once armed. Both classify
+  // the pipeline status against the same shared in-flight set as the poll.
+  const pipelineInFlight = (PIPELINE_IN_FLIGHT as readonly string[]).includes(
+    mergeState.data?.pipelineStatus ?? "",
+  );
+  const autoMergeArmed = mergeState.data?.autoMergeEnabled ?? false;
+
+  // Approval display (GitLab-only): a quiet count shown only when there's something
+  // to report — someone has approved, or a Premium project requires N approvals.
+  const approval = approvals.data;
+  const approvalNote =
+    approval &&
+    (approval.approvalsRequired > 0 || approval.approvedBy.length > 0)
+      ? approval.approvalsRequired > 0
+        ? `${approval.approvedBy.length} of ${approval.approvalsRequired} approvals`
+        : `${approval.approvedBy.length} approval${approval.approvedBy.length === 1 ? "" : "s"}`
+      : null;
+
   if (details.isPending) {
     return (
       <div className="space-y-3 p-4">
@@ -285,6 +495,11 @@ export function RemotePrView({
     mergePr.isPending ||
     closePr.isPending ||
     reopenPr.isPending ||
+    approvePr.isPending ||
+    unapprovePr.isPending ||
+    requestChangesPr.isPending ||
+    armAutoMerge.isPending ||
+    cancelAutoMerge.isPending ||
     readyPr.isPending;
 
   function saveCommentEdit(commentId: string, body: string) {
@@ -327,6 +542,7 @@ export function RemotePrView({
           </h2>
           <span className="flex-1" />
           {isOpen &&
+            canWrite &&
             (repoStatus.data?.branch?.name === pr.headRefName ? (
               <Button
                 variant="outline"
@@ -359,7 +575,7 @@ export function RemotePrView({
                 Checkout
               </Button>
             ))}
-          {isOpen && (
+          {isOpen && canEdit && (
             <Button
               variant="outline"
               size="xs"
@@ -374,11 +590,11 @@ export function RemotePrView({
             variant="outline"
             size="xs"
             onClick={() => openUrl(pr.url)}
-            title="Open this pull request on GitHub"
+            title={`Open this ${prNoun} on ${remoteLabel}`}
             className="cursor-pointer"
           >
             <ArrowSquareOutIcon data-icon="inline-start" />
-            GitHub
+            {remoteLabel}
           </Button>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -394,10 +610,12 @@ export function RemotePrView({
           <span className="text-success">+{pr.additions}</span>
           <span className="text-destructive">-{pr.deletions}</span>
         </div>
-        {isOpen ? (
+        {isOpen && canEditLabels ? (
           <LabelsPopover
             repoPath={repoPath}
             enabled
+            number={number}
+            target="mr"
             labelableId={pr.id}
             labels={pr.labels}
           />
@@ -409,6 +627,42 @@ export function RemotePrView({
               ))}
             </div>
           )
+        )}
+        {/* GitLab-only assignee picker (same affordance as the issue sidebar);
+            a closed/merged MR falls back to read-only chips like the labels row.
+            GitHub PRs carry no assignees, so they show nothing here, as before. */}
+        {isOpen && canEditAssignees ? (
+          <AssigneesPopover
+            repoPath={repoPath}
+            enabled
+            value={pr.assignees}
+            commitOnClose
+            onChange={(next) =>
+              setAssignees.mutate(
+                { number, assignees: next },
+                { onError: toastError },
+              )
+            }
+          />
+        ) : (
+          pr.assignees.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {pr.assignees.map((login) => (
+                <span
+                  key={login}
+                  className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                >
+                  @{login}
+                </span>
+              ))}
+            </div>
+          )
+        )}
+        {/* GitLab-only time-tracking summary (clock + est/spent); a popover with
+            the estimate/add-spent controls while the MR is open, static once
+            closed. GitHub never mounts it (gated on the flag). */}
+        {canTrackTime && (
+          <MrTimeTracking repoPath={repoPath} number={number} open={isOpen} />
         )}
         {pr.checks.length > 0 && (
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
@@ -428,8 +682,11 @@ export function RemotePrView({
           </div>
         )}
         <div className="flex gap-1 pt-1">
+          {/* The AI Review tab needs only the diff (forge-neutral) and a way to
+              post the result as a comment — so it follows canComment, which
+              covers GitLab MRs too (canWrite implies canComment for GitHub). */}
           {(
-            (aiEnabled
+            (aiEnabled && canComment
               ? ["conversation", "commits", "files", "review"]
               : ["conversation", "commits", "files"]) as Section[]
           ).map((s) => (
@@ -452,7 +709,7 @@ export function RemotePrView({
         </div>
       </header>
 
-      {aiEnabled && section === "review" && (
+      {aiEnabled && canComment && section === "review" && (
         <PrReviewPanel
           prKind="remote"
           prRef={String(number)}
@@ -531,7 +788,7 @@ export function RemotePrView({
                       >
                         Copy markdown
                       </DropdownMenuItem>
-                      {isOpen && (
+                      {isOpen && canEdit && (
                         <DropdownMenuItem
                           onClick={() =>
                             edit.openEdit({ title: pr.title, body: pr.body })
@@ -543,12 +800,14 @@ export function RemotePrView({
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
-                <ReactionBar
-                  reactions={reactions.data?.body ?? []}
-                  onToggle={(content, active) =>
-                    toggleReaction(pr.id, content, active)
-                  }
-                />
+                {canReact && (
+                  <ReactionBar
+                    reactions={reactions.data?.body ?? []}
+                    onToggle={(content, active) =>
+                      toggleReaction(pr.id, content, active)
+                    }
+                  />
+                )}
               </div>
               {/* Events with nothing visible to say (empty body, or only an
                   unfilled-template HTML comment) render as a bare author
@@ -562,7 +821,7 @@ export function RemotePrView({
                     key={`${r.author}-${r.date}`}
                     thread={r}
                     onQuote={
-                      hasVisibleBody(r.body)
+                      canWrite && hasVisibleBody(r.body)
                         ? () => quoteReply(r.body)
                         : undefined
                     }
@@ -574,28 +833,35 @@ export function RemotePrView({
                   <Thread
                     key={c.id}
                     thread={c}
-                    onQuote={() => quoteReply(c.body)}
+                    onQuote={canWrite ? () => quoteReply(c.body) : undefined}
                     onSaveEdit={
-                      c.viewerDidAuthor
+                      canWrite && c.viewerDidAuthor
                         ? (body) => saveCommentEdit(c.id, body)
                         : undefined
                     }
                     onDelete={
-                      c.viewerDidAuthor
+                      canWrite && c.viewerDidAuthor
                         ? () => setDeletingCommentId(c.id)
                         : undefined
                     }
                     onHide={
-                      c.isMinimized
-                        ? undefined
-                        : (classifier) => hideComment(c.id, classifier)
+                      canWrite && !c.isMinimized
+                        ? (classifier) => hideComment(c.id, classifier)
+                        : undefined
                     }
                     onUnhide={
-                      c.isMinimized ? () => unhideComment(c.id) : undefined
+                      canWrite && c.isMinimized
+                        ? () => unhideComment(c.id)
+                        : undefined
                     }
-                    reactions={reactions.data?.comments[c.id]}
-                    onToggleReaction={(content, active) =>
-                      toggleReaction(c.id, content, active)
+                    reactions={
+                      canReact ? reactions.data?.comments[c.id] : undefined
+                    }
+                    onToggleReaction={
+                      canReact
+                        ? (content, active) =>
+                            toggleReaction(c.id, content, active)
+                        : undefined
                     }
                   />
                 ))}
@@ -607,77 +873,157 @@ export function RemotePrView({
             </div>
           </ScrollArea>
           {/* Shown for closed/merged PRs too — GitHub lets you comment (and
-              quote-reply) after a PR closes; only reviews are open-only. */}
-          <div className="space-y-2 border-t p-3">
-            <MarkdownEditor
-              ref={composerRef}
-              aria-label="Leave a comment"
-              placeholder="Leave a comment…"
-              value={composeBody}
-              onChange={setComposeBody}
-              onKeyDown={(e) => {
-                if (
-                  (e.ctrlKey || e.metaKey) &&
-                  e.key === "Enter" &&
-                  composeBody.trim() &&
-                  !busy
-                ) {
-                  e.preventDefault();
-                  submitComment();
-                }
-              }}
-              rows={2}
-              textareaClassName="max-h-32 min-h-12 resize-y"
-            />
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!composeBody.trim() || busy}
-                onClick={submitComment}
-                title="Ctrl+Enter"
-              >
-                Comment
-              </Button>
-              {isOpen && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button variant="outline" size="sm" disabled={busy}>
-                        Review
-                        <CaretDownIcon data-icon="inline-end" />
-                      </Button>
-                    }
-                  />
-                  <DropdownMenuContent className="w-52">
-                    <DropdownMenuItem onClick={() => submitReview("approve")}>
-                      Approve
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => submitReview("comment")}>
-                      Comment
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => submitReview("request_changes")}
-                    >
-                      Request changes
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-              {composeBody.trim() && (
+              quote-reply) after a PR closes; only reviews are open-only. On GitLab
+              the composer shows (the first MR writes), but the GitHub-only Review
+              menu stays hidden; Bitbucket has neither, so the bar hides. */}
+          {canComment && (
+            <div className="space-y-2 border-t p-3">
+              <MarkdownEditor
+                ref={composerRef}
+                aria-label="Leave a comment"
+                placeholder="Leave a comment…"
+                value={composeBody}
+                onChange={setComposeBody}
+                onKeyDown={(e) => {
+                  if (
+                    (e.ctrlKey || e.metaKey) &&
+                    e.key === "Enter" &&
+                    composeBody.trim() &&
+                    !busy
+                  ) {
+                    e.preventDefault();
+                    submitComment();
+                  }
+                }}
+                rows={2}
+                textareaClassName="max-h-32 min-h-12 resize-y"
+              />
+              <div className="flex items-center gap-2">
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  className="ml-auto"
-                  disabled={busy}
-                  onClick={() => setComposeBody("")}
-                  title="Discard this draft (e.g. a quote reply)"
+                  disabled={!composeBody.trim() || busy}
+                  onClick={submitComment}
+                  title="Ctrl+Enter"
                 >
-                  Clear
+                  Comment
                 </Button>
-              )}
+                {isOpen && canWrite && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button variant="outline" size="sm" disabled={busy}>
+                          Review
+                          <CaretDownIcon data-icon="inline-end" />
+                        </Button>
+                      }
+                    />
+                    <DropdownMenuContent className="w-52">
+                      <DropdownMenuItem onClick={() => submitReview("approve")}>
+                        Approve
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => submitReview("comment")}>
+                        Comment
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => submitReview("request_changes")}
+                      >
+                        Request changes
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                {isOpen && canApprove && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      // On an approvals read-error we can't know the viewer's state,
+                      // so disable rather than present a confident (possibly wrong)
+                      // Approve that would fire the wrong direction on click.
+                      disabled={
+                        busy || approvals.isPending || approvals.isError
+                      }
+                      aria-pressed={approval?.viewerHasApproved ?? false}
+                      onClick={toggleApproval}
+                      title={
+                        approvals.isError
+                          ? "Couldn't load approval state"
+                          : approval?.viewerHasApproved
+                            ? "Revoke your approval"
+                            : `Approve this ${prNoun}`
+                      }
+                      className={cn(
+                        approval?.viewerHasApproved &&
+                          "border-success/40 text-success hover:text-success",
+                      )}
+                    >
+                      <CheckCircleIcon data-icon="inline-start" />
+                      {approval?.viewerHasApproved ? "Approved" : "Approve"}
+                    </Button>
+                    {approvalNote && (
+                      <span
+                        className="text-xs text-muted-foreground"
+                        title={
+                          approval && approval.approvedBy.length > 0
+                            ? `Approved by ${approval.approvedBy.join(", ")}`
+                            : undefined
+                        }
+                      >
+                        {approvalNote}
+                      </span>
+                    )}
+                  </>
+                )}
+                {isOpen && canRequestChanges && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    // One-shot: once requested, the button becomes the state
+                    // indicator (GitLab's direct undo is Premium-only — approve,
+                    // or remove yourself as a reviewer on GitLab, to clear). It
+                    // stays FOCUSABLE in that state (the click no-ops via the
+                    // handler) so keyboard/AT users can still reach the how-to-
+                    // clear title. Same disable-on-unknown posture as the
+                    // approve toggle.
+                    disabled={busy || approvals.isPending || approvals.isError}
+                    aria-pressed={approval?.viewerRequestedChanges ?? false}
+                    onClick={requestChanges}
+                    title={
+                      approvals.isError
+                        ? "Couldn't load review state"
+                        : approval?.viewerRequestedChanges
+                          ? "You've requested changes — approve, or remove yourself as a reviewer on GitLab, to clear"
+                          : composeBody.trim()
+                            ? "Request changes, posting your draft as a comment"
+                            : `Request changes on this ${prNoun} (adds you as a reviewer)`
+                    }
+                    className={cn(
+                      approval?.viewerRequestedChanges &&
+                        "border-warning/40 text-warning",
+                    )}
+                  >
+                    <XCircleIcon data-icon="inline-start" />
+                    {approval?.viewerRequestedChanges
+                      ? "Changes requested"
+                      : "Request changes"}
+                  </Button>
+                )}
+                {composeBody.trim() && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto"
+                    disabled={busy}
+                    onClick={() => setComposeBody("")}
+                    title="Discard this draft (e.g. a quote reply)"
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 
@@ -704,9 +1050,12 @@ export function RemotePrView({
         />
       )}
 
-      {isOpen && (
+      {/* The open-MR footer hosts Close + Merge (GitLab writes too) alongside Ready
+          (GitHub-only) — show it whenever any is available, and gate each control
+          individually. */}
+      {isOpen && (canChangeState || canMerge || canWrite) && (
         <div className="flex items-center gap-2 border-t p-3">
-          {pr.isDraft && (
+          {canWrite && pr.isDraft && (
             <Button
               variant="outline"
               size="sm"
@@ -721,66 +1070,129 @@ export function RemotePrView({
               Ready for review
             </Button>
           )}
+          {/* Auto-merge armed indicator + cancel (GitLab-only) — sits on the left,
+              opposite Close/Merge. Not color-alone: icon + words. */}
+          {canAutoMerge && autoMergeArmed && (
+            <div className="flex items-center gap-2">
+              <span
+                className="flex items-center gap-1 text-xs text-info"
+                title={
+                  mergeState.data?.pipelineStatus
+                    ? `Merges when the pipeline passes — pipeline: ${mergeState.data.pipelineStatus}`
+                    : "Merges when the pipeline passes"
+                }
+              >
+                <ClockCountdownIcon className="size-3.5 shrink-0" />
+                Auto-merge enabled
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  cancelAutoMerge.mutate(number, {
+                    onSuccess: () => toast.success("Auto-merge canceled"),
+                    onError,
+                  })
+                }
+              >
+                Cancel auto-merge
+              </Button>
+            </div>
+          )}
           <span className="flex-1" />
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() =>
-              closePr.mutate(number, {
-                onSuccess: () => toast.success(`Closed #${number}`),
-                onError,
-              })
-            }
-          >
-            Close
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  size="sm"
-                  disabled={busy || pr.isDraft}
-                  title={
-                    pr.isDraft
-                      ? "Mark the PR ready before merging"
-                      : "Merge this pull request"
-                  }
-                >
-                  <GitMergeIcon data-icon="inline-start" />
-                  Merge
-                  <CaretDownIcon data-icon="inline-end" />
-                </Button>
+          {canChangeState && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                closePr.mutate(number, {
+                  onSuccess: () => toast.success(`Closed #${number}`),
+                  onError,
+                })
               }
-            />
-            <DropdownMenuContent align="end" className="w-56">
-              {(["merge", "squash", "rebase"] as const).map((s) => {
-                const blocked = !isMergeMethodAllowed(
-                  rulesConfig,
-                  pr.baseRefName,
-                  s,
-                );
-                return (
-                  <DropdownMenuItem
-                    key={s}
-                    disabled={blocked}
-                    onClick={() => {
-                      setMergeStrategy(s);
-                      setDeleteBranch(false);
-                      setMergeOpen(true);
-                    }}
+            >
+              Close
+            </Button>
+          )}
+          {canMerge && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    size="sm"
+                    disabled={busy || pr.isDraft || mergeGuardMissing}
+                    title={
+                      pr.isDraft
+                        ? `Mark the ${prNoun} ready before merging`
+                        : mergeGuardMissing
+                          ? "Reload to merge — couldn't load the head commit to guard the merge"
+                          : `Merge this ${prNoun}`
+                    }
                   >
-                    {MERGE_LABEL[s]}
-                    {blocked && " — blocked by branch rule"}
-                  </DropdownMenuItem>
-                );
-              })}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                    <GitMergeIcon data-icon="inline-start" />
+                    Merge
+                    <CaretDownIcon data-icon="inline-end" />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="w-56">
+                {/* GitLab has no per-MR rebase-merge (that's the project's merge_method
+                    setting), so it gets only merge + squash. Branch-rule gating is
+                    GitHub branch-protection data, so it never applies to GitLab. */}
+                {(provider === "gitlab"
+                  ? (["merge", "squash"] as const)
+                  : (["merge", "squash", "rebase"] as const)
+                ).map((s) => {
+                  const blocked =
+                    provider !== "gitlab" &&
+                    !isMergeMethodAllowed(rulesConfig, pr.baseRefName, s);
+                  return (
+                    <DropdownMenuItem
+                      key={s}
+                      disabled={blocked}
+                      onClick={() => {
+                        setMergeStrategy(s);
+                        setDeleteBranch(false);
+                        setMergeAuto(false);
+                        setMergeOpen(true);
+                      }}
+                    >
+                      {MERGE_LABEL[s]}
+                      {blocked && " — blocked by branch rule"}
+                    </DropdownMenuItem>
+                  );
+                })}
+                {/* GitLab auto-merge: while the head pipeline is in flight (and not
+                    already armed), offer merge-when-pipeline-succeeds variants that
+                    arm via the same confirm dialog. */}
+                {canAutoMerge && pipelineInFlight && !autoMergeArmed && (
+                  <>
+                    <DropdownMenuSeparator />
+                    {(["merge", "squash"] as const).map((s) => (
+                      <DropdownMenuItem
+                        key={`auto-${s}`}
+                        title="Merges when the running pipeline succeeds"
+                        onClick={() => {
+                          setMergeStrategy(s);
+                          setDeleteBranch(false);
+                          setMergeAuto(true);
+                          setMergeOpen(true);
+                        }}
+                      >
+                        Auto-merge: {MERGE_LABEL[s]}
+                      </DropdownMenuItem>
+                    ))}
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       )}
 
-      {pr.state === "CLOSED" && (
+      {pr.state === "CLOSED" && canChangeState && (
         <div className="flex items-center gap-2 border-t p-3">
           <span className="flex-1" />
           <Button
@@ -804,21 +1216,24 @@ export function RemotePrView({
         open={mergeOpen}
         onClose={() => setMergeOpen(false)}
         number={number}
+        host={remoteLabel}
+        prNoun={prNoun}
         headRefName={pr.headRefName}
         baseRefName={pr.baseRefName}
         strategyLabel={MERGE_LABEL[mergeStrategy]}
         deleteBranch={deleteBranch}
         onDeleteBranchChange={setDeleteBranch}
-        pending={mergePr.isPending}
+        pending={mergeAuto ? armAutoMerge.isPending : mergePr.isPending}
         onConfirm={confirmMerge}
+        auto={mergeAuto}
       />
 
       <EditTitleBodyDialog
         form={edit.form}
         open={edit.open}
         onOpenChange={edit.setOpen}
-        title="Edit pull request"
-        description={`Updates the title and description of #${number} on GitHub.`}
+        title={`Edit ${prNoun}`}
+        description={`Updates the title and description of #${number} on ${remoteLabel}.`}
         contentClassName="sm:max-w-lg"
         bodyTextareaClassName="max-h-72 min-h-24 resize-y font-mono"
       />

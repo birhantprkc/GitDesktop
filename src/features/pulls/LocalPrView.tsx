@@ -6,6 +6,7 @@ import {
   CheckCircleIcon,
   DotsThreeIcon,
   GithubLogoIcon,
+  GitlabLogoIcon,
   GitMergeIcon,
   PencilSimpleIcon,
   TagIcon,
@@ -49,9 +50,10 @@ import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
 import { gitBranchDiff, type MergeStrategy } from "@/lib/git/api";
 import {
+  forgeFeatureReady,
   useBranchDiffFiles,
   useCompareBranches,
-  useGhStatus,
+  useForgeStatus,
   useMergeLocalPr,
 } from "@/lib/git/queries";
 import {
@@ -115,7 +117,7 @@ export function LocalPrView({
   } = useLocalConversation(pr, save);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
-  const ghStatus = useGhStatus(repoPath);
+  const ghStatus = useForgeStatus(repoPath);
   const edit = useEditTitleBody({
     onSave: async ({ title, body }) => {
       if (!pr) return;
@@ -517,15 +519,20 @@ export function LocalPrView({
         <span className="flex-1" />
         {pr.status === "open" && (
           <>
-            {Boolean(ghStatus.data?.repo) && (
+            {forgeFeatureReady(ghStatus.data, "mrCreate") && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setPromoteOpen(true)}
-                title="Push the branch and open this PR on GitHub"
+                title={`Push the branch and open this ${ghStatus.data?.provider === "gitlab" ? "MR on GitLab" : "PR on GitHub"}`}
               >
-                <GithubLogoIcon data-icon="inline-start" />
-                Publish to GitHub
+                {ghStatus.data?.provider === "gitlab" ? (
+                  <GitlabLogoIcon data-icon="inline-start" />
+                ) : (
+                  <GithubLogoIcon data-icon="inline-start" />
+                )}
+                Publish to{" "}
+                {ghStatus.data?.provider === "gitlab" ? "GitLab" : "GitHub"}
               </Button>
             )}
             <Button

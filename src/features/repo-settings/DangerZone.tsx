@@ -1,4 +1,9 @@
-import { type ReactNode, useEffect, useState } from "react";
+import {
+  type ComponentProps,
+  type ReactNode,
+  useEffect,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,16 +26,29 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import {
   useDeleteRepo,
+  useGlRepoSettings,
   useRenameRepo,
+  useRepoAdmin,
   useRepoSettings,
   useSetArchived,
   useSetVisibility,
   useTransferRepo,
 } from "@/lib/git/queries";
-import type { RepoSettings } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 import { InlineConfirm } from "./parts";
 import { ScopeRefreshHint } from "./ScopeRefreshHint";
+
+/** The provider-neutral facts the danger actions need, sourced from whichever
+ *  provider's settings read is active. */
+interface DangerInfo {
+  /** "owner/repo" (GitHub) or the full project path (GitLab) — the confirm phrase. */
+  fullName: string;
+  /** What the rename input starts from (GitHub repo name / GitLab path slug). */
+  currentName: string;
+  archived: boolean;
+  visibility: string;
+}
 
 /** A guarded destructive dialog: the confirm button stays disabled until the
  *  user types the repo's `owner/repo` exactly. */
@@ -122,21 +140,52 @@ function Row({
   );
 }
 
+const OWNER_HINT = "Needs the Owner role on GitLab";
+
+/** A danger-zone trigger whose disabled state still explains itself: the
+ *  vendored Button renders a NATIVE `disabled`, which swallows pointer events
+ *  (so a `title` on the button never shows) — the hint rides a wrapping span. */
+function DangerButton({
+  hint,
+  className,
+  ...props
+}: ComponentProps<typeof Button> & { hint?: string }) {
+  return (
+    <span title={hint} className={cn("inline-flex", className)}>
+      <Button size="sm" {...props} />
+    </span>
+  );
+}
+
 function RenameAction({
   repoPath,
-  repo,
+  info,
+  isGitLab,
 }: {
   repoPath: string;
-  repo: RepoSettings;
+  info: DangerInfo;
+  isGitLab: boolean;
 }) {
   const rename = useRenameRepo(repoPath);
-  const current = repo.fullName.split("/").pop() ?? "";
+  const current = info.currentName;
   const [name, setName] = useState(current);
-  const valid = /^[A-Za-z0-9._-]+$/.test(name.trim());
+  // GitLab paths must start alphanumeric; GitHub allows a leading `.`/`_`/`-`
+  // (".github" is a standard repo name) — the check branches so GitHub keeps
+  // its full grammar.
+  const valid = isGitLab
+    ? /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name.trim())
+    : /^[A-Za-z0-9._-]+$/.test(name.trim());
   const changed = name.trim() !== current;
 
   return (
-    <Row title="Rename repository" desc="Old links and clones keep working.">
+    <Row
+      title={isGitLab ? "Rename project" : "Rename repository"}
+      desc={
+        isGitLab
+          ? "Renames the name and path; old paths redirect."
+          : "Old links and clones keep working."
+      }
+    >
       <div className="flex shrink-0 items-center gap-2">
         <Input
           value={name}
@@ -167,22 +216,29 @@ function RenameAction({
 
 function ArchiveAction({
   repoPath,
-  repo,
+  info,
+  isGitLab,
+  isOwner,
 }: {
   repoPath: string;
-  repo: RepoSettings;
+  info: DangerInfo;
+  isGitLab: boolean;
+  isOwner: boolean;
 }) {
   const setArchived = useSetArchived(repoPath);
   const [confirming, setConfirming] = useState(false);
-  const archived = repo.archived;
+  const archived = info.archived;
+  // Sentence-cased for toasts, lowercase mid-sentence — GitHub copy unchanged.
+  const noun = isGitLab ? "project" : "repository";
+  const nounCap = isGitLab ? "Project" : "Repository";
 
   return (
     <Row
-      title={archived ? "Unarchive repository" : "Archive repository"}
+      title={archived ? `Unarchive ${noun}` : `Archive ${noun}`}
       desc={
         archived
-          ? "Make the repository writable again."
-          : "Make the repository read-only. Reversible."
+          ? `Make the ${noun} writable again.`
+          : `Make the ${noun} read-only. Reversible.`
       }
     >
       {confirming ? (
@@ -196,7 +252,7 @@ function ArchiveAction({
               setArchived.mutate(!archived, {
                 onSuccess: () => {
                   toast.success(
-                    archived ? "Repository unarchived" : "Repository archived",
+                    archived ? `${nounCap} unarchived` : `${nounCap} archived`,
                   );
                   setConfirming(false);
                 },
@@ -206,14 +262,15 @@ function ArchiveAction({
           />
         </div>
       ) : (
-        <Button
+        <DangerButton
           variant="outline"
-          size="sm"
+          disabled={!isOwner}
+          hint={isOwner ? undefined : OWNER_HINT}
           className="shrink-0"
           onClick={() => setConfirming(true)}
         >
           {archived ? "Unarchive" : "Archive"}
-        </Button>
+        </DangerButton>
       )}
     </Row>
   );
@@ -223,43 +280,56 @@ const VISIBILITIES = ["public", "private", "internal"];
 
 function VisibilityAction({
   repoPath,
-  repo,
+  info,
+  isGitLab,
+  isOwner,
 }: {
   repoPath: string;
-  repo: RepoSettings;
+  info: DangerInfo;
+  isGitLab: boolean;
+  isOwner: boolean;
 }) {
   const setVisibility = useSetVisibility(repoPath);
   const [open, setOpen] = useState(false);
-  const [target, setTarget] = useState(repo.visibility || "public");
+  const [target, setTarget] = useState(info.visibility || "public");
 
   return (
     <Row
-      title="Change repository visibility"
-      desc={`Currently ${repo.visibility || "unknown"}.`}
+      title={
+        isGitLab ? "Change project visibility" : "Change repository visibility"
+      }
+      desc={`Currently ${info.visibility || "unknown"}.`}
     >
-      <Button
+      <DangerButton
         variant="outline"
-        size="sm"
+        disabled={!isOwner}
+        hint={isOwner ? undefined : OWNER_HINT}
         onClick={() => {
-          setTarget(repo.visibility || "public");
+          setTarget(info.visibility || "public");
           setOpen(true);
         }}
       >
         Change visibility
-      </Button>
+      </DangerButton>
       <DangerDialog
         open={open}
         onOpenChange={setOpen}
         title="Change visibility"
-        description="Changing visibility erases this repo's stars and watchers. Making it public exposes all code and history; making it private detaches existing forks, unpublishes Pages, and disables push rulesets."
-        confirmPhrase={repo.fullName}
+        description={
+          isGitLab
+            ? "Making a project public exposes all code, issues, and history; making it private hides it from everyone without access and unlinks existing forks."
+            : "Changing visibility erases this repo's stars and watchers. Making it public exposes all code and history; making it private detaches existing forks, unpublishes Pages, and disables push rulesets."
+        }
+        confirmPhrase={info.fullName}
         confirmLabel="Change visibility"
-        disabled={target === repo.visibility}
+        disabled={target === info.visibility}
         pending={setVisibility.isPending}
         onConfirm={() =>
           setVisibility.mutate(target, {
             onSuccess: () => {
-              toast.success(`Repository is now ${target}`);
+              toast.success(
+                `${isGitLab ? "Project" : "Repository"} is now ${target}`,
+              );
               setOpen(false);
             },
             onError: toastError,
@@ -283,7 +353,9 @@ function VisibilityAction({
             </SelectContent>
           </Select>
           <p className="text-[11px] text-muted-foreground">
-            “Internal” requires the organization to belong to an enterprise.
+            {isGitLab
+              ? "“Internal” is limited to self-managed GitLab (gitlab.com disallows it for new projects)."
+              : "“Internal” requires the organization to belong to an enterprise."}
           </p>
         </div>
       </DangerDialog>
@@ -293,10 +365,14 @@ function VisibilityAction({
 
 function TransferAction({
   repoPath,
-  repo,
+  info,
+  isGitLab,
+  isOwner,
 }: {
   repoPath: string;
-  repo: RepoSettings;
+  info: DangerInfo;
+  isGitLab: boolean;
+  isOwner: boolean;
 }) {
   const transfer = useTransferRepo(repoPath);
   const [open, setOpen] = useState(false);
@@ -305,17 +381,30 @@ function TransferAction({
   return (
     <Row
       title="Transfer ownership"
-      desc="Move this repository to another user or organization."
+      desc={
+        isGitLab
+          ? "Move this project to another group or user namespace."
+          : "Move this repository to another user or organization."
+      }
     >
-      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+      <DangerButton
+        variant="outline"
+        disabled={!isOwner}
+        hint={isOwner ? undefined : OWNER_HINT}
+        onClick={() => setOpen(true)}
+      >
         Transfer
-      </Button>
+      </DangerButton>
       <DangerDialog
         open={open}
         onOpenChange={setOpen}
-        title="Transfer repository"
-        description="Transferring moves the repo (and its issues, PRs, stars, and settings) to the new owner. Transferring to a personal account requires them to accept; you'll lose admin access here."
-        confirmPhrase={repo.fullName}
+        title={isGitLab ? "Transfer project" : "Transfer repository"}
+        description={
+          isGitLab
+            ? "Transferring moves the project (and its issues, merge requests, and settings) to the new namespace — a group you own or maintain. The project URL changes; old paths redirect."
+            : "Transferring moves the repo (and its issues, PRs, stars, and settings) to the new owner. Transferring to a personal account requires them to accept; you'll lose admin access here."
+        }
+        confirmPhrase={info.fullName}
         confirmLabel="Transfer"
         disabled={!newOwner.trim()}
         pending={transfer.isPending}
@@ -324,7 +413,9 @@ function TransferAction({
             { newOwner: newOwner.trim(), newName: null },
             {
               onSuccess: () => {
-                toast.success("Transfer requested");
+                toast.success(
+                  isGitLab ? "Project transferred" : "Transfer requested",
+                );
                 setOpen(false);
               },
               onError: toastError,
@@ -334,13 +425,17 @@ function TransferAction({
       >
         <div className="space-y-1.5">
           <Label htmlFor="transfer-owner" className="text-xs">
-            New owner (user or organization)
+            {isGitLab
+              ? "New namespace (group path or username)"
+              : "New owner (user or organization)"}
           </Label>
           <Input
             id="transfer-owner"
             value={newOwner}
             onChange={(e) => setNewOwner(e.target.value)}
-            placeholder="username-or-org"
+            placeholder={
+              isGitLab ? "group/subgroup or username" : "username-or-org"
+            }
             autoComplete="off"
             spellCheck={false}
           />
@@ -352,71 +447,140 @@ function TransferAction({
 
 function DeleteAction({
   repoPath,
-  repo,
+  info,
+  isGitLab,
+  isOwner,
 }: {
   repoPath: string;
-  repo: RepoSettings;
+  info: DangerInfo;
+  isGitLab: boolean;
+  isOwner: boolean;
 }) {
   const del = useDeleteRepo(repoPath);
   const [open, setOpen] = useState(false);
+  const noun = isGitLab ? "project" : "repository";
 
   return (
     <Row
-      title="Delete this repository"
-      desc="Permanently remove the repository on GitHub."
+      title={`Delete this ${noun}`}
+      desc={`Permanently remove the ${noun} on ${isGitLab ? "GitLab" : "GitHub"}.`}
     >
-      <Button variant="destructive" size="sm" onClick={() => setOpen(true)}>
+      <DangerButton
+        variant="destructive"
+        disabled={!isOwner}
+        hint={isOwner ? undefined : OWNER_HINT}
+        onClick={() => setOpen(true)}
+      >
         Delete
-      </Button>
+      </DangerButton>
       <DangerDialog
         open={open}
         onOpenChange={setOpen}
-        title="Delete repository"
-        description="This permanently deletes the GitHub repository — its issues, pull requests, wiki, releases, and settings. Your local clone is left untouched. This cannot be undone."
-        confirmPhrase={repo.fullName}
+        title={`Delete ${noun}`}
+        description={
+          isGitLab
+            ? "This permanently deletes the GitLab project — its issues, merge requests, wiki, releases, and settings. gitlab.com may delay the deletion briefly (the project is scheduled for removal). Your local clone is left untouched."
+            : "This permanently deletes the GitHub repository — its issues, pull requests, wiki, releases, and settings. Your local clone is left untouched. This cannot be undone."
+        }
+        confirmPhrase={info.fullName}
         confirmLabel="Delete forever"
         pending={del.isPending}
         onConfirm={() =>
           del.mutate(undefined, {
             onSuccess: () => {
-              toast.success("Repository deleted on GitHub");
+              toast.success(
+                isGitLab
+                  ? "Project deleted on GitLab"
+                  : "Repository deleted on GitHub",
+              );
               setOpen(false);
             },
             onError: toastError,
           })
         }
       >
-        <ScopeRefreshHint scope="delete_repo" action="Deleting a repository" />
+        {!isGitLab && (
+          <ScopeRefreshHint
+            scope="delete_repo"
+            action="Deleting a repository"
+          />
+        )}
       </DangerDialog>
     </Row>
   );
 }
 
-/** Destructive lifecycle actions, at the bottom of the General tab (where GitHub
- *  puts them). Reuses the already-loaded repo settings. */
+/** Destructive lifecycle actions, at the bottom of the settings rail. Works for
+ *  both providers: the mutations dispatch behind the abstraction, and GitLab's
+ *  Owner-only actions (archive / visibility / transfer / delete) disable with
+ *  an explanation for Maintainers. */
 export function DangerZone({
   repoPath,
   open,
+  provider,
 }: {
   repoPath: string;
   open: boolean;
+  provider: "github" | "gitlab";
 }) {
-  const settings = useRepoSettings(repoPath, open);
-  if (!settings.data) return null;
-  const repo = settings.data;
+  const isGitLab = provider === "gitlab";
+  const gh = useRepoSettings(repoPath, open && !isGitLab);
+  const gl = useGlRepoSettings(repoPath, open && isGitLab);
+  // Owner gating (GitLab): the same probe the menu item used, so it's cached.
+  const admin = useRepoAdmin(repoPath, open && isGitLab);
+
+  const info: DangerInfo | null = isGitLab
+    ? gl.data
+      ? {
+          fullName: gl.data.fullName,
+          currentName: gl.data.path,
+          archived: gl.data.archived,
+          visibility: gl.data.visibility,
+        }
+      : null
+    : gh.data
+      ? {
+          fullName: gh.data.fullName,
+          currentName: gh.data.fullName.split("/").pop() ?? "",
+          archived: gh.data.archived,
+          visibility: gh.data.visibility,
+        }
+      : null;
+  if (!info) return null;
+  const isOwner = !isGitLab || (admin.data?.owner ?? false);
 
   return (
     <div className="space-y-3 rounded-md border border-destructive/40 p-3">
       <h3 className="text-xs font-semibold text-destructive">Danger zone</h3>
-      <RenameAction repoPath={repoPath} repo={repo} />
+      <RenameAction repoPath={repoPath} info={info} isGitLab={isGitLab} />
       <div className="border-t" />
-      <ArchiveAction repoPath={repoPath} repo={repo} />
+      <ArchiveAction
+        repoPath={repoPath}
+        info={info}
+        isGitLab={isGitLab}
+        isOwner={isOwner}
+      />
       <div className="border-t" />
-      <VisibilityAction repoPath={repoPath} repo={repo} />
+      <VisibilityAction
+        repoPath={repoPath}
+        info={info}
+        isGitLab={isGitLab}
+        isOwner={isOwner}
+      />
       <div className="border-t" />
-      <TransferAction repoPath={repoPath} repo={repo} />
+      <TransferAction
+        repoPath={repoPath}
+        info={info}
+        isGitLab={isGitLab}
+        isOwner={isOwner}
+      />
       <div className="border-t" />
-      <DeleteAction repoPath={repoPath} repo={repo} />
+      <DeleteAction
+        repoPath={repoPath}
+        info={info}
+        isGitLab={isGitLab}
+        isOwner={isOwner}
+      />
     </div>
   );
 }

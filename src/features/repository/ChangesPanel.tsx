@@ -26,7 +26,7 @@ import {
   useDefaultBranch,
   useDiscardAll,
   useDiscardPaths,
-  useGhStatus,
+  useForgeStatus,
   useRepoStatus,
   useStage,
   useStashAll,
@@ -154,10 +154,13 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   // branch with commits the default branch doesn't have offers a PR. The
   // comparison only runs while the tree is clean, so the daily loop never
   // pays for it.
-  const gh = useGhStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const gh = useForgeStatus(repoPath);
+  // The empty-state "View on GitHub" suggestion is GitHub-only (a web link).
+  // The "Open pull request" suggestion is gated on proposeCount alone — it routes
+  // to the Compare tab, whose create affordance is provider-aware (GitHub + GitLab).
+  const ghReady =
+    Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
+    gh.data?.provider === "github";
   const defaultBranch = useDefaultBranch(repoPath);
   const branch = status.data?.branch;
   const currentName = branch?.name ?? null;

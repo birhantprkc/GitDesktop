@@ -23,9 +23,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAppForm } from "@/lib/form";
-import { cloneRepo, validateRepo } from "@/lib/git/api";
-import { useGhRepos } from "@/lib/git/queries";
-import type { GhRepo } from "@/lib/git/types";
+import { cloneRepo, forgeClone, validateRepo } from "@/lib/git/api";
+import { useForgeRepos } from "@/lib/git/queries";
+import type { ForgeProvider, ForgeRepo } from "@/lib/git/types";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useAddRecentRepo, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
@@ -45,18 +45,21 @@ function nameFromUrl(url: string): string {
   return last.replace(/\.git$/, "");
 }
 
-type CloneTab = "github" | "url";
+/** GitHub and GitLab list your repos to pick from; URL clones anything by link. */
+type CloneTab = "github" | "gitlab" | "url";
 
 /** A flat, virtualizer-friendly view of the owner-grouped repos. */
-type Row = { kind: "header"; owner: string } | { kind: "repo"; repo: GhRepo };
+type Row =
+  | { kind: "header"; owner: string }
+  | { kind: "repo"; repo: ForgeRepo };
 
 const DEFAULTS = { url: "", destination: "" };
 
 const REPO_LISTBOX_ID = "clone-repo-listbox";
 /** Stable DOM id per repo row, so the filter's aria-activedescendant can point
  *  at the keyboard-highlighted option for screen readers. */
-const repoOptionId = (nameWithOwner: string) =>
-  `clone-repo-${nameWithOwner.replace(/[^\w-]/g, "_")}`;
+const repoOptionId = (fullName: string) =>
+  `clone-repo-${fullName.replace(/[^\w-]/g, "_")}`;
 
 export function CloneRepoDialog({
   open,
@@ -72,24 +75,29 @@ export function CloneRepoDialog({
   // Tab, selection, and filter are UI state; the URL and local path are form
   // fields so submission and its spinner come from the form.
   const [tab, setTab] = useState<CloneTab>("github");
-  const [selected, setSelected] = useState<GhRepo | null>(null);
+  const [selected, setSelected] = useState<ForgeRepo | null>(null);
   const [filter, setFilter] = useState("");
 
-  const repos = useGhRepos(open && tab === "github");
+  // The active provider tab (github/gitlab) drives which account's repos load;
+  // the URL tab loads nothing.
+  const provider: ForgeProvider = tab === "gitlab" ? "gitlab" : "github";
+  const repos = useForgeRepos(provider, open && tab !== "url");
 
   const form = useAppForm({
     defaultValues: DEFAULTS,
     onSubmit: async ({ value }) => {
       const dest = value.destination.trim();
       const cloneUrl =
-        tab === "github" ? (selected?.cloneUrl ?? "") : value.url.trim();
+        tab === "url" ? value.url.trim() : (selected?.cloneUrl ?? "");
       if (!cloneUrl || !dest) return;
       try {
-        const clonedPath = await cloneRepo(
-          cloneUrl,
-          dest,
-          tab === "github" ? selected?.name : undefined,
-        );
+        // GitHub + URL clone via plain git (gh's credential helper covers private
+        // GitHub repos); GitLab routes through glab so its token authenticates a
+        // private repo that git's credential store doesn't know about.
+        const clonedPath =
+          tab === "url"
+            ? await cloneRepo(cloneUrl, dest)
+            : await forgeClone(provider, cloneUrl, dest, selected?.name);
         const info = await validateRepo(clonedPath);
         addRecent.mutate({ path: info.root, name: info.name });
         onOpenChange(false);
@@ -123,7 +131,7 @@ export function CloneRepoDialog({
 
   // Group by owner — the viewer's own repos first, then other owners
   // alphabetically — and flatten to rows for the virtualizer. Each group keeps
-  // the API's newest-push-first order.
+  // the API's order.
   const rows = useMemo<Row[]>(() => {
     const data = repos.data;
     if (!data) return [];
@@ -132,9 +140,9 @@ export function CloneRepoDialog({
       (r) =>
         !q ||
         r.name.toLowerCase().includes(q) ||
-        r.nameWithOwner.toLowerCase().includes(q),
+        r.fullName.toLowerCase().includes(q),
     );
-    const byOwner = new Map<string, GhRepo[]>();
+    const byOwner = new Map<string, ForgeRepo[]>();
     for (const r of matched) {
       const list = byOwner.get(r.owner);
       if (list) list.push(r);
@@ -157,22 +165,17 @@ export function CloneRepoDialog({
     [rows],
   );
 
-  // Drop a selection that the filter has hidden, so the Clone target always
-  // matches what's on screen.
+  // Drop a selection that the filter (or a provider switch) has hidden, so the
+  // Clone target always matches what's on screen.
   useEffect(() => {
-    if (
-      selected &&
-      !repoRows.some((r) => r.nameWithOwner === selected.nameWithOwner)
-    ) {
+    if (selected && !repoRows.some((r) => r.fullName === selected.fullName)) {
       setSelected(null);
     }
   }, [repoRows, selected]);
 
   const onFilterKeyDown = listKeyboardNav({
     items: repoRows,
-    activeIndex: repoRows.findIndex(
-      (r) => r.nameWithOwner === selected?.nameWithOwner,
-    ),
+    activeIndex: repoRows.findIndex((r) => r.fullName === selected?.fullName),
     onActivate: (r) => setSelected(r),
   });
 
@@ -182,10 +185,10 @@ export function CloneRepoDialog({
   }
 
   const finalName =
-    tab === "github" ? (selected?.name ?? "") : nameFromUrl(values.url);
+    tab === "url" ? nameFromUrl(values.url) : (selected?.name ?? "");
   const canClone =
     values.destination.trim().length > 0 &&
-    (tab === "github" ? selected !== null : values.url.trim().length > 0);
+    (tab === "url" ? values.url.trim().length > 0 : selected !== null);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -200,8 +203,8 @@ export function CloneRepoDialog({
           <DialogHeader>
             <DialogTitle>Clone a repository</DialogTitle>
             <DialogDescription>
-              Pick one of your GitHub repositories or paste a URL. Clones over
-              HTTPS or SSH using your system git credentials.
+              Pick one of your GitHub or GitLab repositories, or paste a URL.
+              Clones over HTTPS or SSH using your system git credentials.
             </DialogDescription>
           </DialogHeader>
 
@@ -210,13 +213,16 @@ export function CloneRepoDialog({
               <TabsTrigger value="github" className="flex-1">
                 GitHub
               </TabsTrigger>
+              <TabsTrigger value="gitlab" className="flex-1">
+                GitLab
+              </TabsTrigger>
               <TabsTrigger value="url" className="flex-1">
                 URL
               </TabsTrigger>
             </TabsList>
           </Tabs>
 
-          {tab === "github" ? (
+          {tab !== "url" ? (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Input
@@ -231,7 +237,7 @@ export function CloneRepoDialog({
                   aria-controls={REPO_LISTBOX_ID}
                   aria-autocomplete="list"
                   aria-activedescendant={
-                    selected ? repoOptionId(selected.nameWithOwner) : undefined
+                    selected ? repoOptionId(selected.fullName) : undefined
                   }
                   disabled={!repos.isSuccess}
                   className="h-8 flex-1"
@@ -249,6 +255,7 @@ export function CloneRepoDialog({
               </div>
               <div className="h-72 rounded-none border">
                 <RepoBrowser
+                  provider={provider}
                   repos={repos}
                   rows={rows}
                   selected={selected}
@@ -316,16 +323,18 @@ export function CloneRepoDialog({
 }
 
 function RepoBrowser({
+  provider,
   repos,
   rows,
   selected,
   onSelect,
   onUseUrl,
 }: {
-  repos: ReturnType<typeof useGhRepos>;
+  provider: ForgeProvider;
+  repos: ReturnType<typeof useForgeRepos>;
   rows: Row[];
-  selected: GhRepo | null;
-  onSelect: (repo: GhRepo) => void;
+  selected: ForgeRepo | null;
+  onSelect: (repo: ForgeRepo) => void;
   onUseUrl: () => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -337,12 +346,12 @@ function RepoBrowser({
   });
 
   // Keep the keyboard-selected repo scrolled into view.
-  const selectedKey = selected?.nameWithOwner;
+  const selectedKey = selected?.fullName;
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll when the selection or list changes
   useEffect(() => {
     if (!selectedKey) return;
     const idx = rows.findIndex(
-      (r) => r.kind === "repo" && r.repo.nameWithOwner === selectedKey,
+      (r) => r.kind === "repo" && r.repo.fullName === selectedKey,
     );
     if (idx >= 0) virtualizer.scrollToIndex(idx, { align: "auto" });
   }, [selectedKey, rows]);
@@ -358,18 +367,18 @@ function RepoBrowser({
   }
 
   if (repos.isError) {
-    const notFound =
-      isAppError(repos.error) && repos.error.kind === "ghNotFound";
+    const kind = isAppError(repos.error) ? repos.error.kind : "";
+    const cliMissing = kind === "ghNotFound" || kind === "glabNotFound";
+    const cli = provider === "gitlab" ? "GitLab CLI (glab)" : "GitHub CLI (gh)";
+    const authCmd = provider === "gitlab" ? "glab auth login" : "gh auth login";
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <p className="text-xs font-medium">
-          {notFound
-            ? "GitHub CLI not found"
-            : "Couldn't load your repositories"}
+          {cliMissing ? `${cli} not found` : "Couldn't load your repositories"}
         </p>
         <p className="max-w-xs text-xs text-muted-foreground">
-          {notFound
-            ? "Install the GitHub CLI and run gh auth login to browse your repositories, or clone from a URL instead."
+          {cliMissing
+            ? `Install the ${cli} and run ${authCmd} to browse your repositories, or clone from a URL instead.`
             : errorMessage(repos.error)}
         </p>
         <Button type="button" variant="outline" size="sm" onClick={onUseUrl}>
@@ -419,7 +428,7 @@ function RepoBrowser({
               ) : (
                 <RepoRow
                   repo={row.repo}
-                  active={selected?.nameWithOwner === row.repo.nameWithOwner}
+                  active={selected?.fullName === row.repo.fullName}
                   onSelect={onSelect}
                 />
               )}
@@ -436,9 +445,9 @@ function RepoRow({
   active,
   onSelect,
 }: {
-  repo: GhRepo;
+  repo: ForgeRepo;
   active: boolean;
-  onSelect: (repo: GhRepo) => void;
+  onSelect: (repo: ForgeRepo) => void;
 }) {
   const Icon = repo.private
     ? LockSimpleIcon
@@ -448,11 +457,11 @@ function RepoRow({
   return (
     <button
       type="button"
-      id={repoOptionId(repo.nameWithOwner)}
+      id={repoOptionId(repo.fullName)}
       role="option"
       aria-selected={active}
       onClick={() => onSelect(repo)}
-      title={repo.description ?? repo.nameWithOwner}
+      title={repo.description ?? repo.fullName}
       className={cn(
         "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
         active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",

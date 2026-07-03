@@ -10,7 +10,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { GhNotReady } from "@/features/repository/GhNotReady";
+import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import { cn } from "@/lib/utils";
 
 /** The "New ▾" dropdown's two items (GitHub + local). */
@@ -40,7 +40,7 @@ function rowClass(active: boolean) {
  */
 export function ConversationListPanel<L, R>(props: {
   repoPath: string;
-  /** GhNotReady's `feature` (e.g. "pull requests"). */
+  /** ForgeNotReady's `feature` (e.g. "pull requests"). */
   feature: string;
   // toolbar
   stateFilter: "open" | "closed";
@@ -63,9 +63,11 @@ export function ConversationListPanel<L, R>(props: {
   archivedLocalCount: number;
   showArchived: boolean;
   onToggleArchived: () => void;
-  // remote (GitHub) section
+  // remote (provider) section
   ghPending: boolean;
   ghReady: boolean;
+  /** The provider's display name for the section header (default "GitHub"). */
+  remoteLabel?: string;
   listPending: boolean;
   stateRemote: R[];
   visibleRemote: R[];
@@ -102,6 +104,7 @@ export function ConversationListPanel<L, R>(props: {
     onToggleArchived,
     ghPending,
     ghReady,
+    remoteLabel = "GitHub",
     listPending,
     repoPath,
     feature,
@@ -201,13 +204,15 @@ export function ConversationListPanel<L, R>(props: {
             </button>
           )}
 
-          <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">GitHub</p>
+          <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">
+            {remoteLabel}
+          </p>
           {ghPending ? (
             <div className="space-y-2 p-3">
               <Skeleton className="h-9 w-full" />
             </div>
           ) : !ghReady ? (
-            <GhNotReady repoPath={repoPath} feature={feature} />
+            <ForgeNotReady repoPath={repoPath} feature={feature} />
           ) : listPending ? (
             <div className="space-y-2 p-3">
               {Array.from({ length: remoteSkeletonRows }, (_, i) => (

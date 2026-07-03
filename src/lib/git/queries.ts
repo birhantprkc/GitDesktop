@@ -18,11 +18,19 @@ import {
 import type {
   DiffStatEntry,
   DiscussionDetails,
-  GhStatus,
+  ForgeCapabilities,
+  ForgeImplemented,
+  ForgeProvider,
+  ForgeStatus,
+  GitLabHookInput,
+  GitLabProtectedBranch,
+  GitLabRepoSettingsInput,
+  GitLabTimeStats,
   IssueDetails,
   IssueReactions,
   IssueRelation,
   IssueType,
+  PrDetails,
   Reaction,
   RepoOp,
   RepoRole,
@@ -111,6 +119,18 @@ export function useBranches(repo: string) {
   return useQuery({
     queryKey: repoKeys.branches(repo),
     queryFn: () => api.gitBranches(repo),
+  });
+}
+
+/** Branches that exist on a remote (reflecting the last fetch), for the switcher's
+ *  "Remote" group. `enabled` gates the fetch so it only runs while the menu is
+ *  open, like the divergence/worktree queries. */
+export function useRemoteBranches(repo: string, enabled = true) {
+  return useQuery({
+    queryKey: ["repo", repo, "remote-branches"] as const,
+    queryFn: () => api.gitRemoteBranches(repo),
+    enabled: enabled && Boolean(repo),
+    staleTime: 30_000,
   });
 }
 
@@ -682,13 +702,15 @@ export function usePublishRepo(repo: string) {
   return useRepoMutation(
     repo,
     (args: {
+      provider: "github" | "gitlab";
       name: string;
       isPrivate: boolean;
       description: string;
       homepage: string;
       topics: string[];
     }) =>
-      api.ghPublishRepo(
+      api.forgePublishRepo(
+        args.provider,
         repo,
         args.name,
         args.isPrivate,
@@ -699,6 +721,21 @@ export function usePublishRepo(repo: string) {
   );
 }
 
+/** Which providers this machine can publish to — drives the publish buttons for
+ *  a repo with no hosted remote yet. Honors the cold-start test mode like
+ *  `useForgeStatus` (the probe hits the real CLIs otherwise). */
+export function usePublishTargets(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "publish-targets"] as const,
+    queryFn: COLD_START_NO_GH
+      ? () => Promise.resolve({ github: false, gitlab: false })
+      : () => api.forgePublishTargets(repo),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 export function usePrsForBranch(
   repo: string,
   head: string | null,
@@ -706,7 +743,7 @@ export function usePrsForBranch(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "prs", head ?? ""] as const,
-    queryFn: () => api.ghPrsForBranch(repo, head ?? ""),
+    queryFn: () => api.forgePrsForBranch(repo, head ?? ""),
     enabled: enabled && head !== null,
     staleTime: 30_000,
   });
@@ -719,7 +756,7 @@ export function usePrList(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "pr-list", state] as const,
-    queryFn: () => api.ghPrList(repo, state),
+    queryFn: () => api.forgePrList(repo, state),
     enabled,
     staleTime: 30_000,
   });
@@ -728,7 +765,7 @@ export function usePrList(
 export function useRepoLabels(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "labels"] as const,
-    queryFn: () => api.ghRepoLabels(repo),
+    queryFn: () => api.forgeRepoLabels(repo),
     enabled,
     staleTime: 5 * 60_000,
   });
@@ -740,14 +777,14 @@ export function useRepoLabels(repo: string, enabled: boolean) {
 const prDetailsOptions = (repo: string, number: number) =>
   queryOptions({
     queryKey: ["repo", repo, "pr", number] as const,
-    queryFn: () => api.ghPrView(repo, number),
+    queryFn: () => api.forgePrView(repo, number),
     staleTime: 30_000,
   });
 
 export const prDiffOptions = (repo: string, number: number) =>
   queryOptions({
     queryKey: ["repo", repo, "pr", number, "diff"] as const,
-    queryFn: () => api.ghPrDiff(repo, number),
+    queryFn: () => api.forgePrDiff(repo, number),
     staleTime: 30_000,
   });
 
@@ -788,7 +825,7 @@ export function usePrefetchPr(repo: string) {
 export function usePrReactions(repo: string, number: number | null) {
   return useQuery({
     queryKey: ["repo", repo, "pr", number ?? 0, "reactions"] as const,
-    queryFn: () => api.ghPrReactions(repo, number ?? 0),
+    queryFn: () => api.forgePrReactions(repo, number ?? 0),
     enabled: number !== null,
     staleTime: 30_000,
   });
@@ -801,7 +838,7 @@ export function useIssueList(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "issue-list", state] as const,
-    queryFn: () => api.ghIssueList(repo, state),
+    queryFn: () => api.forgeIssueList(repo, state),
     enabled,
     staleTime: 30_000,
   });
@@ -810,7 +847,7 @@ export function useIssueList(
 const issueDetailsOptions = (repo: string, number: number) =>
   queryOptions({
     queryKey: ["repo", repo, "issue", number] as const,
-    queryFn: () => api.ghIssueView(repo, number),
+    queryFn: () => api.forgeIssueView(repo, number),
     staleTime: 30_000,
   });
 
@@ -845,7 +882,7 @@ export function useCreateIssue(repo: string) {
       milestone: number | null;
       type: string | null;
     }) =>
-      api.ghIssueCreate(
+      api.forgeIssueCreate(
         repo,
         args.title,
         args.body,
@@ -860,7 +897,7 @@ export function useCreateIssue(repo: string) {
 export function useAssignableUsers(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "assignable-users"] as const,
-    queryFn: () => api.ghAssignableUsers(repo),
+    queryFn: () => api.forgeAssignableUsers(repo),
     enabled,
     staleTime: 5 * 60_000,
   });
@@ -869,7 +906,7 @@ export function useAssignableUsers(repo: string, enabled: boolean) {
 export function useMilestones(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "milestones"] as const,
-    queryFn: () => api.ghMilestones(repo),
+    queryFn: () => api.forgeMilestones(repo),
     enabled,
     staleTime: 5 * 60_000,
   });
@@ -913,7 +950,7 @@ export function useSetIssueAssignees(repo: string) {
   return useOptimisticIssueMutation(
     repo,
     (args: { number: number; assignees: string[] }) =>
-      api.ghIssueSetAssignees(repo, args.number, args.assignees),
+      api.forgeIssueSetAssignees(repo, args.number, args.assignees),
     (issue, args) => ({ ...issue, assignees: args.assignees }),
   );
 }
@@ -926,7 +963,7 @@ export function useSetIssueMilestone(repo: string) {
       milestone: number | null;
       /** Title for the optimistic chip (backend takes only the number). */
       title?: string | null;
-    }) => api.ghIssueSetMilestone(repo, args.number, args.milestone),
+    }) => api.forgeIssueSetMilestone(repo, args.number, args.milestone),
     (issue, args) => ({
       ...issue,
       milestone:
@@ -935,6 +972,173 @@ export function useSetIssueMilestone(repo: string) {
           : { number: args.milestone, title: args.title ?? "" },
     }),
   );
+}
+
+/** Toggle an issue's GitLab-only confidential flag, with the optimistic
+ *  cache patch every other issue-field mutation uses. */
+export function useSetIssueConfidential(repo: string) {
+  return useOptimisticIssueMutation(
+    repo,
+    (args: { number: number; confidential: boolean }) =>
+      api.forgeGlIssueSetConfidential(repo, args.number, args.confidential),
+    (issue, args) => ({ ...issue, confidential: args.confidential }),
+  );
+}
+
+/** Set ("YYYY-MM-DD") or clear (null) an issue's GitLab-only due date. */
+export function useSetIssueDueDate(repo: string) {
+  return useOptimisticIssueMutation(
+    repo,
+    (args: { number: number; dueDate: string | null }) =>
+      api.forgeGlIssueSetDueDate(repo, args.number, args.dueDate),
+    (issue, args) => ({ ...issue, dueDate: args.dueDate }),
+  );
+}
+
+// ── GitLab time tracking + related issues ────────────────────────────────────
+
+const issueTimeStatsKey = (repo: string, number: number) =>
+  ["repo", repo, "issue", number, "time-stats"] as const;
+const mrTimeStatsKey = (repo: string, number: number) =>
+  ["repo", repo, "pr", number, "time-stats"] as const;
+
+/** An issue's GitLab time-tracking stats (estimate + spent). Pass `null` when
+ *  the section isn't shown so the read doesn't fire. */
+export function useGlIssueTimeStats(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: issueTimeStatsKey(repo, number ?? 0),
+    queryFn: () => api.forgeGlIssueTimeStats(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/** An MR's GitLab time-tracking stats. Pass `null` when the summary isn't shown. */
+export function useGlMrTimeStats(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: mrTimeStatsKey(repo, number ?? 0),
+    queryFn: () => api.forgeGlMrTimeStats(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/**
+ * A time-tracking write (set-estimate / add-spent) whose response IS the fresh
+ * {@link GitLabTimeStats}: on success we write it straight into the matching
+ * time-stats query key (no refetch needed), then invalidate the issue/MR view
+ * (the time estimate can surface elsewhere). `statsKey` picks the issue vs MR
+ * cache; `viewKey` is the details query to nudge.
+ */
+function useTimeTrackingMutation(
+  repo: string,
+  statsKey: (repo: string, number: number) => readonly unknown[],
+  viewKey: (repo: string, number: number) => readonly unknown[],
+  mutationFn: (args: {
+    number: number;
+    duration: string | null;
+  }) => Promise<GitLabTimeStats>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: (stats, args) => {
+      queryClient.setQueryData<GitLabTimeStats>(
+        statsKey(repo, args.number),
+        stats,
+      );
+      // `exact` — the stats key extends the view key, so a prefix invalidation
+      // would mark the stats we just wrote stale and refetch them for nothing.
+      queryClient.invalidateQueries({
+        queryKey: viewKey(repo, args.number),
+        exact: true,
+      });
+    },
+  });
+}
+
+const issueViewKey = (repo: string, number: number) =>
+  ["repo", repo, "issue", number] as const;
+const mrViewKey = (repo: string, number: number) =>
+  ["repo", repo, "pr", number] as const;
+
+export function useSetIssueTimeEstimate(repo: string) {
+  return useTimeTrackingMutation(
+    repo,
+    issueTimeStatsKey,
+    issueViewKey,
+    (args) => api.forgeGlIssueSetTimeEstimate(repo, args.number, args.duration),
+  );
+}
+
+export function useAddIssueSpentTime(repo: string) {
+  return useTimeTrackingMutation(
+    repo,
+    issueTimeStatsKey,
+    issueViewKey,
+    (args) => api.forgeGlIssueAddSpentTime(repo, args.number, args.duration),
+  );
+}
+
+export function useSetMrTimeEstimate(repo: string) {
+  return useTimeTrackingMutation(repo, mrTimeStatsKey, mrViewKey, (args) =>
+    api.forgeGlMrSetTimeEstimate(repo, args.number, args.duration),
+  );
+}
+
+export function useAddMrSpentTime(repo: string) {
+  return useTimeTrackingMutation(repo, mrTimeStatsKey, mrViewKey, (args) =>
+    api.forgeGlMrAddSpentTime(repo, args.number, args.duration),
+  );
+}
+
+const issueLinksKey = (repo: string, number: number) =>
+  ["repo", repo, "issue", number, "links"] as const;
+
+/** An issue's GitLab related-issue links. Pass `null` when the section isn't
+ *  shown so the read doesn't fire. */
+export function useGlIssueLinks(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: issueLinksKey(repo, number ?? 0),
+    queryFn: () => api.forgeGlIssueLinks(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/** Link this issue to another (relates_to). Links are symmetric server-side, so
+ *  the target's own links list is invalidated too. */
+export function useLinkIssue(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; targetNumber: number }) =>
+      api.forgeGlIssueLink(repo, args.number, args.targetNumber),
+    onSuccess: (_d, args) => {
+      queryClient.invalidateQueries({
+        queryKey: issueLinksKey(repo, args.number),
+      });
+      queryClient.invalidateQueries({
+        queryKey: issueLinksKey(repo, args.targetNumber),
+      });
+    },
+  });
+}
+
+/** Remove a related-issue link by its `linkId`. Invalidates the source's links;
+ *  the other side is refreshed on its next open (its `linkId` differs). */
+export function useUnlinkIssue(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; linkId: string }) =>
+      api.forgeGlIssueUnlink(repo, args.number, args.linkId),
+    onSuccess: (_d, args) =>
+      queryClient.invalidateQueries({
+        queryKey: issueLinksKey(repo, args.number),
+      }),
+  });
 }
 
 export function useIssueTypes(repo: string, enabled: boolean) {
@@ -972,20 +1176,20 @@ export function useLockIssue(repo: string) {
   return useRepoMutation(
     repo,
     (args: { number: number; reason: api.LockReason | null }) =>
-      api.ghIssueLock(repo, args.number, args.reason),
+      api.forgeIssueLock(repo, args.number, args.reason),
   );
 }
 
 export function useUnlockIssue(repo: string) {
   return useRepoMutation(repo, (number: number) =>
-    api.ghIssueUnlock(repo, number),
+    api.forgeIssueUnlock(repo, number),
   );
 }
 
 export function useIssueReactions(repo: string, number: number | null) {
   return useQuery({
     queryKey: ["repo", repo, "issue", number ?? 0, "reactions"] as const,
-    queryFn: () => api.ghIssueReactions(repo, number ?? 0),
+    queryFn: () => api.forgeIssueReactions(repo, number ?? 0),
     enabled: number !== null,
     staleTime: 30_000,
   });
@@ -1021,13 +1225,19 @@ function patchReactionList(
 /**
  * Toggles the viewer's reaction with an optimistic cache update + rollback, so
  * the chip responds instantly instead of waiting on a refetch. `reactionsKey`
- * is the issue/discussion reactions query; `bodyId` is the issue/discussion
- * node id (anything else is a comment id). Works for issues and discussions.
+ * is the reactions query; `bodyId` is the issue/PR/discussion body's id
+ * (anything else is a comment id). `opts` carries the GitLab-side subject
+ * (containing issue/MR — GitHub keys purely on node ids and ignores it);
+ * discussions are GitHub-only, so the default rides the GitHub arm untouched.
  */
 export function useToggleReaction(
   repo: string,
   reactionsKey: QueryKey,
   bodyId: string,
+  opts: { target: api.ReactionTarget; number: number } = {
+    target: "discussion",
+    number: 0,
+  },
 ) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -1037,8 +1247,20 @@ export function useToggleReaction(
       active: boolean;
     }) =>
       args.active
-        ? api.ghRemoveReaction(repo, args.subjectId, args.content)
-        : api.ghAddReaction(repo, args.subjectId, args.content),
+        ? api.forgeRemoveReaction(
+            repo,
+            opts.target,
+            opts.number,
+            args.subjectId,
+            args.content,
+          )
+        : api.forgeAddReaction(
+            repo,
+            opts.target,
+            opts.number,
+            args.subjectId,
+            args.content,
+          ),
     onMutate: async (args) => {
       await queryClient.cancelQueries({ queryKey: reactionsKey });
       const prev = queryClient.getQueryData<IssueReactions>(reactionsKey);
@@ -1268,19 +1490,19 @@ export function useDiscussionReactions(repo: string, number: number | null) {
 
 export function useCommentIssue(repo: string) {
   return useRepoMutation(repo, (args: { number: number; body: string }) =>
-    api.ghIssueComment(repo, args.number, args.body),
+    api.forgeIssueComment(repo, args.number, args.body),
   );
 }
 
 export function useCloseIssue(repo: string) {
   return useRepoMutation(repo, (args: { number: number; reason: string }) =>
-    api.ghIssueClose(repo, args.number, args.reason),
+    api.forgeIssueClose(repo, args.number, args.reason),
   );
 }
 
 export function useReopenIssue(repo: string) {
   return useRepoMutation(repo, (number: number) =>
-    api.ghIssueReopen(repo, number),
+    api.forgeIssueReopen(repo, number),
   );
 }
 
@@ -1288,7 +1510,7 @@ export function useEditIssue(repo: string) {
   return useRepoMutation(
     repo,
     (args: { number: number; title: string; body: string }) =>
-      api.ghIssueEdit(repo, args.number, args.title, args.body),
+      api.forgeIssueEdit(repo, args.number, args.title, args.body),
   );
 }
 
@@ -1296,13 +1518,13 @@ export function useTransferIssue(repo: string) {
   return useRepoMutation(
     repo,
     (args: { number: number; destination: string }) =>
-      api.ghIssueTransfer(repo, args.number, args.destination),
+      api.forgeIssueTransfer(repo, args.number, args.destination),
   );
 }
 
 export function useDeleteIssue(repo: string) {
   return useRepoMutation(repo, (number: number) =>
-    api.ghIssueDelete(repo, number),
+    api.forgeIssueDelete(repo, number),
   );
 }
 
@@ -1394,23 +1616,117 @@ export function useSwitchAccount() {
   });
 }
 
-export function useGhStatus(repo: string) {
+/** The "no hosted integration" status cold-start test mode forces. */
+const NO_FORGE_STATUS: ForgeStatus = {
+  provider: null,
+  installed: false,
+  authenticated: false,
+  login: null,
+  repo: null,
+  host: null,
+  capabilities: {
+    pullRequests: false,
+    draftPrs: false,
+    issues: false,
+    labels: false,
+    milestones: false,
+    reactions: false,
+    discussions: false,
+    stars: false,
+    ci: false,
+    webhooks: false,
+    approvals: false,
+  },
+  implemented: {
+    pullRequests: false,
+    issues: false,
+    ci: false,
+    releases: false,
+    insights: false,
+    repoActions: false,
+    publish: false,
+    issueComment: false,
+    issueState: false,
+    mrComment: false,
+    mrState: false,
+    mrApprove: false,
+    mrMerge: false,
+    mrAutoMerge: false,
+    issueLabels: false,
+    mrLabels: false,
+    issueAssignees: false,
+    issueCreate: false,
+    mrCreate: false,
+    ciRerun: false,
+    ciCancel: false,
+    ciDispatch: false,
+    releaseCreate: false,
+    releaseEdit: false,
+    mrAssignees: false,
+    mrRequestChanges: false,
+    issueEdit: false,
+    mrEdit: false,
+    issueMilestone: false,
+    issueReactions: false,
+    mrReactions: false,
+    issueLock: false,
+    issueTransfer: false,
+    issueDelete: false,
+    issueConfidential: false,
+    issueDueDate: false,
+    repoSettings: false,
+    ciJobPlay: false,
+    timeTracking: false,
+    issueLinks: false,
+  },
+};
+
+/**
+ * Provider-neutral hosted-integration status — the gate every hosted panel reads.
+ * GitHub delegates to the gh-backed probe; GitLab and Bitbucket join as their
+ * impls land.
+ */
+export function useForgeStatus(repo: string) {
   return useQuery({
-    queryKey: ["repo", repo, "gh-status"] as const,
-    // Cold-start test mode can force the "GitHub not connected" empty states.
+    queryKey: ["repo", repo, "forge-status"] as const,
     queryFn: COLD_START_NO_GH
-      ? (): Promise<GhStatus> =>
-          Promise.resolve({
-            installed: false,
-            authenticated: false,
-            login: null,
-            repo: null,
-            host: null,
-          })
-      : () => api.ghStatus(repo),
+      ? (): Promise<ForgeStatus> => Promise.resolve(NO_FORGE_STATUS)
+      : () => api.forgeStatus(repo),
     staleTime: 60_000,
     retry: false,
   });
+}
+
+/** Whether a repo's hosted integration is ready — its tooling is installed, signed
+ *  in, and pointing at a recognized hosted repo. The provider-neutral gate hosted
+ *  panels check before fetching or offering hosted actions, replacing the inline
+ *  `gh.data?.installed && …` duplication. */
+export function forgeReady(status: ForgeStatus | undefined | null): boolean {
+  return Boolean(status?.installed && status?.authenticated && status?.repo);
+}
+
+/** Whether the repo's provider supports a given hosted capability — the gate for
+ *  a control that some platforms lack (GitLab has no Discussions; Bitbucket has no
+ *  labels/milestones/stars/reactions). GitHub is all-true, so this is a no-op gate
+ *  there; it's the seam GitLab/Bitbucket need to hide what they can't do. */
+export function forgeSupports(
+  status: ForgeStatus | undefined | null,
+  capability: keyof ForgeCapabilities,
+): boolean {
+  return Boolean(status?.capabilities[capability]);
+}
+
+/** Whether a specific hosted *feature* is usable for this repo: the integration is
+ *  ready (installed/signed-in/recognized) **and** GitDesktop has actually built
+ *  that feature for this provider. The gate every feature panel checks before
+ *  firing its data calls. GitHub implements everything, so this is exactly
+ *  `forgeReady` there; for a *ready* GitLab/Bitbucket repo it stays false for the
+ *  panels not yet wired up, so they show "coming soon" instead of breaking. */
+export function forgeFeatureReady(
+  status: ForgeStatus | undefined | null,
+  feature: keyof ForgeImplemented,
+): boolean {
+  return forgeReady(status) && Boolean(status?.implemented[feature]);
 }
 
 // ── Git hooks ────────────────────────────────────────────────────────────────
@@ -1460,6 +1776,19 @@ export function useGhRepos(enabled: boolean) {
   return useQuery({
     queryKey: ["gh-repos"] as const,
     queryFn: api.ghListRepos,
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+/** The signed-in user's repositories on a provider (GitHub via gh, GitLab via
+ *  glab), for the clone browser. The provider-neutral successor to
+ *  {@link useGhRepos} on that surface. */
+export function useForgeRepos(provider: ForgeProvider, enabled: boolean) {
+  return useQuery({
+    queryKey: ["forge-repos", provider] as const,
+    queryFn: () => api.forgeListRepos(provider),
     enabled,
     staleTime: 5 * 60_000,
     retry: false,
@@ -1651,6 +1980,12 @@ export function useCheckoutBranch(repo: string) {
   );
 }
 
+export function useCheckoutRemoteBranch(repo: string) {
+  return useRepoMutation(repo, (args: { remote: string; name: string }) =>
+    api.gitCheckoutRemoteBranch(repo, args.remote, args.name),
+  );
+}
+
 export function useCreateBranch(repo: string) {
   return useRepoMutation(
     repo,
@@ -1832,7 +2167,7 @@ export function useRecentCommits(
 export function useReleaseList(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "releases"] as const,
-    queryFn: () => api.ghReleaseList(repo),
+    queryFn: () => api.forgeReleaseList(repo),
     enabled,
     staleTime: 30_000,
     retry: false,
@@ -1842,10 +2177,10 @@ export function useReleaseList(repo: string, enabled: boolean) {
 const releaseDetailsOptions = (repo: string, tag: string) =>
   queryOptions({
     queryKey: ["repo", repo, "release", tag] as const,
-    queryFn: () => api.ghReleaseView(repo, tag),
+    queryFn: () => api.forgeReleaseView(repo, tag),
     staleTime: 30_000,
-    // A plain tag has no release → gh 404s; the detail treats that as "no
-    // release", so don't retry the expected miss.
+    // A plain tag has no release → the provider 404s; the detail treats that as
+    // "no release", so don't retry the expected miss.
     retry: false,
   });
 
@@ -1878,7 +2213,7 @@ export function useCreateRelease(repo: string) {
       draft: boolean;
       latest: boolean;
     }) =>
-      api.ghReleaseCreate(
+      api.forgeReleaseCreate(
         repo,
         args.tag,
         args.title,
@@ -1902,7 +2237,7 @@ export function useEditRelease(repo: string) {
       draft: boolean;
       latest: boolean;
     }) =>
-      api.ghReleaseEdit(
+      api.forgeReleaseEdit(
         repo,
         args.tag,
         args.title,
@@ -1924,19 +2259,19 @@ export function useGithubReleaseNotes(repo: string) {
 
 export function useDeleteRelease(repo: string) {
   return useRepoMutation(repo, (args: { tag: string; cleanupTag: boolean }) =>
-    api.ghReleaseDelete(repo, args.tag, args.cleanupTag),
+    api.forgeReleaseDelete(repo, args.tag, args.cleanupTag),
   );
 }
 
 export function useUploadReleaseAsset(repo: string) {
   return useRepoMutation(repo, (args: { tag: string; filePath: string }) =>
-    api.ghReleaseUploadAsset(repo, args.tag, args.filePath),
+    api.forgeReleaseUploadAsset(repo, args.tag, args.filePath),
   );
 }
 
 export function useDeleteReleaseAsset(repo: string) {
   return useRepoMutation(repo, (args: { tag: string; assetName: string }) =>
-    api.ghReleaseDeleteAsset(repo, args.tag, args.assetName),
+    api.forgeReleaseDeleteAsset(repo, args.tag, args.assetName),
   );
 }
 
@@ -2177,8 +2512,72 @@ export function useReviewPr(repo: string) {
 
 export function useCommentPr(repo: string) {
   return useRepoMutation(repo, (args: { number: number; body: string }) =>
-    api.ghPrComment(repo, args.number, args.body),
+    api.forgePrComment(repo, args.number, args.body),
   );
+}
+
+/** A merge request's approval state — the GitLab-only approve/unapprove toggle's
+ *  driver. Pass `null` when the toggle isn't shown (GitHub, or a closed MR) so the
+ *  read doesn't fire. */
+export function usePrApprovals(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr", number ?? 0, "approvals"] as const,
+    queryFn: () => api.forgePrApprovals(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useApprovePr(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.forgePrApprove(repo, number),
+  );
+}
+
+export function useUnapprovePr(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.forgePrUnapprove(repo, number),
+  );
+}
+
+/** Request changes on an MR with an optional comment (GitLab-only, gated on
+ *  `implemented.mrRequestChanges`). The caller patches the approvals cache
+ *  optimistically, like the approve toggle. */
+export function useRequestChangesPr(repo: string) {
+  return useRepoMutation(repo, (args: { number: number; body: string }) =>
+    api.forgePrRequestChanges(repo, args.number, args.body),
+  );
+}
+
+/**
+ * Set an MR's assignees (GitLab-only, gated on `implemented.mrAssignees`) with
+ * an optimistic patch of the PR-details cache + rollback, mirroring
+ * `useSetIssueAssignees` — the picker's chips update instantly instead of
+ * waiting on the PUT + refetch (glab spawns a process per call).
+ */
+export function useSetPrAssignees(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; assignees: string[] }) =>
+      api.forgeMrSetAssignees(repo, args.number, args.assignees),
+    onMutate: async (args) => {
+      const key = ["repo", repo, "pr", args.number] as const;
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<PrDetails>(key);
+      queryClient.setQueryData<PrDetails>(key, (d) =>
+        d ? { ...d, assignees: args.assignees } : d,
+      );
+      return { prev, key };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: (_d, _e, args) =>
+      queryClient.invalidateQueries({
+        queryKey: ["repo", repo, "pr", args.number],
+      }),
+  });
 }
 
 export function useMergePr(repo: string) {
@@ -2188,17 +2587,94 @@ export function useMergePr(repo: string) {
       number: number;
       strategy: api.MergeStrategy;
       deleteBranch: boolean;
-    }) => api.ghPrMerge(repo, args.number, args.strategy, args.deleteBranch),
+      /** GitLab stale-view guard (the MR head sha); GitHub ignores it. */
+      sha?: string;
+    }) =>
+      api.forgePrMerge(
+        repo,
+        args.number,
+        args.strategy,
+        args.deleteBranch,
+        args.sha,
+      ),
+  );
+}
+
+/** GitLab pipeline statuses that count as "in flight" — the auto-merge affordance
+ *  is only offered while a pipeline hasn't settled, and the merge-state poll runs
+ *  fast while one is running. Both the view and this query classify against it. */
+export const PIPELINE_IN_FLIGHT = [
+  "created",
+  "waiting_for_resource",
+  "preparing",
+  "pending",
+  "running",
+] as const;
+
+/** A GitLab MR's merge/auto-merge state — drives the auto-merge dropdown items
+ *  and the "auto-merge enabled" footer indicator. Pass `null` when auto-merge
+ *  isn't shown (GitHub, or a closed MR) so the read doesn't fire.
+ *
+ *  Polls: the merge fires SERVER-side once the pipeline passes, so the view has
+ *  to notice both the pipeline completing (which un-gates / re-gates the arm
+ *  affordance) and the auto-merge itself — neither emits a client event. Poll
+ *  fast while armed or a pipeline is in flight, slowly otherwise. */
+export function useGlMrMergeState(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr", number ?? 0, "gl-merge-state"] as const,
+    queryFn: () => api.forgeGlMrMergeState(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 5_000,
+    retry: false,
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (!d) return false;
+      return d.autoMergeEnabled ||
+        (PIPELINE_IN_FLIGHT as readonly string[]).includes(d.pipelineStatus)
+        ? 8_000
+        : 30_000;
+    },
+  });
+}
+
+/** Arm auto-merge (merge-when-pipeline-succeeds) on a GitLab MR. Default repo-wide
+ *  invalidation is deliberate: an arm can race into an immediate merge when the
+ *  pipeline just passed, so the whole MR view must refresh. */
+export function useGlArmAutoMerge(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      number: number;
+      strategy: api.MergeStrategy;
+      deleteBranch: boolean;
+      /** Stale-view guard (the MR head sha) — GitLab 409s if the head moved. */
+      sha?: string;
+    }) =>
+      api.forgeGlMrAutoMerge(
+        repo,
+        args.number,
+        args.strategy,
+        args.deleteBranch,
+        args.sha,
+      ),
+  );
+}
+
+export function useGlCancelAutoMerge(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.forgeGlMrCancelAutoMerge(repo, number),
   );
 }
 
 export function useClosePr(repo: string) {
-  return useRepoMutation(repo, (number: number) => api.ghPrClose(repo, number));
+  return useRepoMutation(repo, (number: number) =>
+    api.forgePrClose(repo, number),
+  );
 }
 
 export function useReopenPr(repo: string) {
   return useRepoMutation(repo, (number: number) =>
-    api.ghPrReopen(repo, number),
+    api.forgePrReopen(repo, number),
   );
 }
 
@@ -2243,7 +2719,7 @@ export function useForkRepo(repo: string) {
 export function useRepoStarStatus(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "star-status"] as const,
-    queryFn: () => api.ghRepoStarStatus(repo),
+    queryFn: () => api.forgeRepoStarStatus(repo),
     enabled,
     staleTime: 5 * 60_000,
     retry: false,
@@ -2254,7 +2730,7 @@ export function useSetRepoStar(repo: string) {
   const queryClient = useQueryClient();
   const key = ["repo", repo, "star-status"] as const;
   return useMutation({
-    mutationFn: (starred: boolean) => api.ghRepoSetStar(repo, starred),
+    mutationFn: (starred: boolean) => api.forgeRepoSetStar(repo, starred),
     // Optimistic: flip the cached star state at once, roll back on failure.
     onMutate: async (starred: boolean) => {
       await queryClient.cancelQueries({ queryKey: key });
@@ -2269,10 +2745,12 @@ export function useSetRepoStar(repo: string) {
   });
 }
 
+/** The settings-management probe ({admin, owner}), behind the abstraction —
+ *  GitHub admin, or GitLab Maintainer/Owner. Gates the settings surface. */
 export function useRepoAdmin(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "admin"] as const,
-    queryFn: () => api.ghRepoAdmin(repo),
+    queryFn: () => api.forgeRepoAdmin(repo),
     enabled,
     staleTime: 5 * 60_000,
     retry: false,
@@ -2404,6 +2882,269 @@ export function useUpdateRepoSettings(repo: string) {
     onSuccess: (data) => queryClient.setQueryData(repoSettingsKey(repo), data),
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: repoSettingsKey(repo) }),
+  });
+}
+
+// The GitLab settings surface — its own query (the models are provider-shaped;
+// see GitLabRepoSettings) but the same key family, so lifecycle mutations'
+// invalidations hit both providers' reads.
+const glRepoSettingsKey = (repo: string) =>
+  ["repo", repo, "repo-settings", "gitlab"] as const;
+
+export function useGlRepoSettings(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: glRepoSettingsKey(repo),
+    queryFn: () => api.forgeGlRepoSettings(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useUpdateGlRepoSettings(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: GitLabRepoSettingsInput) =>
+      api.forgeGlRepoSettingsUpdate(repo, input),
+    // The PUT returns the fresh settings — seed the cache, then refetch.
+    onSuccess: (data) =>
+      queryClient.setQueryData(glRepoSettingsKey(repo), data),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glRepoSettingsKey(repo) }),
+  });
+}
+
+// The GitLab settings sub-surfaces: Members, Webhooks, CI/CD variables.
+const glMembersKey = (repo: string) => ["repo", repo, "gl-members"] as const;
+const glHooksKey = (repo: string) => ["repo", repo, "gl-webhooks"] as const;
+const glHookEventsKey = (repo: string, hookId: string) =>
+  ["repo", repo, "gl-webhook-events", hookId] as const;
+const glVariablesKey = (repo: string) =>
+  ["repo", repo, "gl-variables"] as const;
+
+export function useGlMembers(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: glMembersKey(repo),
+    queryFn: () => api.forgeGlMembers(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useGlAddMember(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { username: string; accessLevel: number }) =>
+      api.forgeGlMemberAdd(repo, a.username, a.accessLevel),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glMembersKey(repo) }),
+  });
+}
+
+export function useGlUpdateMember(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { userId: string; accessLevel: number }) =>
+      api.forgeGlMemberUpdate(repo, a.userId, a.accessLevel),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glMembersKey(repo) }),
+  });
+}
+
+export function useGlRemoveMember(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => api.forgeGlMemberRemove(repo, userId),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glMembersKey(repo) }),
+  });
+}
+
+export function useGlHooks(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: glHooksKey(repo),
+    queryFn: () => api.forgeGlHooks(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useGlCreateHook(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: GitLabHookInput) => api.forgeGlHookCreate(repo, input),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glHooksKey(repo) }),
+  });
+}
+
+export function useGlUpdateHook(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { hookId: string; input: GitLabHookInput }) =>
+      api.forgeGlHookUpdate(repo, a.hookId, a.input),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glHooksKey(repo) }),
+  });
+}
+
+export function useGlDeleteHook(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (hookId: string) => api.forgeGlHookDelete(repo, hookId),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glHooksKey(repo) }),
+  });
+}
+
+export function useGlTestHook(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { hookId: string; trigger: string }) =>
+      api.forgeGlHookTest(repo, a.hookId, a.trigger),
+    // A test lands in the delivery log (and can flip alert_status).
+    onSettled: (_d, _e, a) => {
+      queryClient.invalidateQueries({ queryKey: glHooksKey(repo) });
+      queryClient.invalidateQueries({
+        queryKey: glHookEventsKey(repo, a.hookId),
+      });
+    },
+  });
+}
+
+export function useGlHookEvents(repo: string, hookId: string | null) {
+  return useQuery({
+    queryKey: glHookEventsKey(repo, hookId ?? ""),
+    queryFn: () => api.forgeGlHookEvents(repo, hookId ?? ""),
+    enabled: hookId != null,
+    staleTime: 15_000,
+    retry: false,
+  });
+}
+
+export function useGlResendHookEvent(repo: string, hookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (eventId: string) =>
+      api.forgeGlHookResend(repo, hookId, eventId),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: glHookEventsKey(repo, hookId),
+      }),
+  });
+}
+
+export function useGlVariables(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: glVariablesKey(repo),
+    queryFn: () => api.forgeGlVariables(repo),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useGlSetVariable(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: {
+      key: string;
+      value: string;
+      protected: boolean;
+      masked: boolean;
+      create: boolean;
+      scope: string;
+    }) => api.forgeGlVariableSet(repo, a),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glVariablesKey(repo) }),
+  });
+}
+
+export function useGlDeleteVariable(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { key: string; scope: string }) =>
+      api.forgeGlVariableDelete(repo, a.key, a.scope),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: glVariablesKey(repo) }),
+  });
+}
+
+const glProtectedBranchesKey = (repo: string) =>
+  ["repo", repo, "gl-protected-branches"] as const;
+
+export function useGlProtectedBranches(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: glProtectedBranchesKey(repo),
+    queryFn: () => api.forgeGlProtectedBranches(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useGlProtectBranch(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: {
+      name: string;
+      pushAccessLevel: number;
+      mergeAccessLevel: number;
+      allowForcePush: boolean;
+    }) => api.forgeGlProtectedBranchCreate(repo, a),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: glProtectedBranchesKey(repo),
+      }),
+  });
+}
+
+/** Force-push is the only row-editable field; glab spawns a process per call
+ *  (~1s+), so patch the cached row optimistically or the Switch visibly lags
+ *  and snaps back. */
+export function useGlUpdateProtectedBranch(repo: string) {
+  const queryClient = useQueryClient();
+  const key = glProtectedBranchesKey(repo);
+  return useMutation({
+    mutationFn: (a: { name: string; allowForcePush: boolean }) =>
+      api.forgeGlProtectedBranchUpdate(repo, a.name, a.allowForcePush),
+    onMutate: async (a) => {
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<GitLabProtectedBranch[]>(key);
+      queryClient.setQueryData<GitLabProtectedBranch[]>(key, (rows) =>
+        rows?.map((r) =>
+          r.name === a.name ? { ...r, allowForcePush: a.allowForcePush } : r,
+        ),
+      );
+      return { prev };
+    },
+    onError: (_e, _a, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(key, ctx.prev);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
+  });
+}
+
+export function useGlUnprotectBranch(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.forgeGlProtectedBranchDelete(repo, name),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: glProtectedBranchesKey(repo),
+      }),
+  });
+}
+
+/** Project paths the viewer is a member of on this repo's host — the Move
+ *  dialog's destination suggestions (host-correct for self-managed GitLab). */
+export function useGlMemberProjects(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "gl-member-projects"] as const,
+    queryFn: () => api.forgeGlMemberProjects(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
   });
 }
 
@@ -2643,11 +3384,14 @@ export function useApplySecurity(repo: string) {
   });
 }
 
+// Lifecycle mutations dispatch behind the abstraction (GitHub repo / GitLab
+// project). `repoSettingsKey` invalidation prefix-matches the GitLab settings
+// key too, so both providers' reads refresh.
 export function useSetVisibility(repo: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (visibility: string) =>
-      api.ghRepoSetVisibility(repo, visibility),
+      api.forgeRepoSetVisibility(repo, visibility),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: repoSettingsKey(repo) });
       queryClient.invalidateQueries({ queryKey: securityKey(repo) });
@@ -2658,18 +3402,18 @@ export function useSetVisibility(repo: string) {
 export function useTransferRepo(repo: string) {
   return useMutation({
     mutationFn: (a: { newOwner: string; newName: string | null }) =>
-      api.ghRepoTransfer(repo, a.newOwner, a.newName),
+      api.forgeRepoTransfer(repo, a.newOwner, a.newName),
   });
 }
 
 export function useDeleteRepo(repo: string) {
-  return useMutation({ mutationFn: () => api.ghRepoDelete(repo) });
+  return useMutation({ mutationFn: () => api.forgeRepoDelete(repo) });
 }
 
 export function useSetArchived(repo: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (archived: boolean) => api.ghRepoSetArchived(repo, archived),
+    mutationFn: (archived: boolean) => api.forgeRepoSetArchived(repo, archived),
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: repoSettingsKey(repo) }),
   });
@@ -2677,7 +3421,7 @@ export function useSetArchived(repo: string) {
 
 export function useRenameRepo(repo: string) {
   return useMutation({
-    mutationFn: (newName: string) => api.ghRepoRename(repo, newName),
+    mutationFn: (newName: string) => api.forgeRepoRename(repo, newName),
   });
 }
 
@@ -2802,15 +3546,36 @@ export function useEditPr(repo: string) {
   return useRepoMutation(
     repo,
     (args: { number: number; title: string; body: string }) =>
-      api.ghPrEdit(repo, args.number, args.title, args.body),
+      api.forgePrEdit(repo, args.number, args.title, args.body),
   );
 }
 
+/** Add/remove labels on an issue or MR (also used by GitHub-only Discussions).
+ *  GitHub uses the node-id path (`labelableId` + `addIds`/`removeIds`); GitLab uses
+ *  names (`target` + `number` + `addNames`/`removeNames`). The name/target/number
+ *  fields are optional so GitHub-only callers (Discussions) stay byte-identical. */
 export function useEditPrLabels(repo: string) {
   return useRepoMutation(
     repo,
-    (args: { labelableId: string; addIds: string[]; removeIds: string[] }) =>
-      api.ghPrEditLabels(repo, args.labelableId, args.addIds, args.removeIds),
+    (args: {
+      target?: "issue" | "mr";
+      number?: number;
+      labelableId: string;
+      addIds: string[];
+      removeIds: string[];
+      addNames?: string[];
+      removeNames?: string[];
+    }) =>
+      api.forgeEditLabels(
+        repo,
+        args.target ?? "issue",
+        args.number ?? 0,
+        args.labelableId,
+        args.addIds,
+        args.removeIds,
+        args.addNames ?? [],
+        args.removeNames ?? [],
+      ),
   );
 }
 
@@ -2824,7 +3589,7 @@ export function useCreatePr(repo: string) {
       body: string;
       draft: boolean;
     }) =>
-      api.ghPrCreate(
+      api.forgePrCreate(
         repo,
         args.base,
         args.head,

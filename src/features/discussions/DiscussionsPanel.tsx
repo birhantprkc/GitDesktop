@@ -13,11 +13,13 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LabelChip } from "@/features/conversations/Thread";
-import { GhNotReady } from "@/features/repository/GhNotReady";
+import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import {
+  forgeReady,
+  forgeSupports,
   useDiscussionList,
   useDiscussionMeta,
-  useGhStatus,
+  useForgeStatus,
   useHoverPrefetch,
   usePrefetchDiscussion,
 } from "@/lib/git/queries";
@@ -29,15 +31,17 @@ import { cn } from "@/lib/utils";
 import { CreateDiscussionDialog } from "./CreateDiscussionDialog";
 
 export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const gh = useForgeStatus(repoPath);
+  const ghReady = forgeReady(gh.data);
+  // Discussions are a GitHub-only capability (GitLab has none) — gate the query on
+  // it so a ready GitLab repo never fires the gh discussion calls, while the render
+  // still shows the accurate "not available on this host" message below.
+  const supportsDiscussions = forgeSupports(gh.data, "discussions");
   // Avatars resolve on the repo's host (github.com or an Enterprise server).
   const host = gh.data?.host ?? "github.com";
-  const meta = useDiscussionMeta(repoPath, ghReady);
+  const meta = useDiscussionMeta(repoPath, ghReady && supportsDiscussions);
   const enabled = meta.data?.hasDiscussionsEnabled ?? false;
-  const listEnabled = ghReady && enabled;
+  const listEnabled = ghReady && supportsDiscussions && enabled;
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const list = useDiscussionList(repoPath, listEnabled, categoryId);
   const selectedDiscussion = useUiStore((s) => s.selectedDiscussion);
@@ -163,7 +167,11 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
               <Skeleton className="h-9 w-full" />
             </div>
           ) : !ghReady ? (
-            <GhNotReady repoPath={repoPath} feature="discussions" />
+            <ForgeNotReady repoPath={repoPath} feature="discussions" />
+          ) : !forgeSupports(gh.data, "discussions") ? (
+            <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+              Discussions aren't available on this repository's host.
+            </p>
           ) : meta.isPending ? (
             <div className="space-y-2 p-3">
               <Skeleton className="h-9 w-full" />

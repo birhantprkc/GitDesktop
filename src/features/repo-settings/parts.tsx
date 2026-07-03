@@ -1,7 +1,10 @@
-import type { ReactNode } from "react";
+import { CopyIcon } from "@phosphor-icons/react";
+import { Fragment, type ReactNode, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { highlightJson } from "@/features/diff/shiki-highlighter";
+import { copyText } from "@/lib/clipboard";
 import { useActiveGhHost } from "@/lib/git/host";
 import { cn } from "@/lib/utils";
 
@@ -125,5 +128,66 @@ export function InlineConfirm({
         {actLabel}
       </Button>
     </>
+  );
+}
+
+/** A webhook delivery's request/response body: labeled, copyable, highlighted
+ *  as JSON when it looks like JSON and isn't huge (tokenizing a big blob would
+ *  block). Shared by both providers' delivery-debugging views. */
+export function DeliveryPayload({
+  label,
+  body,
+}: {
+  label: string;
+  body: string;
+}) {
+  const trimmed = body.trim();
+  const lines = useMemo(
+    () =>
+      trimmed.length > 0 &&
+      trimmed.length < 50_000 &&
+      (trimmed.startsWith("{") || trimmed.startsWith("["))
+        ? highlightJson(body)
+        : null,
+    [body, trimmed],
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
+        {trimmed.length > 0 && (
+          <button
+            type="button"
+            className="text-muted-foreground transition-colors hover:text-foreground"
+            title={`Copy ${label.toLowerCase()}`}
+            onClick={() => copyText(body, `${label} copied`)}
+          >
+            <CopyIcon className="size-3.5" />
+          </button>
+        )}
+      </div>
+      {trimmed.length > 0 ? (
+        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px]">
+          {lines
+            ? lines.map((line, i) => (
+                <Fragment key={i}>
+                  {i > 0 && "\n"}
+                  {line.map((t, j) => (
+                    <span
+                      key={j}
+                      style={t.color ? { color: t.color } : undefined}
+                    >
+                      {t.content}
+                    </span>
+                  ))}
+                </Fragment>
+              ))
+            : body}
+        </pre>
+      ) : (
+        <p className="mt-1 text-[11px] text-muted-foreground">(empty)</p>
+      )}
+    </div>
   );
 }

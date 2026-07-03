@@ -203,6 +203,10 @@ pub struct IssueDetails {
     pub is_pinned: bool,
     pub locked: bool,
     pub active_lock_reason: Option<String>,
+    /// GitLab-only: the issue is hidden from non-members. Always false on GitHub.
+    pub confidential: bool,
+    /// GitLab-only: "YYYY-MM-DD" or None. GitHub has no issue due dates.
+    pub due_date: Option<String>,
     pub comments: Vec<PrThreadOut>,
     pub labels: Vec<RepoLabel>,
 }
@@ -253,6 +257,8 @@ pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDet
         is_pinned: raw.is_pinned,
         locked: lock.locked,
         active_lock_reason: lock.reason,
+        confidential: false,
+        due_date: None,
         comments: raw
             .comments
             .into_iter()
@@ -634,8 +640,9 @@ pub async fn gh_issue_unlock(repo_path: String, number: u64) -> AppResult<()> {
     Ok(())
 }
 
-/// Reactions for an issue's body + each comment (keyed by comment node id).
-/// Kept separate from `gh_issue_view` so it loads in parallel and adds no
+/// Reactions for an issue's body + each comment, keyed by the comment's id as
+/// the thread carries it (a GraphQL node id here; the GitLab impl keys by note
+/// id). Kept separate from `gh_issue_view` so it loads in parallel and adds no
 /// latency to the conversation — `viewerHasReacted` requires GraphQL, which the
 /// `gh issue view` CLI JSON doesn't expose.
 #[derive(Serialize)]

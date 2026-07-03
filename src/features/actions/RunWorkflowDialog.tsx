@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useForgeStatus } from "@/lib/git/queries";
 import { useRunWorkflow, useWorkflows } from "@/lib/github/actions";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -34,7 +35,12 @@ export function RunWorkflowDialog({
   onOpenChange: (open: boolean) => void;
   defaultRef: string;
 }) {
-  const workflows = useWorkflows(repoPath, open);
+  // GitLab has no per-workflow dispatch — one `.gitlab-ci.yml` per project — so
+  // its form is just ref + variables: the workflow picker hides (and its
+  // GitHub-only `gh workflow list` query never fires), and "inputs" become CI/CD
+  // variables on the new pipeline.
+  const isGitLab = useForgeStatus(repoPath).data?.provider === "gitlab";
+  const workflows = useWorkflows(repoPath, open && !isGitLab);
   const runWorkflow = useRunWorkflow(repoPath);
   const selectRun = useUiStore((s) => s.selectRun);
 
@@ -68,17 +74,21 @@ export function RunWorkflowDialog({
   }, [open, workflow, dispatchable]);
 
   function submit() {
-    if (!workflow || !gitRef.trim()) return;
+    if ((!isGitLab && !workflow) || !gitRef.trim()) return;
     const record: Record<string, string> = {};
     for (const { key, value } of inputs) {
       const k = key.trim();
       if (k) record[k] = value;
     }
     runWorkflow.mutate(
-      { workflow, gitRef: gitRef.trim(), inputs: record },
+      {
+        workflow: isGitLab ? "" : workflow,
+        gitRef: gitRef.trim(),
+        inputs: record,
+      },
       {
         onSuccess: () => {
-          toast.success("Workflow dispatched", {
+          toast.success(isGitLab ? "Pipeline started" : "Workflow dispatched", {
             description:
               "It may take a few seconds to appear in the runs list.",
           });
@@ -91,52 +101,63 @@ export function RunWorkflowDialog({
     );
   }
 
-  const noneDispatchable = !workflows.isPending && dispatchable.length === 0;
+  const noneDispatchable =
+    !isGitLab && !workflows.isPending && dispatchable.length === 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Run workflow</DialogTitle>
+          <DialogTitle>
+            {isGitLab ? "Run pipeline" : "Run workflow"}
+          </DialogTitle>
           <DialogDescription>
-            Manually trigger a workflow that has a{" "}
-            <code className="font-mono">workflow_dispatch</code> trigger, on a
-            branch or tag.
+            {isGitLab ? (
+              "Run a new pipeline on a branch or tag."
+            ) : (
+              <>
+                Manually trigger a workflow that has a{" "}
+                <code className="font-mono">workflow_dispatch</code> trigger, on
+                a branch or tag.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="wf-workflow">Workflow</Label>
-            <Select
-              items={workflowItems}
-              value={workflow}
-              onValueChange={(v) => v && setWorkflow(v)}
-              disabled={dispatchable.length === 0}
-            >
-              <SelectTrigger id="wf-workflow" className="w-full">
-                <SelectValue
-                  placeholder={
-                    workflows.isPending ? "Loading…" : "Select a workflow"
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {dispatchable.map((w) => (
-                  <SelectItem key={w.id} value={String(w.id)}>
-                    {w.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {noneDispatchable && (
-              <p className="text-xs text-muted-foreground">
-                No active workflows found. A workflow needs a{" "}
-                <code className="font-mono">workflow_dispatch</code> trigger to
-                be run manually.
-              </p>
-            )}
-          </div>
+          {!isGitLab && (
+            <div className="space-y-2">
+              <Label htmlFor="wf-workflow">Workflow</Label>
+              <Select
+                items={workflowItems}
+                value={workflow}
+                onValueChange={(v) => v && setWorkflow(v)}
+                disabled={dispatchable.length === 0}
+              >
+                <SelectTrigger id="wf-workflow" className="w-full">
+                  <SelectValue
+                    placeholder={
+                      workflows.isPending ? "Loading…" : "Select a workflow"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {dispatchable.map((w) => (
+                    <SelectItem key={w.id} value={String(w.id)}>
+                      {w.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {noneDispatchable && (
+                <p className="text-xs text-muted-foreground">
+                  No active workflows found. A workflow needs a{" "}
+                  <code className="font-mono">workflow_dispatch</code> trigger
+                  to be run manually.
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="wf-ref">Branch or tag</Label>
@@ -152,7 +173,7 @@ export function RunWorkflowDialog({
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label>
-                Inputs{" "}
+                {isGitLab ? "Variables" : "Inputs"}{" "}
                 <span className="font-normal text-muted-foreground">
                   (optional)
                 </span>
@@ -169,12 +190,14 @@ export function RunWorkflowDialog({
                 }
               >
                 <PlusIcon data-icon="inline-start" />
-                Add input
+                {isGitLab ? "Add variable" : "Add input"}
               </Button>
             </div>
             {inputs.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                Add key/value pairs if the workflow defines inputs.
+                {isGitLab
+                  ? "Add CI/CD variables to pass to the pipeline."
+                  : "Add key/value pairs if the workflow defines inputs."}
               </p>
             ) : (
               <div className="space-y-2">
@@ -231,10 +254,14 @@ export function RunWorkflowDialog({
             Cancel
           </Button>
           <Button
-            disabled={!workflow || !gitRef.trim() || runWorkflow.isPending}
+            disabled={
+              (!isGitLab && !workflow) ||
+              !gitRef.trim() ||
+              runWorkflow.isPending
+            }
             onClick={submit}
           >
-            Run workflow
+            {isGitLab ? "Run pipeline" : "Run workflow"}
           </Button>
         </DialogFooter>
       </DialogContent>

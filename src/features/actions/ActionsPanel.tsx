@@ -5,8 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { GhNotReady } from "@/features/repository/GhNotReady";
-import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
+import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
+import {
+  forgeFeatureReady,
+  useForgeStatus,
+  useRepoStatus,
+} from "@/lib/git/queries";
 import { useWorkflowRuns } from "@/lib/github/actions";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
@@ -17,10 +21,18 @@ import { RunWorkflowDialog } from "./RunWorkflowDialog";
 import { StatusIcon, statusLabel } from "./status";
 
 export function ActionsPanel({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const forge = useForgeStatus(repoPath);
+  // CI reads are provider-neutral (GitHub Actions + GitLab pipelines): a ready
+  // repo lists runs either way. Starting a run is a SHARED write — `canWrite ||
+  // forgeFeatureReady` keeps GitHub's button up while forge-status is pending and
+  // positively enables a ready GitLab repo (which runs a pipeline on a ref rather
+  // than dispatching a workflow — the dialog adapts).
+  const ghReady = forgeFeatureReady(forge.data, "ci");
+  const provider = forge.data?.provider;
+  const isGitLab = provider === "gitlab";
+  const canWrite = provider !== "gitlab" && provider !== "bitbucket";
+  const canDispatch = canWrite || forgeFeatureReady(forge.data, "ciDispatch");
+  const runNoun = isGitLab ? "pipeline" : "workflow";
   const status = useRepoStatus(repoPath);
   const currentBranch = status.data?.branch.name ?? null;
 
@@ -73,35 +85,38 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
         >
           This branch
         </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          className="ml-auto"
-          disabled={!ghReady}
-          title={
-            ghReady
-              ? "Run a workflow"
-              : "Sign in with GitHub CLI to run workflows"
-          }
-          onClick={() => setRunOpen(true)}
-        >
-          <PlayIcon data-icon="inline-start" />
-          Run workflow…
-        </Button>
-        <Button
-          variant="outline"
-          size="icon-sm"
-          aria-label="Refresh runs"
-          disabled={!ghReady || runs.isFetching}
-          title={
-            ghReady ? "Refresh runs" : "Sign in with GitHub CLI to load runs"
-          }
-          onClick={() => runs.refetch()}
-        >
-          <ArrowClockwiseIcon
-            className={cn(runs.isFetching && "animate-spin")}
-          />
-        </Button>
+        <div className="ml-auto flex items-center gap-1">
+          {canDispatch && (
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={!ghReady}
+              title={
+                ghReady
+                  ? `Run a ${runNoun}`
+                  : isGitLab
+                    ? "Sign in with the GitLab CLI (glab) to run pipelines"
+                    : "Sign in with GitHub CLI to run workflows"
+              }
+              onClick={() => setRunOpen(true)}
+            >
+              <PlayIcon data-icon="inline-start" />
+              Run {runNoun}…
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Refresh runs"
+            disabled={!ghReady || runs.isFetching}
+            title={ghReady ? "Refresh runs" : "Connect this repo to load runs"}
+            onClick={() => runs.refetch()}
+          >
+            <ArrowClockwiseIcon
+              className={cn(runs.isFetching && "animate-spin")}
+            />
+          </Button>
+        </div>
       </div>
       <div className="border-b p-2">
         <Input
@@ -115,13 +130,18 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        {gh.isPending ? (
+        {forge.isPending ? (
           <div className="space-y-2 p-3">
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-10 w-full" />
           </div>
         ) : !ghReady ? (
-          <GhNotReady repoPath={repoPath} feature="workflow runs" />
+          <ForgeNotReady
+            repoPath={repoPath}
+            feature={
+              forge.data?.provider === "gitlab" ? "pipelines" : "workflow runs"
+            }
+          />
         ) : runs.isPending ? (
           <div className="space-y-2 p-3">
             <Skeleton className="h-10 w-full" />

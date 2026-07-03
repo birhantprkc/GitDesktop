@@ -186,7 +186,9 @@ export const ACTIONS = [
   },
   {
     id: "view-on-github",
-    label: "View on GitHub",
+    // Registry labels are static (no provider context here) — the action opens
+    // the repo on whichever host it lives on.
+    label: "View on GitHub/GitLab",
     category: "Repository",
     defaultBinding: "mod+shift+g",
   },
@@ -198,7 +200,7 @@ export const ACTIONS = [
   },
   {
     id: "create-issue",
-    label: "Create issue on GitHub",
+    label: "Create issue",
     category: "Repository",
     defaultBinding: null,
   },
@@ -295,6 +297,18 @@ export const ACTIONS = [
   {
     id: "copy-repo-path",
     label: "Copy repository path",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "copy-branch-name",
+    label: "Copy branch name",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
+    id: "copy-head-sha",
+    label: "Copy HEAD SHA",
     category: "Repository",
     defaultBinding: null,
   },

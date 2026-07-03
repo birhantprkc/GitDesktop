@@ -5,7 +5,8 @@ import { ConversationListPanel } from "@/features/conversations/ConversationList
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { IssueStateFilter } from "@/lib/git/api";
 import {
-  useGhStatus,
+  forgeFeatureReady,
+  useForgeStatus,
   useHoverPrefetch,
   useIssueList,
   usePrefetchIssue,
@@ -19,10 +20,21 @@ import { CreateIssueDialog } from "./CreateIssueDialog";
 import { CreateLocalIssueDialog } from "./CreateLocalIssueDialog";
 
 export function IssuesPanel({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const gh = useForgeStatus(repoPath);
+  const provider = gh.data?.provider;
+  const isGitLab = provider === "gitlab";
+  const remoteLabel =
+    provider === "gitlab"
+      ? "GitLab"
+      : provider === "bitbucket"
+        ? "Bitbucket"
+        : "GitHub";
+  // Issue *reads* are provider-neutral (the panel-level `issues` flag); issue
+  // *creation* follows its own per-action write flag — ready GitHub AND GitLab
+  // repos both offer the create dialog (which hides GitHub-only fields per
+  // provider), while a not-ready repo gets a disabled item with the reason.
+  const ghReady = forgeFeatureReady(gh.data, "issues");
+  const canCreateGh = forgeFeatureReady(gh.data, "issueCreate");
   const [stateFilter, setStateFilter] = useState<IssueStateFilter>("open");
   const issueList = useIssueList(repoPath, ghReady, stateFilter);
   const selectedIssue = useUiStore((s) => s.selectedIssue);
@@ -42,28 +54,32 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
   >();
 
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
-  useHotkeyAction("create-issue", () => setCreateOpen(true), ghReady);
+  useHotkeyAction("create-issue", () => setCreateOpen(true), canCreateGh);
 
-  // "Reference in new issue" (from a discussion) seeds + opens the GitHub create.
+  // "Reference in new issue" / "Duplicate issue" seeds + opens the create dialog.
+  // Re-check the gate (like the PR panel): the seeder's own gate can lag this
+  // panel's — never open a create dialog that can't submit.
   useEffect(() => {
     if (pendingIssueDraft) {
-      setIssueDraft(pendingIssueDraft);
-      setCreateOpen(true);
+      if (canCreateGh) {
+        setIssueDraft(pendingIssueDraft);
+        setCreateOpen(true);
+      }
       setPendingIssueDraft(null);
     }
-  }, [pendingIssueDraft, setPendingIssueDraft]);
+  }, [pendingIssueDraft, setPendingIssueDraft, canCreateGh]);
 
   // Opened from the command palette / New menu via requestCreate (works from any
   // tab — RepositoryView switches here first, then this fires).
   useEffect(() => {
     if (pendingCreate === "issue") {
-      setCreateOpen(true);
+      if (canCreateGh) setCreateOpen(true);
       clearPendingCreate();
     } else if (pendingCreate === "local-issue") {
       setCreateLocalOpen(true);
       clearPendingCreate();
     }
-  }, [pendingCreate, clearPendingCreate]);
+  }, [pendingCreate, clearPendingCreate, canCreateGh]);
 
   const {
     filterText,
@@ -110,14 +126,19 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
     <ConversationListPanel
       repoPath={repoPath}
       feature="issues"
+      remoteLabel={remoteLabel}
       stateFilter={stateFilter}
       onStateFilter={setStateFilter}
       newMenu={{
-        ghLabel: "Issue on GitHub…",
-        ghDisabled: !ghReady,
-        ghReason: ghReady
+        ghLabel: isGitLab ? "Issue on GitLab…" : "Issue on GitHub…",
+        ghDisabled: !canCreateGh,
+        ghReason: canCreateGh
           ? undefined
-          : "Connect this repository to GitHub to open an issue.",
+          : isGitLab
+            ? gh.data?.installed
+              ? "Sign in to GitLab (glab auth login) to open issues here."
+              : "Install the GitLab CLI (glab) to open issues here."
+            : "Connect this repository to GitHub to open an issue.",
         onGh: () => setCreateOpen(true),
         localLabel: "Local issue…",
         onLocal: () => setCreateLocalOpen(true),

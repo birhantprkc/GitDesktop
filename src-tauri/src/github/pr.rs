@@ -1252,6 +1252,37 @@ pub struct PrDetails {
     pub comments: Vec<PrThreadOut>,
     pub checks: Vec<PrCheckOut>,
     pub labels: Vec<RepoLabel>,
+    /// Assignee usernames. Only GitLab fills this — the MR-assignees picker is
+    /// GitLab-only (`implemented.mrAssignees`), so the GitHub view doesn't request
+    /// assignees and leaves it empty.
+    pub assignees: Vec<String>,
+}
+
+/// A merge/pull request's approval summary — who has approved and whether the
+/// viewer has. Provider-neutral, but only GitLab produces it today: GitHub
+/// surfaces approval through the review flow (`reviewDecision` + the Review menu),
+/// not a bodyless toggle, so its forge arm errors and the GitLab-only
+/// approve/unapprove control gates on `implemented.mrApprove` (false for GitHub).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalState {
+    /// Whether the signed-in viewer has approved — the toggle's driver (Approve ↔
+    /// Revoke). The reliable signal, unlike GitLab's `user_can_approve`, which it
+    /// reports `false` on the Free tier even when approving succeeds (a Premium
+    /// approval-rules concept), so a genuine permission error surfaces via the
+    /// action's toast instead of pre-disabling the control.
+    pub viewer_has_approved: bool,
+    /// Usernames who have approved, for an "Approved by …" summary.
+    pub approved_by: Vec<String>,
+    /// Required approvals — a Premium approval-rules concept; `0` on Free.
+    pub approvals_required: u32,
+    /// Approvals still needed (`0` on Free).
+    pub approvals_left: u32,
+    /// Whether the signed-in viewer has a "requested changes" reviewer state on
+    /// this MR — the GitLab-only Request-changes control's pressed state. Cleared
+    /// server-side by approving (validated live) or by removing the viewer from
+    /// the reviewers; the direct undo mutation is Premium-only.
+    pub viewer_requested_changes: bool,
 }
 
 const PR_VIEW_FIELDS: &str = "id,number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup,labels";
@@ -1352,6 +1383,7 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
             })
             .collect(),
         labels: raw.labels,
+        assignees: Vec::new(),
     })
 }
 

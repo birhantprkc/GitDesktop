@@ -15,43 +15,82 @@ pub struct RepoOwner {
     /// Owner parsed from the `origin` remote (e.g. "octocat"), or None when
     /// the repo has no origin remote.
     pub owner: Option<String>,
+    /// The origin remote's host (e.g. "github.com", "gitlab.com"), parsed from
+    /// the same URL — lets per-repo UI (the repo list's context menu) name the
+    /// actual provider instead of guessing.
+    pub host: Option<String>,
+    /// The provider that host routes to ("github" / "gitlab" / "bitbucket"),
+    /// including self-managed GitLab hosts glab is signed in to. `None` when
+    /// there's no host or it's unrecognized (the UI labels those GitHub,
+    /// matching the backend's gh-authoritative routing).
+    pub provider: Option<String>,
 }
 
-/// Owner segment of a git remote URL — handles `https://host/owner/repo(.git)`
-/// and scp-style `git@host:owner/repo(.git)`. None if it can't be parsed.
-fn parse_owner(url: &str) -> Option<String> {
+/// Owner segment + host of a git remote URL — handles
+/// `https://host/owner/repo(.git)` and scp-style `git@host:owner/repo(.git)`.
+/// None if it can't be parsed.
+fn parse_owner_host(url: &str) -> (Option<String>, Option<String>) {
     let url = url.trim().trim_end_matches('/');
     let url = url.strip_suffix(".git").unwrap_or(url);
-    // Drop the scheme+host (or scp `user@host:`) to get the `owner/repo` path.
-    let path = if let Some(idx) = url.find("://") {
-        url[idx + 3..].split_once('/').map(|(_, rest)| rest)?
+    // Split into host and the `owner/repo` path (scheme or scp form).
+    let (host, path) = if let Some(idx) = url.find("://") {
+        let rest = &url[idx + 3..];
+        match rest.split_once('/') {
+            Some((h, p)) => (h, p),
+            None => return (None, None),
+        }
     } else if let Some(colon) = url.rfind(':') {
-        &url[colon + 1..]
+        // A Windows drive-path remote (`C:\path\to\repo`, `C:/path/to/repo`)
+        // looks like the scp form to `rfind(':')`, but the text before the colon
+        // is a single drive letter — it has no owner/host. Bail so we don't
+        // persist a bogus host ("c") + owner ("to") onto RecentRepo.
+        let head = &url[..colon];
+        if head.len() == 1 && head.as_bytes()[0].is_ascii_alphabetic() {
+            return (None, None);
+        }
+        let host = head.rsplit('@').next().unwrap_or(head);
+        (host, &url[colon + 1..])
     } else {
-        return None;
+        return (None, None);
     };
+    // Strip credentials and a port from the host.
+    let host = host.rsplit('@').next().unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     // owner is the segment immediately before the repo name.
-    (segs.len() >= 2).then(|| segs[segs.len() - 2].to_string())
+    let owner = (segs.len() >= 2).then(|| segs[segs.len() - 2].to_string());
+    let host = (!host.is_empty()).then_some(host);
+    (owner, host)
 }
 
-/// Resolves the owner for each repo path (from its `origin` remote), batched so
-/// the repo list/switcher can group repos by owner in one round-trip.
+/// Resolves the owner + host + provider for each repo path (from its `origin`
+/// remote), batched so the repo list/switcher can group repos by owner in one
+/// round-trip. The glab known-hosts config is read once for the whole batch.
 #[tauri::command]
 pub async fn git_repo_owners(repo_paths: Vec<String>) -> AppResult<Vec<RepoOwner>> {
+    let glab_hosts = crate::forge::glab::known_hosts().await;
     let mut out = Vec::with_capacity(repo_paths.len());
     for path in repo_paths {
-        let owner = match run_git_raw(
+        let (owner, host) = match run_git_raw(
             Some(&path),
             &["remote", "get-url", "origin"],
             DEFAULT_TIMEOUT,
         )
         .await
         {
-            Ok(res) if res.code == 0 => parse_owner(res.stdout_lossy().trim()),
-            _ => None,
+            Ok(res) if res.code == 0 => parse_owner_host(res.stdout_lossy().trim()),
+            _ => (None, None),
         };
-        out.push(RepoOwner { path, owner });
+        let provider = host
+            .as_deref()
+            .and_then(|h| crate::forge::provider_tag_for_host(h, &glab_hosts))
+            .map(str::to_string);
+        out.push(RepoOwner {
+            path,
+            owner,
+            host,
+            provider,
+        });
     }
     Ok(out)
 }
@@ -106,24 +145,38 @@ pub async fn clone_repo(
     parent_dir: String,
     dir_name: Option<String>,
 ) -> AppResult<String> {
+    clone_repo_core(&url, &parent_dir, dir_name, &[]).await
+}
+
+/// Clone `url` into `parent_dir/<dir_name>` (dir inferred from the URL when not
+/// given), returning the cloned path. `extra_config` are `git -c key=value`
+/// entries prepended before `clone` — e.g. a provider credential helper so a
+/// private repo authenticates (see `forge::forge_clone`).
+pub(crate) async fn clone_repo_core(
+    url: &str,
+    parent_dir: &str,
+    dir_name: Option<String>,
+    extra_config: &[String],
+) -> AppResult<String> {
     if url.starts_with('-') {
         return Err(AppError::InvalidArgument("invalid clone URL".into()));
     }
     let dir_name = match dir_name {
         Some(name) => name,
-        None => default_clone_dir_name(&url)
+        None => default_clone_dir_name(url)
             .ok_or_else(|| AppError::InvalidArgument("could not infer directory from URL".into()))?,
     };
     if dir_name.starts_with('-') || dir_name.contains(['/', '\\']) {
         return Err(AppError::InvalidArgument("invalid directory name".into()));
     }
-    run_git(
-        Some(&parent_dir),
-        &["clone", "--", &url, &dir_name],
-        NETWORK_TIMEOUT,
-    )
-    .await?;
-    let cloned = Path::new(&parent_dir).join(&dir_name);
+    let mut args: Vec<&str> = Vec::new();
+    for c in extra_config {
+        args.push("-c");
+        args.push(c.as_str());
+    }
+    args.extend_from_slice(&["clone", "--", url, dir_name.as_str()]);
+    run_git(Some(parent_dir), &args, NETWORK_TIMEOUT).await?;
+    let cloned = Path::new(parent_dir).join(&dir_name);
     Ok(cloned.to_string_lossy().into_owned())
 }
 
@@ -306,4 +359,41 @@ fn time_year() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     (1970 + secs / 31_557_600).to_string()
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::parse_owner_host;
+
+    #[test]
+    fn parses_owner_and_host_from_common_remote_forms() {
+        assert_eq!(
+            parse_owner_host("https://github.com/octocat/repo.git"),
+            (Some("octocat".into()), Some("github.com".into()))
+        );
+        assert_eq!(
+            parse_owner_host("git@gitlab.com:group/repo.git"),
+            (Some("group".into()), Some("gitlab.com".into()))
+        );
+        // Subgroups: the owner is the segment before the repo name.
+        assert_eq!(
+            parse_owner_host("https://gitlab.com/group/sub/repo"),
+            (Some("sub".into()), Some("gitlab.com".into()))
+        );
+        // Credentials + port strip from the host.
+        assert_eq!(
+            parse_owner_host("https://user@gitlab.acme.com:8443/g/r.git"),
+            (Some("g".into()), Some("gitlab.acme.com".into()))
+        );
+        assert_eq!(parse_owner_host("not-a-url"), (None, None));
+    }
+
+    #[test]
+    fn windows_drive_path_remotes_have_no_owner_or_host() {
+        // A local-path origin (backslash or forward-slash form) must not be
+        // misparsed as scp-style `host:owner/repo`.
+        assert_eq!(parse_owner_host(r"C:\path\to\repo"), (None, None));
+        assert_eq!(parse_owner_host("C:/path/to/repo"), (None, None));
+        assert_eq!(parse_owner_host("c:/x/y"), (None, None));
+    }
 }

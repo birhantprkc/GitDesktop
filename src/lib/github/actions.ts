@@ -79,39 +79,59 @@ const ACTIVE_STATUSES = new Set([
 export const isRunActive = (status: string) => ACTIVE_STATUSES.has(status);
 
 // ── API wrappers ─────────────────────────────────────────────────────────────
+//
+// Reads AND writes go through the provider-neutral `forge_ci_*` commands (GitHub
+// via `gh run …`, GitLab via `glab` pipelines → the same `WorkflowRun`/`RunDetail`
+// shapes; re-run / cancel / dispatch dispatch per provider too). Only the
+// workflow list stays `gh_*` — GitLab has no workflow analogue (one `.gitlab-ci.yml`
+// per project), so its dispatch is ref+variables with no workflow picker.
 
-export const ghRunList = (repoPath: string, limit: number, branch?: string) =>
-  invoke<WorkflowRun[]>("gh_run_list", {
+export const forgeCiRunList = (
+  repoPath: string,
+  limit: number,
+  branch?: string,
+) =>
+  invoke<WorkflowRun[]>("forge_ci_run_list", {
     repoPath,
     limit,
     branch: branch?.trim() || null,
   });
 
-export const ghRunView = (repoPath: string, runId: number) =>
-  invoke<RunDetail>("gh_run_view", { repoPath, runId });
+export const forgeCiRunView = (repoPath: string, runId: number) =>
+  invoke<RunDetail>("forge_ci_run_view", { repoPath, runId });
 
-export const ghRunRerun = (repoPath: string, runId: number, failed: boolean) =>
-  invoke<void>("gh_run_rerun", { repoPath, runId, failed });
+export const forgeCiRunRerun = (
+  repoPath: string,
+  runId: number,
+  failed: boolean,
+) => invoke<void>("forge_ci_run_rerun", { repoPath, runId, failed });
 
-export const ghRunCancel = (repoPath: string, runId: number) =>
-  invoke<void>("gh_run_cancel", { repoPath, runId });
+export const forgeCiRunCancel = (repoPath: string, runId: number) =>
+  invoke<void>("forge_ci_run_cancel", { repoPath, runId });
 
-export const ghRunFailedLogs = (repoPath: string, runId: number) =>
-  invoke<string>("gh_run_failed_logs", { repoPath, runId });
+export const forgeCiRunFailedLogs = (repoPath: string, runId: number) =>
+  invoke<string>("forge_ci_run_failed_logs", { repoPath, runId });
 
 /** One job's failed-step logs (fallback: full job log), for AI debugging. */
-export const ghJobLogs = (repoPath: string, jobId: number) =>
-  invoke<string>("gh_job_logs", { repoPath, jobId });
+export const forgeCiJobLogs = (repoPath: string, jobId: number) =>
+  invoke<string>("forge_ci_job_logs", { repoPath, jobId });
+
+/** Play (start) a manual GitLab CI job awaiting a manual trigger — GitLab-only,
+ *  gated on `implemented.ciJobPlay`; errors on other providers. */
+export const forgeGlCiPlayJob = (repoPath: string, jobId: number) =>
+  invoke<void>("forge_gl_ci_play_job", { repoPath, jobId });
 
 export const ghWorkflowList = (repoPath: string) =>
   invoke<Workflow[]>("gh_workflow_list", { repoPath });
 
-export const ghWorkflowRun = (
+/** Start a run: GitHub dispatches `workflow` on the ref with `inputs`; GitLab runs
+ *  a new pipeline on the ref with `inputs` as variables (send `workflow` empty). */
+export const forgeCiDispatch = (
   repoPath: string,
   workflow: string,
   gitRef: string,
   inputs: Record<string, string>,
-) => invoke<void>("gh_workflow_run", { repoPath, workflow, gitRef, inputs });
+) => invoke<void>("forge_ci_dispatch", { repoPath, workflow, gitRef, inputs });
 
 // ── Queries ──────────────────────────────────────────────────────────────────
 
@@ -123,7 +143,7 @@ export function useWorkflowRuns(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "actions", "runs", branch ?? ""] as const,
-    queryFn: () => ghRunList(repo, 40, branch),
+    queryFn: () => forgeCiRunList(repo, 40, branch),
     enabled,
     staleTime: 10_000,
     refetchInterval: (query) =>
@@ -136,7 +156,7 @@ export function useWorkflowRuns(
 export function useRunDetail(repo: string, runId: number | null) {
   return useQuery({
     queryKey: ["repo", repo, "actions", "run", runId ?? 0] as const,
-    queryFn: () => ghRunView(repo, runId ?? 0),
+    queryFn: () => forgeCiRunView(repo, runId ?? 0),
     enabled: runId !== null,
     refetchInterval: (query) =>
       query.state.data && isRunActive(query.state.data.status) ? 5000 : false,
@@ -155,7 +175,7 @@ export function useLatestRun(
   return useQuery({
     queryKey: ["repo", repo, "actions", "latest", branch ?? ""] as const,
     queryFn: async () =>
-      (await ghRunList(repo, 1, branch ?? undefined))[0] ?? null,
+      (await forgeCiRunList(repo, 1, branch ?? undefined))[0] ?? null,
     enabled: enabled && Boolean(branch),
     staleTime: 15_000,
     refetchInterval: (query) =>
@@ -180,7 +200,7 @@ export function useRunFailedLogs(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "actions", "run", runId ?? 0, "logs"] as const,
-    queryFn: () => ghRunFailedLogs(repo, runId ?? 0),
+    queryFn: () => forgeCiRunFailedLogs(repo, runId ?? 0),
     enabled: enabled && runId !== null,
     staleTime: 30_000,
   });
@@ -194,7 +214,7 @@ export function useJobLogs(
 ) {
   return useQuery({
     queryKey: ["repo", repo, "actions", "job", jobId ?? 0, "logs"] as const,
-    queryFn: () => ghJobLogs(repo, jobId ?? 0),
+    queryFn: () => forgeCiJobLogs(repo, jobId ?? 0),
     enabled: enabled && jobId !== null,
     staleTime: 30_000,
   });
@@ -219,12 +239,23 @@ function useActionsMutation<TArgs>(
 
 export function useRerunRun(repo: string) {
   return useActionsMutation(repo, (args: { runId: number; failed: boolean }) =>
-    ghRunRerun(repo, args.runId, args.failed),
+    forgeCiRunRerun(repo, args.runId, args.failed),
   );
 }
 
 export function useCancelRun(repo: string) {
-  return useActionsMutation(repo, (runId: number) => ghRunCancel(repo, runId));
+  return useActionsMutation(repo, (runId: number) =>
+    forgeCiRunCancel(repo, runId),
+  );
+}
+
+/** Play a manual GitLab CI job (GitLab-only). Invalidating the Actions subtree
+ *  refreshes the run detail + list; the job goes active and the existing 5s
+ *  poll takes over. */
+export function usePlayCiJob(repo: string) {
+  return useActionsMutation(repo, (jobId: number) =>
+    forgeGlCiPlayJob(repo, jobId),
+  );
 }
 
 export function useRunWorkflow(repo: string) {
@@ -234,6 +265,6 @@ export function useRunWorkflow(repo: string) {
       workflow: string;
       gitRef: string;
       inputs: Record<string, string>;
-    }) => ghWorkflowRun(repo, args.workflow, args.gitRef, args.inputs),
+    }) => forgeCiDispatch(repo, args.workflow, args.gitRef, args.inputs),
   );
 }

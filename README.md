@@ -45,6 +45,37 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 - **GitHub Actions cockpit** — browse runs, drill into jobs and steps, re-run (all
   or failed), cancel, dispatch a workflow, and read failed-step logs — none of
   which GitHub Desktop does.
+- **GitLab too** — via the **GitLab CLI (`glab`)**, browse and clone your GitLab
+  projects and read **merge requests**, **issues**, **CI pipelines**, and
+  **releases** in the same panels: lists, plus detail views (MR
+  comments/commits/diff; issue conversation with a labels/assignees/milestone rail;
+  pipeline jobs with logs and a branch CI badge; release notes with asset links). And
+  GitLab **writes** — **comment** on and **close / reopen** a GitLab issue
+  **or merge request**, **edit titles and descriptions**, **react** with emoji
+  (award emoji on descriptions and comments), edit **labels** and
+  **assignees** (issues *and* MRs), set an issue's **milestone**,
+  **approve / unapprove**, **request changes on**, and **merge** (merge/squash) an
+  MR — including **auto-merge** (merge when the pipeline succeeds, cancelable in
+  place) while a pipeline is running, **create issues and
+  merge requests** (push-and-open, drafts included, duplicate-MR detection —
+  publishing local issues/PRs to
+  GitLab works too), **lock / unlock** an issue's conversation, **move** an issue
+  to another project, **delete** an issue, set an issue's **due date** (with a
+  past-due cue) or mark it **confidential**, **track time** (estimate + spent) on
+  an issue *or* MR and **link related issues** (all GitLab-unique, right in the
+  rail), **retry / cancel / run pipelines** (with CI/CD variables) and **play a
+  manual pipeline job**, and
+  **publish / edit / delete releases** with asset uploads, **star** the project
+  ("View on GitLab" and a fork link too), and **publish a local repo to GitLab**
+  (create + push, straight from the app) — right from the app. **Project settings**
+  too: the same settings dialog manages a GitLab project's **General** settings
+  (description, topics, default branch, feature access levels, merge method and
+  squash policy), **Members**, **Protected branches** (per-rule push/merge access
+  levels and a force-push policy), **Webhooks** (with a delivery log and re-send),
+  **CI/CD variables**, and the **Danger zone** (rename, archive, visibility,
+  transfer, delete). **Self-managed GitLab** works wherever `glab` is signed in —
+  the app recognizes any host from `glab auth login`. Insights charts
+  GitLab pipelines alongside the local-git analytics. GitHub is unchanged.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works
   in an isolated worktree, so your own checkout is never touched. Follow it
   **step by step** — every file it reads, edits, and command it runs — and

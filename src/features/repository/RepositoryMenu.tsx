@@ -47,16 +47,18 @@ import { HooksDialog } from "@/features/hooks/HooksDialog";
 import { RepoSettingsDialog } from "@/features/repo-settings/RepoSettingsDialog";
 import { copyText } from "@/lib/clipboard";
 import {
-  ghRepoUrl,
+  forgeRepoUrl,
   openInTerminal,
   openWithDefault,
   openWithProgram,
 } from "@/lib/git/api";
 import {
+  forgeFeatureReady,
+  useForgeStatus,
   useForkRepo,
-  useGhStatus,
   useRepoAdmin,
   useRepoStarStatus,
+  useRepoStatus,
   useSetRepoStar,
   useSubmodules,
 } from "@/lib/git/queries";
@@ -72,7 +74,7 @@ import { SubmodulesDialog } from "./SubmodulesDialog";
 import { WorktreesDialog } from "./WorktreesDialog";
 
 export function RepositoryMenu({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
+  const gh = useForgeStatus(repoPath);
   const settings = useSettings();
   const repoName = useUiStore((s) => s.repoName);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
@@ -104,23 +106,37 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
     lastOpenedAt: "",
   };
 
-  const canGh = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  // View-on-host / star work for GitHub and GitLab; forking on GitLab is a web
+  // link-out (the fork dialog's remote-rewiring flow is GitHub-only).
+  const canGh = forgeFeatureReady(gh.data, "repoActions");
+  const isGitLab = gh.data?.provider === "gitlab";
+  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
   const starStatus = useRepoStarStatus(repoPath, canGh);
   const setStar = useSetRepoStar(repoPath);
   const starred = starStatus.data ?? false;
-  // Repo settings (webhooks) are admin-only; the menu item hides for everyone else.
-  const admin = useRepoAdmin(repoPath, canGh);
+  // Repo settings are admin-only, on both providers (GitHub admin / GitLab
+  // Maintainer+ — the probe dispatches per provider); the menu item hides for
+  // everyone else.
+  const settingsReady = forgeFeatureReady(gh.data, "repoSettings");
+  const admin = useRepoAdmin(repoPath, settingsReady);
   const editor = (settings.data?.externalEditor ?? "").trim();
   const editorName =
     (settings.data?.externalEditorName ?? "").trim() || "editor";
+
+  // Current branch name + HEAD OID, for the copy actions. The two go null
+  // independently: a detached HEAD nulls only `name` (the OID is still a real
+  // SHA), and an unborn/empty repo nulls only `oid` (the branch name is still
+  // present). Each item disables on its own value, and the palette handlers
+  // explain why rather than copying "null".
+  const status = useRepoStatus(repoPath);
+  const branchName = status.data?.branch.name ?? null;
+  const headOid = status.data?.branch.oid ?? null;
 
   const onError = (e: unknown) => toastError(e);
 
   async function openWeb(suffix = "") {
     try {
-      const url = await ghRepoUrl(repoPath);
+      const url = await forgeRepoUrl(repoPath);
       await openUrl(`${url}${suffix}`);
     } catch (e) {
       onError(e);
@@ -130,8 +146,12 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   // Every menu entry doubles as a hotkey/palette action with the same gates.
   useHotkeyAction("view-on-github", () => openWeb(), canGh);
   // create-issue is the in-app dialog (registered in RepositoryView + IssuesPanel);
-  // the "Create issue on GitHub" menu item below still opens the web page directly.
-  useHotkeyAction("fork-repository", () => setForkOpen(true), canGh);
+  // the "Create issue on GitHub/GitLab" menu item below still opens the web page.
+  useHotkeyAction(
+    "fork-repository",
+    () => (isGitLab ? openWeb("/-/forks/new") : setForkOpen(true)),
+    canGh,
+  );
   useHotkeyAction("open-in-terminal", () =>
     openInTerminal(
       repoPath,
@@ -153,7 +173,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   useHotkeyAction(
     "repository-settings",
     () => setRepoSettingsOpen(true),
-    canGh && Boolean(admin.data),
+    settingsReady && Boolean(admin.data?.admin),
   );
   useHotkeyAction("branch-rules", () => setBranchRulesOpen(true));
   useHotkeyAction("git-hooks", () => setHooksOpen(true));
@@ -178,6 +198,16 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
   useHotkeyAction("copy-repo-path", () =>
     copyText(repoPath, "Repository path copied"),
   );
+  useHotkeyAction("copy-branch-name", () =>
+    branchName
+      ? copyText(branchName, "Branch name copied")
+      : toast.error("Detached HEAD — no branch to copy"),
+  );
+  useHotkeyAction("copy-head-sha", () =>
+    headOid
+      ? copyText(headOid, "HEAD SHA copied")
+      : toast.error("No commits yet — nothing to copy"),
+  );
   useHotkeyAction("remove-repository", () => setRemoveTarget(repoEntry));
 
   return (
@@ -198,7 +228,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <>
             <DropdownMenuItem onClick={() => openWeb()}>
               <ArrowSquareOutIcon />
-              View on GitHub
+              View on {remoteLabel}
             </DropdownMenuItem>
             <DropdownMenuItem
               disabled={setStar.isPending}
@@ -217,14 +247,28 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
               <StarIcon weight={starred ? "fill" : "regular"} />
               {starred ? "Unstar repository" : "Star repository"}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => openWeb("/issues/new")}>
+            <DropdownMenuItem
+              onClick={() =>
+                openWeb(isGitLab ? "/-/issues/new" : "/issues/new")
+              }
+            >
               <WarningCircleIcon />
-              Create issue on GitHub
+              Create issue on {remoteLabel}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setForkOpen(true)}>
-              <GitForkIcon />
-              Fork repository…
-            </DropdownMenuItem>
+            {isGitLab ? (
+              // The fork dialog's flow (fork + rewire remotes + set-default) is
+              // GitHub-only; GitLab forks from its web page instead of hiding
+              // the affordance.
+              <DropdownMenuItem onClick={() => openWeb("/-/forks/new")}>
+                <GitForkIcon />
+                Fork on GitLab…
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem onClick={() => setForkOpen(true)}>
+                <GitForkIcon />
+                Fork repository…
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
           </>
         )}
@@ -267,7 +311,7 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
           <LightningIcon />
           Automations…
         </DropdownMenuItem>
-        {canGh && admin.data && (
+        {settingsReady && admin.data?.admin && (
           <DropdownMenuItem onClick={() => setRepoSettingsOpen(true)}>
             <GearSixIcon />
             Repository settings…
@@ -304,6 +348,24 @@ export function RepositoryMenu({ repoPath }: { repoPath: string }) {
         >
           <CopyIcon />
           Copy repository path
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!branchName}
+          title={branchName ? undefined : "Detached HEAD — no branch to copy"}
+          onClick={() =>
+            branchName && copyText(branchName, "Branch name copied")
+          }
+        >
+          <CopyIcon />
+          Copy branch name
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!headOid}
+          title={headOid ? undefined : "No commits yet — nothing to copy"}
+          onClick={() => headOid && copyText(headOid, "HEAD SHA copied")}
+        >
+          <CopyIcon />
+          Copy HEAD SHA
         </DropdownMenuItem>
         <DropdownMenuItem
           variant="destructive"

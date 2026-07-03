@@ -66,6 +66,19 @@ pub struct Branch {
     pub archived: bool,
 }
 
+/// A branch that exists on a remote but not (yet) as a local branch — offered in
+/// the switcher so it can be checked out (which creates a local tracking branch).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteBranch {
+    /// The short branch name, without the remote prefix (e.g. `feature/x`).
+    pub name: String,
+    /// The remote it lives on (e.g. `origin`).
+    pub remote: String,
+    /// ISO-8601 committer date of the branch tip (for recency sorting).
+    pub last_commit_date: String,
+}
+
 /// How far a local branch sits from a base branch (the default branch), for
 /// the at-a-glance counts in the branch menu.
 #[derive(Debug, Clone, Serialize)]

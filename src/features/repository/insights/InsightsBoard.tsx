@@ -2,11 +2,12 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  forgeFeatureReady,
   useCodeFrequency,
   useCommitActivity,
   useCommunityInsights,
   useContributorActivity,
-  useGhStatus,
+  useForgeStatus,
   usePunchCard,
   useRepoDependencies,
   useRepoTraffic,
@@ -21,7 +22,7 @@ import {
   type RunDurationPoint,
 } from "./charts";
 import { DependenciesCard } from "./DependenciesCard";
-import { LinkOutsCard } from "./LinkOutsCard";
+import { GitLabLinkOutsCard, LinkOutsCard } from "./LinkOutsCard";
 import { PunchCard } from "./PunchCard";
 import { fmt, InsightCard } from "./primitives";
 import { TrafficCard } from "./TrafficCard";
@@ -92,10 +93,13 @@ export function InsightsBoard({
   const [allTime, setAllTime] = useState(false);
   const weeks = allTime ? 0 : WINDOW_WEEKS;
 
-  const gh = useGhStatus(repoPath);
-  const canGh = Boolean(
-    active && gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const gh = useForgeStatus(repoPath);
+  // The hosted cards gate on the insights flag; the CI card is forge-backed
+  // (GitLab pipelines work), while community / traffic / dependencies are
+  // GitHub-only APIs with no GitLab analogue and hide per provider.
+  const canGh = active && forgeFeatureReady(gh.data, "insights");
+  const isGitLab = gh.data?.provider === "gitlab";
+  const canGhOnly = canGh && !isGitLab;
 
   // These are heavy (full-history git scans + gh calls); gate them on the
   // Insights tab being visible. <Activity> keeps this mounted while hidden but
@@ -105,9 +109,9 @@ export function InsightsBoard({
   const codeFreq = useCodeFrequency(repoPath, weeks, active);
   const punchCard = usePunchCard(repoPath, weeks, active);
   const contributors = useContributorActivity(repoPath, weeks, active);
-  const community = useCommunityInsights(repoPath, canGh);
-  const traffic = useRepoTraffic(repoPath, canGh);
-  const dependencies = useRepoDependencies(repoPath, canGh);
+  const community = useCommunityInsights(repoPath, canGhOnly);
+  const traffic = useRepoTraffic(repoPath, canGhOnly);
+  const dependencies = useRepoDependencies(repoPath, canGhOnly);
   const runs = useWorkflowRuns(repoPath, canGh);
 
   const completed = (runs.data ?? []).filter((r) => r.status === "completed");
@@ -203,7 +207,7 @@ export function InsightsBoard({
 
           {canGh && (
             <InsightCard
-              title="Actions"
+              title={isGitLab ? "Pipelines" : "Actions"}
               action={
                 successRate !== null && (
                   <span className="text-[11px] text-muted-foreground tabular-nums">
@@ -217,12 +221,14 @@ export function InsightsBoard({
               ) : durationPoints.length ? (
                 <ActionsDurationChart data={durationPoints} />
               ) : (
-                <Empty>No completed workflow runs yet.</Empty>
+                <Empty>
+                  No completed {isGitLab ? "pipelines" : "workflow runs"} yet.
+                </Empty>
               )}
             </InsightCard>
           )}
 
-          {canGh && (
+          {canGhOnly && (
             <InsightCard title="Community">
               {community.isPending ? (
                 <ChartSkeleton />
@@ -234,7 +240,7 @@ export function InsightsBoard({
             </InsightCard>
           )}
 
-          {canGh && (
+          {canGhOnly && (
             <InsightCard title="Traffic" className="xl:col-span-2">
               {traffic.isPending ? (
                 <ChartSkeleton />
@@ -246,7 +252,7 @@ export function InsightsBoard({
             </InsightCard>
           )}
 
-          {canGh && (
+          {canGhOnly && (
             <InsightCard title="Dependencies">
               {dependencies.isPending ? (
                 <ChartSkeleton />
@@ -258,12 +264,20 @@ export function InsightsBoard({
             </InsightCard>
           )}
 
-          {canGh && (
+          {canGhOnly && (
             <InsightCard title="More on GitHub">
               <LinkOutsCard
                 repoPath={repoPath}
                 isPublic={community.data ? !community.data.private : undefined}
               />
+            </InsightCard>
+          )}
+
+          {canGh && isGitLab && (
+            // GitLab analytics that only render on the web (no usable API) —
+            // link out rather than pretend they don't exist.
+            <InsightCard title="More on GitLab">
+              <GitLabLinkOutsCard repoPath={repoPath} />
             </InsightCard>
           )}
         </div>

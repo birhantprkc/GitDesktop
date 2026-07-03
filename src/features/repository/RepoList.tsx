@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { copyText } from "@/lib/clipboard";
 import {
-  ghRepoUrl,
+  forgeRepoUrl,
   openInTerminal,
   openWithDefault,
   openWithProgram,
@@ -73,24 +73,33 @@ export function RepoList({
   const ownerByPath = new Map(
     (owners.data ?? []).map((o) => [o.path, o.owner]),
   );
+  // The resolved provider per repo — names it in the context menu. Resolved
+  // backend-side so self-managed GitLab hosts (glab's known hosts) label right.
+  const providerByPath = new Map(
+    (owners.data ?? []).map((o) => [o.path, o.provider]),
+  );
   // The owner each repo groups under. Prefer the value stored on the record
   // (synchronous → no reflow on open); fall back to the async query result for
   // a repo not yet backfilled. `OTHER_GROUP` only when neither is known.
   const ownerOf = (r: RecentRepo) =>
     r.owner || ownerByPath.get(r.path) || undefined;
 
-  // Backfill resolved owners onto the recent records so the NEXT open groups
-  // synchronously. Fires once whenever a record's stored owner is stale; the
-  // helper no-ops when nothing changed, so its settings refetch doesn't loop.
+  // Backfill resolved owners + hosts + providers onto the recent records so the
+  // NEXT open groups (and labels its context menu) synchronously. Fires once
+  // whenever a record's stored value is stale; the helper no-ops when nothing
+  // changed, so its settings refetch doesn't loop.
   // biome-ignore lint/correctness/useExhaustiveDependencies: mutate() is stable; rerun only on resolved owners / records
   useEffect(() => {
     const resolved = owners.data;
     if (!resolved?.length) return;
-    const stale = resolved.some(
-      (o) =>
-        (o.owner || undefined) !==
-        recents.find((r) => r.path === o.path)?.owner,
-    );
+    const stale = resolved.some((o) => {
+      const r = recents.find((rec) => rec.path === o.path);
+      return (
+        (o.owner || undefined) !== r?.owner ||
+        (o.host || undefined) !== r?.host ||
+        (o.provider || undefined) !== r?.provider
+      );
+    });
     if (stale) persistOwners.mutate(resolved);
   }, [owners.data, recents]);
 
@@ -243,6 +252,14 @@ export function RepoList({
               <RepoMenuItems
                 repo={menuRepo}
                 owner={ownerOf(menuRepo) ?? null}
+                // Prefer the persisted provider (right from the first frame);
+                // the live query covers repos not yet backfilled, and the host
+                // compare covers records persisted before providers existed.
+                provider={
+                  menuRepo.provider ??
+                  providerByPath.get(menuRepo.path) ??
+                  (menuRepo.host === "gitlab.com" ? "gitlab" : null)
+                }
                 editor={editor}
                 editorName={editorName}
                 terminal={settings.data?.terminal}
@@ -337,6 +354,7 @@ function RepoRow({
 function RepoMenuItems({
   repo,
   owner,
+  provider,
   editor,
   editorName,
   terminal,
@@ -346,6 +364,8 @@ function RepoMenuItems({
 }: {
   repo: RecentRepo;
   owner: string | null;
+  /** The resolved provider ("gitlab", …) — names it on the view item. */
+  provider: string | null;
   editor: string;
   editorName: string;
   terminal?: string;
@@ -372,12 +392,15 @@ function RepoMenuItems({
       {owner && (
         <ContextMenuItem
           onClick={() =>
-            ghRepoUrl(repo.path)
+            forgeRepoUrl(repo.path)
               .then((url) => openUrl(url))
               .catch(toastError)
           }
         >
-          View on GitHub
+          {/* Name the repo's actual provider (incl. self-managed GitLab);
+              unrecognized hosts route through gh (Enterprise etc.), so GitHub
+              is the honest default label. */}
+          View on {provider === "gitlab" ? "GitLab" : "GitHub"}
         </ContextMenuItem>
       )}
       <ContextMenuItem

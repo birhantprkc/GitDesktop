@@ -3,6 +3,7 @@ import {
   ArrowSquareOutIcon,
   CaretDownIcon,
   CaretRightIcon,
+  PlayIcon,
   ProhibitIcon,
   SparkleIcon,
 } from "@phosphor-icons/react";
@@ -13,11 +14,13 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
 import type { RunJob } from "@/lib/github/actions";
 import {
   isRunActive,
   useCancelRun,
   useJobLogs,
+  usePlayCiJob,
   useRerunRun,
   useRunDetail,
   useRunFailedLogs,
@@ -55,11 +58,23 @@ function duration(start: string, end: string): string {
 function JobRow({
   repoPath,
   job,
+  stepsExpected = true,
+  remoteLabel = "GitHub",
   onDebug,
+  onPlay,
+  playing = false,
 }: {
   repoPath: string;
   job: RunJob;
+  /** Whether this provider's jobs have steps (GitLab pipelines don't — suppress
+   *  the "no step details" placeholder for them; the job is the leaf unit). */
+  stepsExpected?: boolean;
+  remoteLabel?: string;
   onDebug?: () => void;
+  /** Play a manual GitLab job awaiting a manual trigger (GitLab-only). */
+  onPlay?: () => void;
+  /** Whether the play mutation is in flight for THIS job. */
+  playing?: boolean;
 }) {
   // Failed and in-progress jobs are the interesting ones — open them by default.
   const [open, setOpen] = useState(
@@ -112,6 +127,23 @@ function JobRow({
             </span>
           )}
         </button>
+        {onPlay && (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="mr-2 shrink-0 text-muted-foreground"
+            disabled={playing}
+            aria-label={`Run job ${job.name}`}
+            onClick={onPlay}
+          >
+            {playing ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <PlayIcon data-icon="inline-start" />
+            )}
+            Run job
+          </Button>
+        )}
         {onDebug && (
           <Button
             variant="ghost"
@@ -171,7 +203,7 @@ function JobRow({
           })}
         </ul>
       )}
-      {open && job.steps.length === 0 && (
+      {open && stepsExpected && job.steps.length === 0 && (
         <p className="py-1 pr-3 pl-10 text-[11px] text-muted-foreground">
           {isRunActive(job.status)
             ? "Waiting for steps…"
@@ -196,7 +228,7 @@ function JobRow({
                   className="inline-flex cursor-pointer items-center gap-1 underline-offset-2 hover:text-foreground hover:underline"
                 >
                   <ArrowSquareOutIcon className="size-3" />
-                  Watch live on GitHub
+                  Watch live on {remoteLabel}
                 </button>
               )}
             </p>
@@ -249,7 +281,24 @@ export function RunDetailView({
   const detail = useRunDetail(repoPath, runId);
   const rerun = useRerunRun(repoPath);
   const cancel = useCancelRun(repoPath);
+  const playJob = usePlayCiJob(repoPath);
   const aiEnabled = useAiEnabled();
+  // Re-run and cancel are SHARED writes (GitHub + GitLab): `canWrite || …` keeps
+  // GitHub's controls up while forge-status is pending and positively enables a
+  // ready GitLab repo. GitLab's retry restarts failed+canceled jobs only, so it
+  // gets a single "Retry pipeline" button — "Re-run all jobs" has no GitLab
+  // analogue and stays on `canWrite` (GitHub-only). GitLab pipelines also have no
+  // per-job steps, so the steps placeholder is suppressed for them.
+  const forge = useForgeStatus(repoPath);
+  const provider = forge.data?.provider;
+  const canWrite = provider !== "gitlab" && provider !== "bitbucket";
+  const canRerun = canWrite || forgeFeatureReady(forge.data, "ciRerun");
+  const canCancel = canWrite || forgeFeatureReady(forge.data, "ciCancel");
+  // Playing a manual job is GitLab-only (no GitHub analogue here), so the flag
+  // alone gates — never `canWrite || …`. With the gate GitHub never matches the
+  // manual-job shape anyway.
+  const canPlay = forgeFeatureReady(forge.data, "ciJobPlay");
+  const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
   const [debugJob, setDebugJob] = useState<RunJob | null>(null);
   // Dialog visibility is tracked separately from the debug session so closing
   // the dialog just hides it (the run keeps streaming) and reopening resumes.
@@ -260,6 +309,13 @@ export function RunDetailView({
   const run = detail.data;
   const active = run ? isRunActive(run.status) : false;
   const failed = run ? isFailureConclusion(run.conclusion) : false;
+  // GitLab's retry also covers a canceled pipeline (its retry restarts
+  // failed + canceled jobs), so the Retry button shows for both conclusions.
+  const retryable = failed || run?.conclusion === "cancelled";
+  // A manual/blocked GitLab pipeline maps to completed/action_required, but
+  // GitLab's cancel endpoint does cancel it — keep Cancel available there.
+  const gitlabBlocked =
+    provider === "gitlab" && run?.conclusion === "action_required";
 
   function doRerun(failedOnly: boolean) {
     rerun.mutate(
@@ -267,7 +323,11 @@ export function RunDetailView({
       {
         onSuccess: () =>
           toast.success(
-            failedOnly ? "Re-running failed jobs" : "Re-running workflow",
+            provider === "gitlab"
+              ? "Retrying pipeline"
+              : failedOnly
+                ? "Re-running failed jobs"
+                : "Re-running workflow",
           ),
         onError: toastError,
       },
@@ -280,6 +340,18 @@ export function RunDetailView({
       onError: toastError,
     });
   }
+
+  function doPlay(jobId: number) {
+    playJob.mutate(jobId, {
+      onSuccess: () => toast.success("Starting job…"),
+      onError: toastError,
+    });
+  }
+
+  // A manual GitLab job arrives as completed + action_required; with the flag
+  // gate GitHub never matches (its manual approvals work differently).
+  const isManualJob = (job: RunJob) =>
+    job.status === "completed" && job.conclusion === "action_required";
 
   if (detail.isPending) {
     return (
@@ -324,56 +396,74 @@ export function RunDetailView({
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {active ? (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={cancel.isPending}
-              onClick={doCancel}
-            >
-              {cancel.isPending ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <ProhibitIcon data-icon="inline-start" />
-              )}
-              Cancel run
-            </Button>
-          ) : (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={rerun.isPending}
-                onClick={() => doRerun(false)}
-              >
-                <ArrowClockwiseIcon data-icon="inline-start" />
-                Re-run all jobs
-              </Button>
-              {failed && (
+          {active || gitlabBlocked
+            ? canCancel && (
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={rerun.isPending}
-                  onClick={() => doRerun(true)}
+                  disabled={cancel.isPending}
+                  onClick={doCancel}
                 >
-                  <ArrowClockwiseIcon data-icon="inline-start" />
-                  Re-run failed jobs
+                  {cancel.isPending ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <ProhibitIcon data-icon="inline-start" />
+                  )}
+                  Cancel run
                 </Button>
-              )}
-            </>
-          )}
+              )
+            : provider === "gitlab"
+              ? canRerun &&
+                retryable && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={rerun.isPending}
+                    title="Restart this pipeline's failed and canceled jobs"
+                    onClick={() => doRerun(true)}
+                  >
+                    <ArrowClockwiseIcon data-icon="inline-start" />
+                    Retry pipeline
+                  </Button>
+                )
+              : canWrite && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={rerun.isPending}
+                      onClick={() => doRerun(false)}
+                    >
+                      <ArrowClockwiseIcon data-icon="inline-start" />
+                      Re-run all jobs
+                    </Button>
+                    {failed && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={rerun.isPending}
+                        onClick={() => doRerun(true)}
+                      >
+                        <ArrowClockwiseIcon data-icon="inline-start" />
+                        Re-run failed jobs
+                      </Button>
+                    )}
+                  </>
+                )}
           <Button
             variant="ghost"
             size="sm"
             className="ml-auto cursor-pointer"
             disabled={!run.url}
             title={
-              run.url ? "Open this run on GitHub" : "No GitHub URL for this run"
+              run.url
+                ? `Open this run on ${remoteLabel}`
+                : "No URL for this run"
             }
             onClick={() => run.url && openUrl(run.url)}
           >
             <ArrowSquareOutIcon data-icon="inline-start" />
-            View on GitHub
+            View on {remoteLabel}
           </Button>
         </div>
       </div>
@@ -396,6 +486,8 @@ export function RunDetailView({
                   key={job.id}
                   repoPath={repoPath}
                   job={job}
+                  stepsExpected={provider !== "gitlab"}
+                  remoteLabel={remoteLabel}
                   onDebug={
                     aiEnabled && isFailureConclusion(job.conclusion)
                       ? () => {
@@ -404,6 +496,12 @@ export function RunDetailView({
                         }
                       : undefined
                   }
+                  onPlay={
+                    canPlay && isManualJob(job)
+                      ? () => doPlay(job.id)
+                      : undefined
+                  }
+                  playing={playJob.isPending && playJob.variables === job.id}
                 />
               ))}
             </div>
@@ -416,7 +514,7 @@ export function RunDetailView({
                 size="sm"
                 onClick={() => setShowLogs((v) => !v)}
               >
-                {showLogs ? "Hide failed-step logs" : "Show failed-step logs"}
+                {showLogs ? "Hide failed logs" : "Show failed logs"}
               </Button>
               {showLogs && (
                 <div className="mt-2">
@@ -435,7 +533,7 @@ export function RunDetailView({
                         "font-mono text-[11px] leading-relaxed whitespace-pre-wrap",
                       )}
                     >
-                      {logs.data?.trim() || "No failed-step logs available."}
+                      {logs.data?.trim() || "No failed logs available."}
                     </pre>
                   )}
                 </div>

@@ -6,7 +6,8 @@ import { ConversationListPanel } from "@/features/conversations/ConversationList
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { PrStateFilter } from "@/lib/git/api";
 import {
-  useGhStatus,
+  forgeFeatureReady,
+  useForgeStatus,
   useHoverPrefetch,
   usePrefetchPr,
   usePrList,
@@ -20,11 +21,20 @@ import { CreatePrDialog } from "./CreatePrDialog";
 import { useReconcileLocalPrs } from "./useReconcileLocalPrs";
 
 export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
-  // "closed" matches GitHub's Closed tab: closed and merged PRs alike.
+  const gh = useForgeStatus(repoPath);
+  const provider = gh.data?.provider;
+  // Merge request reads work for GitHub and GitLab; the noun + section header
+  // follow the provider so a GitLab repo reads "merge requests" / "GitLab".
+  const isGitLab = provider === "gitlab";
+  const remoteLabel =
+    provider === "gitlab"
+      ? "GitLab"
+      : provider === "bitbucket"
+        ? "Bitbucket"
+        : "GitHub";
+  const remoteNoun = isGitLab ? "merge requests" : "pull requests";
+  const ghReady = forgeFeatureReady(gh.data, "pullRequests");
+  // "closed" matches the Closed tab: closed and merged alike.
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
   const prList = usePrList(repoPath, ghReady, stateFilter);
   const localPrs = useLocalPrs(repoPath);
@@ -61,13 +71,17 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
     stateFilter,
   });
 
-  // The dialog picks the head/base branches itself (so main → staging works
-  // just as well as feature → main), so the only requirement here is that the
-  // repo is actually on GitHub.
-  const ghCreateReason = ghReady
+  // Creating a remote PR/MR follows its per-action write flag — ready GitHub AND
+  // GitLab repos both get the create dialog (provider-aware copy; the head branch
+  // is pushed first either way). The dialog picks the head/base branches itself.
+  const canCreateGhPr = forgeFeatureReady(gh.data, "mrCreate");
+  const ghCreateReason = canCreateGhPr
     ? null
-    : "Connect this repository to GitHub to open a pull request here.";
-  const canCreateGhPr = ghReady;
+    : isGitLab
+      ? gh.data?.installed
+        ? "Sign in to GitLab (glab auth login) to work with merge requests here."
+        : "Install the GitLab CLI (glab) to work with merge requests here."
+      : "Connect this repository to GitHub to open a pull request here.";
   const pendingCreate = useUiStore((s) => s.pendingCreate);
   const clearPendingCreate = useUiStore((s) => s.clearPendingCreate);
 
@@ -76,15 +90,17 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   useHotkeyAction("create-pr", () => setGhCreateOpen(true), canCreateGhPr);
 
   // Opened from the command palette / New menu via requestCreate (any tab).
+  // Re-check the gate: the requester's own gate can lag this panel's (e.g. a
+  // provider flip mid-flight) — never open a create dialog that can't submit.
   useEffect(() => {
     if (pendingCreate === "pr") {
-      setGhCreateOpen(true);
+      if (canCreateGhPr) setGhCreateOpen(true);
       clearPendingCreate();
     } else if (pendingCreate === "local-pr") {
       setCreateOpen(true);
       clearPendingCreate();
     }
-  }, [pendingCreate, clearPendingCreate]);
+  }, [pendingCreate, clearPendingCreate, canCreateGhPr]);
 
   // Arrow keys walk the visible rows, local section first like the list.
   const navTargets = [
@@ -107,11 +123,14 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   return (
     <ConversationListPanel
       repoPath={repoPath}
-      feature="pull requests"
+      feature={remoteNoun}
+      remoteLabel={remoteLabel}
       stateFilter={stateFilter}
       onStateFilter={setStateFilter}
       newMenu={{
-        ghLabel: "Pull request on GitHub…",
+        ghLabel: isGitLab
+          ? "Merge request on GitLab…"
+          : "Pull request on GitHub…",
         ghDisabled: !canCreateGhPr,
         ghReason: ghCreateReason ?? undefined,
         onGh: () => setGhCreateOpen(true),
@@ -198,7 +217,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
       )}
       remoteSkeletonRows={2}
       localNoun="pull requests"
-      remoteNoun="pull requests"
+      remoteNoun={remoteNoun}
     >
       <CreateLocalPrDialog
         repoPath={repoPath}

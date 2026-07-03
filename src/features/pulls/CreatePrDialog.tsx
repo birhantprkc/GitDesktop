@@ -20,6 +20,7 @@ import {
   useCompareBranches,
   useCreatePr,
   useDefaultBranch,
+  useForgeStatus,
   useRepoStatus,
 } from "@/lib/git/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
@@ -45,12 +46,20 @@ export function CreatePrDialog({
   const branches = useBranches(repoPath);
   const defaultBranch = useDefaultBranch(repoPath);
   const createPr = useCreatePr(repoPath);
+  const forge = useForgeStatus(repoPath);
+  const isGitLab = forge.data?.provider === "gitlab";
+  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
+  const prNoun = isGitLab ? "merge request" : "pull request";
   const { generate, cancel, generating } = useGeneratePrDescription(repoPath);
   const aiEnabled = useAiEnabled();
   const aiDescriptionRef = useRef(false);
 
   const currentName = status.data?.branch?.name ?? null;
-  const names = (branches.data ?? []).map((b) => b.name);
+  // Agent-session branches (`gd/session/*`) are app-internal — never offer them
+  // as a head/base (submitting would even PUSH one), same rule as BranchSwitcher.
+  const names = (branches.data ?? [])
+    .map((b) => b.name)
+    .filter((n) => !n.startsWith("gd/session/"));
 
   const form = useAppForm({
     defaultValues: { head: "", base: "", title: "", body: "", draft: false },
@@ -75,7 +84,7 @@ export function CreatePrDialog({
             has_ai_description: aiDescriptionRef.current,
           },
         });
-        toast.success(`Opened pull request #${number}`, {
+        toast.success(`Opened ${prNoun} #${number}`, {
           description: url,
           action: { label: "View", onClick: () => openUrl(url) },
         });
@@ -145,11 +154,11 @@ export function CreatePrDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Create pull request</DialogTitle>
+            <DialogTitle>Create {prNoun}</DialogTitle>
             <DialogDescription>
               Pushes <span className="font-mono">{head || "…"}</span> and opens
-              a PR into <span className="font-mono">{base || "…"}</span> on
-              GitHub.
+              a {isGitLab ? "merge request" : "PR"} into{" "}
+              <span className="font-mono">{base || "…"}</span> on {remoteLabel}.
             </DialogDescription>
           </DialogHeader>
 
@@ -266,7 +275,7 @@ export function CreatePrDialog({
               <form.Subscribe selector={(s) => s.values.draft}>
                 {(draft) => (
                   <form.SubmitButton disabled={generating || nothingToMerge}>
-                    {draft ? "Create draft" : "Create pull request"}
+                    {draft ? "Create draft" : `Create ${prNoun}`}
                   </form.SubmitButton>
                 )}
               </form.Subscribe>

@@ -48,7 +48,11 @@ import { SessionList } from "@/features/sessions/SessionList";
 import { SessionView } from "@/features/sessions/SessionView";
 import { TagDetailView } from "@/features/tags/TagDetailView";
 import { TagsPanel } from "@/features/tags/TagsPanel";
-import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
+import {
+  forgeFeatureReady,
+  useForgeStatus,
+  useRepoStatus,
+} from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useAiEnabled, useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
@@ -110,10 +114,15 @@ export function RepositoryView() {
   // The write-capable agent is an AI feature — hide its tab when AI is hidden.
   const aiEnabled = useAiEnabled();
   const currentName = status.data?.branch?.name ?? null;
-  const gh = useGhStatus(repoPath ?? "");
-  const canGh = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const gh = useForgeStatus(repoPath ?? "");
+  // Palette create actions: discussion stays a GitHub-only write; the issue /
+  // PR / release creates follow their per-action forge flags (GitHub + GitLab).
+  const canGh =
+    Boolean(gh.data?.installed && gh.data?.authenticated && gh.data?.repo) &&
+    gh.data?.provider === "github";
+  const canCreateIssue = forgeFeatureReady(gh.data, "issueCreate");
+  const canCreatePr = forgeFeatureReady(gh.data, "mrCreate");
+  const canCreateRelease = forgeFeatureReady(gh.data, "releaseCreate");
   // Tab switches are transitions: a heavy first render of the target panel
   // never blocks the click, and hidden Activities pre-render at low priority.
   const [, startTabTransition] = useTransition();
@@ -153,15 +162,19 @@ export function RepositoryView() {
   // to open its dialog. The panels also register these while visible (newest
   // wins), so on-tab the panel's own handler opens directly with full context.
   useHotkeyAction("create-local-issue", () => requestCreate("local-issue"));
-  useHotkeyAction("create-issue", () => requestCreate("issue"), canGh);
-  useHotkeyAction("create-pr", () => requestCreate("pr"), canGh);
+  useHotkeyAction("create-issue", () => requestCreate("issue"), canCreateIssue);
+  useHotkeyAction("create-pr", () => requestCreate("pr"), canCreatePr);
   useHotkeyAction("create-local-pr", () => requestCreate("local-pr"));
   useHotkeyAction(
     "create-discussion",
     () => requestCreate("discussion"),
     canGh,
   );
-  useHotkeyAction("create-release", () => requestCreate("release"), canGh);
+  useHotkeyAction(
+    "create-release",
+    () => requestCreate("release"),
+    canCreateRelease,
+  );
   useHotkeyAction("create-tag", () => requestCreate("tag"));
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open. No

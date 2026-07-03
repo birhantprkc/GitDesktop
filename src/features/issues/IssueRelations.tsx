@@ -36,7 +36,7 @@ import { toastError } from "@/lib/toast";
 import { CreateIssueDialog } from "./CreateIssueDialog";
 
 /** Open/closed glyph for a related issue, so state isn't conveyed by text alone. */
-function StateIcon({ state }: { state: string }) {
+export function StateIcon({ state }: { state: string }) {
   return state === "CLOSED" ? (
     <CheckCircleIcon className="size-3.5 shrink-0 text-merged" />
   ) : (
@@ -45,7 +45,7 @@ function StateIcon({ state }: { state: string }) {
 }
 
 /** A clickable related-issue row with a hover remove button. */
-function RelatedRow({
+export function RelatedRow({
   issue,
   onOpen,
   onRemove,
@@ -111,7 +111,7 @@ function RelationList({
  * ones that can't be added (self, parent, already-linked). Picking one fires
  * `onPick`. The lists only load while this is mounted (the picker is open).
  */
-function IssuePicker({
+export function IssuePicker({
   repoPath,
   exclude,
   pending,

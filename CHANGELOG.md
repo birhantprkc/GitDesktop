@@ -12,6 +12,104 @@ commit list.
 
 ### Added
 
+- **GitLab time tracking.** Track time on a GitLab issue or merge request without
+  leaving the app: set an **estimate** (e.g. `3h`) and log **spent** time (e.g.
+  `45m`, or subtract with `-15m`), with a progress bar and an "over" note when
+  spent exceeds the estimate. Issues show it in the side rail; merge requests show
+  a compact clock summary in the header that opens the same controls in a popover.
+- **GitLab related issues.** Link a GitLab issue to other issues in the project
+  right from its side rail — pick one from the inline search, open a linked issue,
+  or unlink it. Read-only once the issue is closed.
+- **Play manual GitLab jobs.** A manual pipeline job — one that waits for a manual
+  trigger — now shows a **Run job** button in the pipeline detail view that plays
+  it, so you don't have to switch to GitLab to start it.
+- **GitLab auto-merge.** Arm merge-when-pipeline-succeeds from the merge request
+  view while a pipeline is running — the merge menu offers auto-merge (merge or
+  squash) variants, and once armed the footer shows an "Auto-merge enabled"
+  indicator you can cancel in place. GitLab merges it for you when the pipeline
+  passes.
+- **Copy the branch name or HEAD SHA.** The repository menu (and command palette)
+  gained two clipboard actions alongside "copy the repo path": **Copy branch name**
+  copies the current branch, and **Copy HEAD SHA** copies the full commit SHA of
+  `HEAD` — each with a quick confirmation toast. Each disables when its value
+  isn't available: Copy branch name on a detached HEAD, and Copy HEAD SHA in a
+  fresh repo with no commits yet.
+- **GitLab, in the same panels.** GitDesktop now speaks GitLab as well as GitHub,
+  through the **GitLab CLI (`glab`)** — same delegated-auth model as `gh`, no tokens stored.
+  Point the app at a GitLab repo (or **browse and clone your GitLab projects** from the
+  **GitLab** tab in the clone dialog) and the **Pull Requests** panel lists its **merge
+  requests** right alongside any local PRs — open and closed/merged, searchable and
+  filterable. Open one for the description, comments, commits, and a syntax-highlighted
+  **diff** (plus an "Open on GitLab" link) — and **comment** on a GitLab MR,
+  **close / reopen** it, **edit its title and description**, **approve / unapprove** it
+  (a GitLab reviewer action, with the
+  approval count shown inline), **request changes** (the blocking reviewer state — the app
+  adds you as a reviewer if needed and posts your drafted comment alongside; approving
+  clears it), **react with emoji** on the description and comments (GitLab's award
+  emoji, the same reaction bar as GitHub), **merge** it (merge or squash, optionally deleting the
+  source branch — guarded so it never merges a head you didn't see), and edit its **labels**
+  and **assignees**. The **AI Review tab** works on GitLab MRs too — run a code review or
+  security audit of the MR diff and post it as a comment.
+  You can also **create a merge request** right from the app (the New menu, the command
+  palette, or the Compare tab) — it pushes your branch and opens the MR, draft included, and
+  the Compare tab now spots an **existing open MR** from your branch and offers **View**
+  instead of a duplicate **Create**. The **Issues** panel speaks GitLab
+  too — its issues (open and closed) next to your local issues, and an issue view with the
+  description, comments, and a side rail of labels, assignees, and milestone — with GitLab
+  issue **writes**: **comment**, **close / reopen**, **edit the title and description**,
+  **react with emoji**, editing **labels**, **assignees**, and the **milestone**
+  right in that side rail, and **creating issues** (with labels, assignees, and a
+  milestone) from the same
+  dialog GitHub uses. Publishing a **local** issue or PR to GitLab works too. The
+  **Actions** panel covers GitLab **CI pipelines** — the run list, a branch CI badge, a
+  pipeline view with its **jobs** (status, durations, and per-job **logs**), plus the
+  actions: **cancel** a running pipeline, **retry** a failed or canceled one, and
+  **run a fresh pipeline** on any branch or tag with optional **CI/CD variables**. The
+  **Tags** panel manages GitLab **releases** too — alongside your local tags: read the
+  notes, the Latest badge, and asset links (open in browser), and **publish**, **edit**,
+  and **delete** releases, **upload** files as asset links, and remove them (GitLab has no
+  draft/pre-release toggles — it picks the latest release itself). The repository menu
+  speaks GitLab too — **View on GitLab**, **star / unstar**, a **Fork on GitLab** link,
+  and "Create issue on GitLab" — and you can **publish a local repository to GitLab**:
+  the publish dialog (and the sync bar's Publish button) now offers **GitHub or GitLab**
+  when both CLIs are signed in, creates the project, adds it as `origin`, and pushes.
+  **Insights** rounds it out: the local-git charts always worked, and the CI card now
+  charts **GitLab pipeline durations and success rate** (the GitHub-only cards —
+  community, traffic, dependencies — hide, with GitLab's web-only analytics linked
+  instead). GitHub repositories are
+  completely unaffected. (Bitbucket is still on the way.)
+- **Self-managed GitLab.** Everything above now works on your own GitLab instance,
+  not just gitlab.com — sign `glab` in to the host (`glab auth login --hostname …`)
+  and GitDesktop recognizes repositories on it automatically, labels them
+  correctly ("View on GitLab"), and routes every read and write through your
+  per-host `glab` credentials.
+- **GitLab issue lock, move, and delete.** The issue view's "More actions" menu now
+  works on GitLab: **lock / unlock** the conversation (GitLab locks without a
+  reason, so there's no reason submenu), **move** the issue to another project you
+  have access to (with project suggestions; the original closes with a "moved"
+  marker), **duplicate** it, and **delete** it (Owner-only, type-to-confirm).
+- **GitLab project settings.** The repository-settings dialog now manages GitLab
+  projects end to end: **General** (description, topics — AI-generate works here
+  too — default branch, per-feature access levels with proper
+  everyone/members-only/disabled tri-states, merge method, squash policy, and the
+  merge checks), **Members** (add/re-role/remove by username, with inherited group
+  members shown read-only), **Webhooks** (create/edit/delete with per-event
+  triggers and a secret token, send a test event, and debug with the **delivery
+  log** — request/response payloads and one-click **re-send**), **CI/CD
+  variables** (add/edit/delete, protected and masked flags), and the **Danger
+  zone** (rename with path redirect, archive/unarchive, visibility, transfer to
+  another namespace, delete — Owner-only actions explain themselves when you're
+  a Maintainer). Gated by your actual GitLab role, straight from the repository
+  menu.
+- **GitLab protected branches.** Manage protected branches from repository
+  settings: protect a branch or wildcard with per-rule push/merge access levels
+  and a force-push policy, toggle force push in place, and unprotect — rules
+  inherited from a group show read-only.
+- **GitLab issue due dates and confidential issues.** Two GitLab-unique fields
+  in the issue view's side rail: a **due date** (type a date and press Enter or
+  pick from the calendar; one click clears it, and an open issue past its date
+  reads **Past due**) and a **confidential** toggle that hides the issue from
+  non-members. GitLab-only — the rail on GitHub repositories is unchanged.
 - **A browsable, persistent Agent sidebar.** Several quality-of-life upgrades to the Agent list:
   the **activity log now survives a restart** — reopening the app no longer drops a session's,
   plan's, or research run's **step-by-step tool log** (the full interleaved transcript of reads,
@@ -390,6 +488,15 @@ commit list.
 
 ### Fixed
 
+- **Checking out a remote-only branch that lives on more than one remote now works.**
+  Clicking a remote branch in the branch switcher used to fail with *"matched multiple
+  remote tracking branches"* when the same branch name existed on two or more remotes.
+  The switcher now creates the local branch tracking exactly the remote shown on that
+  row, so the checkout matches what the row promised.
+- **Windows local-path repositories are no longer mislabeled with a bogus owner or host.**
+  A repository whose `origin` points at a local path (e.g. `C:\path\to\repo`) was
+  misread as a hosted remote, tagging it with a nonsensical owner and host. Local-path
+  remotes are now recognized as having neither.
 - **The review-model picker no longer changes your global default.** Switching the provider
   or model in a pull request's **Review** panel now applies to **that review only** — it no
   longer overwrites the default review model in Settings → AI. The panel shows a small note
@@ -446,6 +553,9 @@ commit list.
 
 ### Changed
 
+- **The GitLab clone browser lists your most recently active projects first.** The listing
+  is capped at 100 projects, so ordering by activity also means anything past the cap is
+  the least-recently-active — not an arbitrary hundred.
 - **Sharper AI security reviews.** The security-review prompt was rebuilt to cut false
   positives and surface real, exploitable issues. Every finding must now spell out a
   concrete exploit scenario (no attack path, no finding) and carries a **confidence score**,

@@ -81,13 +81,19 @@ export function useAddRecentRepo() {
   });
 }
 
-/** Backfills resolved owners onto the recent-repo records (see
+/** Backfills resolved owners + hosts onto the recent-repo records (see
  *  `persistRepoOwners`) so the repo list groups synchronously next open. */
 export function usePersistRepoOwners() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (owners: { path: string; owner: string | null }[]) =>
-      persistRepoOwners(owners),
+    mutationFn: (
+      owners: {
+        path: string;
+        owner: string | null;
+        host: string | null;
+        provider: string | null;
+      }[],
+    ) => persistRepoOwners(owners),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: settingsKeys.settings }),
   });

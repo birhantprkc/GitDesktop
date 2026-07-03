@@ -11,7 +11,7 @@ import { isCliProvider } from "@/lib/ai/providers";
 import { runCliStream } from "@/lib/ai/stream";
 import type { AiSettings, ReviewMode } from "@/lib/ai/types";
 import {
-  ghPrComment,
+  forgePrComment,
   ghPrDiff,
   gitBranchDiff,
   gitCommitDiff,
@@ -370,7 +370,7 @@ async function deliver(
   }
 
   if (event.target.type === "remote") {
-    await ghPrComment(event.repoPath, event.target.number, body);
+    await forgePrComment(event.repoPath, event.target.number, body);
     await queryClient.invalidateQueries({
       queryKey: ["repo", event.repoPath],
     });

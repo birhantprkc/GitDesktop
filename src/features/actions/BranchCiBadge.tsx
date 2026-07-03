@@ -1,4 +1,8 @@
-import { useGhStatus, useRepoStatus } from "@/lib/git/queries";
+import {
+  forgeFeatureReady,
+  useForgeStatus,
+  useRepoStatus,
+} from "@/lib/git/queries";
 import { useLatestRun } from "@/lib/github/actions";
 import { useUiStore } from "@/lib/stores/ui";
 import { StatusIcon, statusLabel } from "./status";
@@ -9,13 +13,13 @@ import { StatusIcon, statusLabel } from "./status";
  * Actions tab with that run selected.
  */
 export function BranchCiBadge({ repoPath }: { repoPath: string }) {
-  const gh = useGhStatus(repoPath);
-  const ghReady = Boolean(
-    gh.data?.installed && gh.data?.authenticated && gh.data?.repo,
-  );
+  const gh = useForgeStatus(repoPath);
+  // Renders for any provider with CI read implemented — GitHub Actions or GitLab
+  // pipelines; useLatestRun routes through the provider-neutral forge_ci_run_list.
+  const ciReady = forgeFeatureReady(gh.data, "ci");
   const status = useRepoStatus(repoPath);
   const branch = status.data?.branch.name ?? null;
-  const latest = useLatestRun(repoPath, ghReady, branch);
+  const latest = useLatestRun(repoPath, ciReady, branch);
   const setRepoTab = useUiStore((s) => s.setRepoTab);
   const selectRun = useUiStore((s) => s.selectRun);
 

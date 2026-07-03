@@ -12,19 +12,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { ghPrComment } from "@/lib/git/api";
-import { useCreatePr } from "@/lib/git/queries";
+import { forgePrComment } from "@/lib/git/api";
+import { useCreatePr, useForgeStatus } from "@/lib/git/queries";
 import type { LocalPr } from "@/lib/pulls/local";
 import { useSaveLocalPr } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 
 /**
- * Publishes a local PR to GitHub: pushes the head branch, opens a real PR
- * with the same title/description, **re-posts its comments** (so nothing is
- * lost), then closes the local PR with a link to its successor. Fires no
- * automations — the local PR's creation was the pr-open trigger point (see
- * CreateLocalPrDialog), so promoting it would double-run them.
+ * Publishes a local PR to the repo's provider (GitHub or GitLab): pushes the head
+ * branch, opens a real PR/MR with the same title/description, **re-posts its
+ * comments** (so nothing is lost), then closes the local PR with a link to its
+ * successor. Fires no automations — the local PR's creation was the pr-open
+ * trigger point (see CreateLocalPrDialog), so promoting it would double-run them.
  */
 export function PromoteLocalPrDialog({
   repoPath,
@@ -40,6 +40,10 @@ export function PromoteLocalPrDialog({
   const createPr = useCreatePr(repoPath);
   const save = useSaveLocalPr(repoPath);
   const selectPr = useUiStore((s) => s.selectPr);
+  const forge = useForgeStatus(repoPath);
+  const isGitLab = forge.data?.provider === "gitlab";
+  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
+  const prNoun = isGitLab ? "merge request" : "pull request";
   const [draft, setDraft] = useState(false);
   const [posting, setPosting] = useState(false);
   const pending = createPr.isPending || save.isPending || posting;
@@ -60,7 +64,7 @@ export function PromoteLocalPrDialog({
       setPosting(true);
       try {
         for (const c of carried) {
-          await ghPrComment(repoPath, number, c.body);
+          await forgePrComment(repoPath, number, c.body);
         }
       } finally {
         setPosting(false);
@@ -72,12 +76,12 @@ export function PromoteLocalPrDialog({
           ...pr.comments,
           {
             id: crypto.randomUUID(),
-            body: `Promoted to GitHub pull request [#${number}](${url}).`,
+            body: `Promoted to ${remoteLabel} ${prNoun} [#${number}](${url}).`,
             createdAt: new Date().toISOString(),
           },
         ],
       });
-      toast.success(`Opened pull request #${number}`, {
+      toast.success(`Opened ${prNoun} #${number}`, {
         description: url,
         action: { label: "View", onClick: () => openUrl(url) },
       });
@@ -92,12 +96,11 @@ export function PromoteLocalPrDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Publish this pull request to GitHub?</DialogTitle>
+          <DialogTitle>Publish this pull request to {remoteLabel}?</DialogTitle>
           <DialogDescription>
             Pushes <span className="font-mono">{pr.head}</span> to origin and
-            opens a pull request into{" "}
-            <span className="font-mono">{pr.base}</span> with this title and
-            description
+            opens a {prNoun} into <span className="font-mono">{pr.base}</span>{" "}
+            with this title and description
             {carried.length > 0
               ? `, and re-posts its ${carried.length} comment${
                   carried.length === 1 ? "" : "s"
@@ -123,7 +126,7 @@ export function PromoteLocalPrDialog({
           </Button>
           <Button onClick={promote} disabled={pending}>
             {pending && <Spinner data-icon="inline-start" />}
-            {draft ? "Publish as draft" : "Publish to GitHub"}
+            {draft ? "Publish as draft" : `Publish to ${remoteLabel}`}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -54,3 +54,21 @@ cd site && pnpm build   # build the marketing site
   derive it from `Menu::default()` or include the Edit `PredefinedMenuItem`s, or macOS
   text editing breaks.
 - The site deploys to Cloudflare Pages at `gitdesktop.app` (`base: "/"`).
+
+## Delegated implementation (orchestrator ⇄ subagents)
+
+For multi-file implementation work, prefer the `/delegate` workflow
+(`.claude/skills/delegate/SKILL.md`): the main conversation architects and
+writes work-package specs; the `implementer` agent (Opus,
+`.claude/agents/implementer.md`) executes them; the read-only `spec-reviewer`
+agent verifies. **/delegate requires Fable as the main conversation model**
+(the agents themselves are pinned to Opus regardless) — non-Fable sessions
+work inline instead. Both agents preload the `gd-conventions` skill — the repo
+playbook of hard rules and gotchas (`.claude/skills/gd-conventions/SKILL.md`).
+Only `implementer` may write files in this repo — plus the orchestrator for
+trivial ≤ ~3-line reviewer/live-confirmed fixes during a /delegate run (see
+the skill's Phase 4); every other spawned agent is strictly read-only, and
+**no agent ever commits or mutates git state — the user commits their own
+work.** (This section addresses the main conversation:
+if you are a dispatched subagent working a package, do your package — never
+re-delegate or spawn further agents.)

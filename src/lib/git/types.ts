@@ -48,6 +48,17 @@ export interface Branch {
   archived: boolean;
 }
 
+/** A branch that exists on a remote but not locally — offered in the switcher so
+ *  it can be checked out (which creates a local tracking branch). */
+export interface RemoteBranch {
+  /** Short branch name, without the remote prefix (e.g. `feature/x`). */
+  name: string;
+  /** The remote it lives on (e.g. `origin`). */
+  remote: string;
+  /** ISO-8601 committer date of the branch tip (for recency sorting). */
+  lastCommitDate: string;
+}
+
 /** A local branch's ahead/behind counts vs. the default branch. */
 export interface BranchDivergence {
   name: string;
@@ -60,6 +71,13 @@ export interface BranchDivergence {
 export interface RepoOwner {
   path: string;
   owner: string | null;
+  /** The origin remote's host (e.g. "github.com", "gitlab.com") — lets per-repo
+   *  UI name the actual provider. */
+  host: string | null;
+  /** The provider that host routes to ("github" / "gitlab" / "bitbucket"),
+   *  including self-managed GitLab hosts glab is signed in to. Null when
+   *  unrecognized — the UI labels those GitHub (gh stays authoritative). */
+  provider: string | null;
 }
 
 /** A git submodule and its state vs. the commit the parent records. */
@@ -354,6 +372,28 @@ export interface GhRepoList {
   repos: GhRepo[];
 }
 
+/** Provider-neutral repository row for the clone browser (GitHub via gh, GitLab
+ *  via glab). Mirrors {@link GhRepo} but with a provider-agnostic `fullName`. */
+export interface ForgeRepo {
+  /** "owner/name" (GitHub) or "group/subgroup/name" (GitLab). */
+  fullName: string;
+  owner: string;
+  name: string;
+  private: boolean;
+  archived: boolean;
+  fork: boolean;
+  cloneUrl: string;
+  sshUrl: string;
+  description: string | null;
+  pushedAt: string | null;
+}
+
+export interface ForgeRepoList {
+  /** The signed-in user's login, so the UI lists their own repos first. */
+  viewer: string;
+  repos: ForgeRepo[];
+}
+
 export interface GhAccount {
   /** The host this account is signed in to ("github.com" or an Enterprise
    *  server). Accounts are grouped by host and switched per host. */
@@ -378,6 +418,344 @@ export interface GhStatus {
   /** The repo's GitHub host — "github.com" or an Enterprise server like
    *  "github.acme.com" — when it's a recognized GitHub repo. */
   host: string | null;
+}
+
+/** The hosting platform backing a repo's hosted features. */
+export type ForgeProvider = "github" | "gitlab" | "bitbucket";
+
+/** What a provider (and this repo on it) supports, so panels show only the
+ *  controls that work instead of erroring. GitHub is all-true; GitLab/Bitbucket
+ *  follow the parity matrix. Grows as more panels move behind capability gates. */
+export interface ForgeCapabilities {
+  pullRequests: boolean;
+  draftPrs: boolean;
+  issues: boolean;
+  labels: boolean;
+  milestones: boolean;
+  reactions: boolean;
+  discussions: boolean;
+  stars: boolean;
+  ci: boolean;
+  webhooks: boolean;
+  approvals: boolean;
+}
+
+/** Which hosted features GitDesktop has actually *built* for a provider — a
+ *  different axis from {@link ForgeCapabilities}. Capabilities = what the platform
+ *  can do; this = what we've wired up. GitHub is all-true; GitLab/Bitbucket flip
+ *  these on per phase, so a *ready* repo whose feature isn't built yet degrades to
+ *  "coming soon" rather than firing GitHub calls. Gated via `forgeFeatureReady`. */
+export interface ForgeImplemented {
+  pullRequests: boolean;
+  issues: boolean;
+  ci: boolean;
+  releases: boolean;
+  insights: boolean;
+  /** Repo-management surface: View/Fork/Star/admin settings, branch-rule import. */
+  repoActions: boolean;
+  /** Publishing a local repo to the provider (create remote + push). */
+  publish: boolean;
+  /** Posting a comment/note on an issue (first per-action write). */
+  issueComment: boolean;
+  /** Closing / reopening an issue. */
+  issueState: boolean;
+  /** Posting a comment/note on a merge/pull request. */
+  mrComment: boolean;
+  /** Closing / reopening a merge/pull request (not merge). */
+  mrState: boolean;
+  /** Approving / unapproving a merge request via the bodyless toggle — GitLab-only
+   *  (GitHub approves through the review flow), so it's false for GitHub. */
+  mrApprove: boolean;
+  /** Merging a merge/pull request (strategy + delete-source-branch) — a shared
+   *  control, so true for both GitHub and GitLab. */
+  mrMerge: boolean;
+  /** Arming merge-when-pipeline-succeeds (auto-merge) on an MR while its head
+   *  pipeline is in flight — GitLab-only like `mrApprove` (GitHub has no in-app
+   *  PR auto-merge), so it's false for GitHub. */
+  mrAutoMerge: boolean;
+  /** Editing labels on an issue — a shared control (GitHub by node id, GitLab by
+   *  name), so true for both. */
+  issueLabels: boolean;
+  /** Editing labels on a merge/pull request — the same shared label control. */
+  mrLabels: boolean;
+  /** Setting an issue's assignees — a shared issue control. (MR assignees are the
+   *  separate GitLab-only `mrAssignees` below.) */
+  issueAssignees: boolean;
+  /** Creating an issue from the app — a shared control (the GitHub-only org
+   *  issue type hides per provider in the dialog; milestone works on both). */
+  issueCreate: boolean;
+  /** Creating a merge/pull request from the app (push head + open) — shared. */
+  mrCreate: boolean;
+  /** Re-running a finished CI run — shared. (GitLab retries failed+canceled jobs
+   *  only; "re-run all" stays a GitHub-only affordance.) */
+  ciRerun: boolean;
+  /** Cancelling an in-flight CI run — shared. */
+  ciCancel: boolean;
+  /** Manually starting a CI run — shared (GitHub dispatches a workflow; GitLab
+   *  runs a new pipeline on a ref, with variables instead of inputs). */
+  ciDispatch: boolean;
+  /** Publishing a new release — shared (the GitHub-only draft/pre-release/latest
+   *  toggles hide per provider in the dialog). */
+  releaseCreate: boolean;
+  /** Managing an existing release (edit, delete, upload/delete assets) — shared. */
+  releaseEdit: boolean;
+  /** Setting a merge request's assignees — GitLab-only like `mrApprove` (GitHub
+   *  PRs expose no assignee picker here), so it's false for GitHub. */
+  mrAssignees: boolean;
+  /** Requesting changes on an MR (the blocking reviewer state) — GitLab-only
+   *  like `mrApprove` (GitHub requests changes via its Review menu). */
+  mrRequestChanges: boolean;
+  /** Editing an existing issue's title/body — the shared edit dialog. */
+  issueEdit: boolean;
+  /** Editing an existing merge/pull request's title/body — the same shared
+   *  edit control. */
+  mrEdit: boolean;
+  /** Setting or clearing an issue's milestone — the shared picker. `Milestone.
+   *  number` is whatever key the provider's write takes (GitHub milestone
+   *  number, GitLab global milestone id). */
+  issueMilestone: boolean;
+  /** Reactions on an issue + its comments — the shared ReactionBar (GitHub
+   *  reacts by node id, GitLab awards emoji by issue/note id). */
+  issueReactions: boolean;
+  /** Reactions on a merge/pull request + its comments — the same ReactionBar. */
+  mrReactions: boolean;
+  /** Locking/unlocking an issue's conversation (GitHub with an optional
+   *  reason; GitLab has none, so the reason submenu hides per provider). */
+  issueLock: boolean;
+  /** Moving an issue to another repository/project (GitHub "transfer",
+   *  GitLab "move" — the same dialog). */
+  issueTransfer: boolean;
+  /** Permanently deleting an issue (server-side role checks apply). */
+  issueDelete: boolean;
+  /** Marking an issue confidential (members-only). GitLab-unique — false for
+   *  GitHub, which has no confidential-issue concept. */
+  issueConfidential: boolean;
+  /** Setting/clearing an issue's due date. GitLab-unique — false for GitHub. */
+  issueDueDate: boolean;
+  /** The repository-settings dialog (admin probe + General / Danger zone and
+   *  the provider's extra sections). */
+  repoSettings: boolean;
+  /** Playing a manual CI job (a job awaiting a manual "play"). GitLab-unique —
+   *  false for GitHub, whose manual approvals work differently. */
+  ciJobPlay: boolean;
+  /** Time tracking (estimate + spent) on issues and MRs. GitLab-unique — false
+   *  for GitHub, which has no built-in time tracking. */
+  timeTracking: boolean;
+  /** Related-issue links (relates_to) on issues. GitLab-unique — false for
+   *  GitHub (its issue relationships are sub-issues/dependencies instead). */
+  issueLinks: boolean;
+}
+
+/** Whether the viewer can manage this repo's settings (`admin`) and whether
+ *  they hold the owner-only lifecycle powers (`owner`). GitHub admin implies
+ *  both; GitLab distinguishes Maintainer from Owner. */
+export interface ForgeRepoAdmin {
+  admin: boolean;
+  owner: boolean;
+}
+
+/** GitLab project settings — its own shape rather than a lossy mapping onto
+ *  {@link RepoSettings}: features are ACCESS LEVELS (enabled / private /
+ *  disabled), the merge style is one enum, squash is a four-way option. */
+export interface GitLabRepoSettings {
+  description: string | null;
+  topics: string[];
+  defaultBranch: string | null;
+  /** "private" | "internal" | "public" — read-only here (Danger zone changes it). */
+  visibility: string;
+  webUrl: string;
+  /** Full path ("group/name") — the Danger-zone confirm phrase. */
+  fullName: string;
+  /** URL slug (what a rename edits). */
+  path: string;
+  /** Display name. */
+  name: string;
+  archived: boolean;
+  /** "enabled" | "private" (members only) | "disabled" */
+  issuesAccessLevel: string;
+  mergeRequestsAccessLevel: string;
+  wikiAccessLevel: string;
+  snippetsAccessLevel: string;
+  forkingAccessLevel: string;
+  /** "merge" | "rebase_merge" (semi-linear) | "ff" */
+  mergeMethod: string;
+  /** "never" | "always" | "default_on" | "default_off" */
+  squashOption: string;
+  removeSourceBranchAfterMerge: boolean;
+  onlyAllowMergeIfPipelineSucceeds: boolean;
+  onlyAllowMergeIfAllDiscussionsAreResolved: boolean;
+}
+
+/** The GitLab settings the General form sends back (the managed subset). */
+export type GitLabRepoSettingsInput = Omit<
+  GitLabRepoSettings,
+  | "visibility"
+  | "webUrl"
+  | "fullName"
+  | "path"
+  | "name"
+  | "archived"
+  | "description"
+> & { description: string };
+
+/** A GitLab project member. `id` is the user id as a string (IPC-safe). */
+export interface GitLabMember {
+  id: string;
+  username: string;
+  avatarUrl: string;
+  /** 10 Guest / 15 Planner / 20 Reporter / 30 Developer / 40 Maintainer / 50 Owner. */
+  accessLevel: number;
+  /** Added on this project directly (editable) vs inherited from a group. */
+  direct: boolean;
+}
+
+/** A GitLab project webhook. Events are per-hook boolean flags on GitLab —
+ *  `events` carries the enabled flag names ("push_events", …). */
+export interface GitLabHook {
+  id: string;
+  url: string;
+  events: string[];
+  enableSslVerification: boolean;
+  /** "executable", or "disabled"/"temporarily_disabled" once GitLab
+   *  auto-disables a failing hook. */
+  alertStatus: string;
+  createdAt: string;
+}
+
+/** What the webhook form sends. `token: null` leaves an existing secret
+ *  unchanged (GitLab never returns it). */
+export interface GitLabHookInput {
+  url: string;
+  token: string | null;
+  enableSslVerification: boolean;
+  events: string[];
+}
+
+/** One recorded delivery of a GitLab hook, payloads inline. */
+export interface GitLabHookDelivery {
+  id: string;
+  /** e.g. "push_hooks". */
+  trigger: string;
+  /** The endpoint's HTTP status ("405") or a failure word. */
+  responseStatus: string;
+  createdAt: string;
+  /** Seconds. */
+  duration: number;
+  requestPayload: string;
+  responsePayload: string;
+}
+
+/** A GitLab CI/CD variable — one store (vs GitHub's secrets/variables split):
+ *  `masked` hides the value in job logs, `protected` limits it to protected
+ *  refs; the API still returns values to maintainers. */
+export interface GitLabVariable {
+  key: string;
+  value: string;
+  protected: boolean;
+  masked: boolean;
+  /** "*" for unscoped. A key can repeat at different scopes (a Premium
+   *  feature the app displays but doesn't create) — writes address key+scope. */
+  environmentScope: string;
+}
+
+/** One access-level entry in a protected branch's push/merge allow list.
+ *  Free tier carries a single {0,30,40} role; Premium can add multiple entries
+ *  (users/groups/deploy keys), each with its own `description`. */
+export interface GitLabAccessLevelEntry {
+  accessLevel: number;
+  description: string;
+}
+
+/** A GitLab protected branch rule. Access levels are set at creation time (the
+ *  REST API ignores level changes on update on Free tier), so only
+ *  `allowForcePush` is row-editable. `inherited` rules come from a group and
+ *  are managed there, not here. */
+export interface GitLabProtectedBranch {
+  id: string;
+  name: string;
+  pushLevels: GitLabAccessLevelEntry[];
+  mergeLevels: GitLabAccessLevelEntry[];
+  allowForcePush: boolean;
+  inherited: boolean;
+}
+
+/** A merge/pull request's approval summary — who has approved and whether the
+ *  signed-in viewer has. Only GitLab produces it today; the GitLab-only
+ *  approve/unapprove toggle and Request-changes control read it (gated on
+ *  `implemented.mrApprove` / `implemented.mrRequestChanges`). */
+export interface ApprovalState {
+  /** Whether the viewer has approved — the toggle's driver (Approve ↔ Revoke). */
+  viewerHasApproved: boolean;
+  /** Usernames who have approved, for an "Approved by …" summary. */
+  approvedBy: string[];
+  /** Required approvals — a Premium approval-rules concept; 0 on Free. */
+  approvalsRequired: number;
+  /** Approvals still needed (0 on Free). */
+  approvalsLeft: number;
+  /** Whether the viewer holds a "requested changes" reviewer state — the
+   *  Request-changes control's pressed state. Cleared by approving (or removing
+   *  yourself as a reviewer on GitLab); the direct undo is Premium-only. */
+  viewerRequestedChanges: boolean;
+}
+
+/** A GitLab issue/MR's time-tracking summary. Seconds are the raw values; the
+ *  human strings are GitLab's own formatting ("3h", "1d 2h") and are "" when the
+ *  matching value is unset. GitLab-only (`implemented.timeTracking`). */
+export interface GitLabTimeStats {
+  /** Estimate, in seconds (0 when unset). */
+  timeEstimate: number;
+  /** Total time spent, in seconds (0 when unset). */
+  totalTimeSpent: number;
+  /** Human estimate ("3h"); "" when unset. */
+  humanTimeEstimate: string;
+  /** Human total spent ("1d 2h"); "" when unset. */
+  humanTotalTimeSpent: string;
+}
+
+/** A related issue linked to another via a `relates_to` link. GitLab-only
+ *  (`implemented.issueLinks`); `linkId` addresses the link for removal. */
+export interface GitLabLinkedIssue {
+  /** The link's own id (used to unlink), as a string (IPC-safe). */
+  linkId: string;
+  number: number;
+  title: string;
+  /** "OPEN" or "CLOSED". */
+  state: string;
+  /** "relates_to" (the only link type the app creates). */
+  linkType: string;
+  webUrl: string;
+}
+
+/** A GitLab MR's merge/auto-merge state — the auto-merge (merge-when-pipeline-
+ *  succeeds) control's driver. Only GitLab produces it (`implemented.mrAutoMerge`);
+ *  GitHub has no in-app PR auto-merge. */
+export interface GitLabMrMergeState {
+  /** Whether merge-when-pipeline-succeeds is armed on the MR. */
+  autoMergeEnabled: boolean;
+  /** GitLab's detailed_merge_status ("mergeable", "ci_still_running", "checking", …). */
+  detailedMergeStatus: string;
+  /** Head pipeline status ("running", "pending", "success", …); "" when the MR has no pipeline. */
+  pipelineStatus: string;
+  /** Head pipeline web URL; "" when no pipeline. */
+  pipelineUrl: string;
+}
+
+/** Provider-neutral analogue of {@link GhStatus}: is the hosted integration usable
+ *  for this repo, on which host, as whom, and what does it support. Hosted panels
+ *  gate on this (and its `capabilities`) instead of a GitHub-only readiness check,
+ *  so the same surfaces light up for GitLab and Bitbucket too. */
+export interface ForgeStatus {
+  /** The detected provider, or null when the repo has no recognized hosted remote. */
+  provider: ForgeProvider | null;
+  installed: boolean;
+  authenticated: boolean;
+  repo: string | null;
+  host: string | null;
+  login: string | null;
+  capabilities: ForgeCapabilities;
+  /** Which capabilities are actually built for this provider — drives per-feature
+   *  "coming soon" gating distinct from `capabilities`. */
+  implemented: ForgeImplemented;
 }
 
 export interface WebhookConfig {
@@ -710,6 +1088,9 @@ export interface PrDetails {
   comments: PrThreadOut[];
   checks: PrCheckOut[];
   labels: RepoLabel[];
+  /** Assignee usernames. Only GitLab fills this — the MR-assignees picker is
+   *  GitLab-only (`implemented.mrAssignees`); GitHub leaves it empty. */
+  assignees: string[];
 }
 
 /** One review item on a GitHub PR (a submitted review, an inline review comment,
@@ -769,7 +1150,8 @@ export interface Reaction {
 
 export interface IssueReactions {
   body: Reaction[];
-  /** Reactions per comment, keyed by the comment's GraphQL node id. */
+  /** Reactions per comment, keyed by the comment's id as the thread carries it
+   *  (a GraphQL node id on GitHub, a numeric note id on GitLab). */
   comments: Record<string, Reaction[]>;
 }
 
@@ -916,6 +1298,10 @@ export interface IssueDetails {
   locked: boolean;
   /** GitHub's lock reason (off_topic/resolved/spam/too_heated) or null. */
   activeLockReason: string | null;
+  /** GitLab-only: the issue is hidden from non-members. Always false on GitHub. */
+  confidential: boolean;
+  /** GitLab-only: "YYYY-MM-DD" or null. GitHub issues have no due dates. */
+  dueDate: string | null;
   /** Conversation comments (shared shape with PRs). */
   comments: PrThreadOut[];
   labels: RepoLabel[];

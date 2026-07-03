@@ -19,7 +19,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import {
-  ghRepoUrl,
+  forgeRepoUrl,
   openInTerminal,
   openWithDefault,
   openWithProgram,
@@ -97,7 +97,7 @@ export function ChangesEmptyState({
               size="sm"
               className="cursor-pointer"
               onClick={() =>
-                ghRepoUrl(repoPath)
+                forgeRepoUrl(repoPath)
                   .then((url) => openUrl(url))
                   .catch(onError)
               }
