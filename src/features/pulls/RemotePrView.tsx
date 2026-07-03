@@ -107,6 +107,7 @@ const MERGE_LABEL: Record<MergeStrategy, string> = {
   merge: "Create a merge commit",
   squash: "Squash and merge",
   rebase: "Rebase and merge",
+  fast_forward: "Fast-forward",
 };
 
 /**
@@ -1139,14 +1140,22 @@ export function RemotePrView({
               />
               <DropdownMenuContent align="end" className="w-56">
                 {/* GitLab has no per-MR rebase-merge (that's the project's merge_method
-                    setting), so it gets only merge + squash. Branch-rule gating is
-                    GitHub branch-protection data, so it never applies to GitLab. */}
+                    setting), so it gets only merge + squash. Bitbucket offers
+                    merge + squash + fast-forward. Branch-rule gating is GitHub
+                    branch-protection data, so it never applies to GitLab/Bitbucket. */}
                 {(provider === "gitlab"
                   ? (["merge", "squash"] as const)
-                  : (["merge", "squash", "rebase"] as const)
+                  : provider === "bitbucket"
+                    ? (["merge", "squash", "fast_forward"] as const)
+                    : (["merge", "squash", "rebase"] as const)
                 ).map((s) => {
                   const blocked =
                     provider !== "gitlab" &&
+                    provider !== "bitbucket" &&
+                    // Bitbucket's "fast_forward" isn't a GitHub MergeMethod and
+                    // never reaches this arm (bitbucket is excluded above) — the
+                    // narrowing also keeps `s` a valid MergeMethod for the check.
+                    s !== "fast_forward" &&
                     !isMergeMethodAllowed(rulesConfig, pr.baseRefName, s);
                   return (
                     <DropdownMenuItem
@@ -1192,7 +1201,9 @@ export function RemotePrView({
         </div>
       )}
 
-      {pr.state === "CLOSED" && canChangeState && (
+      {/* Bitbucket declined PRs can't be reopened — no API or web affordance, so
+          hide it (unlike GitHub/GitLab). */}
+      {pr.state === "CLOSED" && canChangeState && provider !== "bitbucket" && (
         <div className="flex items-center gap-2 border-t p-3">
           <span className="flex-1" />
           <Button

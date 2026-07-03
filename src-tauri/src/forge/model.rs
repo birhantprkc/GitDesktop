@@ -418,13 +418,27 @@ impl Implemented {
                 issue_links: true,
             },
             // Bitbucket Cloud reads (Phase 3): PR list/view/diff, CI pipelines, and
-            // repo View/URL are wired over direct HTTP. Everything else — issues (the
-            // native tracker sunsets 2026-08-20), writes, releases, insights, settings
-            // — is unbuilt and stays false, so those panels degrade to "coming soon".
+            // repo View/URL are wired over direct HTTP. Phase 4 adds the WRITES: PR
+            // comment, decline (`mr_state` = DECLINE only — Bitbucket can't reopen a
+            // declined PR via API or web, so `forge_pr_reopen` errors and the frontend
+            // hides the button), merge, title/body edit, create, and the bodyless
+            // approve/unapprove toggle; plus pipeline rerun / cancel / dispatch.
+            // Everything else — issues (the native tracker sunsets 2026-08-20),
+            // request-changes (deferred), assignees/labels, releases, insights, settings
+            // — stays false, so those panels degrade to "coming soon".
             Provider::Bitbucket => Self {
                 pull_requests: true,
                 ci: true,
                 repo_actions: true,
+                mr_comment: true,
+                mr_state: true,
+                mr_merge: true,
+                mr_edit: true,
+                mr_create: true,
+                mr_approve: true,
+                ci_rerun: true,
+                ci_cancel: true,
+                ci_dispatch: true,
                 ..Self::none()
             },
         }
@@ -595,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn github_implements_issue_and_mr_writes_bitbucket_does_not() {
+    fn bitbucket_implements_pr_and_ci_writes() {
         let gh = Implemented::for_provider(Provider::GitHub);
         assert!(gh.issue_comment && gh.issue_state && gh.mr_comment && gh.mr_state);
         // MR merge is a shared control (both providers); approve/unapprove is the one
@@ -606,16 +620,21 @@ mod tests {
         let bb = Implemented::for_provider(Provider::Bitbucket);
         // Bitbucket reads that ARE built (Phase 3): PRs, CI pipelines, repo actions.
         assert!(bb.pull_requests && bb.ci && bb.repo_actions);
+        // Phase 4 PR writes: comment, decline (mr_state), merge, edit, create, and the
+        // bodyless approve/unapprove toggle.
+        assert!(bb.mr_comment && bb.mr_state && bb.mr_merge && bb.mr_edit && bb.mr_create);
+        assert!(bb.mr_approve);
+        // …and pipeline rerun / cancel / dispatch.
+        assert!(bb.ci_rerun && bb.ci_cancel && bb.ci_dispatch);
         // …but nothing else — issues stay off, no releases/insights/settings/publish.
         assert!(!bb.issues && !bb.releases && !bb.insights && !bb.repo_settings && !bb.publish);
-        assert!(!bb.issue_comment && !bb.issue_state && !bb.mr_comment && !bb.mr_state);
-        assert!(!bb.mr_approve && !bb.mr_merge && !bb.mr_auto_merge);
+        assert!(!bb.issue_comment && !bb.issue_state);
+        // Request-changes is deferred for Bitbucket; auto-merge has no Bitbucket analogue.
+        assert!(!bb.mr_request_changes && !bb.mr_auto_merge);
         assert!(!bb.issue_labels && !bb.mr_labels && !bb.issue_assignees);
-        assert!(!bb.issue_create && !bb.mr_create);
-        assert!(!bb.ci_rerun && !bb.ci_cancel && !bb.ci_dispatch);
+        assert!(!bb.issue_create);
         assert!(!bb.release_create && !bb.release_edit && !bb.mr_assignees);
-        assert!(!bb.issue_edit && !bb.mr_edit && !bb.issue_milestone);
-        assert!(!bb.mr_request_changes);
+        assert!(!bb.issue_edit && !bb.issue_milestone);
         assert!(!bb.issue_reactions && !bb.mr_reactions);
         assert!(!bb.ci_job_play && !bb.time_tracking && !bb.issue_links);
     }

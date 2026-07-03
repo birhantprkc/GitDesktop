@@ -702,7 +702,7 @@ export const gitUpdateBranchFrom = (
   base: string,
 ) => invoke<string>("git_update_branch_from", { repoPath, branch, base });
 
-export type MergeStrategy = "merge" | "squash" | "rebase";
+export type MergeStrategy = "merge" | "squash" | "rebase" | "fast_forward";
 
 export const gitMergeLocalPr = (
   repoPath: string,

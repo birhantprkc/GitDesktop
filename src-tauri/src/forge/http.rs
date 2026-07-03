@@ -124,6 +124,17 @@ pub(crate) fn http_error(status: u16, body: &str) -> AppError {
         429 => AppError::Bitbucket(
             "Bitbucket rate limit reached (429). Wait a moment and try again.".into(),
         ),
+        // A 403 whose body names Bitbucket's "privilege scopes" is a missing-write-scope
+        // token (distinct from a bad token, which is a 401). Point the user at
+        // reconnecting with the write scopes rather than showing the raw envelope. Other
+        // 403s (e.g. a genuine per-resource permission denial) fall through to the
+        // envelope/status message below.
+        403 if body.contains("privilege scopes") => AppError::Bitbucket(
+            "Bitbucket rejected the request (403) — your API token is missing a required \
+             write scope. Reconnect it in Settings → Accounts with pull request / \
+             repository / pipeline write scopes."
+                .into(),
+        ),
         _ => {
             let detail = api_msg.unwrap_or_else(|| {
                 let trimmed = body.trim();
@@ -216,6 +227,105 @@ pub async fn bb_get_json<T: serde::de::DeserializeOwned>(
         .map_err(|e| AppError::Bitbucket(format!("could not parse Bitbucket {what}: {e}")))
 }
 
+/// The low-level write primitive: send `method` to `path_or_url` with an optional
+/// JSON `body`, HTTP Basic auth, and return the raw `(status, location_header,
+/// body_text)` WITHOUT turning a non-2xx into an error — the caller decides. The
+/// `Location` header is read case-insensitively (reqwest already normalizes header
+/// names, but the accessor is explicit here). Used directly by the merge path, which
+/// must branch on 200 (sync) vs 202 (async task, follow `Location`); the typed
+/// helpers below build on it.
+pub async fn bb_send(
+    creds: &BbCredentials,
+    method: reqwest::Method,
+    path_or_url: &str,
+    body: Option<&serde_json::Value>,
+) -> AppResult<(u16, Option<String>, String)> {
+    let url = resolve_url(path_or_url);
+    let mut req = client()
+        .request(method, &url)
+        .basic_auth(&creds.email, Some(&creds.token))
+        .header(reqwest::header::ACCEPT, "application/json");
+    if let Some(b) = body {
+        // Serialize the JSON body ourselves rather than `.json()` (which needs
+        // reqwest's `json` feature — a new dep). `serde_json::to_string` on a
+        // `serde_json::Value` cannot fail, so an empty body on the impossible error is
+        // safe.
+        let text = serde_json::to_string(b).unwrap_or_default();
+        req = req
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(text);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| AppError::Bitbucket(format!("Bitbucket request failed: {e}")))?;
+    let status = resp.status().as_u16();
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| AppError::Bitbucket(format!("could not read Bitbucket response: {e}")))?;
+    Ok((status, location, body))
+}
+
+/// POST JSON to a Bitbucket endpoint and deserialize the 2xx body into `T`.
+/// `Accept`/`Content-Type: application/json`, HTTP Basic auth. Non-2xx →
+/// [`http_error`]; a parse failure of a 2xx body → `Bitbucket("could not parse …")`.
+pub async fn bb_post_json<T: serde::de::DeserializeOwned>(
+    creds: &BbCredentials,
+    path_or_url: &str,
+    body: &serde_json::Value,
+    what: &str,
+) -> AppResult<T> {
+    let (status, _, body) = bb_send(creds, reqwest::Method::POST, path_or_url, Some(body)).await?;
+    if !(200..300).contains(&status) {
+        return Err(http_error(status, &body));
+    }
+    serde_json::from_str(&body)
+        .map_err(|e| AppError::Bitbucket(format!("could not parse Bitbucket {what}: {e}")))
+}
+
+/// PUT JSON to a Bitbucket endpoint and deserialize the 2xx body into `T`. Same shape
+/// as [`bb_post_json`].
+pub async fn bb_put_json<T: serde::de::DeserializeOwned>(
+    creds: &BbCredentials,
+    path_or_url: &str,
+    body: &serde_json::Value,
+    what: &str,
+) -> AppResult<T> {
+    let (status, _, body) = bb_send(creds, reqwest::Method::PUT, path_or_url, Some(body)).await?;
+    if !(200..300).contains(&status) {
+        return Err(http_error(status, &body));
+    }
+    serde_json::from_str(&body)
+        .map_err(|e| AppError::Bitbucket(format!("could not parse Bitbucket {what}: {e}")))
+}
+
+/// POST to a Bitbucket endpoint with NO request body (decline / approve /
+/// stopPipeline). Any 2xx (including a 200 participant echo or a 204) → `Ok`; the
+/// returned body is ignored. Non-2xx → [`http_error`].
+pub async fn bb_post_empty(creds: &BbCredentials, path_or_url: &str) -> AppResult<()> {
+    let (status, _, body) = bb_send(creds, reqwest::Method::POST, path_or_url, None).await?;
+    if !(200..300).contains(&status) {
+        return Err(http_error(status, &body));
+    }
+    Ok(())
+}
+
+/// DELETE a Bitbucket endpoint. Any 2xx (typically 204) → `Ok`. Non-2xx →
+/// [`http_error`].
+pub async fn bb_delete(creds: &BbCredentials, path_or_url: &str) -> AppResult<()> {
+    let (status, _, body) = bb_send(creds, reqwest::Method::DELETE, path_or_url, None).await?;
+    if !(200..300).contains(&status) {
+        return Err(http_error(status, &body));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +361,31 @@ mod tests {
             AppError::Bitbucket(m) => {
                 assert!(m.contains("500"));
                 assert!(m.contains("upstream boom"));
+            }
+            other => panic!("expected Bitbucket error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn http_error_403_privilege_scopes_names_the_missing_scope() {
+        let body = r#"{"type":"error","error":{"message":"Your credentials lack one or more required privilege scopes."}}"#;
+        match http_error(403, body) {
+            AppError::Bitbucket(m) => {
+                assert!(m.contains("403"));
+                assert!(m.to_lowercase().contains("scope"));
+            }
+            other => panic!("expected Bitbucket error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn http_error_other_403_falls_through_to_envelope_message() {
+        // A 403 that is NOT a missing-scope error keeps the API's own message.
+        let body = r#"{"type":"error","error":{"message":"You do not have access to this repository."}}"#;
+        match http_error(403, body) {
+            AppError::Bitbucket(m) => {
+                assert!(m.contains("access to this repository"));
+                assert!(!m.to_lowercase().contains("required write scope"));
             }
             other => panic!("expected Bitbucket error, got {other:?}"),
         }

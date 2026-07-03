@@ -16,6 +16,7 @@
 //! repos/pipelines allow 100.
 
 use serde::Deserialize;
+use tauri_plugin_http::reqwest;
 
 use crate::error::{AppError, AppResult};
 use crate::forge::encode_query_value;
@@ -27,7 +28,8 @@ use crate::forge::model::{
 use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::pr::{
-    PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrThreadOut,
+    ApprovalState, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrRef,
+    PrThreadOut,
 };
 
 /// Failed-step logs can run to many MB; keep the tail (failures land at the end).
@@ -154,10 +156,16 @@ pub struct BbAccountInfo {
 }
 
 /// A Bitbucket user (`/2.0/user`, or an embedded author object). For other users
-/// `username` is absent (privacy) — only the authenticated self carries it. The
+/// `username` is absent (privacy) — only the authenticated self carries it, so the
+/// stable cross-user identity is `uuid` (braced, present on every user object). The
 /// avatar link is deliberately not deserialized (unused by the neutral model).
 #[derive(Deserialize)]
 struct BbUser {
+    /// The braced account UUID (`{…}`) — the ONE identity field present on both the
+    /// self object and other users' participant objects, so it's what reconciles the
+    /// viewer against a PR participant.
+    #[serde(default)]
+    uuid: Option<String>,
     #[serde(default)]
     username: Option<String>,
     #[serde(default)]
@@ -1289,6 +1297,527 @@ pub async fn repo_url(repo_path: &str) -> AppResult<String> {
     Ok(format!("https://bitbucket.org/{ws}/{slug}"))
 }
 
+// ── Pull requests (write) ───────────────────────────────────────────────────────
+
+/// The `repositories/{ws}/{slug}` path prefix every write shares — resolve the
+/// workspace/slug from the origin remote and percent-encode both segments.
+async fn repo_base(repo_path: &str) -> AppResult<String> {
+    let (ws, slug) = workspace_slug(repo_path).await?;
+    Ok(format!(
+        "repositories/{}/{}",
+        encode_query_value(&ws),
+        encode_query_value(&slug),
+    ))
+}
+
+/// Post a comment on a pull request (`POST …/pullrequests/{n}/comments`,
+/// `{"content":{"raw": body}}`). The created comment is ignored — the frontend
+/// refetches the thread.
+pub async fn comment_pr(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/comments");
+    let payload = serde_json::json!({ "content": { "raw": body } });
+    http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "comment").await?;
+    Ok(())
+}
+
+/// Decline (close) a pull request (`POST …/pullrequests/{n}/decline`, no body). A
+/// declined Bitbucket PR CANNOT be reopened (via API or web — BCLOUD-4954), so there
+/// is no reopen counterpart; `forge_pr_reopen` errors for Bitbucket by design.
+pub async fn decline_pr(repo_path: &str, number: u64) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/decline");
+    http::bb_post_empty(&creds, &path).await
+}
+
+/// Map the neutral merge-strategy string onto Bitbucket's `merge_strategy` enum.
+/// Pure (testable). Unknown strategies error rather than silently defaulting.
+fn map_merge_strategy(strategy: &str) -> AppResult<&'static str> {
+    match strategy {
+        "merge" => Ok("merge_commit"),
+        "squash" => Ok("squash"),
+        "fast_forward" => Ok("fast_forward"),
+        other => Err(AppError::InvalidArgument(format!(
+            "unsupported Bitbucket merge strategy: {other}"
+        ))),
+    }
+}
+
+/// The `{task_status}` envelope of a merge poll (`GET {location}`).
+#[derive(Deserialize)]
+struct BbMergeTask {
+    #[serde(default)]
+    task_status: String,
+}
+
+/// Merge a pull request (`POST …/pullrequests/{n}/merge`). Bitbucket has no
+/// expected-hash guard (the caller's `sha` is dropped upstream). The body is
+/// `{"type":"pullrequest","merge_strategy":<mapped>,"close_source_branch": delete}` —
+/// `close_source_branch:true` auto-deletes the source branch.
+///
+/// Small repos merge SYNCHRONOUSLY (200); large/slow merges return 202 with a
+/// `Location` task-status URL we poll until `SUCCESS`. Any other status → an error via
+/// [`http::http_error`] (an already-closed PR surfaces as its 400 "This pull request is
+/// already closed.").
+pub async fn merge_pr(
+    repo_path: &str,
+    number: u64,
+    strategy: &str,
+    delete_branch: bool,
+) -> AppResult<()> {
+    let merge_strategy = map_merge_strategy(strategy)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/merge");
+    let payload = serde_json::json!({
+        "type": "pullrequest",
+        "merge_strategy": merge_strategy,
+        "close_source_branch": delete_branch,
+    });
+    let (status, location, body) =
+        http::bb_send(&creds, reqwest::Method::POST, &path, Some(&payload)).await?;
+    match status {
+        // Synchronous merge — done.
+        200 => Ok(()),
+        // Asynchronous merge — poll the task-status URL from the Location header.
+        202 => {
+            let task_url = location.filter(|l| !l.is_empty()).ok_or_else(|| {
+                AppError::Bitbucket(
+                    "Bitbucket accepted the merge but returned no task-status URL to poll.".into(),
+                )
+            })?;
+            poll_merge_task(&creds, &task_url).await
+        }
+        _ => Err(http::http_error(status, &body)),
+    }
+}
+
+/// Poll a Bitbucket merge task-status URL until it resolves. `PENDING` loops (bounded
+/// to ~30 tries, 2s apart); `SUCCESS` → Ok; anything else → an error carrying the raw
+/// body. A non-2xx poll response errors via [`http::http_error`].
+async fn poll_merge_task(creds: &BbCredentials, task_url: &str) -> AppResult<()> {
+    for _ in 0..30 {
+        let (status, _, body) = http::bb_send(creds, reqwest::Method::GET, task_url, None).await?;
+        if !(200..300).contains(&status) {
+            return Err(http::http_error(status, &body));
+        }
+        let task: BbMergeTask = serde_json::from_str(&body).map_err(|e| {
+            AppError::Bitbucket(format!("could not parse Bitbucket merge status: {e}"))
+        })?;
+        match task.task_status.as_str() {
+            "SUCCESS" => return Ok(()),
+            "PENDING" | "" => {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            other => {
+                return Err(AppError::Bitbucket(format!(
+                    "Bitbucket merge did not complete (task status: {other})."
+                )));
+            }
+        }
+    }
+    Err(AppError::Bitbucket(
+        "Bitbucket merge is still processing — check the pull request on Bitbucket.".into(),
+    ))
+}
+
+/// A minimal PR shape for the edit read-back — just the reviewer uuids we must echo.
+#[derive(Deserialize, Default)]
+struct BbPrReviewers {
+    #[serde(default, deserialize_with = "null_to_default")]
+    reviewers: Vec<BbReviewer>,
+}
+
+#[derive(Deserialize, Default)]
+struct BbReviewer {
+    #[serde(default)]
+    uuid: String,
+}
+
+/// Build the reviewer-safe edit body: title + description + the existing reviewer
+/// uuids. Pure (testable). Omitting `reviewers` from a Bitbucket PR PUT WIPES them
+/// (Renovate-confirmed), so we always echo the existing set.
+fn build_edit_body(title: &str, body: &str, reviewer_uuids: &[String]) -> serde_json::Value {
+    let reviewers: Vec<serde_json::Value> = reviewer_uuids
+        .iter()
+        .map(|u| serde_json::json!({ "uuid": u }))
+        .collect();
+    serde_json::json!({
+        "title": title,
+        "description": body,
+        "reviewers": reviewers,
+    })
+}
+
+/// Edit a pull request's title/body (`PUT …/pullrequests/{n}`). Only OPEN PRs are
+/// mutable. A Bitbucket PR PUT that omits `reviewers` WIPES them, so we first read the
+/// existing reviewer uuids and echo them back alongside the new title/description.
+pub async fn edit_pr(repo_path: &str, number: u64, title: &str, body: &str) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    // Read the current reviewers (uuid only) so the PUT preserves them.
+    let read_path = format!("{base}/pullrequests/{number}?fields=reviewers.uuid");
+    let existing: BbPrReviewers =
+        http::bb_get_json(&creds, &read_path, "pull request reviewers").await?;
+    let uuids: Vec<String> = existing
+        .reviewers
+        .into_iter()
+        .map(|r| r.uuid)
+        .filter(|u| !u.is_empty())
+        .collect();
+    let payload = build_edit_body(title, body, &uuids);
+    let path = format!("{base}/pullrequests/{number}");
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "pull request").await?;
+    Ok(())
+}
+
+/// A newly-created PR's identity (id + web link), for mapping onto [`PrRef`].
+#[derive(Deserialize)]
+struct BbCreatedPr {
+    #[serde(default)]
+    id: u64,
+    #[serde(default)]
+    links: Option<BbHtmlLinks>,
+}
+
+/// Build the create-PR body. Pure (testable). No reviewers in v1.
+fn build_create_body(base: &str, head: &str, title: &str, body: &str, draft: bool) -> serde_json::Value {
+    serde_json::json!({
+        "title": title,
+        "description": body,
+        "source": { "branch": { "name": head } },
+        "destination": { "branch": { "name": base } },
+        "draft": draft,
+    })
+}
+
+/// Find an existing OPEN PR from `head` into `base` in a candidate list. Pure
+/// (testable). `prs_for_branch` already filters to `source.branch.name == head` AND
+/// `state == OPEN`, but does NOT constrain the destination, so we filter on
+/// `base_ref_name == base` here to catch only a genuine same-source→same-dest
+/// duplicate. Returns the matching PR's number, if any.
+fn duplicate_pr_number(open_prs: &[PrInfo], base: &str) -> Option<u64> {
+    open_prs
+        .iter()
+        .find(|p| p.base_ref_name == base)
+        .map(|p| p.number)
+}
+
+/// Push `head` to origin, then open a pull request from `head` into `base`. Mirrors
+/// `gitlab::create_mr`, with two Bitbucket-specific differences:
+///
+///  - **Duplicate is an UPSERT, so we pre-check.** A Bitbucket create POST for a
+///    source→dest pair that already has an OPEN PR returns 201 with the EXISTING PR
+///    but ALSO applies the payload (title overwritten, an omitted description wiped to
+///    ""). So BEFORE any mutation we read the open PRs from `head` (via the same query
+///    `prs_for_branch` uses) and, if one already targets `base`, error out naming its
+///    number — nothing is pushed or changed.
+///  - **No credential config on the push.** Unlike glab (whose token isn't in git's
+///    store, so it injects a one-shot helper), Bitbucket repos in this app are
+///    cloned/pushed with the user's ambient git credentials (GCM), so a plain
+///    `git push origin <head>` works. The keyring token is NEVER put on argv / env /
+///    git config of the push process.
+///
+/// Order: duplicate pre-check (read-only) → validate → push → POST create. If the POST
+/// fails after a successful push, the error discloses the partial state (the branch was
+/// pushed) — the same pre-mutation-guard discipline as the rest of the codebase.
+pub async fn create_pr(
+    state: &crate::state::AppState,
+    repo_path: &str,
+    base: &str,
+    head: &str,
+    title: &str,
+    body: &str,
+    draft: bool,
+) -> AppResult<PrRef> {
+    for b in [base, head] {
+        if b.is_empty() || b.starts_with('-') {
+            return Err(AppError::InvalidArgument(format!("invalid branch: {b}")));
+        }
+    }
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::InvalidArgument("a PR title is required".into()));
+    }
+
+    // Pre-mutation guard: a duplicate create is a silent overwrite on Bitbucket, so
+    // refuse it before pushing or POSTing anything.
+    let open_prs = prs_for_branch(repo_path, head).await?;
+    if let Some(n) = duplicate_pr_number(&open_prs, base) {
+        return Err(AppError::Bitbucket(format!(
+            "Pull request #{n} already exists for {head} → {base} — creating another would \
+             silently overwrite it, so nothing was changed. Open PR #{n} instead."
+        )));
+    }
+
+    // A PR needs the branch on the remote first. Bitbucket uses the user's ambient git
+    // credentials (GCM) — no token-derived credential helper, so the keyring token
+    // never reaches the git process.
+    crate::git::runner::run_git_mutating(
+        state,
+        repo_path,
+        &["push", "-u", "origin", head],
+        crate::git::runner::NETWORK_TIMEOUT,
+    )
+    .await?;
+
+    let creds = http::load_credentials().await?;
+    let repo = repo_base(repo_path).await?;
+    let path = format!("{repo}/pullrequests");
+    let payload = build_create_body(base, head, title, body, draft);
+    let created: BbCreatedPr = http::bb_post_json(&creds, &path, &payload, "created pull request")
+        .await
+        .map_err(|e| {
+            // The branch is already on the remote; disclose that partial state so the
+            // user knows a retry needn't re-push (and the branch isn't orphaned silently).
+            AppError::Bitbucket(format!("The branch was pushed, but creating the pull request failed: {e}"))
+        })?;
+    Ok(PrRef {
+        number: created.id,
+        url: html_href(&created.links),
+    })
+}
+
+/// Approve a pull request (`POST …/pullrequests/{n}/approve`, no body). The author CAN
+/// self-approve on Bitbucket.
+pub async fn approve_pr(repo_path: &str, number: u64) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/approve");
+    http::bb_post_empty(&creds, &path).await
+}
+
+/// Revoke the viewer's approval (`DELETE …/pullrequests/{n}/approve`). Unapproving a
+/// MERGED PR is rejected server-side (400 CANNOT_UNAPPROVED_MERGED_PR), surfacing via
+/// [`http::http_error`].
+pub async fn unapprove_pr(repo_path: &str, number: u64) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/approve");
+    http::bb_delete(&creds, &path).await
+}
+
+/// A PR participant (`{user, approved, state}`) — the approval read source. `state` is
+/// `"approved"` / `"changes_requested"` / null.
+#[derive(Deserialize, Default)]
+struct BbParticipant {
+    #[serde(default)]
+    user: Option<BbUser>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    approved: bool,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+/// The participants block on a single-PR GET (for the approvals read).
+#[derive(Deserialize, Default)]
+struct BbPrParticipants {
+    #[serde(default, deserialize_with = "null_to_default")]
+    participants: Vec<BbParticipant>,
+}
+
+/// A human-readable display name for a PR participant: nickname → display_name →
+/// username (participant user objects carry no `username`, so in practice this is the
+/// nickname, then display_name). Used for the names of OTHER participants in
+/// `approved_by`; the viewer's own entry is derived differently (see
+/// [`build_approval_state`]).
+fn participant_login(u: &BbUser) -> String {
+    u.nickname
+        .clone()
+        .or_else(|| u.display_name.clone())
+        .or_else(|| u.username.clone())
+        .unwrap_or_default()
+}
+
+/// Build the neutral [`ApprovalState`] from a PR's participants, matching the viewer by
+/// UUID. Pure (testable).
+///
+/// The viewer is matched on `participant.user.uuid == viewer_uuid`, NOT a name string:
+/// participant user objects never carry `username` (privacy — only the self object
+/// does), so a name match would silently fail whenever the viewer's nickname differs
+/// from their username. `viewer_has_approved` / `viewer_requested_changes` come from
+/// the matched participant.
+///
+/// `approved_by` mixes two derivations on purpose: OTHER approvers get their
+/// human-readable [`participant_login`] (nickname-first), but the VIEWER's own entry
+/// emits `viewer_login` — exactly the string `status().login` produces
+/// (`username || display_name`), which is what the frontend's `forge.data.login`
+/// carries and what its optimistic add/remove inserts into `approvedBy`. Emitting that
+/// same string here lets the viewer's entry reconcile across the optimistic window
+/// (otherwise the server-truth refetch would show a different string than the
+/// optimistic insert and the row would flicker/duplicate).
+///
+/// Bitbucket exposes no required-approval count here (that's a repo-settings merge
+/// check), so `approvals_required`/`_left` are 0.
+fn build_approval_state(
+    participants: &[BbParticipant],
+    viewer_uuid: &str,
+    viewer_login: &str,
+) -> ApprovalState {
+    let is_viewer = |u: &BbUser| -> bool {
+        !viewer_uuid.is_empty() && u.uuid.as_deref() == Some(viewer_uuid)
+    };
+    let approved_by: Vec<String> = participants
+        .iter()
+        .filter(|p| p.approved)
+        .filter_map(|p| {
+            p.user.as_ref().map(|u| {
+                if is_viewer(u) {
+                    viewer_login.to_string()
+                } else {
+                    participant_login(u)
+                }
+            })
+        })
+        .filter(|n| !n.is_empty())
+        .collect();
+    let viewer = participants
+        .iter()
+        .find(|p| p.user.as_ref().map(is_viewer).unwrap_or(false));
+    let viewer_has_approved = viewer.map(|p| p.approved).unwrap_or(false);
+    let viewer_requested_changes = viewer
+        .and_then(|p| p.state.as_deref())
+        .map(|s| s == "changes_requested")
+        .unwrap_or(false);
+    ApprovalState {
+        viewer_has_approved,
+        approved_by,
+        approvals_required: 0,
+        approvals_left: 0,
+        viewer_requested_changes,
+    }
+}
+
+/// The viewer's + the PR's approval state (`GET …/pullrequests/{n}` participants). The
+/// viewer is resolved by a one-time `GET /2.0/user` (its braced `uuid` — the only
+/// identity field present on both the self object and participant objects), then
+/// matched against participants by UUID. The viewer's `approved_by` entry uses the
+/// stored username (falling back to the self object's display name) so it equals
+/// `status().login` and reconciles with the frontend's optimistic toggle.
+pub async fn pr_approvals(repo_path: &str, number: u64) -> AppResult<ApprovalState> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}?fields=participants.user.uuid,participants.user.nickname,participants.user.display_name,participants.approved,participants.state");
+    let pr: BbPrParticipants = http::bb_get_json(&creds, &path, "pull request participants").await?;
+
+    // Resolve the viewer's uuid (for matching) and login (for the reconciling
+    // approved_by entry) from the self object — one GET, like GitLab's approvals read.
+    let self_user = http::bb_get_json::<BbUser>(&creds, "user", "user").await.ok();
+    let viewer_uuid = self_user
+        .as_ref()
+        .and_then(|u| u.uuid.clone())
+        .unwrap_or_default();
+    // `status().login` = username || display_name; the stored username is the same
+    // value persisted at connect time, so prefer it and fall back to the self object.
+    let viewer_login = read_stored_username().await.unwrap_or_else(|| {
+        self_user
+            .as_ref()
+            .and_then(|u| u.username.clone().or_else(|| u.display_name.clone()))
+            .unwrap_or_default()
+    });
+    Ok(build_approval_state(&pr.participants, &viewer_uuid, &viewer_login))
+}
+
+// ── Pipelines (CI, write) ───────────────────────────────────────────────────────
+
+/// Build the pipeline-trigger body for a branch, with optional variables. Pure
+/// (testable). A non-empty `inputs` map adds a top-level `variables` array (sibling of
+/// `target`); an empty map omits it entirely.
+fn build_trigger_body(
+    git_ref: &str,
+    inputs: &std::collections::HashMap<String, String>,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "target": {
+            "type": "pipeline_ref_target",
+            "ref_type": "branch",
+            "ref_name": git_ref,
+        }
+    });
+    if !inputs.is_empty() {
+        // Sort by key for a deterministic body (stable tests + reproducible requests).
+        let mut keys: Vec<&String> = inputs.keys().collect();
+        keys.sort();
+        let variables: Vec<serde_json::Value> = keys
+            .into_iter()
+            .map(|k| serde_json::json!({ "key": k, "value": inputs[k] }))
+            .collect();
+        body["variables"] = serde_json::Value::Array(variables);
+    }
+    body
+}
+
+/// Cancel an in-flight pipeline (`POST …/pipelines/{uuid}/stopPipeline`). `run_id` is
+/// the build number, resolved to the pipeline UUID first (reusing the read-side
+/// resolution). A 400 "already completed" surfaces via [`http::http_error`].
+pub async fn cancel_run(repo_path: &str, run_id: u64) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let (ws, slug) = workspace_slug(repo_path).await?;
+    let p = resolve_pipeline(&creds, &ws, &slug, run_id).await?;
+    let path = format!(
+        "repositories/{}/{}/pipelines/{}/stopPipeline",
+        encode_query_value(&ws),
+        encode_query_value(&slug),
+        encode_uuid(&p.uuid),
+    );
+    http::bb_post_empty(&creds, &path).await
+}
+
+/// Re-run a finished pipeline. Bitbucket has no rerun endpoint, so "re-run" re-triggers
+/// a fresh pipeline on the original run's branch (`run_id` is the build number →
+/// resolve → its `target.ref_name` → trigger). The new pipeline is returned but ignored.
+pub async fn rerun_run(repo_path: &str, run_id: u64) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let (ws, slug) = workspace_slug(repo_path).await?;
+    let p = resolve_pipeline(&creds, &ws, &slug, run_id).await?;
+    let branch = p
+        .target
+        .as_ref()
+        .and_then(|t| t.ref_name.clone())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::Bitbucket(format!(
+                "could not determine the branch of Bitbucket pipeline #{run_id} to re-run"
+            ))
+        })?;
+    let path = format!(
+        "repositories/{}/{}/pipelines/",
+        encode_query_value(&ws),
+        encode_query_value(&slug),
+    );
+    let payload = build_trigger_body(&branch, &std::collections::HashMap::new());
+    http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "pipeline").await?;
+    Ok(())
+}
+
+/// Manually start a pipeline on `git_ref` (`POST …/pipelines/`), with `inputs` as
+/// pipeline variables. Bitbucket triggers a branch pipeline (there's no per-workflow
+/// dispatch — `workflow` is dropped upstream). A 400 (pipelines disabled / missing yml
+/// / invalid) surfaces its raw message via [`http::http_error`].
+pub async fn dispatch_ci(
+    repo_path: &str,
+    git_ref: &str,
+    inputs: &std::collections::HashMap<String, String>,
+) -> AppResult<()> {
+    if git_ref.is_empty() || git_ref.starts_with('-') {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid branch: {git_ref}"
+        )));
+    }
+    let creds = http::load_credentials().await?;
+    let (ws, slug) = workspace_slug(repo_path).await?;
+    let path = format!(
+        "repositories/{}/{}/pipelines/",
+        encode_query_value(&ws),
+        encode_query_value(&slug),
+    );
+    let payload = build_trigger_body(git_ref, inputs);
+    http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "pipeline").await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1694,5 +2223,208 @@ mod tests {
         assert_eq!(user_login(&full), "Full Name");
         let no_display: BbUser = serde_json::from_str(r#"{"nickname":"nick"}"#).unwrap();
         assert_eq!(user_login(&no_display), "nick");
+    }
+
+    // ── Write-side unit tests (pure; no network) ────────────────────────────────
+
+    #[test]
+    fn merge_strategy_maps_neutral_to_bitbucket_enum() {
+        assert_eq!(map_merge_strategy("merge").unwrap(), "merge_commit");
+        assert_eq!(map_merge_strategy("squash").unwrap(), "squash");
+        assert_eq!(map_merge_strategy("fast_forward").unwrap(), "fast_forward");
+        assert!(matches!(
+            map_merge_strategy("rebase"),
+            Err(AppError::InvalidArgument(_))
+        ));
+    }
+
+    fn participants(json: &str) -> Vec<BbParticipant> {
+        let page: BbPrParticipants = serde_json::from_str(json).unwrap();
+        page.participants
+    }
+
+    #[test]
+    fn approval_state_reflects_viewer_approval() {
+        let ps = participants(
+            r#"{"participants":[
+                {"user":{"uuid":"{me}","nickname":"me"},"approved":true,"state":"approved"},
+                {"user":{"uuid":"{other}","nickname":"other"},"approved":false,"state":null}
+            ]}"#,
+        );
+        // Viewer matched by uuid; the viewer's approved_by entry is the passed login.
+        let state = build_approval_state(&ps, "{me}", "me-login");
+        assert!(state.viewer_has_approved);
+        assert!(!state.viewer_requested_changes);
+        assert_eq!(state.approved_by, vec!["me-login".to_string()]);
+        assert_eq!(state.approvals_required, 0);
+        assert_eq!(state.approvals_left, 0);
+    }
+
+    #[test]
+    fn approval_state_matches_viewer_by_uuid_not_name() {
+        // The reconciliation bug fixture: the viewer's nickname, username, and
+        // display_name are ALL different, and the participant object carries no
+        // username at all (Bitbucket's privacy behavior). Only uuid matching works.
+        let ps = participants(
+            r#"{"participants":[
+                {"user":{"uuid":"{viewer-uuid}","nickname":"nick","display_name":"Display Name"},
+                 "approved":true,"state":"approved"},
+                {"user":{"uuid":"{other-uuid}","nickname":"other"},"approved":true,"state":"approved"}
+            ]}"#,
+        );
+        // viewer_uuid matches the first participant; viewer_login is the account
+        // username (what status().login emits), distinct from nickname/display_name.
+        let state = build_approval_state(&ps, "{viewer-uuid}", "myusername");
+        assert!(state.viewer_has_approved);
+        // The viewer's own entry uses the login string (reconciles with the optimistic
+        // toggle); the OTHER approver keeps their human-readable nickname.
+        assert_eq!(
+            state.approved_by,
+            vec!["myusername".to_string(), "other".to_string()]
+        );
+    }
+
+    #[test]
+    fn approval_state_reflects_another_reviewer_requested_changes() {
+        let ps = participants(
+            r#"{"participants":[
+                {"user":{"uuid":"{me}","nickname":"me"},"approved":false,"state":null},
+                {"user":{"uuid":"{rev}","nickname":"rev"},"approved":false,"state":"changes_requested"}
+            ]}"#,
+        );
+        let state = build_approval_state(&ps, "{me}", "me-login");
+        // The viewer neither approved nor requested changes.
+        assert!(!state.viewer_has_approved);
+        assert!(!state.viewer_requested_changes);
+        assert!(state.approved_by.is_empty());
+    }
+
+    #[test]
+    fn approval_state_reflects_viewer_requested_changes() {
+        let ps = participants(
+            r#"{"participants":[
+                {"user":{"uuid":"{me}","nickname":"me"},"approved":false,"state":"changes_requested"}
+            ]}"#,
+        );
+        let state = build_approval_state(&ps, "{me}", "me-login");
+        assert!(!state.viewer_has_approved);
+        assert!(state.viewer_requested_changes);
+    }
+
+    #[test]
+    fn approval_state_empty_viewer_uuid_never_matches() {
+        // Defensive: if the self /user probe failed (empty uuid), no participant is
+        // mistaken for the viewer (an empty uuid must not match a missing uuid).
+        let ps = participants(
+            r#"{"participants":[
+                {"user":{"nickname":"someone"},"approved":true,"state":"approved"}
+            ]}"#,
+        );
+        let state = build_approval_state(&ps, "", "me-login");
+        assert!(!state.viewer_has_approved);
+        assert!(!state.viewer_requested_changes);
+        // The approver is not the viewer, so their nickname (not the login) is used.
+        assert_eq!(state.approved_by, vec!["someone".to_string()]);
+    }
+
+    #[test]
+    fn create_pr_maps_id_and_html_url_to_pr_ref() {
+        let created: BbCreatedPr = serde_json::from_str(
+            r#"{
+                "id": 123,
+                "title": "New feature",
+                "links": {"html": {"href": "https://bitbucket.org/ws/repo/pull-requests/123"}}
+            }"#,
+        )
+        .unwrap();
+        let pr_ref = PrRef {
+            number: created.id,
+            url: html_href(&created.links),
+        };
+        assert_eq!(pr_ref.number, 123);
+        assert_eq!(
+            pr_ref.url,
+            "https://bitbucket.org/ws/repo/pull-requests/123"
+        );
+    }
+
+    #[test]
+    fn duplicate_pr_number_matches_only_same_destination() {
+        // `prs_for_branch` already constrains source==head + OPEN, so the fixtures here
+        // are all open PRs from the same head; only the destination differs.
+        let to_main = pr(r#"{"id":7,"title":"x","state":"OPEN",
+            "source":{"branch":{"name":"feature/x"}},
+            "destination":{"branch":{"name":"main"}}}"#);
+        let to_develop = pr(r#"{"id":9,"title":"y","state":"OPEN",
+            "source":{"branch":{"name":"feature/x"}},
+            "destination":{"branch":{"name":"develop"}}}"#);
+        // A PR into develop is not a duplicate of a create into main.
+        assert_eq!(duplicate_pr_number(&[to_develop], "main"), None);
+        // …but one already into main is.
+        let list = vec![
+            pr(r#"{"id":9,"title":"y","state":"OPEN",
+                "source":{"branch":{"name":"feature/x"}},
+                "destination":{"branch":{"name":"develop"}}}"#),
+            to_main,
+        ];
+        assert_eq!(duplicate_pr_number(&list, "main"), Some(7));
+        // Empty list → no duplicate.
+        assert_eq!(duplicate_pr_number(&[], "main"), None);
+    }
+
+    #[test]
+    fn create_body_carries_source_destination_and_draft() {
+        let body = build_create_body("main", "feature/x", "Title", "Body", true);
+        assert_eq!(body["title"], "Title");
+        assert_eq!(body["description"], "Body");
+        assert_eq!(body["source"]["branch"]["name"], "feature/x");
+        assert_eq!(body["destination"]["branch"]["name"], "main");
+        assert_eq!(body["draft"], true);
+    }
+
+    #[test]
+    fn edit_body_echoes_reviewers_alongside_title_and_description() {
+        let body = build_edit_body("T", "D", &["{uuid-1}".to_string(), "{uuid-2}".to_string()]);
+        assert_eq!(body["title"], "T");
+        assert_eq!(body["description"], "D");
+        let reviewers = body["reviewers"].as_array().unwrap();
+        assert_eq!(reviewers.len(), 2);
+        assert_eq!(reviewers[0]["uuid"], "{uuid-1}");
+        assert_eq!(reviewers[1]["uuid"], "{uuid-2}");
+    }
+
+    #[test]
+    fn edit_body_with_no_reviewers_sends_empty_array_not_omitted() {
+        let body = build_edit_body("T", "D", &[]);
+        // The reviewers key is present (an empty array), so we never accidentally omit
+        // it — which would WIPE reviewers on a PR that had them.
+        assert!(body["reviewers"].is_array());
+        assert_eq!(body["reviewers"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn trigger_body_with_variables_adds_sorted_variables_array() {
+        let mut inputs = std::collections::HashMap::new();
+        inputs.insert("DEPLOY_ENV".to_string(), "staging".to_string());
+        inputs.insert("VERSION".to_string(), "1.2.3".to_string());
+        let body = build_trigger_body("main", &inputs);
+        assert_eq!(body["target"]["type"], "pipeline_ref_target");
+        assert_eq!(body["target"]["ref_type"], "branch");
+        assert_eq!(body["target"]["ref_name"], "main");
+        let vars = body["variables"].as_array().unwrap();
+        assert_eq!(vars.len(), 2);
+        // Sorted by key for determinism.
+        assert_eq!(vars[0]["key"], "DEPLOY_ENV");
+        assert_eq!(vars[0]["value"], "staging");
+        assert_eq!(vars[1]["key"], "VERSION");
+        assert_eq!(vars[1]["value"], "1.2.3");
+    }
+
+    #[test]
+    fn trigger_body_without_variables_omits_the_array() {
+        let body = build_trigger_body("dev", &std::collections::HashMap::new());
+        assert_eq!(body["target"]["ref_name"], "dev");
+        // No `variables` key at all when inputs are empty.
+        assert!(body.get("variables").is_none());
     }
 }

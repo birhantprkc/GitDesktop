@@ -49,10 +49,10 @@ A few things worth knowing up front:
   \`gh auth login --hostname your.github.example\` and its repos get the same PR, issue,
   and Actions features. **Settings → Accounts** lists every signed-in host and lets you
   switch the active account per host.
-- **Bitbucket Cloud (read).** Connect in **Settings → Accounts** with an **Atlassian
+- **Bitbucket Cloud.** Connect in **Settings → Accounts** with an **Atlassian
   API token** (created at id.atlassian.com, used with your Atlassian account email) —
-  the token is stored in your OS keychain. Then browse & clone your repositories and
-  read pull requests and Pipelines. (See **Bitbucket repositories** below.)
+  the token is stored in your OS keychain. Then browse & clone your repositories, and
+  read and act on pull requests and Pipelines. (See **Bitbucket repositories** below.)
 {{ai}}- **AI is optional.** Commit messages, PR descriptions, reviews, CI debugging, and
   agent sessions can use Anthropic, OpenAI, OpenRouter, Ollama (local or cloud), an
   OpenAI-compatible endpoint, or the Claude Code / Codex / GitHub Copilot / opencode
@@ -607,12 +607,15 @@ to jump to that run. You can also get an OS **notification** when a run finishes
     label: "Bitbucket repositories",
     body: `# Bitbucket repositories
 
-GitDesktop reads **Bitbucket Cloud** repositories. Connect once in **Settings →
+GitDesktop works with **Bitbucket Cloud** repositories. Connect once in **Settings →
 Accounts**: create an **Atlassian API token** at id.atlassian.com, then enter your
 Atlassian **account email** (not your Bitbucket username) and the token. It needs the
 five read scopes \`read:user:bitbucket\`, \`read:workspace:bitbucket\`,
 \`read:repository:bitbucket\`, \`read:pullrequest:bitbucket\`, and
-\`read:pipeline:bitbucket\`, and is stored in your OS keychain — never in app files.
+\`read:pipeline:bitbucket\`. To also **act on** pull requests and Pipelines (below), add
+the write scopes \`write:pullrequest:bitbucket\` and \`write:pipeline:bitbucket\` — a
+write fails with a clear message if the token lacks them. The token is stored in your OS
+keychain — never in app files.
 
 Once connected:
 
@@ -621,10 +624,16 @@ Once connected:
   repo uses your system git credentials, e.g. Git Credential Manager — GitDesktop doesn't
   inject the API token into git.)
 - **Pull requests** — the **Pull Requests** tab lists a Bitbucket repo's PRs; open one to
-  read its **diff**, **comments**, and **build statuses**. Creating and commenting on
-  Bitbucket PRs from GitDesktop isn't supported yet.
+  read its **diff**, **comments**, and **build statuses**, and to act on it: **comment**,
+  **decline**, **merge** (merge commit, squash, or fast-forward, with an optional
+  delete-source-branch), **edit** the title/description, and **approve/unapprove**. Use
+  **Create** to open a new PR (drafts included). Two things Bitbucket itself can't do from
+  the API: **reopening a declined PR** (so there's no Reopen button — a Bitbucket platform
+  limit) and a distinct **request-changes** review, so those aren't offered.
 - **Pipelines** — the **Actions** tab lists Bitbucket **Pipelines**; open one to see its
-  **steps** with their **logs**.
+  **steps** with their **logs**. You can **rerun** a finished pipeline (re-triggers its
+  branch), **trigger** a new one on a branch or tag (with optional variables), and **stop**
+  a running pipeline.
 - **Issues** — Bitbucket has retired its native issue tracker (issues live in **Jira**),
   so issues aren't shown for Bitbucket repositories. Private **local to-dos** still work.
 
@@ -944,7 +953,8 @@ Open **Settings** from the header gear (or {{kbd:open-settings}}). Sections:
 - **Keyboard** — rebind any shortcut, with live key-capture.
 - **Accounts** — your GitHub sign-in, and your **Bitbucket** connection (an Atlassian
   API token: enter your Atlassian account email + a token with the five \`read:…:bitbucket\`
-  scopes; stored in the OS keychain, replaceable or removable here).
+  scopes, plus the \`write:…:bitbucket\` scopes to act on PRs and Pipelines; stored in the
+  OS keychain, replaceable or removable here).
 - **Git** — the default branch name for new repos, your global identity, a per-repository
   identity override, and line endings (\`core.autocrlf\`).
 - **Syntax** — map file extensions to languages or add custom grammars, personally or

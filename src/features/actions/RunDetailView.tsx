@@ -316,6 +316,11 @@ export function RunDetailView({
   // GitLab's retry also covers a canceled pipeline (its retry restarts
   // failed + canceled jobs), so the Retry button shows for both conclusions.
   const retryable = failed || run?.conclusion === "cancelled";
+  // Bitbucket has no rerun endpoint — "rerun" re-triggers the branch pipeline (a
+  // fresh run), which makes sense on ANY finished pipeline (success too). Show it
+  // once the run is no longer in flight (a conclusion has been recorded).
+  const bitbucketRerunnable =
+    provider === "bitbucket" && !active && !!run?.conclusion;
   // A manual/blocked GitLab pipeline maps to completed/action_required, but
   // GitLab's cancel endpoint does cancel it — keep Cancel available there.
   const gitlabBlocked =
@@ -430,7 +435,21 @@ export function RunDetailView({
                     Retry pipeline
                   </Button>
                 )
-              : canWrite && (
+              : provider === "bitbucket"
+                ? canRerun &&
+                  bitbucketRerunnable && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={rerun.isPending}
+                      title="Trigger this pipeline's branch again"
+                      onClick={() => doRerun(true)}
+                    >
+                      <ArrowClockwiseIcon data-icon="inline-start" />
+                      Rerun pipeline
+                    </Button>
+                  )
+                : canWrite && (
                   <>
                     <Button
                       variant="outline"

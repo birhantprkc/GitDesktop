@@ -28,6 +28,14 @@ commit list.
   **Pipelines** with step logs — all in the same panels as GitHub and GitLab. Bitbucket
   has retired its native issue tracker (issues now live in Jira), so issues aren't shown
   for Bitbucket repositories.
+- **Bitbucket Cloud pull request & Pipeline actions.** Beyond reading, you can now act on
+  Bitbucket Cloud from GitDesktop: **comment**, **decline**, **merge** (merge commit,
+  squash, or fast-forward, with an optional delete-source-branch), **edit**, **create**
+  (drafts included), and **approve/unapprove** pull requests, plus **rerun**, **trigger**
+  (with variables), and **stop** Pipelines. Add the `write:pullrequest:bitbucket` and
+  `write:pipeline:bitbucket` token scopes in **Settings → Accounts** to enable them.
+  Reopening a declined PR and a distinct request-changes review aren't available — both
+  are Bitbucket platform limits.
 - **GitLab time tracking.** Track time on a GitLab issue or merge request without
   leaving the app: set an **estimate** (e.g. `3h`) and log **spent** time (e.g.
   `45m`, or subtract with `-15m`), with a progress bar and an "over" note when

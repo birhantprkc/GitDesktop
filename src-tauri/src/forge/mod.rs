@@ -309,9 +309,7 @@ pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> 
 pub async fn forge_pr_comment(repo_path: String, number: u64, body: String) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::comment_mr(&repo_path, number, &body).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::comment_pr(&repo_path, number, &body).await,
         _ => github::comment_pr(&repo_path, number, &body).await,
     }
 }
@@ -321,9 +319,7 @@ pub async fn forge_pr_comment(repo_path: String, number: u64, body: String) -> A
 pub async fn forge_pr_close(repo_path: String, number: u64) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::close_mr(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::decline_pr(&repo_path, number).await,
         _ => github::close_pr(&repo_path, number).await,
     }
 }
@@ -333,8 +329,10 @@ pub async fn forge_pr_close(repo_path: String, number: u64) -> AppResult<()> {
 pub async fn forge_pr_reopen(repo_path: String, number: u64) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::reopen_mr(&repo_path, number).await,
+        // A declined Bitbucket PR can't be reopened via API or web (BCLOUD-4954). The
+        // frontend hides the button; this is defense-in-depth.
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
+            "Bitbucket declined pull requests can't be reopened.".into(),
         )),
         _ => github::reopen_pr(&repo_path, number).await,
     }
@@ -375,9 +373,9 @@ pub async fn forge_pr_edit(
 ) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::edit_mr(&repo_path, number, &title, &body).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::edit_pr(&repo_path, number, &title, &body).await
+        }
         _ => github::edit_pr(&repo_path, number, &title, &body).await,
     }
 }
@@ -393,9 +391,7 @@ pub async fn forge_pr_approvals(
 ) -> AppResult<crate::github::pr::ApprovalState> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::pr_approvals(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::pr_approvals(&repo_path, number).await,
         _ => Err(AppError::InvalidArgument(
             "GitHub surfaces approval through the review flow, not this control.".into(),
         )),
@@ -408,9 +404,7 @@ pub async fn forge_pr_approvals(
 pub async fn forge_pr_approve(repo_path: String, number: u64) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::approve_pr(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::approve_pr(&repo_path, number).await,
         _ => Err(AppError::InvalidArgument(
             "GitHub approvals go through the review flow, not this control.".into(),
         )),
@@ -423,9 +417,7 @@ pub async fn forge_pr_approve(repo_path: String, number: u64) -> AppResult<()> {
 pub async fn forge_pr_unapprove(repo_path: String, number: u64) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::unapprove_pr(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::unapprove_pr(&repo_path, number).await,
         _ => Err(AppError::InvalidArgument(
             "GitHub approvals go through the review flow, not this control.".into(),
         )),
@@ -449,9 +441,10 @@ pub async fn forge_pr_merge(
         Some((Provider::GitLab, _)) => {
             gitlab::merge_mr(&repo_path, number, &strategy, delete_branch, sha.as_deref()).await
         }
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        // Bitbucket has no expected-hash guard, so `sha` is dropped.
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::merge_pr(&repo_path, number, &strategy, delete_branch).await
+        }
         _ => crate::github::pr::gh_pr_merge(repo_path, number, strategy, delete_branch).await,
     }
 }
@@ -551,9 +544,8 @@ pub async fn forge_ci_job_logs(repo_path: String, job_id: u64) -> AppResult<Stri
 pub async fn forge_ci_run_rerun(repo_path: String, run_id: u64, failed: bool) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::retry_run(&repo_path, run_id).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        // Bitbucket has no rerun-failed-only; a re-run re-triggers the run's branch.
+        Some((Provider::Bitbucket, _)) => bitbucket::rerun_run(&repo_path, run_id).await,
         _ => github::rerun_run(&repo_path, run_id, failed).await,
     }
 }
@@ -563,9 +555,7 @@ pub async fn forge_ci_run_rerun(repo_path: String, run_id: u64, failed: bool) ->
 pub async fn forge_ci_run_cancel(repo_path: String, run_id: u64) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::cancel_run(&repo_path, run_id).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::cancel_run(&repo_path, run_id).await,
         _ => github::cancel_run(&repo_path, run_id).await,
     }
 }
@@ -583,9 +573,9 @@ pub async fn forge_ci_dispatch(
 ) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::run_pipeline(&repo_path, &git_ref, &inputs).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        // Bitbucket triggers a branch pipeline (no per-workflow dispatch — `workflow` is
+        // dropped); `inputs` become pipeline variables.
+        Some((Provider::Bitbucket, _)) => bitbucket::dispatch_ci(&repo_path, &git_ref, &inputs).await,
         _ => github::dispatch_ci(&repo_path, &workflow, &git_ref, inputs).await,
     }
 }
@@ -1711,9 +1701,9 @@ pub async fn forge_pr_create(
         Some((Provider::GitLab, _)) => {
             gitlab::create_mr(&state, &repo_path, &base, &head, &title, &body, draft).await
         }
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::create_pr(&state, &repo_path, &base, &head, &title, &body, draft).await
+        }
         _ => crate::github::pr::gh_pr_create(state, repo_path, base, head, title, body, draft)
             .await,
     }

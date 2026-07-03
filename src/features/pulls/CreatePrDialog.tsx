@@ -23,6 +23,7 @@ import {
   useForgeStatus,
   useRepoStatus,
 } from "@/lib/git/queries";
+import { providerLabel } from "@/lib/git/types";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
@@ -48,7 +49,7 @@ export function CreatePrDialog({
   const createPr = useCreatePr(repoPath);
   const forge = useForgeStatus(repoPath);
   const isGitLab = forge.data?.provider === "gitlab";
-  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
+  const remoteLabel = providerLabel(forge.data?.provider);
   const prNoun = isGitLab ? "merge request" : "pull request";
   const { generate, cancel, generating } = useGeneratePrDescription(repoPath);
   const aiEnabled = useAiEnabled();

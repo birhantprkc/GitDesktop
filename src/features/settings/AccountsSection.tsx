@@ -31,13 +31,17 @@ import { toastError } from "@/lib/toast";
 const ATLASSIAN_TOKEN_URL =
   "https://id.atlassian.com/manage-profile/security/api-tokens";
 
-/** The read scopes a token needs for GitDesktop's read-only Bitbucket support. */
-const BB_READ_SCOPES = [
+/** The scopes a token needs for full Bitbucket support: the five read scopes that
+ *  power browsing/PR/Pipeline reads, plus the two write scopes for acting on PRs
+ *  and Pipelines. Writes fail with a clear message if the token lacks the latter. */
+const BB_SCOPES = [
   "read:user:bitbucket",
   "read:workspace:bitbucket",
   "read:repository:bitbucket",
   "read:pullrequest:bitbucket",
   "read:pipeline:bitbucket",
+  "write:pullrequest:bitbucket",
+  "write:pipeline:bitbucket",
 ];
 
 /** Whether this gh supports multiple accounts (`gh auth switch`, 2.40+). */
@@ -418,10 +422,12 @@ function BitbucketAccount() {
               </button>{" "}
               and sign in with your Atlassian{" "}
               <span className="font-medium">account email</span> (not your
-              Bitbucket username). The token needs these read scopes:
+              Bitbucket username). The token needs these scopes (the{" "}
+              <span className="font-mono">write:…</span> scopes let you act on PRs
+              and Pipelines):
             </p>
             <ul className="flex flex-wrap gap-1">
-              {BB_READ_SCOPES.map((scope) => (
+              {BB_SCOPES.map((scope) => (
                 <li
                   key={scope}
                   className="rounded-none border px-1.5 py-0.5 font-mono text-[10px]"
