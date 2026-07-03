@@ -497,6 +497,13 @@ commit list.
 
 ### Fixed
 
+- **Deleting a worktree with installed dependencies now works on Windows.** Removing an
+  agent-session (or manually created) worktree that had `node_modules` installed — where
+  pnpm links packages through junctions/symlinks — used to fail with
+  *"failed to delete '…': Invalid argument"*, leaving the worktree half-removed. GitDesktop
+  now finishes the removal itself (correctly deleting those links) when git's own delete
+  trips on the reparse points, and if a file is still locked by another program it says so
+  plainly instead of showing git's cryptic error.
 - **Checking out a remote-only branch that lives on more than one remote now works.**
   Clicking a remote branch in the branch switcher used to fail with *"matched multiple
   remote tracking branches"* when the same branch name existed on two or more remotes.

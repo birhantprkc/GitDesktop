@@ -391,7 +391,36 @@ pub async fn git_worktree_remove(
         args.push("--force");
     }
     args.push(&path);
-    run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    // `git worktree remove` also deletes the working directory, but its recursive delete
+    // mishandles Windows reparse points: a worktree with installed deps (pnpm links
+    // `node_modules/*` into `.pnpm/` with junctions/symlinks) fails with
+    // `failed to delete '<path>': Invalid argument`, leaving the worktree half-removed. On a
+    // forced removal, finish the job ourselves — `std::fs::remove_dir_all` deletes reparse
+    // points as links (hardened for exactly this since Rust 1.63) where git can't — then
+    // reconcile git's now-dangling admin entry with `prune`.
+    if let Err(git_err) = run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await {
+        if !force {
+            return Err(git_err);
+        }
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // Removed despite an error partway (a child vanished under us) — good enough.
+            Err(_) if !std::path::Path::new(&path).exists() => {}
+            // Still there — usually a file locked by another process (an editor, terminal, or
+            // file watcher holding a handle in `node_modules`/`target`). Surface THAT cause
+            // rather than git's stale "Invalid argument", so the message is actionable.
+            Err(e) => {
+                return Err(AppError::Command(format!(
+                    "Couldn't remove the worktree at {path}: {e}. Close any program using that folder (editor, terminal, file watcher) and try again."
+                )));
+            }
+        }
+        // Reconcile git's admin entry best-effort: on current git it's already gone (git drops
+        // `.git/worktrees/<id>` before deleting the directory, which is the step that failed), so
+        // a prune hiccup must never turn a successful removal into a reported failure.
+        let _ = run_git_mutating(&state, &repo_path, &["worktree", "prune"], DEFAULT_TIMEOUT).await;
+    }
     // The branch can only be deleted once it's no longer checked out (i.e. after
     // the worktree is gone). Best-effort: a failure here shouldn't fail removal.
     if let Some(branch) = branch.as_deref().filter(|b| !b.is_empty()) {
