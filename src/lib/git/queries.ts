@@ -22,6 +22,7 @@ import type {
   ForgeImplemented,
   ForgeProvider,
   ForgeStatus,
+  ForgeUserRef,
   GitLabHookInput,
   GitLabProtectedBranch,
   GitLabRepoSettingsInput,
@@ -1676,6 +1677,7 @@ const NO_FORGE_STATUS: ForgeStatus = {
     releaseEdit: false,
     mrAssignees: false,
     mrRequestChanges: false,
+    mrReviewers: false,
     issueEdit: false,
     mrEdit: false,
     issueMilestone: false,
@@ -2553,13 +2555,82 @@ export function useUnapprovePr(repo: string) {
   );
 }
 
-/** Request changes on an MR with an optional comment (GitLab-only, gated on
- *  `implemented.mrRequestChanges`). The caller patches the approvals cache
+/** Request changes on an MR with an optional comment (GitLab + Bitbucket, gated
+ *  on `implemented.mrRequestChanges`). The caller patches the approvals cache
  *  optimistically, like the approve toggle. */
 export function useRequestChangesPr(repo: string) {
   return useRepoMutation(repo, (args: { number: number; body: string }) =>
     api.forgePrRequestChanges(repo, args.number, args.body),
   );
+}
+
+/** Revoke the viewer's requested-changes state (Bitbucket-only — its revoke works
+ *  on every plan, so the request-changes control toggles there). Same
+ *  caller-patches-optimistically contract as `useRequestChangesPr`. */
+export function useUnrequestChangesPr(repo: string) {
+  return useRepoMutation(repo, (number: number) =>
+    api.forgePrUnrequestChanges(repo, number),
+  );
+}
+
+/** Toggle a PR's draft state (Bitbucket-only — both directions, unlike GitHub's
+ *  one-way `gh pr ready`). Invalidation via useRepoMutation refreshes the badge
+ *  and the merge gate. */
+export function useSetPrDraft(repo: string) {
+  return useRepoMutation(repo, (args: { number: number; draft: boolean }) =>
+    api.forgePrSetDraft(repo, args.number, args.draft),
+  );
+}
+
+/** The reviewer picker's candidates (Bitbucket: workspace members minus the PR
+ *  author). Fetched only while the picker is enabled — the popover is the sole
+ *  consumer. */
+export function useReviewerCandidates(
+  repo: string,
+  number: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr", number, "reviewer-candidates"] as const,
+    queryFn: () => api.forgePrReviewerCandidates(repo, number),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+/**
+ * Replace an MR's reviewer list (Bitbucket-only, gated on
+ * `implemented.mrReviewers`) with an optimistic patch of the PR-details cache +
+ * rollback, mirroring `useSetPrAssignees` — the picker's chips update instantly
+ * instead of waiting on the PUT + refetch.
+ */
+export function useSetPrReviewers(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; reviewers: ForgeUserRef[] }) =>
+      api.forgePrSetReviewers(
+        repo,
+        args.number,
+        args.reviewers.map((r) => r.id),
+      ),
+    onMutate: async (args) => {
+      const key = ["repo", repo, "pr", args.number] as const;
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<PrDetails>(key);
+      queryClient.setQueryData<PrDetails>(key, (d) =>
+        d ? { ...d, reviewers: args.reviewers } : d,
+      );
+      return { prev, key };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: (_d, _e, args) =>
+      queryClient.invalidateQueries({
+        queryKey: ["repo", repo, "pr", args.number],
+      }),
+  });
 }
 
 /**

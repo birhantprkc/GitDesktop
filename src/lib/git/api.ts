@@ -32,6 +32,7 @@ import type {
   ForgeRepoAdmin,
   ForgeRepoList,
   ForgeStatus,
+  ForgeUserRef,
   GeneratedNotes,
   GhAccounts,
   GhBranchProtection,
@@ -1396,6 +1397,32 @@ export const forgePrRequestChanges = (
   number: number,
   body: string,
 ) => invoke<void>("forge_pr_request_changes", { repoPath, number, body });
+
+/** Revoke the viewer's requested-changes state — Bitbucket-only (its revoke works
+ *  on every plan, making the control a true toggle; GitLab's undo is Premium). */
+export const forgePrUnrequestChanges = (repoPath: string, number: number) =>
+  invoke<void>("forge_pr_unrequest_changes", { repoPath, number });
+
+/** Toggle a PR's draft state — Bitbucket-only (both directions; GitHub keeps its
+ *  one-way `gh pr ready` path). */
+export const forgePrSetDraft = (
+  repoPath: string,
+  number: number,
+  draft: boolean,
+) => invoke<void>("forge_pr_set_draft", { repoPath, number, draft });
+
+/** Replace a PR's reviewer list (ids from `forgePrReviewerCandidates`) —
+ *  Bitbucket-only (`implemented.mrReviewers`). */
+export const forgePrSetReviewers = (
+  repoPath: string,
+  number: number,
+  reviewers: string[],
+) => invoke<void>("forge_pr_set_reviewers", { repoPath, number, reviewers });
+
+/** Reviewer-picker candidates for a PR — Bitbucket: workspace members minus the
+ *  PR author (the server rejects the author as a reviewer). */
+export const forgePrReviewerCandidates = (repoPath: string, number: number) =>
+  invoke<ForgeUserRef[]>("forge_pr_reviewer_candidates", { repoPath, number });
 
 export const ghPrEditComment = (
   repoPath: string,

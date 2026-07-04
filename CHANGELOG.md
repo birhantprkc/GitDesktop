@@ -34,8 +34,13 @@ commit list.
   (drafts included), and **approve/unapprove** pull requests, plus **rerun**, **trigger**
   (with variables), and **stop** Pipelines. Add the `write:pullrequest:bitbucket` and
   `write:pipeline:bitbucket` token scopes in **Settings → Accounts** to enable them.
-  Reopening a declined PR and a distinct request-changes review aren't available — both
-  are Bitbucket platform limits.
+  Reopening a declined PR isn't available — a Bitbucket platform limit.
+- **Bitbucket Cloud PR reviews & drafts.** Bitbucket pull requests gain the rest of the
+  review flow: **request changes** as a true toggle (click again to revoke — unlike
+  GitLab, Bitbucket's revoke works on every plan; approving also clears it), a
+  **reviewers picker** that lists your workspace members (minus the PR author, whom
+  Bitbucket won't accept as a reviewer), and a both-ways **draft toggle** — mark a draft
+  **ready for review** or convert a ready PR **back to draft**.
 - **GitLab time tracking.** Track time on a GitLab issue or merge request without
   leaving the app: set an **estimate** (e.g. `3h`) and log **spent** time (e.g.
   `45m`, or subtract with `-15m`), with a progress bar and an "over" note when

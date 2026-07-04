@@ -521,9 +521,14 @@ export interface ForgeImplemented {
   /** Setting a merge request's assignees — GitLab-only like `mrApprove` (GitHub
    *  PRs expose no assignee picker here), so it's false for GitHub. */
   mrAssignees: boolean;
-  /** Requesting changes on an MR (the blocking reviewer state) — GitLab-only
-   *  like `mrApprove` (GitHub requests changes via its Review menu). */
+  /** Requesting changes on an MR (the blocking reviewer state) — GitLab and
+   *  Bitbucket (GitHub requests changes via its Review menu). Bitbucket's revoke
+   *  works on every plan, so the control toggles there; GitLab is one-shot. */
   mrRequestChanges: boolean;
+  /** Editing a merge/pull request's reviewer list — Bitbucket-only (reviewers
+   *  picked from workspace members; GitHub keeps its own review-request flow and
+   *  the GitLab reviewer list isn't wired). */
+  mrReviewers: boolean;
   /** Editing an existing issue's title/body — the shared edit dialog. */
   issueEdit: boolean;
   /** Editing an existing merge/pull request's title/body — the same shared
@@ -1110,6 +1115,19 @@ export interface PrDetails {
   /** Assignee usernames. Only GitLab fills this — the MR-assignees picker is
    *  GitLab-only (`implemented.mrAssignees`); GitHub leaves it empty. */
   assignees: string[];
+  /** The reviewer list. Only Bitbucket fills this — the reviewers picker is
+   *  Bitbucket-only (`implemented.mrReviewers`). Identity is the provider's
+   *  stable id (Bitbucket: the braced account uuid), never the display label. */
+  reviewers: ForgeUserRef[];
+}
+
+/** A provider user reference for pickers — a stable id + a human label.
+ *  Bitbucket's reviewer picker emits it today (id = account uuid, label =
+ *  display name / nickname): Bitbucket nicknames aren't unique, so the label
+ *  alone can't round-trip a mutation. */
+export interface ForgeUserRef {
+  id: string;
+  label: string;
 }
 
 /** One review item on a GitHub PR (a submitted review, an inline review comment,

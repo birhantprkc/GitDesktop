@@ -353,11 +353,81 @@ pub async fn forge_pr_request_changes(
         Some((Provider::GitLab, _)) => {
             gitlab::request_changes_mr(&repo_path, number, &body).await
         }
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::request_changes_pr(&repo_path, number, &body).await
+        }
+        _ => Err(AppError::InvalidArgument(
+            "GitHub requests changes through the Review menu.".into(),
+        )),
+    }
+}
+
+/// Revoke the viewer's requested-changes state. Bitbucket-only: its DELETE works on
+/// every plan, so the control is a true toggle there — GitLab's direct undo is a
+/// Premium feature (Free clears it by approving, or by dropping the reviewer on
+/// GitLab), and GitHub reviews live in its own Review menu.
+#[tauri::command]
+pub async fn forge_pr_unrequest_changes(repo_path: String, number: u64) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::unrequest_changes_pr(&repo_path, number).await
+        }
+        Some((Provider::GitLab, _)) => Err(AppError::InvalidArgument(
+            "GitLab can only revoke a change request on Premium — approve instead, or remove yourself as a reviewer on GitLab.".into(),
         )),
         _ => Err(AppError::InvalidArgument(
             "GitHub requests changes through the Review menu.".into(),
+        )),
+    }
+}
+
+/// Toggle a merge/pull request's draft state. Bitbucket-only: Bitbucket flips
+/// `draft` both ways; GitHub keeps its one-way `gh pr ready` path, and a GitLab
+/// draft is a title prefix (unwired here).
+#[tauri::command]
+pub async fn forge_pr_set_draft(repo_path: String, number: u64, draft: bool) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::Bitbucket, _)) => bitbucket::set_pr_draft(&repo_path, number, draft).await,
+        Some((Provider::GitLab, _)) => Err(AppError::InvalidArgument(
+            "GitLab drafts aren't toggleable here yet.".into(),
+        )),
+        _ => Err(AppError::InvalidArgument(
+            "GitHub marks a pull request ready via its own control.".into(),
+        )),
+    }
+}
+
+/// Replace a merge/pull request's reviewer list (ids from
+/// [`forge_pr_reviewer_candidates`]). Bitbucket-only (`implemented.mr_reviewers`).
+#[tauri::command]
+pub async fn forge_pr_set_reviewers(
+    repo_path: String,
+    number: u64,
+    reviewers: Vec<String>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::set_pr_reviewers(&repo_path, number, &reviewers).await
+        }
+        _ => Err(AppError::InvalidArgument(
+            "Reviewers aren't editable here for this provider.".into(),
+        )),
+    }
+}
+
+/// The reviewer picker's candidates for a PR — Bitbucket: workspace members minus
+/// the PR author (the server rejects the author as a reviewer).
+#[tauri::command]
+pub async fn forge_pr_reviewer_candidates(
+    repo_path: String,
+    number: u64,
+) -> AppResult<Vec<model::ForgeUserRef>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::reviewer_candidates(&repo_path, number).await
+        }
+        _ => Err(AppError::InvalidArgument(
+            "Reviewers aren't editable here for this provider.".into(),
         )),
     }
 }

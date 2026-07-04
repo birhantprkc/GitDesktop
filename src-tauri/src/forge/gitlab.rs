@@ -577,6 +577,9 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         checks: Vec::new(),
         labels,
         assignees: mr.assignees.into_iter().map(|a| a.username).collect(),
+        // The GitLab reviewer list isn't wired into the picker yet (mr_reviewers
+        // stays false) — assignees are GitLab's control here.
+        reviewers: Vec::new(),
     })
 }
 

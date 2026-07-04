@@ -85,9 +85,12 @@ import {
   useRequestChangesPr,
   useReviewPr,
   useSetPrAssignees,
+  useSetPrDraft,
+  useSetPrReviewers,
   useToggleReaction,
   useUnapprovePr,
   useUnminimizeComment,
+  useUnrequestChangesPr,
 } from "@/lib/git/queries";
 import { type ApprovalState, providerLabel } from "@/lib/git/types";
 import { useAiEnabled } from "@/lib/settings/queries";
@@ -100,6 +103,7 @@ import {
   MrTimeTracking,
   PrFilesPane,
 } from "./RemotePrViewParts";
+import { ReviewersPopover } from "./ReviewersPopover";
 
 type Section = "conversation" | "commits" | "files" | "review";
 
@@ -172,9 +176,12 @@ export function RemotePrView({
   // approves via the Review menu above), so it's GitLab-only and gated on the forge
   // feature directly — NOT `canWrite || …`, which would duplicate the Review control.
   const canApprove = forgeFeatureReady(forge.data, "mrApprove");
-  // Request-changes follows the same GitLab-only shape (GitHub's lives in the
-  // Review menu): a one-shot blocking reviewer state, cleared by approving.
+  // Request-changes follows the same forge-only shape (GitHub's lives in the
+  // Review menu). On GitLab it's one-shot (the direct undo is Premium-only); on
+  // Bitbucket the revoke works everywhere, so the control is a true toggle.
   const canRequestChanges = forgeFeatureReady(forge.data, "mrRequestChanges");
+  // Bitbucket's revoke — drives the toggle direction below.
+  const canUnrequestChanges = provider === "bitbucket";
   // Merge is a SHARED control (GitHub `gh pr merge`, GitLab `glab`), so it uses the
   // `canWrite || …` gate like comment/close — GitHub keeps it while forge-status is
   // pending/failed; a ready GitLab repo enables it too.
@@ -187,12 +194,20 @@ export function RemotePrView({
   // MR assignees are GitLab-only like the approve toggle (GitHub PRs have no
   // assignee picker here), so the flag alone gates — never `canWrite || …`.
   const canEditAssignees = forgeFeatureReady(forge.data, "mrAssignees");
+  // The reviewers picker is Bitbucket-only the same way (GitHub's review
+  // requests live in its own flow; the GitLab reviewer list isn't wired).
+  const canEditReviewers = forgeFeatureReady(forge.data, "mrReviewers");
+  // Bitbucket toggles draft BOTH ways via the same edit surface (GitHub's
+  // one-way Ready button below stays on `canWrite` + `gh pr ready`).
+  const canToggleDraft =
+    provider === "bitbucket" && forgeFeatureReady(forge.data, "mrEdit");
   // Time tracking is GitLab-only too (GitHub has no built-in time tracking).
   const canTrackTime = forgeFeatureReady(forge.data, "timeTracking");
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
   const setAssignees = useSetPrAssignees(repoPath);
+  const setReviewers = useSetPrReviewers(repoPath);
   const comment = useCommentPr(repoPath);
   const checkout = useCheckoutPr(repoPath);
   const repoStatus = useRepoStatus(repoPath);
@@ -211,6 +226,7 @@ export function RemotePrView({
   const approvePr = useApprovePr(repoPath);
   const unapprovePr = useUnapprovePr(repoPath);
   const requestChangesPr = useRequestChangesPr(repoPath);
+  const unrequestChangesPr = useUnrequestChangesPr(repoPath);
   // Auto-merge state (GitLab-only): read only for a ready GitLab repo with an open
   // MR (null disables the read for GitHub / closed MRs). It polls server-side so the
   // view notices the pipeline completing and the auto-merge firing.
@@ -225,6 +241,7 @@ export function RemotePrView({
   const minimizeComment = useMinimizeComment(repoPath);
   const unminimizeComment = useUnminimizeComment(repoPath);
   const readyPr = useReadyPr(repoPath);
+  const setDraft = useSetPrDraft(repoPath);
   const editPr = useEditPr(repoPath);
   // Reactions are a shared control (GitLab awards emoji); the fetch is gated so
   // it never fires for a provider whose reactions aren't wired (Bitbucket).
@@ -333,21 +350,34 @@ export function RemotePrView({
     });
   }
 
-  // Request changes — one-shot (the direct undo is Premium-only on GitLab;
-  // approving, which clears the state, is the natural Free-tier exit). Same
-  // optimistic flip as the approve toggle: the state lives in the separate
-  // approvals query, so waiting on the write + refetch would look broken.
+  // Request changes — a true toggle on Bitbucket (its revoke works on every
+  // plan); one-shot on GitLab (the direct undo is Premium-only; approving, which
+  // clears the state, is the natural Free-tier exit). Same optimistic flip as the
+  // approve toggle: the state lives in the separate approvals query, so waiting
+  // on the write + refetch would look broken.
   function requestChanges() {
-    // Already requested: the button is a focusable state indicator (its title
-    // says how to clear); a re-click must not fire the Premium-only undo path.
-    if (approvals.data?.viewerRequestedChanges) return;
+    const requested = approvals.data?.viewerRequestedChanges ?? false;
+    // Already requested on GitLab: the button is a focusable state indicator
+    // (its title says how to clear); a re-click must not fire the Premium-only
+    // undo path. Bitbucket falls through to the revoke below.
+    if (requested && !canUnrequestChanges) return;
     const key = ["repo", repoPath, "pr", number, "approvals"] as const;
     const prev = queryClient.getQueryData<ApprovalState>(key);
     if (prev) {
       queryClient.setQueryData<ApprovalState>(key, {
         ...prev,
-        viewerRequestedChanges: true,
+        viewerRequestedChanges: !requested,
       });
+    }
+    if (requested) {
+      unrequestChangesPr.mutate(number, {
+        onSuccess: () => toast.success("Change request revoked"),
+        onError: (e) => {
+          if (prev) queryClient.setQueryData(key, prev);
+          onError(e);
+        },
+      });
+      return;
     }
     requestChangesPr.mutate(
       { number, body: composeBody.trim() },
@@ -499,9 +529,11 @@ export function RemotePrView({
     approvePr.isPending ||
     unapprovePr.isPending ||
     requestChangesPr.isPending ||
+    unrequestChangesPr.isPending ||
     armAutoMerge.isPending ||
     cancelAutoMerge.isPending ||
-    readyPr.isPending;
+    readyPr.isPending ||
+    setDraft.isPending;
 
   function saveCommentEdit(commentId: string, body: string) {
     editComment.mutate(
@@ -654,6 +686,36 @@ export function RemotePrView({
                   className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
                 >
                   @{login}
+                </span>
+              ))}
+            </div>
+          )
+        )}
+        {/* Bitbucket-only reviewers picker (workspace members, minus the author);
+            a closed/merged PR falls back to read-only chips like the rows above.
+            GitHub/GitLab carry no reviewers here and show nothing, as before. */}
+        {isOpen && canEditReviewers ? (
+          <ReviewersPopover
+            repoPath={repoPath}
+            number={number}
+            enabled
+            value={pr.reviewers}
+            onChange={(next) =>
+              setReviewers.mutate(
+                { number, reviewers: next },
+                { onError: toastError },
+              )
+            }
+          />
+        ) : (
+          pr.reviewers.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {pr.reviewers.map((user) => (
+                <span
+                  key={user.id}
+                  className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                >
+                  {user.label}
                 </span>
               ))}
             </div>
@@ -980,13 +1042,14 @@ export function RemotePrView({
                   <Button
                     variant="outline"
                     size="sm"
-                    // One-shot: once requested, the button becomes the state
-                    // indicator (GitLab's direct undo is Premium-only — approve,
-                    // or remove yourself as a reviewer on GitLab, to clear). It
-                    // stays FOCUSABLE in that state (the click no-ops via the
-                    // handler) so keyboard/AT users can still reach the how-to-
-                    // clear title. Same disable-on-unknown posture as the
-                    // approve toggle.
+                    // Bitbucket: a true toggle (its revoke works on every plan).
+                    // GitLab: one-shot — once requested, the button becomes the
+                    // state indicator (the direct undo is Premium-only —
+                    // approve, or remove yourself as a reviewer on GitLab, to
+                    // clear). It stays FOCUSABLE in that state (the click
+                    // no-ops via the handler) so keyboard/AT users can still
+                    // reach the how-to-clear title. Same disable-on-unknown
+                    // posture as the approve toggle.
                     disabled={busy || approvals.isPending || approvals.isError}
                     aria-pressed={approval?.viewerRequestedChanges ?? false}
                     onClick={requestChanges}
@@ -994,7 +1057,9 @@ export function RemotePrView({
                       approvals.isError
                         ? "Couldn't load review state"
                         : approval?.viewerRequestedChanges
-                          ? "You've requested changes — approve, or remove yourself as a reviewer on GitLab, to clear"
+                          ? canUnrequestChanges
+                            ? "Revoke your change request"
+                            : "You've requested changes — approve, or remove yourself as a reviewer on GitLab, to clear"
                           : composeBody.trim()
                             ? "Request changes, posting your draft as a comment"
                             : `Request changes on this ${prNoun} (adds you as a reviewer)`
@@ -1069,6 +1134,46 @@ export function RemotePrView({
               }
             >
               Ready for review
+            </Button>
+          )}
+          {/* Bitbucket toggles draft BOTH ways (GitHub's gh path above is
+              one-way): the same PUT flips it back, so a ready PR offers a
+              quieter Convert-to-draft alongside the primary Ready button. */}
+          {canToggleDraft && pr.isDraft && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                setDraft.mutate(
+                  { number, draft: false },
+                  {
+                    onSuccess: () => toast.success("Marked ready for review"),
+                    onError,
+                  },
+                )
+              }
+            >
+              Ready for review
+            </Button>
+          )}
+          {canToggleDraft && !pr.isDraft && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              title="Turn this pull request back into a draft"
+              onClick={() =>
+                setDraft.mutate(
+                  { number, draft: true },
+                  {
+                    onSuccess: () => toast.success("Converted to draft"),
+                    onError,
+                  },
+                )
+              }
+            >
+              Convert to draft
             </Button>
           )}
           {/* Auto-merge armed indicator + cancel (GitLab-only) — sits on the left,

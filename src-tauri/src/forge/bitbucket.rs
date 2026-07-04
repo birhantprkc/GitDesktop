@@ -3,10 +3,12 @@
 //!
 //! Like the GitLab impl, every read maps Bitbucket's JSON onto the SAME neutral
 //! models the GitHub panels render (`PrInfo`, `PrDetails`, `WorkflowRun`, …), so the
-//! frontend stays provider-agnostic. Bitbucket is READ-ONLY here (Phase 3): PRs,
-//! pipelines, and repo listing/URL — no writes, no issues (the native tracker is
-//! being deleted platform-wide 2026-08-20), no reactions/labels/milestones (the
-//! platform has none of those on Cloud).
+//! frontend stays provider-agnostic. Reads (Phase 3) cover PRs, pipelines, and repo
+//! listing/URL; writes (Phase 4 + the parity pass) cover PR comment / decline /
+//! merge / edit / create / approve / request-changes / reviewers / draft plus
+//! pipeline rerun / cancel / dispatch. Still absent by PLATFORM limitation: issues
+//! (the native tracker is being deleted platform-wide 2026-08-20) and
+//! reactions/labels/milestones (Cloud has none of those).
 //!
 //! Auth is HTTP Basic (`{atlassian_account_email}:{api_token}`) — app passwords are
 //! dead — with the token stored in the OS keyring under `forge/bitbucket.org/*`.
@@ -23,7 +25,7 @@ use crate::forge::encode_query_value;
 use crate::forge::gitlab::null_to_default;
 use crate::forge::http::{self, BbCredentials, BB_HOST, KEY_EMAIL, KEY_TOKEN, KEY_USERNAME};
 use crate::forge::model::{
-    Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, Implemented, Provider,
+    Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, ForgeUserRef, Implemented, Provider,
 };
 use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
@@ -465,6 +467,11 @@ struct BbPr {
     destination: Option<BbPrEndpoint>,
     #[serde(default)]
     links: Option<BbHtmlLinks>,
+    /// The reviewer list (present on the unfielded single-PR GET) — feeds the
+    /// reviewers picker. Distinct from `participants`, which also includes
+    /// commenters/approvers who were never asked to review.
+    #[serde(default)]
+    reviewers: Vec<BbUser>,
 }
 
 /// Best display login for a Bitbucket user: display_name else nickname (other users
@@ -819,6 +826,22 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         checks,
         labels: Vec::new(),
         assignees: Vec::new(),
+        // Identity = uuid (participant objects never carry `username`, and
+        // nicknames aren't unique); label = the usual display fallback chain.
+        reviewers: pr
+            .reviewers
+            .iter()
+            .filter_map(|u| {
+                let id = u.uuid.clone().unwrap_or_default();
+                if id.is_empty() {
+                    return None;
+                }
+                Some(ForgeUserRef {
+                    id,
+                    label: user_login(u),
+                })
+            })
+            .collect(),
     })
 }
 
@@ -1451,26 +1474,157 @@ fn build_edit_body(title: &str, body: &str, reviewer_uuids: &[String]) -> serde_
     })
 }
 
+/// Read a PR's current reviewer uuids — the echo every mutating PR PUT needs
+/// (omitting `reviewers` from a Bitbucket PR PUT WIPES them).
+async fn read_reviewer_uuids(
+    creds: &BbCredentials,
+    base: &str,
+    number: u64,
+) -> AppResult<Vec<String>> {
+    let read_path = format!("{base}/pullrequests/{number}?fields=reviewers.uuid");
+    let existing: BbPrReviewers =
+        http::bb_get_json(creds, &read_path, "pull request reviewers").await?;
+    Ok(existing
+        .reviewers
+        .into_iter()
+        .map(|r| r.uuid)
+        .filter(|u| !u.is_empty())
+        .collect())
+}
+
 /// Edit a pull request's title/body (`PUT …/pullrequests/{n}`). Only OPEN PRs are
 /// mutable. A Bitbucket PR PUT that omits `reviewers` WIPES them, so we first read the
 /// existing reviewer uuids and echo them back alongside the new title/description.
 pub async fn edit_pr(repo_path: &str, number: u64, title: &str, body: &str) -> AppResult<()> {
     let creds = http::load_credentials().await?;
     let base = repo_base(repo_path).await?;
-    // Read the current reviewers (uuid only) so the PUT preserves them.
-    let read_path = format!("{base}/pullrequests/{number}?fields=reviewers.uuid");
-    let existing: BbPrReviewers =
-        http::bb_get_json(&creds, &read_path, "pull request reviewers").await?;
-    let uuids: Vec<String> = existing
-        .reviewers
-        .into_iter()
-        .map(|r| r.uuid)
-        .filter(|u| !u.is_empty())
-        .collect();
+    let uuids = read_reviewer_uuids(&creds, &base, number).await?;
     let payload = build_edit_body(title, body, &uuids);
     let path = format!("{base}/pullrequests/{number}");
     http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "pull request").await?;
     Ok(())
+}
+
+/// Build the draft-toggle body. Pure (testable). Echoes the existing reviewers for
+/// the same reason as [`build_edit_body`] — omitting `reviewers` from a PR PUT
+/// wipes them.
+fn build_draft_body(draft: bool, reviewer_uuids: &[String]) -> serde_json::Value {
+    let reviewers: Vec<serde_json::Value> = reviewer_uuids
+        .iter()
+        .map(|u| serde_json::json!({ "uuid": u }))
+        .collect();
+    serde_json::json!({ "draft": draft, "reviewers": reviewers })
+}
+
+/// Toggle a pull request's draft state (`PUT …/pullrequests/{n}` with `{draft}`).
+/// Bitbucket supports BOTH directions (validated live) — GitHub's `gh pr ready`
+/// path stays one-way and untouched. Echoes the current reviewers like every other
+/// PR PUT here.
+pub async fn set_pr_draft(repo_path: &str, number: u64, draft: bool) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let uuids = read_reviewer_uuids(&creds, &base, number).await?;
+    let payload = build_draft_body(draft, &uuids);
+    let path = format!("{base}/pullrequests/{number}");
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "pull request").await?;
+    Ok(())
+}
+
+/// Build the set-reviewers body. Pure (testable).
+fn build_reviewers_body(uuids: &[String]) -> serde_json::Value {
+    let reviewers: Vec<serde_json::Value> = uuids
+        .iter()
+        .map(|u| serde_json::json!({ "uuid": u }))
+        .collect();
+    serde_json::json!({ "reviewers": reviewers })
+}
+
+/// Replace a pull request's reviewer list (`PUT …/pullrequests/{n}` with
+/// `{reviewers:[{uuid}…]}`). The field is PROVIDED, so the omit-wipes gotcha doesn't
+/// apply, and Bitbucket's partial-update semantics preserve the omitted
+/// title/description (validated live). The server rejects the PR author as a
+/// reviewer — [`reviewer_candidates`] filters the author out up front.
+pub async fn set_pr_reviewers(repo_path: &str, number: u64, uuids: &[String]) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let payload = build_reviewers_body(uuids);
+    let path = format!("{base}/pullrequests/{number}");
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "pull request").await?;
+    Ok(())
+}
+
+/// One `/workspaces/{ws}/members` page — `values` plus the absolute `next` link
+/// (the one paginated read here that follows `next`, bounded below).
+#[derive(Deserialize, Default)]
+struct BbMembersPage {
+    #[serde(default)]
+    values: Vec<BbMembership>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+/// A workspace-membership wrapper (`{type, user, workspace}`) — only the user matters.
+#[derive(Deserialize, Default)]
+struct BbMembership {
+    #[serde(default)]
+    user: Option<BbUser>,
+}
+
+/// Author-uuid-only PR read: candidates must exclude the author, because Bitbucket
+/// rejects the PR author as a reviewer server-side.
+#[derive(Deserialize, Default)]
+struct BbPrAuthorOnly {
+    #[serde(default)]
+    author: Option<BbUser>,
+}
+
+/// Map + filter workspace members into picker candidates. Pure (testable): drops
+/// uuid-less entries and the PR author, and sorts by label (case-insensitive) so
+/// the popover list is stable across refetches.
+fn reviewer_candidates_from(members: Vec<BbUser>, author_uuid: &str) -> Vec<ForgeUserRef> {
+    let mut out: Vec<ForgeUserRef> = members
+        .into_iter()
+        .filter_map(|u| {
+            let id = u.uuid.clone().unwrap_or_default();
+            if id.is_empty() || id == author_uuid {
+                return None;
+            }
+            Some(ForgeUserRef {
+                id,
+                label: user_login(&u),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    out
+}
+
+/// The reviewer picker's candidate list: the repo's WORKSPACE members, minus the PR
+/// author. Follows `next` up to 5 pages (500 members at `pagelen=100`) — a larger
+/// workspace truncates rather than hanging the popover, consistent with the module's
+/// bounded-pagination posture.
+pub async fn reviewer_candidates(repo_path: &str, number: u64) -> AppResult<Vec<ForgeUserRef>> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let pr_path = format!("{base}/pullrequests/{number}?fields=author.uuid");
+    let pr: BbPrAuthorOnly = http::bb_get_json(&creds, &pr_path, "pull request").await?;
+    let author_uuid = pr.author.and_then(|a| a.uuid).unwrap_or_default();
+
+    let (ws, _slug) = workspace_slug(repo_path).await?;
+    let mut members: Vec<BbUser> = Vec::new();
+    let mut url = format!(
+        "workspaces/{}/members?pagelen=100&fields=values.user.uuid,values.user.display_name,values.user.nickname,next",
+        encode_query_value(&ws),
+    );
+    for _ in 0..5 {
+        let page: BbMembersPage = http::bb_get_json(&creds, &url, "workspace members").await?;
+        members.extend(page.values.into_iter().filter_map(|m| m.user));
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    Ok(reviewer_candidates_from(members, &author_uuid))
 }
 
 /// A newly-created PR's identity (id + web link), for mapping onto [`PrRef`].
@@ -1596,6 +1750,36 @@ pub async fn unapprove_pr(repo_path: &str, number: u64) -> AppResult<()> {
     let creds = http::load_credentials().await?;
     let base = repo_base(repo_path).await?;
     let path = format!("{base}/pullrequests/{number}/approve");
+    http::bb_delete(&creds, &path).await
+}
+
+/// Request changes on a pull request (`POST …/pullrequests/{n}/request-changes`).
+/// The optional review comment rides as a plain PR comment AFTER the state change,
+/// mirroring `gitlab::request_changes_mr` — if only the comment fails, the error
+/// says the request itself stood rather than reading as a clean no-op.
+pub async fn request_changes_pr(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/request-changes");
+    http::bb_post_empty(&creds, &path).await?;
+    if !body.trim().is_empty() {
+        if let Err(e) = comment_pr(repo_path, number, body).await {
+            return Err(AppError::Bitbucket(format!(
+                "Changes were requested, but posting the comment failed: {e}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Revoke the viewer's requested-changes state
+/// (`DELETE …/pullrequests/{n}/request-changes`). Works on every Bitbucket plan —
+/// unlike GitLab, whose direct undo is Premium-only — so the frontend renders the
+/// request-changes control as a real toggle for Bitbucket.
+pub async fn unrequest_changes_pr(repo_path: &str, number: u64) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/request-changes");
     http::bb_delete(&creds, &path).await
 }
 
@@ -2426,5 +2610,62 @@ mod tests {
         assert_eq!(body["target"]["ref_name"], "dev");
         // No `variables` key at all when inputs are empty.
         assert!(body.get("variables").is_none());
+    }
+
+    #[test]
+    fn draft_body_flips_state_and_echoes_reviewers() {
+        let body = build_draft_body(true, &["{uuid-1}".to_string()]);
+        assert_eq!(body["draft"], true);
+        assert_eq!(body["reviewers"][0]["uuid"], "{uuid-1}");
+        // Ready direction, no reviewers: the key is still PRESENT (empty array) —
+        // omitting it would wipe reviewers on a PR that had them.
+        let body = build_draft_body(false, &[]);
+        assert_eq!(body["draft"], false);
+        assert!(body["reviewers"].is_array());
+        assert_eq!(body["reviewers"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn reviewers_body_maps_uuids_and_carries_nothing_else() {
+        let body = build_reviewers_body(&["{a}".to_string(), "{b}".to_string()]);
+        let reviewers = body["reviewers"].as_array().unwrap();
+        assert_eq!(reviewers.len(), 2);
+        assert_eq!(reviewers[0]["uuid"], "{a}");
+        assert_eq!(reviewers[1]["uuid"], "{b}");
+        // Only the reviewers field rides — title/description omitted are preserved
+        // by Bitbucket's partial-update semantics (validated live).
+        assert_eq!(body.as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn reviewer_candidates_drop_author_and_uuidless_and_sort_by_label() {
+        let members: Vec<BbUser> = serde_json::from_str(
+            r#"[
+                {"uuid":"{zed}","display_name":"Zed"},
+                {"uuid":"{author}","display_name":"The Author"},
+                {"display_name":"No Uuid"},
+                {"uuid":"{amy}","nickname":"amy"},
+                {"uuid":"{bob}","display_name":"bob"}
+            ]"#,
+        )
+        .unwrap();
+        let out = reviewer_candidates_from(members, "{author}");
+        // Author + uuid-less dropped; case-insensitive label sort; label falls back
+        // to nickname when display_name is absent.
+        let labels: Vec<&str> = out.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, vec!["amy", "bob", "Zed"]);
+        assert_eq!(out[0].id, "{amy}");
+    }
+
+    #[test]
+    fn pr_reviewers_deserialize_from_the_reviewers_field() {
+        let parsed: BbPr = serde_json::from_str(
+            r#"{"id":4,"title":"t","state":"OPEN",
+                "reviewers":[{"uuid":"{r1}","display_name":"Rev One"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.reviewers.len(), 1);
+        assert_eq!(parsed.reviewers[0].uuid.as_deref(), Some("{r1}"));
+        assert_eq!(user_login(&parsed.reviewers[0]), "Rev One");
     }
 }

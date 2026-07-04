@@ -79,13 +79,15 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 - **Bitbucket Cloud** — connect with an **Atlassian API token**
   (Settings → Accounts), then **browse & clone** your Bitbucket repositories,
   read **pull requests** (diffs, comments, build statuses) and watch **Pipelines**
-  (with step logs) in the same panels — and now **act on them**: comment, decline,
+  (with step logs) in the same panels — and act on them: comment, decline,
   merge (merge commit / squash / fast-forward, optionally deleting the source
-  branch), edit, create (drafts included), and approve/unapprove PRs, plus rerun,
-  trigger (with variables), and stop Pipelines. Reopening a declined PR and
-  requesting changes aren't available (Bitbucket platform limits). Bitbucket has
-  retired its native issue tracker (issues live in Jira), so issues aren't shown
-  for Bitbucket repositories.
+  branch), edit, create (drafts included), approve/unapprove, **request changes**
+  (a true toggle — revoking works on every Bitbucket plan), pick **reviewers**
+  from your workspace members, and flip **draft ↔ ready** in either direction,
+  plus rerun, trigger (with variables), and stop Pipelines. Reopening a declined
+  PR isn't available (a Bitbucket platform limit). Bitbucket has retired its
+  native issue tracker (issues live in Jira), so issues aren't shown for
+  Bitbucket repositories.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works
   in an isolated worktree, so your own checkout is never touched. Follow it
   **step by step** — every file it reads, edits, and command it runs — and

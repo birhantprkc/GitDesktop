@@ -626,10 +626,13 @@ Once connected:
 - **Pull requests** — the **Pull Requests** tab lists a Bitbucket repo's PRs; open one to
   read its **diff**, **comments**, and **build statuses**, and to act on it: **comment**,
   **decline**, **merge** (merge commit, squash, or fast-forward, with an optional
-  delete-source-branch), **edit** the title/description, and **approve/unapprove**. Use
-  **Create** to open a new PR (drafts included). Two things Bitbucket itself can't do from
+  delete-source-branch), **edit** the title/description, **approve/unapprove**,
+  **request changes** (a true toggle — click again to revoke; approving also clears it),
+  pick **reviewers** from your workspace members (the PR author can't review their own
+  PR, so they never appear), and flip **draft ↔ ready** in either direction. Use
+  **Create** to open a new PR (drafts included). One thing Bitbucket itself can't do from
   the API: **reopening a declined PR** (so there's no Reopen button — a Bitbucket platform
-  limit) and a distinct **request-changes** review, so those aren't offered.
+  limit).
 - **Pipelines** — the **Actions** tab lists Bitbucket **Pipelines**; open one to see its
   **steps** with their **logs**. You can **rerun** a finished pipeline (re-triggers its
   branch), **trigger** a new one on a branch or tag (with optional variables), and **stop**

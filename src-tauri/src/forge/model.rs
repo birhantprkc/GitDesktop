@@ -199,10 +199,15 @@ pub struct Implemented {
     /// like `mr_approve` this flag stays `false` for GitHub (see `all`).
     pub mr_assignees: bool,
     /// Requesting changes on a merge request — the blocking reviewer state.
-    /// GitLab-only like `mr_approve`: GitHub requests changes through its Review
-    /// menu (`gh_pr_review`), not this control, so the flag stays `false` for
-    /// GitHub (see `all`).
+    /// GitLab and Bitbucket share the control; GitHub requests changes through
+    /// its Review menu (`gh_pr_review`), not this control, so the flag stays
+    /// `false` for GitHub (see `all`).
     pub mr_request_changes: bool,
+    /// Editing a merge/pull request's reviewer list. Bitbucket-only today —
+    /// Bitbucket PRs carry reviewers (not assignees), picked from workspace
+    /// members. GitHub keeps its own review-request flow (not built here) and
+    /// the GitLab reviewer list isn't wired yet, so both stay `false`.
+    pub mr_reviewers: bool,
     /// Editing an existing issue's title/body — a shared control (the same edit
     /// dialog; GitHub PATCHes the issue, GitLab PUTs title/description).
     pub issue_edit: bool,
@@ -288,6 +293,9 @@ impl Implemented {
             mr_assignees: false,
             // Like `mr_approve`: GitHub requests changes via its Review menu.
             mr_request_changes: false,
+            // Like `mr_approve`: GitHub's reviewer requests live in its own
+            // review flow, which this app doesn't edit — Bitbucket-only.
+            mr_reviewers: false,
             issue_edit: true,
             mr_edit: true,
             issue_milestone: true,
@@ -337,6 +345,7 @@ impl Implemented {
             release_edit: false,
             mr_assignees: false,
             mr_request_changes: false,
+            mr_reviewers: false,
             issue_edit: false,
             mr_edit: false,
             issue_milestone: false,
@@ -403,6 +412,8 @@ impl Implemented {
                 release_edit: true,
                 mr_assignees: true,
                 mr_request_changes: true,
+                // The GitLab reviewer list isn't wired here yet (assignees are).
+                mr_reviewers: false,
                 issue_edit: true,
                 mr_edit: true,
                 issue_milestone: true,
@@ -423,9 +434,12 @@ impl Implemented {
             // declined PR via API or web, so `forge_pr_reopen` errors and the frontend
             // hides the button), merge, title/body edit, create, and the bodyless
             // approve/unapprove toggle; plus pipeline rerun / cancel / dispatch.
+            // The parity pass adds the request-changes TOGGLE (unlike GitLab,
+            // Bitbucket's revoke works on every plan) and the reviewers picker
+            // (`mr_reviewers` — workspace members, minus the author).
             // Everything else — issues (the native tracker sunsets 2026-08-20),
-            // request-changes (deferred), assignees/labels, releases, insights, settings
-            // — stays false, so those panels degrade to "coming soon".
+            // assignees/labels, releases, insights, settings — stays false, so
+            // those panels degrade to "coming soon".
             Provider::Bitbucket => Self {
                 pull_requests: true,
                 ci: true,
@@ -436,6 +450,8 @@ impl Implemented {
                 mr_edit: true,
                 mr_create: true,
                 mr_approve: true,
+                mr_request_changes: true,
+                mr_reviewers: true,
                 ci_rerun: true,
                 ci_cancel: true,
                 ci_dispatch: true,
@@ -472,6 +488,18 @@ pub struct ForgeStatus {
     /// Which of those capabilities GitDesktop has actually built for this provider
     /// — drives per-feature "coming soon" gating distinct from `capabilities`.
     pub implemented: Implemented,
+}
+
+/// A provider user reference for pickers — a stable id plus a human label.
+/// Bitbucket's reviewer picker is the emitter today (id = the braced account
+/// uuid, label = display name / nickname): Bitbucket identity must travel as the
+/// uuid because participant objects never carry `username`, and nicknames aren't
+/// unique — the display string alone can't round-trip a mutation safely.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeUserRef {
+    pub id: String,
+    pub label: String,
 }
 
 /// A repository as listed for cloning — neutral across providers (the clone
@@ -556,10 +584,10 @@ mod tests {
         // CI actions and release management are shared controls too.
         assert!(i.ci_rerun && i.ci_cancel && i.ci_dispatch);
         assert!(i.release_create && i.release_edit);
-        // MR assignees and request-changes mirror mr_approve: GitLab-only controls
-        // (GitHub's analogues live in its own Review menu / nowhere), so GitHub
-        // stays false.
-        assert!(!i.mr_assignees && !i.mr_request_changes);
+        // MR assignees, request-changes, and the reviewers picker mirror
+        // mr_approve: forge-only controls (GitHub's analogues live in its own
+        // Review menu / nowhere), so GitHub stays false.
+        assert!(!i.mr_assignees && !i.mr_request_changes && !i.mr_reviewers);
         // Title/body editing, issue milestones, and reactions are shared controls.
         assert!(i.issue_edit && i.mr_edit && i.issue_milestone);
         assert!(i.issue_reactions && i.mr_reactions);
@@ -624,13 +652,16 @@ mod tests {
         // bodyless approve/unapprove toggle.
         assert!(bb.mr_comment && bb.mr_state && bb.mr_merge && bb.mr_edit && bb.mr_create);
         assert!(bb.mr_approve);
+        // …the request-changes toggle and the reviewers picker (both Bitbucket
+        // writes; GitLab's reviewer list stays unwired)…
+        assert!(bb.mr_request_changes && bb.mr_reviewers);
         // …and pipeline rerun / cancel / dispatch.
         assert!(bb.ci_rerun && bb.ci_cancel && bb.ci_dispatch);
         // …but nothing else — issues stay off, no releases/insights/settings/publish.
         assert!(!bb.issues && !bb.releases && !bb.insights && !bb.repo_settings && !bb.publish);
         assert!(!bb.issue_comment && !bb.issue_state);
-        // Request-changes is deferred for Bitbucket; auto-merge has no Bitbucket analogue.
-        assert!(!bb.mr_request_changes && !bb.mr_auto_merge);
+        // Auto-merge has no Bitbucket analogue.
+        assert!(!bb.mr_auto_merge);
         assert!(!bb.issue_labels && !bb.mr_labels && !bb.issue_assignees);
         assert!(!bb.issue_create);
         assert!(!bb.release_create && !bb.release_edit && !bb.mr_assignees);
