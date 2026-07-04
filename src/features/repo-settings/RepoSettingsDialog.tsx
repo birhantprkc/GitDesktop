@@ -52,6 +52,12 @@ import { quickTransition } from "@/lib/motion";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { BitbucketBranchRestrictionsSection } from "./BitbucketBranchRestrictionsSection";
+import { BitbucketDefaultReviewersSection } from "./BitbucketDefaultReviewersSection";
+import { BitbucketGeneralSection } from "./BitbucketGeneralSection";
+import { BitbucketSchedulesSection } from "./BitbucketSchedulesSection";
+import { BitbucketVariablesSection } from "./BitbucketVariablesSection";
+import { BitbucketWebhooksSection } from "./BitbucketWebhooksSection";
 import { CollaboratorsSection } from "./CollaboratorsSection";
 import { DangerZone } from "./DangerZone";
 import { FundingSection } from "./FundingSection";
@@ -102,6 +108,7 @@ type SectionId =
   | "pages"
   | "sponsor"
   | "secrets"
+  | "schedules"
   | "webhooks"
   | "danger";
 
@@ -183,6 +190,35 @@ const GITLAB_RAIL_GROUPS: NavRailGroup[] = [
   },
 ];
 
+/** The Bitbucket rail: the sections with a Bitbucket implementation. Bitbucket
+ *  splits pipelines into their own bucket (variables + schedules), and has no
+ *  GitHub-style rulesets/security/pages/sponsor surfaces. */
+const BITBUCKET_RAIL_GROUPS: NavRailGroup[] = [
+  {
+    label: "Repository",
+    items: [
+      { id: "general", label: "General" },
+      { id: "access", label: "Default reviewers" },
+      { id: "rules", label: "Branch restrictions" },
+    ],
+  },
+  {
+    label: "Pipelines",
+    items: [
+      { id: "secrets", label: "Variables" },
+      { id: "schedules", label: "Schedules" },
+    ],
+  },
+  {
+    label: "Automation",
+    items: [{ id: "webhooks", label: "Webhooks" }],
+  },
+  {
+    separated: true,
+    items: [{ id: "danger", label: "Danger zone", destructive: true }],
+  },
+];
+
 export function RepoSettingsDialog({
   repoPath,
   open,
@@ -198,7 +234,12 @@ export function RepoSettingsDialog({
   // supports, with the same rail + crossfade shell.
   const forge = useForgeStatus(repoPath);
   const isGitLab = forge.data?.provider === "gitlab";
-  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
+  const isBitbucket = forge.data?.provider === "bitbucket";
+  const remoteLabel = isGitLab
+    ? "GitLab"
+    : isBitbucket
+      ? "Bitbucket"
+      : "GitHub";
   // A remembered section from another repo may not exist on this rail.
   const gitlabSections: SectionId[] = [
     "general",
@@ -208,8 +249,24 @@ export function RepoSettingsDialog({
     "webhooks",
     "danger",
   ];
-  const activeSection =
-    isGitLab && !gitlabSections.includes(section) ? "general" : section;
+  const bitbucketSections: SectionId[] = [
+    "general",
+    "access",
+    "rules",
+    "secrets",
+    "schedules",
+    "webhooks",
+    "danger",
+  ];
+  const activeSection = isGitLab
+    ? gitlabSections.includes(section)
+      ? section
+      : "general"
+    : isBitbucket
+      ? bitbucketSections.includes(section)
+        ? section
+        : "general"
+      : section;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -222,14 +279,20 @@ export function RepoSettingsDialog({
           <DialogDescription>
             Manage this {remoteLabel} {isGitLab ? "project's" : "repository's"}{" "}
             settings
-            {isGitLab ? "" : " and webhooks"}. Changes apply on {remoteLabel}{" "}
-            immediately.
+            {isGitLab || isBitbucket ? "" : " and webhooks"}. Changes apply on{" "}
+            {remoteLabel} immediately.
           </DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 min-w-0 flex-1 gap-4">
           <NavRail
             ariaLabel="Repository settings sections"
-            groups={isGitLab ? GITLAB_RAIL_GROUPS : RAIL_GROUPS}
+            groups={
+              isGitLab
+                ? GITLAB_RAIL_GROUPS
+                : isBitbucket
+                  ? BITBUCKET_RAIL_GROUPS
+                  : RAIL_GROUPS
+            }
             activeId={activeSection}
             onSelect={(id) => setSection(id as SectionId)}
             className="w-40 overflow-y-auto"
@@ -252,12 +315,19 @@ export function RepoSettingsDialog({
                 {activeSection === "general" &&
                   (isGitLab ? (
                     <GitLabGeneralSection repoPath={repoPath} open={open} />
+                  ) : isBitbucket ? (
+                    <BitbucketGeneralSection repoPath={repoPath} open={open} />
                   ) : (
                     <GeneralSettingsSection repoPath={repoPath} open={open} />
                   ))}
                 {activeSection === "access" &&
                   (isGitLab ? (
                     <GitLabMembersSection repoPath={repoPath} open={open} />
+                  ) : isBitbucket ? (
+                    <BitbucketDefaultReviewersSection
+                      repoPath={repoPath}
+                      open={open}
+                    />
                   ) : (
                     <CollaboratorsSection repoPath={repoPath} open={open} />
                   ))}
@@ -267,27 +337,42 @@ export function RepoSettingsDialog({
                       repoPath={repoPath}
                       open={open}
                     />
+                  ) : isBitbucket ? (
+                    <BitbucketBranchRestrictionsSection
+                      repoPath={repoPath}
+                      open={open}
+                    />
                   ) : (
                     <RulesetsSection repoPath={repoPath} open={open} />
                   ))}
-                {activeSection === "security" && !isGitLab && (
+                {activeSection === "security" && !isGitLab && !isBitbucket && (
                   <SecuritySection repoPath={repoPath} open={open} />
                 )}
-                {activeSection === "pages" && !isGitLab && (
+                {activeSection === "pages" && !isGitLab && !isBitbucket && (
                   <PagesSection repoPath={repoPath} open={open} />
                 )}
-                {activeSection === "sponsor" && !isGitLab && (
+                {activeSection === "sponsor" && !isGitLab && !isBitbucket && (
                   <FundingSection repoPath={repoPath} open={open} />
                 )}
                 {activeSection === "secrets" &&
                   (isGitLab ? (
                     <GitLabVariablesSection repoPath={repoPath} open={open} />
+                  ) : isBitbucket ? (
+                    <BitbucketVariablesSection
+                      repoPath={repoPath}
+                      open={open}
+                    />
                   ) : (
                     <SecretsSection repoPath={repoPath} open={open} />
                   ))}
+                {activeSection === "schedules" && isBitbucket && (
+                  <BitbucketSchedulesSection repoPath={repoPath} open={open} />
+                )}
                 {activeSection === "webhooks" &&
                   (isGitLab ? (
                     <GitLabWebhooksSection repoPath={repoPath} open={open} />
+                  ) : isBitbucket ? (
+                    <BitbucketWebhooksSection repoPath={repoPath} open={open} />
                   ) : (
                     <WebhooksSection repoPath={repoPath} open={open} />
                   ))}
@@ -295,7 +380,10 @@ export function RepoSettingsDialog({
                   <DangerZone
                     repoPath={repoPath}
                     open={open}
-                    provider={isGitLab ? "gitlab" : "github"}
+                    provider={
+                      isGitLab ? "gitlab" : isBitbucket ? "bitbucket" : "github"
+                    }
+                    onRepoDeleted={() => onOpenChange(false)}
                   />
                 )}
               </m.div>

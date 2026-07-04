@@ -16,6 +16,8 @@ import {
   resolveConflict,
 } from "./conflict";
 import type {
+  BitbucketHookInput,
+  BitbucketRepoSettingsInput,
   DiffStatEntry,
   DiscussionDetails,
   ForgeCapabilities,
@@ -703,12 +705,14 @@ export function usePublishRepo(repo: string) {
   return useRepoMutation(
     repo,
     (args: {
-      provider: "github" | "gitlab";
+      provider: "github" | "gitlab" | "bitbucket";
       name: string;
       isPrivate: boolean;
       description: string;
       homepage: string;
       topics: string[];
+      /** Bitbucket only — the workspace the repo is created under. */
+      workspace?: string;
     }) =>
       api.forgePublishRepo(
         args.provider,
@@ -718,6 +722,7 @@ export function usePublishRepo(repo: string) {
         args.description,
         args.homepage,
         args.topics,
+        args.workspace,
       ),
   );
 }
@@ -729,7 +734,8 @@ export function usePublishTargets(repo: string, enabled: boolean) {
   return useQuery({
     queryKey: ["repo", repo, "publish-targets"] as const,
     queryFn: COLD_START_NO_GH
-      ? () => Promise.resolve({ github: false, gitlab: false })
+      ? () =>
+          Promise.resolve({ github: false, gitlab: false, bitbucket: false })
       : () => api.forgePublishTargets(repo),
     enabled,
     staleTime: 60_000,
@@ -3229,6 +3235,288 @@ export function useGlMemberProjects(repo: string, enabled: boolean) {
     staleTime: 5 * 60_000,
     retry: false,
   });
+}
+
+// ── Bitbucket settings surface (wave 2/3) ──────────────────────────────────
+//
+// Mirrors the useGl* hooks: repo-keyed reads with staleTime + retry:false, and
+// mutations that invalidate their read on onSettled. The workspaces list is
+// account-scoped (not repo-keyed).
+
+/** The viewer's Bitbucket workspaces — the publish target picker. Account-scoped,
+ *  so it's NOT repo-keyed; cached broadly since workspaces rarely change. */
+export function useBbWorkspaces(enabled: boolean) {
+  return useQuery({
+    queryKey: ["bb", "workspaces"] as const,
+    queryFn: () => api.forgeBbWorkspaces(),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+const bbRepoSettingsKey = (repo: string) =>
+  ["repo", repo, "repo-settings", "bitbucket"] as const;
+
+export function useBbRepoSettings(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: bbRepoSettingsKey(repo),
+    queryFn: () => api.forgeBbRepoSettings(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useBbUpdateRepoSettings(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: BitbucketRepoSettingsInput) =>
+      api.forgeBbRepoSettingsUpdate(repo, input),
+    // The PUT returns the fresh settings — seed the cache, then refetch.
+    onSuccess: (data) =>
+      queryClient.setQueryData(bbRepoSettingsKey(repo), data),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: bbRepoSettingsKey(repo) }),
+  });
+}
+
+const bbDefaultReviewersKey = (repo: string) =>
+  ["repo", repo, "bb-default-reviewers"] as const;
+
+export function useBbDefaultReviewers(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: bbDefaultReviewersKey(repo),
+    queryFn: () => api.forgeBbDefaultReviewers(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/** Workspace members (no author exclusion) — the default-reviewers picker. */
+export function useBbMemberCandidates(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "bb-member-candidates"] as const,
+    queryFn: () => api.forgeBbMemberCandidates(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+export function useBbAddDefaultReviewer(repo: string) {
+  return useRepoMutation(
+    repo,
+    (uuid: string) => api.forgeBbDefaultReviewerAdd(repo, uuid),
+    {
+      invalidate: [bbDefaultReviewersKey(repo)],
+    },
+  );
+}
+
+export function useBbRemoveDefaultReviewer(repo: string) {
+  return useRepoMutation(
+    repo,
+    (uuid: string) => api.forgeBbDefaultReviewerRemove(repo, uuid),
+    {
+      invalidate: [bbDefaultReviewersKey(repo)],
+    },
+  );
+}
+
+const bbBranchRestrictionsKey = (repo: string) =>
+  ["repo", repo, "bb-branch-restrictions"] as const;
+
+export function useBbBranchRestrictions(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: bbBranchRestrictionsKey(repo),
+    queryFn: () => api.forgeBbBranchRestrictions(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useBbCreateBranchRestriction(repo: string) {
+  return useRepoMutation(
+    repo,
+    (a: { kind: string; pattern: string; value: number | null }) =>
+      api.forgeBbBranchRestrictionCreate(repo, a.kind, a.pattern, a.value),
+    { invalidate: [bbBranchRestrictionsKey(repo)] },
+  );
+}
+
+export function useBbUpdateBranchRestriction(repo: string) {
+  return useRepoMutation(
+    repo,
+    (a: { id: string; kind: string; pattern: string; value: number | null }) =>
+      api.forgeBbBranchRestrictionUpdate(
+        repo,
+        a.id,
+        a.kind,
+        a.pattern,
+        a.value,
+      ),
+    { invalidate: [bbBranchRestrictionsKey(repo)] },
+  );
+}
+
+export function useBbDeleteBranchRestriction(repo: string) {
+  return useRepoMutation(
+    repo,
+    (id: string) => api.forgeBbBranchRestrictionDelete(repo, id),
+    { invalidate: [bbBranchRestrictionsKey(repo)] },
+  );
+}
+
+const bbPipelinesConfigKey = (repo: string) =>
+  ["repo", repo, "bb-pipelines-config"] as const;
+
+export function useBbPipelinesConfig(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: bbPipelinesConfigKey(repo),
+    queryFn: () => api.forgeBbPipelinesConfig(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useBbSetPipelinesEnabled(repo: string) {
+  return useRepoMutation(
+    repo,
+    (enabled: boolean) => api.forgeBbPipelinesConfigUpdate(repo, enabled),
+    { invalidate: [bbPipelinesConfigKey(repo)] },
+  );
+}
+
+const bbVariablesKey = (repo: string) =>
+  ["repo", repo, "bb-variables"] as const;
+
+export function useBbVariables(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: bbVariablesKey(repo),
+    queryFn: () => api.forgeBbPipelineVariables(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+// Create/update do NOT invalidate immediately: Bitbucket's variables LIST lags a
+// write by ~1s (server replication), so an immediate refetch returns a list WITHOUT
+// the just-written row and clobbers the optimistic cache patch (the row blinks out).
+// The caller upserts the row into the cache and schedules ONE delayed invalidate to
+// reconcile the real server row/uuid. Delete keeps its immediate invalidate below.
+export function useBbCreateVariable(repo: string) {
+  return useMutation({
+    mutationFn: (a: { key: string; value: string; secured: boolean }) =>
+      api.forgeBbPipelineVariableCreate(repo, a.key, a.value, a.secured),
+  });
+}
+
+export function useBbUpdateVariable(repo: string) {
+  return useMutation({
+    mutationFn: (a: { uuid: string; value: string; secured: boolean }) =>
+      api.forgeBbPipelineVariableUpdate(repo, a.uuid, a.value, a.secured),
+  });
+}
+
+export function useBbDeleteVariable(repo: string) {
+  return useRepoMutation(
+    repo,
+    (uuid: string) => api.forgeBbPipelineVariableDelete(repo, uuid),
+    { invalidate: [bbVariablesKey(repo)] },
+  );
+}
+
+const bbSchedulesKey = (repo: string) =>
+  ["repo", repo, "bb-schedules"] as const;
+
+export function useBbSchedules(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: bbSchedulesKey(repo),
+    queryFn: () => api.forgeBbPipelineSchedules(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+// Create does NOT invalidate immediately: like pipeline variables, the schedules
+// LIST lags a write by ~1s (server replication), so an immediate refetch returns a
+// list WITHOUT the new row and keeps the empty state until a later manual refetch.
+// The caller upserts the row into the cache and schedules ONE delayed invalidate to
+// reconcile the real server row/uuid. Toggle/delete keep their invalidate below.
+export function useBbCreateSchedule(repo: string) {
+  return useMutation({
+    mutationFn: (a: {
+      refName: string;
+      cronPattern: string;
+      enabled: boolean;
+    }) =>
+      api.forgeBbPipelineScheduleCreate(
+        repo,
+        a.refName,
+        a.cronPattern,
+        a.enabled,
+      ),
+  });
+}
+
+export function useBbSetScheduleEnabled(repo: string) {
+  return useRepoMutation(
+    repo,
+    (a: { uuid: string; enabled: boolean }) =>
+      api.forgeBbPipelineScheduleSetEnabled(repo, a.uuid, a.enabled),
+    { invalidate: [bbSchedulesKey(repo)] },
+  );
+}
+
+export function useBbDeleteSchedule(repo: string) {
+  return useRepoMutation(
+    repo,
+    (uuid: string) => api.forgeBbPipelineScheduleDelete(repo, uuid),
+    { invalidate: [bbSchedulesKey(repo)] },
+  );
+}
+
+const bbHooksKey = (repo: string) => ["repo", repo, "bb-webhooks"] as const;
+
+export function useBbHooks(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: bbHooksKey(repo),
+    queryFn: () => api.forgeBbHooks(repo),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useBbCreateHook(repo: string) {
+  return useRepoMutation(
+    repo,
+    (input: BitbucketHookInput) => api.forgeBbHookCreate(repo, input),
+    { invalidate: [bbHooksKey(repo)] },
+  );
+}
+
+export function useBbUpdateHook(repo: string) {
+  return useRepoMutation(
+    repo,
+    (a: { uuid: string; input: BitbucketHookInput }) =>
+      api.forgeBbHookUpdate(repo, a.uuid, a.input),
+    { invalidate: [bbHooksKey(repo)] },
+  );
+}
+
+export function useBbDeleteHook(repo: string) {
+  return useRepoMutation(
+    repo,
+    (uuid: string) => api.forgeBbHookDelete(repo, uuid),
+    { invalidate: [bbHooksKey(repo)] },
+  );
 }
 
 // Secrets & variables. `env: null` = repository scope; a string = that

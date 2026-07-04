@@ -444,6 +444,13 @@ impl Implemented {
                 pull_requests: true,
                 ci: true,
                 repo_actions: true,
+                // Wave 2/3: the insights flag, publishing a local repo, and the
+                // full repo-settings surface (admin probe + General / Danger zone +
+                // default reviewers / branch restrictions / pipelines config,
+                // variables, schedules / webhooks) are now wired over direct HTTP.
+                insights: true,
+                publish: true,
+                repo_settings: true,
                 mr_comment: true,
                 mr_state: true,
                 mr_merge: true,
@@ -657,8 +664,10 @@ mod tests {
         assert!(bb.mr_request_changes && bb.mr_reviewers);
         // …and pipeline rerun / cancel / dispatch.
         assert!(bb.ci_rerun && bb.ci_cancel && bb.ci_dispatch);
-        // …but nothing else — issues stay off, no releases/insights/settings/publish.
-        assert!(!bb.issues && !bb.releases && !bb.insights && !bb.repo_settings && !bb.publish);
+        // …plus wave 2/3: insights, publish, and the repo-settings surface.
+        assert!(bb.insights && bb.publish && bb.repo_settings);
+        // …but issues and releases stay off.
+        assert!(!bb.issues && !bb.releases);
         assert!(!bb.issue_comment && !bb.issue_state);
         // Auto-merge has no Bitbucket analogue.
         assert!(!bb.mr_auto_merge);

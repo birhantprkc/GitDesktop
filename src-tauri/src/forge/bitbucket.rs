@@ -17,7 +17,7 @@
 //! no `next`-following loops (documented per call). The PR-list endpoint caps at 50;
 //! repos/pipelines allow 100.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri_plugin_http::reqwest;
 
 use crate::error::{AppError, AppResult};
@@ -1599,10 +1599,30 @@ fn reviewer_candidates_from(members: Vec<BbUser>, author_uuid: &str) -> Vec<Forg
     out
 }
 
+/// Walk a workspace's members, following `next` up to 5 pages (500 members at
+/// `pagelen=100`) — a larger workspace truncates rather than hanging the caller,
+/// consistent with the module's bounded-pagination posture. Shared by
+/// [`reviewer_candidates`] (which then filters the PR author) and
+/// [`member_candidates`] (which keeps everyone).
+async fn workspace_members(creds: &BbCredentials, ws: &str) -> AppResult<Vec<BbUser>> {
+    let mut members: Vec<BbUser> = Vec::new();
+    let mut url = format!(
+        "workspaces/{}/members?pagelen=100&fields=values.user.uuid,values.user.display_name,values.user.nickname,next",
+        encode_query_value(ws),
+    );
+    for _ in 0..5 {
+        let page: BbMembersPage = http::bb_get_json(creds, &url, "workspace members").await?;
+        members.extend(page.values.into_iter().filter_map(|m| m.user));
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    Ok(members)
+}
+
 /// The reviewer picker's candidate list: the repo's WORKSPACE members, minus the PR
-/// author. Follows `next` up to 5 pages (500 members at `pagelen=100`) — a larger
-/// workspace truncates rather than hanging the popover, consistent with the module's
-/// bounded-pagination posture.
+/// author (Bitbucket rejects the PR author as a reviewer server-side).
 pub async fn reviewer_candidates(repo_path: &str, number: u64) -> AppResult<Vec<ForgeUserRef>> {
     let creds = http::load_credentials().await?;
     let base = repo_base(repo_path).await?;
@@ -1611,19 +1631,7 @@ pub async fn reviewer_candidates(repo_path: &str, number: u64) -> AppResult<Vec<
     let author_uuid = pr.author.and_then(|a| a.uuid).unwrap_or_default();
 
     let (ws, _slug) = workspace_slug(repo_path).await?;
-    let mut members: Vec<BbUser> = Vec::new();
-    let mut url = format!(
-        "workspaces/{}/members?pagelen=100&fields=values.user.uuid,values.user.display_name,values.user.nickname,next",
-        encode_query_value(&ws),
-    );
-    for _ in 0..5 {
-        let page: BbMembersPage = http::bb_get_json(&creds, &url, "workspace members").await?;
-        members.extend(page.values.into_iter().filter_map(|m| m.user));
-        match page.next {
-            Some(next) if !next.is_empty() => url = next,
-            _ => break,
-        }
-    }
+    let members = workspace_members(&creds, &ws).await?;
     Ok(reviewer_candidates_from(members, &author_uuid))
 }
 
@@ -2002,6 +2010,1116 @@ pub async fn dispatch_ci(
     Ok(())
 }
 
+// ── Repository settings & lifecycle ──────────────────────────────────────────
+//
+// The Bitbucket repo-management surface (wave 3): the settings read/update, the
+// admin probe, the lifecycle actions (rename / visibility / delete — archive and
+// transfer are platform-impossible), default reviewers, branch restrictions,
+// pipelines config / variables / schedules, and webhooks. All endpoints were
+// live-validated against a throwaway repo. Mirrors the GitLab settings
+// architecture (`forge_gl_*` → `forge_bb_*`), but with Bitbucket's own shapes.
+
+// Account UUIDs the app addresses in paths are percent-encoded (braced) via
+// [`encode_uuid`] (defined for pipeline UUIDs) — it encodes `{`/`}` and any
+// reserved byte, passing unreserved chars through.
+
+/// Whether the signed-in viewer is an admin of this repo. The old
+/// `/user/permissions/repositories` endpoint is 410-GONE (CHANGE-2770); the
+/// replacement is `GET /2.0/repositories/{ws}?role=admin&q=slug="{slug}"` — the
+/// repo appears in `values` iff the viewer is an admin. `role=owner` matched 0 even
+/// for an admin, so for Bitbucket owner := admin (the caller maps both). A slug
+/// containing `"` is rejected up front (it would break the quoted BBQL value).
+pub async fn repo_admin(repo_path: &str) -> AppResult<bool> {
+    let (ws, slug) = workspace_slug(repo_path).await?;
+    if slug.contains('"') {
+        return Err(AppError::Bitbucket(format!(
+            "unexpected characters in repository slug: {slug}"
+        )));
+    }
+    let creds = http::load_credentials().await?;
+    let query = format!(r#"slug="{slug}""#);
+    let path = format!(
+        "repositories/{}?role=admin&q={}&pagelen=100",
+        encode_query_value(&ws),
+        encode_query_value(&query),
+    );
+    let page: BbPage<BbRepoSlug> = http::bb_get_json(&creds, &path, "repositories").await?;
+    Ok(repo_admin_matches(&page.values, &slug))
+}
+
+/// A repo's slug only, for the admin probe's slug match.
+#[derive(Deserialize)]
+struct BbRepoSlug {
+    #[serde(default)]
+    slug: String,
+}
+
+/// Whether the admin-scoped repo list contains this slug (case-insensitive). Pure
+/// (testable): the `q=slug="…"` filter is server-side, but we confirm the match
+/// defensively rather than trusting a non-empty list.
+fn repo_admin_matches(repos: &[BbRepoSlug], slug: &str) -> bool {
+    repos.iter().any(|r| r.slug.eq_ignore_ascii_case(slug))
+}
+
+/// Delete the repository (`DELETE repositories/{ws}/{slug}`) → 204. Irreversible;
+/// owner-scoped, enforced server-side.
+pub async fn delete_repo(repo_path: &str) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    http::bb_delete(&creds, &base).await
+}
+
+/// The origin remote's URL, so a rename can rewrite it preserving the scheme.
+async fn origin_remote_url(repo_path: &str) -> AppResult<String> {
+    crate::git::remote::git_remote_url(repo_path.to_string(), "origin".to_string()).await
+}
+
+/// Rewrite an `origin` remote URL to point at a new slug, preserving its scheme.
+/// Pure (testable). Handles the two forms this app clones with: HTTPS
+/// (`https://bitbucket.org/{ws}/{slug}.git`) and scp-style SSH
+/// (`git@bitbucket.org:{ws}/{slug}.git`). Returns `None` when the URL isn't a
+/// recognized Bitbucket remote (so the caller leaves it alone).
+fn rewritten_origin_url(old_url: &str, ws: &str, new_slug: &str) -> Option<String> {
+    let trimmed = old_url.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        let scheme = if trimmed.starts_with("https://") {
+            "https"
+        } else {
+            "http"
+        };
+        Some(format!("{scheme}://bitbucket.org/{ws}/{new_slug}.git"))
+    } else if trimmed.contains("bitbucket.org:") || trimmed.contains('@') {
+        // scp-style `git@bitbucket.org:ws/slug.git` — keep the user@host prefix.
+        let (prefix, _rest) = trimmed.split_once(':')?;
+        Some(format!("{prefix}:{ws}/{new_slug}.git"))
+    } else {
+        None
+    }
+}
+
+/// Rename the repository: `PUT repositories/{ws}/{slug} {name}` → the server
+/// slugifies the name (lowercase, spaces→dashes) and returns the new `slug`. Unlike
+/// GitLab, the OLD slug 404s immediately (no redirect), so the local `origin` remote
+/// must be rewritten to the new slug. If the rename SUCCEEDS but the local
+/// `remote set-url` then fails, the error discloses the partial state so the user can
+/// fix the remote by hand (a post-mutation disclosure, per the pre-mutation-guard
+/// discipline).
+pub async fn rename_repo(state: &crate::state::AppState, repo_path: &str, new_name: &str) -> AppResult<()> {
+    let new_name = new_name.trim();
+    if new_name.is_empty() || new_name.starts_with('-') {
+        return Err(AppError::InvalidArgument(
+            "a repository name is required".into(),
+        ));
+    }
+    let creds = http::load_credentials().await?;
+    let (ws, _slug) = workspace_slug(repo_path).await?;
+    let base = repo_base(repo_path).await?;
+    let payload = serde_json::json!({ "name": new_name });
+    let updated: BbRepoSlug = http::bb_put_json(&creds, &base, &payload, "repository").await?;
+    let new_slug = updated.slug;
+    if new_slug.is_empty() {
+        return Err(AppError::Bitbucket(
+            "Bitbucket renamed the repository but returned no new slug.".into(),
+        ));
+    }
+
+    // Rewrite the local origin remote to the new slug (the old one 404s now). Best
+    // effort on reading the current URL — if we can't read or recognize it, leave it.
+    let old_url = origin_remote_url(repo_path).await.unwrap_or_default();
+    if let Some(new_url) = rewritten_origin_url(&old_url, &ws, &new_slug) {
+        if let Err(e) = crate::git::runner::run_git_mutating(
+            state,
+            repo_path,
+            &["remote", "set-url", "origin", &new_url],
+            crate::git::runner::NETWORK_TIMEOUT,
+        )
+        .await
+        {
+            return Err(AppError::Bitbucket(format!(
+                "Renamed on Bitbucket, but the local 'origin' remote couldn't be updated — \
+                 set it to {new_url} manually. ({e})"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Change visibility: `PUT {is_private}`. `is_private:false` can 400 with a clean
+/// server message (e.g. "Public repositories must allow public forks.") — surface it
+/// verbatim rather than pre-translating.
+pub async fn set_visibility(repo_path: &str, is_private: bool) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let payload = serde_json::json!({ "is_private": is_private });
+    http::bb_put_json::<serde_json::Value>(&creds, &base, &payload, "repository").await?;
+    Ok(())
+}
+
+/// The Bitbucket repository settings the app manages, as the frontend consumes them.
+/// Nullable scalars ride empty-string defaults (the established idiom).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketRepoSettings {
+    pub name: String,
+    pub slug: String,
+    pub full_name: String,
+    pub description: String,
+    pub website: String,
+    pub language: String,
+    pub is_private: bool,
+    /// "allow_forks" | "no_public_forks" | "no_forks".
+    pub fork_policy: String,
+    pub main_branch: String,
+    pub web_url: String,
+    pub project_key: String,
+    pub project_name: String,
+}
+
+/// The raw repo read for the settings surface. Nullable scalars ride
+/// `null_to_default` (Bitbucket nulls `description`/`website`/`language` rather than
+/// omitting them).
+#[derive(Deserialize, Default)]
+struct BbRepoSettingsRaw {
+    #[serde(default, deserialize_with = "null_to_default")]
+    name: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    slug: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    full_name: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    description: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    website: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    language: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    is_private: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    fork_policy: String,
+    #[serde(default)]
+    mainbranch: Option<BbBranchRef>,
+    #[serde(default)]
+    project: Option<BbProject>,
+    #[serde(default)]
+    links: Option<BbHtmlLinks>,
+}
+
+#[derive(Deserialize, Default)]
+struct BbProject {
+    #[serde(default, deserialize_with = "null_to_default")]
+    key: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    name: String,
+}
+
+fn settings_from_repo(r: BbRepoSettingsRaw) -> BitbucketRepoSettings {
+    let main_branch = r.mainbranch.map(|b| b.name).unwrap_or_default();
+    let (project_key, project_name) = r
+        .project
+        .map(|p| (p.key, p.name))
+        .unwrap_or_else(|| (String::new(), String::new()));
+    let web_url = html_href(&r.links);
+    BitbucketRepoSettings {
+        name: r.name,
+        slug: r.slug,
+        full_name: r.full_name,
+        description: r.description,
+        website: r.website,
+        language: r.language,
+        is_private: r.is_private,
+        fork_policy: r.fork_policy,
+        main_branch,
+        web_url,
+        project_key,
+        project_name,
+    }
+}
+
+/// The repository settings read (`GET repositories/{ws}/{slug}`).
+pub async fn repo_settings(repo_path: &str) -> AppResult<BitbucketRepoSettings> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let raw: BbRepoSettingsRaw = http::bb_get_json(&creds, &base, "repository").await?;
+    Ok(settings_from_repo(raw))
+}
+
+/// The settings the General form sends back (the managed subset). Name and
+/// visibility are deliberately absent — the Danger zone owns them (rename +
+/// set-visibility).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketRepoSettingsInput {
+    pub description: String,
+    pub website: String,
+    pub language: String,
+    pub fork_policy: String,
+    pub main_branch: String,
+}
+
+/// Build the settings-update PUT body. Pure (testable). `mainbranch` rides only when
+/// a non-empty branch is chosen (an empty repo has none). `fork_policy` is only sent
+/// when non-empty (an empty value would 400).
+fn build_settings_update_body(input: &BitbucketRepoSettingsInput) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "description": input.description,
+        "website": input.website,
+        "language": input.language,
+    });
+    if !input.fork_policy.is_empty() {
+        body["fork_policy"] = serde_json::Value::String(input.fork_policy.clone());
+    }
+    if !input.main_branch.is_empty() {
+        body["mainbranch"] = serde_json::json!({ "type": "branch", "name": input.main_branch });
+    }
+    body
+}
+
+/// Batch-save the managed settings via one `PUT repositories/{ws}/{slug}`, returning
+/// the fresh settings.
+pub async fn update_repo_settings(
+    repo_path: &str,
+    input: BitbucketRepoSettingsInput,
+) -> AppResult<BitbucketRepoSettings> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let payload = build_settings_update_body(&input);
+    let raw: BbRepoSettingsRaw = http::bb_put_json(&creds, &base, &payload, "repository").await?;
+    Ok(settings_from_repo(raw))
+}
+
+// ── Workspaces ───────────────────────────────────────────────────────────────
+
+/// A workspace the viewer belongs to, for the publish target picker.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketWorkspace {
+    pub slug: String,
+    pub administrator: bool,
+}
+
+/// One `/2.0/user/workspaces` membership entry, with the `administrator` flag the
+/// publish picker needs (distinct from the read-only [`BbWorkspaceAccess`] used for
+/// the clone browser, which only needs the slug).
+#[derive(Deserialize)]
+struct BbWorkspaceMembership {
+    #[serde(default)]
+    workspace: Option<BbWorkspace>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    administrator: bool,
+}
+
+/// One `/2.0/user/workspaces` page (values + `next` for bounded pagination).
+#[derive(Deserialize, Default)]
+struct BbWorkspacesPage {
+    #[serde(default)]
+    values: Vec<BbWorkspaceMembership>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+/// The viewer's workspaces (`GET /2.0/user/workspaces`), account-scoped (no repo).
+/// Follows `next` up to 5 pages. Skips entries with no nested workspace / empty slug.
+pub async fn workspaces() -> AppResult<Vec<BitbucketWorkspace>> {
+    let creds = http::load_credentials().await?;
+    let mut out: Vec<BitbucketWorkspace> = Vec::new();
+    let mut url = "user/workspaces?pagelen=100".to_string();
+    for _ in 0..5 {
+        let page: BbWorkspacesPage = http::bb_get_json(&creds, &url, "workspaces").await?;
+        for m in page.values {
+            let administrator = m.administrator;
+            if let Some(slug) = m.workspace.map(|w| w.slug).filter(|s| !s.is_empty()) {
+                out.push(BitbucketWorkspace { slug, administrator });
+            }
+        }
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
+// ── Default reviewers ────────────────────────────────────────────────────────
+
+/// The repo's default reviewers (`GET .../default-reviewers?pagelen=100`, follow
+/// `next` ≤5 pages). Maps onto `ForgeUserRef` (id = uuid, label = display name).
+pub async fn default_reviewers(repo_path: &str) -> AppResult<Vec<ForgeUserRef>> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let mut out: Vec<ForgeUserRef> = Vec::new();
+    let mut url = format!("{base}/default-reviewers?pagelen=100");
+    for _ in 0..5 {
+        let page: BbUsersPage = http::bb_get_json(&creds, &url, "default reviewers").await?;
+        for u in page.values {
+            let id = u.uuid.clone().unwrap_or_default();
+            if id.is_empty() {
+                continue;
+            }
+            out.push(ForgeUserRef {
+                id,
+                label: user_login(&u),
+            });
+        }
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
+/// A paginated page of bare user objects, with `next` (default reviewers list).
+#[derive(Deserialize, Default)]
+struct BbUsersPage {
+    #[serde(default)]
+    values: Vec<BbUser>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+/// Add a default reviewer (`PUT .../default-reviewers/{pct-enc-braced-uuid}`, empty
+/// body → 200). The repo owner CAN be a default reviewer (unlike PR reviewers).
+pub async fn default_reviewer_add(repo_path: &str, uuid: &str) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/default-reviewers/{}", encode_uuid(uuid));
+    // PUT with an empty JSON object body (the endpoint takes no fields).
+    let payload = serde_json::json!({});
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "default reviewer").await?;
+    Ok(())
+}
+
+/// Remove a default reviewer (`DELETE .../default-reviewers/{pct-enc-braced-uuid}` →
+/// 204).
+pub async fn default_reviewer_remove(repo_path: &str, uuid: &str) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/default-reviewers/{}", encode_uuid(uuid));
+    http::bb_delete(&creds, &path).await
+}
+
+/// The workspace-member picker candidates for default reviewers — everyone in the
+/// workspace, WITHOUT the PR-author exclusion `reviewer_candidates` applies.
+pub async fn member_candidates(repo_path: &str) -> AppResult<Vec<ForgeUserRef>> {
+    let creds = http::load_credentials().await?;
+    let (ws, _slug) = workspace_slug(repo_path).await?;
+    let members = workspace_members(&creds, &ws).await?;
+    // Reuse the map/sort with an empty author filter (nothing excluded).
+    Ok(reviewer_candidates_from(members, ""))
+}
+
+// ── Branch restrictions ──────────────────────────────────────────────────────
+
+/// A branch restriction, as the frontend consumes it. The server `id` is numeric on
+/// the wire; it travels as a String over IPC (the u64-precision rule).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketBranchRestriction {
+    pub id: String,
+    pub kind: String,
+    pub pattern: String,
+    pub branch_match_kind: String,
+    pub value: Option<u32>,
+}
+
+/// The raw branch-restriction object (`id` numeric, `value` optional).
+#[derive(Deserialize)]
+struct BbBranchRestrictionRaw {
+    #[serde(default)]
+    id: u64,
+    #[serde(default, deserialize_with = "null_to_default")]
+    kind: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pattern: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    branch_match_kind: String,
+    #[serde(default)]
+    value: Option<u32>,
+}
+
+fn from_bb_branch_restriction(r: BbBranchRestrictionRaw) -> BitbucketBranchRestriction {
+    BitbucketBranchRestriction {
+        id: r.id.to_string(),
+        kind: r.kind,
+        pattern: r.pattern,
+        branch_match_kind: r.branch_match_kind,
+        value: r.value,
+    }
+}
+
+/// Build a branch-restriction create/update body. Pure (testable). Always sends the
+/// FULL shape (`kind` + `branch_match_kind:"glob"` + `pattern` + empty `users`/
+/// `groups` + `value`) — a partial PUT is rejected. `value` rides only when present.
+fn build_branch_restriction_body(kind: &str, pattern: &str, value: Option<u32>) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "kind": kind,
+        "branch_match_kind": "glob",
+        "pattern": pattern,
+        "users": [],
+        "groups": [],
+    });
+    if let Some(v) = value {
+        body["value"] = serde_json::json!(v);
+    } else {
+        body["value"] = serde_json::Value::Null;
+    }
+    body
+}
+
+/// The repo's branch restrictions (`GET .../branch-restrictions?pagelen=100`, follow
+/// `next` ≤5 pages).
+pub async fn branch_restrictions(repo_path: &str) -> AppResult<Vec<BitbucketBranchRestriction>> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let mut out: Vec<BitbucketBranchRestriction> = Vec::new();
+    let mut url = format!("{base}/branch-restrictions?pagelen=100");
+    for _ in 0..5 {
+        let page: BbRestrictionsPage =
+            http::bb_get_json(&creds, &url, "branch restrictions").await?;
+        out.extend(page.values.into_iter().map(from_bb_branch_restriction));
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
+/// A paginated page of branch restrictions (values + `next`).
+#[derive(Deserialize, Default)]
+struct BbRestrictionsPage {
+    #[serde(default)]
+    values: Vec<BbBranchRestrictionRaw>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+/// Create a branch restriction (`POST .../branch-restrictions` → 201 with numeric id).
+pub async fn branch_restriction_create(
+    repo_path: &str,
+    kind: &str,
+    pattern: &str,
+    value: Option<u32>,
+) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/branch-restrictions");
+    let payload = build_branch_restriction_body(kind, pattern, value);
+    http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "branch restriction").await?;
+    Ok(())
+}
+
+/// Update a branch restriction (`PUT .../branch-restrictions/{id}` with the FULL
+/// shape → 200).
+pub async fn branch_restriction_update(
+    repo_path: &str,
+    id: &str,
+    kind: &str,
+    pattern: &str,
+    value: Option<u32>,
+) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/branch-restrictions/{}", encode_query_value(id));
+    let payload = build_branch_restriction_body(kind, pattern, value);
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "branch restriction").await?;
+    Ok(())
+}
+
+/// Delete a branch restriction (`DELETE .../branch-restrictions/{id}` → 204).
+pub async fn branch_restriction_delete(repo_path: &str, id: &str) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/branch-restrictions/{}", encode_query_value(id));
+    http::bb_delete(&creds, &path).await
+}
+
+// ── Pipelines config, variables & schedules ──────────────────────────────────
+
+/// Whether Bitbucket Pipelines is enabled for the repo.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketPipelinesConfig {
+    pub enabled: bool,
+}
+
+#[derive(Deserialize, Default)]
+struct BbPipelinesConfigRaw {
+    #[serde(default, deserialize_with = "null_to_default")]
+    enabled: bool,
+}
+
+/// Parse a `pipelines_config` `(status, body)` into a [`BitbucketPipelinesConfig`].
+/// A never-configured repo 404s → `{enabled:false}` (Bitbucket's error message wording
+/// isn't guaranteed to mention "404"/"not found", so branch on the numeric status like
+/// the expired-log path does); 2xx → parse the JSON; any other status → the normal
+/// `http_error` mapping so 401/403 messages stay identical to the JSON helper.
+fn parse_pipelines_config(status: u16, body: &str) -> AppResult<BitbucketPipelinesConfig> {
+    if status == 404 {
+        return Ok(BitbucketPipelinesConfig { enabled: false });
+    }
+    if !(200..300).contains(&status) {
+        return Err(http::http_error(status, body));
+    }
+    let raw: BbPipelinesConfigRaw = serde_json::from_str(body).map_err(|e| {
+        AppError::Bitbucket(format!("could not parse Bitbucket pipelines config: {e}"))
+    })?;
+    Ok(BitbucketPipelinesConfig {
+        enabled: raw.enabled,
+    })
+}
+
+/// The pipelines config (`GET .../pipelines_config`). A never-configured repo 404s →
+/// map to `{enabled:false}` rather than surfacing an error.
+pub async fn pipelines_config(repo_path: &str) -> AppResult<BitbucketPipelinesConfig> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pipelines_config");
+    let (status, body) = http::bb_get_text_status(&creds, &path).await?;
+    parse_pipelines_config(status, &body)
+}
+
+/// Enable / disable Pipelines (`PUT .../pipelines_config {enabled}`).
+pub async fn pipelines_config_update(repo_path: &str, enabled: bool) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pipelines_config");
+    let payload = serde_json::json!({ "enabled": enabled });
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "pipelines config").await?;
+    Ok(())
+}
+
+/// A pipeline variable. A secured variable's `value` is write-only (omitted from
+/// reads) → `None`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketPipelineVariable {
+    pub uuid: String,
+    pub key: String,
+    pub value: Option<String>,
+    pub secured: bool,
+}
+
+#[derive(Deserialize)]
+struct BbPipelineVariableRaw {
+    #[serde(default)]
+    uuid: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    key: String,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    secured: bool,
+}
+
+fn from_bb_pipeline_variable(v: BbPipelineVariableRaw) -> BitbucketPipelineVariable {
+    // A secured variable never returns its value; force None so the frontend never
+    // shows a stale/blank secured value as if it were the real one.
+    let value = if v.secured { None } else { v.value };
+    BitbucketPipelineVariable {
+        uuid: v.uuid,
+        key: v.key,
+        value,
+        secured: v.secured,
+    }
+}
+
+/// The repo's pipeline variables (`GET .../pipelines_config/variables/?pagelen=100`,
+/// follow `next` ≤5 pages). Note the TRAILING SLASH on `variables/`.
+pub async fn pipeline_variables(repo_path: &str) -> AppResult<Vec<BitbucketPipelineVariable>> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let mut out: Vec<BitbucketPipelineVariable> = Vec::new();
+    let mut url = format!("{base}/pipelines_config/variables/?pagelen=100");
+    for _ in 0..5 {
+        let page: BbVariablesPage =
+            http::bb_get_json(&creds, &url, "pipeline variables").await?;
+        out.extend(page.values.into_iter().map(from_bb_pipeline_variable));
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize, Default)]
+struct BbVariablesPage {
+    #[serde(default)]
+    values: Vec<BbPipelineVariableRaw>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+/// Create a pipeline variable (`POST .../pipelines_config/variables/` → 201).
+pub async fn pipeline_variable_create(
+    repo_path: &str,
+    key: &str,
+    value: &str,
+    secured: bool,
+) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pipelines_config/variables/");
+    let payload = serde_json::json!({ "key": key, "value": value, "secured": secured });
+    http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "pipeline variable").await?;
+    Ok(())
+}
+
+/// Update a pipeline variable (`PUT .../pipelines_config/variables/{pct-enc-uuid}` →
+/// 200). The key is immutable; only value + secured change.
+pub async fn pipeline_variable_update(
+    repo_path: &str,
+    uuid: &str,
+    value: &str,
+    secured: bool,
+) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!(
+        "{base}/pipelines_config/variables/{}",
+        encode_uuid(uuid)
+    );
+    let payload = serde_json::json!({ "value": value, "secured": secured });
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "pipeline variable").await?;
+    Ok(())
+}
+
+/// Delete a pipeline variable (`DELETE .../pipelines_config/variables/{pct-enc-uuid}`
+/// → 204).
+pub async fn pipeline_variable_delete(repo_path: &str, uuid: &str) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!(
+        "{base}/pipelines_config/variables/{}",
+        encode_uuid(uuid)
+    );
+    http::bb_delete(&creds, &path).await
+}
+
+/// A pipeline schedule (a cron-triggered pipeline on a branch).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketPipelineSchedule {
+    pub uuid: String,
+    pub enabled: bool,
+    /// QUARTZ-format cron (e.g. "0 0 12 * * ?").
+    pub cron_pattern: String,
+    pub ref_name: String,
+}
+
+#[derive(Deserialize)]
+struct BbPipelineScheduleRaw {
+    #[serde(default)]
+    uuid: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    enabled: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    cron_pattern: String,
+    #[serde(default)]
+    target: Option<BbScheduleTarget>,
+}
+
+#[derive(Deserialize, Default)]
+struct BbScheduleTarget {
+    #[serde(default, deserialize_with = "null_to_default")]
+    ref_name: String,
+}
+
+fn from_bb_pipeline_schedule(s: BbPipelineScheduleRaw) -> BitbucketPipelineSchedule {
+    let ref_name = s.target.map(|t| t.ref_name).unwrap_or_default();
+    BitbucketPipelineSchedule {
+        uuid: s.uuid,
+        enabled: s.enabled,
+        cron_pattern: s.cron_pattern,
+        ref_name,
+    }
+}
+
+/// Build a schedule-create body. Pure (testable). The `selector.pattern` rides the
+/// same `ref_name` as the target branch. `cron_pattern` is QUARTZ format (validated).
+fn build_schedule_create_body(ref_name: &str, cron_pattern: &str, enabled: bool) -> serde_json::Value {
+    serde_json::json!({
+        "type": "pipeline_schedule",
+        "enabled": enabled,
+        "cron_pattern": cron_pattern,
+        "target": {
+            "type": "pipeline_ref_target",
+            "ref_type": "branch",
+            "ref_name": ref_name,
+            "selector": {
+                "type": "branches",
+                "pattern": ref_name,
+            },
+        },
+    })
+}
+
+/// The repo's pipeline schedules (`GET .../pipelines_config/schedules/?pagelen=100`,
+/// follow `next` ≤5 pages). Note the TRAILING SLASH.
+pub async fn pipeline_schedules(repo_path: &str) -> AppResult<Vec<BitbucketPipelineSchedule>> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let mut out: Vec<BitbucketPipelineSchedule> = Vec::new();
+    let mut url = format!("{base}/pipelines_config/schedules/?pagelen=100");
+    for _ in 0..5 {
+        let page: BbSchedulesPage =
+            http::bb_get_json(&creds, &url, "pipeline schedules").await?;
+        out.extend(page.values.into_iter().map(from_bb_pipeline_schedule));
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize, Default)]
+struct BbSchedulesPage {
+    #[serde(default)]
+    values: Vec<BbPipelineScheduleRaw>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+/// Create a pipeline schedule (`POST .../pipelines_config/schedules/` → 201).
+pub async fn pipeline_schedule_create(
+    repo_path: &str,
+    ref_name: &str,
+    cron_pattern: &str,
+    enabled: bool,
+) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pipelines_config/schedules/");
+    let payload = build_schedule_create_body(ref_name, cron_pattern, enabled);
+    http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "pipeline schedule").await?;
+    Ok(())
+}
+
+/// Toggle a schedule's enabled state (`PUT .../schedules/{uuid} {enabled}` → 200).
+pub async fn pipeline_schedule_set_enabled(
+    repo_path: &str,
+    uuid: &str,
+    enabled: bool,
+) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pipelines_config/schedules/{}", encode_uuid(uuid));
+    let payload = serde_json::json!({ "enabled": enabled });
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "pipeline schedule").await?;
+    Ok(())
+}
+
+/// Delete a schedule (`DELETE .../schedules/{uuid}` → 204).
+pub async fn pipeline_schedule_delete(repo_path: &str, uuid: &str) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pipelines_config/schedules/{}", encode_uuid(uuid));
+    http::bb_delete(&creds, &path).await
+}
+
+// ── Webhooks ─────────────────────────────────────────────────────────────────
+
+/// A repository webhook. Bitbucket has no delivery-log API (no deliveries feature).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketHook {
+    pub uuid: String,
+    pub description: String,
+    pub url: String,
+    pub active: bool,
+    pub events: Vec<String>,
+    pub skip_cert_verification: bool,
+}
+
+#[derive(Deserialize)]
+struct BbHookRaw {
+    #[serde(default)]
+    uuid: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    description: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    url: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    active: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    events: Vec<String>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    skip_cert_verification: bool,
+}
+
+fn from_bb_hook(h: BbHookRaw) -> BitbucketHook {
+    BitbucketHook {
+        uuid: h.uuid,
+        description: h.description,
+        url: h.url,
+        active: h.active,
+        events: h.events,
+        skip_cert_verification: h.skip_cert_verification,
+    }
+}
+
+/// What the webhook form sends. A PUT requires the FULL shape (a partial PUT 400s
+/// with "You cannot create a webhook without any events").
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketHookInput {
+    pub description: String,
+    pub url: String,
+    pub active: bool,
+    pub events: Vec<String>,
+    pub skip_cert_verification: bool,
+}
+
+/// Build a webhook create/update body. Pure (testable). Always the FULL shape.
+fn build_hook_body(input: &BitbucketHookInput) -> serde_json::Value {
+    serde_json::json!({
+        "description": input.description,
+        "url": input.url,
+        "active": input.active,
+        "events": input.events,
+        "skip_cert_verification": input.skip_cert_verification,
+    })
+}
+
+/// The repo's webhooks (`GET .../hooks?pagelen=100`, follow `next` ≤5 pages).
+pub async fn hooks(repo_path: &str) -> AppResult<Vec<BitbucketHook>> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let mut out: Vec<BitbucketHook> = Vec::new();
+    let mut url = format!("{base}/hooks?pagelen=100");
+    for _ in 0..5 {
+        let page: BbHooksPage = http::bb_get_json(&creds, &url, "webhooks").await?;
+        out.extend(page.values.into_iter().map(from_bb_hook));
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize, Default)]
+struct BbHooksPage {
+    #[serde(default)]
+    values: Vec<BbHookRaw>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+/// Create a webhook (`POST .../hooks` → 201).
+pub async fn hook_create(repo_path: &str, input: BitbucketHookInput) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/hooks");
+    let payload = build_hook_body(&input);
+    http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "webhook").await?;
+    Ok(())
+}
+
+/// Update a webhook (`PUT .../hooks/{pct-enc-uuid}` with the FULL shape → 200).
+pub async fn hook_update(repo_path: &str, uuid: &str, input: BitbucketHookInput) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/hooks/{}", encode_uuid(uuid));
+    let payload = build_hook_body(&input);
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "webhook").await?;
+    Ok(())
+}
+
+/// Delete a webhook (`DELETE .../hooks/{pct-enc-uuid}` → 204).
+pub async fn hook_delete(repo_path: &str, uuid: &str) -> AppResult<()> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/hooks/{}", encode_uuid(uuid));
+    http::bb_delete(&creds, &path).await
+}
+
+// ── Publish ──────────────────────────────────────────────────────────────────
+
+/// A slug-grammar check for a name that becomes a Bitbucket repo slug. Pure
+/// (testable). The server lowercases the name into the slug, so the grammar allows
+/// the mixed-case input: `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
+fn is_valid_repo_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Build the repo-create body. Pure (testable). Empty description/website are
+/// omitted (Bitbucket accepts them, but omitting keeps the object clean).
+fn build_publish_body(is_private: bool, description: &str, website: &str) -> serde_json::Value {
+    let mut body = serde_json::json!({ "scm": "git", "is_private": is_private });
+    if !description.is_empty() {
+        body["description"] = serde_json::Value::String(description.to_string());
+    }
+    if !website.is_empty() {
+        body["website"] = serde_json::Value::String(website.to_string());
+    }
+    body
+}
+
+/// A created repo's identity (slug + html link).
+#[derive(Deserialize)]
+struct BbCreatedRepo {
+    #[serde(default)]
+    slug: String,
+    #[serde(default)]
+    links: Option<BbHtmlLinks>,
+}
+
+/// Publish a local repo to Bitbucket: create the repo in `workspace`, seed git's
+/// credential store, add `origin`, and push the current branch. Returns the repo's
+/// html URL. `website` maps to Bitbucket's website field (homepage); topics are
+/// dropped (Bitbucket has no topics).
+///
+/// Guard order mirrors `gitlab::publish_repo`: every locally-checkable precondition
+/// runs BEFORE the create POST (an orphaned repo whose slug then blocks retries is
+/// the failure to avoid). Any failure AFTER the create discloses the partial state
+/// ("The Bitbucket repository was created at <url>, but …"). The keyring token never
+/// reaches argv / env / git config — the `git credential approve` seed feeds it on
+/// STDIN only.
+pub async fn publish_repo(
+    state: &crate::state::AppState,
+    repo_path: &str,
+    name: &str,
+    private: bool,
+    description: &str,
+    website: &str,
+    workspace: Option<String>,
+) -> AppResult<String> {
+    // ── Pre-mutation guards (all before the create POST). ──
+    let workspace = workspace.map(|w| w.trim().to_string()).unwrap_or_default();
+    if workspace.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "choose a Bitbucket workspace to publish into".into(),
+        ));
+    }
+    let name = name.trim();
+    if !is_valid_repo_name(name) {
+        return Err(AppError::InvalidArgument(
+            "repository names must start with a letter or digit and use only letters, digits, '.', '_' or '-'".into(),
+        ));
+    }
+    let description = description.trim();
+    let website = website.trim();
+
+    // Current branch (unborn / detached HEAD → a clear error, like gitlab::publish_repo).
+    let branch_out = crate::git::runner::run_git(
+        Some(repo_path),
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        crate::git::runner::NETWORK_TIMEOUT,
+    )
+    .await
+    .map_err(|e| match &e {
+        AppError::Git { stderr, .. }
+            if stderr.contains("ambiguous argument") || stderr.contains("unknown revision") =>
+        {
+            AppError::InvalidArgument(
+                "make an initial commit before publishing (this repository has none yet)".into(),
+            )
+        }
+        _ => e,
+    })?;
+    let branch = branch_out.stdout_lossy().trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        return Err(AppError::InvalidArgument(
+            "check out a branch before publishing (detached HEAD)".into(),
+        ));
+    }
+
+    // Origin must not already exist (an externally-added origin would strand an
+    // orphaned repo when the post-create `remote add` fails).
+    if crate::git::runner::run_git_raw(
+        Some(repo_path),
+        &["remote", "get-url", "origin"],
+        crate::git::runner::DEFAULT_TIMEOUT,
+    )
+    .await
+    .map(|o| o.code == 0)
+    .unwrap_or(false)
+    {
+        return Err(AppError::InvalidArgument(
+            "this repository already has an origin remote — push to it instead".into(),
+        ));
+    }
+
+    let creds = http::load_credentials().await?;
+
+    // ── Create the repo (the slug is the lowercased name; the server assigns the
+    //    project). ──
+    let slug = name.to_ascii_lowercase();
+    let create_path = format!(
+        "repositories/{}/{}",
+        encode_query_value(&workspace),
+        encode_query_value(&slug),
+    );
+    let payload = build_publish_body(private, description, website);
+    let created: BbCreatedRepo =
+        http::bb_post_json(&creds, &create_path, &payload, "created repository").await?;
+    let created_slug = if created.slug.is_empty() {
+        slug.clone()
+    } else {
+        created.slug
+    };
+    let html_url = html_href(&created.links);
+    let html_url = if html_url.is_empty() {
+        format!("https://bitbucket.org/{workspace}/{created_slug}")
+    } else {
+        html_url
+    };
+    // From here on, any failure must disclose that the repo WAS created.
+    let created_hint =
+        format!("The Bitbucket repository was created at {html_url}, but ");
+
+    // ── Seed git's credential store so the push authenticates non-interactively.
+    //    The token is fed on STDIN ONLY — never argv / env / git config. A missing
+    //    helper / non-zero exit is tolerated (the push surfaces any auth failure). ──
+    let approve_input = format!(
+        "protocol=https\nhost=bitbucket.org\nusername=x-bitbucket-api-token-auth\npassword={}\n\n",
+        creds.token
+    );
+    let _ = crate::git::runner::run_git_mutating_input(
+        state,
+        repo_path,
+        &["credential", "approve"],
+        Some(&approve_input),
+        crate::git::runner::DEFAULT_TIMEOUT,
+    )
+    .await;
+
+    // ── Add origin, then push the current branch. ──
+    let remote_url = format!("https://bitbucket.org/{workspace}/{created_slug}.git");
+    if let Err(e) = crate::git::runner::run_git_mutating(
+        state,
+        repo_path,
+        &["remote", "add", "origin", &remote_url],
+        crate::git::runner::NETWORK_TIMEOUT,
+    )
+    .await
+    {
+        return Err(AppError::Bitbucket(format!("{created_hint}adding the 'origin' remote failed: {e}")));
+    }
+
+    if let Err(e) = crate::git::runner::run_git_mutating(
+        state,
+        repo_path,
+        &["-c", "credential.interactive=false", "push", "-u", "origin", &branch],
+        crate::git::runner::NETWORK_TIMEOUT,
+    )
+    .await
+    {
+        return Err(AppError::Bitbucket(format!("{created_hint}pushing failed: {e}")));
+    }
+
+    Ok(html_url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2059,6 +3177,31 @@ mod tests {
         assert!(!p.is_draft);
         assert!(p.author.is_none());
         assert_eq!(p.url, "");
+    }
+
+    #[test]
+    fn pipelines_config_404_maps_to_disabled() {
+        // A repo that never enabled Pipelines 404s regardless of the message wording.
+        let cfg =
+            parse_pipelines_config(404, r#"{"type":"error","error":{"message":"Not found"}}"#)
+                .expect("404 should map to disabled, not error");
+        assert!(!cfg.enabled);
+    }
+
+    #[test]
+    fn pipelines_config_200_parses_enabled() {
+        let cfg =
+            parse_pipelines_config(200, r#"{"enabled":true}"#).expect("200 body should parse");
+        assert!(cfg.enabled);
+        let cfg =
+            parse_pipelines_config(200, r#"{"enabled":false}"#).expect("200 body should parse");
+        assert!(!cfg.enabled);
+    }
+
+    #[test]
+    fn pipelines_config_other_status_errors() {
+        // A 401 must surface as an error, not a silently-disabled config.
+        assert!(parse_pipelines_config(401, r#"{"type":"error"}"#).is_err());
     }
 
     #[test]
@@ -2667,5 +3810,264 @@ mod tests {
         assert_eq!(parsed.reviewers.len(), 1);
         assert_eq!(parsed.reviewers[0].uuid.as_deref(), Some("{r1}"));
         assert_eq!(user_login(&parsed.reviewers[0]), "Rev One");
+    }
+
+    // ── Wave 2/3 (publish + repo management) unit tests ─────────────────────────
+
+    #[test]
+    fn publish_body_omits_empty_description_and_website() {
+        let body = build_publish_body(true, "", "");
+        assert_eq!(body["scm"], "git");
+        assert_eq!(body["is_private"], true);
+        assert!(body.get("description").is_none());
+        assert!(body.get("website").is_none());
+
+        let body = build_publish_body(false, "A repo", "https://x.dev");
+        assert_eq!(body["is_private"], false);
+        assert_eq!(body["description"], "A repo");
+        assert_eq!(body["website"], "https://x.dev");
+    }
+
+    #[test]
+    fn repo_name_grammar_matches_slug_rules() {
+        assert!(is_valid_repo_name("MyRepo"));
+        assert!(is_valid_repo_name("my-repo_1.2"));
+        assert!(is_valid_repo_name("a"));
+        // Must start with a letter or digit.
+        assert!(!is_valid_repo_name("-lead"));
+        assert!(!is_valid_repo_name(".dot"));
+        assert!(!is_valid_repo_name(""));
+        // No spaces or slashes (the server would slugify, but we reject up front).
+        assert!(!is_valid_repo_name("has space"));
+        assert!(!is_valid_repo_name("ws/repo"));
+    }
+
+    #[test]
+    fn branch_restriction_body_carries_full_shape_with_and_without_value() {
+        // `require_approvals_to_merge` with a value.
+        let body = build_branch_restriction_body("require_approvals_to_merge", "main", Some(1));
+        assert_eq!(body["kind"], "require_approvals_to_merge");
+        assert_eq!(body["branch_match_kind"], "glob");
+        assert_eq!(body["pattern"], "main");
+        assert!(body["users"].as_array().unwrap().is_empty());
+        assert!(body["groups"].as_array().unwrap().is_empty());
+        assert_eq!(body["value"], 1);
+
+        // `push` with no value → value is explicit null (not omitted).
+        let body = build_branch_restriction_body("push", "release/*", None);
+        assert_eq!(body["kind"], "push");
+        assert_eq!(body["pattern"], "release/*");
+        assert!(body["value"].is_null());
+    }
+
+    #[test]
+    fn branch_restriction_maps_numeric_id_to_string() {
+        let raw: BbBranchRestrictionRaw = serde_json::from_str(
+            r#"{"id":123456789,"kind":"push","pattern":"main","branch_match_kind":"glob","value":null}"#,
+        )
+        .unwrap();
+        let r = from_bb_branch_restriction(raw);
+        assert_eq!(r.id, "123456789");
+        assert_eq!(r.kind, "push");
+        assert_eq!(r.pattern, "main");
+        assert_eq!(r.value, None);
+
+        let raw: BbBranchRestrictionRaw = serde_json::from_str(
+            r#"{"id":42,"kind":"require_approvals_to_merge","pattern":"main","branch_match_kind":"glob","value":2}"#,
+        )
+        .unwrap();
+        let r = from_bb_branch_restriction(raw);
+        assert_eq!(r.id, "42");
+        assert_eq!(r.value, Some(2));
+    }
+
+    #[test]
+    fn schedule_create_body_rides_ref_name_into_selector() {
+        let body = build_schedule_create_body("main", "0 0 12 * * ?", true);
+        assert_eq!(body["type"], "pipeline_schedule");
+        assert_eq!(body["enabled"], true);
+        assert_eq!(body["cron_pattern"], "0 0 12 * * ?");
+        assert_eq!(body["target"]["type"], "pipeline_ref_target");
+        assert_eq!(body["target"]["ref_type"], "branch");
+        assert_eq!(body["target"]["ref_name"], "main");
+        // The selector pattern MUST equal the ref_name (validated live).
+        assert_eq!(body["target"]["selector"]["type"], "branches");
+        assert_eq!(body["target"]["selector"]["pattern"], "main");
+    }
+
+    #[test]
+    fn hook_body_carries_full_shape() {
+        let input: BitbucketHookInput = serde_json::from_str(
+            r#"{"description":"CI","url":"https://x.dev/h","active":true,
+                "events":["repo:push","pullrequest:created"],"skipCertVerification":false}"#,
+        )
+        .unwrap();
+        let body = build_hook_body(&input);
+        assert_eq!(body["description"], "CI");
+        assert_eq!(body["url"], "https://x.dev/h");
+        assert_eq!(body["active"], true);
+        assert_eq!(body["events"][0], "repo:push");
+        assert_eq!(body["events"][1], "pullrequest:created");
+        assert_eq!(body["skip_cert_verification"], false);
+    }
+
+    #[test]
+    fn settings_mapping_absorbs_null_scalars() {
+        // Bitbucket nulls description/website/language rather than omitting them.
+        let raw: BbRepoSettingsRaw = serde_json::from_str(
+            r#"{
+                "name":"My Repo","slug":"my-repo","full_name":"ws/my-repo",
+                "description":null,"website":null,"language":null,
+                "is_private":true,"fork_policy":"no_public_forks",
+                "mainbranch":{"name":"main"},
+                "project":{"key":"PROJ","name":"Project X"},
+                "links":{"html":{"href":"https://bitbucket.org/ws/my-repo"}}
+            }"#,
+        )
+        .unwrap();
+        let s = settings_from_repo(raw);
+        assert_eq!(s.name, "My Repo");
+        assert_eq!(s.slug, "my-repo");
+        assert_eq!(s.description, "");
+        assert_eq!(s.website, "");
+        assert_eq!(s.language, "");
+        assert!(s.is_private);
+        assert_eq!(s.fork_policy, "no_public_forks");
+        assert_eq!(s.main_branch, "main");
+        assert_eq!(s.project_key, "PROJ");
+        assert_eq!(s.project_name, "Project X");
+        assert_eq!(s.web_url, "https://bitbucket.org/ws/my-repo");
+    }
+
+    #[test]
+    fn settings_update_body_conditionally_includes_forkpolicy_and_mainbranch() {
+        let input = BitbucketRepoSettingsInput {
+            description: "d".into(),
+            website: "w".into(),
+            language: "rust".into(),
+            fork_policy: "allow_forks".into(),
+            main_branch: "develop".into(),
+        };
+        let body = build_settings_update_body(&input);
+        assert_eq!(body["description"], "d");
+        assert_eq!(body["website"], "w");
+        assert_eq!(body["language"], "rust");
+        assert_eq!(body["fork_policy"], "allow_forks");
+        assert_eq!(body["mainbranch"]["type"], "branch");
+        assert_eq!(body["mainbranch"]["name"], "develop");
+
+        // Empty fork_policy / main_branch are omitted (an empty repo has no branch).
+        let input = BitbucketRepoSettingsInput {
+            description: "d".into(),
+            website: "".into(),
+            language: "".into(),
+            fork_policy: "".into(),
+            main_branch: "".into(),
+        };
+        let body = build_settings_update_body(&input);
+        assert!(body.get("fork_policy").is_none());
+        assert!(body.get("mainbranch").is_none());
+    }
+
+    #[test]
+    fn secured_pipeline_variable_hides_its_value() {
+        // An unsecured variable keeps its value.
+        let raw: BbPipelineVariableRaw = serde_json::from_str(
+            r#"{"uuid":"{v1}","key":"PLAIN","value":"hello","secured":false}"#,
+        )
+        .unwrap();
+        let v = from_bb_pipeline_variable(raw);
+        assert_eq!(v.value.as_deref(), Some("hello"));
+        assert!(!v.secured);
+
+        // A secured variable forces value to None even if the JSON carried one.
+        let raw: BbPipelineVariableRaw = serde_json::from_str(
+            r#"{"uuid":"{v2}","key":"SECRET","secured":true}"#,
+        )
+        .unwrap();
+        let v = from_bb_pipeline_variable(raw);
+        assert_eq!(v.value, None);
+        assert!(v.secured);
+    }
+
+    #[test]
+    fn repo_admin_matches_slug_exactly_and_case_insensitively() {
+        let repos = vec![
+            BbRepoSlug { slug: "other".into() },
+            BbRepoSlug { slug: "My-Repo".into() },
+        ];
+        // Exact.
+        assert!(repo_admin_matches(&repos, "My-Repo"));
+        // Case-insensitive.
+        assert!(repo_admin_matches(&repos, "my-repo"));
+        // Not present.
+        assert!(!repo_admin_matches(&repos, "nope"));
+        // Empty list = not an admin.
+        assert!(!repo_admin_matches(&[], "my-repo"));
+    }
+
+    #[test]
+    fn rename_rewrites_https_and_scp_origin_urls_preserving_scheme() {
+        // HTTPS form.
+        assert_eq!(
+            rewritten_origin_url("https://bitbucket.org/ws/old.git", "ws", "new"),
+            Some("https://bitbucket.org/ws/new.git".to_string())
+        );
+        // HTTPS with an embedded user (some clones carry one) — the rebuilt URL is
+        // the canonical host form.
+        assert_eq!(
+            rewritten_origin_url("https://user@bitbucket.org/ws/old.git", "ws", "new"),
+            Some("https://bitbucket.org/ws/new.git".to_string())
+        );
+        // scp-style SSH form keeps the user@host prefix.
+        assert_eq!(
+            rewritten_origin_url("git@bitbucket.org:ws/old.git", "ws", "new"),
+            Some("git@bitbucket.org:ws/new.git".to_string())
+        );
+        // An unrecognized URL is left alone (None).
+        assert_eq!(rewritten_origin_url("/local/path", "ws", "new"), None);
+    }
+
+    #[test]
+    fn workspace_membership_carries_administrator_flag() {
+        let page: BbWorkspacesPage = serde_json::from_str(
+            r#"{"values":[
+                {"administrator":true,"workspace":{"slug":"team-a"}},
+                {"administrator":false,"workspace":{"slug":"team-b"}},
+                {"administrator":true,"workspace":{"slug":""}},
+                {"administrator":true}
+            ]}"#,
+        )
+        .unwrap();
+        let out: Vec<BitbucketWorkspace> = page
+            .values
+            .into_iter()
+            .filter_map(|m| {
+                let administrator = m.administrator;
+                m.workspace
+                    .map(|w| w.slug)
+                    .filter(|s| !s.is_empty())
+                    .map(|slug| BitbucketWorkspace { slug, administrator })
+            })
+            .collect();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].slug, "team-a");
+        assert!(out[0].administrator);
+        assert_eq!(out[1].slug, "team-b");
+        assert!(!out[1].administrator);
+    }
+
+    #[test]
+    fn hook_mapping_defaults_empty_events_and_flags() {
+        let raw: BbHookRaw = serde_json::from_str(
+            r#"{"uuid":"{h1}","description":"CI","url":"https://x.dev","active":true,
+                "events":["repo:push"],"skip_cert_verification":false}"#,
+        )
+        .unwrap();
+        let h = from_bb_hook(raw);
+        assert_eq!(h.uuid, "{h1}");
+        assert_eq!(h.events, vec!["repo:push".to_string()]);
+        assert!(h.active);
+        assert!(!h.skip_cert_verification);
     }
 }

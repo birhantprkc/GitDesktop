@@ -63,9 +63,9 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   const lastFetchedAt = useLastFetchedAt(repoPath);
   const [forceConfirmOpen, setForceConfirmOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
-  const [publishProvider, setPublishProvider] = useState<"github" | "gitlab">(
-    "github",
-  );
+  const [publishProvider, setPublishProvider] = useState<
+    "github" | "gitlab" | "bitbucket"
+  >("github");
 
   // A repo with no `origin` (e.g. created locally in GitDesktop) can't push;
   // offer to create the GitHub/GitLab repo instead. Which providers can take it
@@ -76,10 +76,20 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   const hasOrigin = remotes.isSuccess && remotes.data.includes("origin");
   const ghCliReady = Boolean(gh.data?.installed && gh.data?.authenticated);
   const targets = usePublishTargets(repoPath, noOrigin);
-  const canPublish = Boolean(
-    ghCliReady || targets.data?.github || targets.data?.gitlab,
-  );
-  const bothTargets = Boolean(targets.data?.github && targets.data?.gitlab);
+  // Which providers can take this origin-less repo, in a stable GitHub → GitLab
+  // → Bitbucket order. GitHub stays eligible off the (warm) CLI status while the
+  // explicit probe is still in flight, matching the pre-generalized behavior.
+  const PUBLISH_PROVIDERS = [
+    {
+      id: "github",
+      label: "GitHub",
+      ready: ghCliReady || targets.data?.github,
+    },
+    { id: "gitlab", label: "GitLab", ready: targets.data?.gitlab },
+    { id: "bitbucket", label: "Bitbucket", ready: targets.data?.bitbucket },
+  ] as const;
+  const readyProviders = PUBLISH_PROVIDERS.filter((p) => p.ready);
+  const canPublish = readyProviders.length > 0;
 
   const head = status.data?.branch;
   const hasUpstream = Boolean(head?.upstream);
@@ -164,11 +174,17 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
     );
   }
 
+  function openPublish(provider: "github" | "gitlab" | "bitbucket") {
+    setPublishProvider(provider);
+    setPublishOpen(true);
+  }
+
   if (noOrigin) {
+    const soleTarget = readyProviders[0];
     return (
       <>
-        {bothTargets ? (
-          // Both CLIs are signed in: the button becomes a provider choice.
+        {readyProviders.length >= 2 ? (
+          // Multiple CLIs/accounts are ready: the button becomes a provider choice.
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button variant="outline" size="sm" />}
@@ -178,22 +194,11 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
               <CaretDownIcon data-icon="inline-end" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onClick={() => {
-                  setPublishProvider("github");
-                  setPublishOpen(true);
-                }}
-              >
-                Publish to GitHub…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  setPublishProvider("gitlab");
-                  setPublishOpen(true);
-                }}
-              >
-                Publish to GitLab…
-              </DropdownMenuItem>
+              {readyProviders.map((p) => (
+                <DropdownMenuItem key={p.id} onClick={() => openPublish(p.id)}>
+                  Publish to {p.label}…
+                </DropdownMenuItem>
+              ))}
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
@@ -201,20 +206,11 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
             variant="outline"
             size="sm"
             disabled={!canPublish}
-            onClick={() => {
-              setPublishProvider(
-                targets.data?.gitlab && !targets.data.github
-                  ? "gitlab"
-                  : "github",
-              );
-              setPublishOpen(true);
-            }}
+            onClick={() => soleTarget && openPublish(soleTarget.id)}
             title={
-              targets.data?.gitlab && !targets.data.github
-                ? "Create a GitLab project and push this repository"
-                : canPublish
-                  ? "Create a GitHub repository and push this one"
-                  : "Sign in with the GitHub CLI (gh auth login) or GitLab CLI (glab auth login) to publish"
+              soleTarget
+                ? `Create a ${soleTarget.label} repository and push this one`
+                : "Sign in with the GitHub CLI (gh auth login), GitLab CLI (glab auth login), or connect a Bitbucket account to publish"
             }
           >
             <UploadSimpleIcon data-icon="inline-start" />

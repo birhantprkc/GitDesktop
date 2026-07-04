@@ -764,6 +764,104 @@ export interface GitLabMrMergeState {
   pipelineUrl: string;
 }
 
+// ── Bitbucket settings surface (wave 2/3) ──────────────────────────────────
+//
+// Bitbucket's repo-management model is its own shape (like GitLab's), not a
+// mapping onto the GitHub types: a `fork_policy` enum, a `mainbranch`, and no
+// topics/archiving. camelCase mirrors the serde on the Rust side.
+
+/** A Bitbucket workspace the viewer belongs to — the publish target picker. */
+export interface BitbucketWorkspace {
+  slug: string;
+  administrator: boolean;
+}
+
+/** Bitbucket repository settings — its own shape (a `fork_policy` enum, a
+ *  main branch, no topics). Nullable scalars arrive as "" (empty-string idiom). */
+export interface BitbucketRepoSettings {
+  name: string;
+  slug: string;
+  fullName: string;
+  description: string;
+  website: string;
+  language: string;
+  isPrivate: boolean;
+  /** "allow_forks" | "no_public_forks" | "no_forks". */
+  forkPolicy: string;
+  mainBranch: string;
+  webUrl: string;
+  projectKey: string;
+  projectName: string;
+}
+
+/** The Bitbucket settings the General form sends back (the managed subset).
+ *  Name and visibility are NOT here — the Danger zone owns them (rename +
+ *  set-visibility). */
+export interface BitbucketRepoSettingsInput {
+  description: string;
+  website: string;
+  language: string;
+  forkPolicy: string;
+  mainBranch: string;
+}
+
+/** A Bitbucket branch restriction. `id` is numeric on the wire; it travels as a
+ *  string over IPC (u64-precision rule). `value` is the numeric argument some
+ *  kinds carry (e.g. `require_approvals_to_merge` → the required count). */
+export interface BitbucketBranchRestriction {
+  id: string;
+  /** "push" | "require_approvals_to_merge" | "force" | "delete" | … */
+  kind: string;
+  pattern: string;
+  /** "glob" (the only kind the app creates). */
+  branchMatchKind: string;
+  value: number | null;
+}
+
+/** Whether Bitbucket Pipelines is enabled for the repo. */
+export interface BitbucketPipelinesConfig {
+  enabled: boolean;
+}
+
+/** A Bitbucket pipeline variable. A secured variable's value is write-only —
+ *  reads return `null` for it. */
+export interface BitbucketPipelineVariable {
+  uuid: string;
+  key: string;
+  value: string | null;
+  secured: boolean;
+}
+
+/** A Bitbucket pipeline schedule (a cron-triggered pipeline on a branch).
+ *  `cronPattern` is QUARTZ format (e.g. "0 0 12 * * ?"). */
+export interface BitbucketPipelineSchedule {
+  uuid: string;
+  enabled: boolean;
+  cronPattern: string;
+  refName: string;
+}
+
+/** A Bitbucket repository webhook. Bitbucket has no delivery-log API (no
+ *  deliveries feature). */
+export interface BitbucketHook {
+  uuid: string;
+  description: string;
+  url: string;
+  active: boolean;
+  events: string[];
+  skipCertVerification: boolean;
+}
+
+/** What the Bitbucket webhook form sends. A PUT requires the FULL shape (a
+ *  partial PUT 400s), so create and update carry the same fields. */
+export interface BitbucketHookInput {
+  description: string;
+  url: string;
+  active: boolean;
+  events: string[];
+  skipCertVerification: boolean;
+}
+
 /** Provider-neutral analogue of {@link GhStatus}: is the hosted integration usable
  *  for this repo, on which host, as whom, and what does it support. Hosted panels
  *  gate on this (and its `capabilities`) instead of a GitHub-only readiness check,

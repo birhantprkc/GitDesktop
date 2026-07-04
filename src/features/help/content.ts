@@ -126,10 +126,11 @@ monitor it was on — see **Settings → About** for the current coordinates.`,
     label: "Repository settings",
     body: `# Repository settings
 
-**Repository settings** (the repo ⋮ menu) manages your GitHub repository — or GitLab
-project (see **GitLab projects** below) — without leaving the app. It's organized as a
-sidebar of grouped sections; changes apply on the host immediately unless noted. On
-GitHub it looks like this:
+**Repository settings** (the repo ⋮ menu) manages your GitHub repository — a GitLab
+project (see **GitLab projects** below) or a Bitbucket repository (see **Bitbucket
+repositories** below) too — without leaving the app. It's organized as a sidebar of
+grouped sections; changes apply on the host immediately unless noted. On GitHub it looks
+like this:
 
 - **General** — description, topics, homepage, default branch, features (issues,
   projects, wiki, discussions), pull-request merge options (allowed merge methods,
@@ -189,7 +190,37 @@ menu item appears only when you have it):
 - **Danger zone** — **rename** (name + path, old paths redirect),
   **archive / unarchive**, **change visibility**, **transfer** to another namespace,
   and **delete**. The Owner-only actions disable with an explanation when you're a
-  Maintainer.`,
+  Maintainer.
+
+## Bitbucket repositories
+
+The same dialog manages a **Bitbucket** repository (it needs **admin** on the repo; the
+menu item appears only when you have it):
+
+- **General** — description, **website**, primary **language**, **fork policy** (allow
+  all forks / private forks only / no forks), and the **default branch**, saved behind a
+  Save button.
+- **Default reviewers** — the accounts auto-added to every new pull request: add one from
+  the workspace members not already listed, or remove one.
+- **Branch restrictions** — rules that limit matching branches (by a **glob** like
+  \`release/*\`): **prevent pushes**, **prevent force pushes**, **prevent branch
+  deletion**, **restrict merges**, and **require approvals / passing builds / resolved
+  tasks** to merge (the count-based ones take a number). Edit a rule's pattern or count,
+  or delete it.
+- **Variables** — the repo's **pipeline variables**: add, edit, and delete, with a
+  **secured** flag (a secured value is write-only and never shown again). If Pipelines
+  are off, an **Enable pipelines** action turns them on first.
+- **Schedules** — **pipeline schedules** that run a branch's pipeline on a recurring
+  **cron** (Bitbucket uses Quartz cron, e.g. \`0 0 12 * * ?\`): add one, toggle it
+  enabled/disabled in place, or delete it.
+- **Webhooks** — create, edit, and delete webhooks with a payload URL, an active toggle,
+  and an event checklist. Bitbucket has no delivery-log API, so there's no deliveries
+  view.
+- **Danger zone** — **rename** (this changes the repository's URL slug; GitDesktop
+  updates your local \`origin\` remote automatically), **change visibility**
+  (public / private), **transfer** (a link out to Bitbucket, which handles transfers on
+  the web), and **delete**. Bitbucket has no archive, so that action isn't shown. Your
+  local clone is never touched.`,
   },
   {
     id: "changes",
@@ -613,9 +644,14 @@ Atlassian **account email** (not your Bitbucket username) and the token. It need
 five read scopes \`read:user:bitbucket\`, \`read:workspace:bitbucket\`,
 \`read:repository:bitbucket\`, \`read:pullrequest:bitbucket\`, and
 \`read:pipeline:bitbucket\`. To also **act on** pull requests and Pipelines (below), add
-the write scopes \`write:pullrequest:bitbucket\` and \`write:pipeline:bitbucket\` — a
-write fails with a clear message if the token lacks them. The token is stored in your OS
-keychain — never in app files.
+the write scopes \`write:pullrequest:bitbucket\`, \`write:pipeline:bitbucket\`, and
+\`admin:pipeline:bitbucket\` (pipeline variables & config). To **manage repositories** —
+publish a local repo, edit repository settings, branch restrictions, default reviewers,
+webhooks, or delete — also add \`write:repository:bitbucket\`,
+\`admin:repository:bitbucket\`, \`delete:repository:bitbucket\`, and the webhook scopes
+\`read:webhook:bitbucket\`, \`write:webhook:bitbucket\`, and \`delete:webhook:bitbucket\`.
+A write fails with a clear message if the token lacks the matching scope. The token is
+stored in your OS keychain — never in app files.
 
 Once connected:
 
@@ -637,6 +673,21 @@ Once connected:
   **steps** with their **logs**. You can **rerun** a finished pipeline (re-triggers its
   branch), **trigger** a new one on a branch or tag (with optional variables), and **stop**
   a running pipeline.
+- **Insights** — the **Insights** tab works on Bitbucket repos: the local-git charts
+  (commit activity, code frequency, contributors, punch card), a **Pipelines** duration
+  and success-rate chart, and a **More on Bitbucket** card that links out to the
+  **Commits**, **Branches**, and **Pipelines** pages (these only render on the web).
+  GitHub-only cards (community, traffic, dependencies) stay hidden.
+- **Publish a local repo** — a repo with no remote can be published to Bitbucket. From
+  the sync bar's **Publish repository…** (or the not-ready panel), pick **Bitbucket**,
+  choose a **workspace**, give it a name (which becomes the URL slug), and optionally a
+  description, website, and private/public — GitDesktop creates the repo, adds it as
+  \`origin\`, and pushes the current branch. (Bitbucket has no topics, so there's no topics
+  field.)
+- **Repository settings** — for a repo you **admin**, the repo ⋮ menu's **Repository
+  settings** manages the Bitbucket repo: General, Default reviewers, Branch restrictions,
+  Variables and Schedules (Pipelines), Webhooks, and a Danger zone (rename, visibility,
+  transfer, delete). See **Repository settings → Bitbucket repositories** for the details.
 - **Issues** — Bitbucket has retired its native issue tracker (issues live in **Jira**),
   so issues aren't shown for Bitbucket repositories. Private **local to-dos** still work.
 
@@ -649,21 +700,22 @@ missing scopes — update it in **Settings → Accounts**.`,
     body: `# Insights
 
 The **Insights** tab ({{kbd:tab-insights}}, in the More ▾ menu) is a dashboard of
-repository analytics, mixing local Git history with hosted data (GitHub or GitLab).
+repository analytics, mixing local Git history with hosted data (GitHub, GitLab, or
+Bitbucket).
 
 - **Repository statistics** — commits, contributors, branch and tag counts, sizes, and a
   language-makeup bar.
 - **Commit activity** — commits per week, and a **code-frequency** chart of additions and
   deletions over time.
 - **Top contributors** and a **punch card** heatmap of commits by day and hour.
-- **CI usage** — recent run duration and success rate (GitHub workflow runs, or GitLab
-  pipelines).
+- **CI usage** — recent run duration and success rate (GitHub workflow runs, GitLab
+  pipelines, or Bitbucket Pipelines).
 - On GitHub: **community health** (stars, forks, watchers, a health percentage),
   **traffic** (14-day views, clones, and top referrers — needs push access), and
   **dependencies**.
 - Quick links jump to the pages best viewed on the web — GitHub's Pulse, Network, Forks,
-  Dependents, and Actions, or GitLab's Activity, CI/CD analytics, and value stream
-  analytics.`,
+  Dependents, and Actions; GitLab's Activity, CI/CD analytics, and value stream analytics;
+  or Bitbucket's Commits, Branches, and Pipelines.`,
   },
   {
     id: "agent",
@@ -956,8 +1008,9 @@ Open **Settings** from the header gear (or {{kbd:open-settings}}). Sections:
 - **Keyboard** — rebind any shortcut, with live key-capture.
 - **Accounts** — your GitHub sign-in, and your **Bitbucket** connection (an Atlassian
   API token: enter your Atlassian account email + a token with the five \`read:…:bitbucket\`
-  scopes, plus the \`write:…:bitbucket\` scopes to act on PRs and Pipelines; stored in the
-  OS keychain, replaceable or removable here).
+  scopes, plus the \`write:…:bitbucket\` scopes to act on PRs and Pipelines and the
+  \`admin:…:bitbucket\` / \`delete:…:bitbucket\` / webhook scopes to manage repositories;
+  stored in the OS keychain, replaceable or removable here).
 - **Git** — the default branch name for new repos, your global identity, a per-repository
   identity override, and line endings (\`core.autocrlf\`).
 - **Syntax** — map file extensions to languages or add custom grammars, personally or

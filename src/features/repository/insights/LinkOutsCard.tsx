@@ -29,6 +29,15 @@ const GITLAB_LINKS: { label: string; suffix: string }[] = [
   },
 ];
 
+// Bitbucket's equivalents also only render on the web. It has no analytics
+// dashboards, but these views (commits, branches, pipelines) have no usable API
+// here — link out rather than show an empty panel.
+const BITBUCKET_LINKS: { label: string; suffix: string }[] = [
+  { label: "Commits", suffix: "/commits/" },
+  { label: "Branches", suffix: "/branches/" },
+  { label: "Pipelines", suffix: "/pipelines" },
+];
+
 export function GitLabLinkOutsCard({ repoPath }: { repoPath: string }) {
   async function open(suffix: string) {
     try {
@@ -45,6 +54,38 @@ export function GitLabLinkOutsCard({ repoPath }: { repoPath: string }) {
       </p>
       <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
         {GITLAB_LINKS.map((l) => (
+          <Button
+            key={l.label}
+            variant="outline"
+            size="sm"
+            className="cursor-pointer justify-start"
+            onClick={() => open(l.suffix)}
+          >
+            <ArrowSquareOutIcon data-icon="inline-start" />
+            {l.label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function BitbucketLinkOutsCard({ repoPath }: { repoPath: string }) {
+  async function open(suffix: string) {
+    try {
+      const url = await forgeRepoUrl(repoPath);
+      await openUrl(`${url}${suffix}`);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">
+        These views only render on the web:
+      </p>
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        {BITBUCKET_LINKS.map((l) => (
           <Button
             key={l.label}
             variant="outline"

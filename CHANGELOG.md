@@ -41,6 +41,24 @@ commit list.
   **reviewers picker** that lists your workspace members (minus the PR author, whom
   Bitbucket won't accept as a reviewer), and a both-ways **draft toggle** — mark a draft
   **ready for review** or convert a ready PR **back to draft**.
+- **Bitbucket Cloud publish, Insights & repository settings.** Three more Bitbucket
+  surfaces come online. **Publish a local repo** — a repo with no remote can be published
+  to Bitbucket from the sync bar's **Publish repository…** (or the not-ready panel): pick a
+  **workspace**, give it a name (which becomes the URL slug), optionally a description,
+  website, and public/private, and GitDesktop creates the repo, adds it as `origin`, and
+  pushes the current branch. **Insights** now works on Bitbucket repos — the local-git
+  charts, a **Pipelines** duration and success-rate chart, and a *More on Bitbucket* card
+  that links out to Commits, Branches, and Pipelines (the GitHub-only community, traffic,
+  and dependencies cards stay hidden). And **repository settings** (for a repo you admin)
+  manage a Bitbucket repo end to end: **General** (description, website, language, fork
+  policy, default branch), **Default reviewers** (from your workspace members), **Branch
+  restrictions** (prevent pushes / force-pushes / deletion, restrict merges, require
+  approvals / passing builds / resolved tasks, by glob pattern), pipeline **Variables**
+  (secured supported, with an enable-Pipelines toggle) and **Schedules** (cron, enable /
+  disable, delete), **Webhooks** (create / edit / delete with an event checklist — Bitbucket
+  has no delivery-log API, so there's no deliveries view), and a **Danger zone** (rename,
+  which updates your local `origin` remote automatically; change visibility; transfer via a
+  link out to Bitbucket; and delete — Bitbucket has no archive).
 - **GitLab time tracking.** Track time on a GitLab issue or merge request without
   leaving the app: set an **estimate** (e.g. `3h`) and log **spent** time (e.g.
   `45m`, or subtract with `-15m`), with a progress bar and an "over" note when
@@ -106,7 +124,7 @@ commit list.
   charts **GitLab pipeline durations and success rate** (the GitHub-only cards —
   community, traffic, dependencies — hide, with GitLab's web-only analytics linked
   instead). GitHub repositories are
-  completely unaffected. (Bitbucket is still on the way.)
+  completely unaffected.
 - **Self-managed GitLab.** Everything above now works on your own GitLab instance,
   not just gitlab.com — sign `glab` in to the host (`glab auth login --hostname …`)
   and GitDesktop recognizes repositories on it automatically, labels them

@@ -1,3 +1,5 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   type ComponentProps,
   type ReactNode,
@@ -25,6 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import {
+  useBbRepoSettings,
   useDeleteRepo,
   useGlRepoSettings,
   useRenameRepo,
@@ -48,6 +51,8 @@ interface DangerInfo {
   currentName: string;
   archived: boolean;
   visibility: string;
+  /** The repo's web URL — Bitbucket's transfer link-out targets `{webUrl}/admin`. */
+  webUrl: string;
 }
 
 /** A guarded destructive dialog: the confirm button stays disabled until the
@@ -161,17 +166,19 @@ function RenameAction({
   repoPath,
   info,
   isGitLab,
+  isBitbucket,
 }: {
   repoPath: string;
   info: DangerInfo;
   isGitLab: boolean;
+  isBitbucket: boolean;
 }) {
   const rename = useRenameRepo(repoPath);
   const current = info.currentName;
   const [name, setName] = useState(current);
-  // GitLab paths must start alphanumeric; GitHub allows a leading `.`/`_`/`-`
-  // (".github" is a standard repo name) — the check branches so GitHub keeps
-  // its full grammar.
+  // GitLab paths must start alphanumeric; GitHub/Bitbucket allow a leading
+  // `.`/`_`/`-` (".github" is a standard repo name) — the check branches so
+  // they keep their fuller grammar.
   const valid = isGitLab
     ? /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name.trim())
     : /^[A-Za-z0-9._-]+$/.test(name.trim());
@@ -183,7 +190,9 @@ function RenameAction({
       desc={
         isGitLab
           ? "Renames the name and path; old paths redirect."
-          : "Old links and clones keep working."
+          : isBitbucket
+            ? "Renaming changes the repository URL; GitDesktop will update your local 'origin' remote automatically."
+            : "Old links and clones keep working."
       }
     >
       <div className="flex shrink-0 items-center gap-2">
@@ -201,7 +210,11 @@ function RenameAction({
           onClick={() =>
             rename.mutate(name.trim(), {
               onSuccess: () =>
-                toast.success(`Renamed to ${name.trim()} — links redirect`),
+                toast.success(
+                  isBitbucket
+                    ? `Renamed to ${name.trim()} — origin remote updated`
+                    : `Renamed to ${name.trim()} — links redirect`,
+                ),
               onError: toastError,
             })
           }
@@ -277,21 +290,26 @@ function ArchiveAction({
 }
 
 const VISIBILITIES = ["public", "private", "internal"];
+// Bitbucket only knows public/private — no "internal".
+const BB_VISIBILITIES = ["public", "private"];
 
 function VisibilityAction({
   repoPath,
   info,
   isGitLab,
+  isBitbucket,
   isOwner,
 }: {
   repoPath: string;
   info: DangerInfo;
   isGitLab: boolean;
+  isBitbucket: boolean;
   isOwner: boolean;
 }) {
   const setVisibility = useSetVisibility(repoPath);
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState(info.visibility || "public");
+  const visibilities = isBitbucket ? BB_VISIBILITIES : VISIBILITIES;
 
   return (
     <Row
@@ -318,7 +336,9 @@ function VisibilityAction({
         description={
           isGitLab
             ? "Making a project public exposes all code, issues, and history; making it private hides it from everyone without access and unlinks existing forks."
-            : "Changing visibility erases this repo's stars and watchers. Making it public exposes all code and history; making it private detaches existing forks, unpublishes Pages, and disables push rulesets."
+            : isBitbucket
+              ? "Making a repository public exposes all code and history to anyone; making it private restricts it to people with access."
+              : "Changing visibility erases this repo's stars and watchers. Making it public exposes all code and history; making it private detaches existing forks, unpublishes Pages, and disables push rulesets."
         }
         confirmPhrase={info.fullName}
         confirmLabel="Change visibility"
@@ -345,18 +365,20 @@ function VisibilityAction({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {VISIBILITIES.map((v) => (
+              {visibilities.map((v) => (
                 <SelectItem key={v} value={v} className="capitalize">
                   {v}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <p className="text-[11px] text-muted-foreground">
-            {isGitLab
-              ? "“Internal” is limited to self-managed GitLab (gitlab.com disallows it for new projects)."
-              : "“Internal” requires the organization to belong to an enterprise."}
-          </p>
+          {!isBitbucket && (
+            <p className="text-[11px] text-muted-foreground">
+              {isGitLab
+                ? "“Internal” is limited to self-managed GitLab (gitlab.com disallows it for new projects)."
+                : "“Internal” requires the organization to belong to an enterprise."}
+            </p>
+          )}
         </div>
       </DangerDialog>
     </Row>
@@ -367,16 +389,38 @@ function TransferAction({
   repoPath,
   info,
   isGitLab,
+  isBitbucket,
   isOwner,
 }: {
   repoPath: string;
   info: DangerInfo;
   isGitLab: boolean;
+  isBitbucket: boolean;
   isOwner: boolean;
 }) {
   const transfer = useTransferRepo(repoPath);
   const [open, setOpen] = useState(false);
   const [newOwner, setNewOwner] = useState("");
+
+  // Bitbucket's REST API can't transfer a repo — send the user to the web
+  // admin page instead of offering a form that would only error.
+  if (isBitbucket) {
+    return (
+      <Row
+        title="Transfer ownership"
+        desc="Bitbucket transfers happen on the web."
+      >
+        <DangerButton
+          variant="outline"
+          disabled={!isOwner || !info.webUrl}
+          hint={isOwner ? undefined : OWNER_HINT}
+          onClick={() => info.webUrl && openUrl(`${info.webUrl}/admin`)}
+        >
+          Transfer on Bitbucket…
+        </DangerButton>
+      </Row>
+    );
+  }
 
   return (
     <Row
@@ -449,21 +493,31 @@ function DeleteAction({
   repoPath,
   info,
   isGitLab,
+  isBitbucket,
   isOwner,
+  onRepoDeleted,
 }: {
   repoPath: string;
   info: DangerInfo;
   isGitLab: boolean;
+  isBitbucket: boolean;
   isOwner: boolean;
+  onRepoDeleted: () => void;
 }) {
   const del = useDeleteRepo(repoPath);
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const noun = isGitLab ? "project" : "repository";
+  const providerLabel = isGitLab
+    ? "GitLab"
+    : isBitbucket
+      ? "Bitbucket"
+      : "GitHub";
 
   return (
     <Row
       title={`Delete this ${noun}`}
-      desc={`Permanently remove the ${noun} on ${isGitLab ? "GitLab" : "GitHub"}.`}
+      desc={`Permanently remove the ${noun} on ${providerLabel}.`}
     >
       <DangerButton
         variant="destructive"
@@ -479,8 +533,10 @@ function DeleteAction({
         title={`Delete ${noun}`}
         description={
           isGitLab
-            ? "This permanently deletes the GitLab project — its issues, merge requests, wiki, releases, and settings. gitlab.com may delay the deletion briefly (the project is scheduled for removal). Your local clone is left untouched."
-            : "This permanently deletes the GitHub repository — its issues, pull requests, wiki, releases, and settings. Your local clone is left untouched. This cannot be undone."
+            ? "This permanently deletes the GitLab project — its issues, merge requests, wiki, releases, and settings. gitlab.com may delay the deletion briefly (the project is scheduled for removal). Your local clone and its files are kept; the dangling 'origin' remote is removed so you can publish the repo again."
+            : isBitbucket
+              ? "This immediately and permanently deletes the Bitbucket repository — its pull requests, pipelines, and settings. Your local clone and its files are kept; the dangling 'origin' remote is removed so you can publish the repo again. This cannot be undone."
+              : "This permanently deletes the GitHub repository — its issues, pull requests, wiki, releases, and settings. Your local clone and its files are kept; the dangling 'origin' remote is removed so you can publish the repo again. This cannot be undone."
         }
         confirmPhrase={info.fullName}
         confirmLabel="Delete forever"
@@ -489,17 +545,20 @@ function DeleteAction({
           del.mutate(undefined, {
             onSuccess: () => {
               toast.success(
-                isGitLab
-                  ? "Project deleted on GitLab"
-                  : "Repository deleted on GitHub",
+                `${isGitLab ? "Project" : "Repository"} deleted on ${providerLabel}`,
               );
               setOpen(false);
+              // The remote is gone — re-probe the repo's hosted panels so they
+              // stop showing stale data, and close the settings dialog (it only
+              // offers actions against a repo that no longer exists).
+              queryClient.invalidateQueries({ queryKey: ["repo", repoPath] });
+              onRepoDeleted();
             },
             onError: toastError,
           })
         }
       >
-        {!isGitLab && (
+        {!isGitLab && !isBitbucket && (
           <ScopeRefreshHint
             scope="delete_repo"
             action="Deleting a repository"
@@ -518,16 +577,23 @@ export function DangerZone({
   repoPath,
   open,
   provider,
+  onRepoDeleted,
 }: {
   repoPath: string;
   open: boolean;
-  provider: "github" | "gitlab";
+  provider: "github" | "gitlab" | "bitbucket";
+  /** Called after the remote repo is deleted — the dialog closes itself. */
+  onRepoDeleted: () => void;
 }) {
   const isGitLab = provider === "gitlab";
-  const gh = useRepoSettings(repoPath, open && !isGitLab);
+  const isBitbucket = provider === "bitbucket";
+  const isGitHub = !isGitLab && !isBitbucket;
+  const gh = useRepoSettings(repoPath, open && isGitHub);
   const gl = useGlRepoSettings(repoPath, open && isGitLab);
-  // Owner gating (GitLab): the same probe the menu item used, so it's cached.
-  const admin = useRepoAdmin(repoPath, open && isGitLab);
+  const bb = useBbRepoSettings(repoPath, open && isBitbucket);
+  // Owner gating (GitLab / Bitbucket): the same probe the menu item used, so
+  // it's cached. GitHub admin implies owner, so it doesn't need the probe.
+  const admin = useRepoAdmin(repoPath, open && (isGitLab || isBitbucket));
 
   const info: DangerInfo | null = isGitLab
     ? gl.data
@@ -536,35 +602,61 @@ export function DangerZone({
           currentName: gl.data.path,
           archived: gl.data.archived,
           visibility: gl.data.visibility,
+          webUrl: "",
         }
       : null
-    : gh.data
-      ? {
-          fullName: gh.data.fullName,
-          currentName: gh.data.fullName.split("/").pop() ?? "",
-          archived: gh.data.archived,
-          visibility: gh.data.visibility,
-        }
-      : null;
+    : isBitbucket
+      ? bb.data
+        ? {
+            fullName: bb.data.fullName,
+            currentName: bb.data.slug,
+            archived: false,
+            visibility: bb.data.isPrivate ? "private" : "public",
+            webUrl: bb.data.webUrl,
+          }
+        : null
+      : gh.data
+        ? {
+            fullName: gh.data.fullName,
+            currentName: gh.data.fullName.split("/").pop() ?? "",
+            archived: gh.data.archived,
+            visibility: gh.data.visibility,
+            webUrl: "",
+          }
+        : null;
   if (!info) return null;
-  const isOwner = !isGitLab || (admin.data?.owner ?? false);
+  // GitHub admin implies owner; GitLab and Bitbucket both gate the owner-only
+  // lifecycle powers on the probe's `admin` flag (owner == admin for Bitbucket).
+  const isOwner =
+    isGitHub || (isBitbucket ? admin.data?.admin : admin.data?.owner) || false;
 
   return (
     <div className="space-y-3 rounded-md border border-destructive/40 p-3">
       <h3 className="text-xs font-semibold text-destructive">Danger zone</h3>
-      <RenameAction repoPath={repoPath} info={info} isGitLab={isGitLab} />
-      <div className="border-t" />
-      <ArchiveAction
+      <RenameAction
         repoPath={repoPath}
         info={info}
         isGitLab={isGitLab}
-        isOwner={isOwner}
+        isBitbucket={isBitbucket}
       />
+      {/* Bitbucket can't archive over the API — hide the row (platform limit). */}
+      {!isBitbucket && (
+        <>
+          <div className="border-t" />
+          <ArchiveAction
+            repoPath={repoPath}
+            info={info}
+            isGitLab={isGitLab}
+            isOwner={isOwner}
+          />
+        </>
+      )}
       <div className="border-t" />
       <VisibilityAction
         repoPath={repoPath}
         info={info}
         isGitLab={isGitLab}
+        isBitbucket={isBitbucket}
         isOwner={isOwner}
       />
       <div className="border-t" />
@@ -572,6 +664,7 @@ export function DangerZone({
         repoPath={repoPath}
         info={info}
         isGitLab={isGitLab}
+        isBitbucket={isBitbucket}
         isOwner={isOwner}
       />
       <div className="border-t" />
@@ -579,7 +672,9 @@ export function DangerZone({
         repoPath={repoPath}
         info={info}
         isGitLab={isGitLab}
+        isBitbucket={isBitbucket}
         isOwner={isOwner}
+        onRepoDeleted={onRepoDeleted}
       />
     </div>
   );

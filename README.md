@@ -85,7 +85,17 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   (a true toggle — revoking works on every Bitbucket plan), pick **reviewers**
   from your workspace members, and flip **draft ↔ ready** in either direction,
   plus rerun, trigger (with variables), and stop Pipelines. Reopening a declined
-  PR isn't available (a Bitbucket platform limit). Bitbucket has retired its
+  PR isn't available (a Bitbucket platform limit). **Publish a local repo to
+  Bitbucket** (pick a workspace, name it, and it creates the repo, adds `origin`,
+  and pushes the current branch). Insights charts **Bitbucket Pipeline durations**
+  alongside the local-git analytics, with a link-out to Bitbucket's
+  Commits/Branches/Pipelines. And **repository settings** (admin-gated) manage a
+  Bitbucket repo: **General** (description, website, language, fork policy, default
+  branch), **default reviewers**, **branch restrictions** (prevent
+  pushes/force-pushes/deletion, restrict merges, require approvals/builds/tasks),
+  **pipeline variables** (secured supported) and **schedules** (cron), **webhooks**,
+  and a **Danger zone** (rename — which updates your local `origin` automatically —
+  visibility, transfer, delete; Bitbucket has no archive). Bitbucket has retired its
   native issue tracker (issues live in Jira), so issues aren't shown for
   Bitbucket repositories.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works

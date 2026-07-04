@@ -31,17 +31,26 @@ import { toastError } from "@/lib/toast";
 const ATLASSIAN_TOKEN_URL =
   "https://id.atlassian.com/manage-profile/security/api-tokens";
 
-/** The scopes a token needs for full Bitbucket support: the five read scopes that
- *  power browsing/PR/Pipeline reads, plus the two write scopes for acting on PRs
- *  and Pipelines. Writes fail with a clear message if the token lacks the latter. */
+/** The scopes a token needs for full Bitbucket support: the read scopes that power
+ *  browsing/PR/Pipeline reads, the write/admin scopes for acting on PRs and Pipelines,
+ *  and the repository admin/delete + webhook scopes that power repository management
+ *  (publish, settings, branch restrictions, default reviewers, webhooks, delete). A
+ *  write fails with a clear message if the token lacks the matching scope. */
 const BB_SCOPES = [
   "read:user:bitbucket",
   "read:workspace:bitbucket",
   "read:repository:bitbucket",
+  "write:repository:bitbucket",
+  "admin:repository:bitbucket",
+  "delete:repository:bitbucket",
   "read:pullrequest:bitbucket",
-  "read:pipeline:bitbucket",
   "write:pullrequest:bitbucket",
+  "read:pipeline:bitbucket",
   "write:pipeline:bitbucket",
+  "admin:pipeline:bitbucket",
+  "read:webhook:bitbucket",
+  "write:webhook:bitbucket",
+  "delete:webhook:bitbucket",
 ];
 
 /** Whether this gh supports multiple accounts (`gh auth switch`, 2.40+). */
@@ -423,8 +432,8 @@ function BitbucketAccount() {
               and sign in with your Atlassian{" "}
               <span className="font-medium">account email</span> (not your
               Bitbucket username). The token needs these scopes (the{" "}
-              <span className="font-mono">write:…</span> scopes let you act on PRs
-              and Pipelines):
+              <span className="font-mono">write:…</span> scopes let you act on
+              PRs and Pipelines):
             </p>
             <ul className="flex flex-wrap gap-1">
               {BB_SCOPES.map((scope) => (

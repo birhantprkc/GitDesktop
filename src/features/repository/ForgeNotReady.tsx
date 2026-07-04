@@ -49,9 +49,9 @@ export function ForgeNotReady({
   const repoName = useUiStore((s) => s.repoName);
   const openSettings = useUiStore((s) => s.openSettings);
   const [publishOpen, setPublishOpen] = useState(false);
-  const [publishProvider, setPublishProvider] = useState<"github" | "gitlab">(
-    "github",
-  );
+  const [publishProvider, setPublishProvider] = useState<
+    "github" | "gitlab" | "bitbucket"
+  >("github");
 
   const provider = forge.data?.provider;
   // A repo with no hosted remote has nothing to detect a provider from, so
@@ -177,9 +177,11 @@ export function ForgeNotReady({
     );
   }
 
-  // GitHub: the install → sign-in → publish ladder — plus a GitLab publish
-  // path whenever glab is ready (a no-remote repo can go to either provider).
+  // GitHub: the install → sign-in → publish ladder — plus GitLab / Bitbucket
+  // publish paths whenever those are ready (a no-remote repo can go to any of
+  // the providers this machine is signed in to).
   const glabPublish = noOrigin && targets.data?.gitlab === true;
+  const bbPublish = noOrigin && targets.data?.bitbucket === true;
 
   return (
     <div className="space-y-2.5 px-3 py-4 text-xs text-muted-foreground">
@@ -251,6 +253,19 @@ export function ForgeNotReady({
         >
           <GitlabLogoIcon data-icon="inline-start" />
           Publish to GitLab…
+        </Button>
+      )}
+      {bbPublish && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setPublishProvider("bitbucket");
+            setPublishOpen(true);
+          }}
+        >
+          <UploadSimpleIcon data-icon="inline-start" />
+          Publish to Bitbucket…
         </Button>
       )}
       <PublishDialog
