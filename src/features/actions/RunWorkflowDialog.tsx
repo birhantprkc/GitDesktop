@@ -20,7 +20,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useForgeStatus } from "@/lib/git/queries";
-import { useRunWorkflow, useWorkflows } from "@/lib/github/actions";
+import {
+  useBbCustomPipelines,
+  useRunWorkflow,
+  useWorkflows,
+} from "@/lib/github/actions";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 
@@ -40,9 +44,15 @@ export function RunWorkflowDialog({
   // its GitHub-only `gh workflow list` query never fires), and "inputs" become
   // CI/CD variables on the new pipeline.
   const provider = useForgeStatus(repoPath).data?.provider;
-  const isPipelineProvider =
-    provider === "gitlab" || provider === "bitbucket";
+  const isPipelineProvider = provider === "gitlab" || provider === "bitbucket";
+  const isBitbucket = provider === "bitbucket";
   const workflows = useWorkflows(repoPath, open && !isPipelineProvider);
+  // Bitbucket custom-pipeline selectors (from the working-tree
+  // `bitbucket-pipelines.yml`). When present, they're offered above the ref
+  // alongside "Default" (the branch pipeline). Other providers never fetch.
+  const customPipelines = useBbCustomPipelines(repoPath, open && isBitbucket);
+  const pipelineNames = customPipelines.data ?? [];
+  const hasCustomPipelines = isBitbucket && pipelineNames.length > 0;
   const runWorkflow = useRunWorkflow(repoPath);
   const selectRun = useUiStore((s) => s.selectRun);
 
@@ -54,8 +64,15 @@ export function RunWorkflowDialog({
   const workflowItems = Object.fromEntries(
     dispatchable.map((w) => [String(w.id), w.name]),
   );
+  // value → label map so the closed trigger shows "Default" for "", not a blank.
+  const pipelineItems: Record<string, string> = {
+    "": "Default",
+    ...Object.fromEntries(pipelineNames.map((n) => [n, n])),
+  };
 
   const [workflow, setWorkflow] = useState("");
+  // "" = the branch's default pipeline; a name = a custom selector. Bitbucket only.
+  const [pipeline, setPipeline] = useState("");
   const [gitRef, setGitRef] = useState(defaultRef);
   // Stable row ids keep input focus/state correct when rows are removed.
   const nextId = useRef(0);
@@ -68,6 +85,7 @@ export function RunWorkflowDialog({
     if (!open) return;
     setGitRef(defaultRef);
     setInputs([]);
+    setPipeline("");
   }, [open, defaultRef]);
   useEffect(() => {
     if (open && !workflow && dispatchable.length > 0) {
@@ -84,7 +102,10 @@ export function RunWorkflowDialog({
     }
     runWorkflow.mutate(
       {
-        workflow: isPipelineProvider ? "" : workflow,
+        // Bitbucket rides a custom-pipeline selector (or "" for the default) through
+        // the `workflow` arg; GitLab always sends "" (byte-identical); GitHub sends
+        // the selected workflow id.
+        workflow: isBitbucket ? pipeline : isPipelineProvider ? "" : workflow,
         gitRef: gitRef.trim(),
         inputs: record,
       },
@@ -161,6 +182,29 @@ export function RunWorkflowDialog({
                   to be run manually.
                 </p>
               )}
+            </div>
+          )}
+
+          {hasCustomPipelines && (
+            <div className="space-y-2">
+              <Label htmlFor="wf-pipeline">Pipeline</Label>
+              <Select
+                items={pipelineItems}
+                value={pipeline}
+                onValueChange={(v) => setPipeline(v ?? "")}
+              >
+                <SelectTrigger id="wf-pipeline" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Default</SelectItem>
+                  {pipelineNames.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
 

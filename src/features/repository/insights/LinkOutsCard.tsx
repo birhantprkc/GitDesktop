@@ -36,6 +36,7 @@ const BITBUCKET_LINKS: { label: string; suffix: string }[] = [
   { label: "Commits", suffix: "/commits/" },
   { label: "Branches", suffix: "/branches/" },
   { label: "Pipelines", suffix: "/pipelines" },
+  { label: "Deployments", suffix: "/deployments" },
 ];
 
 export function GitLabLinkOutsCard({ repoPath }: { repoPath: string }) {

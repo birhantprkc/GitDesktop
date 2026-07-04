@@ -54,6 +54,7 @@ import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { BitbucketBranchRestrictionsSection } from "./BitbucketBranchRestrictionsSection";
 import { BitbucketDefaultReviewersSection } from "./BitbucketDefaultReviewersSection";
+import { BitbucketEnvironmentsSection } from "./BitbucketEnvironmentsSection";
 import { BitbucketGeneralSection } from "./BitbucketGeneralSection";
 import { BitbucketSchedulesSection } from "./BitbucketSchedulesSection";
 import { BitbucketVariablesSection } from "./BitbucketVariablesSection";
@@ -109,6 +110,7 @@ type SectionId =
   | "sponsor"
   | "secrets"
   | "schedules"
+  | "environments"
   | "webhooks"
   | "danger";
 
@@ -207,6 +209,7 @@ const BITBUCKET_RAIL_GROUPS: NavRailGroup[] = [
     items: [
       { id: "secrets", label: "Variables" },
       { id: "schedules", label: "Schedules" },
+      { id: "environments", label: "Deployments" },
     ],
   },
   {
@@ -255,6 +258,7 @@ export function RepoSettingsDialog({
     "rules",
     "secrets",
     "schedules",
+    "environments",
     "webhooks",
     "danger",
   ];
@@ -367,6 +371,12 @@ export function RepoSettingsDialog({
                   ))}
                 {activeSection === "schedules" && isBitbucket && (
                   <BitbucketSchedulesSection repoPath={repoPath} open={open} />
+                )}
+                {activeSection === "environments" && isBitbucket && (
+                  <BitbucketEnvironmentsSection
+                    repoPath={repoPath}
+                    open={open}
+                  />
                 )}
                 {activeSection === "webhooks" &&
                   (isGitLab ? (

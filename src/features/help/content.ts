@@ -213,6 +213,10 @@ menu item appears only when you have it):
 - **Schedules** — **pipeline schedules** that run a branch's pipeline on a recurring
   **cron** (Bitbucket uses Quartz cron, e.g. \`0 0 12 * * ?\`): add one, toggle it
   enabled/disabled in place, or delete it.
+- **Deployments** — a read-only list of the repo's **deployment environments** (with tier,
+  and hints for ones not yet used or restricted to admins). Environments are created and
+  managed on Bitbucket, so there's a **Manage on Bitbucket…** link out rather than editing
+  here. (Like Variables and Schedules, deployments need Pipelines enabled first.)
 - **Webhooks** — create, edit, and delete webhooks with a payload URL, an active toggle,
   and an event checklist. Bitbucket has no delivery-log API, so there's no deliveries
   view.
@@ -666,18 +670,26 @@ Once connected:
   **request changes** (a true toggle — click again to revoke; approving also clears it),
   pick **reviewers** from your workspace members (the PR author can't review their own
   PR, so they never appear), and flip **draft ↔ ready** in either direction. Use
-  **Create** to open a new PR (drafts included). One thing Bitbucket itself can't do from
-  the API: **reopening a declined PR** (so there's no Reopen button — a Bitbucket platform
-  limit).
+  **Create** to open a new PR (drafts included) — the create dialog also lets you pick
+  **reviewers** up front (leave it empty to keep Bitbucket's default reviewers). An open PR
+  also gets a **Tasks** checklist in the conversation column: **add**, **edit**, and
+  **delete** tasks, **resolve/unresolve** them (a progress bar tracks completion), and jump
+  to the list from an "N open tasks" chip in the PR header; a task attached to a comment
+  links back to it. On a closed or merged PR the checklist is read-only. One thing Bitbucket
+  itself can't do from the API: **reopening a declined PR** (so there's no Reopen button — a
+  Bitbucket platform limit).
 - **Pipelines** — the **Actions** tab lists Bitbucket **Pipelines**; open one to see its
   **steps** with their **logs**. You can **rerun** a finished pipeline (re-triggers its
   branch), **trigger** a new one on a branch or tag (with optional variables), and **stop**
-  a running pipeline.
+  a running pipeline. When the repo's \`bitbucket-pipelines.yml\` defines **custom
+  pipelines** (\`pipelines.custom.*\`), the **Run pipeline** dialog adds a **Pipeline**
+  picker — run the branch's **Default** pipeline or a named custom one, with the same
+  variables.
 - **Insights** — the **Insights** tab works on Bitbucket repos: the local-git charts
   (commit activity, code frequency, contributors, punch card), a **Pipelines** duration
   and success-rate chart, and a **More on Bitbucket** card that links out to the
-  **Commits**, **Branches**, and **Pipelines** pages (these only render on the web).
-  GitHub-only cards (community, traffic, dependencies) stay hidden.
+  **Commits**, **Branches**, **Pipelines**, and **Deployments** pages (these only render on
+  the web). GitHub-only cards (community, traffic, dependencies) stay hidden.
 - **Publish a local repo** — a repo with no remote can be published to Bitbucket. From
   the sync bar's **Publish repository…** (or the not-ready panel), pick **Bitbucket**,
   choose a **workspace**, give it a name (which becomes the URL slug), and optionally a
@@ -686,8 +698,9 @@ Once connected:
   field.)
 - **Repository settings** — for a repo you **admin**, the repo ⋮ menu's **Repository
   settings** manages the Bitbucket repo: General, Default reviewers, Branch restrictions,
-  Variables and Schedules (Pipelines), Webhooks, and a Danger zone (rename, visibility,
-  transfer, delete). See **Repository settings → Bitbucket repositories** for the details.
+  Variables, Schedules, and Deployments (Pipelines), Webhooks, and a Danger zone (rename,
+  visibility, transfer, delete). See **Repository settings → Bitbucket repositories** for
+  the details.
 - **Issues** — Bitbucket has retired its native issue tracker (issues live in **Jira**),
   so issues aren't shown for Bitbucket repositories. Private **local to-dos** still work.
 
@@ -715,7 +728,7 @@ Bitbucket).
   **dependencies**.
 - Quick links jump to the pages best viewed on the web — GitHub's Pulse, Network, Forks,
   Dependents, and Actions; GitLab's Activity, CI/CD analytics, and value stream analytics;
-  or Bitbucket's Commits, Branches, and Pipelines.`,
+  or Bitbucket's Commits, Branches, Pipelines, and Deployments.`,
   },
   {
     id: "agent",

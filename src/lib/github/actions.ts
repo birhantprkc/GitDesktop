@@ -146,13 +146,20 @@ export const ghWorkflowList = (repoPath: string) =>
   invoke<Workflow[]>("gh_workflow_list", { repoPath });
 
 /** Start a run: GitHub dispatches `workflow` on the ref with `inputs`; GitLab runs
- *  a new pipeline on the ref with `inputs` as variables (send `workflow` empty). */
+ *  a new pipeline on the ref with `inputs` as variables (send `workflow` empty);
+ *  Bitbucket triggers the branch pipeline, or a named CUSTOM pipeline when `workflow`
+ *  is a custom-pipeline name. */
 export const forgeCiDispatch = (
   repoPath: string,
   workflow: string,
   gitRef: string,
   inputs: Record<string, string>,
 ) => invoke<void>("forge_ci_dispatch", { repoPath, workflow, gitRef, inputs });
+
+/** The CUSTOM pipeline names declared in the working-tree `bitbucket-pipelines.yml`
+ *  (Bitbucket-only — the custom-dispatch picker's options). */
+export const forgeBbCustomPipelines = (repoPath: string) =>
+  invoke<string[]>("forge_bb_custom_pipelines", { repoPath });
 
 // ── Queries ──────────────────────────────────────────────────────────────────
 
@@ -210,6 +217,19 @@ export function useWorkflows(repo: string, enabled: boolean) {
     queryFn: () => ghWorkflowList(repo),
     enabled,
     staleTime: 5 * 60_000,
+  });
+}
+
+/** The Bitbucket custom-pipeline names (from `bitbucket-pipelines.yml`) — the
+ *  custom-dispatch picker's options. Reads the local working-tree file (no network);
+ *  fetched only while the dispatch surface is enabled. */
+export function useBbCustomPipelines(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "actions", "bb-custom-pipelines"] as const,
+    queryFn: () => forgeBbCustomPipelines(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
   });
 }
 

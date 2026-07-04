@@ -59,6 +59,19 @@ commit list.
   has no delivery-log API, so there's no deliveries view), and a **Danger zone** (rename,
   which updates your local `origin` remote automatically; change visibility; transfer via a
   link out to Bitbucket; and delete — Bitbucket has no archive).
+- **Bitbucket Cloud PR tasks, custom pipelines, deployments & create-time reviewers.** Four
+  more Bitbucket surfaces. A Bitbucket pull request now has a **Tasks** checklist in its
+  conversation view — add, edit, resolve/unresolve, and delete tasks, with a completion
+  progress bar, an "N open tasks" chip in the PR header that jumps to the list, and
+  comment-attached tasks that link back to their comment (read-only once the PR is closed or
+  merged). The **Run pipeline** dialog gains a **Pipeline** picker on Bitbucket repos whose
+  `bitbucket-pipelines.yml` defines custom pipelines (`pipelines.custom.*`) — run the
+  branch's Default pipeline or a named custom one, with the same variables. **Repository
+  settings → Pipelines → Deployments** lists the repo's **deployment environments**
+  (read-only, with tier and not-yet-used / admin-only hints and a *Manage on Bitbucket…*
+  link out), and the Insights *More on Bitbucket* card gains a **Deployments** link.
+  Finally, the **Create pull request** dialog lets you pick **reviewers** up front (an empty
+  selection keeps Bitbucket's default reviewers).
 - **GitLab time tracking.** Track time on a GitLab issue or merge request without
   leaving the app: set an **estimate** (e.g. `3h`) and log **spent** time (e.g.
   `45m`, or subtract with `-15m`), with a progress bar and an "over" note when

@@ -98,12 +98,13 @@ import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { PrReviewPanel } from "./PrReviewPanel";
+import { PrTasksChip, PrTasksSection } from "./PrTasksSection";
 import {
   MergePrDialog,
   MrTimeTracking,
   PrFilesPane,
 } from "./RemotePrViewParts";
-import { ReviewersPopover } from "./ReviewersPopover";
+import { ReviewersPopover, userRefHint } from "./ReviewersPopover";
 
 type Section = "conversation" | "commits" | "files" | "review";
 
@@ -203,6 +204,9 @@ export function RemotePrView({
     provider === "bitbucket" && forgeFeatureReady(forge.data, "mrEdit");
   // Time tracking is GitLab-only too (GitHub has no built-in time tracking).
   const canTrackTime = forgeFeatureReady(forge.data, "timeTracking");
+  // PR tasks are a native Bitbucket concept (no GitHub/GitLab analogue wired), so
+  // the flag alone gates the section + header chip — never `canWrite || …`.
+  const canTasks = forgeFeatureReady(forge.data, "prTasks");
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
@@ -710,14 +714,21 @@ export function RemotePrView({
         ) : (
           pr.reviewers.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
-              {pr.reviewers.map((user) => (
-                <span
-                  key={user.id}
-                  className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                >
-                  {user.label}
-                </span>
-              ))}
+              {pr.reviewers.map((user) => {
+                const hint = userRefHint(user, pr.reviewers);
+                return (
+                  <span
+                    key={user.id}
+                    title={hint ? `${user.label} (${hint})` : undefined}
+                    className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                  >
+                    {user.label}
+                    {hint && (
+                      <span className="text-muted-foreground"> · {hint}</span>
+                    )}
+                  </span>
+                );
+              })}
             </div>
           )
         )}
@@ -726,6 +737,24 @@ export function RemotePrView({
             closed. GitHub never mounts it (gated on the flag). */}
         {canTrackTime && (
           <MrTimeTracking repoPath={repoPath} number={number} open={isOpen} />
+        )}
+        {/* Bitbucket-only PR-tasks chip: "{n} open tasks", quiet until there are
+            unresolved tasks. Clicking jumps to the Tasks section in the
+            conversation column. Reads the same usePrTasks query as the section. */}
+        {canTasks && (
+          <PrTasksChip
+            repoPath={repoPath}
+            number={number}
+            onView={() => {
+              setSection("conversation");
+              // Defer the scroll so the conversation column has mounted.
+              requestAnimationFrame(() =>
+                document
+                  .getElementById("pr-tasks-section")
+                  ?.scrollIntoView({ block: "nearest", behavior: "auto" }),
+              );
+            }}
+          />
         )}
         {pr.checks.length > 0 && (
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
@@ -872,6 +901,16 @@ export function RemotePrView({
                   />
                 )}
               </div>
+              {/* Bitbucket-only PR tasks checklist — between the description and
+                  the review/comment threads. Gated on the flag alone; absent for
+                  GitHub/GitLab. */}
+              {canTasks && (
+                <PrTasksSection
+                  repoPath={repoPath}
+                  number={number}
+                  editable={pr.state === "OPEN"}
+                />
+              )}
               {/* Events with nothing visible to say (empty body, or only an
                   unfilled-template HTML comment) render as a bare author
                   line — drop them. */}
@@ -893,40 +932,44 @@ export function RemotePrView({
               {pr.comments
                 .filter((c) => hasVisibleBody(c.body))
                 .map((c) => (
-                  <Thread
-                    key={c.id}
-                    thread={c}
-                    onQuote={canWrite ? () => quoteReply(c.body) : undefined}
-                    onSaveEdit={
-                      canWrite && c.viewerDidAuthor
-                        ? (body) => saveCommentEdit(c.id, body)
-                        : undefined
-                    }
-                    onDelete={
-                      canWrite && c.viewerDidAuthor
-                        ? () => setDeletingCommentId(c.id)
-                        : undefined
-                    }
-                    onHide={
-                      canWrite && !c.isMinimized
-                        ? (classifier) => hideComment(c.id, classifier)
-                        : undefined
-                    }
-                    onUnhide={
-                      canWrite && c.isMinimized
-                        ? () => unhideComment(c.id)
-                        : undefined
-                    }
-                    reactions={
-                      canReact ? reactions.data?.comments[c.id] : undefined
-                    }
-                    onToggleReaction={
-                      canReact
-                        ? (content, active) =>
-                            toggleReaction(c.id, content, active)
-                        : undefined
-                    }
-                  />
+                  // Annotated so a Bitbucket PR task attached to this comment can
+                  // scroll to it (`viewComment` in PrTasksSection targets
+                  // [data-comment-id]). Inert markup for GitHub/GitLab.
+                  <div key={c.id} data-comment-id={c.id}>
+                    <Thread
+                      thread={c}
+                      onQuote={canWrite ? () => quoteReply(c.body) : undefined}
+                      onSaveEdit={
+                        canWrite && c.viewerDidAuthor
+                          ? (body) => saveCommentEdit(c.id, body)
+                          : undefined
+                      }
+                      onDelete={
+                        canWrite && c.viewerDidAuthor
+                          ? () => setDeletingCommentId(c.id)
+                          : undefined
+                      }
+                      onHide={
+                        canWrite && !c.isMinimized
+                          ? (classifier) => hideComment(c.id, classifier)
+                          : undefined
+                      }
+                      onUnhide={
+                        canWrite && c.isMinimized
+                          ? () => unhideComment(c.id)
+                          : undefined
+                      }
+                      reactions={
+                        canReact ? reactions.data?.comments[c.id] : undefined
+                      }
+                      onToggleReaction={
+                        canReact
+                          ? (content, active) =>
+                              toggleReaction(c.id, content, active)
+                          : undefined
+                      }
+                    />
+                  </div>
                 ))}
               {pr.reviews.length === 0 && pr.comments.length === 0 && (
                 <p className="text-xs text-muted-foreground">

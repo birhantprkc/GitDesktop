@@ -253,6 +253,10 @@ pub struct Implemented {
     /// Related issues (issue links). GitLab-unique — GitHub has no native issue
     /// links, so like `mr_approve` this stays `false` for GitHub (see `all`).
     pub issue_links: bool,
+    /// The pull-request tasks checklist (create/edit/resolve/delete). Bitbucket-only:
+    /// PR tasks are a native Bitbucket concept with no GitHub/GitLab analogue wired
+    /// here, so like `mr_approve` this stays `false` for both (see `all`).
+    pub pr_tasks: bool,
 }
 
 impl Implemented {
@@ -312,6 +316,8 @@ impl Implemented {
             ci_job_play: false,
             time_tracking: false,
             issue_links: false,
+            // Like `mr_approve`: PR tasks are a Bitbucket-only surface here.
+            pr_tasks: false,
         }
     }
 
@@ -359,6 +365,7 @@ impl Implemented {
             ci_job_play: false,
             time_tracking: false,
             issue_links: false,
+            pr_tasks: false,
         }
     }
 
@@ -427,6 +434,8 @@ impl Implemented {
                 ci_job_play: true,
                 time_tracking: true,
                 issue_links: true,
+                // PR tasks are Bitbucket-only here.
+                pr_tasks: false,
             },
             // Bitbucket Cloud reads (Phase 3): PR list/view/diff, CI pipelines, and
             // repo View/URL are wired over direct HTTP. Phase 4 adds the WRITES: PR
@@ -462,6 +471,8 @@ impl Implemented {
                 ci_rerun: true,
                 ci_cancel: true,
                 ci_dispatch: true,
+                // Wave 4: the PR-tasks checklist (Bitbucket-native).
+                pr_tasks: true,
                 ..Self::none()
             },
         }
@@ -602,6 +613,8 @@ mod tests {
         // (GitHub has no per-job manual play, native time tracking, or issue links),
         // so GitHub stays false.
         assert!(!i.ci_job_play && !i.time_tracking && !i.issue_links);
+        // PR tasks are a Bitbucket-only surface here, so GitHub stays false too.
+        assert!(!i.pr_tasks);
     }
 
     #[test]
@@ -641,6 +654,8 @@ mod tests {
         assert!(imp.issue_reactions && imp.mr_reactions);
         // …and the GitLab-only CI job play, time tracking, and issue links.
         assert!(imp.ci_job_play && imp.time_tracking && imp.issue_links);
+        // PR tasks stay Bitbucket-only — not wired for GitLab.
+        assert!(!imp.pr_tasks);
     }
 
     #[test]
@@ -666,6 +681,8 @@ mod tests {
         assert!(bb.ci_rerun && bb.ci_cancel && bb.ci_dispatch);
         // …plus wave 2/3: insights, publish, and the repo-settings surface.
         assert!(bb.insights && bb.publish && bb.repo_settings);
+        // …and wave 4's Bitbucket-only PR-tasks checklist.
+        assert!(bb.pr_tasks);
         // …but issues and releases stay off.
         assert!(!bb.issues && !bb.releases);
         assert!(!bb.issue_comment && !bb.issue_state);

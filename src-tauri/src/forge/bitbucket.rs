@@ -1621,18 +1621,33 @@ async fn workspace_members(creds: &BbCredentials, ws: &str) -> AppResult<Vec<BbU
     Ok(members)
 }
 
-/// The reviewer picker's candidate list: the repo's WORKSPACE members, minus the PR
-/// author (Bitbucket rejects the PR author as a reviewer server-side).
-pub async fn reviewer_candidates(repo_path: &str, number: u64) -> AppResult<Vec<ForgeUserRef>> {
+/// The reviewer picker's candidate list: the repo's WORKSPACE members, minus the user
+/// the server would reject as a reviewer. For an EXISTING PR (`Some(number)`) that's
+/// the PR author; at CREATE time (`None`, no PR yet) it's the VIEWER (the create body's
+/// author, whom the server 400s "…is the author…").
+pub async fn reviewer_candidates(
+    repo_path: &str,
+    number: Option<u64>,
+) -> AppResult<Vec<ForgeUserRef>> {
     let creds = http::load_credentials().await?;
     let base = repo_base(repo_path).await?;
-    let pr_path = format!("{base}/pullrequests/{number}?fields=author.uuid");
-    let pr: BbPrAuthorOnly = http::bb_get_json(&creds, &pr_path, "pull request").await?;
-    let author_uuid = pr.author.and_then(|a| a.uuid).unwrap_or_default();
+    let exclude_uuid = match number {
+        Some(n) => {
+            let pr_path = format!("{base}/pullrequests/{n}?fields=author.uuid");
+            let pr: BbPrAuthorOnly = http::bb_get_json(&creds, &pr_path, "pull request").await?;
+            pr.author.and_then(|a| a.uuid).unwrap_or_default()
+        }
+        None => {
+            // No PR yet — the viewer would be its author, so exclude them (the
+            // pr_approvals `user` idiom).
+            let me: BbUser = http::bb_get_json(&creds, "user", "user").await?;
+            me.uuid.unwrap_or_default()
+        }
+    };
 
     let (ws, _slug) = workspace_slug(repo_path).await?;
     let members = workspace_members(&creds, &ws).await?;
-    Ok(reviewer_candidates_from(members, &author_uuid))
+    Ok(reviewer_candidates_from(members, &exclude_uuid))
 }
 
 /// A newly-created PR's identity (id + web link), for mapping onto [`PrRef`].
@@ -1644,15 +1659,33 @@ struct BbCreatedPr {
     links: Option<BbHtmlLinks>,
 }
 
-/// Build the create-PR body. Pure (testable). No reviewers in v1.
-fn build_create_body(base: &str, head: &str, title: &str, body: &str, draft: bool) -> serde_json::Value {
-    serde_json::json!({
+/// Build the create-PR body. Pure (testable). A non-empty `reviewers` (account uuids)
+/// adds a `reviewers` array (`[{uuid},…]`); an EMPTY list OMITS the key entirely, which
+/// preserves the server's default-reviewer auto-add (sending `reviewers: []` would
+/// suppress it). The author must not appear (the server 400s "…is the author…").
+fn build_create_body(
+    base: &str,
+    head: &str,
+    title: &str,
+    body: &str,
+    draft: bool,
+    reviewers: &[String],
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
         "title": title,
         "description": body,
         "source": { "branch": { "name": head } },
         "destination": { "branch": { "name": base } },
         "draft": draft,
-    })
+    });
+    if !reviewers.is_empty() {
+        let list: Vec<serde_json::Value> = reviewers
+            .iter()
+            .map(|u| serde_json::json!({ "uuid": u }))
+            .collect();
+        payload["reviewers"] = serde_json::Value::Array(list);
+    }
+    payload
 }
 
 /// Find an existing OPEN PR from `head` into `base` in a candidate list. Pure
@@ -1685,6 +1718,7 @@ fn duplicate_pr_number(open_prs: &[PrInfo], base: &str) -> Option<u64> {
 /// Order: duplicate pre-check (read-only) → validate → push → POST create. If the POST
 /// fails after a successful push, the error discloses the partial state (the branch was
 /// pushed) — the same pre-mutation-guard discipline as the rest of the codebase.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_pr(
     state: &crate::state::AppState,
     repo_path: &str,
@@ -1693,6 +1727,7 @@ pub async fn create_pr(
     title: &str,
     body: &str,
     draft: bool,
+    reviewers: &[String],
 ) -> AppResult<PrRef> {
     for b in [base, head] {
         if b.is_empty() || b.starts_with('-') {
@@ -1728,7 +1763,7 @@ pub async fn create_pr(
     let creds = http::load_credentials().await?;
     let repo = repo_base(repo_path).await?;
     let path = format!("{repo}/pullrequests");
-    let payload = build_create_body(base, head, title, body, draft);
+    let payload = build_create_body(base, head, title, body, draft, reviewers);
     let created: BbCreatedPr = http::bb_post_json(&creds, &path, &payload, "created pull request")
         .await
         .map_err(|e| {
@@ -1912,13 +1947,208 @@ pub async fn pr_approvals(repo_path: &str, number: u64) -> AppResult<ApprovalSta
     Ok(build_approval_state(&pr.participants, &viewer_uuid, &viewer_login))
 }
 
+// ── Pull-request tasks (checklist) ───────────────────────────────────────────────
+//
+// Bitbucket PRs carry a native task checklist (`…/pullrequests/{id}/tasks`) — a
+// Bitbucket-only surface (`implemented.pr_tasks`). A task is UNRESOLVED / RESOLVED
+// with free-text content; it may optionally be attached to a PR comment. Task/user
+// ids are numeric on the wire and travel as Strings over IPC (the u64-precision
+// rule); user objects here carry NO `username` (only uuid/display_name/nickname), so
+// the neutral shape reads display_name → nickname only.
+
+/// A pull-request task, as the frontend consumes it. `id`/`commentId` are the numeric
+/// server ids serialized as Strings (u64-precision rule); `state` is
+/// `"UNRESOLVED"` / `"RESOLVED"`.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PrTask {
+    pub id: String,
+    pub state: String,
+    /// The task text (`content.raw`).
+    pub text: String,
+    /// The creator's display name (falls back to nickname, then ""). Never a username
+    /// (task user objects don't carry one).
+    pub creator: String,
+    pub created_on: String,
+    /// The display name of whoever resolved it, or `None` while unresolved.
+    pub resolved_by: Option<String>,
+    /// The id of the PR comment this task is attached to, or `None` for a standalone
+    /// task. Numeric on the wire → String over IPC.
+    pub comment_id: Option<String>,
+    /// The task's web (`links.html.href`) URL, or "" when absent.
+    pub url: String,
+}
+
+/// A task's `content` block (`{raw, html, markup}`) — only `raw` is consumed.
+#[derive(Deserialize, Default)]
+struct BbTaskContent {
+    #[serde(default, deserialize_with = "null_to_default")]
+    raw: String,
+}
+
+/// The PR comment a task is attached to (`{id, links}`) — only the numeric id matters.
+#[derive(Deserialize, Default)]
+struct BbTaskComment {
+    #[serde(default)]
+    id: Option<u64>,
+}
+
+/// A PR task as `…/tasks` returns it. All fields tolerated null/missing.
+#[derive(Deserialize, Default)]
+struct BbTask {
+    #[serde(default)]
+    id: Option<u64>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    state: String,
+    #[serde(default)]
+    content: Option<BbTaskContent>,
+    #[serde(default)]
+    creator: Option<BbUser>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    created_on: String,
+    #[serde(default)]
+    resolved_by: Option<BbUser>,
+    #[serde(default)]
+    comment: Option<BbTaskComment>,
+    #[serde(default)]
+    links: Option<BbHtmlLinks>,
+}
+
+/// One `…/tasks` page — `values` plus the absolute `next` link (bounded pagination).
+#[derive(Deserialize, Default)]
+struct BbTasksPage {
+    #[serde(default)]
+    values: Vec<BbTask>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+/// A task user's display name: display_name → nickname → "" (never a username — task
+/// user objects don't carry one).
+fn task_user_name(u: &BbUser) -> String {
+    u.display_name
+        .clone()
+        .or_else(|| u.nickname.clone())
+        .unwrap_or_default()
+}
+
+/// Map a raw Bitbucket task onto the neutral [`PrTask`]. Pure (testable).
+fn from_bb_task(t: BbTask) -> PrTask {
+    PrTask {
+        id: t.id.map(|n| n.to_string()).unwrap_or_default(),
+        state: t.state,
+        text: t.content.map(|c| c.raw).unwrap_or_default(),
+        creator: t.creator.as_ref().map(task_user_name).unwrap_or_default(),
+        created_on: t.created_on,
+        resolved_by: t.resolved_by.as_ref().map(task_user_name),
+        comment_id: t
+            .comment
+            .and_then(|c| c.id)
+            .map(|n| n.to_string()),
+        url: html_href(&t.links),
+    }
+}
+
+/// A PR's task checklist, in list order. Follows `next` up to 5 pages (the
+/// workspace_members idiom), so a long checklist is bounded rather than unbounded.
+pub async fn pr_tasks(repo_path: &str, number: u64) -> AppResult<Vec<PrTask>> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let mut url = format!("{base}/pullrequests/{number}/tasks");
+    let mut out: Vec<PrTask> = Vec::new();
+    for _ in 0..5 {
+        let page: BbTasksPage = http::bb_get_json(&creds, &url, "pull request tasks").await?;
+        out.extend(page.values.into_iter().map(from_bb_task));
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
+/// Parse a task id from the String the frontend carries (numeric server id). A
+/// non-numeric value is a client bug → `InvalidArgument` rather than a 4xx round-trip.
+fn parse_task_id(task_id: &str) -> AppResult<u64> {
+    task_id
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| AppError::InvalidArgument(format!("invalid task id: {task_id}")))
+}
+
+/// Create a PR task (`POST …/tasks`, `{content:{raw}}` → 201 full task). Empty /
+/// whitespace-only text is rejected before the request (a pre-mutation guard).
+pub async fn pr_task_create(repo_path: &str, number: u64, text: &str) -> AppResult<PrTask> {
+    if text.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a task description is required".into()));
+    }
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/tasks");
+    let payload = serde_json::json!({ "content": { "raw": text } });
+    let created: BbTask = http::bb_post_json(&creds, &path, &payload, "created task").await?;
+    Ok(from_bb_task(created))
+}
+
+/// Edit a PR task's text (`PUT …/tasks/{id}`, `{content:{raw}}` → 200; state
+/// survives). Empty text is rejected up front; a non-numeric `task_id` errors before
+/// the request.
+pub async fn pr_task_edit(
+    repo_path: &str,
+    number: u64,
+    task_id: &str,
+    text: &str,
+) -> AppResult<PrTask> {
+    if text.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a task description is required".into()));
+    }
+    let id = parse_task_id(task_id)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/tasks/{id}");
+    let payload = serde_json::json!({ "content": { "raw": text } });
+    let edited: BbTask = http::bb_put_json(&creds, &path, &payload, "task").await?;
+    Ok(from_bb_task(edited))
+}
+
+/// Resolve / unresolve a PR task (`PUT …/tasks/{id}`, `{state:…}` → 200; content
+/// survives). Partial PUT is safe (no full-echo requirement — validated live).
+pub async fn pr_task_set_state(
+    repo_path: &str,
+    number: u64,
+    task_id: &str,
+    resolved: bool,
+) -> AppResult<PrTask> {
+    let id = parse_task_id(task_id)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/tasks/{id}");
+    let state = if resolved { "RESOLVED" } else { "UNRESOLVED" };
+    let payload = serde_json::json!({ "state": state });
+    let updated: BbTask = http::bb_put_json(&creds, &path, &payload, "task").await?;
+    Ok(from_bb_task(updated))
+}
+
+/// Delete a PR task (`DELETE …/tasks/{id}` → 204).
+pub async fn pr_task_delete(repo_path: &str, number: u64, task_id: &str) -> AppResult<()> {
+    let id = parse_task_id(task_id)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/tasks/{id}");
+    http::bb_delete(&creds, &path).await
+}
+
 // ── Pipelines (CI, write) ───────────────────────────────────────────────────────
 
-/// Build the pipeline-trigger body for a branch, with optional variables. Pure
-/// (testable). A non-empty `inputs` map adds a top-level `variables` array (sibling of
-/// `target`); an empty map omits it entirely.
+/// Build the pipeline-trigger body for a branch, with an optional custom-pipeline
+/// selector and optional variables. Pure (testable). A non-empty `workflow` adds a
+/// `selector` (`{type:"custom", pattern:<workflow>}`) INSIDE `target`, dispatching a
+/// named custom pipeline instead of the branch's default; empty `workflow` triggers the
+/// branch's default pipeline (the rerun path passes ""). A non-empty `inputs` map adds
+/// a top-level `variables` array (sibling of `target`); an empty map omits it entirely.
 fn build_trigger_body(
     git_ref: &str,
+    workflow: &str,
     inputs: &std::collections::HashMap<String, String>,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
@@ -1928,6 +2158,12 @@ fn build_trigger_body(
             "ref_name": git_ref,
         }
     });
+    if !workflow.is_empty() {
+        body["target"]["selector"] = serde_json::json!({
+            "type": "custom",
+            "pattern": workflow,
+        });
+    }
     if !inputs.is_empty() {
         // Sort by key for a deterministic body (stable tests + reproducible requests).
         let mut keys: Vec<&String> = inputs.keys().collect();
@@ -1979,17 +2215,21 @@ pub async fn rerun_run(repo_path: &str, run_id: u64) -> AppResult<()> {
         encode_query_value(&ws),
         encode_query_value(&slug),
     );
-    let payload = build_trigger_body(&branch, &std::collections::HashMap::new());
+    // Re-run re-triggers the branch's DEFAULT pipeline (no custom selector).
+    let payload = build_trigger_body(&branch, "", &std::collections::HashMap::new());
     http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "pipeline").await?;
     Ok(())
 }
 
 /// Manually start a pipeline on `git_ref` (`POST …/pipelines/`), with `inputs` as
-/// pipeline variables. Bitbucket triggers a branch pipeline (there's no per-workflow
-/// dispatch — `workflow` is dropped upstream). A 400 (pipelines disabled / missing yml
-/// / invalid) surfaces its raw message via [`http::http_error`].
+/// pipeline variables. A non-empty `workflow` dispatches that named CUSTOM pipeline
+/// (via a `selector` on the target); empty `workflow` triggers the branch's default
+/// pipeline. A 400 (pipelines disabled / missing yml / unknown selector) surfaces its
+/// raw message via [`http::http_error`] — the unknown-selector envelope carries the
+/// useful text in `error.detail`, which `http_error` now prefers.
 pub async fn dispatch_ci(
     repo_path: &str,
+    workflow: &str,
     git_ref: &str,
     inputs: &std::collections::HashMap<String, String>,
 ) -> AppResult<()> {
@@ -2005,9 +2245,261 @@ pub async fn dispatch_ci(
         encode_query_value(&ws),
         encode_query_value(&slug),
     );
-    let payload = build_trigger_body(git_ref, inputs);
+    let payload = build_trigger_body(git_ref, workflow, inputs);
     http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "pipeline").await?;
     Ok(())
+}
+
+/// Parse the CUSTOM pipeline names declared in a `bitbucket-pipelines.yml`, in file
+/// order. A hand-rolled line scanner (no YAML crate in the dep tree — kept that way):
+/// find the top-level `pipelines:` key, then its child `custom:` mapping, and return
+/// the immediate child key names. Handles full-line and trailing `#` comments,
+/// single/double-quoted keys, blank lines, and an arbitrary consistent indent width
+/// (measured from the first child rather than assumed). Ignores list items (`- `) and
+/// deeper grandchildren; stops when a line dedents to `custom:`'s level or above. Bails
+/// to `vec![]` (never errors) on anything it can't confidently read — tabs in
+/// indentation, an inline flow value on `custom:` (`custom: {…`), etc. Capped at 50.
+fn parse_custom_pipeline_names(yml: &str) -> Vec<String> {
+    const MAX_NAMES: usize = 50;
+
+    /// Strip a trailing ` # comment` (only when the `#` is preceded by whitespace or
+    /// starts the token — a `#` inside an unquoted value is rare in keys, but the caller
+    /// only ever passes the pre-colon key text here). Returns the trimmed-right remainder.
+    fn strip_trailing_comment(s: &str) -> &str {
+        match s.find(" #") {
+            Some(i) => &s[..i],
+            None => s,
+        }
+    }
+
+    /// The indent width (count of leading spaces) of a line. A tab in the indentation
+    /// returns `None` — the caller bails, since tab/space mixing makes levels ambiguous.
+    fn indent_of(line: &str) -> Option<usize> {
+        let mut n = 0;
+        for c in line.chars() {
+            match c {
+                ' ' => n += 1,
+                '\t' => return None,
+                _ => break,
+            }
+        }
+        Some(n)
+    }
+
+    /// Strip matching surrounding single/double quotes from a key name.
+    fn unquote(s: &str) -> &str {
+        let s = s.trim();
+        let b = s.as_bytes();
+        if b.len() >= 2 && (b[0] == b'"' || b[0] == b'\'') && b[b.len() - 1] == b[0] {
+            &s[1..s.len() - 1]
+        } else {
+            s
+        }
+    }
+
+    // A "content line" is one with a non-comment, non-blank payload. We track the
+    // top-level `pipelines:` block, then the `custom:` block within it.
+    #[derive(PartialEq)]
+    enum Phase {
+        SeekPipelines,
+        SeekCustom,
+        InCustom,
+    }
+    let mut phase = Phase::SeekPipelines;
+    let mut pipelines_indent = 0usize;
+    let mut custom_indent = 0usize;
+    let mut child_indent: Option<usize> = None;
+    let mut out: Vec<String> = Vec::new();
+
+    for raw_line in yml.lines() {
+        // Skip full-line comments and blank lines.
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = match indent_of(raw_line) {
+            Some(i) => i,
+            // A tab in indentation → structure is ambiguous; bail entirely.
+            None => return Vec::new(),
+        };
+
+        match phase {
+            Phase::SeekPipelines => {
+                // Only a top-level (indent 0) `pipelines:` key counts. Strip a trailing
+                // comment first (`pipelines:  # ci config`) so it doesn't read as an
+                // inline flow value and bail — mirroring the SeekCustom arm.
+                let key = strip_trailing_comment(trimmed);
+                if indent == 0 && (key == "pipelines:" || key.starts_with("pipelines:")) {
+                    // Reject an inline flow value (`pipelines: {…}`) — can't read it.
+                    let after = key["pipelines:".len()..].trim();
+                    if key == "pipelines:" || after.is_empty() {
+                        pipelines_indent = indent;
+                        phase = Phase::SeekCustom;
+                    } else {
+                        return Vec::new();
+                    }
+                }
+            }
+            Phase::SeekCustom => {
+                // Left the pipelines block without finding custom → nothing to collect.
+                if indent <= pipelines_indent {
+                    return out;
+                }
+                let key = strip_trailing_comment(trimmed);
+                if key == "custom:" || key.starts_with("custom:") {
+                    let after = key["custom:".len()..].trim();
+                    // An inline flow value (`custom: {…`) can't be read → bail.
+                    if !(key == "custom:" || after.is_empty()) {
+                        return Vec::new();
+                    }
+                    custom_indent = indent;
+                    phase = Phase::InCustom;
+                }
+                // Any other key under pipelines (e.g. `default:`, `branches:`) is skipped
+                // until we either find `custom:` or dedent out.
+            }
+            Phase::InCustom => {
+                // Dedent to custom:'s level or above → the custom block ended.
+                if indent <= custom_indent {
+                    return out;
+                }
+                // Establish the child indent from the FIRST child line.
+                let ci = *child_indent.get_or_insert(indent);
+                // Only immediate children at exactly the child indent are pipeline names;
+                // deeper lines (steps, scripts) and shallower-but-still-inside lines are
+                // grandchildren/structure and skipped.
+                if indent != ci {
+                    continue;
+                }
+                // A list item (`- …`) at the child level isn't a mapping key → skip.
+                if trimmed.starts_with("- ") || trimmed == "-" {
+                    continue;
+                }
+                // A pipeline name is a `key:` mapping entry. Take the text before the
+                // first colon, drop a trailing comment, unquote. NOTE: a quoted key that
+                // itself contains a colon (`"a:b":`) splits at the inner colon and yields
+                // a wrong name — an exotic we accept as unsupported; dispatching it just
+                // 400s with a legible `detail` ("selector not found") rather than misfiring.
+                if let Some(colon) = trimmed.find(':') {
+                    let name = unquote(strip_trailing_comment(&trimmed[..colon]));
+                    if !name.is_empty() {
+                        out.push(name.to_string());
+                        if out.len() >= MAX_NAMES {
+                            return out;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The CUSTOM pipeline names declared in the WORKING-TREE `bitbucket-pipelines.yml`
+/// (`<repo_path>/bitbucket-pipelines.yml`) — the custom-dispatch picker's options. A
+/// missing file is not an error (returns `vec![]`, like `dependabot_get`); other io
+/// errors propagate. No credentials / network — this reads the local file only.
+pub async fn custom_pipelines(repo_path: &str) -> AppResult<Vec<String>> {
+    let path = std::path::Path::new(repo_path).join("bitbucket-pipelines.yml");
+    let yml = match tokio::fs::read_to_string(&path).await {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(AppError::Io(e)),
+    };
+    Ok(parse_custom_pipeline_names(&yml))
+}
+
+// ── Deployment environments (read) ───────────────────────────────────────────────
+
+/// A deployment environment, as the frontend consumes it — minimal by design
+/// (lock/category deliberately unmapped). `adminOnly` comes from
+/// `restrictions.admin_only`; `environmentType` from `environment_type.name`.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BbEnvironment {
+    pub uuid: String,
+    pub name: String,
+    /// The environment tier name (`environment_type.name`, e.g. "Test" / "Production"),
+    /// or "" when missing.
+    pub environment_type: String,
+    pub rank: i64,
+    pub hidden: bool,
+    /// Whether the environment is restricted to admins (`restrictions.admin_only`).
+    pub admin_only: bool,
+}
+
+/// The `environment_type` sub-object (`{name, rank}`) — only the name is mapped.
+#[derive(Deserialize, Default)]
+struct BbEnvType {
+    #[serde(default, deserialize_with = "null_to_default")]
+    name: String,
+}
+
+/// The `restrictions` sub-object (`{admin_only}`).
+#[derive(Deserialize, Default)]
+struct BbEnvRestrictions {
+    #[serde(default, deserialize_with = "null_to_default")]
+    admin_only: bool,
+}
+
+/// A deployment environment as `…/environments/` returns it. All fields tolerated
+/// null/missing.
+#[derive(Deserialize, Default)]
+struct BbRawEnvironment {
+    #[serde(default, deserialize_with = "null_to_default")]
+    uuid: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    name: String,
+    #[serde(default)]
+    environment_type: Option<BbEnvType>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    rank: i64,
+    #[serde(default, deserialize_with = "null_to_default")]
+    hidden: bool,
+    #[serde(default)]
+    restrictions: Option<BbEnvRestrictions>,
+}
+
+/// One `…/environments/` page — `values` plus the absolute `next` link (bounded
+/// pagination, ≤5 pages).
+#[derive(Deserialize, Default)]
+struct BbEnvironmentsPage {
+    #[serde(default)]
+    values: Vec<BbRawEnvironment>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+fn from_bb_environment(e: BbRawEnvironment) -> BbEnvironment {
+    BbEnvironment {
+        uuid: e.uuid,
+        name: e.name,
+        environment_type: e.environment_type.map(|t| t.name).unwrap_or_default(),
+        rank: e.rank,
+        hidden: e.hidden,
+        admin_only: e.restrictions.map(|r| r.admin_only).unwrap_or(false),
+    }
+}
+
+/// The repo's deployment environments (`GET …/environments/`), sorted by rank
+/// ascending. Follows `next` up to 5 pages. Note the TRAILING SLASH (required, like
+/// `pipelines/`).
+pub async fn environments(repo_path: &str) -> AppResult<Vec<BbEnvironment>> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let mut url = format!("{base}/environments/");
+    let mut out: Vec<BbEnvironment> = Vec::new();
+    for _ in 0..5 {
+        let page: BbEnvironmentsPage =
+            http::bb_get_json(&creds, &url, "environments").await?;
+        out.extend(page.values.into_iter().map(from_bb_environment));
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    out.sort_by_key(|e| e.rank);
+    Ok(out)
 }
 
 // ── Repository settings & lifecycle ──────────────────────────────────────────
@@ -3701,12 +4193,31 @@ mod tests {
 
     #[test]
     fn create_body_carries_source_destination_and_draft() {
-        let body = build_create_body("main", "feature/x", "Title", "Body", true);
+        let body = build_create_body("main", "feature/x", "Title", "Body", true, &[]);
         assert_eq!(body["title"], "Title");
         assert_eq!(body["description"], "Body");
         assert_eq!(body["source"]["branch"]["name"], "feature/x");
         assert_eq!(body["destination"]["branch"]["name"], "main");
         assert_eq!(body["draft"], true);
+        // Empty reviewers → the key is OMITTED (preserves the server's default-reviewer
+        // auto-add; sending `[]` would suppress it).
+        assert!(body.get("reviewers").is_none());
+    }
+
+    #[test]
+    fn create_body_with_reviewers_maps_uuids() {
+        let body = build_create_body(
+            "main",
+            "feature/x",
+            "T",
+            "B",
+            false,
+            &["{a}".to_string(), "{b}".to_string()],
+        );
+        let reviewers = body["reviewers"].as_array().unwrap();
+        assert_eq!(reviewers.len(), 2);
+        assert_eq!(reviewers[0]["uuid"], "{a}");
+        assert_eq!(reviewers[1]["uuid"], "{b}");
     }
 
     #[test]
@@ -3734,7 +4245,7 @@ mod tests {
         let mut inputs = std::collections::HashMap::new();
         inputs.insert("DEPLOY_ENV".to_string(), "staging".to_string());
         inputs.insert("VERSION".to_string(), "1.2.3".to_string());
-        let body = build_trigger_body("main", &inputs);
+        let body = build_trigger_body("main", "", &inputs);
         assert_eq!(body["target"]["type"], "pipeline_ref_target");
         assert_eq!(body["target"]["ref_type"], "branch");
         assert_eq!(body["target"]["ref_name"], "main");
@@ -3745,14 +4256,315 @@ mod tests {
         assert_eq!(vars[0]["value"], "staging");
         assert_eq!(vars[1]["key"], "VERSION");
         assert_eq!(vars[1]["value"], "1.2.3");
+        // No custom selector when workflow is empty.
+        assert!(body["target"].get("selector").is_none());
     }
 
     #[test]
     fn trigger_body_without_variables_omits_the_array() {
-        let body = build_trigger_body("dev", &std::collections::HashMap::new());
+        let body = build_trigger_body("dev", "", &std::collections::HashMap::new());
         assert_eq!(body["target"]["ref_name"], "dev");
         // No `variables` key at all when inputs are empty.
         assert!(body.get("variables").is_none());
+        // No selector either (default pipeline).
+        assert!(body["target"].get("selector").is_none());
+    }
+
+    #[test]
+    fn trigger_body_with_workflow_adds_custom_selector_inside_target() {
+        let body = build_trigger_body("main", "w4-smoke", &std::collections::HashMap::new());
+        assert_eq!(body["target"]["ref_name"], "main");
+        assert_eq!(body["target"]["selector"]["type"], "custom");
+        assert_eq!(body["target"]["selector"]["pattern"], "w4-smoke");
+        // No variables when inputs are empty.
+        assert!(body.get("variables").is_none());
+    }
+
+    #[test]
+    fn trigger_body_selector_and_variables_combine() {
+        let mut inputs = std::collections::HashMap::new();
+        inputs.insert("W4_VAR".to_string(), "on".to_string());
+        let body = build_trigger_body("dev", "w4-second", &inputs);
+        assert_eq!(body["target"]["selector"]["pattern"], "w4-second");
+        let vars = body["variables"].as_array().unwrap();
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0]["key"], "W4_VAR");
+        assert_eq!(vars[0]["value"], "on");
+    }
+
+    // ── Custom-pipeline-name parser ─────────────────────────────────────────────
+
+    #[test]
+    fn custom_pipelines_parse_the_live_validated_yml() {
+        // The exact yml validated live (2 custom pipelines).
+        let yml = "\
+pipelines:
+  custom:
+    w4-smoke:
+      - step:
+          name: Smoke
+          script:
+            - echo \"w4 smoke $W4_VAR\"
+    w4-second:
+      - step:
+          script:
+            - echo second
+";
+        assert_eq!(
+            parse_custom_pipeline_names(yml),
+            vec!["w4-smoke".to_string(), "w4-second".to_string()]
+        );
+    }
+
+    #[test]
+    fn custom_pipelines_strip_quotes_from_keys() {
+        let yml = "\
+pipelines:
+  custom:
+    \"quoted-one\":
+      - step:
+          script:
+            - echo a
+    'quoted-two':
+      - step:
+          script:
+            - echo b
+";
+        assert_eq!(
+            parse_custom_pipeline_names(yml),
+            vec!["quoted-one".to_string(), "quoted-two".to_string()]
+        );
+    }
+
+    #[test]
+    fn custom_pipelines_ignore_comments_full_line_and_trailing() {
+        let yml = "\
+# top comment
+pipelines:
+  # a comment inside pipelines
+  custom:
+    deploy:  # trailing comment on the key
+      - step:
+          script:
+            - echo deploy
+
+    # another comment
+    smoke:
+      - step:
+          script:
+            - echo smoke
+";
+        assert_eq!(
+            parse_custom_pipeline_names(yml),
+            vec!["deploy".to_string(), "smoke".to_string()]
+        );
+    }
+
+    #[test]
+    fn custom_pipelines_tolerate_trailing_comment_on_pipelines_key() {
+        // A trailing comment on `pipelines:` must not read as an inline flow value and
+        // bail — the custom names still parse.
+        let yml = "\
+pipelines:  # ci config
+  custom:
+    w4-smoke:
+      - step:
+          script:
+            - echo smoke
+    w4-second:
+      - step:
+          script:
+            - echo second
+";
+        assert_eq!(
+            parse_custom_pipeline_names(yml),
+            vec!["w4-smoke".to_string(), "w4-second".to_string()]
+        );
+    }
+
+    #[test]
+    fn custom_pipelines_handle_four_space_indent() {
+        // Indent width is measured from the first child, not assumed to be 2.
+        let yml = "\
+pipelines:
+    custom:
+        alpha:
+            - step:
+                  script:
+                      - echo alpha
+        beta:
+            - step:
+                  script:
+                      - echo beta
+";
+        assert_eq!(
+            parse_custom_pipeline_names(yml),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+    }
+
+    #[test]
+    fn custom_pipelines_missing_custom_section_is_empty() {
+        // A default-only pipelines block (no custom:).
+        let yml = "\
+pipelines:
+  default:
+    - step:
+        script:
+          - echo hi
+  branches:
+    main:
+      - step:
+          script:
+            - echo main
+";
+        assert!(parse_custom_pipeline_names(yml).is_empty());
+    }
+
+    #[test]
+    fn custom_pipelines_empty_input_is_empty() {
+        assert!(parse_custom_pipeline_names("").is_empty());
+        assert!(parse_custom_pipeline_names("   \n\n# just a comment\n").is_empty());
+    }
+
+    #[test]
+    fn custom_pipelines_inline_flow_custom_bails() {
+        // A flow-style custom mapping we can't confidently read → vec![].
+        let yml = "\
+pipelines:
+  custom: { w4-smoke: [] }
+";
+        assert!(parse_custom_pipeline_names(yml).is_empty());
+    }
+
+    #[test]
+    fn custom_pipelines_do_not_collect_grandchildren() {
+        // Deeper keys (step, name, script) under a pipeline name must NOT be collected;
+        // only the immediate custom children (the pipeline names).
+        let yml = "\
+pipelines:
+  custom:
+    only-one:
+      - step:
+          name: A step named like a pipeline
+          deployment: production
+          script:
+            - echo one
+";
+        assert_eq!(
+            parse_custom_pipeline_names(yml),
+            vec!["only-one".to_string()]
+        );
+    }
+
+    #[test]
+    fn custom_pipelines_bail_on_tab_indentation() {
+        // Tabs in indentation make levels ambiguous → bail to vec![].
+        let yml = "pipelines:\n\tcustom:\n\t\ta-pipe:\n\t\t\t- step:\n";
+        assert!(parse_custom_pipeline_names(yml).is_empty());
+    }
+
+    #[test]
+    fn custom_pipelines_stop_at_sibling_top_level_key() {
+        // A top-level key after pipelines (e.g. `definitions:`) ends the custom block.
+        let yml = "\
+pipelines:
+  custom:
+    one:
+      - step:
+          script:
+            - echo one
+definitions:
+  caches:
+    node: node_modules
+";
+        assert_eq!(parse_custom_pipeline_names(yml), vec!["one".to_string()]);
+    }
+
+    // ── PR tasks ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn from_bb_task_maps_ids_as_strings_and_prefers_display_name() {
+        let raw: BbTask = serde_json::from_str(
+            r#"{
+                "id": 67881206,
+                "state": "RESOLVED",
+                "content": {"raw": "fix the thing", "html": "<p>fix</p>"},
+                "creator": {"uuid": "{c}", "display_name": "Cre Ator", "nickname": "cre"},
+                "created_on": "2026-07-04T00:00:00Z",
+                "resolved_by": {"uuid": "{r}", "nickname": "resolver"},
+                "comment": {"id": 42, "links": {}},
+                "links": {"html": {"href": "https://bitbucket.org/x/tasks/1"}}
+            }"#,
+        )
+        .unwrap();
+        let t = from_bb_task(raw);
+        // Numeric ids serialize as Strings (u64-precision rule).
+        assert_eq!(t.id, "67881206");
+        assert_eq!(t.comment_id.as_deref(), Some("42"));
+        assert_eq!(t.state, "RESOLVED");
+        assert_eq!(t.text, "fix the thing");
+        // Creator prefers display_name; resolver falls back to nickname (no display_name).
+        assert_eq!(t.creator, "Cre Ator");
+        assert_eq!(t.resolved_by.as_deref(), Some("resolver"));
+        assert_eq!(t.url, "https://bitbucket.org/x/tasks/1");
+    }
+
+    #[test]
+    fn from_bb_task_tolerates_missing_optional_fields() {
+        let raw: BbTask = serde_json::from_str(r#"{"id": 5, "state": "UNRESOLVED"}"#).unwrap();
+        let t = from_bb_task(raw);
+        assert_eq!(t.id, "5");
+        assert_eq!(t.text, "");
+        assert_eq!(t.creator, "");
+        assert!(t.resolved_by.is_none());
+        assert!(t.comment_id.is_none());
+        assert_eq!(t.url, "");
+    }
+
+    #[test]
+    fn parse_task_id_rejects_non_numeric() {
+        assert_eq!(parse_task_id("42").unwrap(), 42);
+        assert!(matches!(
+            parse_task_id("nope"),
+            Err(AppError::InvalidArgument(_))
+        ));
+    }
+
+    // ── Environments ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn from_bb_environment_maps_type_and_admin_only() {
+        let raw: BbRawEnvironment = serde_json::from_str(
+            r#"{
+                "uuid": "{e1}",
+                "name": "Production",
+                "environment_type": {"name": "Production", "rank": 2},
+                "rank": 2,
+                "hidden": true,
+                "restrictions": {"admin_only": true}
+            }"#,
+        )
+        .unwrap();
+        let e = from_bb_environment(raw);
+        assert_eq!(e.uuid, "{e1}");
+        assert_eq!(e.name, "Production");
+        assert_eq!(e.environment_type, "Production");
+        assert_eq!(e.rank, 2);
+        assert!(e.hidden);
+        assert!(e.admin_only);
+    }
+
+    #[test]
+    fn from_bb_environment_defaults_when_fields_missing() {
+        let raw: BbRawEnvironment =
+            serde_json::from_str(r#"{"uuid": "{e2}", "name": "Test"}"#).unwrap();
+        let e = from_bb_environment(raw);
+        assert_eq!(e.environment_type, "");
+        assert_eq!(e.rank, 0);
+        assert!(!e.hidden);
+        // admin_only defaults to false when restrictions is absent.
+        assert!(!e.admin_only);
     }
 
     #[test]

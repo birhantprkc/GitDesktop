@@ -8,6 +8,7 @@ import {
 import type {
   ApprovalState,
   BbAccountInfo,
+  BbEnvironment,
   BitbucketBranchRestriction,
   BitbucketHook,
   BitbucketHookInput,
@@ -81,6 +82,7 @@ import type {
   PrInfo,
   PrPollInfo,
   PrRef,
+  PrTask,
   PunchCard,
   ReleaseDetails,
   ReleaseInfo,
@@ -896,6 +898,7 @@ export const forgePrCreate = (
   title: string,
   body: string,
   draft: boolean,
+  reviewers?: string[],
 ) =>
   invoke<PrRef>("forge_pr_create", {
     repoPath,
@@ -904,6 +907,9 @@ export const forgePrCreate = (
     title,
     body,
     draft,
+    // Create-time reviewers are Bitbucket-only; omit (null) for other providers so
+    // the backend leaves behavior untouched.
+    reviewers: reviewers ?? null,
   });
 
 /** Which providers this machine can publish to (CLI installed + signed in) —
@@ -1433,8 +1439,12 @@ export const forgePrSetReviewers = (
 ) => invoke<void>("forge_pr_set_reviewers", { repoPath, number, reviewers });
 
 /** Reviewer-picker candidates for a PR — Bitbucket: workspace members minus the
- *  PR author (the server rejects the author as a reviewer). */
-export const forgePrReviewerCandidates = (repoPath: string, number: number) =>
+ *  user the server would reject. For an existing PR pass its number (the PR author
+ *  is excluded); at create time pass `null` (no PR yet — the viewer is excluded). */
+export const forgePrReviewerCandidates = (
+  repoPath: string,
+  number: number | null,
+) =>
   invoke<ForgeUserRef[]>("forge_pr_reviewer_candidates", { repoPath, number });
 
 export const ghPrEditComment = (
@@ -1830,6 +1840,53 @@ export const forgeBbHookUpdate = (
 
 export const forgeBbHookDelete = (repoPath: string, uuid: string) =>
   invoke<void>("forge_bb_hook_delete", { repoPath, uuid });
+
+// ── Bitbucket PR tasks + environments (wave 4) ───────────────────────────────
+
+/** A PR's task checklist, in list order (Bitbucket-only — `implemented.prTasks`). */
+export const forgeBbPrTasks = (repoPath: string, number: number) =>
+  invoke<PrTask[]>("forge_bb_pr_tasks", { repoPath, number });
+
+/** Create a PR task from free-text (empty text is rejected server-side). */
+export const forgeBbPrTaskCreate = (
+  repoPath: string,
+  number: number,
+  text: string,
+) => invoke<PrTask>("forge_bb_pr_task_create", { repoPath, number, text });
+
+/** Edit a PR task's text (`taskId` is the numeric server id as a String). */
+export const forgeBbPrTaskEdit = (
+  repoPath: string,
+  number: number,
+  taskId: string,
+  text: string,
+) =>
+  invoke<PrTask>("forge_bb_pr_task_edit", { repoPath, number, taskId, text });
+
+/** Resolve / unresolve a PR task. */
+export const forgeBbPrTaskSetState = (
+  repoPath: string,
+  number: number,
+  taskId: string,
+  resolved: boolean,
+) =>
+  invoke<PrTask>("forge_bb_pr_task_set_state", {
+    repoPath,
+    number,
+    taskId,
+    resolved,
+  });
+
+/** Delete a PR task. */
+export const forgeBbPrTaskDelete = (
+  repoPath: string,
+  number: number,
+  taskId: string,
+) => invoke<void>("forge_bb_pr_task_delete", { repoPath, number, taskId });
+
+/** The repo's deployment environments, sorted by rank ascending (Bitbucket-only). */
+export const forgeBbEnvironments = (repoPath: string) =>
+  invoke<BbEnvironment[]>("forge_bb_environments", { repoPath });
 
 /** The active gh token's OAuth scopes (for "needs gh auth refresh -s …" hints). */
 export const ghTokenScopes = (host?: string) =>

@@ -360,7 +360,8 @@ export function PipelinesDisabledBanner({
           Pipelines are disabled for this repository
         </p>
         <p className="mt-0.5 text-muted-foreground">
-          Enable Bitbucket Pipelines to manage variables and schedules.
+          Enable Bitbucket Pipelines to manage variables, schedules, and
+          deployments.
         </p>
       </div>
       <Button size="sm" disabled={pending} onClick={onEnable}>

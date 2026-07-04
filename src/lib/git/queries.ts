@@ -16,6 +16,7 @@ import {
   resolveConflict,
 } from "./conflict";
 import type {
+  BbEnvironment,
   BitbucketHookInput,
   BitbucketRepoSettingsInput,
   DiffStatEntry,
@@ -1698,6 +1699,7 @@ const NO_FORGE_STATUS: ForgeStatus = {
     ciJobPlay: false,
     timeTracking: false,
     issueLinks: false,
+    prTasks: false,
   },
 };
 
@@ -2555,6 +2557,73 @@ export function useApprovePr(repo: string) {
   );
 }
 
+/** A PR's task checklist (Bitbucket-only, gated on `implemented.prTasks`). Pass
+ *  `null` when the panel isn't shown so the read doesn't fire (mirrors
+ *  `usePrApprovals`). */
+export function usePrTasks(repo: string, number: number | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr", number, "tasks"] as const,
+    queryFn: () => api.forgeBbPrTasks(repo, number ?? 0),
+    enabled: number !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+// PR-task mutations invalidate the exact tasks key onSettled (keyed on the PR number
+// carried in the mutation args); the component patches its own local state
+// optimistically (like toggleApproval), so no optimistic logic lives in the hook.
+const prTasksKey = (repo: string, number: number) =>
+  ["repo", repo, "pr", number, "tasks"] as const;
+
+export function useCreatePrTask(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; text: string }) =>
+      api.forgeBbPrTaskCreate(repo, args.number, args.text),
+    onSettled: (_d, _e, args) =>
+      queryClient.invalidateQueries({
+        queryKey: prTasksKey(repo, args.number),
+      }),
+  });
+}
+
+export function useEditPrTask(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; taskId: string; text: string }) =>
+      api.forgeBbPrTaskEdit(repo, args.number, args.taskId, args.text),
+    onSettled: (_d, _e, args) =>
+      queryClient.invalidateQueries({
+        queryKey: prTasksKey(repo, args.number),
+      }),
+  });
+}
+
+export function useSetPrTaskState(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; taskId: string; resolved: boolean }) =>
+      api.forgeBbPrTaskSetState(repo, args.number, args.taskId, args.resolved),
+    onSettled: (_d, _e, args) =>
+      queryClient.invalidateQueries({
+        queryKey: prTasksKey(repo, args.number),
+      }),
+  });
+}
+
+export function useDeletePrTask(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; taskId: string }) =>
+      api.forgeBbPrTaskDelete(repo, args.number, args.taskId),
+    onSettled: (_d, _e, args) =>
+      queryClient.invalidateQueries({
+        queryKey: prTasksKey(repo, args.number),
+      }),
+  });
+}
+
 export function useUnapprovePr(repo: string) {
   return useRepoMutation(repo, (number: number) =>
     api.forgePrUnapprove(repo, number),
@@ -2588,16 +2657,23 @@ export function useSetPrDraft(repo: string) {
   );
 }
 
-/** The reviewer picker's candidates (Bitbucket: workspace members minus the PR
- *  author). Fetched only while the picker is enabled — the popover is the sole
- *  consumer. */
+/** The reviewer picker's candidates (Bitbucket: workspace members minus the user the
+ *  server would reject). For an existing PR pass its number (excludes the PR author);
+ *  at create time pass `null` (no PR yet — excludes the viewer), keyed on "create".
+ *  Fetched only while the picker is enabled — the popover is the sole consumer. */
 export function useReviewerCandidates(
   repo: string,
-  number: number,
+  number: number | null,
   enabled: boolean,
 ) {
   return useQuery({
-    queryKey: ["repo", repo, "pr", number, "reviewer-candidates"] as const,
+    queryKey: [
+      "repo",
+      repo,
+      "pr",
+      number ?? "create",
+      "reviewer-candidates",
+    ] as const,
     queryFn: () => api.forgePrReviewerCandidates(repo, number),
     enabled,
     staleTime: 5 * 60_000,
@@ -3519,6 +3595,18 @@ export function useBbDeleteHook(repo: string) {
   );
 }
 
+/** The repo's Bitbucket deployment environments (rank-sorted). Read-only —
+ *  fetched only when the consuming surface is enabled. */
+export function useBbEnvironments(repo: string, enabled: boolean) {
+  return useQuery<BbEnvironment[]>({
+    queryKey: ["repo", repo, "bb-environments"] as const,
+    queryFn: () => api.forgeBbEnvironments(repo),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 // Secrets & variables. `env: null` = repository scope; a string = that
 // environment (Actions only). Keyed by app + scope so each list caches apart.
 const secretsKey = (repo: string, app: SecretApp, env: string | null) =>
@@ -3959,6 +4047,8 @@ export function useCreatePr(repo: string) {
       title: string;
       body: string;
       draft: boolean;
+      /** Create-time reviewer account uuids (Bitbucket-only; omit elsewhere). */
+      reviewers?: string[];
     }) =>
       api.forgePrCreate(
         repo,
@@ -3967,6 +4057,7 @@ export function useCreatePr(repo: string) {
         args.title,
         args.body,
         args.draft,
+        args.reviewers,
       ),
   );
 }

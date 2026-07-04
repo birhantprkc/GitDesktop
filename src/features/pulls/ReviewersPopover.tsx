@@ -7,6 +7,23 @@ import { useReviewerCandidates } from "@/lib/git/queries";
 import type { ForgeUserRef } from "@/lib/git/types";
 
 /**
+ * A short, stable disambiguator for a reviewer whose label collides with a
+ * DIFFERENT account's label — real workspaces can hold two accounts with an
+ * identical display_name AND nickname (only the uuid is guaranteed distinct).
+ * Returns null unless some OTHER ref in `all` (different id) shares this label;
+ * when colliding, returns the uuid's first hyphen-segment with braces stripped
+ * (e.g. "{0d55e607-aeb2-…}" → "0d55e607") so the two entries read apart.
+ */
+export function userRefHint(
+  ref: ForgeUserRef,
+  all: ForgeUserRef[],
+): string | null {
+  const collides = all.some((o) => o.id !== ref.id && o.label === ref.label);
+  if (!collides) return null;
+  return ref.id.replace(/[{}]/g, "").split("-")[0] || null;
+}
+
+/**
  * Reviewer multi-select for the PR view (Bitbucket-only —
  * `implemented.mrReviewers`). Mirrors `AssigneesPopover`, with one structural
  * difference: entries are `{id, label}` pairs, not bare login strings — Bitbucket
@@ -26,7 +43,7 @@ export function ReviewersPopover({
   onChange,
 }: {
   repoPath: string;
-  number: number;
+  number: number | null;
   enabled: boolean;
   value: ForgeUserRef[];
   onChange: (next: ForgeUserRef[]) => void;
@@ -34,6 +51,14 @@ export function ReviewersPopover({
   const candidates = useReviewerCandidates(repoPath, number, enabled);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Map<string, ForgeUserRef>>(new Map());
+
+  // Collision universe for the candidate rows: candidates ∪ current value, so a
+  // selected colliding reviewer still gets a hint. For the chips: value ∪
+  // candidates when loaded, else just value (candidates aren't fetched until the
+  // popover opens, so a fresh render of the chips must stand on `value` alone).
+  const loaded = candidates.data ?? [];
+  const rowUniverse = [...loaded, ...value];
+  const chipUniverse = loaded.length > 0 ? [...value, ...loaded] : value;
 
   function toggle(user: ForgeUserRef, on: boolean) {
     setDraft((prev) => {
@@ -82,30 +107,44 @@ export function ReviewersPopover({
                       : "No eligible reviewers — the workspace has no other members."}
                 </p>
               )}
-              {(candidates.data ?? []).map((user) => (
-                <label
-                  key={user.id}
-                  className="flex cursor-pointer items-center gap-2 px-1 py-1.5 text-xs hover:bg-muted/60"
-                >
-                  <Checkbox
-                    checked={draft.has(user.id)}
-                    onCheckedChange={(v) => toggle(user, v === true)}
-                  />
-                  <span className="flex-1 truncate">{user.label}</span>
-                </label>
-              ))}
+              {loaded.map((user) => {
+                const hint = userRefHint(user, rowUniverse);
+                return (
+                  <label
+                    key={user.id}
+                    title={hint ? `${user.label} (${hint})` : undefined}
+                    className="flex cursor-pointer items-center gap-2 px-1 py-1.5 text-xs hover:bg-muted/60"
+                  >
+                    <Checkbox
+                      checked={draft.has(user.id)}
+                      onCheckedChange={(v) => toggle(user, v === true)}
+                    />
+                    <span className="flex-1 truncate">
+                      {user.label}
+                      {hint && (
+                        <span className="text-muted-foreground"> · {hint}</span>
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
             </Popover.Popup>
           </Popover.Positioner>
         </Popover.Portal>
       </Popover.Root>
-      {value.map((user) => (
-        <span
-          key={user.id}
-          className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
-        >
-          {user.label}
-        </span>
-      ))}
+      {value.map((user) => {
+        const hint = userRefHint(user, chipUniverse);
+        return (
+          <span
+            key={user.id}
+            title={hint ? `${user.label} (${hint})` : undefined}
+            className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+          >
+            {user.label}
+            {hint && <span className="text-muted-foreground"> · {hint}</span>}
+          </span>
+        );
+      })}
     </div>
   );
 }

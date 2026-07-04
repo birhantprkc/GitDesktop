@@ -415,12 +415,13 @@ pub async fn forge_pr_set_reviewers(
     }
 }
 
-/// The reviewer picker's candidates for a PR — Bitbucket: workspace members minus
-/// the PR author (the server rejects the author as a reviewer).
+/// The reviewer picker's candidates for a PR — Bitbucket: workspace members minus the
+/// user the server would reject. For an existing PR (`Some(number)`) that's the PR
+/// author; at create time (`None`, no PR yet) it's the viewer.
 #[tauri::command]
 pub async fn forge_pr_reviewer_candidates(
     repo_path: String,
-    number: u64,
+    number: Option<u64>,
 ) -> AppResult<Vec<model::ForgeUserRef>> {
     match detect_non_github(&repo_path).await {
         Some((Provider::Bitbucket, _)) => {
@@ -643,9 +644,11 @@ pub async fn forge_ci_dispatch(
 ) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::run_pipeline(&repo_path, &git_ref, &inputs).await,
-        // Bitbucket triggers a branch pipeline (no per-workflow dispatch — `workflow` is
-        // dropped); `inputs` become pipeline variables.
-        Some((Provider::Bitbucket, _)) => bitbucket::dispatch_ci(&repo_path, &git_ref, &inputs).await,
+        // Bitbucket triggers a branch pipeline; a non-empty `workflow` names a CUSTOM
+        // pipeline (via a selector on the target), and `inputs` become pipeline variables.
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::dispatch_ci(&repo_path, &workflow, &git_ref, &inputs).await
+        }
         _ => github::dispatch_ci(&repo_path, &workflow, &git_ref, inputs).await,
     }
 }
@@ -1982,6 +1985,85 @@ pub async fn forge_bb_hook_delete(repo_path: String, uuid: String) -> AppResult<
     bb_only!(repo_path, bitbucket::hook_delete(&repo_path, &uuid))
 }
 
+// ── Bitbucket PR tasks + custom pipelines + environments (wave 4) ─────────────
+
+/// A pull request's task checklist, in list order (Bitbucket-only —
+/// `implemented.pr_tasks`).
+#[tauri::command]
+pub async fn forge_bb_pr_tasks(
+    repo_path: String,
+    number: u64,
+) -> AppResult<Vec<bitbucket::PrTask>> {
+    bb_only!(repo_path, bitbucket::pr_tasks(&repo_path, number))
+}
+
+/// Create a PR task from free-text (empty text is rejected before the request).
+#[tauri::command]
+pub async fn forge_bb_pr_task_create(
+    repo_path: String,
+    number: u64,
+    text: String,
+) -> AppResult<bitbucket::PrTask> {
+    bb_only!(repo_path, bitbucket::pr_task_create(&repo_path, number, &text))
+}
+
+/// Edit a PR task's text (`task_id` is the numeric server id as a String).
+#[tauri::command]
+pub async fn forge_bb_pr_task_edit(
+    repo_path: String,
+    number: u64,
+    task_id: String,
+    text: String,
+) -> AppResult<bitbucket::PrTask> {
+    bb_only!(
+        repo_path,
+        bitbucket::pr_task_edit(&repo_path, number, &task_id, &text)
+    )
+}
+
+/// Resolve / unresolve a PR task.
+#[tauri::command]
+pub async fn forge_bb_pr_task_set_state(
+    repo_path: String,
+    number: u64,
+    task_id: String,
+    resolved: bool,
+) -> AppResult<bitbucket::PrTask> {
+    bb_only!(
+        repo_path,
+        bitbucket::pr_task_set_state(&repo_path, number, &task_id, resolved)
+    )
+}
+
+/// Delete a PR task.
+#[tauri::command]
+pub async fn forge_bb_pr_task_delete(
+    repo_path: String,
+    number: u64,
+    task_id: String,
+) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::pr_task_delete(&repo_path, number, &task_id)
+    )
+}
+
+/// The CUSTOM pipeline names declared in the working-tree `bitbucket-pipelines.yml`
+/// (the custom-dispatch picker's options). Reads the local file only (no network); a
+/// missing file yields an empty list.
+#[tauri::command]
+pub async fn forge_bb_custom_pipelines(repo_path: String) -> AppResult<Vec<String>> {
+    bb_only!(repo_path, bitbucket::custom_pipelines(&repo_path))
+}
+
+/// The repo's deployment environments, sorted by rank ascending (Bitbucket-only).
+#[tauri::command]
+pub async fn forge_bb_environments(
+    repo_path: String,
+) -> AppResult<Vec<bitbucket::BbEnvironment>> {
+    bb_only!(repo_path, bitbucket::environments(&repo_path))
+}
+
 /// Which providers this machine can publish a local repo to. A repo with no
 /// hosted remote has nothing to detect a provider from, so the publish UI asks
 /// explicitly and offers each ready target.
@@ -2059,6 +2141,7 @@ pub async fn forge_publish_repo(
 /// GitHub delegates to the unchanged `gh pr create`; GitLab POSTs the MR with
 /// draft mapped to the `Draft:` title prefix. Returns the new number + URL.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn forge_pr_create(
     state: tauri::State<'_, crate::state::AppState>,
     repo_path: String,
@@ -2067,13 +2150,34 @@ pub async fn forge_pr_create(
     title: String,
     body: String,
     draft: bool,
+    reviewers: Option<Vec<String>>,
 ) -> AppResult<crate::github::pr::PrRef> {
-    match detect_non_github(&repo_path).await {
+    let detected = detect_non_github(&repo_path).await;
+    // Create-time reviewers are Bitbucket-only. GitHub/GitLab reject a non-empty list
+    // BEFORE dispatching (existing callers omit the key → `None` → untouched behavior).
+    if reviewers.as_deref().is_some_and(|r| !r.is_empty())
+        && !matches!(detected, Some((Provider::Bitbucket, _)))
+    {
+        return Err(AppError::InvalidArgument(
+            "Create-time reviewers aren't supported for this provider.".into(),
+        ));
+    }
+    match detected {
         Some((Provider::GitLab, _)) => {
             gitlab::create_mr(&state, &repo_path, &base, &head, &title, &body, draft).await
         }
         Some((Provider::Bitbucket, _)) => {
-            bitbucket::create_pr(&state, &repo_path, &base, &head, &title, &body, draft).await
+            bitbucket::create_pr(
+                &state,
+                &repo_path,
+                &base,
+                &head,
+                &title,
+                &body,
+                draft,
+                reviewers.as_deref().unwrap_or(&[]),
+            )
+            .await
         }
         _ => crate::github::pr::gh_pr_create(state, repo_path, base, head, title, body, draft)
             .await,

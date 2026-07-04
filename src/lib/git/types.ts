@@ -568,6 +568,44 @@ export interface ForgeImplemented {
   /** Related-issue links (relates_to) on issues. GitLab-unique — false for
    *  GitHub (its issue relationships are sub-issues/dependencies instead). */
   issueLinks: boolean;
+  /** The pull-request tasks checklist (create/edit/resolve/delete). Bitbucket-only
+   *  — a native Bitbucket concept with no GitHub/GitLab analogue wired here, so
+   *  false for both. */
+  prTasks: boolean;
+}
+
+/** One pull-request task (Bitbucket's PR checklist). `id`/`commentId` are numeric
+ *  server ids serialized as Strings (u64-precision rule); `state` is
+ *  `"UNRESOLVED"` | `"RESOLVED"`. `creator`/`resolvedBy` are display names (task
+ *  user objects carry no username). */
+export interface PrTask {
+  id: string;
+  /** "UNRESOLVED" | "RESOLVED" */
+  state: string;
+  /** The task text (`content.raw`). */
+  text: string;
+  /** The creator's display name (falls back to nickname, then ""). */
+  creator: string;
+  createdOn: string;
+  /** Who resolved it, or null while unresolved. */
+  resolvedBy: string | null;
+  /** The PR comment this task is attached to, or null for a standalone task. */
+  commentId: string | null;
+  /** The task's web URL, or "". */
+  url: string;
+}
+
+/** One Bitbucket deployment environment (minimal read — lock/category unmapped).
+ *  `adminOnly` is `restrictions.admin_only`; `environmentType` is the tier name. */
+export interface BbEnvironment {
+  uuid: string;
+  name: string;
+  /** The tier name ("Test" / "Staging" / "Production"), or "". */
+  environmentType: string;
+  rank: number;
+  hidden: boolean;
+  /** Whether the environment is restricted to admins. */
+  adminOnly: boolean;
 }
 
 /** Whether the viewer can manage this repo's settings (`admin`) and whether

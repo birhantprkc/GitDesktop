@@ -15,6 +15,7 @@ import type { ForgeUserRef } from "@/lib/git/types";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { userRefHint } from "../pulls/ReviewersPopover";
 import { AsyncListBody, InlineConfirm } from "./parts";
 
 /** Bitbucket default reviewers: the accounts auto-added to every new pull
@@ -82,6 +83,7 @@ export function BitbucketDefaultReviewersSection({
             <ReviewerRow
               key={r.id}
               reviewer={r}
+              all={rows}
               active={i === activeIndex}
               onFocus={() => setActiveIndex(i)}
               confirming={confirming === r.id}
@@ -107,6 +109,7 @@ export function BitbucketDefaultReviewersSection({
 
 function ReviewerRow({
   reviewer,
+  all,
   active,
   onFocus,
   confirming,
@@ -116,6 +119,7 @@ function ReviewerRow({
   onRemove,
 }: {
   reviewer: ForgeUserRef;
+  all: ForgeUserRef[];
   active: boolean;
   onFocus: () => void;
   confirming: boolean;
@@ -124,6 +128,7 @@ function ReviewerRow({
   onCancel: () => void;
   onRemove: () => void;
 }) {
+  const hint = userRefHint(reviewer, all);
   return (
     <div
       role="option"
@@ -137,8 +142,12 @@ function ReviewerRow({
       )}
     >
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium" title={reviewer.label}>
+        <p
+          className="truncate font-medium"
+          title={hint ? `${reviewer.label} (${hint})` : reviewer.label}
+        >
           {reviewer.label}
+          {hint && <span className="text-muted-foreground"> · {hint}</span>}
         </p>
       </div>
       {confirming ? (
@@ -265,25 +274,34 @@ function AddReviewerPopover({
                     : "Couldn't load members."}
                 </p>
               )}
-              {suggestions.map((c, i) => (
-                <button
-                  type="button"
-                  key={c.id}
-                  id={`bb-reviewer-option-${i}`}
-                  role="option"
-                  aria-selected={active === i}
-                  className={cn(
-                    "flex w-full items-baseline gap-2 px-2 py-1.5 text-left text-xs",
-                    active === i
-                      ? "bg-accent text-accent-foreground"
-                      : "hover:bg-muted/60",
-                  )}
-                  onMouseEnter={() => setActiveIndex(i)}
-                  onClick={() => add(c)}
-                >
-                  <span className="truncate font-medium">{c.label}</span>
-                </button>
-              ))}
+              {suggestions.map((c, i) => {
+                const hint = userRefHint(c, suggestions);
+                return (
+                  <button
+                    type="button"
+                    key={c.id}
+                    id={`bb-reviewer-option-${i}`}
+                    role="option"
+                    aria-selected={active === i}
+                    title={hint ? `${c.label} (${hint})` : undefined}
+                    className={cn(
+                      "flex w-full items-baseline gap-2 px-2 py-1.5 text-left text-xs",
+                      active === i
+                        ? "bg-accent text-accent-foreground"
+                        : "hover:bg-muted/60",
+                    )}
+                    onMouseEnter={() => setActiveIndex(i)}
+                    onClick={() => add(c)}
+                  >
+                    <span className="truncate font-medium">
+                      {c.label}
+                      {hint && (
+                        <span className="text-muted-foreground"> · {hint}</span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
               {!candidates.isLoading &&
                 !candidates.isError &&
                 suggestions.length === 0 && (

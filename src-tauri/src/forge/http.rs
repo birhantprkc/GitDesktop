@@ -88,9 +88,12 @@ pub async fn load_credentials() -> AppResult<BbCredentials> {
     }
 }
 
-/// Bitbucket's error envelope (`{"type":"error","error":{"message":…}}`). Not every
-/// endpoint emits it — some send plain text — so parsing is best-effort and callers
-/// fall back to a status-code message.
+/// Bitbucket's error envelope. The common shape is
+/// `{"type":"error","error":{"message":…}}`, but some endpoints (e.g. an invalid
+/// pipeline selector) drop the top-level `"type"` key and carry the useful text in
+/// `error.detail` instead of `error.message`. The top-level `type` is never read, so
+/// its absence is tolerated; parsing is best-effort and callers fall back to a
+/// status-code message.
 #[derive(Deserialize)]
 struct BbErrorEnvelope {
     error: Option<BbErrorBody>,
@@ -100,6 +103,21 @@ struct BbErrorEnvelope {
 struct BbErrorBody {
     #[serde(default)]
     message: String,
+    /// A more specific explanation on some envelopes (e.g. "Requested selector is not
+    /// found in bitbucket-pipelines.yml."). Preferred over `message` when present.
+    #[serde(default)]
+    detail: String,
+}
+
+impl BbErrorBody {
+    /// The best human message: `detail` when it's non-empty, else `message`.
+    fn best_message(self) -> String {
+        if self.detail.trim().is_empty() {
+            self.message
+        } else {
+            self.detail
+        }
+    }
 }
 
 /// Turn a non-2xx response body + status into an [`AppError::Bitbucket`], with the
@@ -113,7 +131,7 @@ pub(crate) fn http_error(status: u16, body: &str) -> AppError {
     let api_msg = serde_json::from_str::<BbErrorEnvelope>(body)
         .ok()
         .and_then(|e| e.error)
-        .map(|e| e.message)
+        .map(BbErrorBody::best_message)
         .filter(|m| !m.trim().is_empty());
     match status {
         401 => AppError::Bitbucket(
@@ -351,6 +369,34 @@ mod tests {
         let body = r#"{"type":"error","error":{"message":"Repository not found"}}"#;
         match http_error(404, body) {
             AppError::Bitbucket(m) => assert!(m.contains("Repository not found")),
+            other => panic!("expected Bitbucket error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn http_error_uses_detail_over_message_when_present() {
+        // The custom-pipeline-selector error drops the top-level "type" and carries the
+        // useful text in error.detail (not error.message).
+        let body = r#"{"error":{"message":"Bad request","detail":"Requested selector is not found in bitbucket-pipelines.yml.","data":{}}}"#;
+        match http_error(400, body) {
+            AppError::Bitbucket(m) => {
+                assert!(m.contains("Requested selector is not found"));
+                // The generic "Bad request" message is NOT what surfaces.
+                assert!(!m.contains("Bad request"));
+            }
+            other => panic!("expected Bitbucket error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn http_error_typed_envelope_message_parses_exactly_as_before() {
+        // The waves-2+3 envelope (top-level "type" + error.message, no detail) is
+        // unchanged: message surfaces verbatim.
+        let body = r#"{"type":"error","error":{"message":"Repository not found"}}"#;
+        match http_error(404, body) {
+            AppError::Bitbucket(m) => {
+                assert!(m.contains("Repository not found"));
+            }
             other => panic!("expected Bitbucket error, got {other:?}"),
         }
     }

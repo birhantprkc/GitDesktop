@@ -1,7 +1,7 @@
 import { SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,10 +12,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { track } from "@/lib/analytics";
 import { triggerAutomations } from "@/lib/automations/runner";
 import { required, useAppForm } from "@/lib/form";
 import {
+  forgeFeatureReady,
   useBranches,
   useCompareBranches,
   useCreatePr,
@@ -23,9 +25,10 @@ import {
   useForgeStatus,
   useRepoStatus,
 } from "@/lib/git/queries";
-import { providerLabel } from "@/lib/git/types";
+import { type ForgeUserRef, providerLabel } from "@/lib/git/types";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
+import { ReviewersPopover } from "./ReviewersPopover";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 
 export function CreatePrDialog({
@@ -48,6 +51,8 @@ export function CreatePrDialog({
   const defaultBranch = useDefaultBranch(repoPath);
   const createPr = useCreatePr(repoPath);
   const forge = useForgeStatus(repoPath);
+  const canPickReviewers = forgeFeatureReady(forge.data, "mrReviewers");
+  const [reviewers, setReviewers] = useState<ForgeUserRef[]>([]);
   const isGitLab = forge.data?.provider === "gitlab";
   const remoteLabel = providerLabel(forge.data?.provider);
   const prNoun = isGitLab ? "merge request" : "pull request";
@@ -77,6 +82,11 @@ export function CreatePrDialog({
           title: value.title.trim(),
           body: value.body,
           draft: value.draft,
+          // Bitbucket-only; omit the key otherwise (GitHub/GitLab byte-identical).
+          // An empty selection also omits it, preserving server-side default reviewers.
+          ...(canPickReviewers && reviewers.length > 0
+            ? { reviewers: reviewers.map((r) => r.id) }
+            : {}),
         });
         track({
           name: "pull_request_created",
@@ -114,6 +124,7 @@ export function CreatePrDialog({
   // seeded values back to empty on an untouched form.
   const seedOnOpen = useEffectEvent(() => {
     aiDescriptionRef.current = false;
+    setReviewers([]);
     const h = defaultHead ?? currentName ?? names[0] ?? "";
     const fallbackBase =
       defaultBranch.data && defaultBranch.data !== h
@@ -196,6 +207,19 @@ export function CreatePrDialog({
                 </p>
               )}
             </div>
+
+            {canPickReviewers && (
+              <div className="space-y-1.5">
+                <Label>Reviewers</Label>
+                <ReviewersPopover
+                  repoPath={repoPath}
+                  number={null}
+                  enabled={open && canPickReviewers}
+                  value={reviewers}
+                  onChange={setReviewers}
+                />
+              </div>
+            )}
 
             <form.AppField
               name="title"
