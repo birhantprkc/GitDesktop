@@ -410,7 +410,11 @@ export function PrTasksSection({
           )}
 
           {total === 0 && !adding && (
-            <p className="text-[11px] text-muted-foreground">No tasks yet.</p>
+            <p className="text-[11px] text-muted-foreground">
+              {editable
+                ? "No tasks yet — use Add task to keep a checklist of follow-ups to resolve before merging."
+                : "No tasks."}
+            </p>
           )}
 
           {adding && (

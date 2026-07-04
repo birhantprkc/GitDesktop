@@ -3,6 +3,7 @@ import {
   externalReviewerNames,
   fetchExternalFindings,
 } from "@/lib/ai/external-context";
+import { useForgeStatus } from "@/lib/git/queries";
 import {
   createLocalPr,
   deleteLocalPr,
@@ -112,11 +113,18 @@ export function useClearReviews(repo: string, kind: PrKind, ref: string) {
  *  best-effort (errors degrade to no banner). Returns the kept findings plus the
  *  distinct reviewer display names. */
 export function useExternalReviews(repo: string, kind: PrKind, ref: string) {
-  const enabled = kind === "remote" && repo !== "" && /^\d+$/.test(ref);
+  // Harvested behind the forge abstraction for GitHub + GitLab; Bitbucket has no
+  // bot-review ecosystem, so the query is disabled there (no banner, no round trip).
+  const provider = useForgeStatus(repo).data?.provider ?? "github";
+  const enabled =
+    provider !== "bitbucket" &&
+    kind === "remote" &&
+    repo !== "" &&
+    /^\d+$/.test(ref);
   return useQuery({
-    queryKey: ["external-reviews", repo, ref],
+    queryKey: ["external-reviews", repo, ref, provider],
     queryFn: async () => {
-      const items = await fetchExternalFindings(repo, Number(ref));
+      const items = await fetchExternalFindings(repo, Number(ref), provider);
       return { items, reviewers: externalReviewerNames(items) };
     },
     enabled,

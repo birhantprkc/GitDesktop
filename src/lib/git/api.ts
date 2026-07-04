@@ -971,6 +971,14 @@ export const forgePrView = (repoPath: string, number: number) =>
 export const forgePrDiff = (repoPath: string, number: number) =>
   invoke<string>("forge_pr_diff", { repoPath, number });
 
+/** Provider-neutral PR poll for the notification poller + remote pr-sync — the
+ *  backend dispatches (GitHub `gh`, GitLab `glab`, Bitbucket HTTP) onto the same
+ *  neutral `PrPollInfo`. GitLab/Bitbucket carry no check rollup or review decision
+ *  in list responses, so those fields come back empty (a v1 limit); `headSha`
+ *  still drives pr-sync. */
+export const forgePrPoll = (repoPath: string) =>
+  invoke<PrPollInfo[]>("forge_pr_poll", { repoPath });
+
 export type IssueStateFilter = "open" | "closed";
 
 // Provider-neutral issue reads — like the PR reads above, the backend resolves the
@@ -1377,8 +1385,14 @@ export const ghIssueRemoveSubIssue = (
 export const ghPrDiff = (repoPath: string, number: number) =>
   invoke<string>("gh_pr_diff", { repoPath, number });
 
-export const ghPrExternalReviews = (repoPath: string, number: number) =>
-  invoke<ExternalReviewItem[]>("gh_pr_external_reviews", { repoPath, number });
+/** Third-party AI-reviewer findings on a PR/MR (Copilot/CodeRabbit/…), behind the
+ *  forge abstraction: GitHub delegates unchanged, GitLab maps MR discussions,
+ *  Bitbucket returns empty by design. Shape is provider-agnostic. */
+export const forgePrExternalReviews = (repoPath: string, number: number) =>
+  invoke<ExternalReviewItem[]>("forge_pr_external_reviews", {
+    repoPath,
+    number,
+  });
 
 export type ReviewAction = "approve" | "comment" | "request_changes";
 
@@ -1533,9 +1547,6 @@ export const ghListRepos = () => invoke<GhRepoList>("gh_list_repos");
 
 export const ghSwitchAccount = (host: string, login: string) =>
   invoke<void>("gh_switch_account", { host, login });
-
-export const ghPrPoll = (repoPath: string) =>
-  invoke<PrPollInfo[]>("gh_pr_poll", { repoPath });
 
 export const ghPrCheckout = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_checkout", { repoPath, number });

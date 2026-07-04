@@ -1266,9 +1266,10 @@ export interface ForgeUserRef {
   label: string;
 }
 
-/** One review item on a GitHub PR (a submitted review, an inline review comment,
- *  or a conversation comment) with its author's bot flag — the raw material a
- *  re-review folds in from third-party AI reviewers. From `gh_pr_external_reviews`. */
+/** One review item on a PR/MR (a submitted review, an inline review comment, or a
+ *  conversation comment) with its author's bot flag — the raw material a re-review
+ *  folds in from third-party AI reviewers. From `forge_pr_external_reviews`
+ *  (GitHub reviews / GitLab MR discussions; Bitbucket returns none). */
 export interface ExternalReviewItem {
   kind: "review" | "inline" | "comment";
   author: string;

@@ -2,6 +2,14 @@ import { ArrowClockwiseIcon, PlayIcon } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -153,13 +161,52 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
             Couldn't load {runNoun} runs. Refresh to try again.
           </p>
         ) : visible.length === 0 ? (
-          <p className="px-3 py-4 text-xs text-muted-foreground">
-            {allRuns.length > 0
-              ? "No runs match the filter."
-              : branchOnly
-                ? `No ${runNoun} runs on this branch yet.`
-                : `No ${runNoun} runs yet.`}
-          </p>
+          allRuns.length > 0 ? (
+            <p className="px-3 py-4 text-xs text-muted-foreground">
+              No runs match the filter.
+            </p>
+          ) : branchOnly ? (
+            <div className="flex flex-col items-start gap-2 px-3 py-4">
+              <p className="text-xs text-muted-foreground">
+                No {runNoun} runs on this branch yet.
+              </p>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => setBranchOnly(false)}
+              >
+                Show all branches
+              </Button>
+            </div>
+          ) : (
+            <Empty className="min-h-full">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <PlayIcon />
+                </EmptyMedia>
+                <EmptyTitle>No {runNoun} runs yet</EmptyTitle>
+                <EmptyDescription>
+                  {isPipelines
+                    ? isGitLab
+                      ? "Pipelines run on pushes and merge requests — runs land here as they happen."
+                      : "Pipelines run on pushes and pull requests — runs land here as they happen."
+                    : "GitHub Actions workflows run on pushes and pull requests — runs land here as they happen."}
+                </EmptyDescription>
+              </EmptyHeader>
+              {canDispatch && (
+                <EmptyContent>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setRunOpen(true)}
+                  >
+                    <PlayIcon data-icon="inline-start" />
+                    Run {runNoun}…
+                  </Button>
+                </EmptyContent>
+              )}
+            </Empty>
+          )
         ) : (
           <div onKeyDown={onListKeyDown}>
             {visible.map((run) => {

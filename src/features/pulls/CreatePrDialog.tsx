@@ -266,6 +266,9 @@ export function CreatePrDialog({
                               form.setFieldValue("title", d.title);
                               form.setFieldValue("body", d.body);
                             },
+                            // Provider-aware prompt copy (MR/merge-request noun,
+                            // markdown flavor); null host → base GitHub wording.
+                            forge.data?.provider ?? undefined,
                           );
                         }}
                         title="Generate the title and description with AI"

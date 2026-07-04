@@ -29,6 +29,9 @@ export function useGenerateReleaseNotes(repoPath: string) {
       target: string;
       previousTag: string;
       repoName: string;
+      /** True when the repo's provider is GitHub — gates the `gh` auto-changelog
+       *  call so a GitLab/Bitbucket generate doesn't spawn a doomed subprocess. */
+      isGitHub: boolean;
       onResult: (body: string) => void;
     }) => {
       const abort = new AbortController();
@@ -39,18 +42,21 @@ export function useGenerateReleaseNotes(repoPath: string) {
 
         // Prefer GitHub's auto-generated changelog (PR titles, authors, links) as
         // the source so the AI can organize + credit like GitHub does, rather
-        // than guessing from bare commit subjects.
+        // than guessing from bare commit subjects. Only GitHub provides this, so
+        // skip the (otherwise doomed) `gh` subprocess on other providers.
         let changelog = "";
-        try {
-          const gen = await ghReleaseGenerateNotes(
-            repoPath,
-            opts.tag,
-            opts.target,
-            opts.previousTag,
-          );
-          changelog = gen.body ?? "";
-        } catch {
-          // Not a GitHub repo / gh unavailable — fall back to local commits.
+        if (opts.isGitHub) {
+          try {
+            const gen = await ghReleaseGenerateNotes(
+              repoPath,
+              opts.tag,
+              opts.target,
+              opts.previousTag,
+            );
+            changelog = gen.body ?? "";
+          } catch {
+            // gh unavailable / not usable here — fall back to local commits.
+          }
         }
 
         let subjects: string[] = [];

@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { toast } from "sonner";
 import { useAiStream } from "@/features/conversations/useAiStream";
 import { buildPrPrompt, splitCommitMessage } from "@/lib/ai/prompt";
+import type { PromptProvider } from "@/lib/ai/types";
 import { gitBranchDiff, readRepoInstructions } from "@/lib/git/api";
 
 /** Raw diff bytes requested from the backend; prompt budgeting trims further. */
@@ -20,6 +21,9 @@ export function useGeneratePrDescription(repoPath: string) {
       head: string,
       commitSubjects: string[],
       onUpdate: (draft: { title: string; body: string }) => void,
+      /** Target host — swaps the change-request noun + markdown flavor in the
+       *  prompt. Omit (local PRs) to keep the base GitHub wording. */
+      provider?: PromptProvider,
     ) => {
       await run(
         async (settings) => {
@@ -40,6 +44,7 @@ export function useGeneratePrDescription(repoPath: string) {
             headBranch: head,
             repoInstructions,
             globalInstructions: settings.globalInstructions,
+            provider,
           });
         },
         { onChunk: (buffer) => onUpdate(splitCommitMessage(buffer)) },

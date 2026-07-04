@@ -265,6 +265,22 @@ pub async fn forge_pr_list(
     }
 }
 
+/// A lightweight snapshot of the repo's recently-updated PRs for the notification
+/// poller + remote pr-sync, behind the abstraction. GitHub delegates to the UNCHANGED
+/// `gh_pr_poll`; GitLab/Bitbucket map their list responses onto the same neutral
+/// [`PrPollInfo`](crate::github::pr::PrPollInfo). GitLab/Bitbucket carry no check
+/// rollup or review decision in list responses, so those fields come back empty (a
+/// documented v1 limit — the poller's checks/review notification branches never fire
+/// there); `headSha` still drives pr-sync re-review.
+#[tauri::command]
+pub async fn forge_pr_poll(repo_path: String) -> AppResult<Vec<crate::github::pr::PrPollInfo>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::poll_prs(&repo_path).await,
+        Some((Provider::Bitbucket, _)) => bitbucket::poll_prs(&repo_path).await,
+        _ => github::poll_prs(&repo_path).await,
+    }
+}
+
 /// Open merge/pull requests whose head is `head`, behind the abstraction — the
 /// ComparePanel duplicate probe ("View" instead of "Create" once one exists).
 #[tauri::command]
@@ -299,6 +315,27 @@ pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> 
         Some((Provider::GitLab, _)) => gitlab::diff_pr(&repo_path, number).await,
         Some((Provider::Bitbucket, _)) => bitbucket::diff_pr(&repo_path, number).await,
         _ => github::diff_pr(&repo_path, number).await,
+    }
+}
+
+/// Third-party AI-reviewer findings on a merge/pull request (Copilot/CodeRabbit/…),
+/// behind the abstraction. GitHub delegates unchanged (`gh_pr_external_reviews`);
+/// GitLab maps MR discussion notes onto the same neutral shape; Bitbucket returns
+/// an empty list by design — no third-party AI-reviewer ecosystem posts on
+/// Bitbucket PRs, so there's nothing to harvest and no reason to hit the network.
+/// The frontend decides which authors are AI reviewers and folds their findings
+/// in as soft re-review context.
+#[tauri::command]
+pub async fn forge_pr_external_reviews(
+    repo_path: String,
+    number: u64,
+) -> AppResult<Vec<crate::github::pr::ExternalReviewItem>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::external_reviews(&repo_path, number).await,
+        // By design: no bot-review ecosystem posts on Bitbucket PRs. Cheap,
+        // permanent no-network empty — nothing to map.
+        Some((Provider::Bitbucket, _)) => Ok(Vec::new()),
+        _ => github::external_reviews(&repo_path, number).await,
     }
 }
 

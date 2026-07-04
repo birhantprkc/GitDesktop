@@ -26,6 +26,11 @@ export interface AiSettings {
   cliRepoAware?: boolean;
 }
 
+/** The hosting provider a generated artifact targets. Absent/`"github"` keeps the
+ *  original GitHub wording byte-for-byte; the others swap the change-request noun +
+ *  markdown flavor so a GitLab MR / Bitbucket PR prompt reads correctly. */
+export type PromptProvider = "github" | "gitlab" | "bitbucket";
+
 export interface AiStreamRequest {
   system: string;
   prompt: string;
@@ -60,6 +65,9 @@ export interface PrPromptInput {
   headBranch: string;
   repoInstructions: string | null;
   globalInstructions: string;
+  /** Target host — swaps the change-request noun + markdown flavor in the prompt.
+   *  Absent/`"github"` keeps the original GitHub wording byte-for-byte. */
+  provider?: PromptProvider;
 }
 
 export interface BranchNamePromptInput {
@@ -113,4 +121,7 @@ export interface ReviewPromptInput {
   externalReviewers?: string[];
   /** Whether any external finding may be stale (made against an older commit). */
   externalStale?: boolean;
+  /** Target host — swaps the change-request noun + markdown flavor in the review
+   *  system prompt. Absent/`"github"` keeps the original GitHub wording. */
+  provider?: PromptProvider;
 }

@@ -197,7 +197,9 @@ export function TagsPanel({ repoPath }: { repoPath: string }) {
           </div>
         ) : visible.length === 0 ? (
           <p className="px-3 py-4 text-xs text-muted-foreground">
-            {rows.length > 0 ? "No tags match the filter." : "No tags yet."}
+            {rows.length > 0
+              ? "No tags match the filter."
+              : "No tags yet. The New menu above creates a tag on the current commit or publishes a release."}
           </p>
         ) : (
           <div onKeyDown={onListKeyDown}>

@@ -10,7 +10,12 @@ import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isLocalProvider } from "@/lib/ai/providers";
 import { streamAi } from "@/lib/ai/stream";
-import type { AiSettings, ReviewDeltaState, ReviewMode } from "@/lib/ai/types";
+import type {
+  AiSettings,
+  PromptProvider,
+  ReviewDeltaState,
+  ReviewMode,
+} from "@/lib/ai/types";
 import type { DiffStatEntry } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { saveReview } from "@/lib/pulls/reviews-history";
@@ -24,6 +29,10 @@ export interface ReviewContext {
   commitSubjects: string[];
   /** Repo working directory — the CLI agent runs here. */
   repoPath: string;
+  /** Target host — swaps the change-request noun + markdown flavor in the review
+   *  system prompt. Absent (local PRs / commit reviews) keeps the base GitHub
+   *  wording. */
+  provider?: PromptProvider;
   /** Current PR head SHA. Persisted with the review so the NEXT run can compute
    *  a "changes since" delta against it; absent for views that don't supply it. */
   headSha?: string;
@@ -363,6 +372,7 @@ export async function startReview(
           deleted: f.deleted,
           isBinary: f.isBinary,
         })),
+        provider: context.provider,
         ...prior,
         ...external,
       },

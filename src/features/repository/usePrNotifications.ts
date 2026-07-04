@@ -3,8 +3,8 @@ import { useEffect, useEffectEvent, useRef } from "react";
 import { useAutomations } from "@/lib/automations/queries";
 import { maybeFireSync } from "@/lib/automations/sync";
 import { effectiveRules } from "@/lib/automations/types";
-import { ghPrPoll } from "@/lib/git/api";
-import { useForgeStatus } from "@/lib/git/queries";
+import { forgePrPoll } from "@/lib/git/api";
+import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
 import type { PrPollInfo } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { useSettings } from "@/lib/settings/queries";
@@ -31,17 +31,19 @@ export function usePrNotifications(repoPath: string) {
   const hasPrSync = automations.data
     ? effectiveRules(automations.data, repoPath, "pr-sync").length > 0
     : false;
-  // The head-OID poll (and pr-sync) run through GitHub-only `gh` commands, so the
-  // poller stays off for GitLab/Bitbucket repos until their notification paths land.
+  // The head-OID poll (and pr-sync) run through the provider-neutral `forge_pr_poll`,
+  // so the poller works for any ready hosted repo (GitHub/GitLab/Bitbucket). For
+  // GitLab/Bitbucket the check-rollup and review-decision fields come back empty, so
+  // those notification branches simply never fire there (a documented v1 limit) —
+  // opened/merged/closed activity and remote pr-sync work on all three.
   const enabled =
     repoPath !== "" &&
-    gh.data?.provider === "github" &&
-    Boolean(gh.data?.repo) &&
+    forgeFeatureReady(gh.data, "pullRequests") &&
     (anyNotif || hasPrSync);
 
   const poll = useQuery({
     queryKey: ["repo", repoPath, "pr-poll"] as const,
-    queryFn: () => ghPrPoll(repoPath),
+    queryFn: () => forgePrPoll(repoPath),
     enabled,
     refetchInterval: 60_000,
     refetchIntervalInBackground: true,

@@ -194,7 +194,9 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
             <p className="px-3 py-4 text-xs text-muted-foreground">
               {discussions.length > 0
                 ? "No discussions match the filter."
-                : "No discussions yet."}
+                : activeCat
+                  ? "No discussions in this category yet."
+                  : "No discussions yet."}
             </p>
           ) : (
             visible.map((d) => {

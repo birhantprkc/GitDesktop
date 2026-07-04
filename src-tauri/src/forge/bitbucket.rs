@@ -30,8 +30,8 @@ use crate::forge::model::{
 use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::pr::{
-    ApprovalState, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrRef,
-    PrThreadOut,
+    ApprovalState, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrPollInfo,
+    PrRef, PrThreadOut,
 };
 
 /// Failed-step logs can run to many MB; keep the tail (failures land at the end).
@@ -569,6 +569,110 @@ pub async fn prs_for_branch(repo_path: &str, head: &str) -> AppResult<Vec<PrInfo
     );
     let page: BbPage<BbPr> = http::bb_get_json(&creds, &path, "pull requests").await?;
     Ok(page.values.into_iter().map(from_bb_pr).collect())
+}
+
+// ── Pull-request poll (notifications + remote pr-sync) ─────────────────────────
+
+/// A pull request as the poll endpoint returns it. `source.commit.hash` is the SHORT
+/// 12-char head sha (not the full OID the list/detail source carries elsewhere);
+/// `author.uuid` matches the viewer's uuid so an own-PR notification is suppressed.
+#[derive(Deserialize)]
+struct BbPollPr {
+    #[serde(default)]
+    id: u64,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    draft: bool,
+    #[serde(default)]
+    author: Option<BbUser>,
+    #[serde(default)]
+    source: Option<BbPollEndpoint>,
+    #[serde(default)]
+    links: Option<BbHtmlLinks>,
+}
+
+/// The `source` block of a poll PR — only its head commit hash matters here.
+#[derive(Deserialize, Default)]
+struct BbPollEndpoint {
+    #[serde(default)]
+    commit: Option<BbPollCommit>,
+}
+
+#[derive(Deserialize, Default)]
+struct BbPollCommit {
+    #[serde(default)]
+    hash: String,
+}
+
+/// Map a poll PR onto the neutral [`PrPollInfo`], resolving the author so the hook's
+/// `mine` check (poll author == `ForgeStatus.login`) works despite Bitbucket's
+/// privacy behavior: participant/author objects carry NO `username`, only `uuid` +
+/// `nickname`. When the PR's `author.uuid` matches the viewer's, emit the stored
+/// username (what `status().login` carries for Bitbucket) so the user isn't notified
+/// about their own just-created PR; otherwise fall back to the author's nickname.
+fn from_bb_poll_pr(p: BbPollPr, viewer_uuid: &str, viewer_login: &str) -> PrPollInfo {
+    let author = match p.author.as_ref() {
+        Some(a) if !viewer_uuid.is_empty() && a.uuid.as_deref() == Some(viewer_uuid) => {
+            viewer_login.to_string()
+        }
+        Some(a) => a.nickname.clone().unwrap_or_default(),
+        None => String::new(),
+    };
+    PrPollInfo {
+        number: p.id,
+        title: p.title,
+        url: html_href(&p.links),
+        state: map_bb_pr_state(&p.state),
+        is_draft: p.draft,
+        author,
+        // Bitbucket's list carries no review decision or check rollup (single-PR/
+        // pipeline reads only), so both stay empty — the poller's checks/review
+        // branches never fire for Bitbucket (a documented v1 limit).
+        review_decision: String::new(),
+        checks_state: String::new(),
+        // The 12-char SHORT sha as-is; `sameSha` on the frontend prefix-matches it
+        // against the full head sha seeded by pr-open events.
+        head_sha: p.source.and_then(|s| s.commit).map(|c| c.hash).unwrap_or_default(),
+    }
+}
+
+/// A lightweight snapshot of the repo's recently-updated PRs for the notification
+/// poller — the Bitbucket analogue of `gh_pr_poll`. One list call ordered by
+/// `-updated_on` across all states, plus one `GET /2.0/user` to resolve the viewer's
+/// uuid (so own-PR notifications are suppressed). `head_sha` (the short head hash)
+/// drives pr-sync re-review.
+pub async fn poll_prs(repo_path: &str) -> AppResult<Vec<PrPollInfo>> {
+    let creds = http::load_credentials().await?;
+    let (ws, slug) = workspace_slug(repo_path).await?;
+    let path = format!(
+        "repositories/{}/{}/pullrequests?state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED&sort=-updated_on&pagelen=20",
+        encode_query_value(&ws),
+        encode_query_value(&slug),
+    );
+    let page: BbPage<BbPollPr> = http::bb_get_json(&creds, &path, "pull requests").await?;
+
+    // Resolve the viewer's identity (uuid to match the author, login to emit as the
+    // author when it's the viewer's own PR) — one GET, like `pr_approvals`.
+    let self_user = http::bb_get_json::<BbUser>(&creds, "user", "user").await.ok();
+    let viewer_uuid = self_user
+        .as_ref()
+        .and_then(|u| u.uuid.clone())
+        .unwrap_or_default();
+    let viewer_login = read_stored_username().await.unwrap_or_else(|| {
+        self_user
+            .as_ref()
+            .and_then(|u| u.username.clone().or_else(|| u.display_name.clone()))
+            .unwrap_or_default()
+    });
+
+    Ok(page
+        .values
+        .into_iter()
+        .map(|p| from_bb_poll_pr(p, &viewer_uuid, &viewer_login))
+        .collect())
 }
 
 /// A PR commit (`{hash, date, message, summary, author {raw, user}}`).
@@ -4116,6 +4220,62 @@ mod tests {
         assert!(!state.viewer_has_approved);
         assert!(!state.viewer_requested_changes);
         assert!(state.approved_by.is_empty());
+    }
+
+    #[test]
+    fn poll_pr_maps_state_short_sha_and_own_author_as_login() {
+        // DECLINED collapses to CLOSED; the short (12-char) head hash rides through
+        // as-is; the author is the VIEWER, so it emits the stored login (not nickname)
+        // — that's how the hook suppresses a notification about the viewer's own PR.
+        let json = r#"{
+            "id": 12,
+            "title": "My PR",
+            "state": "DECLINED",
+            "draft": false,
+            "author": {"uuid": "{me}", "nickname": "me-nick"},
+            "source": {"commit": {"hash": "abc123def456"}},
+            "links": {"html": {"href": "https://bitbucket.org/w/r/pull-requests/12"}}
+        }"#;
+        let info = from_bb_poll_pr(serde_json::from_str(json).unwrap(), "{me}", "me-login");
+        assert_eq!(info.number, 12);
+        assert_eq!(info.state, "CLOSED");
+        assert_eq!(info.url, "https://bitbucket.org/w/r/pull-requests/12");
+        // Author == the viewer's login, so `pr.author === gh.login` matches → own PR.
+        assert_eq!(info.author, "me-login");
+        // The 12-char short sha is passed through untouched.
+        assert_eq!(info.head_sha, "abc123def456");
+        assert_eq!(info.review_decision, "");
+        assert_eq!(info.checks_state, "");
+    }
+
+    #[test]
+    fn poll_pr_other_author_uses_nickname() {
+        // A PR by someone else: no username is available (Bitbucket privacy), so the
+        // author falls back to the nickname — the hook then notifies (not the viewer).
+        let json = r#"{
+            "id": 3,
+            "title": "Their PR",
+            "state": "OPEN",
+            "author": {"uuid": "{other}", "nickname": "other-nick"},
+            "source": {"commit": {"hash": "000111222333"}}
+        }"#;
+        let info = from_bb_poll_pr(serde_json::from_str(json).unwrap(), "{me}", "me-login");
+        assert_eq!(info.state, "OPEN");
+        assert_eq!(info.author, "other-nick");
+        assert_eq!(info.head_sha, "000111222333");
+        // SUPERSEDED also collapses to CLOSED.
+        assert_eq!(map_bb_pr_state("SUPERSEDED"), "CLOSED");
+    }
+
+    #[test]
+    fn poll_pr_tolerates_missing_author_and_commit() {
+        // A PR with no author object and no source commit must not sink the parse.
+        let json = r#"{ "id": 9, "title": "t", "state": "MERGED" }"#;
+        let info = from_bb_poll_pr(serde_json::from_str(json).unwrap(), "{me}", "me-login");
+        assert_eq!(info.number, 9);
+        assert_eq!(info.state, "MERGED");
+        assert_eq!(info.author, "");
+        assert_eq!(info.head_sha, "");
     }
 
     #[test]

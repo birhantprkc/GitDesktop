@@ -805,11 +805,14 @@ export function RemotePrView({
         <PrReviewPanel
           prKind="remote"
           prRef={String(number)}
+          prNoun={prNoun}
           context={{
             title: pr.title,
             body: pr.body,
             commitSubjects: pr.commits.map((c) => c.headline),
             repoPath,
+            // Provider-aware review copy (MR/merge-request noun, markdown flavor).
+            provider: provider ?? undefined,
             // gh GraphQL returns commits oldest-first, so the head is the last.
             headSha: pr.commits.at(-1)?.oid,
             // Reuse the diff already cached by usePrDiff (mounted above) instead of

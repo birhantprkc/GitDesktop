@@ -8,6 +8,14 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -31,7 +39,7 @@ import {
   useRepoStatus,
 } from "@/lib/git/queries";
 import type { CommitSummary } from "@/lib/git/types";
-import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { dispatchAction, useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
@@ -107,18 +115,65 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
     Boolean(compareBranch && compareBranch !== currentName && ahead.length > 0),
   );
 
+  if (status.isPending || branches.isPending)
+    return (
+      <div className="space-y-2 p-3">
+        <Skeleton className="h-8 w-full" />
+        <Skeleton className="h-8 w-full" />
+      </div>
+    );
+
   if (detached || !currentName) {
     return (
-      <p className="flex-1 px-3 py-8 text-center text-xs text-muted-foreground">
-        Compare needs a checked-out branch. You're on a detached HEAD.
-      </p>
+      <Empty className="flex-1">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <GitBranchIcon />
+          </EmptyMedia>
+          <EmptyTitle>You're on a detached HEAD</EmptyTitle>
+          <EmptyDescription>
+            Compare needs a checked-out branch. Switch to a branch to see how it
+            differs from another.
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => dispatchAction("show-branches")}
+          >
+            <GitBranchIcon data-icon="inline-start" />
+            Switch branch…
+          </Button>
+        </EmptyContent>
+      </Empty>
     );
   }
   if (otherBranches.length === 0) {
     return (
-      <p className="flex-1 px-3 py-8 text-center text-xs text-muted-foreground">
-        No other branches to compare against.
-      </p>
+      <Empty className="flex-1">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <GitBranchIcon />
+          </EmptyMedia>
+          <EmptyTitle>No other branches</EmptyTitle>
+          <EmptyDescription>
+            Compare shows how <span className="font-mono">{currentName}</span>{" "}
+            diverges from another branch. Create a branch to have something to
+            compare against.
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => dispatchAction("new-branch")}
+          >
+            <GitBranchIcon data-icon="inline-start" />
+            New branch…
+          </Button>
+        </EmptyContent>
+      </Empty>
     );
   }
 

@@ -12,6 +12,23 @@ import { triggerAutomations } from "./runner";
  */
 const lastFiredHead = new Map<string, string>();
 
+/**
+ * Whether two commit SHAs refer to the same commit, tolerating a short-vs-full
+ * mismatch. Providers disagree on length: pr-open events seed the FULL 40-char
+ * local sha, while Bitbucket's poll delivers a 12-char short sha for the same
+ * head. A plain `===` would then treat every poll tick as a new head and re-fire
+ * pr-sync forever. Prefix-matches by the shorter (requiring ≥7 chars — git's
+ * minimum unambiguous length — so a stray empty/1-char value can't false-match),
+ * with an exact-equal fast path.
+ */
+export function sameSha(a: string, b: string): boolean {
+  if (a === b) return a !== "";
+  if (!a || !b) return false;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if (shorter.length < 7) return false;
+  return longer.startsWith(shorter);
+}
+
 export interface SyncCandidate {
   repoPath: string;
   kind: "remote" | "local";
@@ -35,7 +52,10 @@ export interface SyncCandidate {
 export function maybeFireSync(c: SyncCandidate): void {
   if (!c.currentHeadSha) return;
   const key = `${c.kind}:${c.repoPath}#${c.ref}`;
-  if (lastFiredHead.get(key) === c.currentHeadSha) return;
+  const prior = lastFiredHead.get(key);
+  // sameSha (not `===`) so a short-vs-full sha for the SAME head (Bitbucket's
+  // 12-char poll head vs a full-40 seed) doesn't re-fire on every poll tick.
+  if (prior !== undefined && sameSha(prior, c.currentHeadSha)) return;
   lastFiredHead.set(key, c.currentHeadSha);
   triggerAutomations({
     kind: "pr-sync",

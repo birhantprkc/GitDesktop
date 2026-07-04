@@ -88,6 +88,12 @@ commit list.
   squash) variants, and once armed the footer shows an "Auto-merge enabled"
   indicator you can cancel in place. GitLab merges it for you when the pipeline
   passes.
+- **PR notifications & remote pr-sync on GitLab and Bitbucket.** The background PR
+  poller — OS notifications for pull requests opened, merged, or closed, and the
+  **remote pr-sync** automation that re-reviews an open remote PR when its head
+  advances — now works on GitLab and Bitbucket repositories, not just GitHub. (Check
+  and review-decision notifications stay GitHub-only for now: GitLab and Bitbucket
+  don't report a check rollup or approval state in the list responses the poll uses.)
 - **Copy the branch name or HEAD SHA.** The repository menu (and command palette)
   gained two clipboard actions alongside "copy the repo path": **Copy branch name**
   copies the current branch, and **Copy HEAD SHA** copies the full commit SHA of
@@ -545,6 +551,16 @@ commit list.
   mounts your global skills (`~/.agents/skills`) read-only, so a skill invoked by name
   resolves inside the container just as it does for a host session — previously only
   skills committed to the repo were visible there.
+- **AI re-reviews build on GitLab bot findings.** When you re-review a GitLab merge
+  request, GitDesktop now folds in what third-party AI reviewers (CodeRabbit, Copilot,
+  and the like) already flagged in the MR discussion — the same "build on external
+  reviews" context it has offered on GitHub — so the model doesn't re-report findings
+  another tool already raised. Bitbucket has no equivalent bot-review ecosystem, so it
+  stays out of this path.
+- **Provider-aware AI prompts.** AI review, summary, and commit-message prompts now speak
+  the host's vocabulary — "merge request" on GitLab and Bitbucket, "pull request" on
+  GitHub — and use each platform's markdown flavor, and release-notes generation no
+  longer shells out to the GitHub CLI on a GitLab or Bitbucket repository.
 
 ### Changed
 
@@ -554,6 +570,12 @@ commit list.
   to pick between GitHub, GitLab, and Bitbucket when more than one is ready — no more
   stacked per-provider buttons. In those empty states, publishing now takes precedence
   over the GitHub CLI setup steps whenever another provider can already publish the repo.
+- **Empty states now teach their surface and offer the next action.** Compare's
+  detached-HEAD and no-other-branches states explain what's needed and offer *Switch
+  branch* / *New branch*; Actions' empty runs list explains where runs come from
+  (provider-aware) with a *Run workflow/pipeline* button, and its branch-scoped empty
+  offers *Show all branches*; History's filtered no-match adds a *Clear filter* button;
+  and the Tags, PR Tasks, and Discussions empty states got clearer, more helpful copy.
 
 ### Fixed
 

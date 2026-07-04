@@ -1,4 +1,4 @@
-import { ghPrExternalReviews } from "@/lib/git/api";
+import { forgePrExternalReviews } from "@/lib/git/api";
 import type { ExternalReviewItem } from "@/lib/git/types";
 
 /** What `buildReviewPrompt` needs about third-party AI reviews on a PR. */
@@ -52,30 +52,53 @@ function isReviewerBotLogin(login: string): boolean {
 }
 
 /**
- * Whether an item is a genuine AI-reviewer finding worth folding in. Inline
- * review comments and submitted reviews from any bot qualify (only reviewers
- * post those); conversation comments only from an allowlisted reviewer bot.
+ * Whether an item is a genuine AI-reviewer finding worth folding in.
+ *
+ * On GitHub, `isBot` is server truth (GraphQL `__typename == "Bot"`), so inline
+ * review comments and submitted reviews from any bot qualify (only reviewers post
+ * those); conversation comments only from an allowlisted reviewer bot.
+ *
+ * On GitLab, REST authors carry NO bot flag — the Rust mapper sets `isBot: true`
+ * unconditionally — so the inline/review "any bot" bypass would let a HUMAN
+ * teammate's inline diff comment ("nit: rename this") pose as an AI finding. For
+ * GitLab we therefore require the author to be an allowlisted reviewer bot for
+ * EVERY kind; the login allowlist (`REVIEWER_BOTS`) is the only bot truth we have,
+ * and it lives in exactly one place — here.
  */
-function isReviewerFinding(item: ExternalReviewItem): boolean {
+function isReviewerFinding(
+  item: ExternalReviewItem,
+  provider: string,
+): boolean {
   if (!item.isBot || !item.body.trim()) return false;
-  // A pure "APPROVED" with no body is noise, but we already require a body.
+  if (provider === "gitlab") return isReviewerBotLogin(item.author);
+  // GitHub: `isBot` is server-verified, so reviewer-only surfaces (inline/review)
+  // qualify from any bot; conversation comments need the allowlist.
   if (item.kind === "inline" || item.kind === "review") return true;
   return isReviewerBotLogin(item.author);
 }
 
 /**
  * Fetches a PR's review activity and keeps only the third-party AI-reviewer
- * findings. Best-effort: any failure (no gh, network, non-GitHub repo) yields an
- * empty list — external context never blocks a review. Used by the panel's
- * banner query and by `resolveExternalContext`.
+ * findings. Best-effort: any failure (no gh, network) yields an empty list —
+ * external context never blocks a review. Used by the panel's banner query and by
+ * `resolveExternalContext`.
+ *
+ * The harvest runs behind the forge abstraction (`forge_pr_external_reviews`):
+ * GitHub delegates unchanged, GitLab maps MR discussions. Bitbucket has no
+ * third-party AI-reviewer ecosystem, so we skip it here (the Rust arm is an empty
+ * no-network `[]` anyway — skipping in one place, the frontend, avoids even the
+ * IPC round trip per automated run and per panel view). The `provider` param
+ * defaults to GitHub so existing callers are unchanged.
  */
 export async function fetchExternalFindings(
   repoPath: string,
   prNumber: number,
+  provider: string = "github",
 ): Promise<ExternalReviewItem[]> {
+  if (provider === "bitbucket") return [];
   try {
-    const items = await ghPrExternalReviews(repoPath, prNumber);
-    return items.filter(isReviewerFinding);
+    const items = await forgePrExternalReviews(repoPath, prNumber);
+    return items.filter((item) => isReviewerFinding(item, provider));
   } catch {
     return [];
   }
@@ -178,12 +201,13 @@ export async function resolveExternalContext(
   ref: string,
   currentHeadSha: string | undefined,
   ignore: boolean,
+  provider: string = "github",
 ): Promise<ExternalContext> {
   if (ignore || kind !== "remote") return {};
   const prNumber = Number(ref);
   if (!Number.isInteger(prNumber) || prNumber <= 0) return {};
 
-  const items = await fetchExternalFindings(repoPath, prNumber);
+  const items = await fetchExternalFindings(repoPath, prNumber, provider);
   if (items.length === 0) return {};
 
   const externalFindings = formatExternalFindings(items);
