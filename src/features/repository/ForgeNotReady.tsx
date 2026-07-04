@@ -2,23 +2,16 @@ import {
   ArrowSquareOutIcon,
   GearSixIcon,
   GithubLogoIcon,
-  GitlabLogoIcon,
   TerminalIcon,
-  UploadSimpleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { openInTerminal } from "@/lib/git/api";
-import {
-  useForgeStatus,
-  usePublishTargets,
-  useRemotes,
-} from "@/lib/git/queries";
+import { useForgeStatus, useRemotes } from "@/lib/git/queries";
 import { useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
-import { PublishDialog } from "./PublishDialog";
+import { PublishRepoControl, usePublishProviders } from "./PublishRepoControl";
 
 /** Where a Bitbucket / Atlassian API token is created. */
 const ATLASSIAN_TOKEN_URL =
@@ -31,11 +24,15 @@ const ATLASSIAN_TOKEN_URL =
  * instead of a dead end. `feature` is the noun the message reads with ("pull
  * requests", "workflow runs").
  *
- * Provider-aware: GitHub walks the gh setup ladder (install → sign in →
- * publish); GitLab walks the analogous glab ladder (install → sign in), then —
- * if glab is ready but the repo still isn't resolvable to a GitLab project —
- * points at `glab auth status`; Bitbucket — recognized but not yet implemented
- * — says so plainly.
+ * Provider-aware, with the publish path taking precedence: when this repo has
+ * no origin and ≥1 provider can publish it, the panel offers the shared
+ * "Publish repository…" control (a menu when 2+ are ready) instead of the gh
+ * setup ladder. Otherwise GitHub walks the gh setup ladder (install → sign in
+ * → publish, or — if gh is ready but the repo isn't resolvable — a `gh auth
+ * status` diagnostic); GitLab walks the analogous glab ladder (install → sign
+ * in), then — if glab is ready but the repo still isn't resolvable to a GitLab
+ * project — points at `glab auth status`; Bitbucket — recognized but not yet
+ * implemented — says so plainly.
  */
 export function ForgeNotReady({
   repoPath,
@@ -46,26 +43,22 @@ export function ForgeNotReady({
 }) {
   const forge = useForgeStatus(repoPath);
   const settings = useSettings();
-  const repoName = useUiStore((s) => s.repoName);
   const openSettings = useUiStore((s) => s.openSettings);
-  const [publishOpen, setPublishOpen] = useState(false);
-  const [publishProvider, setPublishProvider] = useState<
-    "github" | "gitlab" | "bitbucket"
-  >("github");
 
   const provider = forge.data?.provider;
-  // A repo with no hosted remote has nothing to detect a provider from, so
-  // publish targets are probed explicitly (which CLIs are installed + signed
-  // in). This is what lets a glab-only machine publish to GitLab even while the
-  // gh ladder below is still asking for the GitHub CLI. Gated on the repo
-  // actually having NO origin: provider is ALSO null for repos whose remote gh
-  // simply can't identify (gh signed out, an unrecognized host) — publishing
-  // those would create an orphan project and then fail adding `origin`.
   const installed = Boolean(forge.data?.installed);
   const authed = Boolean(forge.data?.authenticated);
   const remotes = useRemotes(repoPath);
   const noOrigin = remotes.isSuccess && !remotes.data.includes("origin");
-  const targets = usePublishTargets(
+  // A repo with no hosted remote has nothing to detect a provider from, so
+  // publish targets are probed explicitly (which CLIs are installed + signed
+  // in), yielding the ready providers in a stable order. This is what lets a
+  // glab-only machine publish to GitLab even while the gh ladder below is still
+  // asking for the GitHub CLI. Gated on the repo actually having NO origin:
+  // provider is ALSO null for repos whose remote gh simply can't identify (gh
+  // signed out, an unrecognized host) — publishing those would create an orphan
+  // project and then fail adding `origin`.
+  const providers = usePublishProviders(
     repoPath,
     provider == null && Boolean(forge.data) && noOrigin,
   );
@@ -177,12 +170,24 @@ export function ForgeNotReady({
     );
   }
 
-  // GitHub: the install → sign-in → publish ladder — plus GitLab / Bitbucket
-  // publish paths whenever those are ready (a no-remote repo can go to any of
-  // the providers this machine is signed in to).
-  const glabPublish = noOrigin && targets.data?.gitlab === true;
-  const bbPublish = noOrigin && targets.data?.bitbucket === true;
+  // Publish takes precedence: a no-origin repo that any signed-in provider can
+  // take is offered the shared Publish control (a menu when 2+ are ready)
+  // instead of the gh setup ladder.
+  if (providers.length > 0) {
+    return (
+      <div className="space-y-2.5 px-3 py-4 text-xs text-muted-foreground">
+        <p>
+          This repository isn't published yet. Publish it to use {feature} here.
+        </p>
+        <PublishRepoControl repoPath={repoPath} providers={providers} />
+      </div>
+    );
+  }
 
+  // GitHub: nothing can publish this repo, so walk the gh setup ladder
+  // (install → sign in), then — if gh is ready but the repo still isn't
+  // resolvable (an origin gh can't identify, or the targets probe found
+  // nothing) — point at `gh auth status`.
   return (
     <div className="space-y-2.5 px-3 py-4 text-xs text-muted-foreground">
       {!installed ? (
@@ -224,57 +229,13 @@ export function ForgeNotReady({
           </Button>
         </>
       ) : (
-        <>
-          <p>
-            This repository isn't published yet. Publish it to use {feature}{" "}
-            here.
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setPublishProvider("github");
-              setPublishOpen(true);
-            }}
-          >
-            <UploadSimpleIcon data-icon="inline-start" />
-            Publish to GitHub…
-          </Button>
-        </>
+        <p>
+          GitDesktop couldn't connect this repository to GitHub, so {feature}{" "}
+          aren't available here. Run{" "}
+          <span className="font-mono text-foreground">gh auth status</span> in a
+          terminal to check the connection.
+        </p>
       )}
-      {glabPublish && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            setPublishProvider("gitlab");
-            setPublishOpen(true);
-          }}
-        >
-          <GitlabLogoIcon data-icon="inline-start" />
-          Publish to GitLab…
-        </Button>
-      )}
-      {bbPublish && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            setPublishProvider("bitbucket");
-            setPublishOpen(true);
-          }}
-        >
-          <UploadSimpleIcon data-icon="inline-start" />
-          Publish to Bitbucket…
-        </Button>
-      )}
-      <PublishDialog
-        repoPath={repoPath}
-        provider={publishProvider}
-        defaultName={repoName ?? ""}
-        open={publishOpen}
-        onOpenChange={setPublishOpen}
-      />
     </div>
   );
 }

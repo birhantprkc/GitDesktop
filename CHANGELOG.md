@@ -546,6 +546,15 @@ commit list.
   resolves inside the container just as it does for a host session — previously only
   skills committed to the repo were visible there.
 
+### Changed
+
+- **One unified "Publish repository…" control.** The sync bar and the hosted-feature
+  empty states (Pull Requests, Issues, Discussions, Actions) now share a single publish
+  affordance: a plain button when one provider can publish a local-only repo, or a menu
+  to pick between GitHub, GitLab, and Bitbucket when more than one is ready — no more
+  stacked per-provider buttons. In those empty states, publishing now takes precedence
+  over the GitHub CLI setup steps whenever another provider can already publish the repo.
+
 ### Fixed
 
 - **Deleting a worktree with installed dependencies now works on Windows.** Removing an
