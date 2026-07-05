@@ -140,8 +140,12 @@ export function RemoveRepoDialog({
       onClose();
     } catch (e) {
       // Removal didn't complete and the folder still exists — reopen so the
-      // user isn't stranded on the welcome screen. (If the trash already
-      // succeeded the folder is gone, so don't reopen.)
+      // user isn't stranded on the welcome screen. The `!trashed` guard is
+      // deliberate and must stay: once the trash succeeds the folder is gone,
+      // so reopening it would fail. (In the rare case the trash succeeds but
+      // the subsequent removeRecent write throws, we intentionally leave the
+      // stale recents entry rather than reopen a deleted folder — the entry is
+      // harmless and self-heals next time the recents list is opened.)
       if (wasOpen && !trashed) openRepo({ root: repo.path, name: repo.name });
       toastError(e);
     } finally {
