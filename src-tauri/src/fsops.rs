@@ -109,12 +109,19 @@ pub async fn delete_repo_folder(path: String) -> AppResult<()> {
         // subprocess holding a handle to the folder, which makes Windows abort
         // the move. A few short waits let those processes exit.
         const ATTEMPTS: usize = 3;
-        let mut last_err = None;
+        // "Recycle Bin" is Windows-only terminology; macOS and Linux call the
+        // OS trash "Trash". Pick the right one at compile time.
+        #[cfg(windows)]
+        const TRASH_NAME: &str = "Recycle Bin";
+        #[cfg(not(windows))]
+        const TRASH_NAME: &str = "Trash";
+
+        let mut cause = String::new();
         for attempt in 0..ATTEMPTS {
             match trash::delete(&dir) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
-                    last_err = Some(e);
+                    cause = e.to_string();
                     if attempt + 1 < ATTEMPTS {
                         std::thread::sleep(std::time::Duration::from_millis(300));
                     }
@@ -122,11 +129,8 @@ pub async fn delete_repo_folder(path: String) -> AppResult<()> {
             }
         }
         // Lead with actionable copy; keep the raw cause as an honest suffix.
-        let cause = last_err
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "unknown error".to_string());
         Err(AppError::Io(std::io::Error::other(format!(
-            "Couldn't move the repository to the Recycle Bin — the folder may be in use \
+            "Couldn't move the repository to the {TRASH_NAME} — the folder may be in use \
              by an open editor, terminal, or file-explorer window. Close them and try \
              again. ({cause})"
         ))))
