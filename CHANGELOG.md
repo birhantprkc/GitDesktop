@@ -4,9 +4,11 @@ All notable, user-facing changes to GitDesktop are recorded here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Entries are curated for humans. They're drafted from the commit history
-(`pnpm changelog`) and then rewritten into clear, user-facing notes — not a raw
-commit list.
+Entries are curated for humans. Each user-facing change adds a small fragment file
+under `changelog.d/` (see its README); those are assembled here at release time by
+`pnpm release:prepare`, so `## [Unreleased]` is generated — don't hand-edit it.
+`pnpm changelog` drafts starting-point bullets from the commit history and
+`pnpm changelog:preview` shows the pending fragments.
 
 ## [Unreleased]
 

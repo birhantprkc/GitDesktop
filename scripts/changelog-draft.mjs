@@ -4,6 +4,27 @@
 // the output into clear, user-facing prose before pasting it under
 // "## [Unreleased]" in CHANGELOG.md. Run with: pnpm changelog
 import { execSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { countEntries, readFragments, renderSectionLines } from "./changelog-lib.mjs";
+
+// `--preview` mode: show the pending changelog.d/ fragments assembled under an
+// Unreleased heading, without touching any file. (Plain `pnpm changelog`, below,
+// still drafts a starting point from the Conventional Commits since the last tag.)
+if (process.argv.includes("--preview")) {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "changelog.d");
+  const { groups } = readFragments(dir);
+  if (countEntries(groups) === 0) {
+    process.stdout.write(
+      "No pending changelog.d fragments. Add one as changelog.d/<added|changed|fixed>-<slug>.md.\n",
+    );
+    process.exit(0);
+  }
+  process.stdout.write(
+    `${renderSectionLines("## [Unreleased] — pending fragments", groups).join("\n").trimEnd()}\n`,
+  );
+  process.exit(0);
+}
 
 const git = (args) =>
   execSync(`git ${args}`, {

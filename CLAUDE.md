@@ -23,11 +23,15 @@ don't wait to be asked:**
    literal keys** (they resolve per-platform and reflect rebindings); gate AI content with
    the `ai: true` section flag + `{{ai}}…{{/ai}}` inline markers so *Hide AI* hides it.
    (Conventions + gotchas: `memory/help-guide-content-conventions.md`.)
-4. **`CHANGELOG.md`** — add an entry under `## [Unreleased]` (existing convention,
-   for any user-facing change, written for humans).
+4. **Changelog fragment** — for any user-facing change, add a
+   `changelog.d/<added|changed|fixed>-<slug>.md` file whose body is the finished
+   Keep a Changelog bullet (written for humans). **Never edit `## [Unreleased]` in
+   `CHANGELOG.md` directly** — fragments are assembled there at release time, and
+   one file per change keeps parallel branches conflict-free. Preview with
+   `pnpm changelog:preview`; conventions live in `changelog.d/README.md`.
 
 If a feature is too minor for the README / site / guide, it's fine to add only the
-capability line + changelog — but make the call deliberately, don't skip silently.
+capability line + changelog fragment — but make the call deliberately, don't skip silently.
 
 **Screenshots:** marketing-site screenshots for the **Just Git** view must be
 captured with the app's *Settings → General → Hide AI features* ON, so they match
@@ -40,6 +44,7 @@ pnpm build      # typecheck (tsc) + bundle the frontend
 pnpm lint       # Biome (format + lint) — run before committing
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 cd site && pnpm build   # build the marketing site
+pnpm changelog:preview  # preview pending changelog.d/ fragments
 ```
 
 ## A few house rules (see CONTRIBUTING.md for the rest)

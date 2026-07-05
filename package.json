@@ -10,6 +10,8 @@
     "lint": "biome check --write ./src/",
     "preview": "vite preview",
     "changelog": "node scripts/changelog-draft.mjs",
+    "changelog:preview": "node scripts/changelog-draft.mjs --preview",
+    "release:prepare": "node scripts/changelog-release.mjs",
     "cold-start": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/cold-start.ps1",
     "tauri": "tauri",
     "dev:site": "pnpm --filter site dev",

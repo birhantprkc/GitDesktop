@@ -1,0 +1,44 @@
+name: changelog
+
+# Reminds contributors to add a changelog.d/ fragment when they change code.
+# This is opt-in: it's only enforced if you make the "fragment" check a required
+# status in branch protection. Escape hatches: label the PR `no-changelog`, or put
+# `skip-changelog` in the PR title.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  fragment:
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Require a changelog.d/ fragment for code changes
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          changed=$(git diff --name-only "$BASE" "$HEAD")
+          printf '%s\n' "$changed"
+          if grep -qE '^(src|src-tauri)/' <<< "$changed"; then
+            if grep -qE '^changelog\.d/.+\.md$' <<< "$changed"; then
+              echo "Changelog fragment present — thanks!"
+            elif grep -qiF 'skip-changelog' <<< "$TITLE"; then
+              echo "'skip-changelog' in the PR title — fragment not required."
+            else
+              echo "::error::This PR changes src/ or src-tauri/ but adds no changelog.d/ fragment."
+              echo "Add changelog.d/<added|changed|fixed>-<slug>.md (see changelog.d/README.md),"
+              echo "or add the 'no-changelog' label / put 'skip-changelog' in the PR title."
+              exit 1
+            fi
+          else
+            echo "No src/ or src-tauri/ changes — fragment not required."
+          fi

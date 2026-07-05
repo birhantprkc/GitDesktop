@@ -91,11 +91,18 @@ Common scopes mirror the feature areas: `repos`, `changes`, `branches`, `history
 
 ### Changelog
 
-For any **user-facing** change, add an entry under `## [Unreleased]` in
-[CHANGELOG.md](CHANGELOG.md). Entries are
-[Keep a Changelog](https://keepachangelog.com/) style and written **for humans** —
-a clear sentence about what changed for the user, not a copy of your commit
-subject. (`pnpm changelog` can draft a starting point from the git history.)
+For any **user-facing** change, add a **changelog fragment** — a small Markdown
+file under [`changelog.d/`](changelog.d/) named `<added|changed|fixed>-<slug>.md`
+(e.g. `changelog.d/added-gitlab-time-tracking.md`). Its body is the finished
+[Keep a Changelog](https://keepachangelog.com/)-style bullet, written **for
+humans** — a clear sentence about what changed for the user, not a copy of your
+commit subject. One file per change means parallel branches never conflict on the
+changelog; see [`changelog.d/README.md`](changelog.d/README.md) for the format.
+
+Don't edit `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) directly — the
+fragments are assembled there at release time. Preview the pending changelog with
+`pnpm changelog:preview`; `pnpm changelog` still drafts starting-point bullets
+from the git history.
 
 ### Docs and the marketing site
 
@@ -149,7 +156,7 @@ the utmost care.
 2. Keep PRs small and focused; one logical change per PR is easiest to review.
 3. Link the issue it addresses (`Closes #123`).
 4. Run `pnpm lint` and, if you touched Rust, `cargo test --manifest-path src-tauri/Cargo.toml`.
-5. Update `CHANGELOG.md` if the change is user-facing.
+5. Add a `changelog.d/` fragment if the change is user-facing (see the Changelog section).
 6. Fill out the PR template — including screenshots or a short screen recording
    for UI changes.
 
