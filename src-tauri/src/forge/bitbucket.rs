@@ -1367,34 +1367,32 @@ fn tail_cap(text: String, cap: usize) -> String {
 const EXPIRED_LOG_MESSAGE: &str =
     "Logs for this step are no longer available — Bitbucket expires older pipeline logs.";
 
-/// Fetch one step's log via `log_ref` (`"{pipeline_uuid}/{step_uuid}"`, RAW braces).
+/// Fetch one pipeline step's log from ALREADY-RESOLVED credentials + workspace/slug and
+/// the bare pipeline/step uuids. Split out from [`step_logs`] so `run_failed_logs` can
+/// loop over failed steps WITHOUT re-reading the keyring and re-spawning
+/// `git remote get-url origin` once per step (N failed steps → N redundant of each).
+///
 /// The `…/steps/{uuid}/log` endpoint 307-redirects (cross-host) to a pre-signed S3
 /// URL; reqwest strips Authorization on that hop (see `http::CLIENT`). Cleaned/capped
-/// like the gitlab job log (60_000 chars; empty → placeholder).
-///
-/// A 404 means the log has EXPIRED (verified live on a 2024 pipeline — Bitbucket
-/// prunes old logs) — a normal state, so it returns the informative
+/// like the gitlab job log (60_000 chars; empty → placeholder). A 404 means the log has
+/// EXPIRED (Bitbucket prunes old logs) — a normal state, so it returns the informative
 /// [`EXPIRED_LOG_MESSAGE`] as `Ok` rather than surfacing a raw error toast. Any other
 /// non-2xx still errors via `http::http_error` (401/429 special-casing preserved).
-pub async fn step_logs(repo_path: &str, log_ref: &str) -> AppResult<String> {
-    let (pipeline_uuid, step_uuid) = log_ref
-        .split_once('/')
-        .ok_or_else(|| AppError::InvalidArgument("a step log reference is required".into()))?;
-    if pipeline_uuid.is_empty() || step_uuid.is_empty() {
-        return Err(AppError::InvalidArgument(
-            "a step log reference is required".into(),
-        ));
-    }
-    let creds = http::load_credentials().await?;
-    let (ws, slug) = workspace_slug(repo_path).await?;
+async fn step_log_raw(
+    creds: &BbCredentials,
+    ws: &str,
+    slug: &str,
+    pipeline_uuid: &str,
+    step_uuid: &str,
+) -> AppResult<String> {
     let path = format!(
         "repositories/{}/{}/pipelines/{}/steps/{}/log",
-        encode_query_value(&ws),
-        encode_query_value(&slug),
+        encode_query_value(ws),
+        encode_query_value(slug),
         encode_uuid(pipeline_uuid),
         encode_uuid(step_uuid),
     );
-    let (status, body) = http::bb_get_text_status(&creds, &path).await?;
+    let (status, body) = http::bb_get_text_status(creds, &path).await?;
     if status == 404 {
         return Ok(EXPIRED_LOG_MESSAGE.to_string());
     }
@@ -1407,6 +1405,23 @@ pub async fn step_logs(repo_path: &str, log_ref: &str) -> AppResult<String> {
         body
     };
     Ok(tail_cap(text, CI_STEP_LOG_CAP))
+}
+
+/// Fetch one step's log via `log_ref` (`"{pipeline_uuid}/{step_uuid}"`, RAW braces) —
+/// the single-step command entry point. Parses the ref, resolves credentials +
+/// workspace/slug, then delegates to [`step_log_raw`].
+pub async fn step_logs(repo_path: &str, log_ref: &str) -> AppResult<String> {
+    let (pipeline_uuid, step_uuid) = log_ref
+        .split_once('/')
+        .ok_or_else(|| AppError::InvalidArgument("a step log reference is required".into()))?;
+    if pipeline_uuid.is_empty() || step_uuid.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "a step log reference is required".into(),
+        ));
+    }
+    let creds = http::load_credentials().await?;
+    let (ws, slug) = workspace_slug(repo_path).await?;
+    step_log_raw(&creds, &ws, &slug, pipeline_uuid, step_uuid).await
 }
 
 /// The failed steps' logs for a pipeline, concatenated — Bitbucket's analogue of
@@ -1442,11 +1457,12 @@ pub async fn run_failed_logs(repo_path: &str, run_id: u64) -> AppResult<String> 
             .clone()
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("Step {}", i + 1));
-        let log_ref = format!("{uuid}/{}", step.uuid);
         // An expired log comes back as the placeholder message (Ok), a hard failure
         // as an Err — either way make the section say so rather than leave a bare
-        // header with an empty body in the concatenated output.
-        let log = match step_logs(repo_path, &log_ref).await {
+        // header with an empty body in the concatenated output. Call `step_log_raw`
+        // directly with the creds/ws/slug already resolved above — going through
+        // `step_logs` would re-read the keyring and re-spawn `git remote get-url` per step.
+        let log = match step_log_raw(&creds, &ws, &slug, &uuid, &step.uuid).await {
             Ok(l) if l == EXPIRED_LOG_MESSAGE => "(log unavailable — expired)".to_string(),
             Ok(l) if l.trim().is_empty() => "(log unavailable)".to_string(),
             Ok(l) => l,
