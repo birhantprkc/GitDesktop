@@ -9,7 +9,7 @@ import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider } from "@/lib/ai/providers";
 import { runCliStream } from "@/lib/ai/stream";
-import type { AiSettings, ReviewMode } from "@/lib/ai/types";
+import type { AiSettings, PromptProvider, ReviewMode } from "@/lib/ai/types";
 import {
   forgePrComment,
   forgePrDiff,
@@ -267,11 +267,20 @@ async function generateReviewText(
         );
   if (signal.aborted) return null;
 
+  // Resolve the forge provider once and thread it to BOTH review sinks: the
+  // external-context harvest (to short-circuit the doomed `gh` spawn on
+  // GitLab/Bitbucket) AND the prompt builder (so the system prompt uses MR
+  // wording/markdown for GitLab/Bitbucket, not GitHub's). Needed even when
+  // external context is ignored, because buildReviewPrompt always wants it.
+  // Best-effort: a status-probe failure falls back to GitHub, the prior behavior.
+  const provider: PromptProvider = await forgeStatus(event.repoPath)
+    .then((s) => s.provider ?? "github")
+    .catch((): PromptProvider => "github");
+  if (signal.aborted) return null;
+
   // Third-party AI-reviewer findings (Copilot/CodeRabbit) on the remote PR, so an
   // automated re-review weighs them too — same soft context the interactive path
-  // uses. Remote PRs only; best-effort. The harvest is GitHub-only, so we thread
-  // the provider through to short-circuit the doomed `gh` spawn on GitLab/Bitbucket
-  // (best-effort: a status-probe failure falls back to GitHub, the prior behavior).
+  // uses. Remote PRs only; best-effort.
   const external: ExternalContext =
     event.kind !== "commit" && event.target.type === "remote"
       ? await resolveExternalContext(
@@ -280,9 +289,7 @@ async function generateReviewText(
           targetRef(event),
           event.headSha,
           false,
-          await forgeStatus(event.repoPath)
-            .then((s) => s.provider ?? "github")
-            .catch(() => "github"),
+          provider,
         )
       : {};
   if (signal.aborted) return null;
@@ -300,6 +307,7 @@ async function generateReviewText(
         deleted: f.deleted,
         isBinary: f.isBinary,
       })),
+      provider,
       ...prior,
       ...external,
     },

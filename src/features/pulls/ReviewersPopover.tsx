@@ -76,7 +76,15 @@ export function ReviewersPopover({
       return;
     }
     setOpen(false);
-    onChange([...draft.values()]);
+    // Only commit when the draft actually differs from `value` — otherwise
+    // merely opening and closing the popover would fire a redundant reviewer
+    // PUT (onChange → setReviewers.mutate). Compare id sets.
+    const valueIds = new Set(value.map((r) => r.id));
+    const changed =
+      draft.size !== valueIds.size ||
+      value.some((r) => !draft.has(r.id)) ||
+      [...draft.keys()].some((id) => !valueIds.has(id));
+    if (changed) onChange([...draft.values()]);
   }
 
   return (

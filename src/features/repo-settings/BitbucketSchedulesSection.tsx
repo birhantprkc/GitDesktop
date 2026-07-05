@@ -276,8 +276,10 @@ function ScheduleForm({
     const cronPattern = cron.trim();
     const created: BitbucketPipelineSchedule = {
       // The create call returns void, so synthesize a uuid; the reconcile refetch
-      // replaces it with the server's real row shortly.
-      uuid: `pending:${refName}:${cronPattern}`,
+      // replaces it with the server's real row shortly. A random uuid (not one
+      // derived from branch+cron) keeps two identical back-to-back creates from
+      // colliding on the same synthetic key and overwriting in the cache.
+      uuid: `pending:${crypto.randomUUID()}`,
       refName,
       cronPattern,
       enabled: true,

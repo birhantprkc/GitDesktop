@@ -1017,7 +1017,7 @@ pub async fn forge_add_reaction(
             gitlab::add_reaction(&repo_path, &target, number, note_id, &content).await
         }
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket reactions aren't supported yet.".into(),
+            "Bitbucket Cloud has no reactions.".into(),
         )),
         _ => github::add_reaction(&repo_path, &subject_id, &content).await,
     }
@@ -1039,7 +1039,7 @@ pub async fn forge_remove_reaction(
             gitlab::remove_reaction(&repo_path, &target, number, note_id, &content).await
         }
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket reactions aren't supported yet.".into(),
+            "Bitbucket Cloud has no reactions.".into(),
         )),
         _ => github::remove_reaction(&repo_path, &subject_id, &content).await,
     }

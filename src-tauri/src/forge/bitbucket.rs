@@ -26,7 +26,9 @@ use tauri_plugin_http::reqwest;
 use crate::error::{AppError, AppResult};
 use crate::forge::encode_query_value;
 use crate::forge::gitlab::null_to_default;
-use crate::forge::http::{self, BbCredentials, BB_HOST, KEY_EMAIL, KEY_TOKEN, KEY_USERNAME};
+use crate::forge::http::{
+    self, BbCredentials, BB_HOST, KEY_DISPLAY_NAME, KEY_EMAIL, KEY_TOKEN, KEY_USERNAME,
+};
 use crate::forge::model::{
     Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, ForgeUserRef, Implemented, Provider,
 };
@@ -201,8 +203,13 @@ pub async fn set_account(email: &str, token: &str) -> AppResult<BbAccountInfo> {
     let username = user.username.clone();
     let display_name = user.display_name.clone();
 
-    // Validated — persist all three entries (blocking keyring writes off-thread).
-    let (kr_email, kr_token, kr_username) = (email.clone(), token.clone(), username.clone());
+    // Validated — persist all entries (blocking keyring writes off-thread).
+    let (kr_email, kr_token, kr_username, kr_display_name) = (
+        email.clone(),
+        token.clone(),
+        username.clone(),
+        display_name.clone(),
+    );
     tauri::async_runtime::spawn_blocking(move || {
         crate::secrets::set_forge_secret(BB_HOST, KEY_EMAIL, &kr_email)?;
         crate::secrets::set_forge_secret(BB_HOST, KEY_TOKEN, &kr_token)?;
@@ -211,6 +218,14 @@ pub async fn set_account(email: &str, token: &str) -> AppResult<BbAccountInfo> {
         match &kr_username {
             Some(u) if !u.is_empty() => crate::secrets::set_forge_secret(BB_HOST, KEY_USERNAME, u)?,
             _ => crate::secrets::delete_forge_secret(BB_HOST, KEY_USERNAME)?,
+        }
+        // Persist the display name too (so `account()` can surface it after a
+        // restart); clear a stale one when the account has none.
+        match &kr_display_name {
+            Some(d) if !d.is_empty() => {
+                crate::secrets::set_forge_secret(BB_HOST, KEY_DISPLAY_NAME, d)?
+            }
+            _ => crate::secrets::delete_forge_secret(BB_HOST, KEY_DISPLAY_NAME)?,
         }
         Ok::<_, AppError>(())
     })
@@ -224,13 +239,14 @@ pub async fn set_account(email: &str, token: &str) -> AppResult<BbAccountInfo> {
     })
 }
 
-/// Disconnect the Bitbucket account — delete all three keyring entries (a missing
+/// Disconnect the Bitbucket account — delete all keyring entries (a missing
 /// entry is tolerated).
 pub async fn clear_account() -> AppResult<()> {
     tauri::async_runtime::spawn_blocking(|| {
         crate::secrets::delete_forge_secret(BB_HOST, KEY_EMAIL)?;
         crate::secrets::delete_forge_secret(BB_HOST, KEY_TOKEN)?;
         crate::secrets::delete_forge_secret(BB_HOST, KEY_USERNAME)?;
+        crate::secrets::delete_forge_secret(BB_HOST, KEY_DISPLAY_NAME)?;
         Ok::<_, AppError>(())
     })
     .await
@@ -244,12 +260,13 @@ pub async fn account() -> AppResult<Option<BbAccountInfo>> {
         let email = crate::secrets::read_forge_secret(BB_HOST, KEY_EMAIL)?;
         let token = crate::secrets::read_forge_secret(BB_HOST, KEY_TOKEN)?;
         let username = crate::secrets::read_forge_secret(BB_HOST, KEY_USERNAME)?;
+        let display_name = crate::secrets::read_forge_secret(BB_HOST, KEY_DISPLAY_NAME)?;
         Ok::<_, AppError>(match (email, token) {
             (Some(email), Some(token)) if !email.is_empty() && !token.is_empty() => {
                 Some(BbAccountInfo {
                     email,
                     username: username.filter(|u| !u.is_empty()),
-                    display_name: None,
+                    display_name: display_name.filter(|d| !d.is_empty()),
                 })
             }
             _ => None,
@@ -397,20 +414,36 @@ pub async fn list_repos() -> AppResult<ForgeRepoList> {
         http::bb_get_json(&creds, "user/workspaces?pagelen=100", "workspaces").await?;
 
     let mut repos = Vec::new();
+    // Best-effort per workspace (one workspace erroring shouldn't sink the others),
+    // but if EVERY workspace fetch fails (e.g. a transient 429/5xx or an expired
+    // token across the board), surface the last error rather than reporting an empty
+    // "no repositories" list.
+    let mut workspace_count = 0usize;
+    let mut any_ok = false;
+    let mut last_err: Option<AppError> = None;
     for access in workspaces.values {
         // Skip an entry with no nested workspace or an empty slug rather than error.
         let Some(slug) = access.workspace.map(|w| w.slug).filter(|s| !s.is_empty()) else {
             continue;
         };
+        workspace_count += 1;
         let path = format!(
             "repositories/{}?role=member&sort=-updated_on&pagelen=100",
             encode_query_value(&slug)
         );
-        // Best-effort per workspace: one workspace erroring (e.g. a permissions
-        // quirk) shouldn't sink the whole list.
-        if let Ok(page) = http::bb_get_json::<BbPage<BbRepo>>(&creds, &path, "repositories").await {
-            repos.extend(page.values.into_iter().map(from_bb_repo));
+        match http::bb_get_json::<BbPage<BbRepo>>(&creds, &path, "repositories").await {
+            Ok(page) => {
+                any_ok = true;
+                repos.extend(page.values.into_iter().map(from_bb_repo));
+            }
+            Err(e) => last_err = Some(e),
         }
+    }
+    if workspace_count > 0 && !any_ok {
+        // Every workspace fetch failed — return the last error, not an empty Ok.
+        return Err(last_err.unwrap_or_else(|| {
+            AppError::Bitbucket("could not list Bitbucket repositories".into())
+        }));
     }
     Ok(ForgeRepoList { viewer, repos })
 }
@@ -2252,21 +2285,25 @@ pub async fn pr_task_delete(repo_path: &str, number: u64, task_id: &str) -> AppR
 
 // ── Pipelines (CI, write) ───────────────────────────────────────────────────────
 
-/// Build the pipeline-trigger body for a branch, with an optional custom-pipeline
-/// selector and optional variables. Pure (testable). A non-empty `workflow` adds a
-/// `selector` (`{type:"custom", pattern:<workflow>}`) INSIDE `target`, dispatching a
-/// named custom pipeline instead of the branch's default; empty `workflow` triggers the
-/// branch's default pipeline (the rerun path passes ""). A non-empty `inputs` map adds
-/// a top-level `variables` array (sibling of `target`); an empty map omits it entirely.
+/// Build the pipeline-trigger body for a ref, with an optional custom-pipeline
+/// selector and optional variables. Pure (testable). `ref_type` is the target's
+/// `ref_type` (`"branch"` or `"tag"`) — the dispatch dialog's ref field is free-text
+/// and labelled "Branch or tag", so the backend detects which it is (the frontend
+/// can't). A non-empty `workflow` adds a `selector` (`{type:"custom",
+/// pattern:<workflow>}`) INSIDE `target`, dispatching a named custom pipeline instead
+/// of the ref's default; empty `workflow` triggers the ref's default pipeline (the
+/// rerun path passes ""). A non-empty `inputs` map adds a top-level `variables` array
+/// (sibling of `target`); an empty map omits it entirely.
 fn build_trigger_body(
     git_ref: &str,
+    ref_type: &str,
     workflow: &str,
     inputs: &std::collections::HashMap<String, String>,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
         "target": {
             "type": "pipeline_ref_target",
-            "ref_type": "branch",
+            "ref_type": ref_type,
             "ref_name": git_ref,
         }
     });
@@ -2327,18 +2364,36 @@ pub async fn rerun_run(repo_path: &str, run_id: u64) -> AppResult<()> {
         encode_query_value(&ws),
         encode_query_value(&slug),
     );
-    // Re-run re-triggers the branch's DEFAULT pipeline (no custom selector).
-    let payload = build_trigger_body(&branch, "", &std::collections::HashMap::new());
+    // Re-run re-triggers the branch's DEFAULT pipeline (no custom selector). A rerun
+    // always targets the original run's BRANCH.
+    let payload = build_trigger_body(&branch, "branch", "", &std::collections::HashMap::new());
     http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "pipeline").await?;
     Ok(())
 }
 
+/// Best-effort detection of whether `git_ref` names a TAG (vs a branch) in this repo,
+/// by probing `GET repositories/{ws}/{slug}/refs/tags/{ref}` — a 200 means the tag
+/// exists. Any error or non-200 (including a network hiccup, a 404 for a branch ref,
+/// or an auth failure) resolves to `false` (treat as a branch): this only refines the
+/// dispatch body's `ref_type`, so it must never sink the dispatch itself.
+async fn ref_is_tag(creds: &BbCredentials, ws: &str, slug: &str, git_ref: &str) -> bool {
+    let path = format!(
+        "repositories/{}/{}/refs/tags/{}",
+        encode_query_value(ws),
+        encode_query_value(slug),
+        encode_query_value(git_ref),
+    );
+    matches!(http::bb_get_text_status(creds, &path).await, Ok((200, _)))
+}
+
 /// Manually start a pipeline on `git_ref` (`POST …/pipelines/`), with `inputs` as
 /// pipeline variables. A non-empty `workflow` dispatches that named CUSTOM pipeline
-/// (via a `selector` on the target); empty `workflow` triggers the branch's default
-/// pipeline. A 400 (pipelines disabled / missing yml / unknown selector) surfaces its
-/// raw message via [`http::http_error`] — the unknown-selector envelope carries the
-/// useful text in `error.detail`, which `http_error` now prefers.
+/// (via a `selector` on the target); empty `workflow` triggers the ref's default
+/// pipeline. The dialog's ref field is free-text ("Branch or tag"), so we detect the
+/// ref type ([`ref_is_tag`]) and set the target's `ref_type` accordingly. A 400
+/// (pipelines disabled / missing yml / unknown selector) surfaces its raw message via
+/// [`http::http_error`] — the unknown-selector envelope carries the useful text in
+/// `error.detail`, which `http_error` now prefers.
 pub async fn dispatch_ci(
     repo_path: &str,
     workflow: &str,
@@ -2357,7 +2412,12 @@ pub async fn dispatch_ci(
         encode_query_value(&ws),
         encode_query_value(&slug),
     );
-    let payload = build_trigger_body(git_ref, workflow, inputs);
+    let ref_type = if ref_is_tag(&creds, &ws, &slug, git_ref).await {
+        "tag"
+    } else {
+        "branch"
+    };
+    let payload = build_trigger_body(git_ref, ref_type, workflow, inputs);
     http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "pipeline").await?;
     Ok(())
 }
@@ -2641,7 +2701,12 @@ pub async fn repo_admin(repo_path: &str) -> AppResult<bool> {
         )));
     }
     let creds = http::load_credentials().await?;
-    let query = format!(r#"slug="{slug}""#);
+    // Bitbucket stores slugs lowercase, and the BBQL `slug="…"` filter is
+    // case-sensitive server-side — a mixed-case clone URL would otherwise match 0
+    // rows and report a real admin as non-admin. The `slug.contains('"')` guard above
+    // ran on the original slug; the `repo_admin_matches` check below is already
+    // case-insensitive.
+    let query = format!(r#"slug="{}""#, slug.to_ascii_lowercase());
     let path = format!(
         "repositories/{}?role=admin&q={}&pagelen=100",
         encode_query_value(&ws),
@@ -2679,8 +2744,9 @@ async fn origin_remote_url(repo_path: &str) -> AppResult<String> {
 }
 
 /// Rewrite an `origin` remote URL to point at a new slug, preserving its scheme.
-/// Pure (testable). Handles the two forms this app clones with: HTTPS
-/// (`https://bitbucket.org/{ws}/{slug}.git`) and scp-style SSH
+/// Pure (testable). Handles the three forms this app clones with: HTTPS
+/// (`https://bitbucket.org/{ws}/{slug}.git`), `ssh://` SSH
+/// (`ssh://git@bitbucket.org/{ws}/{slug}.git`), and scp-style SSH
 /// (`git@bitbucket.org:{ws}/{slug}.git`). Returns `None` when the URL isn't a
 /// recognized Bitbucket remote (so the caller leaves it alone).
 fn rewritten_origin_url(old_url: &str, ws: &str, new_slug: &str) -> Option<String> {
@@ -2700,6 +2766,22 @@ fn rewritten_origin_url(old_url: &str, ws: &str, new_slug: &str) -> Option<Strin
             return None;
         }
         Some(format!("{scheme}://bitbucket.org/{ws}/{new_slug}.git"))
+    } else if let Some(after_scheme) = trimmed.strip_prefix("ssh://") {
+        // `ssh://git@bitbucket.org/ws/slug.git` — authority is up to the first '/',
+        // preserving the userinfo (`git@`) prefix like the http(s) branch preserves
+        // scheme. Only rewrite when the host is actually Bitbucket.
+        let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
+        // Split off an optional userinfo prefix (`user@`), keeping it to re-emit.
+        let (userinfo, hostport) = match authority.rsplit_once('@') {
+            Some((u, h)) => (format!("{u}@"), h),
+            None => (String::new(), authority),
+        };
+        // Strip an optional `:port`.
+        let host = hostport.split_once(':').map_or(hostport, |(h, _)| h);
+        if !host.eq_ignore_ascii_case("bitbucket.org") {
+            return None;
+        }
+        Some(format!("ssh://{userinfo}bitbucket.org/{ws}/{new_slug}.git"))
     } else if let Some((prefix, _rest)) = trimmed.split_once(':') {
         // scp-style `git@bitbucket.org:ws/slug.git` — keep the user@host prefix,
         // but only when the host is actually Bitbucket (a `git@github.com:…`
@@ -4435,7 +4517,7 @@ mod tests {
         let mut inputs = std::collections::HashMap::new();
         inputs.insert("DEPLOY_ENV".to_string(), "staging".to_string());
         inputs.insert("VERSION".to_string(), "1.2.3".to_string());
-        let body = build_trigger_body("main", "", &inputs);
+        let body = build_trigger_body("main", "branch", "", &inputs);
         assert_eq!(body["target"]["type"], "pipeline_ref_target");
         assert_eq!(body["target"]["ref_type"], "branch");
         assert_eq!(body["target"]["ref_name"], "main");
@@ -4452,7 +4534,7 @@ mod tests {
 
     #[test]
     fn trigger_body_without_variables_omits_the_array() {
-        let body = build_trigger_body("dev", "", &std::collections::HashMap::new());
+        let body = build_trigger_body("dev", "branch", "", &std::collections::HashMap::new());
         assert_eq!(body["target"]["ref_name"], "dev");
         // No `variables` key at all when inputs are empty.
         assert!(body.get("variables").is_none());
@@ -4461,8 +4543,17 @@ mod tests {
     }
 
     #[test]
+    fn trigger_body_with_tag_ref_type_sets_tag_target() {
+        // A tag dispatch must carry `ref_type:"tag"` (the dialog's ref field is
+        // free-text "Branch or tag", so the backend detects the type).
+        let body = build_trigger_body("v1.2.3", "tag", "", &std::collections::HashMap::new());
+        assert_eq!(body["target"]["ref_type"], "tag");
+        assert_eq!(body["target"]["ref_name"], "v1.2.3");
+    }
+
+    #[test]
     fn trigger_body_with_workflow_adds_custom_selector_inside_target() {
-        let body = build_trigger_body("main", "w4-smoke", &std::collections::HashMap::new());
+        let body = build_trigger_body("main", "branch", "w4-smoke", &std::collections::HashMap::new());
         assert_eq!(body["target"]["ref_name"], "main");
         assert_eq!(body["target"]["selector"]["type"], "custom");
         assert_eq!(body["target"]["selector"]["pattern"], "w4-smoke");
@@ -4474,7 +4565,7 @@ mod tests {
     fn trigger_body_selector_and_variables_combine() {
         let mut inputs = std::collections::HashMap::new();
         inputs.insert("W4_VAR".to_string(), "on".to_string());
-        let body = build_trigger_body("dev", "w4-second", &inputs);
+        let body = build_trigger_body("dev", "branch", "w4-second", &inputs);
         assert_eq!(body["target"]["selector"]["pattern"], "w4-second");
         let vars = body["variables"].as_array().unwrap();
         assert_eq!(vars.len(), 1);
@@ -5025,6 +5116,21 @@ definitions:
         assert_eq!(
             rewritten_origin_url("git@bitbucket.org:ws/old.git", "ws", "new"),
             Some("git@bitbucket.org:ws/new.git".to_string())
+        );
+        // `ssh://` form with userinfo preserves the `git@` prefix.
+        assert_eq!(
+            rewritten_origin_url("ssh://git@bitbucket.org/ws/old.git", "ws", "new"),
+            Some("ssh://git@bitbucket.org/ws/new.git".to_string())
+        );
+        // `ssh://` form without userinfo emits the bare host.
+        assert_eq!(
+            rewritten_origin_url("ssh://bitbucket.org/ws/old.git", "ws", "new"),
+            Some("ssh://bitbucket.org/ws/new.git".to_string())
+        );
+        // A non-Bitbucket `ssh://` host must NOT be clobbered.
+        assert_eq!(
+            rewritten_origin_url("ssh://git@example.com/ws/old.git", "ws", "new"),
+            None
         );
         // An unrecognized URL is left alone (None).
         assert_eq!(rewritten_origin_url("/local/path", "ws", "new"), None);

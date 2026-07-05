@@ -357,6 +357,7 @@ export async function startReview(
       target.ref,
       context.headSha,
       ignoreExternal,
+      context.provider,
     );
     if (control.cancelled) return;
     const { system, prompt } = buildReviewPrompt(

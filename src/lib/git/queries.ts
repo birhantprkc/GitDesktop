@@ -2573,7 +2573,7 @@ export function usePrTasks(repo: string, number: number | null) {
 // PR-task mutations invalidate the exact tasks key onSettled (keyed on the PR number
 // carried in the mutation args); the component patches its own local state
 // optimistically (like toggleApproval), so no optimistic logic lives in the hook.
-const prTasksKey = (repo: string, number: number) =>
+export const prTasksKey = (repo: string, number: number) =>
   ["repo", repo, "pr", number, "tasks"] as const;
 
 export function useCreatePrTask(repo: string) {
@@ -3467,7 +3467,7 @@ export function useBbSetPipelinesEnabled(repo: string) {
   );
 }
 
-const bbVariablesKey = (repo: string) =>
+export const bbVariablesKey = (repo: string) =>
   ["repo", repo, "bb-variables"] as const;
 
 export function useBbVariables(repo: string, enabled: boolean) {

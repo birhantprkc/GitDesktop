@@ -8,7 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -19,6 +19,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import {
+  prTasksKey,
   useCreatePrTask,
   useDeletePrTask,
   useEditPrTask,
@@ -29,9 +30,6 @@ import type { PrTask } from "@/lib/git/types";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-
-const tasksKey = (repoPath: string, number: number) =>
-  ["repo", repoPath, "pr", number, "tasks"] as const;
 
 /** Count of unresolved tasks — shared by the section and the header chip. */
 function unresolved(tasks: PrTask[]): number {
@@ -269,6 +267,19 @@ export function PrTasksSection({
   // The row the arrow-key nav walks from — updated as focus moves between rows.
   const [focusedId, setFocusedId] = useState<string | null>(null);
 
+  // Reset all PR-scoped UI state when the PR changes. Without this, switching
+  // PRs with the add/edit input open would leave it open and pre-filled, so
+  // submitting would create/edit a task on the NEW PR using the prior PR's text.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset intentionally keyed on `number` only.
+  useEffect(() => {
+    setAdding(false);
+    setAddText("");
+    setEditingId(null);
+    setEditText("");
+    setDeletingId(null);
+    setFocusedId(null);
+  }, [number]);
+
   const onError = (e: unknown) => toastError(e);
   const tasks = tasksQuery.data;
 
@@ -284,7 +295,7 @@ export function PrTasksSection({
   // mutate with rollback on error (mirrors RemotePrView's toggleApproval). The
   // mutation's onSettled invalidation reconciles the real state.
   function toggle(task: PrTask) {
-    const key = tasksKey(repoPath, number);
+    const key = prTasksKey(repoPath, number);
     const prev = queryClient.getQueryData<PrTask[]>(key);
     const nextResolved = task.state !== "RESOLVED";
     if (prev) {

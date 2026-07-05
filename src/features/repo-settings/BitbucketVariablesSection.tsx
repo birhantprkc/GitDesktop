@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import {
+  bbVariablesKey,
   useBbCreateVariable,
   useBbDeleteVariable,
   useBbPipelinesConfig,
@@ -23,8 +24,6 @@ import { AsyncListBody, InlineConfirm } from "./parts";
 function validKey(k: string): boolean {
   return /^[A-Za-z0-9_]{1,255}$/.test(k);
 }
-
-const bbVariablesKey = (repo: string) => ["repo", repo, "bb-variables"];
 
 /** Bitbucket pipeline variables. A secured variable's value is write-only — the
  *  API never returns it, so secured rows show "Secured — value hidden" (never

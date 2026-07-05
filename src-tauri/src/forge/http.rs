@@ -27,6 +27,7 @@ pub const BB_HOST: &str = "bitbucket.org";
 pub const KEY_EMAIL: &str = "email";
 pub const KEY_TOKEN: &str = "token";
 pub const KEY_USERNAME: &str = "username";
+pub const KEY_DISPLAY_NAME: &str = "display_name";
 
 /// Mirror `GLAB_NETWORK_TIMEOUT` — the ceiling for a single request.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
