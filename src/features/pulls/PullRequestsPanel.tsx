@@ -78,7 +78,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
         ? "Sign in to GitLab (glab auth login) to work with merge requests here."
         : "Install the GitLab CLI (glab) to work with merge requests here."
       : provider === "bitbucket"
-        ? "Creating Bitbucket pull requests from GitDesktop isn't supported yet."
+        ? "Connect your Bitbucket account in Settings → Accounts to create pull requests here."
         : "Connect this repository to GitHub to open a pull request here.";
   const pendingCreate = useUiStore((s) => s.pendingCreate);
   const clearPendingCreate = useUiStore((s) => s.clearPendingCreate);

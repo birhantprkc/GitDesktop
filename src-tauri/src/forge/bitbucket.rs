@@ -10,8 +10,11 @@
 //! (the native tracker is being deleted platform-wide 2026-08-20) and
 //! reactions/labels/milestones (Cloud has none of those).
 //!
-//! Auth is HTTP Basic (`{atlassian_account_email}:{api_token}`) — app passwords are
-//! dead — with the token stored in the OS keyring under `forge/bitbucket.org/*`.
+//! Auth is HTTP Basic (`{atlassian_account_email}:{api_token}`) for the REST API —
+//! app passwords are dead — with the token stored in the OS keyring under
+//! `forge/bitbucket.org/*`. git-over-HTTPS is the exception: it authenticates with the
+//! literal `x-bitbucket-api-token-auth` sentinel username (NOT the account email) plus
+//! the same token (see `publish_repo`).
 //!
 //! Pagination policy matches GitLab: a single page at the endpoint's max `pagelen`,
 //! no `next`-following loops (documented per call). The PR-list endpoint caps at 50;
@@ -1204,21 +1207,26 @@ async fn resolve_pipeline(
     let ws_e = encode_query_value(ws);
     let slug_e = encode_query_value(slug);
     let primary = format!("repositories/{ws_e}/{slug_e}/pipelines/{build_number}");
-    match http::bb_get_json::<BbPipeline>(creds, &primary, "pipeline").await {
-        Ok(p) => Ok(p),
-        Err(AppError::Bitbucket(_)) => {
-            // Fallback: query by build_number and take the single match.
-            let q = format!(
-                "repositories/{ws_e}/{slug_e}/pipelines/?q=build_number={build_number}&pagelen=1"
-            );
-            let page: BbPage<BbPipeline> = http::bb_get_json(creds, &q, "pipeline").await?;
-            page.values.into_iter().next().ok_or_else(|| {
-                AppError::Bitbucket(format!(
-                    "no Bitbucket pipeline with build number {build_number}"
-                ))
-            })
-        }
-        Err(e) => Err(e),
+    // `bb_get_json` maps every non-2xx to `AppError::Bitbucket` with no status, so
+    // the fallback must gate on the raw status: only a genuine 404 warrants the
+    // second request (401/429/… should surface, not fire a doomed retry).
+    let (status, body) = http::bb_get_text_status(creds, &primary).await?;
+    if (200..300).contains(&status) {
+        serde_json::from_str::<BbPipeline>(&body)
+            .map_err(|e| AppError::Bitbucket(format!("could not parse Bitbucket pipeline: {e}")))
+    } else if status == 404 {
+        // Fallback: query by build_number and take the single match.
+        let q = format!(
+            "repositories/{ws_e}/{slug_e}/pipelines/?q=build_number={build_number}&pagelen=1"
+        );
+        let page: BbPage<BbPipeline> = http::bb_get_json(creds, &q, "pipeline").await?;
+        page.values.into_iter().next().ok_or_else(|| {
+            AppError::Bitbucket(format!(
+                "no Bitbucket pipeline with build number {build_number}"
+            ))
+        })
+    } else {
+        Err(http::http_error(status, &body))
     }
 }
 
@@ -2158,7 +2166,7 @@ fn from_bb_task(t: BbTask) -> PrTask {
 pub async fn pr_tasks(repo_path: &str, number: u64) -> AppResult<Vec<PrTask>> {
     let creds = http::load_credentials().await?;
     let base = repo_base(repo_path).await?;
-    let mut url = format!("{base}/pullrequests/{number}/tasks");
+    let mut url = format!("{base}/pullrequests/{number}/tasks?pagelen=100");
     let mut out: Vec<PrTask> = Vec::new();
     for _ in 0..5 {
         let page: BbTasksPage = http::bb_get_json(&creds, &url, "pull request tasks").await?;
@@ -2677,17 +2685,34 @@ async fn origin_remote_url(repo_path: &str) -> AppResult<String> {
 /// recognized Bitbucket remote (so the caller leaves it alone).
 fn rewritten_origin_url(old_url: &str, ws: &str, new_slug: &str) -> Option<String> {
     let trimmed = old_url.trim();
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        let scheme = if trimmed.starts_with("https://") {
-            "https"
-        } else {
-            "http"
-        };
+    if let Some(rest) = trimmed
+        .strip_prefix("https://")
+        .map(|r| ("https", r))
+        .or_else(|| trimmed.strip_prefix("http://").map(|r| ("http", r)))
+    {
+        let (scheme, after_scheme) = rest;
+        // Authority is everything up to the first '/'.
+        let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
+        // Strip an optional userinfo prefix (`user@`), then an optional `:port`.
+        let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+        let host = host.split_once(':').map_or(host, |(h, _)| h);
+        if !host.eq_ignore_ascii_case("bitbucket.org") {
+            return None;
+        }
         Some(format!("{scheme}://bitbucket.org/{ws}/{new_slug}.git"))
-    } else if trimmed.contains("bitbucket.org:") || trimmed.contains('@') {
-        // scp-style `git@bitbucket.org:ws/slug.git` — keep the user@host prefix.
-        let (prefix, _rest) = trimmed.split_once(':')?;
-        Some(format!("{prefix}:{ws}/{new_slug}.git"))
+    } else if let Some((prefix, _rest)) = trimmed.split_once(':') {
+        // scp-style `git@bitbucket.org:ws/slug.git` — keep the user@host prefix,
+        // but only when the host is actually Bitbucket (a `git@github.com:…`
+        // origin must be left alone).
+        if prefix.eq_ignore_ascii_case("bitbucket.org")
+            || prefix
+                .rsplit_once('@')
+                .is_some_and(|(_, h)| h.eq_ignore_ascii_case("bitbucket.org"))
+        {
+            Some(format!("{prefix}:{ws}/{new_slug}.git"))
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -3675,7 +3700,12 @@ pub async fn publish_repo(
 
     // ── Seed git's credential store so the push authenticates non-interactively.
     //    The token is fed on STDIN ONLY — never argv / env / git config. A missing
-    //    helper / non-zero exit is tolerated (the push surfaces any auth failure). ──
+    //    helper / non-zero exit is tolerated (the push surfaces any auth failure).
+    //    NOTE: git-over-HTTPS REQUIRES the `x-bitbucket-api-token-auth` sentinel as
+    //    the username — the Atlassian account email does NOT authenticate here
+    //    (probe-validated: `git ls-remote` succeeds with the sentinel, fails with the
+    //    email). The email:token Basic pair is the REST-API contract only; do not
+    //    "fix" this username to `creds.email`, it will break the push. ──
     let approve_input = format!(
         "protocol=https\nhost=bitbucket.org\nusername=x-bitbucket-api-token-auth\npassword={}\n\n",
         creds.token
@@ -4998,6 +5028,16 @@ definitions:
         );
         // An unrecognized URL is left alone (None).
         assert_eq!(rewritten_origin_url("/local/path", "ws", "new"), None);
+        // A non-Bitbucket https host (e.g. a corporate proxy) must NOT be clobbered.
+        assert_eq!(
+            rewritten_origin_url("https://git-proxy.corp.example.com/ws/old.git", "ws", "new"),
+            None
+        );
+        // A non-Bitbucket scp host (github) must NOT be clobbered.
+        assert_eq!(
+            rewritten_origin_url("git@github.com:ws/old.git", "ws", "new"),
+            None
+        );
     }
 
     #[test]

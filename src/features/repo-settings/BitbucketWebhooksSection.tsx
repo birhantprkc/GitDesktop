@@ -259,6 +259,13 @@ function HookForm({
             onCheckedChange={setSkipCertVerification}
           />
         </div>
+        {skipCertVerification && (
+          <p className="text-[11px] text-warning">
+            TLS certificate verification will be skipped for deliveries —
+            payloads could be intercepted. Only enable for a trusted endpoint
+            you control.
+          </p>
+        )}
         <div className="space-y-1.5">
           <p className="text-xs font-medium">Trigger events</p>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">

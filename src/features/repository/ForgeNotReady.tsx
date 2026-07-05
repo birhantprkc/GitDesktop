@@ -31,8 +31,9 @@ const ATLASSIAN_TOKEN_URL =
  * → publish, or — if gh is ready but the repo isn't resolvable — a `gh auth
  * status` diagnostic); GitLab walks the analogous glab ladder (install → sign
  * in), then — if glab is ready but the repo still isn't resolvable to a GitLab
- * project — points at `glab auth status`; Bitbucket — recognized but not yet
- * implemented — says so plainly.
+ * project — points at `glab auth status`; Bitbucket walks the connect-account
+ * ladder — no saved Atlassian API token → connect one, a saved token that won't
+ * authenticate → update it — both deep-linking to Settings → Accounts.
  */
 export function ForgeNotReady({
   repoPath,

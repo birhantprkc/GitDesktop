@@ -17,9 +17,11 @@ const lastFiredHead = new Map<string, string>();
  * mismatch. Providers disagree on length: pr-open events seed the FULL 40-char
  * local sha, while Bitbucket's poll delivers a 12-char short sha for the same
  * head. A plain `===` would then treat every poll tick as a new head and re-fire
- * pr-sync forever. Prefix-matches by the shorter (requiring ≥7 chars — git's
- * minimum unambiguous length — so a stray empty/1-char value can't false-match),
- * with an exact-equal fast path.
+ * pr-sync forever. An exact-equal fast path returns true for any equal non-empty
+ * value (identical SHAs are trivially the same commit, whatever their length).
+ * Otherwise it prefix-matches by the shorter sha — and ONLY that prefix path
+ * requires ≥7 chars (git's minimum unambiguous length), so a stray empty/1-char
+ * value can't false-match a longer one.
  */
 export function sameSha(a: string, b: string): boolean {
   if (a === b) return a !== "";

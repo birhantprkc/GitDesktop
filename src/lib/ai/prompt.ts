@@ -179,6 +179,7 @@ function prSystemFor(provider: PromptProvider | undefined): string {
     .replace("the PR title", `the ${prNoun} title`)
     .replace('no "PR:"', `no "${abbrev}:"`)
     .replace("human-written PR:", `human-written ${prNoun}:`)
+    .replace("issue or PR numbers", `issue or ${abbrev} numbers`)
     .replace("GitHub-flavored Markdown", markdownFlavor);
 }
 
@@ -187,6 +188,7 @@ export function buildPrPrompt(input: PrPromptInput): {
   prompt: string;
 } {
   const { prNoun } = platformCopy(input.provider);
+  const abbrev = prNoun === "merge request" ? "MR" : "PR";
   const systemParts = [prSystemFor(input.provider)];
   if (input.repoInstructions) {
     systemParts.push(`## Project instructions\n${input.repoInstructions}`);
@@ -210,7 +212,7 @@ export function buildPrPrompt(input: PrPromptInput): {
   ];
   if (input.commitSubjects.length > 0) {
     promptParts.push(
-      `## Commits in this PR\n${input.commitSubjects.map((s) => `- ${s}`).join("\n")}`,
+      `## Commits in this ${abbrev}\n${input.commitSubjects.map((s) => `- ${s}`).join("\n")}`,
     );
   }
   promptParts.push(`## Files changed\n${fileSummary || "(none)"}`);
