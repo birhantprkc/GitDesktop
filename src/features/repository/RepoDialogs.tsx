@@ -115,9 +115,12 @@ export function RemoveRepoDialog({
     if (!repo) return;
     setBusy(true);
     try {
-      // Trash first: if that fails, the repo stays open and listed.
-      if (moveToTrash) await deleteRepoFolder(repo.path);
+      // Close the open repo BEFORE trashing: its git-status polling keeps
+      // spawning subprocesses into the folder, which makes Windows abort the
+      // move. If the trash still fails, the repo stays listed (removeRecent is
+      // not reached) so the user can close external programs and retry.
       if (repo.path === repoPath) closeRepo();
+      if (moveToTrash) await deleteRepoFolder(repo.path);
       await removeRecent.mutateAsync(repo.path);
       toast.success(
         moveToTrash

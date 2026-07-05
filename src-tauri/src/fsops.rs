@@ -105,7 +105,31 @@ pub async fn delete_repo_folder(path: String) -> AppResult<()> {
         )));
     }
     tauri::async_runtime::spawn_blocking(move || {
-        trash::delete(&dir).map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))
+        // Retry briefly: a just-closed repo may still have an in-flight git
+        // subprocess holding a handle to the folder, which makes Windows abort
+        // the move. A few short waits let those processes exit.
+        const ATTEMPTS: usize = 3;
+        let mut last_err = None;
+        for attempt in 0..ATTEMPTS {
+            match trash::delete(&dir) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_err = Some(e);
+                    if attempt + 1 < ATTEMPTS {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                    }
+                }
+            }
+        }
+        // Lead with actionable copy; keep the raw cause as an honest suffix.
+        let cause = last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string());
+        Err(AppError::Io(std::io::Error::other(format!(
+            "Couldn't move the repository to the Recycle Bin — the folder may be in use \
+             by an open editor, terminal, or file-explorer window. Close them and try \
+             again. ({cause})"
+        ))))
     })
     .await
     .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?
