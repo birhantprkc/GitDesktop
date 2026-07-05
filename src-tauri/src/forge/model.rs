@@ -75,12 +75,15 @@ impl Capabilities {
                 webhooks: true,
                 approvals: true,
             },
-            // Bitbucket Cloud: no labels, milestones, stars, reactions, draft PRs,
-            // or discussions; PRs/CI(pipelines)/webhooks/approvals do work.
+            // Bitbucket Cloud: no labels, milestones, stars, reactions, or
+            // discussions; PRs/CI(pipelines)/webhooks/approvals do work. Draft PRs
+            // ARE supported (since 2024, the `draft` bool on the PR object). The
+            // native issue tracker is being deleted platform-wide 2026-08-20, so
+            // issues is false.
             Provider::Bitbucket => Self {
                 pull_requests: true,
-                draft_prs: false,
-                issues: true,
+                draft_prs: true,
+                issues: false,
                 labels: false,
                 milestones: false,
                 reactions: false,
@@ -196,10 +199,15 @@ pub struct Implemented {
     /// like `mr_approve` this flag stays `false` for GitHub (see `all`).
     pub mr_assignees: bool,
     /// Requesting changes on a merge request — the blocking reviewer state.
-    /// GitLab-only like `mr_approve`: GitHub requests changes through its Review
-    /// menu (`gh_pr_review`), not this control, so the flag stays `false` for
-    /// GitHub (see `all`).
+    /// GitLab and Bitbucket share the control; GitHub requests changes through
+    /// its Review menu (`gh_pr_review`), not this control, so the flag stays
+    /// `false` for GitHub (see `all`).
     pub mr_request_changes: bool,
+    /// Editing a merge/pull request's reviewer list. Bitbucket-only today —
+    /// Bitbucket PRs carry reviewers (not assignees), picked from workspace
+    /// members. GitHub keeps its own review-request flow (not built here) and
+    /// the GitLab reviewer list isn't wired yet, so both stay `false`.
+    pub mr_reviewers: bool,
     /// Editing an existing issue's title/body — a shared control (the same edit
     /// dialog; GitHub PATCHes the issue, GitLab PUTs title/description).
     pub issue_edit: bool,
@@ -245,6 +253,10 @@ pub struct Implemented {
     /// Related issues (issue links). GitLab-unique — GitHub has no native issue
     /// links, so like `mr_approve` this stays `false` for GitHub (see `all`).
     pub issue_links: bool,
+    /// The pull-request tasks checklist (create/edit/resolve/delete). Bitbucket-only:
+    /// PR tasks are a native Bitbucket concept with no GitHub/GitLab analogue wired
+    /// here, so like `mr_approve` this stays `false` for both (see `all`).
+    pub pr_tasks: bool,
 }
 
 impl Implemented {
@@ -285,6 +297,9 @@ impl Implemented {
             mr_assignees: false,
             // Like `mr_approve`: GitHub requests changes via its Review menu.
             mr_request_changes: false,
+            // Like `mr_approve`: GitHub's reviewer requests live in its own
+            // review flow, which this app doesn't edit — Bitbucket-only.
+            mr_reviewers: false,
             issue_edit: true,
             mr_edit: true,
             issue_milestone: true,
@@ -301,6 +316,8 @@ impl Implemented {
             ci_job_play: false,
             time_tracking: false,
             issue_links: false,
+            // Like `mr_approve`: PR tasks are a Bitbucket-only surface here.
+            pr_tasks: false,
         }
     }
 
@@ -334,6 +351,7 @@ impl Implemented {
             release_edit: false,
             mr_assignees: false,
             mr_request_changes: false,
+            mr_reviewers: false,
             issue_edit: false,
             mr_edit: false,
             issue_milestone: false,
@@ -347,6 +365,7 @@ impl Implemented {
             ci_job_play: false,
             time_tracking: false,
             issue_links: false,
+            pr_tasks: false,
         }
     }
 
@@ -400,6 +419,8 @@ impl Implemented {
                 release_edit: true,
                 mr_assignees: true,
                 mr_request_changes: true,
+                // The GitLab reviewer list isn't wired here yet (assignees are).
+                mr_reviewers: false,
                 issue_edit: true,
                 mr_edit: true,
                 issue_milestone: true,
@@ -413,8 +434,47 @@ impl Implemented {
                 ci_job_play: true,
                 time_tracking: true,
                 issue_links: true,
+                // PR tasks are Bitbucket-only here.
+                pr_tasks: false,
             },
-            Provider::Bitbucket => Self::none(),
+            // Bitbucket Cloud reads (Phase 3): PR list/view/diff, CI pipelines, and
+            // repo View/URL are wired over direct HTTP. Phase 4 adds the WRITES: PR
+            // comment, decline (`mr_state` = DECLINE only — Bitbucket can't reopen a
+            // declined PR via API or web, so `forge_pr_reopen` errors and the frontend
+            // hides the button), merge, title/body edit, create, and the bodyless
+            // approve/unapprove toggle; plus pipeline rerun / cancel / dispatch.
+            // The parity pass adds the request-changes TOGGLE (unlike GitLab,
+            // Bitbucket's revoke works on every plan) and the reviewers picker
+            // (`mr_reviewers` — workspace members, minus the author).
+            // Everything else — issues (the native tracker sunsets 2026-08-20),
+            // assignees/labels, releases, insights, settings — stays false, so
+            // those panels degrade to "coming soon".
+            Provider::Bitbucket => Self {
+                pull_requests: true,
+                ci: true,
+                repo_actions: true,
+                // Wave 2/3: the insights flag, publishing a local repo, and the
+                // full repo-settings surface (admin probe + General / Danger zone +
+                // default reviewers / branch restrictions / pipelines config,
+                // variables, schedules / webhooks) are now wired over direct HTTP.
+                insights: true,
+                publish: true,
+                repo_settings: true,
+                mr_comment: true,
+                mr_state: true,
+                mr_merge: true,
+                mr_edit: true,
+                mr_create: true,
+                mr_approve: true,
+                mr_request_changes: true,
+                mr_reviewers: true,
+                ci_rerun: true,
+                ci_cancel: true,
+                ci_dispatch: true,
+                // Wave 4: the PR-tasks checklist (Bitbucket-native).
+                pr_tasks: true,
+                ..Self::none()
+            },
         }
     }
 }
@@ -448,22 +508,16 @@ pub struct ForgeStatus {
     pub implemented: Implemented,
 }
 
-impl ForgeStatus {
-    /// A "recognized, but not yet wired up" status for a provider whose impl
-    /// hasn't landed (GitLab/Bitbucket during the phased rollout): the host is
-    /// known and capabilities advertised, but the integration reports not-ready.
-    pub fn unimplemented(provider: Provider, host: String) -> Self {
-        Self {
-            provider: Some(provider),
-            installed: false,
-            authenticated: false,
-            repo: None,
-            host: Some(host),
-            login: None,
-            capabilities: Capabilities::for_provider(provider),
-            implemented: Implemented::for_provider(provider),
-        }
-    }
+/// A provider user reference for pickers — a stable id plus a human label.
+/// Bitbucket's reviewer picker is the emitter today (id = the braced account
+/// uuid, label = display name / nickname): Bitbucket identity must travel as the
+/// uuid because participant objects never carry `username`, and nicknames aren't
+/// unique — the display string alone can't round-trip a mutation safely.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeUserRef {
+    pub id: String,
+    pub label: String,
 }
 
 /// A repository as listed for cloning — neutral across providers (the clone
@@ -518,9 +572,11 @@ mod tests {
     #[test]
     fn bitbucket_drops_unsupported_features() {
         let c = Capabilities::for_provider(Provider::Bitbucket);
-        assert!(!c.labels && !c.milestones && !c.stars && !c.reactions && !c.draft_prs && !c.discussions);
-        // …but the core flow still works.
-        assert!(c.pull_requests && c.ci && c.webhooks && c.approvals);
+        assert!(!c.labels && !c.milestones && !c.stars && !c.reactions && !c.discussions);
+        // Issues are off — the native tracker sunsets 2026-08-20.
+        assert!(!c.issues);
+        // …but the core flow still works, and draft PRs are supported.
+        assert!(c.pull_requests && c.ci && c.webhooks && c.approvals && c.draft_prs);
     }
 
     #[test]
@@ -546,10 +602,10 @@ mod tests {
         // CI actions and release management are shared controls too.
         assert!(i.ci_rerun && i.ci_cancel && i.ci_dispatch);
         assert!(i.release_create && i.release_edit);
-        // MR assignees and request-changes mirror mr_approve: GitLab-only controls
-        // (GitHub's analogues live in its own Review menu / nowhere), so GitHub
-        // stays false.
-        assert!(!i.mr_assignees && !i.mr_request_changes);
+        // MR assignees, request-changes, and the reviewers picker mirror
+        // mr_approve: forge-only controls (GitHub's analogues live in its own
+        // Review menu / nowhere), so GitHub stays false.
+        assert!(!i.mr_assignees && !i.mr_request_changes && !i.mr_reviewers);
         // Title/body editing, issue milestones, and reactions are shared controls.
         assert!(i.issue_edit && i.mr_edit && i.issue_milestone);
         assert!(i.issue_reactions && i.mr_reactions);
@@ -557,6 +613,8 @@ mod tests {
         // (GitHub has no per-job manual play, native time tracking, or issue links),
         // so GitHub stays false.
         assert!(!i.ci_job_play && !i.time_tracking && !i.issue_links);
+        // PR tasks are a Bitbucket-only surface here, so GitHub stays false too.
+        assert!(!i.pr_tasks);
     }
 
     #[test]
@@ -596,10 +654,12 @@ mod tests {
         assert!(imp.issue_reactions && imp.mr_reactions);
         // …and the GitLab-only CI job play, time tracking, and issue links.
         assert!(imp.ci_job_play && imp.time_tracking && imp.issue_links);
+        // PR tasks stay Bitbucket-only — not wired for GitLab.
+        assert!(!imp.pr_tasks);
     }
 
     #[test]
-    fn github_implements_issue_and_mr_writes_bitbucket_does_not() {
+    fn bitbucket_implements_pr_and_ci_writes() {
         let gh = Implemented::for_provider(Provider::GitHub);
         assert!(gh.issue_comment && gh.issue_state && gh.mr_comment && gh.mr_state);
         // MR merge is a shared control (both providers); approve/unapprove is the one
@@ -608,14 +668,30 @@ mod tests {
         // Auto-merge is GitLab-only (no in-app GitHub PR auto-merge).
         assert!(!gh.mr_auto_merge);
         let bb = Implemented::for_provider(Provider::Bitbucket);
-        assert!(!bb.issue_comment && !bb.issue_state && !bb.mr_comment && !bb.mr_state);
-        assert!(!bb.mr_approve && !bb.mr_merge && !bb.mr_auto_merge);
+        // Bitbucket reads that ARE built (Phase 3): PRs, CI pipelines, repo actions.
+        assert!(bb.pull_requests && bb.ci && bb.repo_actions);
+        // Phase 4 PR writes: comment, decline (mr_state), merge, edit, create, and the
+        // bodyless approve/unapprove toggle.
+        assert!(bb.mr_comment && bb.mr_state && bb.mr_merge && bb.mr_edit && bb.mr_create);
+        assert!(bb.mr_approve);
+        // …the request-changes toggle and the reviewers picker (both Bitbucket
+        // writes; GitLab's reviewer list stays unwired)…
+        assert!(bb.mr_request_changes && bb.mr_reviewers);
+        // …and pipeline rerun / cancel / dispatch.
+        assert!(bb.ci_rerun && bb.ci_cancel && bb.ci_dispatch);
+        // …plus wave 2/3: insights, publish, and the repo-settings surface.
+        assert!(bb.insights && bb.publish && bb.repo_settings);
+        // …and wave 4's Bitbucket-only PR-tasks checklist.
+        assert!(bb.pr_tasks);
+        // …but issues and releases stay off.
+        assert!(!bb.issues && !bb.releases);
+        assert!(!bb.issue_comment && !bb.issue_state);
+        // Auto-merge has no Bitbucket analogue.
+        assert!(!bb.mr_auto_merge);
         assert!(!bb.issue_labels && !bb.mr_labels && !bb.issue_assignees);
-        assert!(!bb.issue_create && !bb.mr_create);
-        assert!(!bb.ci_rerun && !bb.ci_cancel && !bb.ci_dispatch);
+        assert!(!bb.issue_create);
         assert!(!bb.release_create && !bb.release_edit && !bb.mr_assignees);
-        assert!(!bb.issue_edit && !bb.mr_edit && !bb.issue_milestone);
-        assert!(!bb.mr_request_changes);
+        assert!(!bb.issue_edit && !bb.issue_milestone);
         assert!(!bb.issue_reactions && !bb.mr_reactions);
         assert!(!bb.ci_job_play && !bb.time_tracking && !bb.issue_links);
     }

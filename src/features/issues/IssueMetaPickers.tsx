@@ -99,7 +99,17 @@ export function AssigneesPopover({
       return;
     }
     setOpen(false);
-    if (commitOnClose) onChange([...draft]);
+    // Only commit when the draft actually differs from `value` — otherwise
+    // merely opening and closing the popover would fire a redundant assignees
+    // PATCH (onChange → the view's mutation). Compare membership sets.
+    if (commitOnClose) {
+      const current = new Set(value);
+      const changed =
+        draft.size !== current.size ||
+        value.some((login) => !draft.has(login)) ||
+        [...draft].some((login) => !current.has(login));
+      if (changed) onChange([...draft]);
+    }
   }
 
   return (

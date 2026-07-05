@@ -25,6 +25,7 @@ dist-ssr
 /.impeccable/critique/
 /github-desktop.md
 /.claude/skills/logo-creator/
+/.claude/worktrees/
 /design/
 /docs/
 .env

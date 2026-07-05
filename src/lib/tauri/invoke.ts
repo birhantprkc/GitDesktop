@@ -9,6 +9,8 @@ export interface AppError {
     | "gh"
     | "glabNotFound"
     | "glab"
+    | "bitbucketNotConfigured"
+    | "bitbucket"
     | "keyring"
     | "invalidArgument"
     | "command"

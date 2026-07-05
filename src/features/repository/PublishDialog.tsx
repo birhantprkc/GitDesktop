@@ -14,10 +14,19 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { required, useAppForm } from "@/lib/form";
-import { usePublishRepo } from "@/lib/git/queries";
+import { useBbWorkspaces, usePublishRepo } from "@/lib/git/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
 import { useGenerateRepoDescription } from "../repo-settings/useGenerateRepoDescription";
+
+/** Bitbucket repo slugs must start alphanumeric, then allow dot/underscore/hyphen.
+ *  A blank name is caught by the `required` validator, so don't double-flag it. */
+const BB_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function bbSlugWarning(value: string): string | null {
+  const name = value.trim();
+  if (!name || BB_SLUG_RE.test(name)) return null;
+  return "Only letters, numbers, and . _ - are allowed, starting with a letter or number.";
+}
 
 /** Space/comma-separated text → GitHub's lowercase, deduped, capped topic list.
  *  Mirrors GeneralSettingsSection's parser (GitHub normalizes topics the same). */
@@ -42,7 +51,7 @@ export function PublishDialog({
   repoPath: string;
   /** Chosen explicitly by the caller — an unpublished repo has no remote to
    *  detect a provider from. */
-  provider: "github" | "gitlab";
+  provider: "github" | "gitlab" | "bitbucket";
   defaultName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -51,7 +60,26 @@ export function PublishDialog({
   const aiEnabled = useAiEnabled();
   const descGen = useGenerateRepoDescription(repoPath);
   const isGitLab = provider === "gitlab";
-  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
+  const isBitbucket = provider === "bitbucket";
+  const remoteLabel = isBitbucket
+    ? "Bitbucket"
+    : isGitLab
+      ? "GitLab"
+      : "GitHub";
+
+  // Bitbucket creates the repo under a workspace; only workspaces the viewer can
+  // administer can receive a new repo, so default to the first of those (else the
+  // first workspace at all). Only fetched when the Bitbucket dialog is open.
+  const workspaces = useBbWorkspaces(open && isBitbucket);
+  const defaultWorkspace =
+    workspaces.data?.find((w) => w.administrator)?.slug ??
+    workspaces.data?.[0]?.slug ??
+    "";
+  // value ≠ label isn't a risk here (slug is both), but the Base UI Select still
+  // needs an items map to render the closed trigger.
+  const workspaceItems = Object.fromEntries(
+    (workspaces.data ?? []).map((w) => [w.slug, w.slug]),
+  );
 
   const form = useAppForm({
     defaultValues: {
@@ -59,6 +87,7 @@ export function PublishDialog({
       description: "",
       homepage: "",
       topics: "",
+      workspace: "",
       isPrivate: true,
     },
     onSubmit: async ({ value }) => {
@@ -70,6 +99,7 @@ export function PublishDialog({
           description: value.description,
           homepage: value.homepage.trim(),
           topics: parseTopics(value.topics),
+          workspace: isBitbucket ? value.workspace : undefined,
         });
         toast.success(`Published ${value.name.trim()}`, {
           description: url,
@@ -84,6 +114,13 @@ export function PublishDialog({
 
   // The live name drives the AI grounding (the repo isn't published yet).
   const nameVal = useSelector(form.store, (s) => s.values.name);
+  const workspaceVal = useSelector(form.store, (s) => s.values.workspace);
+  // Bitbucket-only submit gate: a valid slug and a chosen workspace. The name's
+  // `warning` hint already explains a bad slug inline; a missing workspace can't
+  // happen once the picker seeds, but guard it so submit never fires half-formed.
+  const bbBlocked =
+    isBitbucket &&
+    (bbSlugWarning(nameVal) !== null || nameVal.trim() === "" || !workspaceVal);
 
   const seedOnOpen = useEffectEvent(() =>
     form.reset({
@@ -91,12 +128,24 @@ export function PublishDialog({
       description: "",
       homepage: "",
       topics: "",
+      workspace: "",
       isPrivate: true,
     }),
   );
   useEffect(() => {
     if (open) seedOnOpen();
   }, [open]);
+
+  // Workspaces load after the dialog opens, so seed the picker once they arrive
+  // (and only while the field is still empty — never stomp a user's pick).
+  const seedWorkspace = useEffectEvent((slug: string) => {
+    if (!form.state.values.workspace && slug) {
+      form.setFieldValue("workspace", slug);
+    }
+  });
+  useEffect(() => {
+    if (open && isBitbucket) seedWorkspace(defaultWorkspace);
+  }, [open, isBitbucket, defaultWorkspace]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -111,10 +160,17 @@ export function PublishDialog({
           <DialogHeader>
             <DialogTitle>Publish to {remoteLabel}</DialogTitle>
             <DialogDescription>
-              Creates a {isGitLab ? "GitLab project" : "GitHub repository"},
-              adds it as <span className="font-mono">origin</span>, and pushes
+              Creates a{" "}
+              {isBitbucket
+                ? "Bitbucket repository"
+                : isGitLab
+                  ? "GitLab project"
+                  : "GitHub repository"}
+              , adds it as <span className="font-mono">origin</span>, and pushes
               the current branch.{" "}
-              {isGitLab ? (
+              {isBitbucket ? (
+                <>It's created under the selected workspace.</>
+              ) : isGitLab ? (
                 <>It lands in your namespace (groups aren't supported yet).</>
               ) : (
                 <>
@@ -126,12 +182,39 @@ export function PublishDialog({
           </DialogHeader>
           {/* Fields scroll; header and submit footer stay pinned. */}
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+            {/* Bitbucket creates the repo under a workspace — pick it first. */}
+            {isBitbucket && (
+              <form.AppField name="workspace">
+                {(field) => (
+                  <field.SelectField
+                    label="Workspace"
+                    items={workspaceItems}
+                    disabled={workspaces.isPending || !workspaces.data?.length}
+                  />
+                )}
+              </form.AppField>
+            )}
             <form.AppField
               name="name"
               validators={{ onChange: ({ value }) => required(value) }}
             >
               {(field) => (
-                <field.TextField label="Name" placeholder="my-project" />
+                <field.TextField
+                  label={
+                    isBitbucket ? (
+                      <span className="flex flex-col gap-0.5">
+                        <span>Name</span>
+                        <span className="font-normal text-muted-foreground">
+                          Becomes the repository URL slug on Bitbucket
+                        </span>
+                      </span>
+                    ) : (
+                      "Name"
+                    )
+                  }
+                  placeholder="my-project"
+                  warning={isBitbucket ? bbSlugWarning : undefined}
+                />
               )}
             </form.AppField>
 
@@ -160,16 +243,23 @@ export function PublishDialog({
                           if (description) {
                             form.setFieldValue("description", description);
                           }
-                          if (topics.length) {
+                          // Bitbucket has no topics field — drop that arm.
+                          if (!isBitbucket && topics.length) {
                             form.setFieldValue("topics", topics.join(" "));
                           }
                         },
                       })
                     }
-                    title="Suggest a description + topics from the README with AI"
+                    title={
+                      isBitbucket
+                        ? "Suggest a description from the README with AI"
+                        : "Suggest a description + topics from the README with AI"
+                    }
                   >
                     <SparkleIcon data-icon="inline-start" />
-                    Generate description &amp; topics
+                    {isBitbucket
+                      ? "Generate description"
+                      : "Generate description & topics"}
                   </Button>
                 )}
               </div>
@@ -183,20 +273,26 @@ export function PublishDialog({
                 />
               )}
             </form.AppField>
-            <form.AppField name="topics">
-              {(field) => (
-                <field.TextField
-                  label="Topics (optional, separate with spaces)"
-                  placeholder="react typescript cli"
-                />
-              )}
-            </form.AppField>
-            {/* GitLab projects have no homepage field — the arm drops it. */}
+            {/* Bitbucket has no topics — hide the field there. */}
+            {!isBitbucket && (
+              <form.AppField name="topics">
+                {(field) => (
+                  <field.TextField
+                    label="Topics (optional, separate with spaces)"
+                    placeholder="react typescript cli"
+                  />
+                )}
+              </form.AppField>
+            )}
+            {/* GitLab projects have no homepage field — the arm drops it.
+                Bitbucket keeps it but calls it "Website". */}
             {!isGitLab && (
               <form.AppField name="homepage">
                 {(field) => (
                   <field.TextField
-                    label="Homepage (optional)"
+                    label={
+                      isBitbucket ? "Website (optional)" : "Homepage (optional)"
+                    }
                     placeholder="https://…"
                   />
                 )}
@@ -221,7 +317,7 @@ export function PublishDialog({
               Cancel
             </Button>
             <form.AppForm>
-              <form.SubmitButton disabled={descGen.generating}>
+              <form.SubmitButton disabled={descGen.generating || bbBlocked}>
                 Publish
               </form.SubmitButton>
             </form.AppForm>

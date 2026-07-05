@@ -40,6 +40,10 @@ export interface RunJob {
   completedAt: string;
   url: string;
   steps: RunStep[];
+  /** Present on Bitbucket jobs (a pipeline step) — the log reference its logs are
+   *  fetched by (`forge_bb_step_logs`). Absent for GitHub/GitLab, whose job logs
+   *  come from `forge_ci_job_logs`. */
+  logRef?: string;
 }
 
 export interface RunDetail {
@@ -116,6 +120,23 @@ export const forgeCiRunFailedLogs = (repoPath: string, runId: number) =>
 export const forgeCiJobLogs = (repoPath: string, jobId: number) =>
   invoke<string>("forge_ci_job_logs", { repoPath, jobId });
 
+/** A Bitbucket pipeline step's logs (cleaned/capped). Bitbucket jobs carry a
+ *  `logRef` instead of a numeric job id, and `forge_ci_job_logs` errors for
+ *  them — so a job with a `logRef` fetches here instead. */
+export const forgeBbStepLogs = (repoPath: string, logRef: string) =>
+  invoke<string>("forge_bb_step_logs", { repoPath, logRef });
+
+/** A job's logs, dispatched by provider: Bitbucket steps (carrying a `logRef`)
+ *  go through `forge_bb_step_logs`; GitHub/GitLab jobs through the id-keyed
+ *  `forge_ci_job_logs`. */
+export const forgeJobLogs = (
+  repoPath: string,
+  job: { id: number; logRef?: string },
+) =>
+  job.logRef
+    ? forgeBbStepLogs(repoPath, job.logRef)
+    : forgeCiJobLogs(repoPath, job.id);
+
 /** Play (start) a manual GitLab CI job awaiting a manual trigger — GitLab-only,
  *  gated on `implemented.ciJobPlay`; errors on other providers. */
 export const forgeGlCiPlayJob = (repoPath: string, jobId: number) =>
@@ -125,13 +146,20 @@ export const ghWorkflowList = (repoPath: string) =>
   invoke<Workflow[]>("gh_workflow_list", { repoPath });
 
 /** Start a run: GitHub dispatches `workflow` on the ref with `inputs`; GitLab runs
- *  a new pipeline on the ref with `inputs` as variables (send `workflow` empty). */
+ *  a new pipeline on the ref with `inputs` as variables (send `workflow` empty);
+ *  Bitbucket triggers the branch pipeline, or a named CUSTOM pipeline when `workflow`
+ *  is a custom-pipeline name. */
 export const forgeCiDispatch = (
   repoPath: string,
   workflow: string,
   gitRef: string,
   inputs: Record<string, string>,
 ) => invoke<void>("forge_ci_dispatch", { repoPath, workflow, gitRef, inputs });
+
+/** The CUSTOM pipeline names declared in the working-tree `bitbucket-pipelines.yml`
+ *  (Bitbucket-only — the custom-dispatch picker's options). */
+export const forgeBbCustomPipelines = (repoPath: string) =>
+  invoke<string[]>("forge_bb_custom_pipelines", { repoPath });
 
 // ── Queries ──────────────────────────────────────────────────────────────────
 
@@ -192,6 +220,19 @@ export function useWorkflows(repo: string, enabled: boolean) {
   });
 }
 
+/** The Bitbucket custom-pipeline names (from `bitbucket-pipelines.yml`) — the
+ *  custom-dispatch picker's options. Reads the local working-tree file (no network);
+ *  fetched only while the dispatch surface is enabled. */
+export function useBbCustomPipelines(repo: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["repo", repo, "actions", "bb-custom-pipelines"] as const,
+    queryFn: () => forgeBbCustomPipelines(repo),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
 /** Failed-step logs, fetched only when the user expands them. */
 export function useRunFailedLogs(
   repo: string,
@@ -206,16 +247,22 @@ export function useRunFailedLogs(
   });
 }
 
-/** One job's logs (failed steps, or the full log), fetched only when expanded. */
+/** One job's logs (failed steps, or the full log), fetched only when expanded.
+ *  The job's `logRef` (Bitbucket steps) routes the fetch to `forge_bb_step_logs`;
+ *  GitHub/GitLab jobs (no `logRef`) go through the id-keyed `forge_ci_job_logs`.
+ *  The query key stays distinct per job either way. */
 export function useJobLogs(
   repo: string,
-  jobId: number | null,
+  job: { id: number; logRef?: string } | null,
   enabled: boolean,
 ) {
+  // Bitbucket steps are keyed by logRef (their numeric id can collide across a
+  // run's jobs); GitHub/GitLab jobs by their unique id.
+  const jobKey = job?.logRef ?? String(job?.id ?? 0);
   return useQuery({
-    queryKey: ["repo", repo, "actions", "job", jobId ?? 0, "logs"] as const,
-    queryFn: () => forgeCiJobLogs(repo, jobId ?? 0),
-    enabled: enabled && jobId !== null,
+    queryKey: ["repo", repo, "actions", "job", jobKey, "logs"] as const,
+    queryFn: () => forgeJobLogs(repo, job ?? { id: 0 }),
+    enabled: enabled && job !== null,
     staleTime: 30_000,
   });
 }

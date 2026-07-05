@@ -120,3 +120,49 @@ pub async fn mcp_secret_exists(server_id: String, key: String) -> AppResult<bool
         .await
         .map_err(|e| AppError::Keyring(e.to_string()))?
 }
+
+// --- Forge (HTTP provider) credentials ------------------------------------
+//
+// The HTTP forge providers (Bitbucket Cloud today) authenticate with a token
+// the user stores here, namespaced per host + credential key — mirroring the
+// MCP scheme above. The account string is `forge/<host>/<key>`; both parts are
+// validated with the same `safe_token` set (note `bitbucket.org` passes — dots
+// are allowed). These are `pub(crate)` sync helpers, NOT Tauri commands: the
+// provider impls (e.g. `forge::bitbucket`) call them via `spawn_blocking`
+// (keyring is blocking; all forge commands are async), so no generic
+// forge-secret command surface is exposed to the frontend and the token is
+// never returned across IPC.
+
+fn forge_entry_for(host: &str, key: &str) -> AppResult<keyring::Entry> {
+    if !safe_token(host) || !safe_token(key) {
+        return Err(AppError::InvalidArgument(
+            "invalid forge credential reference".into(),
+        ));
+    }
+    keyring::Entry::new(SERVICE, &format!("forge/{host}/{key}"))
+        .map_err(|e| AppError::Keyring(e.to_string()))
+}
+
+/// Store a forge credential (`forge/<host>/<key>`). Blocking.
+pub(crate) fn set_forge_secret(host: &str, key: &str, value: &str) -> AppResult<()> {
+    forge_entry_for(host, key)?
+        .set_password(value)
+        .map_err(|e| AppError::Keyring(e.to_string()))
+}
+
+/// Read a forge credential; `None` when nothing is stored for that ref. Blocking.
+pub(crate) fn read_forge_secret(host: &str, key: &str) -> AppResult<Option<String>> {
+    match forge_entry_for(host, key)?.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(AppError::Keyring(e.to_string())),
+    }
+}
+
+/// Delete a forge credential; a missing entry is tolerated. Blocking.
+pub(crate) fn delete_forge_secret(host: &str, key: &str) -> AppResult<()> {
+    match forge_entry_for(host, key)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(AppError::Keyring(e.to_string())),
+    }
+}

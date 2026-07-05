@@ -9,12 +9,15 @@
 //! commands (byte-identical), the GitLab arm to `gitlab.rs`. Which features each
 //! provider has wired up is declared in `model.rs::Implemented`.
 
+pub mod bitbucket;
 pub mod github;
 pub mod gitlab;
 pub mod glab;
+pub mod http;
 pub mod model;
 
 use crate::error::{AppError, AppResult};
+use crate::forge::bitbucket::BitbucketForge;
 use crate::forge::github::GitHubForge;
 use crate::forge::gitlab::GitLabForge;
 use crate::forge::model::{ForgeRepoList, ForgeStatus, Provider};
@@ -68,6 +71,25 @@ pub(crate) fn remote_path(url: &str) -> Option<String> {
     let path = path.trim_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
     (!path.is_empty()).then(|| path.to_string())
+}
+
+/// Percent-encode a value for safe use inside an API query string, encoding
+/// everything outside the RFC-3986 unreserved set. A value with a
+/// query-significant byte (`&`, `#`, `?`, `=`, `%`, space, `/`, …) must be
+/// encoded or it corrupts the query. Shared by the GitLab (`glab api`) and
+/// Bitbucket (HTTP) providers, which both interpolate untrusted values (branch
+/// names, search terms) into query strings.
+pub(crate) fn encode_query_value(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// Route a remote host to a **non-GitHub** provider, but only when it's
@@ -137,10 +159,12 @@ pub(crate) fn provider_tag_for_host(host: &str, glab_hosts: &[String]) -> Option
 pub async fn resolve_status(repo_path: &str) -> AppResult<ForgeStatus> {
     if let Some((provider, host)) = detect_non_github(repo_path).await {
         return match provider {
-            // GitLab probes glab for install/auth (read ops not built yet, so it
-            // reports not-ready); Bitbucket is still a recognized-only stub.
+            // GitLab probes glab for install/auth; Bitbucket probes the keyring
+            // token + `/user` over HTTP. Both report their real readiness (unbuilt
+            // panels degrade via the `implemented` flags).
             Provider::GitLab => GitLabForge::new(host).status(repo_path).await,
-            _ => Ok(ForgeStatus::unimplemented(provider, host)),
+            Provider::Bitbucket => BitbucketForge::new(host).status(repo_path).await,
+            Provider::GitHub => GitHubForge.status(repo_path).await,
         };
     }
     GitHubForge.status(repo_path).await
@@ -154,6 +178,47 @@ pub async fn forge_status(repo_path: String) -> AppResult<ForgeStatus> {
     resolve_status(&repo_path).await
 }
 
+// ── Bitbucket account (Settings → Accounts) ───────────────────────────────────
+//
+// Bitbucket Cloud has no CLI to carry credentials (unlike gh/glab), so its token
+// is managed here: connect (validate + store), disconnect (clear), and read (the
+// stored account, no network). The token is stored in the OS keyring and is NEVER
+// returned to the frontend.
+
+/// Connect a Bitbucket account: validate the Atlassian email + API token against
+/// `GET /2.0/user` BEFORE persisting (nothing is stored if validation fails), then
+/// keep email/token/username in the keyring. Returns the account info sans token.
+#[tauri::command]
+pub async fn forge_bb_set_account(
+    email: String,
+    token: String,
+) -> AppResult<bitbucket::BbAccountInfo> {
+    bitbucket::set_account(&email, &token).await
+}
+
+/// Disconnect the Bitbucket account (delete all stored entries; a missing entry is
+/// tolerated).
+#[tauri::command]
+pub async fn forge_bb_clear_account() -> AppResult<()> {
+    bitbucket::clear_account().await
+}
+
+/// The stored Bitbucket account, if any — a keyring existence read only (no
+/// network). `None` when no token is stored.
+#[tauri::command]
+pub async fn forge_bb_account() -> AppResult<Option<bitbucket::BbAccountInfo>> {
+    bitbucket::account().await
+}
+
+/// One Bitbucket pipeline step's log, by its `log_ref` (`"{pipeline_uuid}/{step_uuid}"`
+/// with RAW braced UUIDs — the value a `RunJob.logRef` carries). Bitbucket steps have
+/// no numeric id, so this is the step-log path (the numeric `forge_ci_job_logs` arm
+/// errors for Bitbucket).
+#[tauri::command]
+pub async fn forge_bb_step_logs(repo_path: String, log_ref: String) -> AppResult<String> {
+    bitbucket::step_logs(&repo_path, &log_ref).await
+}
+
 /// The signed-in user's repositories on a provider, for the clone browser.
 /// Dispatches by provider — GitHub via `gh`, GitLab via `glab`; Bitbucket isn't
 /// implemented yet. Account-scoped (no repo path), unlike `forge_status`.
@@ -162,9 +227,7 @@ pub async fn forge_list_repos(provider: Provider) -> AppResult<ForgeRepoList> {
     match provider {
         Provider::GitHub => github::list_repos().await,
         Provider::GitLab => gitlab::list_repos().await,
-        Provider::Bitbucket => Err(AppError::InvalidArgument(
-            "Bitbucket repository listing isn't supported yet.".into(),
-        )),
+        Provider::Bitbucket => bitbucket::list_repos().await,
     }
 }
 
@@ -197,10 +260,24 @@ pub async fn forge_pr_list(
 ) -> AppResult<Vec<crate::github::pr::PrInfo>> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::list_prs(&repo_path, &state).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::list_prs(&repo_path, &state).await,
         _ => github::list_prs(&repo_path, &state).await,
+    }
+}
+
+/// A lightweight snapshot of the repo's recently-updated PRs for the notification
+/// poller + remote pr-sync, behind the abstraction. GitHub delegates to the UNCHANGED
+/// `gh_pr_poll`; GitLab/Bitbucket map their list responses onto the same neutral
+/// [`PrPollInfo`](crate::github::pr::PrPollInfo). GitLab/Bitbucket carry no check
+/// rollup or review decision in list responses, so those fields come back empty (a
+/// documented v1 limit — the poller's checks/review notification branches never fire
+/// there); `headSha` still drives pr-sync re-review.
+#[tauri::command]
+pub async fn forge_pr_poll(repo_path: String) -> AppResult<Vec<crate::github::pr::PrPollInfo>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::poll_prs(&repo_path).await,
+        Some((Provider::Bitbucket, _)) => bitbucket::poll_prs(&repo_path).await,
+        _ => github::poll_prs(&repo_path).await,
     }
 }
 
@@ -213,9 +290,7 @@ pub async fn forge_prs_for_branch(
 ) -> AppResult<Vec<crate::github::pr::PrInfo>> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::prs_for_branch(&repo_path, &head).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::prs_for_branch(&repo_path, &head).await,
         _ => github::prs_for_branch(&repo_path, &head).await,
     }
 }
@@ -228,9 +303,7 @@ pub async fn forge_pr_view(
 ) -> AppResult<crate::github::pr::PrDetails> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::view_pr(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::view_pr(&repo_path, number).await,
         _ => github::view_pr(&repo_path, number).await,
     }
 }
@@ -240,10 +313,29 @@ pub async fn forge_pr_view(
 pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::diff_pr(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::diff_pr(&repo_path, number).await,
         _ => github::diff_pr(&repo_path, number).await,
+    }
+}
+
+/// Third-party AI-reviewer findings on a merge/pull request (Copilot/CodeRabbit/…),
+/// behind the abstraction. GitHub delegates unchanged (`gh_pr_external_reviews`);
+/// GitLab maps MR discussion notes onto the same neutral shape; Bitbucket returns
+/// an empty list by design — no third-party AI-reviewer ecosystem posts on
+/// Bitbucket PRs, so there's nothing to harvest and no reason to hit the network.
+/// The frontend decides which authors are AI reviewers and folds their findings
+/// in as soft re-review context.
+#[tauri::command]
+pub async fn forge_pr_external_reviews(
+    repo_path: String,
+    number: u64,
+) -> AppResult<Vec<crate::github::pr::ExternalReviewItem>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::external_reviews(&repo_path, number).await,
+        // By design: no bot-review ecosystem posts on Bitbucket PRs. Cheap,
+        // permanent no-network empty — nothing to map.
+        Some((Provider::Bitbucket, _)) => Ok(Vec::new()),
+        _ => github::external_reviews(&repo_path, number).await,
     }
 }
 
@@ -254,9 +346,7 @@ pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> 
 pub async fn forge_pr_comment(repo_path: String, number: u64, body: String) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::comment_mr(&repo_path, number, &body).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::comment_pr(&repo_path, number, &body).await,
         _ => github::comment_pr(&repo_path, number, &body).await,
     }
 }
@@ -266,9 +356,7 @@ pub async fn forge_pr_comment(repo_path: String, number: u64, body: String) -> A
 pub async fn forge_pr_close(repo_path: String, number: u64) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::close_mr(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::decline_pr(&repo_path, number).await,
         _ => github::close_pr(&repo_path, number).await,
     }
 }
@@ -278,8 +366,10 @@ pub async fn forge_pr_close(repo_path: String, number: u64) -> AppResult<()> {
 pub async fn forge_pr_reopen(repo_path: String, number: u64) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::reopen_mr(&repo_path, number).await,
+        // A declined Bitbucket PR can't be reopened via API or web (BCLOUD-4954). The
+        // frontend hides the button; this is defense-in-depth.
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
+            "Bitbucket declined pull requests can't be reopened.".into(),
         )),
         _ => github::reopen_pr(&repo_path, number).await,
     }
@@ -300,11 +390,82 @@ pub async fn forge_pr_request_changes(
         Some((Provider::GitLab, _)) => {
             gitlab::request_changes_mr(&repo_path, number, &body).await
         }
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::request_changes_pr(&repo_path, number, &body).await
+        }
+        _ => Err(AppError::InvalidArgument(
+            "GitHub requests changes through the Review menu.".into(),
+        )),
+    }
+}
+
+/// Revoke the viewer's requested-changes state. Bitbucket-only: its DELETE works on
+/// every plan, so the control is a true toggle there — GitLab's direct undo is a
+/// Premium feature (Free clears it by approving, or by dropping the reviewer on
+/// GitLab), and GitHub reviews live in its own Review menu.
+#[tauri::command]
+pub async fn forge_pr_unrequest_changes(repo_path: String, number: u64) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::unrequest_changes_pr(&repo_path, number).await
+        }
+        Some((Provider::GitLab, _)) => Err(AppError::InvalidArgument(
+            "GitLab can only revoke a change request on Premium — approve instead, or remove yourself as a reviewer on GitLab.".into(),
         )),
         _ => Err(AppError::InvalidArgument(
             "GitHub requests changes through the Review menu.".into(),
+        )),
+    }
+}
+
+/// Toggle a merge/pull request's draft state. Bitbucket-only: Bitbucket flips
+/// `draft` both ways; GitHub keeps its one-way `gh pr ready` path, and a GitLab
+/// draft is a title prefix (unwired here).
+#[tauri::command]
+pub async fn forge_pr_set_draft(repo_path: String, number: u64, draft: bool) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::Bitbucket, _)) => bitbucket::set_pr_draft(&repo_path, number, draft).await,
+        Some((Provider::GitLab, _)) => Err(AppError::InvalidArgument(
+            "GitLab drafts aren't toggleable here yet.".into(),
+        )),
+        _ => Err(AppError::InvalidArgument(
+            "GitHub marks a pull request ready via its own control.".into(),
+        )),
+    }
+}
+
+/// Replace a merge/pull request's reviewer list (ids from
+/// [`forge_pr_reviewer_candidates`]). Bitbucket-only (`implemented.mr_reviewers`).
+#[tauri::command]
+pub async fn forge_pr_set_reviewers(
+    repo_path: String,
+    number: u64,
+    reviewers: Vec<String>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::set_pr_reviewers(&repo_path, number, &reviewers).await
+        }
+        _ => Err(AppError::InvalidArgument(
+            "Reviewers aren't editable here for this provider.".into(),
+        )),
+    }
+}
+
+/// The reviewer picker's candidates for a PR — Bitbucket: workspace members minus the
+/// user the server would reject. For an existing PR (`Some(number)`) that's the PR
+/// author; at create time (`None`, no PR yet) it's the viewer.
+#[tauri::command]
+pub async fn forge_pr_reviewer_candidates(
+    repo_path: String,
+    number: Option<u64>,
+) -> AppResult<Vec<model::ForgeUserRef>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::reviewer_candidates(&repo_path, number).await
+        }
+        _ => Err(AppError::InvalidArgument(
+            "Reviewers aren't editable here for this provider.".into(),
         )),
     }
 }
@@ -320,9 +481,9 @@ pub async fn forge_pr_edit(
 ) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::edit_mr(&repo_path, number, &title, &body).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::edit_pr(&repo_path, number, &title, &body).await
+        }
         _ => github::edit_pr(&repo_path, number, &title, &body).await,
     }
 }
@@ -338,9 +499,7 @@ pub async fn forge_pr_approvals(
 ) -> AppResult<crate::github::pr::ApprovalState> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::pr_approvals(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::pr_approvals(&repo_path, number).await,
         _ => Err(AppError::InvalidArgument(
             "GitHub surfaces approval through the review flow, not this control.".into(),
         )),
@@ -353,9 +512,7 @@ pub async fn forge_pr_approvals(
 pub async fn forge_pr_approve(repo_path: String, number: u64) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::approve_pr(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::approve_pr(&repo_path, number).await,
         _ => Err(AppError::InvalidArgument(
             "GitHub approvals go through the review flow, not this control.".into(),
         )),
@@ -368,9 +525,7 @@ pub async fn forge_pr_approve(repo_path: String, number: u64) -> AppResult<()> {
 pub async fn forge_pr_unapprove(repo_path: String, number: u64) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::unapprove_pr(&repo_path, number).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::unapprove_pr(&repo_path, number).await,
         _ => Err(AppError::InvalidArgument(
             "GitHub approvals go through the review flow, not this control.".into(),
         )),
@@ -394,9 +549,10 @@ pub async fn forge_pr_merge(
         Some((Provider::GitLab, _)) => {
             gitlab::merge_mr(&repo_path, number, &strategy, delete_branch, sha.as_deref()).await
         }
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        // Bitbucket has no expected-hash guard, so `sha` is dropped.
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::merge_pr(&repo_path, number, &strategy, delete_branch).await
+        }
         _ => crate::github::pr::gh_pr_merge(repo_path, number, strategy, delete_branch).await,
     }
 }
@@ -446,9 +602,7 @@ pub async fn forge_ci_run_list(
 ) -> AppResult<Vec<crate::github::actions::WorkflowRun>> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::list_runs(&repo_path, limit, branch).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::list_runs(&repo_path, limit, branch).await,
         _ => github::list_runs(&repo_path, limit, branch).await,
     }
 }
@@ -461,9 +615,7 @@ pub async fn forge_ci_run_view(
 ) -> AppResult<crate::github::actions::RunDetail> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::view_run(&repo_path, run_id).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::view_run(&repo_path, run_id).await,
         _ => github::view_run(&repo_path, run_id).await,
     }
 }
@@ -473,9 +625,7 @@ pub async fn forge_ci_run_view(
 pub async fn forge_ci_run_failed_logs(repo_path: String, run_id: u64) -> AppResult<String> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::run_failed_logs(&repo_path, run_id).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::run_failed_logs(&repo_path, run_id).await,
         _ => github::run_failed_logs(&repo_path, run_id).await,
     }
 }
@@ -485,8 +635,10 @@ pub async fn forge_ci_run_failed_logs(repo_path: String, run_id: u64) -> AppResu
 pub async fn forge_ci_job_logs(repo_path: String, job_id: u64) -> AppResult<String> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::job_logs(&repo_path, job_id).await,
+        // Bitbucket steps are addressed by braced UUID, not a numeric id — the
+        // frontend fetches their logs via `forge_bb_step_logs` using RunJob.logRef.
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
+            "Bitbucket step logs are fetched by step reference.".into(),
         )),
         _ => github::job_logs(&repo_path, job_id).await,
     }
@@ -500,9 +652,8 @@ pub async fn forge_ci_job_logs(repo_path: String, job_id: u64) -> AppResult<Stri
 pub async fn forge_ci_run_rerun(repo_path: String, run_id: u64, failed: bool) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::retry_run(&repo_path, run_id).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        // Bitbucket has no rerun-failed-only; a re-run re-triggers the run's branch.
+        Some((Provider::Bitbucket, _)) => bitbucket::rerun_run(&repo_path, run_id).await,
         _ => github::rerun_run(&repo_path, run_id, failed).await,
     }
 }
@@ -512,9 +663,7 @@ pub async fn forge_ci_run_rerun(repo_path: String, run_id: u64, failed: bool) ->
 pub async fn forge_ci_run_cancel(repo_path: String, run_id: u64) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::cancel_run(&repo_path, run_id).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::cancel_run(&repo_path, run_id).await,
         _ => github::cancel_run(&repo_path, run_id).await,
     }
 }
@@ -532,9 +681,11 @@ pub async fn forge_ci_dispatch(
 ) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::run_pipeline(&repo_path, &git_ref, &inputs).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket pipelines aren't supported yet.".into(),
-        )),
+        // Bitbucket triggers a branch pipeline; a non-empty `workflow` names a CUSTOM
+        // pipeline (via a selector on the target), and `inputs` become pipeline variables.
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::dispatch_ci(&repo_path, &workflow, &git_ref, &inputs).await
+        }
         _ => github::dispatch_ci(&repo_path, &workflow, &git_ref, inputs).await,
     }
 }
@@ -866,7 +1017,7 @@ pub async fn forge_add_reaction(
             gitlab::add_reaction(&repo_path, &target, number, note_id, &content).await
         }
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket reactions aren't supported yet.".into(),
+            "Bitbucket Cloud has no reactions.".into(),
         )),
         _ => github::add_reaction(&repo_path, &subject_id, &content).await,
     }
@@ -888,7 +1039,7 @@ pub async fn forge_remove_reaction(
             gitlab::remove_reaction(&repo_path, &target, number, note_id, &content).await
         }
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket reactions aren't supported yet.".into(),
+            "Bitbucket Cloud has no reactions.".into(),
         )),
         _ => github::remove_reaction(&repo_path, &subject_id, &content).await,
     }
@@ -1050,9 +1201,7 @@ pub async fn forge_issue_create(
 pub async fn forge_repo_url(repo_path: String) -> AppResult<String> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::repo_url(&repo_path).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket repositories aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => bitbucket::repo_url(&repo_path).await,
         _ => github::repo_url(&repo_path).await,
     }
 }
@@ -1103,9 +1252,15 @@ pub async fn forge_repo_admin(repo_path: String) -> AppResult<ForgeRepoAdmin> {
             let (admin, owner) = gitlab::repo_admin(&repo_path).await?;
             Ok(ForgeRepoAdmin { admin, owner })
         }
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket repositories aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => {
+            // Bitbucket has no owner/admin distinction here (role=owner matched 0
+            // even for an admin), so owner := admin.
+            let admin = bitbucket::repo_admin(&repo_path).await?;
+            Ok(ForgeRepoAdmin {
+                admin,
+                owner: admin,
+            })
+        }
         _ => {
             let admin = crate::github::repo_settings::gh_repo_admin(repo_path).await?;
             Ok(ForgeRepoAdmin {
@@ -1153,6 +1308,20 @@ macro_rules! gl_only {
             Some((Provider::GitLab, _)) => $call.await,
             _ => Err(AppError::InvalidArgument(
                 "this repo isn't hosted on GitLab.".into(),
+            )),
+        }
+    };
+}
+
+/// The Bitbucket-only settings sub-surfaces (repo settings, default reviewers,
+/// branch restrictions, pipelines config/variables/schedules, webhooks). Mirrors
+/// [`gl_only!`] — each guards on the detected provider being Bitbucket.
+macro_rules! bb_only {
+    ($repo_path:expr, $call:expr) => {
+        match detect_non_github(&$repo_path).await {
+            Some((Provider::Bitbucket, _)) => $call.await,
+            _ => Err(AppError::InvalidArgument(
+                "this repo isn't hosted on Bitbucket.".into(),
             )),
         }
     };
@@ -1524,12 +1693,18 @@ pub async fn forge_gl_issue_unlink(
 /// (old links redirect); GitLab renames both the display name and the URL slug
 /// (old paths redirect).
 #[tauri::command]
-pub async fn forge_repo_rename(repo_path: String, new_name: String) -> AppResult<()> {
+pub async fn forge_repo_rename(
+    state: tauri::State<'_, crate::state::AppState>,
+    repo_path: String,
+    new_name: String,
+) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::rename_repo(&repo_path, &new_name).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket repositories aren't supported yet.".into(),
-        )),
+        // Bitbucket's rename changes the slug and the OLD slug 404s (no redirect),
+        // so the local origin remote is rewritten — hence the state handle.
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::rename_repo(&state, &repo_path, &new_name).await
+        }
         _ => crate::github::lifecycle::gh_repo_rename(repo_path, new_name).await,
     }
 }
@@ -1540,7 +1715,7 @@ pub async fn forge_repo_set_archived(repo_path: String, archived: bool) -> AppRe
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::set_archived(&repo_path, archived).await,
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket repositories aren't supported yet.".into(),
+            "Bitbucket doesn't support archiving repositories.".into(),
         )),
         _ => crate::github::lifecycle::gh_repo_set_archived(repo_path, archived).await,
     }
@@ -1553,9 +1728,16 @@ pub async fn forge_repo_set_archived(repo_path: String, archived: bool) -> AppRe
 pub async fn forge_repo_set_visibility(repo_path: String, visibility: String) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::set_visibility(&repo_path, &visibility).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket repositories aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => match visibility.as_str() {
+            "public" => bitbucket::set_visibility(&repo_path, false).await,
+            "private" => bitbucket::set_visibility(&repo_path, true).await,
+            "internal" => Err(AppError::InvalidArgument(
+                "Bitbucket has no internal visibility.".into(),
+            )),
+            other => Err(AppError::InvalidArgument(format!(
+                "unknown visibility: {other}"
+            ))),
+        },
         _ => crate::github::lifecycle::gh_repo_set_visibility(repo_path, visibility).await,
     }
 }
@@ -1571,22 +1753,352 @@ pub async fn forge_repo_transfer(
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::transfer_repo(&repo_path, &new_owner).await,
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket repositories aren't supported yet.".into(),
+            "Transferring isn't available via the Bitbucket API — use the repository's settings on Bitbucket.".into(),
         )),
         _ => crate::github::lifecycle::gh_repo_transfer(repo_path, new_owner, new_name).await,
     }
 }
 
 /// Permanently delete the repository on its provider, behind the abstraction.
+/// After the remote is gone the local `origin` remote is a dangling pointer, so
+/// we remove it — the repo then reads as unpublished again (the header's
+/// "Publish repository…" button reappears). The `state` handle is injected by
+/// Tauri; the invoke args are unchanged.
 #[tauri::command]
-pub async fn forge_repo_delete(repo_path: String) -> AppResult<()> {
+pub async fn forge_repo_delete(
+    state: tauri::State<'_, crate::state::AppState>,
+    repo_path: String,
+) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::delete_repo(&repo_path).await,
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket repositories aren't supported yet.".into(),
-        )),
-        _ => crate::github::lifecycle::gh_repo_delete(repo_path).await,
+        Some((Provider::Bitbucket, _)) => bitbucket::delete_repo(&repo_path).await,
+        _ => crate::github::lifecycle::gh_repo_delete(repo_path.clone()).await,
+    }?;
+
+    // The remote delete succeeded — now drop the local `origin` remote so the
+    // repo reads as unpublished. Tolerate origin already being absent (a git
+    // "No such remote" failure is treated as success). Any other failure AFTER
+    // the remote is gone discloses the partial state rather than masking it.
+    if let Err(e) = crate::git::runner::run_git_mutating(
+        &state,
+        &repo_path,
+        &["remote", "remove", "origin"],
+        crate::git::runner::DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        let already_absent = matches!(
+            &e,
+            AppError::Git { stderr, .. } if stderr.contains("No such remote")
+        );
+        if !already_absent {
+            return Err(AppError::Command(format!(
+                "The repository was deleted on the host, but the local 'origin' \
+                 remote couldn't be removed — remove it manually. ({e})"
+            )));
+        }
     }
+    Ok(())
+}
+
+// ── Bitbucket settings sub-surfaces (wave 3) ─────────────────────────────────
+
+/// The viewer's Bitbucket workspaces — the publish target picker. Account-scoped
+/// (no repo_path); creds come from the keyring.
+#[tauri::command]
+pub async fn forge_bb_workspaces() -> AppResult<Vec<bitbucket::BitbucketWorkspace>> {
+    bitbucket::workspaces().await
+}
+
+/// The Bitbucket repository-settings read (Bitbucket repos only — its model is
+/// provider-shaped, like GitLab's).
+#[tauri::command]
+pub async fn forge_bb_repo_settings(
+    repo_path: String,
+) -> AppResult<bitbucket::BitbucketRepoSettings> {
+    bb_only!(repo_path, bitbucket::repo_settings(&repo_path))
+}
+
+/// Batch-save the Bitbucket repo settings (the General section's Save). Name and
+/// visibility are deliberately not here — the Danger zone owns them.
+#[tauri::command]
+pub async fn forge_bb_repo_settings_update(
+    repo_path: String,
+    input: bitbucket::BitbucketRepoSettingsInput,
+) -> AppResult<bitbucket::BitbucketRepoSettings> {
+    bb_only!(repo_path, bitbucket::update_repo_settings(&repo_path, input))
+}
+
+#[tauri::command]
+pub async fn forge_bb_default_reviewers(
+    repo_path: String,
+) -> AppResult<Vec<model::ForgeUserRef>> {
+    bb_only!(repo_path, bitbucket::default_reviewers(&repo_path))
+}
+
+#[tauri::command]
+pub async fn forge_bb_default_reviewer_add(repo_path: String, uuid: String) -> AppResult<()> {
+    bb_only!(repo_path, bitbucket::default_reviewer_add(&repo_path, &uuid))
+}
+
+#[tauri::command]
+pub async fn forge_bb_default_reviewer_remove(repo_path: String, uuid: String) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::default_reviewer_remove(&repo_path, &uuid)
+    )
+}
+
+/// Workspace members WITHOUT the PR-author exclusion — the default-reviewers picker.
+#[tauri::command]
+pub async fn forge_bb_member_candidates(
+    repo_path: String,
+) -> AppResult<Vec<model::ForgeUserRef>> {
+    bb_only!(repo_path, bitbucket::member_candidates(&repo_path))
+}
+
+#[tauri::command]
+pub async fn forge_bb_branch_restrictions(
+    repo_path: String,
+) -> AppResult<Vec<bitbucket::BitbucketBranchRestriction>> {
+    bb_only!(repo_path, bitbucket::branch_restrictions(&repo_path))
+}
+
+#[tauri::command]
+pub async fn forge_bb_branch_restriction_create(
+    repo_path: String,
+    kind: String,
+    pattern: String,
+    value: Option<u32>,
+) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::branch_restriction_create(&repo_path, &kind, &pattern, value)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_bb_branch_restriction_update(
+    repo_path: String,
+    id: String,
+    kind: String,
+    pattern: String,
+    value: Option<u32>,
+) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::branch_restriction_update(&repo_path, &id, &kind, &pattern, value)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_bb_branch_restriction_delete(repo_path: String, id: String) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::branch_restriction_delete(&repo_path, &id)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_bb_pipelines_config(
+    repo_path: String,
+) -> AppResult<bitbucket::BitbucketPipelinesConfig> {
+    bb_only!(repo_path, bitbucket::pipelines_config(&repo_path))
+}
+
+#[tauri::command]
+pub async fn forge_bb_pipelines_config_update(repo_path: String, enabled: bool) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::pipelines_config_update(&repo_path, enabled)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_bb_pipeline_variables(
+    repo_path: String,
+) -> AppResult<Vec<bitbucket::BitbucketPipelineVariable>> {
+    bb_only!(repo_path, bitbucket::pipeline_variables(&repo_path))
+}
+
+#[tauri::command]
+pub async fn forge_bb_pipeline_variable_create(
+    repo_path: String,
+    key: String,
+    value: String,
+    secured: bool,
+) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::pipeline_variable_create(&repo_path, &key, &value, secured)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_bb_pipeline_variable_update(
+    repo_path: String,
+    uuid: String,
+    value: String,
+    secured: bool,
+) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::pipeline_variable_update(&repo_path, &uuid, &value, secured)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_bb_pipeline_variable_delete(repo_path: String, uuid: String) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::pipeline_variable_delete(&repo_path, &uuid)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_bb_pipeline_schedules(
+    repo_path: String,
+) -> AppResult<Vec<bitbucket::BitbucketPipelineSchedule>> {
+    bb_only!(repo_path, bitbucket::pipeline_schedules(&repo_path))
+}
+
+#[tauri::command]
+pub async fn forge_bb_pipeline_schedule_create(
+    repo_path: String,
+    ref_name: String,
+    cron_pattern: String,
+    enabled: bool,
+) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::pipeline_schedule_create(&repo_path, &ref_name, &cron_pattern, enabled)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_bb_pipeline_schedule_set_enabled(
+    repo_path: String,
+    uuid: String,
+    enabled: bool,
+) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::pipeline_schedule_set_enabled(&repo_path, &uuid, enabled)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_bb_pipeline_schedule_delete(repo_path: String, uuid: String) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::pipeline_schedule_delete(&repo_path, &uuid)
+    )
+}
+
+#[tauri::command]
+pub async fn forge_bb_hooks(repo_path: String) -> AppResult<Vec<bitbucket::BitbucketHook>> {
+    bb_only!(repo_path, bitbucket::hooks(&repo_path))
+}
+
+#[tauri::command]
+pub async fn forge_bb_hook_create(
+    repo_path: String,
+    input: bitbucket::BitbucketHookInput,
+) -> AppResult<()> {
+    bb_only!(repo_path, bitbucket::hook_create(&repo_path, input))
+}
+
+#[tauri::command]
+pub async fn forge_bb_hook_update(
+    repo_path: String,
+    uuid: String,
+    input: bitbucket::BitbucketHookInput,
+) -> AppResult<()> {
+    bb_only!(repo_path, bitbucket::hook_update(&repo_path, &uuid, input))
+}
+
+#[tauri::command]
+pub async fn forge_bb_hook_delete(repo_path: String, uuid: String) -> AppResult<()> {
+    bb_only!(repo_path, bitbucket::hook_delete(&repo_path, &uuid))
+}
+
+// ── Bitbucket PR tasks + custom pipelines + environments (wave 4) ─────────────
+
+/// A pull request's task checklist, in list order (Bitbucket-only —
+/// `implemented.pr_tasks`).
+#[tauri::command]
+pub async fn forge_bb_pr_tasks(
+    repo_path: String,
+    number: u64,
+) -> AppResult<Vec<bitbucket::PrTask>> {
+    bb_only!(repo_path, bitbucket::pr_tasks(&repo_path, number))
+}
+
+/// Create a PR task from free-text (empty text is rejected before the request).
+#[tauri::command]
+pub async fn forge_bb_pr_task_create(
+    repo_path: String,
+    number: u64,
+    text: String,
+) -> AppResult<bitbucket::PrTask> {
+    bb_only!(repo_path, bitbucket::pr_task_create(&repo_path, number, &text))
+}
+
+/// Edit a PR task's text (`task_id` is the numeric server id as a String).
+#[tauri::command]
+pub async fn forge_bb_pr_task_edit(
+    repo_path: String,
+    number: u64,
+    task_id: String,
+    text: String,
+) -> AppResult<bitbucket::PrTask> {
+    bb_only!(
+        repo_path,
+        bitbucket::pr_task_edit(&repo_path, number, &task_id, &text)
+    )
+}
+
+/// Resolve / unresolve a PR task.
+#[tauri::command]
+pub async fn forge_bb_pr_task_set_state(
+    repo_path: String,
+    number: u64,
+    task_id: String,
+    resolved: bool,
+) -> AppResult<bitbucket::PrTask> {
+    bb_only!(
+        repo_path,
+        bitbucket::pr_task_set_state(&repo_path, number, &task_id, resolved)
+    )
+}
+
+/// Delete a PR task.
+#[tauri::command]
+pub async fn forge_bb_pr_task_delete(
+    repo_path: String,
+    number: u64,
+    task_id: String,
+) -> AppResult<()> {
+    bb_only!(
+        repo_path,
+        bitbucket::pr_task_delete(&repo_path, number, &task_id)
+    )
+}
+
+/// The CUSTOM pipeline names declared in the working-tree `bitbucket-pipelines.yml`
+/// (the custom-dispatch picker's options). Reads the local file only (no network); a
+/// missing file yields an empty list.
+#[tauri::command]
+pub async fn forge_bb_custom_pipelines(repo_path: String) -> AppResult<Vec<String>> {
+    bb_only!(repo_path, bitbucket::custom_pipelines(&repo_path))
+}
+
+/// The repo's deployment environments, sorted by rank ascending (Bitbucket-only).
+#[tauri::command]
+pub async fn forge_bb_environments(
+    repo_path: String,
+) -> AppResult<Vec<bitbucket::BbEnvironment>> {
+    bb_only!(repo_path, bitbucket::environments(&repo_path))
 }
 
 /// Which providers this machine can publish a local repo to. A repo with no
@@ -1597,6 +2109,7 @@ pub async fn forge_repo_delete(repo_path: String) -> AppResult<()> {
 pub struct PublishTargets {
     pub github: bool,
     pub gitlab: bool,
+    pub bitbucket: bool,
 }
 
 #[tauri::command]
@@ -1606,9 +2119,12 @@ pub async fn forge_publish_targets(repo_path: String) -> AppResult<PublishTarget
         .map(|s| s.installed && s.authenticated)
         .unwrap_or(false);
     let gl = gitlab::cli_ready().await;
+    // Bitbucket is publishable iff an account is stored (keyring read, no network).
+    let bb = bitbucket::account().await.map(|a| a.is_some()).unwrap_or(false);
     Ok(PublishTargets {
         github: gh,
         gitlab: gl,
+        bitbucket: bb,
     })
 }
 
@@ -1628,14 +2144,27 @@ pub async fn forge_publish_repo(
     description: String,
     homepage: String,
     topics: Vec<String>,
+    // Optional — GitHub/GitLab arms ignore it; a missing arg deserializes to None.
+    workspace: Option<String>,
 ) -> AppResult<String> {
     match provider {
         Provider::GitLab => {
             gitlab::publish_repo(&state, &repo_path, &name, private, &description, &topics).await
         }
-        Provider::Bitbucket => Err(AppError::InvalidArgument(
-            "Bitbucket publishing isn't supported yet.".into(),
-        )),
+        // Bitbucket: homepage maps to `website`; topics are dropped (no topics on
+        // Bitbucket); `workspace` names the target (required).
+        Provider::Bitbucket => {
+            bitbucket::publish_repo(
+                &state,
+                &repo_path,
+                &name,
+                private,
+                &description,
+                &homepage,
+                workspace,
+            )
+            .await
+        }
         Provider::GitHub => {
             github::publish_repo(&repo_path, &name, private, &description, &homepage, topics)
                 .await
@@ -1649,6 +2178,7 @@ pub async fn forge_publish_repo(
 /// GitHub delegates to the unchanged `gh pr create`; GitLab POSTs the MR with
 /// draft mapped to the `Draft:` title prefix. Returns the new number + URL.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn forge_pr_create(
     state: tauri::State<'_, crate::state::AppState>,
     repo_path: String,
@@ -1657,14 +2187,35 @@ pub async fn forge_pr_create(
     title: String,
     body: String,
     draft: bool,
+    reviewers: Option<Vec<String>>,
 ) -> AppResult<crate::github::pr::PrRef> {
-    match detect_non_github(&repo_path).await {
+    let detected = detect_non_github(&repo_path).await;
+    // Create-time reviewers are Bitbucket-only. GitHub/GitLab reject a non-empty list
+    // BEFORE dispatching (existing callers omit the key → `None` → untouched behavior).
+    if reviewers.as_deref().is_some_and(|r| !r.is_empty())
+        && !matches!(detected, Some((Provider::Bitbucket, _)))
+    {
+        return Err(AppError::InvalidArgument(
+            "Create-time reviewers aren't supported for this provider.".into(),
+        ));
+    }
+    match detected {
         Some((Provider::GitLab, _)) => {
             gitlab::create_mr(&state, &repo_path, &base, &head, &title, &body, draft).await
         }
-        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
-            "Bitbucket merge requests aren't supported yet.".into(),
-        )),
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::create_pr(
+                &state,
+                &repo_path,
+                &base,
+                &head,
+                &title,
+                &body,
+                draft,
+                reviewers.as_deref().unwrap_or(&[]),
+            )
+            .await
+        }
         _ => crate::github::pr::gh_pr_create(state, repo_path, base, head, title, body, draft)
             .await,
     }

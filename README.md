@@ -76,6 +76,35 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   transfer, delete). **Self-managed GitLab** works wherever `glab` is signed in —
   the app recognizes any host from `glab auth login`. Insights charts
   GitLab pipelines alongside the local-git analytics. GitHub is unchanged.
+- **Bitbucket Cloud** — connect with an **Atlassian API token**
+  (Settings → Accounts), then **browse & clone** your Bitbucket repositories,
+  read **pull requests** (diffs, comments, build statuses) and watch **Pipelines**
+  (with step logs) in the same panels — and act on them: comment, decline,
+  merge (merge commit / squash / fast-forward, optionally deleting the source
+  branch), edit, create (drafts included, and pick **reviewers** at create time),
+  approve/unapprove, **request changes**
+  (a true toggle — revoking works on every Bitbucket plan), pick **reviewers**
+  from your workspace members, and flip **draft ↔ ready** in either direction.
+  A PR also gets a **Tasks** checklist — add, edit, resolve/unresolve, and delete
+  tasks with a progress bar and an "N open tasks" header chip that jumps to the
+  list (read-only on a closed or merged PR). Plus rerun, trigger, and stop
+  Pipelines — and on a repo with custom `pipelines.custom.*` in its
+  `bitbucket-pipelines.yml`, **pick which pipeline to run** (Default or a named
+  custom one), with variables. Reopening a declined
+  PR isn't available (a Bitbucket platform limit). **Publish a local repo to
+  Bitbucket** (pick a workspace, name it, and it creates the repo, adds `origin`,
+  and pushes the current branch). Insights charts **Bitbucket Pipeline durations**
+  alongside the local-git analytics, with a link-out to Bitbucket's
+  Commits/Branches/Pipelines/Deployments. And **repository settings** (admin-gated) manage a
+  Bitbucket repo: **General** (description, website, language, fork policy, default
+  branch), **default reviewers**, **branch restrictions** (prevent
+  pushes/force-pushes/deletion, restrict merges, require approvals/builds/tasks),
+  **pipeline variables** (secured supported) and **schedules** (cron), a read-only
+  list of **deployment environments**, **webhooks**,
+  and a **Danger zone** (rename — which updates your local `origin` automatically —
+  visibility, transfer, delete; Bitbucket has no archive). Bitbucket has retired its
+  native issue tracker (issues live in Jira), so issues aren't shown for
+  Bitbucket repositories.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works
   in an isolated worktree, so your own checkout is never touched. Follow it
   **step by step** — every file it reads, edits, and command it runs — and

@@ -45,8 +45,9 @@ function nameFromUrl(url: string): string {
   return last.replace(/\.git$/, "");
 }
 
-/** GitHub and GitLab list your repos to pick from; URL clones anything by link. */
-type CloneTab = "github" | "gitlab" | "url";
+/** GitHub, GitLab, and Bitbucket list your repos to pick from; URL clones
+ *  anything by link. */
+type CloneTab = "github" | "gitlab" | "bitbucket" | "url";
 
 /** A flat, virtualizer-friendly view of the owner-grouped repos. */
 type Row =
@@ -78,9 +79,10 @@ export function CloneRepoDialog({
   const [selected, setSelected] = useState<ForgeRepo | null>(null);
   const [filter, setFilter] = useState("");
 
-  // The active provider tab (github/gitlab) drives which account's repos load;
-  // the URL tab loads nothing.
-  const provider: ForgeProvider = tab === "gitlab" ? "gitlab" : "github";
+  // The active provider tab (github/gitlab/bitbucket) drives which account's
+  // repos load; the URL tab loads nothing.
+  const provider: ForgeProvider =
+    tab === "gitlab" ? "gitlab" : tab === "bitbucket" ? "bitbucket" : "github";
   const repos = useForgeRepos(provider, open && tab !== "url");
 
   const form = useAppForm({
@@ -93,7 +95,10 @@ export function CloneRepoDialog({
       try {
         // GitHub + URL clone via plain git (gh's credential helper covers private
         // GitHub repos); GitLab routes through glab so its token authenticates a
-        // private repo that git's credential store doesn't know about.
+        // private repo that git's credential store doesn't know about. Bitbucket
+        // clones over plain git too — a private Bitbucket repo relies on the
+        // user's git credential setup (e.g. Git Credential Manager); GitDesktop
+        // does not inject the Atlassian API token into git.
         const clonedPath =
           tab === "url"
             ? await cloneRepo(cloneUrl, dest)
@@ -203,8 +208,9 @@ export function CloneRepoDialog({
           <DialogHeader>
             <DialogTitle>Clone a repository</DialogTitle>
             <DialogDescription>
-              Pick one of your GitHub or GitLab repositories, or paste a URL.
-              Clones over HTTPS or SSH using your system git credentials.
+              Pick one of your GitHub, GitLab, or Bitbucket repositories, or
+              paste a URL. Clones over HTTPS or SSH using your system git
+              credentials.
             </DialogDescription>
           </DialogHeader>
 
@@ -215,6 +221,9 @@ export function CloneRepoDialog({
               </TabsTrigger>
               <TabsTrigger value="gitlab" className="flex-1">
                 GitLab
+              </TabsTrigger>
+              <TabsTrigger value="bitbucket" className="flex-1">
+                Bitbucket
               </TabsTrigger>
               <TabsTrigger value="url" className="flex-1">
                 URL
@@ -337,6 +346,7 @@ function RepoBrowser({
   onSelect: (repo: ForgeRepo) => void;
   onUseUrl: () => void;
 }) {
+  const openSettings = useUiStore((s) => s.openSettings);
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -369,8 +379,36 @@ function RepoBrowser({
   if (repos.isError) {
     const kind = isAppError(repos.error) ? repos.error.kind : "";
     const cliMissing = kind === "ghNotFound" || kind === "glabNotFound";
+    // Bitbucket has no CLI — an unconfigured account means "add a token in
+    // Settings → Accounts" rather than "install a CLI". A general Bitbucket API
+    // failure (kind "bitbucket") falls through to the generic error rendering.
+    const bbUnconfigured = kind === "bitbucketNotConfigured";
     const cli = provider === "gitlab" ? "GitLab CLI (glab)" : "GitHub CLI (gh)";
     const authCmd = provider === "gitlab" ? "glab auth login" : "gh auth login";
+    if (bbUnconfigured) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+          <p className="text-xs font-medium">Connect your Bitbucket account</p>
+          <p className="max-w-xs text-xs text-muted-foreground">
+            Add an Atlassian API token in Settings → Accounts to browse your
+            Bitbucket repositories, or clone from a URL instead.
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => openSettings("accounts")}
+            >
+              Open Settings → Accounts
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={onUseUrl}>
+              Clone from a URL
+            </Button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <p className="text-xs font-medium">

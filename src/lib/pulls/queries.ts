@@ -3,6 +3,7 @@ import {
   externalReviewerNames,
   fetchExternalFindings,
 } from "@/lib/ai/external-context";
+import { useForgeStatus } from "@/lib/git/queries";
 import {
   createLocalPr,
   deleteLocalPr,
@@ -112,11 +113,29 @@ export function useClearReviews(repo: string, kind: PrKind, ref: string) {
  *  best-effort (errors degrade to no banner). Returns the kept findings plus the
  *  distinct reviewer display names. */
 export function useExternalReviews(repo: string, kind: PrKind, ref: string) {
-  const enabled = kind === "remote" && repo !== "" && /^\d+$/.test(ref);
+  // Harvested behind the forge abstraction for GitHub + GitLab; Bitbucket has no
+  // bot-review ecosystem, so the query is disabled there (no banner, no round trip).
+  // Gate on the forge status being RESOLVED before enabling: while it's pending the
+  // provider is unknown, so we must not run under a default-"github" assumption
+  // (wrong trust semantics on GitLab, a wasted IPC harvest on Bitbucket).
+  const forge = useForgeStatus(repo);
+  const provider = forge.data?.provider;
+  const enabled =
+    forge.isSuccess &&
+    provider != null &&
+    provider !== "bitbucket" &&
+    kind === "remote" &&
+    repo !== "" &&
+    /^\d+$/.test(ref);
   return useQuery({
-    queryKey: ["external-reviews", repo, ref],
+    queryKey: ["external-reviews", repo, ref, provider ?? "pending"],
     queryFn: async () => {
-      const items = await fetchExternalFindings(repo, Number(ref));
+      // Only runs when enabled, so provider is guaranteed a resolved non-Bitbucket value.
+      const items = await fetchExternalFindings(
+        repo,
+        Number(ref),
+        provider ?? undefined,
+      );
       return { items, reviewers: externalReviewerNames(items) };
     },
     enabled,

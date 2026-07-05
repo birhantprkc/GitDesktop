@@ -1256,6 +1256,10 @@ pub struct PrDetails {
     /// GitLab-only (`implemented.mrAssignees`), so the GitHub view doesn't request
     /// assignees and leaves it empty.
     pub assignees: Vec<String>,
+    /// The reviewer list. Only Bitbucket fills this — the reviewers picker is
+    /// Bitbucket-only (`implemented.mrReviewers`); identity is the provider's
+    /// stable id (Bitbucket: the braced account uuid), label the display name.
+    pub reviewers: Vec<crate::forge::model::ForgeUserRef>,
 }
 
 /// A merge/pull request's approval summary — who has approved and whether the
@@ -1384,6 +1388,7 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
             .collect(),
         labels: raw.labels,
         assignees: Vec::new(),
+        reviewers: Vec::new(),
     })
 }
 

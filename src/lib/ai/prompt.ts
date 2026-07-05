@@ -2,6 +2,7 @@ import { budgetDiff, budgetReviewExtras, type ReviewExtras } from "./truncate";
 import type {
   BranchNamePromptInput,
   CommitPromptInput,
+  PromptProvider,
   PrPromptInput,
   ReviewDeltaState,
   ReviewMode,
@@ -117,6 +118,41 @@ export function buildBranchNamePrompt(input: BranchNamePromptInput): {
   };
 }
 
+/** The provider-specific nouns/wording a prompt needs. Resolved centrally so the
+ *  GitHub path is unchanged and the others differ in exactly the copy that
+ *  matters (the change-request noun and the markdown-flavor phrase). */
+interface PlatformCopy {
+  /** The host label, e.g. "GitHub" / "GitLab" / "Bitbucket". */
+  host: string;
+  /** The change-request noun, e.g. "pull request" / "merge request". */
+  prNoun: string;
+  /** How to describe the target markdown dialect in an instruction. */
+  markdownFlavor: string;
+}
+
+function platformCopy(provider: PromptProvider | undefined): PlatformCopy {
+  if (provider === "gitlab") {
+    return {
+      host: "GitLab",
+      prNoun: "merge request",
+      markdownFlavor: "GitLab-flavored Markdown",
+    };
+  }
+  if (provider === "bitbucket") {
+    return {
+      host: "Bitbucket",
+      prNoun: "pull request",
+      markdownFlavor:
+        "Bitbucket-compatible Markdown (avoid GitHub-only extensions)",
+    };
+  }
+  return {
+    host: "GitHub",
+    prNoun: "pull request",
+    markdownFlavor: "GitHub-flavored Markdown",
+  };
+}
+
 const PR_SYSTEM = `You write GitHub pull request descriptions for reviewers.
 
 First line: the PR title — concise, imperative mood, no trailing period, no "PR:"/"Title:" prefix.
@@ -131,11 +167,29 @@ Structure the description like a strong human-written PR:
 
 Do not wrap the output in code fences. Do not add commentary before the title or after the body.`;
 
+/** The PR description system prompt for a target provider. GitHub (or an absent
+ *  provider) returns {@link PR_SYSTEM} verbatim (byte-identical); the others swap
+ *  only the change-request noun ("merge request") and the markdown-flavor phrase,
+ *  by targeted replacement so the rest of the prompt stays in lockstep. */
+function prSystemFor(provider: PromptProvider | undefined): string {
+  if (!provider || provider === "github") return PR_SYSTEM;
+  const { host, prNoun, markdownFlavor } = platformCopy(provider);
+  const abbrev = prNoun === "merge request" ? "MR" : "PR";
+  return PR_SYSTEM.replace("GitHub pull request", `${host} ${prNoun}`)
+    .replace("the PR title", `the ${prNoun} title`)
+    .replace('no "PR:"', `no "${abbrev}:"`)
+    .replace("human-written PR:", `human-written ${prNoun}:`)
+    .replace("issue or PR numbers", `issue or ${abbrev} numbers`)
+    .replace("GitHub-flavored Markdown", markdownFlavor);
+}
+
 export function buildPrPrompt(input: PrPromptInput): {
   system: string;
   prompt: string;
 } {
-  const systemParts = [PR_SYSTEM];
+  const { prNoun } = platformCopy(input.provider);
+  const abbrev = prNoun === "merge request" ? "MR" : "PR";
+  const systemParts = [prSystemFor(input.provider)];
   if (input.repoInstructions) {
     systemParts.push(`## Project instructions\n${input.repoInstructions}`);
   }
@@ -154,11 +208,11 @@ export function buildPrPrompt(input: PrPromptInput): {
   const budgeted = budgetDiff(stripBinarySections(input.diffText));
 
   const promptParts = [
-    `This pull request merges \`${input.headBranch}\` into \`${input.baseBranch}\`.`,
+    `This ${prNoun} merges \`${input.headBranch}\` into \`${input.baseBranch}\`.`,
   ];
   if (input.commitSubjects.length > 0) {
     promptParts.push(
-      `## Commits in this PR\n${input.commitSubjects.map((s) => `- ${s}`).join("\n")}`,
+      `## Commits in this ${abbrev}\n${input.commitSubjects.map((s) => `- ${s}`).join("\n")}`,
     );
   }
   promptParts.push(`## Files changed\n${fileSummary || "(none)"}`);
@@ -173,7 +227,7 @@ export function buildPrPrompt(input: PrPromptInput): {
   }
   promptParts.push(diffSection);
   promptParts.push(
-    "Write the pull request title and description. Lead with a summary of the goal, then group related changes by theme under `###` headings when the diff touches several areas, citing the files involved.",
+    `Write the ${prNoun} title and description. Lead with a summary of the goal, then group related changes by theme under \`###\` headings when the diff touches several areas, citing the files involved.`,
   );
 
   return {
@@ -289,6 +343,23 @@ function deltaSection(
   return section;
 }
 
+/** The review system prompt for a target provider. GitHub (or an absent provider)
+ *  returns the base system verbatim (byte-identical); the others swap only the
+ *  change-request noun and the markdown-flavor phrase, by targeted replacement so
+ *  the rest of the long prompt stays in lockstep. */
+function reviewSystemFor(
+  mode: ReviewMode,
+  provider: PromptProvider | undefined,
+): string {
+  const base =
+    mode === "security" ? SECURITY_REVIEW_SYSTEM : GENERAL_REVIEW_SYSTEM;
+  if (!provider || provider === "github") return base;
+  const { prNoun, markdownFlavor } = platformCopy(provider);
+  return base
+    .replaceAll("pull request", prNoun)
+    .replaceAll("GitHub-flavored Markdown", markdownFlavor);
+}
+
 export function buildReviewPrompt(
   input: ReviewPromptInput,
   mode: ReviewMode,
@@ -385,9 +456,7 @@ export function buildReviewPrompt(
       : "Review these changes.",
   );
 
-  const baseSystem =
-    mode === "security" ? SECURITY_REVIEW_SYSTEM : GENERAL_REVIEW_SYSTEM;
-  let system = baseSystem;
+  let system = reviewSystemFor(mode, input.provider);
   if (hasPrior) system += ITERATIVE_REVIEW_CLAUSE;
   if (renderedExternal) system += EXTERNAL_REVIEW_CLAUSE;
   return {
@@ -1070,6 +1139,21 @@ When given only commit subjects:
 
 Keep it concise and scannable. If there are very few entries, a short flat list is fine.`;
 
+/** The commit-subjects-only variant of the release-notes system prompt: no host
+ *  named, since this path feeds bare commit subjects (used on GitLab/Bitbucket and
+ *  as GitHub's own fallback). The changelog-enriched path keeps the GitHub wording
+ *  above — only GitHub produces that auto-changelog. */
+const RELEASE_NOTES_SYSTEM_COMMITS = `You write polished release notes as Markdown
+only — no preamble, no title line, no code fences.
+
+You are given a list of commit subjects from this release.
+
+Group them under short headings (e.g. ## Features, ## Fixes, ## Maintenance) with concise
+past-tense bullets. Merge trivial/duplicate commits and drop noise (merge commits, "wip",
+formatting-only, version bumps). Do NOT invent changes.
+
+Keep it concise and scannable. If there are very few entries, a short flat list is fine.`;
+
 export function buildReleaseNotesPrompt(input: {
   repoName: string;
   version: string;
@@ -1078,7 +1162,14 @@ export function buildReleaseNotesPrompt(input: {
   changelog?: string;
   globalInstructions: string;
 }): { system: string; prompt: string } {
-  const systemParts = [RELEASE_NOTES_SYSTEM];
+  // Only GitHub supplies the auto-changelog, so its enriched prompt keeps the
+  // GitHub wording; the bare-commit path (GitLab/Bitbucket + GitHub fallback)
+  // uses the host-neutral variant.
+  const systemParts = [
+    input.changelog?.trim()
+      ? RELEASE_NOTES_SYSTEM
+      : RELEASE_NOTES_SYSTEM_COMMITS,
+  ];
   if (input.globalInstructions.trim()) {
     systemParts.push(
       `## User instructions\n${input.globalInstructions.trim()}`,

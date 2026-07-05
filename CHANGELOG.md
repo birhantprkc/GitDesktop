@@ -21,6 +21,57 @@ commit list.
   shows the Dockerfile and asks you to confirm before building (the build runs the file's
   commands, so it never happens automatically — the guard for a cloned repo you don't fully
   trust), and **Add custom tools…** scaffolds a starter Dockerfile for you to edit and commit.
+- **Bitbucket Cloud (read).** Connect Bitbucket in **Settings → Accounts** with an
+  **Atlassian API token** (created at id.atlassian.com, used with your Atlassian
+  account email; stored in your OS keychain), then **browse & clone** your Bitbucket
+  repositories and read **pull requests** (diffs, comments, build statuses) and watch
+  **Pipelines** with step logs — all in the same panels as GitHub and GitLab. Bitbucket
+  has retired its native issue tracker (issues now live in Jira), so issues aren't shown
+  for Bitbucket repositories.
+- **Bitbucket Cloud pull request & Pipeline actions.** Beyond reading, you can now act on
+  Bitbucket Cloud from GitDesktop: **comment**, **decline**, **merge** (merge commit,
+  squash, or fast-forward, with an optional delete-source-branch), **edit**, **create**
+  (drafts included), and **approve/unapprove** pull requests, plus **rerun**, **trigger**
+  (with variables), and **stop** Pipelines. Add the `write:pullrequest:bitbucket` and
+  `write:pipeline:bitbucket` token scopes in **Settings → Accounts** to enable them.
+  Reopening a declined PR isn't available — a Bitbucket platform limit.
+- **Bitbucket Cloud PR reviews & drafts.** Bitbucket pull requests gain the rest of the
+  review flow: **request changes** as a true toggle (click again to revoke — unlike
+  GitLab, Bitbucket's revoke works on every plan; approving also clears it), a
+  **reviewers picker** that lists your workspace members (minus the PR author, whom
+  Bitbucket won't accept as a reviewer), and a both-ways **draft toggle** — mark a draft
+  **ready for review** or convert a ready PR **back to draft**.
+- **Bitbucket Cloud publish, Insights & repository settings.** Three more Bitbucket
+  surfaces come online. **Publish a local repo** — a repo with no remote can be published
+  to Bitbucket from the sync bar's **Publish repository…** (or the not-ready panel): pick a
+  **workspace**, give it a name (which becomes the URL slug), optionally a description,
+  website, and public/private, and GitDesktop creates the repo, adds it as `origin`, and
+  pushes the current branch. **Insights** now works on Bitbucket repos — the local-git
+  charts, a **Pipelines** duration and success-rate chart, and a *More on Bitbucket* card
+  that links out to Commits, Branches, and Pipelines (the GitHub-only community, traffic,
+  and dependencies cards stay hidden). And **repository settings** (for a repo you admin)
+  manage a Bitbucket repo end to end: **General** (description, website, language, fork
+  policy, default branch), **Default reviewers** (from your workspace members), **Branch
+  restrictions** (prevent pushes / force-pushes / deletion, restrict merges, require
+  approvals / passing builds / resolved tasks, by glob pattern), pipeline **Variables**
+  (secured supported, with an enable-Pipelines toggle) and **Schedules** (cron, enable /
+  disable, delete), **Webhooks** (create / edit / delete with an event checklist — Bitbucket
+  has no delivery-log API, so there's no deliveries view), and a **Danger zone** (rename,
+  which updates your local `origin` remote automatically; change visibility; transfer via a
+  link out to Bitbucket; and delete — Bitbucket has no archive).
+- **Bitbucket Cloud PR tasks, custom pipelines, deployments & create-time reviewers.** Four
+  more Bitbucket surfaces. A Bitbucket pull request now has a **Tasks** checklist in its
+  conversation view — add, edit, resolve/unresolve, and delete tasks, with a completion
+  progress bar, an "N open tasks" chip in the PR header that jumps to the list, and
+  comment-attached tasks that link back to their comment (read-only once the PR is closed or
+  merged). The **Run pipeline** dialog gains a **Pipeline** picker on Bitbucket repos whose
+  `bitbucket-pipelines.yml` defines custom pipelines (`pipelines.custom.*`) — run the
+  branch's Default pipeline or a named custom one, with the same variables. **Repository
+  settings → Pipelines → Deployments** lists the repo's **deployment environments**
+  (read-only, with tier and not-yet-used / admin-only hints and a *Manage on Bitbucket…*
+  link out), and the Insights *More on Bitbucket* card gains a **Deployments** link.
+  Finally, the **Create pull request** dialog lets you pick **reviewers** up front (an empty
+  selection keeps Bitbucket's default reviewers).
 - **GitLab time tracking.** Track time on a GitLab issue or merge request without
   leaving the app: set an **estimate** (e.g. `3h`) and log **spent** time (e.g.
   `45m`, or subtract with `-15m`), with a progress bar and an "over" note when
@@ -37,6 +88,12 @@ commit list.
   squash) variants, and once armed the footer shows an "Auto-merge enabled"
   indicator you can cancel in place. GitLab merges it for you when the pipeline
   passes.
+- **PR notifications & remote pr-sync on GitLab and Bitbucket.** The background PR
+  poller — OS notifications for pull requests opened, merged, or closed, and the
+  **remote pr-sync** automation that re-reviews an open remote PR when its head
+  advances — now works on GitLab and Bitbucket repositories, not just GitHub. (Check
+  and review-decision notifications stay GitHub-only for now: GitLab and Bitbucket
+  don't report a check rollup or approval state in the list responses the poll uses.)
 - **Copy the branch name or HEAD SHA.** The repository menu (and command palette)
   gained two clipboard actions alongside "copy the repo path": **Copy branch name**
   copies the current branch, and **Copy HEAD SHA** copies the full commit SHA of
@@ -86,7 +143,7 @@ commit list.
   charts **GitLab pipeline durations and success rate** (the GitHub-only cards —
   community, traffic, dependencies — hide, with GitLab's web-only analytics linked
   instead). GitHub repositories are
-  completely unaffected. (Bitbucket is still on the way.)
+  completely unaffected.
 - **Self-managed GitLab.** Everything above now works on your own GitLab instance,
   not just gitlab.com — sign `glab` in to the host (`glab auth login --hostname …`)
   and GitDesktop recognizes repositories on it automatically, labels them
@@ -494,6 +551,31 @@ commit list.
   mounts your global skills (`~/.agents/skills`) read-only, so a skill invoked by name
   resolves inside the container just as it does for a host session — previously only
   skills committed to the repo were visible there.
+- **AI re-reviews build on GitLab bot findings.** When you re-review a GitLab merge
+  request, GitDesktop now folds in what third-party AI reviewers (CodeRabbit, Copilot,
+  and the like) already flagged in the MR discussion — the same "build on external
+  reviews" context it has offered on GitHub — so the model doesn't re-report findings
+  another tool already raised. Bitbucket has no equivalent bot-review ecosystem, so it
+  stays out of this path.
+- **Provider-aware AI prompts.** AI review, summary, and commit-message prompts now speak
+  the host's vocabulary — "merge request" on GitLab and Bitbucket, "pull request" on
+  GitHub — and use each platform's markdown flavor, and release-notes generation no
+  longer shells out to the GitHub CLI on a GitLab or Bitbucket repository.
+
+### Changed
+
+- **One unified "Publish repository…" control.** The sync bar and the hosted-feature
+  empty states (Pull Requests, Issues, Discussions, Actions) now share a single publish
+  affordance: a plain button when one provider can publish a local-only repo, or a menu
+  to pick between GitHub, GitLab, and Bitbucket when more than one is ready — no more
+  stacked per-provider buttons. In those empty states, publishing now takes precedence
+  over the GitHub CLI setup steps whenever another provider can already publish the repo.
+- **Empty states now teach their surface and offer the next action.** Compare's
+  detached-HEAD and no-other-branches states explain what's needed and offer *Switch
+  branch* / *New branch*; Actions' empty runs list explains where runs come from
+  (provider-aware) with a *Run workflow/pipeline* button, and its branch-scoped empty
+  offers *Show all branches*; History's filtered no-match adds a *Clear filter* button;
+  and the Tags, PR Tasks, and Discussions empty states got clearer, more helpful copy.
 
 ### Fixed
 

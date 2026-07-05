@@ -20,7 +20,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useForgeStatus } from "@/lib/git/queries";
-import { useRunWorkflow, useWorkflows } from "@/lib/github/actions";
+import {
+  useBbCustomPipelines,
+  useRunWorkflow,
+  useWorkflows,
+} from "@/lib/github/actions";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 
@@ -35,12 +39,20 @@ export function RunWorkflowDialog({
   onOpenChange: (open: boolean) => void;
   defaultRef: string;
 }) {
-  // GitLab has no per-workflow dispatch — one `.gitlab-ci.yml` per project — so
-  // its form is just ref + variables: the workflow picker hides (and its
-  // GitHub-only `gh workflow list` query never fires), and "inputs" become CI/CD
-  // variables on the new pipeline.
-  const isGitLab = useForgeStatus(repoPath).data?.provider === "gitlab";
-  const workflows = useWorkflows(repoPath, open && !isGitLab);
+  // GitLab and Bitbucket have no per-workflow dispatch — one pipeline config per
+  // project — so the form is just ref + variables: the workflow picker hides (and
+  // its GitHub-only `gh workflow list` query never fires), and "inputs" become
+  // CI/CD variables on the new pipeline.
+  const provider = useForgeStatus(repoPath).data?.provider;
+  const isPipelineProvider = provider === "gitlab" || provider === "bitbucket";
+  const isBitbucket = provider === "bitbucket";
+  const workflows = useWorkflows(repoPath, open && !isPipelineProvider);
+  // Bitbucket custom-pipeline selectors (from the working-tree
+  // `bitbucket-pipelines.yml`). When present, they're offered above the ref
+  // alongside "Default" (the branch pipeline). Other providers never fetch.
+  const customPipelines = useBbCustomPipelines(repoPath, open && isBitbucket);
+  const pipelineNames = customPipelines.data ?? [];
+  const hasCustomPipelines = isBitbucket && pipelineNames.length > 0;
   const runWorkflow = useRunWorkflow(repoPath);
   const selectRun = useUiStore((s) => s.selectRun);
 
@@ -52,8 +64,15 @@ export function RunWorkflowDialog({
   const workflowItems = Object.fromEntries(
     dispatchable.map((w) => [String(w.id), w.name]),
   );
+  // value → label map so the closed trigger shows "Default" for "", not a blank.
+  const pipelineItems: Record<string, string> = {
+    "": "Default",
+    ...Object.fromEntries(pipelineNames.map((n) => [n, n])),
+  };
 
   const [workflow, setWorkflow] = useState("");
+  // "" = the branch's default pipeline; a name = a custom selector. Bitbucket only.
+  const [pipeline, setPipeline] = useState("");
   const [gitRef, setGitRef] = useState(defaultRef);
   // Stable row ids keep input focus/state correct when rows are removed.
   const nextId = useRef(0);
@@ -66,6 +85,7 @@ export function RunWorkflowDialog({
     if (!open) return;
     setGitRef(defaultRef);
     setInputs([]);
+    setPipeline("");
   }, [open, defaultRef]);
   useEffect(() => {
     if (open && !workflow && dispatchable.length > 0) {
@@ -74,7 +94,7 @@ export function RunWorkflowDialog({
   }, [open, workflow, dispatchable]);
 
   function submit() {
-    if ((!isGitLab && !workflow) || !gitRef.trim()) return;
+    if ((!isPipelineProvider && !workflow) || !gitRef.trim()) return;
     const record: Record<string, string> = {};
     for (const { key, value } of inputs) {
       const k = key.trim();
@@ -82,16 +102,22 @@ export function RunWorkflowDialog({
     }
     runWorkflow.mutate(
       {
-        workflow: isGitLab ? "" : workflow,
+        // Bitbucket rides a custom-pipeline selector (or "" for the default) through
+        // the `workflow` arg; GitLab always sends "" (byte-identical); GitHub sends
+        // the selected workflow id.
+        workflow: isBitbucket ? pipeline : isPipelineProvider ? "" : workflow,
         gitRef: gitRef.trim(),
         inputs: record,
       },
       {
         onSuccess: () => {
-          toast.success(isGitLab ? "Pipeline started" : "Workflow dispatched", {
-            description:
-              "It may take a few seconds to appear in the runs list.",
-          });
+          toast.success(
+            isPipelineProvider ? "Pipeline started" : "Workflow dispatched",
+            {
+              description:
+                "It may take a few seconds to appear in the runs list.",
+            },
+          );
           // Clear any stale selection so the new run is easy to spot.
           selectRun(null);
           onOpenChange(false);
@@ -102,17 +128,17 @@ export function RunWorkflowDialog({
   }
 
   const noneDispatchable =
-    !isGitLab && !workflows.isPending && dispatchable.length === 0;
+    !isPipelineProvider && !workflows.isPending && dispatchable.length === 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {isGitLab ? "Run pipeline" : "Run workflow"}
+            {isPipelineProvider ? "Run pipeline" : "Run workflow"}
           </DialogTitle>
           <DialogDescription>
-            {isGitLab ? (
+            {isPipelineProvider ? (
               "Run a new pipeline on a branch or tag."
             ) : (
               <>
@@ -125,7 +151,7 @@ export function RunWorkflowDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          {!isGitLab && (
+          {!isPipelineProvider && (
             <div className="space-y-2">
               <Label htmlFor="wf-workflow">Workflow</Label>
               <Select
@@ -159,6 +185,29 @@ export function RunWorkflowDialog({
             </div>
           )}
 
+          {hasCustomPipelines && (
+            <div className="space-y-2">
+              <Label htmlFor="wf-pipeline">Pipeline</Label>
+              <Select
+                items={pipelineItems}
+                value={pipeline}
+                onValueChange={(v) => setPipeline(v ?? "")}
+              >
+                <SelectTrigger id="wf-pipeline" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Default</SelectItem>
+                  {pipelineNames.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="wf-ref">Branch or tag</Label>
             <Input
@@ -173,7 +222,7 @@ export function RunWorkflowDialog({
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label>
-                {isGitLab ? "Variables" : "Inputs"}{" "}
+                {isPipelineProvider ? "Variables" : "Inputs"}{" "}
                 <span className="font-normal text-muted-foreground">
                   (optional)
                 </span>
@@ -190,12 +239,12 @@ export function RunWorkflowDialog({
                 }
               >
                 <PlusIcon data-icon="inline-start" />
-                {isGitLab ? "Add variable" : "Add input"}
+                {isPipelineProvider ? "Add variable" : "Add input"}
               </Button>
             </div>
             {inputs.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                {isGitLab
+                {isPipelineProvider
                   ? "Add CI/CD variables to pass to the pipeline."
                   : "Add key/value pairs if the workflow defines inputs."}
               </p>
@@ -255,13 +304,13 @@ export function RunWorkflowDialog({
           </Button>
           <Button
             disabled={
-              (!isGitLab && !workflow) ||
+              (!isPipelineProvider && !workflow) ||
               !gitRef.trim() ||
               runWorkflow.isPending
             }
             onClick={submit}
           >
-            {isGitLab ? "Run pipeline" : "Run workflow"}
+            {isPipelineProvider ? "Run pipeline" : "Run workflow"}
           </Button>
         </DialogFooter>
       </DialogContent>

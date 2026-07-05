@@ -19,6 +19,7 @@ import {
   openWithProgram,
 } from "@/lib/git/api";
 import { useRepoOwners } from "@/lib/git/queries";
+import { type ForgeProvider, providerLabel } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { type RecentRepo, repoDisplayName } from "@/lib/settings/api";
 import { usePersistRepoOwners, useSettings } from "@/lib/settings/queries";
@@ -397,10 +398,10 @@ function RepoMenuItems({
               .catch(toastError)
           }
         >
-          {/* Name the repo's actual provider (incl. self-managed GitLab);
-              unrecognized hosts route through gh (Enterprise etc.), so GitHub
-              is the honest default label. */}
-          View on {provider === "gitlab" ? "GitLab" : "GitHub"}
+          {/* Name the repo's actual provider (incl. self-managed GitLab and
+              Bitbucket); unrecognized hosts route through gh (Enterprise etc.),
+              so GitHub is the honest default label. */}
+          View on {providerLabel(provider as ForgeProvider | null)}
         </ContextMenuItem>
       )}
       <ContextMenuItem

@@ -423,6 +423,25 @@ export interface GhStatus {
 /** The hosting platform backing a repo's hosted features. */
 export type ForgeProvider = "github" | "gitlab" | "bitbucket";
 
+/** The human label for a provider. Null/undefined (an unrecognized host that
+ *  routes through gh) reads as "GitHub" — gh stays the authoritative default. */
+export function providerLabel(
+  provider: ForgeProvider | null | undefined,
+): "GitHub" | "GitLab" | "Bitbucket" {
+  if (provider === "gitlab") return "GitLab";
+  if (provider === "bitbucket") return "Bitbucket";
+  return "GitHub";
+}
+
+/** A signed-in Bitbucket Cloud account (validated against GET /2.0/user before
+ *  the token is saved). The token itself is never returned by anything. */
+export interface BbAccountInfo {
+  /** The Atlassian account email — the HTTP Basic username for API-token auth. */
+  email: string;
+  username: string | null;
+  displayName: string | null;
+}
+
 /** What a provider (and this repo on it) supports, so panels show only the
  *  controls that work instead of erroring. GitHub is all-true; GitLab/Bitbucket
  *  follow the parity matrix. Grows as more panels move behind capability gates. */
@@ -502,9 +521,14 @@ export interface ForgeImplemented {
   /** Setting a merge request's assignees — GitLab-only like `mrApprove` (GitHub
    *  PRs expose no assignee picker here), so it's false for GitHub. */
   mrAssignees: boolean;
-  /** Requesting changes on an MR (the blocking reviewer state) — GitLab-only
-   *  like `mrApprove` (GitHub requests changes via its Review menu). */
+  /** Requesting changes on an MR (the blocking reviewer state) — GitLab and
+   *  Bitbucket (GitHub requests changes via its Review menu). Bitbucket's revoke
+   *  works on every plan, so the control toggles there; GitLab is one-shot. */
   mrRequestChanges: boolean;
+  /** Editing a merge/pull request's reviewer list — Bitbucket-only (reviewers
+   *  picked from workspace members; GitHub keeps its own review-request flow and
+   *  the GitLab reviewer list isn't wired). */
+  mrReviewers: boolean;
   /** Editing an existing issue's title/body — the shared edit dialog. */
   issueEdit: boolean;
   /** Editing an existing merge/pull request's title/body — the same shared
@@ -544,6 +568,44 @@ export interface ForgeImplemented {
   /** Related-issue links (relates_to) on issues. GitLab-unique — false for
    *  GitHub (its issue relationships are sub-issues/dependencies instead). */
   issueLinks: boolean;
+  /** The pull-request tasks checklist (create/edit/resolve/delete). Bitbucket-only
+   *  — a native Bitbucket concept with no GitHub/GitLab analogue wired here, so
+   *  false for both. */
+  prTasks: boolean;
+}
+
+/** One pull-request task (Bitbucket's PR checklist). `id`/`commentId` are numeric
+ *  server ids serialized as Strings (u64-precision rule); `state` is
+ *  `"UNRESOLVED"` | `"RESOLVED"`. `creator`/`resolvedBy` are display names (task
+ *  user objects carry no username). */
+export interface PrTask {
+  id: string;
+  /** "UNRESOLVED" | "RESOLVED" */
+  state: string;
+  /** The task text (`content.raw`). */
+  text: string;
+  /** The creator's display name (falls back to nickname, then ""). */
+  creator: string;
+  createdOn: string;
+  /** Who resolved it, or null while unresolved. */
+  resolvedBy: string | null;
+  /** The PR comment this task is attached to, or null for a standalone task. */
+  commentId: string | null;
+  /** The task's web URL, or "". */
+  url: string;
+}
+
+/** One Bitbucket deployment environment (minimal read — lock/category unmapped).
+ *  `adminOnly` is `restrictions.admin_only`; `environmentType` is the tier name. */
+export interface BbEnvironment {
+  uuid: string;
+  name: string;
+  /** The tier name ("Test" / "Staging" / "Production"), or "". */
+  environmentType: string;
+  rank: number;
+  hidden: boolean;
+  /** Whether the environment is restricted to admins. */
+  adminOnly: boolean;
 }
 
 /** Whether the viewer can manage this repo's settings (`admin`) and whether
@@ -738,6 +800,104 @@ export interface GitLabMrMergeState {
   pipelineStatus: string;
   /** Head pipeline web URL; "" when no pipeline. */
   pipelineUrl: string;
+}
+
+// ── Bitbucket settings surface (wave 2/3) ──────────────────────────────────
+//
+// Bitbucket's repo-management model is its own shape (like GitLab's), not a
+// mapping onto the GitHub types: a `fork_policy` enum, a `mainbranch`, and no
+// topics/archiving. camelCase mirrors the serde on the Rust side.
+
+/** A Bitbucket workspace the viewer belongs to — the publish target picker. */
+export interface BitbucketWorkspace {
+  slug: string;
+  administrator: boolean;
+}
+
+/** Bitbucket repository settings — its own shape (a `fork_policy` enum, a
+ *  main branch, no topics). Nullable scalars arrive as "" (empty-string idiom). */
+export interface BitbucketRepoSettings {
+  name: string;
+  slug: string;
+  fullName: string;
+  description: string;
+  website: string;
+  language: string;
+  isPrivate: boolean;
+  /** "allow_forks" | "no_public_forks" | "no_forks". */
+  forkPolicy: string;
+  mainBranch: string;
+  webUrl: string;
+  projectKey: string;
+  projectName: string;
+}
+
+/** The Bitbucket settings the General form sends back (the managed subset).
+ *  Name and visibility are NOT here — the Danger zone owns them (rename +
+ *  set-visibility). */
+export interface BitbucketRepoSettingsInput {
+  description: string;
+  website: string;
+  language: string;
+  forkPolicy: string;
+  mainBranch: string;
+}
+
+/** A Bitbucket branch restriction. `id` is numeric on the wire; it travels as a
+ *  string over IPC (u64-precision rule). `value` is the numeric argument some
+ *  kinds carry (e.g. `require_approvals_to_merge` → the required count). */
+export interface BitbucketBranchRestriction {
+  id: string;
+  /** "push" | "require_approvals_to_merge" | "force" | "delete" | … */
+  kind: string;
+  pattern: string;
+  /** "glob" (the only kind the app creates). */
+  branchMatchKind: string;
+  value: number | null;
+}
+
+/** Whether Bitbucket Pipelines is enabled for the repo. */
+export interface BitbucketPipelinesConfig {
+  enabled: boolean;
+}
+
+/** A Bitbucket pipeline variable. A secured variable's value is write-only —
+ *  reads return `null` for it. */
+export interface BitbucketPipelineVariable {
+  uuid: string;
+  key: string;
+  value: string | null;
+  secured: boolean;
+}
+
+/** A Bitbucket pipeline schedule (a cron-triggered pipeline on a branch).
+ *  `cronPattern` is QUARTZ format (e.g. "0 0 12 * * ?"). */
+export interface BitbucketPipelineSchedule {
+  uuid: string;
+  enabled: boolean;
+  cronPattern: string;
+  refName: string;
+}
+
+/** A Bitbucket repository webhook. Bitbucket has no delivery-log API (no
+ *  deliveries feature). */
+export interface BitbucketHook {
+  uuid: string;
+  description: string;
+  url: string;
+  active: boolean;
+  events: string[];
+  skipCertVerification: boolean;
+}
+
+/** What the Bitbucket webhook form sends. A PUT requires the FULL shape (a
+ *  partial PUT 400s), so create and update carry the same fields. */
+export interface BitbucketHookInput {
+  description: string;
+  url: string;
+  active: boolean;
+  events: string[];
+  skipCertVerification: boolean;
 }
 
 /** Provider-neutral analogue of {@link GhStatus}: is the hosted integration usable
@@ -1091,11 +1251,25 @@ export interface PrDetails {
   /** Assignee usernames. Only GitLab fills this — the MR-assignees picker is
    *  GitLab-only (`implemented.mrAssignees`); GitHub leaves it empty. */
   assignees: string[];
+  /** The reviewer list. Only Bitbucket fills this — the reviewers picker is
+   *  Bitbucket-only (`implemented.mrReviewers`). Identity is the provider's
+   *  stable id (Bitbucket: the braced account uuid), never the display label. */
+  reviewers: ForgeUserRef[];
 }
 
-/** One review item on a GitHub PR (a submitted review, an inline review comment,
- *  or a conversation comment) with its author's bot flag — the raw material a
- *  re-review folds in from third-party AI reviewers. From `gh_pr_external_reviews`. */
+/** A provider user reference for pickers — a stable id + a human label.
+ *  Bitbucket's reviewer picker emits it today (id = account uuid, label =
+ *  display name / nickname): Bitbucket nicknames aren't unique, so the label
+ *  alone can't round-trip a mutation. */
+export interface ForgeUserRef {
+  id: string;
+  label: string;
+}
+
+/** One review item on a PR/MR (a submitted review, an inline review comment, or a
+ *  conversation comment) with its author's bot flag — the raw material a re-review
+ *  folds in from third-party AI reviewers. From `forge_pr_external_reviews`
+ *  (GitHub reviews / GitLab MR discussions; Bitbucket returns none). */
 export interface ExternalReviewItem {
   kind: "review" | "inline" | "comment";
   author: string;

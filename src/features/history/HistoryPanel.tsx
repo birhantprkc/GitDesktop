@@ -684,13 +684,29 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
             }
           >
             {visibleCommits.length === 0 && (
-              <p className="px-3 py-8 text-center text-xs text-muted-foreground">
-                {searchActive
-                  ? search.isFetching
-                    ? "Searching all history…"
-                    : `No commits match "${filterText.trim()}"`
-                  : "No loaded commits match the filter"}
-              </p>
+              <div className="px-3 py-8 text-center">
+                <p className="text-xs text-muted-foreground">
+                  {searchActive
+                    ? search.isFetching
+                      ? "Searching all history…"
+                      : `No commits match "${filterText.trim()}"`
+                    : `No loaded commits match "${filterText.trim()}"`}
+                </p>
+                {!(searchActive && search.isFetching) && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="mt-2 text-muted-foreground"
+                    onClick={() => {
+                      setFilterText("");
+                      setSearchMode(false);
+                      filterRef.current?.focus();
+                    }}
+                  >
+                    Clear filter
+                  </Button>
+                )}
+              </div>
             )}
             {visibleCommits.map((commit, index) => (
               <button

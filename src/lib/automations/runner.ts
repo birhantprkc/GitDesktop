@@ -9,10 +9,11 @@ import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider } from "@/lib/ai/providers";
 import { runCliStream } from "@/lib/ai/stream";
-import type { AiSettings, ReviewMode } from "@/lib/ai/types";
+import type { AiSettings, PromptProvider, ReviewMode } from "@/lib/ai/types";
 import {
   forgePrComment,
-  ghPrDiff,
+  forgePrDiff,
+  forgeStatus,
   gitBranchDiff,
   gitCommitDiff,
 } from "@/lib/git/api";
@@ -24,6 +25,7 @@ import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
 import { useAutomationResults } from "./results";
 import { loadAutomations } from "./store";
+import { sameSha } from "./sync";
 import { effectiveRules } from "./types";
 
 export type AutomationEvent =
@@ -138,7 +140,10 @@ async function run(event: AutomationEvent): Promise<void> {
         targetRef(event),
         rule.action,
       );
-      if (!prior || prior.headSha === event.headSha) continue;
+      // sameSha (not `===`) so a short-vs-full sha for the SAME head (Bitbucket's
+      // 12-char poll head vs a full-40 seed) counts as "already reviewed" and
+      // doesn't re-fire a redundant review each poll tick.
+      if (!prior || sameSha(prior.headSha, event.headSha ?? "")) continue;
     }
     const label = modeLabel(rule.action);
     // Per-rule cancellation: HTTP providers stop via the AbortSignal; CLI
@@ -228,12 +233,12 @@ async function generateReviewText(
   if (event.kind === "commit") {
     diff = await gitCommitDiff(event.repoPath, event.hash, DIFF_MAX_BYTES);
   } else if (event.kind === "pr-sync" && event.target.type === "remote") {
-    // Remote pr-sync is detected via the GitHub head-OID poll, which carries no
-    // local base/head branch and whose head may not be local (fork / pushed
-    // elsewhere). Use GitHub's authoritative PR diff; gh has no numstat, so
-    // derive the file summary from the diff text. (pr-open and local pr-sync
-    // keep the local branch diff below, which already includes file counts.)
-    const text = await ghPrDiff(event.repoPath, event.target.number);
+    // Remote pr-sync is detected via the provider-neutral head-OID poll, which
+    // carries no local base/head branch and whose head may not be local (fork /
+    // pushed elsewhere). Use the provider's authoritative PR diff; it has no
+    // numstat, so derive the file summary from the diff text. (pr-open and local
+    // pr-sync keep the local branch diff below, which already includes file counts.)
+    const text = await forgePrDiff(event.repoPath, event.target.number);
     diff = { text, truncated: false, files: filesFromDiff(text) };
   } else {
     diff = await gitBranchDiff(
@@ -262,6 +267,17 @@ async function generateReviewText(
         );
   if (signal.aborted) return null;
 
+  // Resolve the forge provider once and thread it to BOTH review sinks: the
+  // external-context harvest (to short-circuit the doomed `gh` spawn on
+  // GitLab/Bitbucket) AND the prompt builder (so the system prompt uses MR
+  // wording/markdown for GitLab/Bitbucket, not GitHub's). Needed even when
+  // external context is ignored, because buildReviewPrompt always wants it.
+  // Best-effort: a status-probe failure falls back to GitHub, the prior behavior.
+  const provider: PromptProvider = await forgeStatus(event.repoPath)
+    .then((s) => s.provider ?? "github")
+    .catch((): PromptProvider => "github");
+  if (signal.aborted) return null;
+
   // Third-party AI-reviewer findings (Copilot/CodeRabbit) on the remote PR, so an
   // automated re-review weighs them too — same soft context the interactive path
   // uses. Remote PRs only; best-effort.
@@ -273,6 +289,7 @@ async function generateReviewText(
           targetRef(event),
           event.headSha,
           false,
+          provider,
         )
       : {};
   if (signal.aborted) return null;
@@ -290,6 +307,7 @@ async function generateReviewText(
         deleted: f.deleted,
         isBinary: f.isBinary,
       })),
+      provider,
       ...prior,
       ...external,
     },

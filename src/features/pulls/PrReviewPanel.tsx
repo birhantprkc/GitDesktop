@@ -69,6 +69,7 @@ export function PrReviewPanel({
   context,
   prKind,
   prRef,
+  prNoun = "PR",
   onPost,
   posting,
 }: {
@@ -77,6 +78,9 @@ export function PrReviewPanel({
   prKind: "remote" | "local";
   /** Remote PR number (as a string) or local PR id — identifies the run. */
   prRef: string;
+  /** The change-request noun for idle copy ("PR" / "merge request"). Defaults to
+   *  "PR" (local PRs / commit reviews). */
+  prNoun?: string;
   onPost?: (body: string) => void | Promise<void>;
   posting?: boolean;
 }) {
@@ -462,9 +466,9 @@ export function PrReviewPanel({
             </p>
           ) : (
             <p className="text-xs text-muted-foreground">
-              Run a general review or a security audit of this PR's changes with
-              the selected model. The result appears here and isn't shared
-              unless you post it.
+              Run a general review or a security audit of this {prNoun}'s
+              changes with the selected model. The result appears here and isn't
+              shared unless you post it.
             </p>
           )}
         </div>

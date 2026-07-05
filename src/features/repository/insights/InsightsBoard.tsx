@@ -22,7 +22,11 @@ import {
   type RunDurationPoint,
 } from "./charts";
 import { DependenciesCard } from "./DependenciesCard";
-import { GitLabLinkOutsCard, LinkOutsCard } from "./LinkOutsCard";
+import {
+  BitbucketLinkOutsCard,
+  GitLabLinkOutsCard,
+  LinkOutsCard,
+} from "./LinkOutsCard";
 import { PunchCard } from "./PunchCard";
 import { fmt, InsightCard } from "./primitives";
 import { TrafficCard } from "./TrafficCard";
@@ -99,7 +103,11 @@ export function InsightsBoard({
   // GitHub-only APIs with no GitLab analogue and hide per provider.
   const canGh = active && forgeFeatureReady(gh.data, "insights");
   const isGitLab = gh.data?.provider === "gitlab";
-  const canGhOnly = canGh && !isGitLab;
+  const isBitbucket = gh.data?.provider === "bitbucket";
+  // Positive gate: the community / traffic / dependencies cards are GitHub-only
+  // APIs, so fire them ONLY for GitHub. A `!isGitLab` shape would (with insights
+  // now enabled for Bitbucket) light them up on Bitbucket repos too.
+  const canGhOnly = canGh && gh.data?.provider === "github";
 
   // These are heavy (full-history git scans + gh calls); gate them on the
   // Insights tab being visible. <Activity> keeps this mounted while hidden but
@@ -207,7 +215,7 @@ export function InsightsBoard({
 
           {canGh && (
             <InsightCard
-              title={isGitLab ? "Pipelines" : "Actions"}
+              title={isGitLab || isBitbucket ? "Pipelines" : "Actions"}
               action={
                 successRate !== null && (
                   <span className="text-[11px] text-muted-foreground tabular-nums">
@@ -222,7 +230,8 @@ export function InsightsBoard({
                 <ActionsDurationChart data={durationPoints} />
               ) : (
                 <Empty>
-                  No completed {isGitLab ? "pipelines" : "workflow runs"} yet.
+                  No completed{" "}
+                  {isGitLab || isBitbucket ? "pipelines" : "workflow runs"} yet.
                 </Empty>
               )}
             </InsightCard>
@@ -278,6 +287,14 @@ export function InsightsBoard({
             // link out rather than pretend they don't exist.
             <InsightCard title="More on GitLab">
               <GitLabLinkOutsCard repoPath={repoPath} />
+            </InsightCard>
+          )}
+
+          {canGh && isBitbucket && (
+            // Bitbucket views that only render on the web (no usable API) —
+            // link out rather than pretend they don't exist.
+            <InsightCard title="More on Bitbucket">
+              <BitbucketLinkOutsCard repoPath={repoPath} />
             </InsightCard>
           )}
         </div>

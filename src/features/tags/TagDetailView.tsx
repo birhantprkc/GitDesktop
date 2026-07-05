@@ -41,6 +41,7 @@ import {
   useTagList,
   useUploadReleaseAsset,
 } from "@/lib/git/queries";
+import { providerLabel } from "@/lib/git/types";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
@@ -74,7 +75,7 @@ export function TagDetailView({
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
   const canManage = canWrite || forgeFeatureReady(gh.data, "releaseEdit");
   const canCreate = canWrite || forgeFeatureReady(gh.data, "releaseCreate");
-  const remoteLabel = isGitLab ? "GitLab" : "GitHub";
+  const remoteLabel = providerLabel(provider);
   // Ask the provider for a release only when connected; otherwise it's just a tag.
   const release = useReleaseDetails(repoPath, ghReady ? tag : null);
   const tagList = useTagList(repoPath);

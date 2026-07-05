@@ -21,8 +21,8 @@ use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::issue::{IssueDetails, IssueInfo, IssueReactions, Milestone, Reaction};
 use crate::github::pr::{
-    ApprovalState, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrRef,
-    PrThreadOut, RepoLabel,
+    ApprovalState, ExternalReviewItem, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo,
+    PrListLabel, PrPollInfo, PrRef, PrThreadOut, RepoLabel,
 };
 use crate::state::AppState;
 use crate::github::release::{ReleaseAsset, ReleaseDetails, ReleaseInfo};
@@ -192,22 +192,11 @@ fn encode_project(path: &str) -> String {
     path.replace('/', "%2F")
 }
 
-/// Percent-encode a value for safe use inside a `glab api` query string. `glab`
+/// Percent-encode a value for safe use inside a `glab api` query string — `glab`
 /// forwards the endpoint verbatim (it only encodes the path, not query values), so
-/// a value with a query-significant byte (`&`, `#`, `?`, `=`, `%`, space, …) must be
-/// encoded or it corrupts the query. Encodes everything outside RFC-3986 unreserved.
-fn encode_query_value(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
+/// a query-significant byte must be encoded or it corrupts the query. Shared with
+/// the Bitbucket provider, hence it lives in the parent `forge` module.
+use crate::forge::encode_query_value;
 
 /// The project's full path (`group/name`) from the repo's origin remote.
 async fn project_path(repo_path: &str) -> AppResult<String> {
@@ -234,7 +223,7 @@ fn map_mr_state(state: &str) -> String {
 /// whole issue parse when GitLab returned `discussion_locked: null` instead of
 /// `false`. Applied to the optional scalars and the collections GitLab could null
 /// out (it returns `[]` today, but the same one-quirk-away fragility bit us once).
-fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+pub(crate) fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Default + Deserialize<'de>,
@@ -328,6 +317,65 @@ pub async fn prs_for_branch(repo_path: &str, head: &str) -> AppResult<Vec<PrInfo
     let mrs: Vec<GlabMr> = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Glab(format!("could not parse GitLab merge requests: {e}")))?;
     Ok(mrs.into_iter().map(from_glab_mr).collect())
+}
+
+/// Map a GitLab MR's list state onto the neutral poll state the notification poller
+/// expects. Unlike [`map_mr_state`], `locked` here maps to `OPEN`: on the poll surface
+/// a locked MR is a transient mid-merge state (still an open PR), and mapping it closed
+/// would fire a spurious "closed" notification each time GitLab locks the MR to merge it.
+fn map_mr_poll_state(state: &str) -> String {
+    match state {
+        "opened" | "locked" => "OPEN".to_string(),
+        "merged" => "MERGED".to_string(),
+        "closed" => "CLOSED".to_string(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
+/// A merge request as the poll endpoint returns it. `sha` is the FULL 40-char head
+/// commit; the list carries no pipeline/approval state (v1 poll limitation).
+#[derive(Deserialize)]
+struct GlabPollMr {
+    iid: u64,
+    web_url: String,
+    title: String,
+    state: String,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    sha: String,
+    #[serde(default)]
+    author: Option<GlabMrUser>,
+}
+
+fn from_glab_poll_mr(m: GlabPollMr) -> PrPollInfo {
+    PrPollInfo {
+        number: m.iid,
+        title: m.title,
+        url: m.web_url,
+        state: map_mr_poll_state(&m.state),
+        is_draft: m.draft,
+        author: m.author.map(|a| a.username).unwrap_or_default(),
+        // The list response carries neither an approval decision nor a pipeline
+        // rollup, so both stay empty — the notification poller's checks/review
+        // branches simply never fire for GitLab (a documented v1 limit).
+        review_decision: String::new(),
+        checks_state: String::new(),
+        head_sha: m.sha,
+    }
+}
+
+/// A lightweight snapshot of the repo's recently-updated MRs for the notification
+/// poller — the GitLab analogue of `gh_pr_poll`. One `glab api` call ordered by
+/// `updated_at` desc; `head_sha` (the full MR head OID) drives pr-sync re-review.
+pub async fn poll_prs(repo_path: &str) -> AppResult<Vec<PrPollInfo>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint =
+        format!("projects/{enc}/merge_requests?state=all&order_by=updated_at&per_page=20");
+    let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+    let mrs: Vec<GlabPollMr> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab MR poll: {e}")))?;
+    Ok(mrs.into_iter().map(from_glab_poll_mr).collect())
 }
 
 /// One changed file as the MR `/changes` endpoint returns it.
@@ -588,6 +636,9 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         checks: Vec::new(),
         labels,
         assignees: mr.assignees.into_iter().map(|a| a.username).collect(),
+        // The GitLab reviewer list isn't wired into the picker yet (mr_reviewers
+        // stays false) — assignees are GitLab's control here.
+        reviewers: Vec::new(),
     })
 }
 
@@ -1967,6 +2018,154 @@ pub async fn mr_reactions(repo_path: &str, number: u64) -> AppResult<IssueReacti
         .0)
 }
 
+// ── External (third-party) reviews ────────────────────────────────────────────
+//
+// Third-party AI reviewers (Copilot / CodeRabbit / …) post their findings as MR
+// discussion notes. We map each NON-system note onto the neutral
+// `ExternalReviewItem` shape the frontend already consumes for GitHub, so its
+// budgeting / prompt layers stay unchanged. GitLab REST authors carry NO `bot`
+// flag (unlike GitHub's GraphQL `__typename`), so `is_bot` is NOT meaningful for
+// GitLab — the frontend applies its `REVIEWER_BOTS` login allowlist to EVERY
+// GitLab item regardless of kind (otherwise a human's inline diff comment would
+// pose as an AI finding). GitHub, with a server-verified bot flag, still lets
+// inline/review items bypass the list.
+
+/// A note's `position` object as GitLab embeds it on diff (inline) notes; absent
+/// or null for plain conversation notes. Every field is tolerated as
+/// null/missing per the untrusted-JSON rule.
+#[derive(Deserialize, Default)]
+struct GlabNotePosition {
+    #[serde(default, deserialize_with = "null_to_default")]
+    new_path: String,
+    #[serde(default)]
+    new_line: Option<u32>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    old_path: String,
+    #[serde(default)]
+    old_line: Option<u32>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    head_sha: String,
+}
+
+/// One note inside an MR discussion, as `…/merge_requests/<n>/discussions`
+/// returns it. `type` is empty for plain notes and "DiffNote" for inline ones;
+/// `resolved` is null unless the note is resolvable.
+#[derive(Deserialize)]
+struct GlabDiscussionNote {
+    #[serde(default)]
+    system: bool,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    author: Option<GlabMrUser>,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    resolvable: bool,
+    #[serde(default)]
+    resolved: Option<bool>,
+    #[serde(default)]
+    position: Option<GlabNotePosition>,
+}
+
+/// A discussion (thread) as the discussions endpoint returns it.
+#[derive(Deserialize)]
+struct GlabDiscussion {
+    #[serde(default, deserialize_with = "null_to_default")]
+    notes: Vec<GlabDiscussionNote>,
+}
+
+/// Maps a discussion note onto the neutral `ExternalReviewItem` shape, or `None`
+/// when the note is a system note (auto "approved" / "assigned" / "changed the
+/// title" …) that must never enter the findings pipeline. Inline (DiffNote /
+/// positioned) notes become `kind == "inline"` with a path/line; everything else
+/// is `kind == "comment"`. `is_bot` is always true, but it is NOT meaningful for
+/// GitLab (REST has no bot flag) — the frontend applies its `REVIEWER_BOTS` login
+/// allowlist to every GitLab item regardless of kind, so it is the real gate.
+/// Per-item: a malformed field falls back to a default rather than sinking the
+/// whole batch.
+fn external_item_from_note(n: &GlabDiscussionNote) -> Option<ExternalReviewItem> {
+    if n.system {
+        return None;
+    }
+    // A positioned note with a usable path is an inline (line-anchored) finding;
+    // fall back to the old_path/old_line side when the new side is absent.
+    let position = n.position.as_ref();
+    let (path, line) = match position {
+        Some(p) if !p.new_path.is_empty() => (p.new_path.clone(), p.new_line.unwrap_or(0)),
+        Some(p) if !p.old_path.is_empty() => (p.old_path.clone(), p.old_line.unwrap_or(0)),
+        _ => (String::new(), 0),
+    };
+    let kind = if path.is_empty() { "comment" } else { "inline" };
+    // `resolved` is only meaningful when the note is resolvable.
+    let is_resolved = n.resolvable && n.resolved == Some(true);
+    Some(ExternalReviewItem {
+        kind: kind.into(),
+        author: n
+            .author
+            .as_ref()
+            .map(|a| a.username.clone())
+            .unwrap_or_default(),
+        // GitLab REST authors carry no bot flag; `is_bot` is not meaningful for
+        // GitLab. The frontend applies its `REVIEWER_BOTS` login allowlist to
+        // EVERY GitLab item regardless of kind, so this value is only a
+        // placeholder that keeps the shared shape non-empty.
+        is_bot: true,
+        body: n.body.clone(),
+        path,
+        line,
+        // The commit the note was anchored to, when GitLab carries it (diff notes
+        // do via `position.head_sha`); "" otherwise — used for staleness.
+        commit_sha: position.map(|p| p.head_sha.clone()).unwrap_or_default(),
+        // GitLab notes carry no submitted-review state (no APPROVED/CHANGES_REQUESTED
+        // review-body concept on the discussions surface).
+        state: String::new(),
+        is_resolved,
+        // GitLab has no per-thread "outdated" flag; staleness is inferred from
+        // commit_sha vs head in the frontend.
+        is_outdated: false,
+        created_at: n.created_at.clone(),
+    })
+}
+
+/// Maps a page of discussions to neutral review items, dropping system notes and
+/// any note that fails to yield an item. Pure — unit-tested directly.
+fn external_items_from_discussions(discussions: &[GlabDiscussion]) -> Vec<ExternalReviewItem> {
+    discussions
+        .iter()
+        .flat_map(|d| d.notes.iter())
+        .filter_map(external_item_from_note)
+        .collect()
+}
+
+/// Third-party AI-reviewer findings on a merge request, mapped onto the same
+/// neutral shape GitHub uses. Fetches the MR discussions (per_page=100, capped at
+/// 5 pages — a re-review only needs the recent bot findings, and this can't spawn
+/// unbounded network calls) and maps every non-system note. Per-item tolerant: a
+/// malformed page is skipped, not fatal.
+pub async fn external_reviews(repo_path: &str, number: u64) -> AppResult<Vec<ExternalReviewItem>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let mut items: Vec<ExternalReviewItem> = Vec::new();
+    for page in 1..=5u32 {
+        let endpoint = format!(
+            "projects/{enc}/merge_requests/{number}/discussions?per_page=100&page={page}"
+        );
+        let out = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT).await?;
+        let batch: Vec<GlabDiscussion> = match serde_json::from_str(&out.stdout_lossy()) {
+            Ok(b) => b,
+            // A page that won't parse shouldn't sink the whole harvest; external
+            // context is best-effort, so stop and return what we have.
+            Err(_) => break,
+        };
+        let done = batch.len() < 100;
+        items.extend(external_items_from_discussions(&batch));
+        if done {
+            break;
+        }
+    }
+    Ok(items)
+}
+
 /// The award endpoint for a subject: the issue/MR body (`note_id` None) or one
 /// of its notes. `target` is `"issue"` or `"mr"`.
 fn award_endpoint(enc: &str, target: &str, number: u64, note_id: Option<&str>) -> AppResult<String> {
@@ -2910,6 +3109,8 @@ fn from_glab_job(j: GlabJob) -> RunJob {
         url: j.web_url,
         // GitLab exposes no per-job steps via the API — the job is the leaf unit.
         steps: Vec::new(),
+        // GitLab job logs are addressed by the numeric job id, not a log ref.
+        log_ref: None,
     }
 }
 
@@ -5007,6 +5208,147 @@ mod tests {
     use super::*;
 
     #[test]
+    fn external_reviews_drop_system_notes_and_map_kinds() {
+        // A live-shaped discussions payload: a system note (must be dropped), a
+        // plain conversation note (→ "comment"), and an inline DiffNote (→
+        // "inline" with path/line/commit).
+        let json = r#"[
+            {
+                "notes": [
+                    {
+                        "system": true,
+                        "body": "approved this merge request",
+                        "author": { "username": "someuser" },
+                        "created_at": "2026-07-04T00:00:00Z",
+                        "resolvable": false,
+                        "resolved": null
+                    }
+                ]
+            },
+            {
+                "notes": [
+                    {
+                        "system": false,
+                        "body": "Consider extracting this helper.",
+                        "author": { "username": "coderabbitai" },
+                        "created_at": "2026-07-04T00:01:00Z",
+                        "resolvable": false,
+                        "resolved": null
+                    }
+                ]
+            },
+            {
+                "notes": [
+                    {
+                        "system": false,
+                        "body": "Off-by-one here.",
+                        "author": { "username": "coderabbitai" },
+                        "created_at": "2026-07-04T00:02:00Z",
+                        "resolvable": true,
+                        "resolved": true,
+                        "position": {
+                            "new_path": "src/main.rs",
+                            "new_line": 42,
+                            "old_path": "src/main.rs",
+                            "old_line": 40,
+                            "head_sha": "abc123"
+                        }
+                    }
+                ]
+            }
+        ]"#;
+        let discussions: Vec<GlabDiscussion> = serde_json::from_str(json).unwrap();
+        let items = external_items_from_discussions(&discussions);
+        // System note filtered out → only the two real notes survive.
+        assert_eq!(items.len(), 2);
+
+        let comment = &items[0];
+        assert_eq!(comment.kind, "comment");
+        assert_eq!(comment.author, "coderabbitai");
+        assert!(comment.is_bot);
+        assert_eq!(comment.path, "");
+        assert_eq!(comment.line, 0);
+        assert!(!comment.is_resolved);
+
+        let inline = &items[1];
+        assert_eq!(inline.kind, "inline");
+        assert_eq!(inline.path, "src/main.rs");
+        assert_eq!(inline.line, 42);
+        assert_eq!(inline.commit_sha, "abc123");
+        // resolvable && resolved == true.
+        assert!(inline.is_resolved);
+    }
+
+    #[test]
+    fn external_reviews_fall_back_to_old_path_and_ignore_unresolvable_resolved() {
+        // No new_path (a deletion-side note): fall back to old_path/old_line.
+        // `resolved` is meaningless without `resolvable`, so is_resolved stays false.
+        let json = r#"[
+            {
+                "notes": [
+                    {
+                        "system": false,
+                        "body": "This deleted line was load-bearing.",
+                        "author": { "username": "copilot-pull-request-reviewer" },
+                        "created_at": "2026-07-04T00:03:00Z",
+                        "resolvable": false,
+                        "resolved": true,
+                        "position": {
+                            "new_path": "",
+                            "new_line": null,
+                            "old_path": "src/old.rs",
+                            "old_line": 7,
+                            "head_sha": ""
+                        }
+                    }
+                ]
+            }
+        ]"#;
+        let discussions: Vec<GlabDiscussion> = serde_json::from_str(json).unwrap();
+        let items = external_items_from_discussions(&discussions);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, "inline");
+        assert_eq!(items[0].path, "src/old.rs");
+        assert_eq!(items[0].line, 7);
+        assert_eq!(items[0].commit_sha, "");
+        // resolved true but not resolvable → not resolved.
+        assert!(!items[0].is_resolved);
+    }
+
+    #[test]
+    fn external_reviews_tolerate_missing_and_null_fields() {
+        // A note missing author/position/created_at and one with a null position
+        // and null author must still map (defaults), not panic or drop the batch.
+        let json = r#"[
+            {
+                "notes": [
+                    { "body": "bare note, no other fields" }
+                ]
+            },
+            {
+                "notes": [
+                    {
+                        "system": false,
+                        "body": "null author and position",
+                        "author": null,
+                        "position": null,
+                        "created_at": "2026-07-04T00:04:00Z"
+                    }
+                ]
+            }
+        ]"#;
+        let discussions: Vec<GlabDiscussion> = serde_json::from_str(json).unwrap();
+        let items = external_items_from_discussions(&discussions);
+        assert_eq!(items.len(), 2);
+        // Both fall back to plain-comment kind with empty author.
+        assert_eq!(items[0].kind, "comment");
+        assert_eq!(items[0].author, "");
+        assert_eq!(items[0].body, "bare note, no other fields");
+        assert_eq!(items[1].kind, "comment");
+        assert_eq!(items[1].author, "");
+    }
+
+    #[test]
     fn parses_project_permissions_with_null_group_access() {
         // The exact shape observed live: a direct project grant, no group.
         let json = r#"{
@@ -5601,6 +5943,61 @@ mod tests {
         let missing = format!("{{ {base} }}");
         let mr: GlabMrChanges = serde_json::from_str(&missing).unwrap();
         assert!(mr.assignees.is_empty());
+    }
+
+    #[test]
+    fn mr_poll_state_maps_locked_to_open() {
+        // `locked` is a transient mid-merge state — the poll must treat it as OPEN,
+        // NOT closed (map_mr_state maps it to CLOSED for the list panel, but firing a
+        // spurious "closed" notification while GitLab locks the MR to merge is wrong).
+        assert_eq!(map_mr_poll_state("opened"), "OPEN");
+        assert_eq!(map_mr_poll_state("locked"), "OPEN");
+        assert_eq!(map_mr_poll_state("merged"), "MERGED");
+        assert_eq!(map_mr_poll_state("closed"), "CLOSED");
+        // An unrecognized state is uppercased, never silently dropped.
+        assert_eq!(map_mr_poll_state("weird"), "WEIRD");
+    }
+
+    #[test]
+    fn poll_mr_maps_full_sha_author_and_empty_rollups() {
+        let json = r#"{
+            "iid": 42,
+            "web_url": "https://gitlab.com/g/r/-/merge_requests/42",
+            "title": "Add feature",
+            "state": "opened",
+            "draft": true,
+            "sha": "0123456789abcdef0123456789abcdef01234567",
+            "author": { "username": "theBGuy" }
+        }"#;
+        let info = from_glab_poll_mr(serde_json::from_str(json).unwrap());
+        assert_eq!(info.number, 42);
+        assert_eq!(info.state, "OPEN");
+        assert!(info.is_draft);
+        // Author = username (matches ForgeStatus.login for GitLab, so `mine` matches).
+        assert_eq!(info.author, "theBGuy");
+        // Full 40-char head OID drives pr-sync.
+        assert_eq!(info.head_sha, "0123456789abcdef0123456789abcdef01234567");
+        // The list carries neither an approval decision nor a check rollup (v1 limit).
+        assert_eq!(info.review_decision, "");
+        assert_eq!(info.checks_state, "");
+    }
+
+    #[test]
+    fn poll_mr_tolerates_null_sha_and_missing_author() {
+        // A null `sha` (null_to_default) and an absent author must not sink the parse.
+        let json = r#"{
+            "iid": 7,
+            "web_url": "u",
+            "title": "t",
+            "state": "merged",
+            "sha": null
+        }"#;
+        let info = from_glab_poll_mr(serde_json::from_str(json).unwrap());
+        assert_eq!(info.number, 7);
+        assert_eq!(info.state, "MERGED");
+        assert!(!info.is_draft);
+        assert_eq!(info.author, "");
+        assert_eq!(info.head_sha, "");
     }
 
     #[test]

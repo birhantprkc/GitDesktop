@@ -12,6 +12,7 @@ import {
   usePrefetchPr,
   usePrList,
 } from "@/lib/git/queries";
+import { providerLabel } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useLocalPrs } from "@/lib/pulls/queries";
@@ -26,12 +27,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   // Merge request reads work for GitHub and GitLab; the noun + section header
   // follow the provider so a GitLab repo reads "merge requests" / "GitLab".
   const isGitLab = provider === "gitlab";
-  const remoteLabel =
-    provider === "gitlab"
-      ? "GitLab"
-      : provider === "bitbucket"
-        ? "Bitbucket"
-        : "GitHub";
+  const remoteLabel = providerLabel(provider);
   const remoteNoun = isGitLab ? "merge requests" : "pull requests";
   const ghReady = forgeFeatureReady(gh.data, "pullRequests");
   // "closed" matches the Closed tab: closed and merged alike.
@@ -81,7 +77,9 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
       ? gh.data?.installed
         ? "Sign in to GitLab (glab auth login) to work with merge requests here."
         : "Install the GitLab CLI (glab) to work with merge requests here."
-      : "Connect this repository to GitHub to open a pull request here.";
+      : provider === "bitbucket"
+        ? "Connect your Bitbucket account in Settings → Accounts to create pull requests here."
+        : "Connect this repository to GitHub to open a pull request here.";
   const pendingCreate = useUiStore((s) => s.pendingCreate);
   const clearPendingCreate = useUiStore((s) => s.clearPendingCreate);
 
@@ -130,7 +128,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
       newMenu={{
         ghLabel: isGitLab
           ? "Merge request on GitLab…"
-          : "Pull request on GitHub…",
+          : `Pull request on ${remoteLabel}…`,
         ghDisabled: !canCreateGhPr,
         ghReason: ghCreateReason ?? undefined,
         onGh: () => setGhCreateOpen(true),

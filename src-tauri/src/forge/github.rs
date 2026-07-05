@@ -91,6 +91,17 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
     crate::github::pr::gh_pr_diff(repo_path.to_string(), number).await
 }
 
+pub async fn external_reviews(
+    repo_path: &str,
+    number: u64,
+) -> AppResult<Vec<crate::github::pr::ExternalReviewItem>> {
+    crate::github::pr::gh_pr_external_reviews(repo_path.to_string(), number).await
+}
+
+pub async fn poll_prs(repo_path: &str) -> AppResult<Vec<crate::github::pr::PrPollInfo>> {
+    crate::github::pr::gh_pr_poll(repo_path.to_string()).await
+}
+
 // ── Merge requests (write) ───────────────────────────────────────────────────
 //
 // Thin delegates to the existing gh-backed PR mutations — comment, close/reopen,

@@ -3,7 +3,6 @@ import {
   ArrowsClockwiseIcon,
   ArrowUpIcon,
   CaretDownIcon,
-  UploadSimpleIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
 import { AnimatePresence, m } from "motion/react";
@@ -35,8 +34,6 @@ import {
 } from "@/lib/git/auto-fetch";
 import {
   useFetchRemote,
-  useForgeStatus,
-  usePublishTargets,
   usePull,
   usePush,
   useRemotes,
@@ -45,41 +42,29 @@ import {
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { quickTransition } from "@/lib/motion";
 import { useSettings } from "@/lib/settings/queries";
-import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
-import { PublishDialog } from "./PublishDialog";
+import { PublishRepoControl, usePublishProviders } from "./PublishRepoControl";
 
 export function SyncControls({ repoPath }: { repoPath: string }) {
   const status = useRepoStatus(repoPath);
   const remotes = useRemotes(repoPath);
-  const gh = useForgeStatus(repoPath);
   const settings = useSettings();
-  const repoName = useUiStore((s) => s.repoName);
   const fetchRemote = useFetchRemote(repoPath);
   const pull = usePull(repoPath);
   const push = usePush(repoPath);
   const markFetched = useFetchStatusStore((s) => s.markFetched);
   const lastFetchedAt = useLastFetchedAt(repoPath);
   const [forceConfirmOpen, setForceConfirmOpen] = useState(false);
-  const [publishOpen, setPublishOpen] = useState(false);
-  const [publishProvider, setPublishProvider] = useState<"github" | "gitlab">(
-    "github",
-  );
 
   // A repo with no `origin` (e.g. created locally in GitDesktop) can't push;
-  // offer to create the GitHub/GitLab repo instead. Which providers can take it
-  // is probed explicitly — there's no remote to detect one from. The (usually
-  // warm) forge-status cache keeps the button enabled for the common GitHub
-  // case while that probe is still in flight, avoiding a flash of disabled.
+  // offer to create the hosted repo instead. Which providers can take this
+  // origin-less repo is probed by usePublishProviders (there's no remote to
+  // detect one from), returning them in a stable GitHub → GitLab → Bitbucket
+  // order.
   const noOrigin = remotes.isSuccess && !remotes.data.includes("origin");
   const hasOrigin = remotes.isSuccess && remotes.data.includes("origin");
-  const ghCliReady = Boolean(gh.data?.installed && gh.data?.authenticated);
-  const targets = usePublishTargets(repoPath, noOrigin);
-  const canPublish = Boolean(
-    ghCliReady || targets.data?.github || targets.data?.gitlab,
-  );
-  const bothTargets = Boolean(targets.data?.github && targets.data?.gitlab);
+  const readyProviders = usePublishProviders(repoPath, noOrigin);
 
   const head = status.data?.branch;
   const hasUpstream = Boolean(head?.upstream);
@@ -166,69 +151,11 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
 
   if (noOrigin) {
     return (
-      <>
-        {bothTargets ? (
-          // Both CLIs are signed in: the button becomes a provider choice.
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<Button variant="outline" size="sm" />}
-            >
-              <UploadSimpleIcon data-icon="inline-start" />
-              Publish repository…
-              <CaretDownIcon data-icon="inline-end" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onClick={() => {
-                  setPublishProvider("github");
-                  setPublishOpen(true);
-                }}
-              >
-                Publish to GitHub…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  setPublishProvider("gitlab");
-                  setPublishOpen(true);
-                }}
-              >
-                Publish to GitLab…
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!canPublish}
-            onClick={() => {
-              setPublishProvider(
-                targets.data?.gitlab && !targets.data.github
-                  ? "gitlab"
-                  : "github",
-              );
-              setPublishOpen(true);
-            }}
-            title={
-              targets.data?.gitlab && !targets.data.github
-                ? "Create a GitLab project and push this repository"
-                : canPublish
-                  ? "Create a GitHub repository and push this one"
-                  : "Sign in with the GitHub CLI (gh auth login) or GitLab CLI (glab auth login) to publish"
-            }
-          >
-            <UploadSimpleIcon data-icon="inline-start" />
-            Publish repository…
-          </Button>
-        )}
-        <PublishDialog
-          repoPath={repoPath}
-          provider={publishProvider}
-          defaultName={repoName ?? ""}
-          open={publishOpen}
-          onOpenChange={setPublishOpen}
-        />
-      </>
+      <PublishRepoControl
+        repoPath={repoPath}
+        providers={readyProviders}
+        disabledTitle="Sign in with the GitHub CLI (gh auth login), GitLab CLI (glab auth login), or connect a Bitbucket account to publish"
+      />
     );
   }
 

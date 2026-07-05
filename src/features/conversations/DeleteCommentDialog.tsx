@@ -21,12 +21,14 @@ export function DeleteCommentDialog({
   commentId,
   onClose,
   onConfirm,
+  title = "Delete comment?",
   description = "This permanently deletes the comment on GitHub. This cannot be undone.",
   pending,
 }: {
   commentId: string | null;
   onClose: () => void;
   onConfirm: (id: string) => void;
+  title?: ReactNode;
   description?: ReactNode;
   pending?: boolean;
 }) {
@@ -39,7 +41,7 @@ export function DeleteCommentDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Delete comment?</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <DialogFooter>

@@ -19,7 +19,8 @@ export const NotificationsSection = withForm({
           <p className="text-xs text-muted-foreground">
             OS notifications fire only while GitDesktop is unfocused — in-app
             toasts cover the rest. Pull request events are polled about once a
-            minute while a GitHub repository is open.
+            minute while a hosted repository (GitHub, GitLab, or Bitbucket) is
+            open.
           </p>
         </div>
         <form.AppField name="notifications.prChecks">

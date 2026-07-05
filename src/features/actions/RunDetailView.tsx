@@ -15,6 +15,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
+import { providerLabel } from "@/lib/git/types";
 import type { RunJob } from "@/lib/github/actions";
 import {
   isRunActive,
@@ -84,7 +85,7 @@ function JobRow({
   const jobActive = isRunActive(job.status);
   // The archived log only exists once the job finishes, so don't fetch while it
   // runs (gh would just return a "still in progress" line).
-  const logs = useJobLogs(repoPath, job.id, open && showLogs && !jobActive);
+  const logs = useJobLogs(repoPath, job, open && showLogs && !jobActive);
   const elapsed = duration(job.startedAt, job.completedAt);
 
   // Auto-reveal the (now archived) logs the moment a job we're watching finishes.
@@ -298,7 +299,10 @@ export function RunDetailView({
   // alone gates — never `canWrite || …`. With the gate GitHub never matches the
   // manual-job shape anyway.
   const canPlay = forgeFeatureReady(forge.data, "ciJobPlay");
-  const remoteLabel = provider === "gitlab" ? "GitLab" : "GitHub";
+  const remoteLabel = providerLabel(provider);
+  // GitLab pipelines and Bitbucket steps carry no per-job step list; only GitHub
+  // jobs do — so the steps placeholder is suppressed for both.
+  const stepsExpected = provider !== "gitlab" && provider !== "bitbucket";
   const [debugJob, setDebugJob] = useState<RunJob | null>(null);
   // Dialog visibility is tracked separately from the debug session so closing
   // the dialog just hides it (the run keeps streaming) and reopening resumes.
@@ -312,6 +316,11 @@ export function RunDetailView({
   // GitLab's retry also covers a canceled pipeline (its retry restarts
   // failed + canceled jobs), so the Retry button shows for both conclusions.
   const retryable = failed || run?.conclusion === "cancelled";
+  // Bitbucket has no rerun endpoint — "rerun" re-triggers the branch pipeline (a
+  // fresh run), which makes sense on ANY finished pipeline (success too). Show it
+  // once the run is no longer in flight (a conclusion has been recorded).
+  const bitbucketRerunnable =
+    provider === "bitbucket" && !active && !!run?.conclusion;
   // A manual/blocked GitLab pipeline maps to completed/action_required, but
   // GitLab's cancel endpoint does cancel it — keep Cancel available there.
   const gitlabBlocked =
@@ -426,7 +435,21 @@ export function RunDetailView({
                     Retry pipeline
                   </Button>
                 )
-              : canWrite && (
+              : provider === "bitbucket"
+                ? canRerun &&
+                  bitbucketRerunnable && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={rerun.isPending}
+                      title="Trigger this pipeline's branch again"
+                      onClick={() => doRerun(true)}
+                    >
+                      <ArrowClockwiseIcon data-icon="inline-start" />
+                      Rerun pipeline
+                    </Button>
+                  )
+                : canWrite && (
                   <>
                     <Button
                       variant="outline"
@@ -486,7 +509,7 @@ export function RunDetailView({
                   key={job.id}
                   repoPath={repoPath}
                   job={job}
-                  stepsExpected={provider !== "gitlab"}
+                  stepsExpected={stepsExpected}
                   remoteLabel={remoteLabel}
                   onDebug={
                     aiEnabled && isFailureConclusion(job.conclusion)

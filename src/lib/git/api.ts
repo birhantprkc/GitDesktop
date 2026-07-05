@@ -7,6 +7,17 @@ import {
 } from "@/lib/test-mode";
 import type {
   ApprovalState,
+  BbAccountInfo,
+  BbEnvironment,
+  BitbucketBranchRestriction,
+  BitbucketHook,
+  BitbucketHookInput,
+  BitbucketPipelineSchedule,
+  BitbucketPipelinesConfig,
+  BitbucketPipelineVariable,
+  BitbucketRepoSettings,
+  BitbucketRepoSettingsInput,
+  BitbucketWorkspace,
   BlameLine,
   Branch,
   BranchComparison,
@@ -31,6 +42,7 @@ import type {
   ForgeRepoAdmin,
   ForgeRepoList,
   ForgeStatus,
+  ForgeUserRef,
   GeneratedNotes,
   GhAccounts,
   GhBranchProtection,
@@ -70,6 +82,7 @@ import type {
   PrInfo,
   PrPollInfo,
   PrRef,
+  PrTask,
   PunchCard,
   ReleaseDetails,
   ReleaseInfo,
@@ -701,7 +714,7 @@ export const gitUpdateBranchFrom = (
   base: string,
 ) => invoke<string>("git_update_branch_from", { repoPath, branch, base });
 
-export type MergeStrategy = "merge" | "squash" | "rebase";
+export type MergeStrategy = "merge" | "squash" | "rebase" | "fast_forward";
 
 export const gitMergeLocalPr = (
   repoPath: string,
@@ -837,6 +850,28 @@ export const forgeStatus = (repoPath: string) =>
 export const forgeListRepos = (provider: ForgeProvider) =>
   invoke<ForgeRepoList>("forge_list_repos", { provider });
 
+// ── Bitbucket account (Atlassian API token) ──────────────────────────────────
+//
+// Bitbucket Cloud auth is an Atlassian API token used with the account email
+// (HTTP Basic); the token lives in the OS keychain, never returned by anything.
+// In cold-start test mode there's no keychain, so `forgeBbAccount` reports
+// "not connected" (null) rather than reaching for a Tauri command.
+
+/** Validate an Atlassian API token against GET /2.0/user and, on success, save
+ *  it to the keychain. Throws (nothing saved) on an invalid token or a network
+ *  failure — the message distinguishes the two. */
+export const forgeBbSetAccount = (email: string, token: string) =>
+  invoke<BbAccountInfo>("forge_bb_set_account", { email, token });
+
+/** Remove the saved Bitbucket token from the keychain. */
+export const forgeBbClearAccount = () => invoke<void>("forge_bb_clear_account");
+
+/** The saved Bitbucket account (fast keyring check, no network); null when none. */
+export const forgeBbAccount = () =>
+  COLD_START
+    ? Promise.resolve<BbAccountInfo | null>(null)
+    : invoke<BbAccountInfo | null>("forge_bb_account");
+
 /** Clone a repo for a provider, supplying provider auth that plain `git clone`
  *  lacks (a private GitLab repo authenticates via glab's token). Returns the
  *  cloned path. */
@@ -863,6 +898,7 @@ export const forgePrCreate = (
   title: string,
   body: string,
   draft: boolean,
+  reviewers?: string[],
 ) =>
   invoke<PrRef>("forge_pr_create", {
     repoPath,
@@ -871,25 +907,31 @@ export const forgePrCreate = (
     title,
     body,
     draft,
+    // Create-time reviewers are Bitbucket-only; omit (null) for other providers so
+    // the backend leaves behavior untouched.
+    reviewers: reviewers ?? null,
   });
 
 /** Which providers this machine can publish to (CLI installed + signed in) —
  *  asked explicitly since an unpublished repo has no remote to detect one from. */
 export const forgePublishTargets = (repoPath: string) =>
-  invoke<{ github: boolean; gitlab: boolean }>("forge_publish_targets", {
-    repoPath,
-  });
+  invoke<{ github: boolean; gitlab: boolean; bitbucket: boolean }>(
+    "forge_publish_targets",
+    { repoPath },
+  );
 
 /** Publish a local repo to the CHOSEN provider (create + add origin + push).
- *  GitLab has no homepage field and drops it (the dialog hides that field). */
+ *  GitLab has no homepage field and drops it (the dialog hides that field).
+ *  Bitbucket maps homepage → website, drops topics, and needs a `workspace`. */
 export const forgePublishRepo = (
-  provider: "github" | "gitlab",
+  provider: "github" | "gitlab" | "bitbucket",
   repoPath: string,
   name: string,
   isPrivate: boolean,
   description: string,
   homepage: string,
   topics: string[],
+  workspace?: string,
 ) =>
   invoke<string>("forge_publish_repo", {
     provider,
@@ -899,6 +941,7 @@ export const forgePublishRepo = (
     description,
     homepage,
     topics,
+    workspace,
   });
 
 /** Open PRs/MRs whose head is `head` — the ComparePanel duplicate probe. */
@@ -927,6 +970,14 @@ export const forgePrView = (repoPath: string, number: number) =>
 
 export const forgePrDiff = (repoPath: string, number: number) =>
   invoke<string>("forge_pr_diff", { repoPath, number });
+
+/** Provider-neutral PR poll for the notification poller + remote pr-sync — the
+ *  backend dispatches (GitHub `gh`, GitLab `glab`, Bitbucket HTTP) onto the same
+ *  neutral `PrPollInfo`. GitLab/Bitbucket carry no check rollup or review decision
+ *  in list responses, so those fields come back empty (a v1 limit); `headSha`
+ *  still drives pr-sync. */
+export const forgePrPoll = (repoPath: string) =>
+  invoke<PrPollInfo[]>("forge_pr_poll", { repoPath });
 
 export type IssueStateFilter = "open" | "closed";
 
@@ -1334,8 +1385,14 @@ export const ghIssueRemoveSubIssue = (
 export const ghPrDiff = (repoPath: string, number: number) =>
   invoke<string>("gh_pr_diff", { repoPath, number });
 
-export const ghPrExternalReviews = (repoPath: string, number: number) =>
-  invoke<ExternalReviewItem[]>("gh_pr_external_reviews", { repoPath, number });
+/** Third-party AI-reviewer findings on a PR/MR (Copilot/CodeRabbit/…), behind the
+ *  forge abstraction: GitHub delegates unchanged, GitLab maps MR discussions,
+ *  Bitbucket returns empty by design. Shape is provider-agnostic. */
+export const forgePrExternalReviews = (repoPath: string, number: number) =>
+  invoke<ExternalReviewItem[]>("forge_pr_external_reviews", {
+    repoPath,
+    number,
+  });
 
 export type ReviewAction = "approve" | "comment" | "request_changes";
 
@@ -1373,6 +1430,36 @@ export const forgePrRequestChanges = (
   number: number,
   body: string,
 ) => invoke<void>("forge_pr_request_changes", { repoPath, number, body });
+
+/** Revoke the viewer's requested-changes state — Bitbucket-only (its revoke works
+ *  on every plan, making the control a true toggle; GitLab's undo is Premium). */
+export const forgePrUnrequestChanges = (repoPath: string, number: number) =>
+  invoke<void>("forge_pr_unrequest_changes", { repoPath, number });
+
+/** Toggle a PR's draft state — Bitbucket-only (both directions; GitHub keeps its
+ *  one-way `gh pr ready` path). */
+export const forgePrSetDraft = (
+  repoPath: string,
+  number: number,
+  draft: boolean,
+) => invoke<void>("forge_pr_set_draft", { repoPath, number, draft });
+
+/** Replace a PR's reviewer list (ids from `forgePrReviewerCandidates`) —
+ *  Bitbucket-only (`implemented.mrReviewers`). */
+export const forgePrSetReviewers = (
+  repoPath: string,
+  number: number,
+  reviewers: string[],
+) => invoke<void>("forge_pr_set_reviewers", { repoPath, number, reviewers });
+
+/** Reviewer-picker candidates for a PR — Bitbucket: workspace members minus the
+ *  user the server would reject. For an existing PR pass its number (the PR author
+ *  is excluded); at create time pass `null` (no PR yet — the viewer is excluded). */
+export const forgePrReviewerCandidates = (
+  repoPath: string,
+  number: number | null,
+) =>
+  invoke<ForgeUserRef[]>("forge_pr_reviewer_candidates", { repoPath, number });
 
 export const ghPrEditComment = (
   repoPath: string,
@@ -1460,9 +1547,6 @@ export const ghListRepos = () => invoke<GhRepoList>("gh_list_repos");
 
 export const ghSwitchAccount = (host: string, login: string) =>
   invoke<void>("gh_switch_account", { host, login });
-
-export const ghPrPoll = (repoPath: string) =>
-  invoke<PrPollInfo[]>("gh_pr_poll", { repoPath });
 
 export const ghPrCheckout = (repoPath: string, number: number) =>
   invoke<void>("gh_pr_checkout", { repoPath, number });
@@ -1608,6 +1692,212 @@ export const forgeGlProtectedBranchDelete = (repoPath: string, name: string) =>
  *  dialog's suggestions (host-correct for self-managed GitLab). */
 export const forgeGlMemberProjects = (repoPath: string) =>
   invoke<string[]>("forge_gl_member_projects", { repoPath });
+
+// ── Bitbucket settings surface (wave 3) — Bitbucket repos only; the GitHub /
+//    GitLab dialogs keep their own provider-shaped sections.
+
+/** The viewer's Bitbucket workspaces — the publish target picker (account-scoped). */
+export const forgeBbWorkspaces = () =>
+  invoke<BitbucketWorkspace[]>("forge_bb_workspaces");
+
+export const forgeBbRepoSettings = (repoPath: string) =>
+  invoke<BitbucketRepoSettings>("forge_bb_repo_settings", { repoPath });
+
+export const forgeBbRepoSettingsUpdate = (
+  repoPath: string,
+  input: BitbucketRepoSettingsInput,
+) =>
+  invoke<BitbucketRepoSettings>("forge_bb_repo_settings_update", {
+    repoPath,
+    input,
+  });
+
+export const forgeBbDefaultReviewers = (repoPath: string) =>
+  invoke<ForgeUserRef[]>("forge_bb_default_reviewers", { repoPath });
+
+export const forgeBbDefaultReviewerAdd = (repoPath: string, uuid: string) =>
+  invoke<void>("forge_bb_default_reviewer_add", { repoPath, uuid });
+
+export const forgeBbDefaultReviewerRemove = (repoPath: string, uuid: string) =>
+  invoke<void>("forge_bb_default_reviewer_remove", { repoPath, uuid });
+
+/** Workspace members WITHOUT the author exclusion — the default-reviewers picker. */
+export const forgeBbMemberCandidates = (repoPath: string) =>
+  invoke<ForgeUserRef[]>("forge_bb_member_candidates", { repoPath });
+
+export const forgeBbBranchRestrictions = (repoPath: string) =>
+  invoke<BitbucketBranchRestriction[]>("forge_bb_branch_restrictions", {
+    repoPath,
+  });
+
+export const forgeBbBranchRestrictionCreate = (
+  repoPath: string,
+  kind: string,
+  pattern: string,
+  value: number | null,
+) =>
+  invoke<void>("forge_bb_branch_restriction_create", {
+    repoPath,
+    kind,
+    pattern,
+    value,
+  });
+
+export const forgeBbBranchRestrictionUpdate = (
+  repoPath: string,
+  id: string,
+  kind: string,
+  pattern: string,
+  value: number | null,
+) =>
+  invoke<void>("forge_bb_branch_restriction_update", {
+    repoPath,
+    id,
+    kind,
+    pattern,
+    value,
+  });
+
+export const forgeBbBranchRestrictionDelete = (repoPath: string, id: string) =>
+  invoke<void>("forge_bb_branch_restriction_delete", { repoPath, id });
+
+export const forgeBbPipelinesConfig = (repoPath: string) =>
+  invoke<BitbucketPipelinesConfig>("forge_bb_pipelines_config", { repoPath });
+
+export const forgeBbPipelinesConfigUpdate = (
+  repoPath: string,
+  enabled: boolean,
+) => invoke<void>("forge_bb_pipelines_config_update", { repoPath, enabled });
+
+export const forgeBbPipelineVariables = (repoPath: string) =>
+  invoke<BitbucketPipelineVariable[]>("forge_bb_pipeline_variables", {
+    repoPath,
+  });
+
+export const forgeBbPipelineVariableCreate = (
+  repoPath: string,
+  key: string,
+  value: string,
+  secured: boolean,
+) =>
+  invoke<void>("forge_bb_pipeline_variable_create", {
+    repoPath,
+    key,
+    value,
+    secured,
+  });
+
+export const forgeBbPipelineVariableUpdate = (
+  repoPath: string,
+  uuid: string,
+  value: string,
+  secured: boolean,
+) =>
+  invoke<void>("forge_bb_pipeline_variable_update", {
+    repoPath,
+    uuid,
+    value,
+    secured,
+  });
+
+export const forgeBbPipelineVariableDelete = (repoPath: string, uuid: string) =>
+  invoke<void>("forge_bb_pipeline_variable_delete", { repoPath, uuid });
+
+export const forgeBbPipelineSchedules = (repoPath: string) =>
+  invoke<BitbucketPipelineSchedule[]>("forge_bb_pipeline_schedules", {
+    repoPath,
+  });
+
+export const forgeBbPipelineScheduleCreate = (
+  repoPath: string,
+  refName: string,
+  cronPattern: string,
+  enabled: boolean,
+) =>
+  invoke<void>("forge_bb_pipeline_schedule_create", {
+    repoPath,
+    refName,
+    cronPattern,
+    enabled,
+  });
+
+export const forgeBbPipelineScheduleSetEnabled = (
+  repoPath: string,
+  uuid: string,
+  enabled: boolean,
+) =>
+  invoke<void>("forge_bb_pipeline_schedule_set_enabled", {
+    repoPath,
+    uuid,
+    enabled,
+  });
+
+export const forgeBbPipelineScheduleDelete = (repoPath: string, uuid: string) =>
+  invoke<void>("forge_bb_pipeline_schedule_delete", { repoPath, uuid });
+
+export const forgeBbHooks = (repoPath: string) =>
+  invoke<BitbucketHook[]>("forge_bb_hooks", { repoPath });
+
+export const forgeBbHookCreate = (
+  repoPath: string,
+  input: BitbucketHookInput,
+) => invoke<void>("forge_bb_hook_create", { repoPath, input });
+
+export const forgeBbHookUpdate = (
+  repoPath: string,
+  uuid: string,
+  input: BitbucketHookInput,
+) => invoke<void>("forge_bb_hook_update", { repoPath, uuid, input });
+
+export const forgeBbHookDelete = (repoPath: string, uuid: string) =>
+  invoke<void>("forge_bb_hook_delete", { repoPath, uuid });
+
+// ── Bitbucket PR tasks + environments (wave 4) ───────────────────────────────
+
+/** A PR's task checklist, in list order (Bitbucket-only — `implemented.prTasks`). */
+export const forgeBbPrTasks = (repoPath: string, number: number) =>
+  invoke<PrTask[]>("forge_bb_pr_tasks", { repoPath, number });
+
+/** Create a PR task from free-text (empty text is rejected server-side). */
+export const forgeBbPrTaskCreate = (
+  repoPath: string,
+  number: number,
+  text: string,
+) => invoke<PrTask>("forge_bb_pr_task_create", { repoPath, number, text });
+
+/** Edit a PR task's text (`taskId` is the numeric server id as a String). */
+export const forgeBbPrTaskEdit = (
+  repoPath: string,
+  number: number,
+  taskId: string,
+  text: string,
+) =>
+  invoke<PrTask>("forge_bb_pr_task_edit", { repoPath, number, taskId, text });
+
+/** Resolve / unresolve a PR task. */
+export const forgeBbPrTaskSetState = (
+  repoPath: string,
+  number: number,
+  taskId: string,
+  resolved: boolean,
+) =>
+  invoke<PrTask>("forge_bb_pr_task_set_state", {
+    repoPath,
+    number,
+    taskId,
+    resolved,
+  });
+
+/** Delete a PR task. */
+export const forgeBbPrTaskDelete = (
+  repoPath: string,
+  number: number,
+  taskId: string,
+) => invoke<void>("forge_bb_pr_task_delete", { repoPath, number, taskId });
+
+/** The repo's deployment environments, sorted by rank ascending (Bitbucket-only). */
+export const forgeBbEnvironments = (repoPath: string) =>
+  invoke<BbEnvironment[]>("forge_bb_environments", { repoPath });
 
 /** The active gh token's OAuth scopes (for "needs gh auth refresh -s …" hints). */
 export const ghTokenScopes = (host?: string) =>

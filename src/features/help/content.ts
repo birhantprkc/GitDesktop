@@ -49,6 +49,10 @@ A few things worth knowing up front:
   \`gh auth login --hostname your.github.example\` and its repos get the same PR, issue,
   and Actions features. **Settings → Accounts** lists every signed-in host and lets you
   switch the active account per host.
+- **Bitbucket Cloud.** Connect in **Settings → Accounts** with an **Atlassian
+  API token** (created at id.atlassian.com, used with your Atlassian account email) —
+  the token is stored in your OS keychain. Then browse & clone your repositories, and
+  read and act on pull requests and Pipelines. (See **Bitbucket repositories** below.)
 {{ai}}- **AI is optional.** Commit messages, PR descriptions, reviews, CI debugging, and
   agent sessions can use Anthropic, OpenAI, OpenRouter, Ollama (local or cloud), an
   OpenAI-compatible endpoint, or the Claude Code / Codex / GitHub Copilot / opencode
@@ -61,7 +65,7 @@ From the welcome screen (or the repo switcher in the header):
 - **Open repository** ({{kbd:add-local-repository}}) — point at a folder that's already
   a Git repo.
 - **Clone repository** ({{kbd:clone-repository}}) — clone from a URL, or browse and
-  clone your **GitHub** or **GitLab** repos from their tabs.
+  clone your **GitHub**, **GitLab**, or **Bitbucket** repos from their tabs.
 - **Create repository** ({{kbd:new-repository}}) — start a new repo with an optional
   README, \`.gitignore\`, and license.
 
@@ -96,11 +100,12 @@ filter box — jump between repos without returning to the welcome screen.
 
 Click the **⋮** menu next to the repo name for repo-wide actions:
 
-- **View on GitHub / GitLab** ({{kbd:view-on-github}}), open a **terminal** at the repo
-  root ({{kbd:open-in-terminal}}), **show in your file manager**
+- **View on GitHub / GitLab / Bitbucket** ({{kbd:view-on-github}}), open a **terminal**
+  at the repo root ({{kbd:open-in-terminal}}), **show in your file manager**
   ({{kbd:show-in-explorer}}), or **open in your editor** ({{kbd:open-in-editor}}).
-- On the host: **Star** the repository, **create an issue**, or **Fork** it (on GitLab,
-  forking opens the web fork page).
+- On the host: **Star** the repository, **create an issue**, or **Fork** it (on GitLab
+  and Bitbucket, forking opens the web fork page). Bitbucket has no stars and its
+  issue tracker is retired, so those two actions don't appear for Bitbucket repos.
 - **Insights** (analytics), **manage files**, **submodules**, the **remote URL**,
   **branch rules**, **git hooks**, {{ai}}**automations**, {{/ai}}**repository settings**,
   an **alias**, copy the repo path, copy the branch name, copy the HEAD SHA, and
@@ -121,10 +126,11 @@ monitor it was on — see **Settings → About** for the current coordinates.`,
     label: "Repository settings",
     body: `# Repository settings
 
-**Repository settings** (the repo ⋮ menu) manages your GitHub repository — or GitLab
-project (see **GitLab projects** below) — without leaving the app. It's organized as a
-sidebar of grouped sections; changes apply on the host immediately unless noted. On
-GitHub it looks like this:
+**Repository settings** (the repo ⋮ menu) manages your GitHub repository — a GitLab
+project (see **GitLab projects** below) or a Bitbucket repository (see **Bitbucket
+repositories** below) too — without leaving the app. It's organized as a sidebar of
+grouped sections; changes apply on the host immediately unless noted. On GitHub it looks
+like this:
 
 - **General** — description, topics, homepage, default branch, features (issues,
   projects, wiki, discussions), pull-request merge options (allowed merge methods,
@@ -184,7 +190,41 @@ menu item appears only when you have it):
 - **Danger zone** — **rename** (name + path, old paths redirect),
   **archive / unarchive**, **change visibility**, **transfer** to another namespace,
   and **delete**. The Owner-only actions disable with an explanation when you're a
-  Maintainer.`,
+  Maintainer.
+
+## Bitbucket repositories
+
+The same dialog manages a **Bitbucket** repository (it needs **admin** on the repo; the
+menu item appears only when you have it):
+
+- **General** — description, **website**, primary **language**, **fork policy** (allow
+  all forks / private forks only / no forks), and the **default branch**, saved behind a
+  Save button.
+- **Default reviewers** — the accounts auto-added to every new pull request: add one from
+  the workspace members not already listed, or remove one.
+- **Branch restrictions** — rules that limit matching branches (by a **glob** like
+  \`release/*\`): **prevent pushes**, **prevent force pushes**, **prevent branch
+  deletion**, **restrict merges**, and **require approvals / passing builds / resolved
+  tasks** to merge (the count-based ones take a number). Edit a rule's pattern or count,
+  or delete it.
+- **Variables** — the repo's **pipeline variables**: add, edit, and delete, with a
+  **secured** flag (a secured value is write-only and never shown again). If Pipelines
+  are off, an **Enable pipelines** action turns them on first.
+- **Schedules** — **pipeline schedules** that run a branch's pipeline on a recurring
+  **cron** (Bitbucket uses Quartz cron, e.g. \`0 0 12 * * ?\`): add one, toggle it
+  enabled/disabled in place, or delete it.
+- **Deployments** — a read-only list of the repo's **deployment environments** (with tier,
+  and hints for ones not yet used or restricted to admins). Environments are created and
+  managed on Bitbucket, so there's a **Manage on Bitbucket…** link out rather than editing
+  here. (Like Variables and Schedules, deployments need Pipelines enabled first.)
+- **Webhooks** — create, edit, and delete webhooks with a payload URL, an active toggle,
+  and an event checklist. Bitbucket has no delivery-log API, so there's no deliveries
+  view.
+- **Danger zone** — **rename** (this changes the repository's URL slug; GitDesktop
+  updates your local \`origin\` remote automatically), **change visibility**
+  (public / private), **transfer** (a link out to Bitbucket, which handles transfers on
+  the web), and **delete**. Bitbucket has no archive, so that action isn't shown. Your
+  local clone is never touched.`,
   },
   {
     id: "changes",
@@ -598,26 +638,97 @@ to jump to that run. You can also get an OS **notification** when a run finishes
 (**Settings → Notifications**).`,
   },
   {
+    id: "bitbucket",
+    label: "Bitbucket repositories",
+    body: `# Bitbucket repositories
+
+GitDesktop works with **Bitbucket Cloud** repositories. Connect once in **Settings →
+Accounts**: create an **Atlassian API token** at id.atlassian.com, then enter your
+Atlassian **account email** (not your Bitbucket username) and the token. It needs the
+five read scopes \`read:user:bitbucket\`, \`read:workspace:bitbucket\`,
+\`read:repository:bitbucket\`, \`read:pullrequest:bitbucket\`, and
+\`read:pipeline:bitbucket\`. To also **act on** pull requests and Pipelines (below), add
+the write scopes \`write:pullrequest:bitbucket\`, \`write:pipeline:bitbucket\`, and
+\`admin:pipeline:bitbucket\` (pipeline variables & config). To **manage repositories** —
+publish a local repo, edit repository settings, branch restrictions, default reviewers,
+webhooks, or delete — also add \`write:repository:bitbucket\`,
+\`admin:repository:bitbucket\`, \`delete:repository:bitbucket\`, and the webhook scopes
+\`read:webhook:bitbucket\`, \`write:webhook:bitbucket\`, and \`delete:webhook:bitbucket\`.
+A write fails with a clear message if the token lacks the matching scope. The token is
+stored in your OS keychain — never in app files.
+
+Once connected:
+
+- **Clone browser** — the **Clone repository** dialog ({{kbd:clone-repository}}) gains a
+  **Bitbucket** tab that lists your repositories to filter and clone. (Cloning a private
+  repo uses your system git credentials, e.g. Git Credential Manager — GitDesktop doesn't
+  inject the API token into git.)
+- **Pull requests** — the **Pull Requests** tab lists a Bitbucket repo's PRs; open one to
+  read its **diff**, **comments**, and **build statuses**, and to act on it: **comment**,
+  **decline**, **merge** (merge commit, squash, or fast-forward, with an optional
+  delete-source-branch), **edit** the title/description, **approve/unapprove**,
+  **request changes** (a true toggle — click again to revoke; approving also clears it),
+  pick **reviewers** from your workspace members (the PR author can't review their own
+  PR, so they never appear), and flip **draft ↔ ready** in either direction. Use
+  **Create** to open a new PR (drafts included) — the create dialog also lets you pick
+  **reviewers** up front (leave it empty to keep Bitbucket's default reviewers). An open PR
+  also gets a **Tasks** checklist in the conversation column: **add**, **edit**, and
+  **delete** tasks, **resolve/unresolve** them (a progress bar tracks completion), and jump
+  to the list from an "N open tasks" chip in the PR header; a task attached to a comment
+  links back to it. On a closed or merged PR the checklist is read-only. One thing Bitbucket
+  itself can't do from the API: **reopening a declined PR** (so there's no Reopen button — a
+  Bitbucket platform limit).
+- **Pipelines** — the **Actions** tab lists Bitbucket **Pipelines**; open one to see its
+  **steps** with their **logs**. You can **rerun** a finished pipeline (re-triggers its
+  branch), **trigger** a new one on a branch or tag (with optional variables), and **stop**
+  a running pipeline. When the repo's \`bitbucket-pipelines.yml\` defines **custom
+  pipelines** (\`pipelines.custom.*\`), the **Run pipeline** dialog adds a **Pipeline**
+  picker — run the branch's **Default** pipeline or a named custom one, with the same
+  variables.
+- **Insights** — the **Insights** tab works on Bitbucket repos: the local-git charts
+  (commit activity, code frequency, contributors, punch card), a **Pipelines** duration
+  and success-rate chart, and a **More on Bitbucket** card that links out to the
+  **Commits**, **Branches**, **Pipelines**, and **Deployments** pages (these only render on
+  the web). GitHub-only cards (community, traffic, dependencies) stay hidden.
+- **Publish a local repo** — a repo with no remote can be published to Bitbucket. From
+  the sync bar's **Publish repository…** (or the not-ready panel), pick **Bitbucket**,
+  choose a **workspace**, give it a name (which becomes the URL slug), and optionally a
+  description, website, and private/public — GitDesktop creates the repo, adds it as
+  \`origin\`, and pushes the current branch. (Bitbucket has no topics, so there's no topics
+  field.)
+- **Repository settings** — for a repo you **admin**, the repo ⋮ menu's **Repository
+  settings** manages the Bitbucket repo: General, Default reviewers, Branch restrictions,
+  Variables, Schedules, and Deployments (Pipelines), Webhooks, and a Danger zone (rename,
+  visibility, transfer, delete). See **Repository settings → Bitbucket repositories** for
+  the details.
+- **Issues** — Bitbucket has retired its native issue tracker (issues live in **Jira**),
+  so issues aren't shown for Bitbucket repositories. Private **local to-dos** still work.
+
+If a Bitbucket panel says it can't sign in, your token may be expired, revoked, or
+missing scopes — update it in **Settings → Accounts**.`,
+  },
+  {
     id: "insights",
     label: "Insights",
     body: `# Insights
 
 The **Insights** tab ({{kbd:tab-insights}}, in the More ▾ menu) is a dashboard of
-repository analytics, mixing local Git history with hosted data (GitHub or GitLab).
+repository analytics, mixing local Git history with hosted data (GitHub, GitLab, or
+Bitbucket).
 
 - **Repository statistics** — commits, contributors, branch and tag counts, sizes, and a
   language-makeup bar.
 - **Commit activity** — commits per week, and a **code-frequency** chart of additions and
   deletions over time.
 - **Top contributors** and a **punch card** heatmap of commits by day and hour.
-- **CI usage** — recent run duration and success rate (GitHub workflow runs, or GitLab
-  pipelines).
+- **CI usage** — recent run duration and success rate (GitHub workflow runs, GitLab
+  pipelines, or Bitbucket Pipelines).
 - On GitHub: **community health** (stars, forks, watchers, a health percentage),
   **traffic** (14-day views, clones, and top referrers — needs push access), and
   **dependencies**.
 - Quick links jump to the pages best viewed on the web — GitHub's Pulse, Network, Forks,
-  Dependents, and Actions, or GitLab's Activity, CI/CD analytics, and value stream
-  analytics.`,
+  Dependents, and Actions; GitLab's Activity, CI/CD analytics, and value stream analytics;
+  or Bitbucket's Commits, Branches, Pipelines, and Deployments.`,
   },
   {
     id: "agent",
@@ -908,7 +1019,11 @@ Open **Settings** from the header gear (or {{kbd:open-settings}}). Sections:
 {{/ai}}- **Notifications** — opt into OS notifications (sent only when the window isn't
   focused) for PR activity, CI checks, reviews on your PRs, and workflow runs finishing.
 - **Keyboard** — rebind any shortcut, with live key-capture.
-- **Accounts** — your GitHub sign-in.
+- **Accounts** — your GitHub sign-in, and your **Bitbucket** connection (an Atlassian
+  API token: enter your Atlassian account email + a token with the five \`read:…:bitbucket\`
+  scopes, plus the \`write:…:bitbucket\` scopes to act on PRs and Pipelines and the
+  \`admin:…:bitbucket\` / \`delete:…:bitbucket\` / webhook scopes to manage repositories;
+  stored in the OS keychain, replaceable or removable here).
 - **Git** — the default branch name for new repos, your global identity, a per-repository
   identity override, and line endings (\`core.autocrlf\`).
 - **Syntax** — map file extensions to languages or add custom grammars, personally or

@@ -104,7 +104,12 @@ export function CreateReleaseDialog({
   // GitLab has no draft/pre-release/latest concepts and no auto-notes API, so
   // those checkboxes and the "From GitHub" generator hide there (AI notes still
   // work — they fall back to local commits).
-  const isGitLab = useForgeStatus(repoPath).data?.provider === "gitlab";
+  const releaseProvider = useForgeStatus(repoPath).data?.provider;
+  const isGitLab = releaseProvider === "gitlab";
+  // GitHub (or an unrecognized host that still routes through gh) is the only
+  // provider with an auto-changelog API — gates the `gh` call in the AI hook.
+  const isGitHub =
+    releaseProvider !== "gitlab" && releaseProvider !== "bitbucket";
   const status = useRepoStatus(repoPath);
   const tagList = useTagList(repoPath);
   const branches = useBranches(repoPath);
@@ -236,6 +241,7 @@ export function CreateReleaseDialog({
       target: showTarget ? target.trim() : tagTrimmed,
       previousTag: effectivePreviousTag,
       repoName,
+      isGitHub,
       onResult: (body) => form.setFieldValue("notes", body),
     });
   }
