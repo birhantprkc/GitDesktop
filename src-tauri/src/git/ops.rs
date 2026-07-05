@@ -1060,9 +1060,10 @@ pub async fn git_rebase(
 /// - "rebase" â†’ replay head's commits onto base (cherry-pick range, no merge
 ///   commit), preserving their individual messages
 ///
-/// Checks out `base` first and leaves you there on success. Any failure
-/// (conflict, etc.) is rolled back: base is reset to its prior tip and your
-/// original branch restored, so nothing is left half-merged.
+/// Checks out `base` to perform the merge, then returns you to the branch (or
+/// detached commit) you started on. Any failure (conflict, etc.) is rolled back:
+/// base is reset to its prior tip and your original branch restored, so nothing
+/// is left half-merged.
 #[tauri::command]
 pub async fn git_merge_local_pr(
     state: State<'_, AppState>,
@@ -1146,7 +1147,23 @@ pub async fn git_merge_local_pr(
     };
 
     match result {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            // The merge landed on `base`; return the user to the branch (or
+            // detached commit) they started on, unless they were already there.
+            // Best-effort and always safe: the merge went *into* base, so the
+            // original ref is untouched and still exists, and the tree is clean
+            // after the commit, so the switch-back can't be blocked. A failure
+            // here at worst leaves them on `base` — no worse than before.
+            if original_restore != base {
+                let restore: Vec<&str> = if detached {
+                    vec!["switch", "--detach", &original_restore]
+                } else {
+                    vec!["switch", &original_restore]
+                };
+                let _ = run_git_mutating(&state, &repo_path, &restore, DEFAULT_TIMEOUT).await;
+            }
+            Ok(())
+        }
         Err(err) => {
             // Roll back any half-applied state, then return home. The aborts
             // are best-effort (only one applies); the hard reset is the

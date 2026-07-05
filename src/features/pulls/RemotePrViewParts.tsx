@@ -177,7 +177,8 @@ export function MergePrDialog({
               onDeleteBranchChange(checked === true)
             }
           />
-          Delete <span className="font-mono">{headRefName}</span> after merging
+          Delete <span className="font-mono">{headRefName}</span> on the remote
+          after merging
         </label>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>

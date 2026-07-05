@@ -525,8 +525,16 @@ pub async fn gh_pr_comment(repo_path: String, number: u64, body: String) -> AppR
     Ok(())
 }
 
-/// Merges the PR with the given strategy ("merge"/"squash"/"rebase"),
-/// optionally deleting the head branch afterwards.
+/// Merges the PR with the given strategy ("merge"/"squash"/"rebase"). When
+/// `delete_branch` is set, only the *remote* head branch is removed afterwards —
+/// the local branch and HEAD are left untouched.
+///
+/// We deliberately do NOT pass `gh pr merge --delete-branch`: that also deletes
+/// the user's **local** branch and switches HEAD to the default branch, which
+/// surprised users and diverged from the other providers (GitLab's
+/// `should_remove_source_branch` and Bitbucket's `close_source_branch` are
+/// server-side, so they only ever touch the remote). Instead we merge, then
+/// delete just the remote ref via the API — remote-only, like the others.
 #[tauri::command]
 pub async fn gh_pr_merge(
     repo_path: String,
@@ -545,12 +553,106 @@ pub async fn gh_pr_merge(
             )));
         }
     };
-    let mut args = vec!["pr", "merge", &n, method];
+    run_gh(
+        Some(&repo_path),
+        &["pr", "merge", &n, method],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
     if delete_branch {
-        args.push("--delete-branch");
+        gh_delete_remote_head_branch(&repo_path, number).await?;
     }
-    run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT).await?;
     Ok(())
+}
+
+/// The slice of `gh pr view` needed to delete only the remote head branch after
+/// a merge: the ref name plus the repository that branch lives in — the fork for
+/// a cross-repository PR, the base repo otherwise. `headRepository` /
+/// `headRepositoryOwner` name that repo either way, so we target it explicitly
+/// rather than gh's `{owner}/{repo}` placeholders (which resolve to the *base*
+/// repo and would risk deleting a same-named branch there for a fork PR).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawMergeHead {
+    #[serde(default)]
+    head_ref_name: String,
+    #[serde(default)]
+    is_cross_repository: bool,
+    head_repository_owner: Option<RawLogin>,
+    head_repository: Option<RawRepoName>,
+}
+
+#[derive(Deserialize)]
+struct RawRepoName {
+    #[serde(default)]
+    name: String,
+}
+
+/// Deletes only the *remote* head branch of a just-merged PR (see `gh_pr_merge`).
+/// Best-effort and disclosing: the merge already succeeded, so a delete failure
+/// is surfaced as a caveat rather than a merge failure, and a branch that is
+/// already gone (e.g. a repo that auto-deletes head branches on merge) counts as
+/// success.
+async fn gh_delete_remote_head_branch(repo_path: &str, number: u64) -> AppResult<()> {
+    let out = run_gh(
+        Some(repo_path),
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--json",
+            "headRefName,isCrossRepository,headRepositoryOwner,headRepository",
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let head: RawMergeHead = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not read the PR's head branch: {e}")))?;
+
+    let branch = head.head_ref_name.trim().to_string();
+    if branch.is_empty() {
+        return Ok(());
+    }
+    // The fork may have been deleted, or gh couldn't resolve the head repo —
+    // either way there is no remote branch of ours left to remove.
+    let (Some(owner), Some(repo)) = (
+        head.head_repository_owner
+            .map(|o| o.login)
+            .filter(|s| !s.is_empty()),
+        head.head_repository
+            .map(|r| r.name)
+            .filter(|s| !s.is_empty()),
+    ) else {
+        return Ok(());
+    };
+
+    let endpoint = format!("repos/{owner}/{repo}/git/refs/heads/{branch}");
+    match run_gh(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let raw = err.to_string();
+            let lower = raw.to_ascii_lowercase();
+            // The branch is already gone (repo auto-deletes head branches, or a
+            // prior attempt removed it) — that's the desired end state.
+            if lower.contains("reference does not exist") || lower.contains("not found") {
+                return Ok(());
+            }
+            let fork_note = if head.is_cross_repository {
+                " (the branch is on a fork, where you may not have permission to delete it)"
+            } else {
+                ""
+            };
+            Err(AppError::Gh(format!(
+                "Merged #{number}, but the remote branch \"{branch}\" could not be deleted: {raw}{fork_note}"
+            )))
+        }
+    }
 }
 
 #[tauri::command]
