@@ -1434,6 +1434,8 @@ name = "gitdesktop"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
+ "dirs",
  "keyring",
  "os_info",
  "portable-pty",
@@ -1453,6 +1455,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "trash",
+ "uuid",
  "winreg 0.55.0",
 ]
 
