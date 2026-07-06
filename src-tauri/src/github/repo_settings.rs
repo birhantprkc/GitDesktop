@@ -29,6 +29,26 @@ pub async fn gh_repo_admin(repo_path: String) -> AppResult<bool> {
     Ok(out.stdout_lossy().trim() == "true")
 }
 
+/// The repo's remote visibility as `gh` reports it — "PUBLIC" / "PRIVATE" /
+/// "INTERNAL" (uppercase). Returned raw for the forge dispatcher to normalize;
+/// a repo with no GitHub remote (or no access) surfaces gh's own error rather
+/// than a guessed value. Used by `forge_repo_visibility`'s GitHub arm.
+pub async fn gh_repo_visibility(repo_path: String) -> AppResult<String> {
+    let out = run_gh(
+        Some(&repo_path),
+        &["repo", "view", "--json", "visibility", "-q", ".visibility"],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let raw = out.stdout_lossy().trim().to_string();
+    if raw.is_empty() {
+        return Err(AppError::Gh(
+            "could not read the repository's visibility".into(),
+        ));
+    }
+    Ok(raw)
+}
+
 // ── Webhooks ─────────────────────────────────────────────────────────────────
 //
 // Structs double as the GitHub-response deserialize target (snake_case via

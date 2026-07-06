@@ -1,0 +1,1 @@
+- Repo switcher and welcome list rows now show identity badges at a glance: a GitHub, GitLab, or Bitbucket logo for the forge the repo lives on (a cloud icon for a remote on an unrecognized host, a folder for a local-only repo), and a trailing lock (private), buildings (internal), or globe (public) for its visibility.

@@ -205,7 +205,10 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 
 **Repositories** — clone, add local, create (README / .gitignore / license
 scaffolding), publish to GitHub, and fork. A header repo switcher groups every
-repo by owner with a Recent section and filter; aliases and recycle-bin-safe
+repo by owner with a Recent section and filter, and each row shows identity
+badges at a glance — the forge's logo (GitHub / GitLab / Bitbucket, a cloud for
+an unrecognized remote, a folder for local-only) and a visibility icon (lock /
+buildings / globe for private / internal / public); aliases and recycle-bin-safe
 removal. Star or unstar a repo from the menu, and (for admins) manage GitHub
 repo settings — description and topics (with AI suggestions), merge options and
 default commit messages, template & forking, **collaborators & invitations**,

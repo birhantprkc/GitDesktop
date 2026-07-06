@@ -94,7 +94,10 @@ remote{{ai}}; the **Agent** tab appears only when AI features are enabled{{/ai}}
 
 The repository name in the header is a **switcher** ({{kbd:show-repositories}}). Click it
 to see every repo you've opened, grouped by GitHub owner, with a Recent section and a
-filter box — jump between repos without returning to the welcome screen.
+filter box — jump between repos without returning to the welcome screen. Each row shows
+its **forge** as a leading logo (GitHub, GitLab, or Bitbucket; a cloud for a remote on an
+unrecognized host, a folder for a local-only repo) and, once resolved, a trailing
+**visibility** icon — a lock (private), buildings (internal), or globe (public).
 
 ## The repository menu
 

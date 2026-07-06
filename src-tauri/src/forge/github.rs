@@ -390,6 +390,10 @@ pub async fn repo_set_star(repo_path: &str, starred: bool) -> AppResult<()> {
     crate::github::pr::gh_repo_set_star(repo_path.to_string(), starred).await
 }
 
+pub async fn repo_visibility(repo_path: &str) -> AppResult<String> {
+    crate::github::repo_settings::gh_repo_visibility(repo_path.to_string()).await
+}
+
 pub async fn publish_repo(
     repo_path: &str,
     name: &str,

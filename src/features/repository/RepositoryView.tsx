@@ -61,6 +61,7 @@ import { ChangesPanel } from "./ChangesPanel";
 import { InsightsPanel } from "./insights/InsightsPanel";
 import { RepoHeader } from "./RepoHeader";
 import { usePrNotifications } from "./usePrNotifications";
+import { useRepoVisibilityProbe } from "./useRepoVisibilityProbe";
 
 // Base OS window title. In a `tauri dev` session (Vite serving) it gets a
 // "(Dev)" suffix so the dev instance is tellable apart in the taskbar / Alt-Tab
@@ -140,6 +141,8 @@ export function RepositoryView() {
   // Auto re-review open PRs (local + remote) whose head branch gets new
   // commits — pr-sync, gated by the runner's opt-in + per-mode watermark.
   useWatchPrHeads(repoPath ?? "");
+  // Refresh the repo's stored visibility badge on every open (fire-and-forget).
+  useRepoVisibilityProbe(repoPath);
 
   function changeTab(tab: RepoTab) {
     startTabTransition(() => setRepoTab(tab));

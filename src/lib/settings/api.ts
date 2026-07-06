@@ -20,6 +20,11 @@ export interface RecentRepo {
    *  resolved backend-side (it knows glab's self-managed hosts) and stored so
    *  labels are right from the first frame. Absent until first resolved. */
   provider?: string;
+  /** The persisted result of the visibility probe ("public" | "private" |
+   *  "internal"). Absent = never resolved (the repo list shows no badge, which
+   *  must never read as "public"). Cleared when the provider is cleared, so a
+   *  stale badge never outlives the remote it was probed from. */
+  visibility?: string;
 }
 
 /** What to call a repo in the UI: its alias when set, else its name. */
@@ -318,27 +323,50 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   await store.set("settings", settings);
 }
 
-export async function addRecentRepo(repo: {
+/**
+ * Serializes every `recentRepos` read-modify-write (load → modify → save)
+ * through one module-level promise chain, so concurrent mutators can't clobber
+ * each other. Each of the wrapped helpers below is a NON-atomic
+ * loadSettings→modify→saveSettings; run two at once and they interleave —
+ * A loads, B loads, A saves, B saves B's stale snapshot → A's write is lost.
+ * That lost-update race is real: the visibility backfill fires up to three
+ * concurrent persists while `persistRepoOwners` and `addRecentRepo` write the
+ * same store, and it silently dropped persisted visibility for several repos.
+ *
+ * The no-op-when-unchanged guards inside each helper MUST stay inside this
+ * critical section (they re-read fresh state under the lock) — do not hoist
+ * them out or "simplify" this chain away.
+ */
+let recentRepoWrites: Promise<unknown> = Promise.resolve();
+function serializedRecentRepoWrite<T>(fn: () => Promise<T>): Promise<T> {
+  const run = recentRepoWrites.then(fn, fn);
+  recentRepoWrites = run.catch(() => undefined);
+  return run;
+}
+
+export function addRecentRepo(repo: {
   path: string;
   name: string;
 }): Promise<void> {
-  const settings = await loadSettings();
-  // Windows paths are case-insensitive; compare them that way to dedupe
-  const samePath = (a: string, b: string) =>
-    a.toLowerCase() === b.toLowerCase();
-  // Reopening a repo must not wipe the alias on its previous entry.
-  const previous = settings.recentRepos.find((r) =>
-    samePath(r.path, repo.path),
-  );
-  const recentRepos = [
-    {
-      ...repo,
-      alias: previous?.alias,
-      lastOpenedAt: new Date().toISOString(),
-    },
-    ...settings.recentRepos.filter((r) => !samePath(r.path, repo.path)),
-  ].slice(0, MAX_RECENT_REPOS);
-  await saveSettings({ ...settings, recentRepos });
+  return serializedRecentRepoWrite(async () => {
+    const settings = await loadSettings();
+    // Windows paths are case-insensitive; compare them that way to dedupe
+    const samePath = (a: string, b: string) =>
+      a.toLowerCase() === b.toLowerCase();
+    // Reopening a repo must not wipe the alias on its previous entry.
+    const previous = settings.recentRepos.find((r) =>
+      samePath(r.path, repo.path),
+    );
+    const recentRepos = [
+      {
+        ...repo,
+        alias: previous?.alias,
+        lastOpenedAt: new Date().toISOString(),
+      },
+      ...settings.recentRepos.filter((r) => !samePath(r.path, repo.path)),
+    ].slice(0, MAX_RECENT_REPOS);
+    await saveSettings({ ...settings, recentRepos });
+  });
 }
 
 /**
@@ -348,7 +376,7 @@ export async function addRecentRepo(repo: {
  * records whose stored values actually changed; an empty remote clears them.
  * No-op when nothing changed, so it never loops with its own settings refetch.
  */
-export async function persistRepoOwners(
+export function persistRepoOwners(
   owners: {
     path: string;
     owner: string | null;
@@ -356,41 +384,85 @@ export async function persistRepoOwners(
     provider: string | null;
   }[],
 ): Promise<void> {
-  if (owners.length === 0) return;
-  const settings = await loadSettings();
-  const byPath = new Map(owners.map((o) => [o.path, o]));
-  let changed = false;
-  const recentRepos = settings.recentRepos.map((r) => {
-    const resolved = byPath.get(r.path);
-    if (!resolved) return r;
-    const owner = resolved.owner || undefined;
-    const host = resolved.host || undefined;
-    const provider = resolved.provider || undefined;
-    if (owner === r.owner && host === r.host && provider === r.provider)
-      return r;
-    changed = true;
-    return { ...r, owner, host, provider };
+  if (owners.length === 0) return Promise.resolve();
+  return serializedRecentRepoWrite(async () => {
+    const settings = await loadSettings();
+    const byPath = new Map(owners.map((o) => [o.path, o]));
+    let changed = false;
+    const recentRepos = settings.recentRepos.map((r) => {
+      const resolved = byPath.get(r.path);
+      if (!resolved) return r;
+      const owner = resolved.owner || undefined;
+      const host = resolved.host || undefined;
+      const provider = resolved.provider || undefined;
+      // Visibility is probed from the provider; when the provider is being
+      // cleared (remote removed), the stored visibility can't outlive it — drop
+      // it too so a stale badge never lingers on a now-local-only repo.
+      const visibility = provider ? r.visibility : undefined;
+      if (
+        owner === r.owner &&
+        host === r.host &&
+        provider === r.provider &&
+        visibility === r.visibility
+      )
+        return r;
+      changed = true;
+      return { ...r, owner, host, provider, visibility };
+    });
+    if (!changed) return;
+    await saveSettings({ ...settings, recentRepos });
   });
-  if (!changed) return;
-  await saveSettings({ ...settings, recentRepos });
+}
+
+/**
+ * Stores resolved repo visibility ("public" | "private" | "internal") onto the
+ * matching recent-repo records so the repo list shows the right visibility
+ * badge synchronously next open. A null `visibility` clears the field (the
+ * repo has no resolvable remote anymore). Touches only records whose stored
+ * value actually changed; no-op when nothing changed, so it never loops with
+ * its own settings refetch (mirrors {@link persistRepoOwners}).
+ */
+export function persistRepoVisibility(
+  entries: { path: string; visibility: string | null }[],
+): Promise<void> {
+  if (entries.length === 0) return Promise.resolve();
+  return serializedRecentRepoWrite(async () => {
+    const settings = await loadSettings();
+    const byPath = new Map(entries.map((e) => [e.path, e]));
+    let changed = false;
+    const recentRepos = settings.recentRepos.map((r) => {
+      const resolved = byPath.get(r.path);
+      if (!resolved) return r;
+      const visibility = resolved.visibility || undefined;
+      if (visibility === r.visibility) return r;
+      changed = true;
+      return { ...r, visibility };
+    });
+    if (!changed) return;
+    await saveSettings({ ...settings, recentRepos });
+  });
 }
 
 /** Sets (or clears, with an empty string) the display alias for a repo. */
-export async function setRepoAlias(path: string, alias: string): Promise<void> {
-  const settings = await loadSettings();
-  const trimmed = alias.trim();
-  await saveSettings({
-    ...settings,
-    recentRepos: settings.recentRepos.map((r) =>
-      r.path === path ? { ...r, alias: trimmed || undefined } : r,
-    ),
+export function setRepoAlias(path: string, alias: string): Promise<void> {
+  return serializedRecentRepoWrite(async () => {
+    const settings = await loadSettings();
+    const trimmed = alias.trim();
+    await saveSettings({
+      ...settings,
+      recentRepos: settings.recentRepos.map((r) =>
+        r.path === path ? { ...r, alias: trimmed || undefined } : r,
+      ),
+    });
   });
 }
 
-export async function removeRecentRepo(path: string): Promise<void> {
-  const settings = await loadSettings();
-  await saveSettings({
-    ...settings,
-    recentRepos: settings.recentRepos.filter((r) => r.path !== path),
+export function removeRecentRepo(path: string): Promise<void> {
+  return serializedRecentRepoWrite(async () => {
+    const settings = await loadSettings();
+    await saveSettings({
+      ...settings,
+      recentRepos: settings.recentRepos.filter((r) => r.path !== path),
+    });
   });
 }

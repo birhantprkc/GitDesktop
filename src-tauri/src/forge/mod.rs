@@ -1287,6 +1287,35 @@ pub async fn forge_repo_set_star(repo_path: String, starred: bool) -> AppResult<
     }
 }
 
+/// Canonicalize a provider's raw visibility string to one of the three neutral
+/// values (`public` / `private` / `internal`), case-insensitively — gh emits
+/// uppercase, GitLab lowercase. An unrecognized/empty value maps to `None` so
+/// the caller errors rather than passing a guessed value to the UI.
+fn normalize_visibility(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "public" => Some("public"),
+        "private" => Some("private"),
+        "internal" => Some("internal"),
+        _ => None,
+    }
+}
+
+/// The repo's remote visibility (`public` / `private` / `internal`), behind the
+/// abstraction — for badging the repo list. Every arm returns a raw provider
+/// string that's canonicalized here; an undeterminable case (no remote, CLI/API
+/// failure, unrecognized payload) errors rather than guessing.
+#[tauri::command]
+pub async fn forge_repo_visibility(repo_path: String) -> AppResult<String> {
+    let raw = match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::repo_visibility(&repo_path).await?,
+        Some((Provider::Bitbucket, _)) => bitbucket::repo_visibility(&repo_path).await?,
+        _ => github::repo_visibility(&repo_path).await?,
+    };
+    normalize_visibility(&raw)
+        .map(str::to_string)
+        .ok_or_else(|| AppError::InvalidArgument(format!("unrecognized visibility: {raw}")))
+}
+
 // ── Repository settings & lifecycle ──────────────────────────────────────────
 
 /// Whether the signed-in viewer can manage this repo's settings (`admin`), and
@@ -2322,5 +2351,19 @@ mod tests {
         // host only → no path.
         assert_eq!(remote_path("https://gitlab.com"), None);
         assert_eq!(remote_path("/local/path"), None);
+    }
+
+    #[test]
+    fn visibility_normalizes_case_insensitively_and_rejects_garbage() {
+        // gh's uppercase, GitLab's lowercase, and mixed case all canonicalize.
+        assert_eq!(normalize_visibility("PUBLIC"), Some("public"));
+        assert_eq!(normalize_visibility("public"), Some("public"));
+        assert_eq!(normalize_visibility("Private"), Some("private"));
+        assert_eq!(normalize_visibility("INTERNAL"), Some("internal"));
+        // Surrounding whitespace (e.g. a trailing newline from a CLI) is tolerated.
+        assert_eq!(normalize_visibility(" public\n"), Some("public"));
+        // Anything else → None so the caller errors rather than guessing.
+        assert_eq!(normalize_visibility("garbage"), None);
+        assert_eq!(normalize_visibility(""), None);
     }
 }

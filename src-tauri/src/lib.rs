@@ -309,6 +309,7 @@ pub fn run() {
             forge::forge_repo_url,
             forge::forge_repo_star_status,
             forge::forge_repo_set_star,
+            forge::forge_repo_visibility,
             forge::forge_publish_targets,
             forge::forge_publish_repo,
             forge::forge_bb_workspaces,

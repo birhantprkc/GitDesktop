@@ -580,6 +580,13 @@ export const openInTerminal = (
 export const forgeRepoUrl = (repoPath: string) =>
   invoke<string>("forge_repo_url", { repoPath });
 
+/** The repo's visibility on its provider — resolves to exactly "public" |
+ *  "private" | "internal" (lowercase). Rejects on any undeterminable case (no
+ *  remote, no auth, API failure); callers treat a rejection as "leave the
+ *  persisted value alone". */
+export const forgeRepoVisibility = (repoPath: string) =>
+  invoke<string>("forge_repo_visibility", { repoPath });
+
 export const gitRecentCommits = (repoPath: string, limit: number) =>
   invoke<CommitSummary[]>("git_recent_commits", { repoPath, limit });
 

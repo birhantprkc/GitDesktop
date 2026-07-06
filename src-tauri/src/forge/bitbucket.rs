@@ -3158,6 +3158,28 @@ pub async fn repo_settings(repo_path: &str) -> AppResult<BitbucketRepoSettings> 
     Ok(settings_from_repo(raw))
 }
 
+/// The repo's `is_private` only, mapped to the neutral visibility string.
+/// Bitbucket has no "internal" tier, so it's just private/public. Reuses the
+/// same `GET repositories/{ws}/{slug}` read the settings fetch uses. Unlike the
+/// tolerant settings struct, `is_private` is STRICT here (`Option`, no default):
+/// a missing or null value is undeterminable, and this probe must error rather
+/// than guess "public" (mirrors the GitHub arm's empty-string guard).
+#[derive(Deserialize)]
+struct BbRepoVisibility {
+    #[serde(default)]
+    is_private: Option<bool>,
+}
+
+pub async fn repo_visibility(repo_path: &str) -> AppResult<String> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let raw: BbRepoVisibility = http::bb_get_json(&creds, &base, "repository").await?;
+    let is_private = raw.is_private.ok_or_else(|| {
+        AppError::Bitbucket("could not read the repository's visibility".into())
+    })?;
+    Ok(if is_private { "private" } else { "public" }.to_string())
+}
+
 /// The settings the General form sends back (the managed subset). Name and
 /// visibility are deliberately absent — the Danger zone owns them (rename +
 /// set-visibility).
@@ -5328,6 +5350,24 @@ definitions:
         assert_eq!(s.project_key, "PROJ");
         assert_eq!(s.project_name, "Project X");
         assert_eq!(s.web_url, "https://bitbucket.org/ws/my-repo");
+    }
+
+    #[test]
+    fn visibility_probe_reads_is_private_and_errors_when_undeterminable() {
+        // Present → decodes to the boolean.
+        let private: BbRepoVisibility =
+            serde_json::from_str(r#"{"is_private":true}"#).unwrap();
+        assert_eq!(private.is_private, Some(true));
+        let public: BbRepoVisibility =
+            serde_json::from_str(r#"{"is_private":false}"#).unwrap();
+        assert_eq!(public.is_private, Some(false));
+        // Missing OR explicit null → None, so the command errors rather than
+        // guessing "public" for a repo whose visibility we can't read.
+        let missing: BbRepoVisibility = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(missing.is_private, None);
+        let null: BbRepoVisibility =
+            serde_json::from_str(r#"{"is_private":null}"#).unwrap();
+        assert_eq!(null.is_private, None);
     }
 
     #[test]

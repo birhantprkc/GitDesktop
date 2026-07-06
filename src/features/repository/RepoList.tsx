@@ -1,6 +1,14 @@
-import { FolderIcon } from "@phosphor-icons/react";
+import {
+  BuildingsIcon,
+  CloudIcon,
+  FolderIcon,
+  GlobeSimpleIcon,
+  LockSimpleIcon,
+} from "@phosphor-icons/react";
+import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { ProviderIcon } from "@/components/provider-icon";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -14,6 +22,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { copyText } from "@/lib/clipboard";
 import {
   forgeRepoUrl,
+  forgeRepoVisibility,
   openInTerminal,
   openWithDefault,
   openWithProgram,
@@ -21,14 +30,59 @@ import {
 import { useRepoOwners } from "@/lib/git/queries";
 import { type ForgeProvider, providerLabel } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
-import { type RecentRepo, repoDisplayName } from "@/lib/settings/api";
-import { usePersistRepoOwners, useSettings } from "@/lib/settings/queries";
+import {
+  persistRepoVisibility,
+  type RecentRepo,
+  repoDisplayName,
+} from "@/lib/settings/api";
+import {
+  settingsKeys,
+  usePersistRepoOwners,
+  useSettings,
+} from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useOpenRepoByPath } from "./useOpenRepoByPath";
 
 const RECENT_COUNT = 5;
 const OTHER_GROUP = "Other";
+
+// Paths whose visibility probe has already been attempted this app session, so
+// a failing probe (e.g. a signed-out provider) is retried at most once per
+// session — no probe storms on every dropdown open. Module-level and read only
+// inside the backfill effect (never during render), so React Compiler stays
+// happy. Best-effort by design; cleared on reload.
+const visibilityAttempted = new Set<string>();
+const VISIBILITY_BACKFILL_CONCURRENCY = 3;
+
+/**
+ * The full forge-provider fallback chain for a repo, in ONE place so the rows,
+ * the context menu, and the visibility backfill all resolve the same provider
+ * (a divergence here would probe a different repo set than the badges show).
+ * Prefer the persisted provider (right from the first frame), then the live
+ * owners query (covers records not yet backfilled), then a gitlab.com host
+ * compare (covers records persisted before providers were stored) — with the
+ * host itself resolved persisted-then-live via {@link resolveHost}. Pure: the
+ * render-scope maps are passed in, so it's never a reactive dependency.
+ */
+function resolveHost(
+  repo: RecentRepo,
+  hostByPath: Map<string, string | null>,
+): string | undefined {
+  return repo.host || hostByPath.get(repo.path) || undefined;
+}
+
+function resolveProvider(
+  repo: RecentRepo,
+  providerByPath: Map<string, string | null>,
+  hostByPath: Map<string, string | null>,
+): ForgeProvider | null {
+  return (repo.provider ??
+    providerByPath.get(repo.path) ??
+    (resolveHost(repo, hostByPath) === "gitlab.com"
+      ? "gitlab"
+      : null)) as ForgeProvider | null;
+}
 
 /**
  * Filterable list of every repo GitDesktop has opened — a "Recent" shortcut
@@ -56,6 +110,7 @@ export function RepoList({
   const recents = settings.data?.recentRepos ?? [];
   const owners = useRepoOwners(recents.map((r) => r.path));
   const persistOwners = usePersistRepoOwners();
+  const queryClient = useQueryClient();
   const open = useOpenRepoByPath();
   const [filter, setFilter] = useState("");
   const [highlight, setHighlight] = useState(-1);
@@ -85,6 +140,19 @@ export function RepoList({
   const ownerOf = (r: RecentRepo) =>
     r.owner || ownerByPath.get(r.path) || undefined;
 
+  // The origin remote's host, preferring the stored value (right from the first
+  // frame) and falling back to the live owners query for a not-yet-backfilled
+  // record. `undefined` when the repo has no remote.
+  const hostByPath = new Map((owners.data ?? []).map((o) => [o.path, o.host]));
+  const hostOf = (r: RecentRepo) => resolveHost(r, hostByPath);
+
+  // The resolved forge provider for a repo — used by the row's leading glyph,
+  // the context menu's "View on …" label, AND the visibility backfill, all via
+  // the one module-level `resolveProvider` so they can never diverge. Thin
+  // wrapper closing over the render-scope maps.
+  const providerOf = (r: RecentRepo): ForgeProvider | null =>
+    resolveProvider(r, providerByPath, hostByPath);
+
   // Backfill resolved owners + hosts + providers onto the recent records so the
   // NEXT open groups (and labels its context menu) synchronously. Fires once
   // whenever a record's stored value is stale; the helper no-ops when nothing
@@ -102,6 +170,56 @@ export function RepoList({
       );
     });
     if (stale) persistOwners.mutate(resolved);
+  }, [owners.data, recents]);
+
+  // Backfill visibility for rows whose provider resolves but whose persisted
+  // `visibility` is still unknown — so their badge fills in progressively. Runs
+  // a small concurrency-capped queue, persisting each success as it lands, and
+  // records every attempted path in a module-level Set (read only here, never
+  // in render) so a failing probe is tried at most once per app session.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: queryClient is stable; rerun only on the resolved rows / records
+  useEffect(() => {
+    if (!owners.data) return;
+    // Resolve via the shared module-level fn (not `providerOf`, which isn't a
+    // dependency) so the backfill probes exactly the repo set the badges show.
+    const pending = recents
+      .filter(
+        (r) =>
+          r.visibility === undefined &&
+          resolveProvider(r, providerByPath, hostByPath) !== null &&
+          !visibilityAttempted.has(r.path),
+      )
+      .map((r) => r.path);
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    let cursor = 0;
+    const worker = async () => {
+      // `cancelled` only stops STARTING new probes (e.g. the popover closed) —
+      // a probe already in flight must still persist when it lands, or its
+      // path stays marked attempted with no badge until an app restart. Persist
+      // via the raw helper + captured queryClient (both stable across an
+      // unmount), not a component-bound mutation that dies with the component.
+      while (!cancelled && cursor < pending.length) {
+        const path = pending[cursor++];
+        visibilityAttempted.add(path);
+        try {
+          const visibility = await forgeRepoVisibility(path);
+          await persistRepoVisibility([{ path, visibility }]);
+          queryClient.invalidateQueries({ queryKey: settingsKeys.settings });
+        } catch {
+          // Signed out / API failure — leave the persisted value alone.
+        }
+      }
+    };
+    const workers = Array.from(
+      { length: Math.min(VISIBILITY_BACKFILL_CONCURRENCY, pending.length) },
+      worker,
+    );
+    Promise.all(workers).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, [owners.data, recents]);
 
   const q = filter.trim().toLowerCase();
@@ -199,6 +317,8 @@ export function RepoList({
     highlightedPath,
     openingPath,
     onOpen: handleOpen,
+    providerOf,
+    hostOf,
   };
 
   return (
@@ -253,14 +373,7 @@ export function RepoList({
               <RepoMenuItems
                 repo={menuRepo}
                 owner={ownerOf(menuRepo) ?? null}
-                // Prefer the persisted provider (right from the first frame);
-                // the live query covers repos not yet backfilled, and the host
-                // compare covers records persisted before providers existed.
-                provider={
-                  menuRepo.provider ??
-                  providerByPath.get(menuRepo.path) ??
-                  (menuRepo.host === "gitlab.com" ? "gitlab" : null)
-                }
+                provider={providerOf(menuRepo)}
                 editor={editor}
                 editorName={editorName}
                 terminal={settings.data?.terminal}
@@ -281,6 +394,10 @@ interface RepoRowsProps {
   highlightedPath: string | null;
   openingPath: string | null;
   onOpen: (path: string) => void;
+  /** Resolves a row's forge provider (shared with the context menu). */
+  providerOf: (r: RecentRepo) => ForgeProvider | null;
+  /** Resolves a row's origin-remote host, or undefined when local-only. */
+  hostOf: (r: RecentRepo) => string | undefined;
 }
 
 function RepoSection({
@@ -301,15 +418,34 @@ function RepoSection({
   );
 }
 
+/** The trailing visibility badge (icon + accessible label) for a resolved
+ *  visibility, or null when it's unknown — absence must never read as public. */
+function visibilityBadge(
+  visibility: string | undefined,
+): { Icon: typeof LockSimpleIcon; label: string } | null {
+  if (visibility === "private")
+    return { Icon: LockSimpleIcon, label: "Private" };
+  if (visibility === "internal")
+    return { Icon: BuildingsIcon, label: "Internal" };
+  if (visibility === "public")
+    return { Icon: GlobeSimpleIcon, label: "Public" };
+  return null;
+}
+
 function RepoRow({
   repo,
   currentPath,
   highlightedPath,
   openingPath,
   onOpen,
+  providerOf,
+  hostOf,
 }: RepoRowsProps & { repo: RecentRepo }) {
   const highlighted = repo.path === highlightedPath;
   const opening = repo.path === openingPath;
+  const provider = providerOf(repo);
+  const host = hostOf(repo);
+  const badge = visibilityBadge(repo.visibility);
 
   return (
     <div
@@ -330,11 +466,7 @@ function RepoRow({
         onClick={() => onOpen(repo.path)}
         disabled={openingPath !== null}
       >
-        {opening ? (
-          <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
+        <LeadingGlyph opening={opening} provider={provider} host={host} />
         <span className="min-w-0 flex-1">
           <span
             className={cn("block truncate text-xs", repo.alias && "italic")}
@@ -346,8 +478,71 @@ function RepoRow({
             {repo.path}
           </span>
         </span>
+        {badge && (
+          <span
+            className="shrink-0 text-muted-foreground"
+            role="img"
+            title={badge.label}
+            aria-label={badge.label}
+          >
+            <badge.Icon className="size-3" />
+          </span>
+        )}
       </button>
     </div>
+  );
+}
+
+/** The row's leading glyph: opening spinner → provider logo → cloud (remote on
+ *  an unrecognized host) → folder (local-only). Each informational glyph carries
+ *  a `title` + aria-label so its meaning isn't conveyed by shape alone. */
+function LeadingGlyph({
+  opening,
+  provider,
+  host,
+}: {
+  opening: boolean;
+  provider: ForgeProvider | null;
+  host: string | undefined;
+}) {
+  if (opening)
+    return <Spinner className="size-3.5 shrink-0 text-muted-foreground" />;
+  if (provider) {
+    const label = providerLabel(provider);
+    return (
+      <span
+        className="shrink-0 text-muted-foreground"
+        role="img"
+        title={label}
+        aria-label={label}
+      >
+        <ProviderIcon provider={provider} className="size-3.5" />
+      </span>
+    );
+  }
+  if (host) {
+    const label = `Remote: ${host}`;
+    return (
+      <span
+        className="shrink-0 text-muted-foreground"
+        role="img"
+        title={label}
+        aria-label={label}
+      >
+        <CloudIcon className="size-3.5" />
+      </span>
+    );
+  }
+  const label = "Local repository — no remote";
+  return (
+    <span
+      className="shrink-0 text-muted-foreground"
+      role="img"
+      title={label}
+      aria-label={label}
+    >
+      <FolderIcon className="size-3.5" />
+    </span>
   );
 }
 

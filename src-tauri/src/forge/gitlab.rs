@@ -2679,6 +2679,28 @@ pub async fn repo_url(repo_path: &str) -> AppResult<String> {
     Ok(p.web_url)
 }
 
+/// The project's visibility only (`public` / `internal` / `private`, already
+/// lowercase from GitLab). Reuses the same `projects/{enc}` read the settings
+/// fetch uses, with a minimal shape.
+#[derive(Deserialize)]
+struct GlabProjectVisibility {
+    #[serde(default)]
+    visibility: String,
+}
+
+pub async fn repo_visibility(repo_path: &str) -> AppResult<String> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let p: GlabProjectVisibility = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab project: {e}")))?;
+    Ok(p.visibility)
+}
+
 /// One of the viewer's starred projects (only the path is needed).
 #[derive(Deserialize)]
 struct GlabStarredProject {
