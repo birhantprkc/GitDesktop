@@ -52,8 +52,8 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
   const gh = useForgeStatus(repoPath);
   const compareBranch = useUiStore((s) => s.compareBranch);
   const setCompareBranch = useUiStore((s) => s.setCompareBranch);
-  const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
-  const selectCommit = useUiStore((s) => s.selectCommit);
+  const compareCommitHash = useUiStore((s) => s.compareCommitHash);
+  const selectCompareCommit = useUiStore((s) => s.selectCompareCommit);
   const prefetchCommit = usePrefetchCommit(repoPath);
   const hoverPrefetch = useHoverPrefetch();
   const onHoverCommit = (hash: string) =>
@@ -82,10 +82,6 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
     otherBranches.some((b) => b.name === compareBranch);
   const defaultName = defaultBranch.data ?? null;
 
-  // Show the aggregate diff first, not a stale commit from another tab.
-  useEffect(() => {
-    selectCommit(null);
-  }, [selectCommit]);
   // Default the comparison to the default branch, else the first other branch.
   useEffect(() => {
     if (firstOther === null || compareValid) return;
@@ -186,8 +182,8 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
 
   const onListKeyDown = listKeyboardNav({
     items: navTargets,
-    activeIndex: navTargets.indexOf(selectedCommitHash),
-    onActivate: (target) => selectCommit(target),
+    activeIndex: navTargets.indexOf(compareCommitHash),
+    onActivate: (target) => selectCompareCommit(target),
     rowKey: (target) => target ?? "all",
   });
 
@@ -283,11 +279,11 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
           data-row="all"
           className={cn(
             "flex w-full shrink-0 items-center gap-2 border-b px-3 py-2 text-left text-xs",
-            selectedCommitHash === null
+            compareCommitHash === null
               ? "bg-accent text-accent-foreground"
               : "hover:bg-muted/60",
           )}
-          onClick={() => selectCommit(null)}
+          onClick={() => selectCompareCommit(null)}
         >
           <FilesIcon className="size-3.5 shrink-0" />
           <span className="font-medium">All changes</span>
@@ -304,16 +300,16 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
               title={`${ahead.length} ahead`}
               subtitle={`on ${currentName}, not on ${compareBranch}`}
               commits={ahead}
-              selectedHash={selectedCommitHash}
-              onSelect={selectCommit}
+              selectedHash={compareCommitHash}
+              onSelect={selectCompareCommit}
               onHover={onHoverCommit}
             />
             <CommitSection
               title={`${behind.length} behind`}
               subtitle={`on ${compareBranch}, not on ${currentName}`}
               commits={behind}
-              selectedHash={selectedCommitHash}
-              onSelect={selectCommit}
+              selectedHash={compareCommitHash}
+              onSelect={selectCompareCommit}
               onHover={onHoverCommit}
             />
             {ahead.length === 0 && behind.length === 0 && (

@@ -44,6 +44,7 @@ import { useUiStore } from "@/lib/stores/ui";
 import { useEffectiveSyntax } from "@/lib/syntax/queries";
 import { toastError } from "@/lib/toast";
 import { useIsDark } from "@/lib/use-is-dark";
+import { useLatestRef } from "@/lib/use-latest-ref";
 import { DiffLanguagePicker } from "./DiffLanguagePicker";
 import { DiffPlaceholder } from "./DiffPlaceholder";
 import {
@@ -597,10 +598,8 @@ function StagingDiffView({
   useEffect(() => setExpanded(false), [diffFile]);
 
   // Keep latest callback/selection without re-creating the manager each render.
-  const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
-  const selectedRef = useRef(selection);
-  selectedRef.current = selection;
+  const onSelectRef = useLatestRef(onSelect);
+  const selectedRef = useLatestRef(selection);
 
   useEffect(() => {
     const container = containerRef.current;

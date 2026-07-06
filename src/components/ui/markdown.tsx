@@ -1,10 +1,14 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
-import hljs from "highlight.js";
+// Static `lib/common` (~37 languages) so the common fences highlight instantly
+// with no flicker. Rarer tags trigger a one-time lazy load of the full ~192-lang
+// build (see markdown-hljs.ts), which registers into this same core singleton.
+import hljs from "highlight.js/lib/common";
 import { Marked } from "marked";
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { diffLang } from "@/features/diff/diff-lang";
 import { cn } from "@/lib/utils";
+import { hljsUpgradeStore, upgradeToFullHljs } from "./markdown-hljs";
 import "./markdown-highlight.css";
 
 /**
@@ -12,6 +16,10 @@ import "./markdown-highlight.css";
  * null to render it as plain text. highlight.js resolves its own aliases
  * (`js`, `ts`, `py`, `sh`, `yml`…); if that misses, we treat the tag as a file
  * extension and reuse the diff's extension→language map (so `rs` → rust etc.).
+ *
+ * A miss can mean the language lives only in the full highlight.js build (not the
+ * static `lib/common` set), so we kick off the one-time lazy upgrade; once it
+ * lands, subscribed Markdown components re-parse and the fence highlights.
  */
 function resolveCodeLang(info: string | undefined): string | null {
   if (!info) return null;
@@ -19,15 +27,23 @@ function resolveCodeLang(info: string | undefined): string | null {
   if (!tag) return null;
   if (hljs.getLanguage(tag)) return tag;
   const mapped = diffLang(`f.${tag}`);
-  return mapped && hljs.getLanguage(mapped) ? mapped : null;
+  if (mapped && hljs.getLanguage(mapped)) return mapped;
+  // Unknown to the currently-loaded set: the full build may know it — load it
+  // once. If it's unknown even to the full build, the fence stays plain (the
+  // renderer's guard never highlights an unresolved tag, so it can't throw).
+  upgradeToFullHljs();
+  return null;
 }
 
 /**
  * A marked instance whose code renderer syntax-highlights fenced blocks with
- * highlight.js (the full ~190-language build). Tokens are emitted as
- * `hljs-*`-classed spans, colored by the GitHub palette in
- * `markdown-highlight.css` (scoped to `.markdown-body`). Untagged or unknown
- * languages return `false` so marked falls back to its default escaped block.
+ * highlight.js: the ~37 common languages highlight instantly from the static
+ * `lib/common` import, and the first fence naming a rarer language lazy-loads the
+ * full ~192-language build (keeping its ~2MB off the startup bundle) and
+ * re-highlights once it arrives. Tokens are emitted as `hljs-*`-classed spans,
+ * colored by the GitHub palette in `markdown-highlight.css` (scoped to
+ * `.markdown-body`). Untagged or still-unknown languages return `false` so marked
+ * falls back to its default escaped block.
  */
 const md = new Marked({ gfm: true });
 md.use({
@@ -61,10 +77,23 @@ export function Markdown({
   children: string;
   className?: string;
 }) {
+  // Subscribe to the highlight.js upgrade: when a fence's exotic language pulls
+  // in the full build, this snapshot changes, re-parsing so the previously-plain
+  // fence highlights. (Module state read during render is invisible to the React
+  // Compiler — the store subscription is the sanctioned reactive path.)
+  const hljsVersion = useSyncExternalStore(
+    hljsUpgradeStore.subscribe,
+    hljsUpgradeStore.getSnapshot,
+    hljsUpgradeStore.getServerSnapshot,
+  );
+  // hljsVersion is a deliberate rebuild trigger: marked reads the now-upgraded
+  // hljs during parse via module state, not a value passed in, so bumping it is
+  // what forces the re-parse that highlights the previously-plain fence.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: hljsVersion is an intentional rebuild trigger, not read directly
   const html = useMemo(() => {
     const raw = md.parse(children, { async: false }) as string;
     return DOMPurify.sanitize(raw);
-  }, [children]);
+  }, [children, hljsVersion]);
 
   // Intercept link clicks (event delegation) so they open externally rather
   // than navigating the embedded webview.

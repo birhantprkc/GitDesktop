@@ -3,10 +3,17 @@ import {
   TerminalWindowIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { AgentSession } from "@/features/sessions/store";
-import { Terminal } from "./Terminal";
+
+// Lazy-load the terminal so xterm.js and its CSS stay off the startup bundle and
+// load only the first time a session actually opens a shell. TerminalDock itself
+// (and its cheap `if (!launch) return null` gate) stays eager so sessions that
+// never launch a terminal pull in none of that graph.
+const Terminal = lazy(() =>
+  import("./Terminal").then((m) => ({ default: m.Terminal })),
+);
 
 // Persist the dock height across open/close within a session (not across restart).
 let lastHeight = 260;
@@ -130,14 +137,16 @@ export function TerminalDock({
           <XIcon />
         </Button>
       </div>
-      <Terminal
-        key={termKey}
-        ptyId={termKey}
-        kind={isContainer ? "container" : "host"}
-        cwd={session.worktreePath}
-        ports={launch.ports}
-        className="min-h-0 flex-1 px-1 pb-1"
-      />
+      <Suspense fallback={null}>
+        <Terminal
+          key={termKey}
+          ptyId={termKey}
+          kind={isContainer ? "container" : "host"}
+          cwd={session.worktreePath}
+          ports={launch.ports}
+          className="min-h-0 flex-1 px-1 pb-1"
+        />
+      </Suspense>
     </div>
   );
 }

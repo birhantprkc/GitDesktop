@@ -44,15 +44,18 @@ export function useRunNotifications(repoPath: string) {
   });
 
   // Reset the snapshot when the repo or branch changes, so we don't fire a
-  // backlog of "finished" notifications after a context switch.
+  // backlog of "finished" notifications after a context switch. The check lives
+  // inside the effect event (reading the latest key off the render path) so it
+  // primes fresh on the first diff after a switch.
   const prev = useRef<Map<number, WorkflowRun> | null>(null);
   const prevKey = useRef(`${repoPath}:${branch}`);
-  if (prevKey.current !== `${repoPath}:${branch}`) {
-    prevKey.current = `${repoPath}:${branch}`;
-    prev.current = null;
-  }
 
   const diff = useEffectEvent((runs: WorkflowRun[]) => {
+    const key = `${repoPath}:${branch}`;
+    if (prevKey.current !== key) {
+      prevKey.current = key;
+      prev.current = null;
+    }
     const snapshot = new Map(runs.map((r) => [r.id, r]));
     const before = prev.current;
     prev.current = snapshot;

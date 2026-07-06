@@ -23,6 +23,7 @@ import { reloadLocalPrs } from "@/lib/pulls/local";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { COLD_START } from "@/lib/test-mode";
+import { useLatestRef } from "@/lib/use-latest-ref";
 
 function App() {
   const view = useUiStore((s) => s.view);
@@ -41,8 +42,7 @@ function App() {
   // The notice lingers ~10s; read the LATEST settings at click/dismiss time (not
   // the value frozen when it was shown) so a setting changed in the meantime
   // isn't clobbered when we persist `seenAnalyticsNotice`.
-  const settingsRef = useRef(settings.data);
-  settingsRef.current = settings.data;
+  const settingsRef = useLatestRef(settings.data);
   useEffect(() => {
     if (
       !settings.data ||

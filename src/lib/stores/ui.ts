@@ -142,6 +142,11 @@ interface UiState {
   selectedTag: { tag: string } | null;
   selectedFile: SelectedFile | null;
   selectedCommitHash: string | null;
+  /** Commit selected on the Compare tab. Kept separate from `selectedCommitHash`
+   *  (which History owns) so visiting Compare doesn't clobber History's selection
+   *  and vice-versa. Reset when the compare branch changes, since a commit from
+   *  one branch's compare list may not exist in another's. */
+  compareCommitHash: string | null;
   commitTitle: string;
   commitBody: string;
   /** Co-authors credited on the next commit (Co-authored-by trailers). */
@@ -191,6 +196,7 @@ interface UiState {
   selectTag: (tag: { tag: string } | null) => void;
   selectFile: (file: SelectedFile | null) => void;
   selectCommit: (hash: string | null) => void;
+  selectCompareCommit: (hash: string | null) => void;
   setCommitDraft: (title: string, body: string) => void;
   setCommitTitle: (title: string) => void;
   setCommitBody: (body: string) => void;
@@ -268,6 +274,7 @@ export const useUiStore = create<UiState>()((set, get) => {
     selectedTag: null,
     selectedFile: null,
     selectedCommitHash: null,
+    compareCommitHash: null,
     commitTitle: "",
     commitBody: "",
     commitCoAuthors: [],
@@ -295,6 +302,7 @@ export const useUiStore = create<UiState>()((set, get) => {
           selectedTag: null,
           selectedFile: null,
           selectedCommitHash: null,
+          compareCommitHash: null,
           // Clear the live fields; the previous repo's draft stays in
           // commitDrafts (keyed by repo+branch) and CommitBox reloads the new
           // repo's draft once its branch is known.
@@ -324,6 +332,7 @@ export const useUiStore = create<UiState>()((set, get) => {
           selectedTag: null,
           selectedFile: null,
           selectedCommitHash: null,
+          compareCommitHash: null,
           commitTitle: "",
           commitBody: "",
           commitCoAuthors: [],
@@ -355,6 +364,7 @@ export const useUiStore = create<UiState>()((set, get) => {
                 selectedTag: null,
                 selectedFile: null,
                 selectedCommitHash: null,
+                compareCommitHash: null,
                 commitTitle: "",
                 commitBody: "",
                 commitCoAuthors: [],
@@ -366,7 +376,11 @@ export const useUiStore = create<UiState>()((set, get) => {
         });
       }),
     setRepoTab: (tab) => set({ repoTab: tab }),
-    setCompareBranch: (branch) => set({ compareBranch: branch }),
+    // Changing the compared branch resets Compare's selection to the aggregate
+    // diff: a commit selected from one branch's compare list may not exist in
+    // another's. Same atomic set — a follow-up set() would be clobbered.
+    setCompareBranch: (branch) =>
+      set({ compareBranch: branch, compareCommitHash: null }),
     selectPr: (pr) => set({ selectedPr: pr }),
     setPendingPrSection: (section) => set({ pendingPrSection: section }),
     selectIssue: (issue) => set({ selectedIssue: issue }),
@@ -378,6 +392,7 @@ export const useUiStore = create<UiState>()((set, get) => {
     selectRun: (id) => set({ selectedRunId: id }),
     selectTag: (tag) => set({ selectedTag: tag }),
     selectCommit: (hash) => set({ selectedCommitHash: hash }),
+    selectCompareCommit: (hash) => set({ compareCommitHash: hash }),
     openSettings: (target) =>
       startViewTransition(() => {
         const { view } = get();

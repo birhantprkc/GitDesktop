@@ -275,11 +275,15 @@ function JobRow({
 export function RunDetailView({
   repoPath,
   runId,
+  active: tabActive,
 }: {
   repoPath: string;
   runId: number;
+  /** Whether the Actions tab is visible — gates polling while hidden. Renamed
+   *  locally to avoid clashing with the run's own `active` (is-in-flight) flag. */
+  active: boolean;
 }) {
-  const detail = useRunDetail(repoPath, runId);
+  const detail = useRunDetail(repoPath, runId, tabActive);
   const rerun = useRerunRun(repoPath);
   const cancel = useCancelRun(repoPath);
   const playJob = usePlayCiJob(repoPath);
@@ -450,29 +454,29 @@ export function RunDetailView({
                     </Button>
                   )
                 : canWrite && (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={rerun.isPending}
-                      onClick={() => doRerun(false)}
-                    >
-                      <ArrowClockwiseIcon data-icon="inline-start" />
-                      Re-run all jobs
-                    </Button>
-                    {failed && (
+                    <>
                       <Button
                         variant="outline"
                         size="sm"
                         disabled={rerun.isPending}
-                        onClick={() => doRerun(true)}
+                        onClick={() => doRerun(false)}
                       >
                         <ArrowClockwiseIcon data-icon="inline-start" />
-                        Re-run failed jobs
+                        Re-run all jobs
                       </Button>
-                    )}
-                  </>
-                )}
+                      {failed && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={rerun.isPending}
+                          onClick={() => doRerun(true)}
+                        >
+                          <ArrowClockwiseIcon data-icon="inline-start" />
+                          Re-run failed jobs
+                        </Button>
+                      )}
+                    </>
+                  )}
           <Button
             variant="ghost"
             size="sm"

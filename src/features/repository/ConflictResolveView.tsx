@@ -29,6 +29,7 @@ import { useResolveConflict } from "@/lib/git/queries";
 import { useReviewConfigured, useSettings } from "@/lib/settings/queries";
 import { useConflictResolve } from "@/lib/stores/conflict-resolve";
 import { toastError } from "@/lib/toast";
+import { useLatestRef } from "@/lib/use-latest-ref";
 
 type Phase = "loading" | "streaming" | "ready" | "blocked" | "idle";
 type ViewKey = "diff" | "proposed" | "ours" | "theirs" | "base";
@@ -75,8 +76,7 @@ export function ConflictResolveView({
   // Bumped on each run so a superseded continuation (cancel / regenerate /
   // navigate-away) can't settle the shared state the newer run now owns.
   const genRef = useRef(0);
-  const textRef = useRef(text);
-  textRef.current = text;
+  const textRef = useLatestRef(text);
 
   const markersLeft = phase === "ready" && hasConflictMarkers(proposed);
 

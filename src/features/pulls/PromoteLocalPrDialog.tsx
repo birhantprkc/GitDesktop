@@ -17,6 +17,7 @@ import { useCreatePr, useForgeStatus } from "@/lib/git/queries";
 import type { LocalPr } from "@/lib/pulls/local";
 import { useUpdateLocalPr } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
+import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
 
 /**
@@ -52,6 +53,11 @@ export function PromoteLocalPrDialog({
   const carried = pr.comments.filter((c) => c.body.trim() && !c.hidden);
 
   async function promote() {
+    // Once the remote PR exists, later steps (comment carry-over, closing the
+    // local PR) failing must NOT re-arm the submit — retrying would open a
+    // duplicate. Track it so the catch can disclose instead of re-running.
+    let created: { number: number; url: string } | null = null;
+    let failedStep = "finishing up";
     try {
       const { number, url } = await createPr.mutateAsync({
         base: pr.base,
@@ -60,7 +66,9 @@ export function PromoteLocalPrDialog({
         body: pr.body,
         draft,
       });
+      created = { number, url };
       // Carry the local comments over, in order, so none are lost.
+      failedStep = "carrying over comments";
       setPosting(true);
       try {
         for (const c of carried) {
@@ -69,6 +77,7 @@ export function PromoteLocalPrDialog({
       } finally {
         setPosting(false);
       }
+      failedStep = "closing the local pull request";
       await update.mutateAsync({
         id: pr.id,
         mutate: (cur) => ({
@@ -91,7 +100,23 @@ export function PromoteLocalPrDialog({
       onOpenChange(false);
       selectPr({ kind: "remote", id: String(number) });
     } catch (e) {
-      toastError(e);
+      if (created === null) {
+        // The create itself failed — retrying is correct, keep the dialog open.
+        toastError(e);
+        return;
+      }
+      // The remote PR already exists. Close the dialog (leaving it open is a
+      // duplicate factory) and disclose what was created and what failed. The
+      // local PR is left untouched so the user can reconcile manually.
+      const { number, url } = created;
+      onOpenChange(false);
+      toast.error(
+        `Created ${prNoun} #${number}, but ${failedStep} failed: ${errorMessage(e)}`,
+        {
+          duration: 10000,
+          action: { label: "View", onClick: () => openUrl(url) },
+        },
+      );
     }
   }
 

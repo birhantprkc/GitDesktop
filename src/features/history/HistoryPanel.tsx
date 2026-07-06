@@ -5,7 +5,8 @@ import {
   MagnifyingGlassIcon,
   TagIcon,
 } from "@phosphor-icons/react";
-import { type MouseEvent, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,7 +25,6 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { AmendForcePushDialog } from "@/features/commit/AmendForcePushDialog";
@@ -102,6 +102,13 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   // rewrite/amend actions still see contiguous recent history.
   const [searchMode, setSearchMode] = useState(false);
   const filterRef = useRef<HTMLInputElement>(null);
+  // The native scroll container that hosts the virtualized list. Kept in STATE
+  // (not a ref) so attaching it re-renders and the child's virtualizer
+  // re-initializes with the real node — a plain ref stays null at the
+  // virtualizer's mount effect, so getVirtualItems() returns [] and no rows
+  // paint even though the spacer has height. Mirrors ChangesPanel's `setScrollEl`
+  // callback-ref wiring on its own Base-UI ContextMenuTrigger render element.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   // Tag pending deletion, plus whether to delete it from origin too.
   const [deleteTagName, setDeleteTagName] = useState<string | null>(null);
   const [deleteTagRemote, setDeleteTagRemote] = useState(false);
@@ -673,172 +680,129 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
           autoComplete="off"
         />
       </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <ContextMenu>
-          <ContextMenuTrigger
-            render={
-              <div
-                onKeyDown={onListKeyDown}
-                onContextMenuCapture={handleCommitContextMenu}
-              />
-            }
-          >
-            {visibleCommits.length === 0 && (
-              <div className="px-3 py-8 text-center">
-                <p className="text-xs text-muted-foreground">
-                  {searchActive
-                    ? search.isFetching
-                      ? "Searching all history…"
-                      : `No commits match "${filterText.trim()}"`
-                    : `No loaded commits match "${filterText.trim()}"`}
-                </p>
-                {!(searchActive && search.isFetching) && (
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="mt-2 text-muted-foreground"
-                    onClick={() => {
-                      setFilterText("");
-                      setSearchMode(false);
-                      filterRef.current?.focus();
-                    }}
-                  >
-                    Clear filter
-                  </Button>
-                )}
+      <ContextMenu>
+        <ContextMenuTrigger
+          render={
+            // Native overflow scroll container (not the Base-UI ScrollArea) so
+            // the virtualizer's getScrollElement gets the real scrollable node —
+            // see docs/list-virtualization.md. Fixed-height flex child so
+            // getTotalSize resolves (max-h would leave it unbounded → 0).
+            <div
+              ref={setScrollEl}
+              className="min-h-0 flex-1 overflow-y-auto"
+              onKeyDown={onListKeyDown}
+              onContextMenuCapture={handleCommitContextMenu}
+            />
+          }
+        >
+          {visibleCommits.length === 0 ? (
+            <div className="px-3 py-8 text-center">
+              <p className="text-xs text-muted-foreground">
+                {searchActive
+                  ? search.isFetching
+                    ? "Searching all history…"
+                    : `No commits match "${filterText.trim()}"`
+                  : `No loaded commits match "${filterText.trim()}"`}
+              </p>
+              {!(searchActive && search.isFetching) && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="mt-2 text-muted-foreground"
+                  onClick={() => {
+                    setFilterText("");
+                    setSearchMode(false);
+                    filterRef.current?.focus();
+                  }}
+                >
+                  Clear filter
+                </Button>
+              )}
+            </div>
+          ) : (
+            // Data-gated child: the useVirtualizer call lives here (never in the
+            // 900-line parent) so (a) HistoryPanel's body keeps compiling under
+            // the React Compiler — useVirtualizer bails its host out — and (b) the
+            // virtualizer only ever mounts once there are rows, dodging the
+            // first-row measureElement race (docs/list-virtualization.md).
+            <CommitList
+              scrollEl={scrollEl}
+              commits={visibleCommits}
+              selected={selected}
+              selectedCommitHash={selectedCommitHash}
+              unpushedHashes={unpushedHashes}
+              upstream={head?.upstream ?? null}
+              onRowClick={onRowClick}
+              onHoverPrefetch={(hash) =>
+                hoverPrefetch(() => prefetchCommit(hash))
+              }
+            />
+          )}
+          {searchActive ? (
+            <div className="space-y-0.5 px-3 py-2 text-center">
+              {search.hasNextPage && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground"
+                  disabled={search.isFetchingNextPage}
+                  onClick={() => search.fetchNextPage()}
+                >
+                  {search.isFetchingNextPage && (
+                    <Spinner data-icon="inline-start" />
+                  )}
+                  Load more results
+                </Button>
+              )}
+              <div>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground"
+                  onClick={() => setSearchMode(false)}
+                >
+                  Back to recent history
+                </Button>
               </div>
-            )}
-            {visibleCommits.map((commit, index) => (
-              <button
-                key={commit.hash}
-                type="button"
-                data-hash={commit.hash}
-                className={cn(
-                  "block w-full border-b px-3 py-2 text-left",
-                  selected.has(commit.hash) ||
-                    (selected.size === 0 && selectedCommitHash === commit.hash)
-                    ? "bg-accent text-accent-foreground"
-                    : "hover:bg-muted/60",
-                )}
-                onClick={(e) => onRowClick(e, index, commit.hash)}
-                onMouseEnter={() =>
-                  hoverPrefetch(() => prefetchCommit(commit.hash))
-                }
-              >
-                <p className="flex items-center gap-1.5 text-xs font-medium">
-                  <span className="min-w-0 truncate" title={commit.subject}>
-                    {commit.subject}
-                  </span>
-                  {commit.tags.slice(0, 2).map((tag) => (
-                    <span
-                      key={tag}
-                      className="flex max-w-24 shrink-0 items-center gap-0.5 border px-1 py-px text-[10px] font-normal text-muted-foreground"
-                      title={`tag: ${tag}`}
-                    >
-                      <TagIcon className="size-2.5 shrink-0" />
-                      <span className="truncate">{tag}</span>
-                    </span>
-                  ))}
-                  {commit.tags.length > 2 && (
-                    <span
-                      className="shrink-0 text-[10px] font-normal text-muted-foreground"
-                      title={commit.tags.join(", ")}
-                    >
-                      +{commit.tags.length - 2}
-                    </span>
-                  )}
-                  {unpushedHashes.has(commit.hash) && (
-                    <span
-                      className="ml-auto flex shrink-0 items-center text-muted-foreground"
-                      title={
-                        head?.upstream
-                          ? `Not pushed yet — ahead of ${head.upstream}`
-                          : "Not pushed yet"
-                      }
-                      aria-label="Not pushed yet"
-                    >
-                      <ArrowUpIcon className="size-3" weight="bold" />
-                    </span>
-                  )}
-                </p>
-                <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <span className="flex size-3.5 items-center justify-center rounded-full bg-muted text-[8px] uppercase">
-                    {commit.author.slice(0, 1)}
-                  </span>
-                  <span className="truncate">{commit.author}</span>
-                  <span>•</span>
-                  <span className="shrink-0">
-                    {formatRelativeTime(commit.date)}
-                  </span>
-                </p>
-              </button>
-            ))}
-            {searchActive ? (
-              <div className="space-y-0.5 px-3 py-2 text-center">
-                {search.hasNextPage && (
+            </div>
+          ) : (
+            <>
+              {query && (
+                <div className="px-3 py-2 text-center">
                   <Button
                     variant="ghost"
                     size="xs"
-                    className="text-muted-foreground"
-                    disabled={search.isFetchingNextPage}
-                    onClick={() => search.fetchNextPage()}
+                    className="text-primary"
+                    onClick={() => setSearchMode(true)}
                   >
-                    {search.isFetchingNextPage && (
-                      <Spinner data-icon="inline-start" />
-                    )}
-                    Load more results
-                  </Button>
-                )}
-                <div>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="text-muted-foreground"
-                    onClick={() => setSearchMode(false)}
-                  >
-                    Back to recent history
+                    <MagnifyingGlassIcon data-icon="inline-start" />
+                    Search all history for "{filterText.trim()}"
                   </Button>
                 </div>
-              </div>
-            ) : (
-              <>
-                {query && (
-                  <div className="px-3 py-2 text-center">
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      className="text-primary"
-                      onClick={() => setSearchMode(true)}
-                    >
-                      <MagnifyingGlassIcon data-icon="inline-start" />
-                      Search all history for "{filterText.trim()}"
-                    </Button>
-                  </div>
-                )}
-                {log.hasNextPage && (
-                  <div className="px-3 py-2 text-center">
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      className="text-muted-foreground"
-                      disabled={log.isFetchingNextPage}
-                      onClick={() => log.fetchNextPage()}
-                    >
-                      {log.isFetchingNextPage && (
-                        <Spinner data-icon="inline-start" />
-                      )}
-                      Load more ({commits.length} loaded)
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
-          </ContextMenuTrigger>
-          <ContextMenuContent className="min-w-60">
-            {renderCommitMenu()}
-          </ContextMenuContent>
-        </ContextMenu>
-      </ScrollArea>
+              )}
+              {log.hasNextPage && (
+                <div className="px-3 py-2 text-center">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    disabled={log.isFetchingNextPage}
+                    onClick={() => log.fetchNextPage()}
+                  >
+                    {log.isFetchingNextPage && (
+                      <Spinner data-icon="inline-start" />
+                    )}
+                    Load more ({commits.length} loaded)
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </ContextMenuTrigger>
+        <ContextMenuContent className="min-w-60">
+          {renderCommitMenu()}
+        </ContextMenuContent>
+      </ContextMenu>
 
       {squashCtx && (
         <SquashDialog
@@ -915,5 +879,151 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
         onDone={() => setSelected(new Set())}
       />
     </>
+  );
+}
+
+// The virtualized commit rows. Isolated in its own leaf component for two
+// reasons (docs/list-virtualization.md): useVirtualizer bails its host
+// component out of the React Compiler ("incompatible library"), so keeping it
+// here lets HistoryPanel's body — filtering, selection, handlers — keep
+// compiling; and it only mounts once `commits` is non-empty, so the virtualizer
+// never races measureElement over an empty-then-filled list.
+function CommitList({
+  scrollEl,
+  commits,
+  selected,
+  selectedCommitHash,
+  unpushedHashes,
+  upstream,
+  onRowClick,
+  onHoverPrefetch,
+}: {
+  scrollEl: HTMLDivElement | null;
+  commits: CommitSummary[];
+  selected: Set<string>;
+  selectedCommitHash: string | null;
+  unpushedHashes: Set<string>;
+  upstream: string | null;
+  onRowClick: (e: React.MouseEvent, index: number, hash: string) => void;
+  onHoverPrefetch: (hash: string) => void;
+}) {
+  const virtualizer = useVirtualizer({
+    count: commits.length,
+    getScrollElement: () => scrollEl,
+    // Rows are near-uniform (~52px: two text lines + padding); measureElement
+    // corrects any that wrap.
+    estimateSize: () => 52,
+    overscan: 12,
+    // Key by commit hash, not index, so filtering/search swaps keep stable
+    // measurements instead of reusing a stale height for a different commit.
+    getItemKey: (index) => commits[index].hash,
+  });
+
+  // Arrow-key nav moves the selection by index; the target row may be outside
+  // the virtualizer's mounted window (offscreen rows unmount), so
+  // listKeyboardNav's synchronous data-hash querySelector finds nothing and
+  // focus is dropped. On a *changed* selection we scroll the target into view,
+  // then re-focus it on the next frame once it has mounted.
+  const prevSelectedHash = useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: virtualizer + scrollEl are stable refs; the guard runs only on hash change
+  useEffect(() => {
+    // Gate on the hash actually CHANGING so list growth (Load more appends to
+    // `commits`) never yanks the scroll back to a selected-but-offscreen commit.
+    if (selectedCommitHash === prevSelectedHash.current) return;
+    prevSelectedHash.current = selectedCommitHash;
+    if (!selectedCommitHash) return;
+    const idx = commits.findIndex((c) => c.hash === selectedCommitHash);
+    if (idx < 0) return;
+    virtualizer.scrollToIndex(idx, { align: "auto" });
+    // The row mounts after the scroll re-renders; re-focus it next frame so the
+    // focus ring + SR position follow the selection. Guard: only when focus is
+    // already inside the list, so we never steal it from the filter box.
+    const raf = requestAnimationFrame(() => {
+      if (!scrollEl?.contains(document.activeElement)) return;
+      scrollEl
+        .querySelector<HTMLElement>(
+          `[data-hash="${CSS.escape(selectedCommitHash)}"]`,
+        )
+        ?.focus();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [selectedCommitHash, commits]);
+
+  return (
+    <div
+      className="relative w-full"
+      style={{ height: `${virtualizer.getTotalSize()}px` }}
+    >
+      {virtualizer.getVirtualItems().map((vi) => {
+        const commit = commits[vi.index];
+        const index = vi.index;
+        return (
+          <button
+            key={vi.key}
+            type="button"
+            data-index={index}
+            ref={virtualizer.measureElement}
+            data-hash={commit.hash}
+            className={cn(
+              "absolute top-0 left-0 block w-full border-b px-3 py-2 text-left",
+              selected.has(commit.hash) ||
+                (selected.size === 0 && selectedCommitHash === commit.hash)
+                ? "bg-accent text-accent-foreground"
+                : "hover:bg-muted/60",
+            )}
+            style={{ transform: `translateY(${vi.start}px)` }}
+            onClick={(e) => onRowClick(e, index, commit.hash)}
+            onMouseEnter={() => onHoverPrefetch(commit.hash)}
+          >
+            <p className="flex items-center gap-1.5 text-xs font-medium">
+              <span className="min-w-0 truncate" title={commit.subject}>
+                {commit.subject}
+              </span>
+              {commit.tags.slice(0, 2).map((tag) => (
+                <span
+                  key={tag}
+                  className="flex max-w-24 shrink-0 items-center gap-0.5 border px-1 py-px text-[10px] font-normal text-muted-foreground"
+                  title={`tag: ${tag}`}
+                >
+                  <TagIcon className="size-2.5 shrink-0" />
+                  <span className="truncate">{tag}</span>
+                </span>
+              ))}
+              {commit.tags.length > 2 && (
+                <span
+                  className="shrink-0 text-[10px] font-normal text-muted-foreground"
+                  title={commit.tags.join(", ")}
+                >
+                  +{commit.tags.length - 2}
+                </span>
+              )}
+              {unpushedHashes.has(commit.hash) && (
+                <span
+                  className="ml-auto flex shrink-0 items-center text-muted-foreground"
+                  title={
+                    upstream
+                      ? `Not pushed yet — ahead of ${upstream}`
+                      : "Not pushed yet"
+                  }
+                  aria-label="Not pushed yet"
+                >
+                  <ArrowUpIcon className="size-3" weight="bold" />
+                </span>
+              )}
+            </p>
+            <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className="flex size-3.5 items-center justify-center rounded-full bg-muted text-[8px] uppercase">
+                {commit.author.slice(0, 1)}
+              </span>
+              <span className="truncate">{commit.author}</span>
+              <span>•</span>
+              <span className="shrink-0">
+                {formatRelativeTime(commit.date)}
+              </span>
+            </p>
+          </button>
+        );
+      })}
+    </div>
   );
 }

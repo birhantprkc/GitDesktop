@@ -110,14 +110,6 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
       ? "Fetch from origin"
       : `Last fetched ${formatRelativeTime(new Date(lastFetchedAt).toISOString())}`;
 
-  // Hotkeys mirror the buttons' disabled states exactly.
-  useHotkeyAction("fetch", () => doFetch(false), !noOrigin && !busy);
-  useHotkeyAction(
-    "pull",
-    () => doPull("ffOnly"),
-    !noOrigin && !busy && hasUpstream && !diverged,
-  );
-
   function doPull(mode: PullMode) {
     pull.mutate(mode, {
       onSuccess: () => {
@@ -127,11 +119,6 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
       onError,
     });
   }
-  useHotkeyAction(
-    "push",
-    () => (diverged ? setForceConfirmOpen(true) : doPush(false)),
-    !noOrigin && !busy,
-  );
 
   function doPush(force: boolean) {
     push.mutate(
@@ -148,6 +135,19 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
       },
     );
   }
+
+  // Hotkeys mirror the buttons' disabled states exactly.
+  useHotkeyAction("fetch", () => doFetch(false), !noOrigin && !busy);
+  useHotkeyAction(
+    "pull",
+    () => doPull("ffOnly"),
+    !noOrigin && !busy && hasUpstream && !diverged,
+  );
+  useHotkeyAction(
+    "push",
+    () => (diverged ? setForceConfirmOpen(true) : doPush(false)),
+    !noOrigin && !busy,
+  );
 
   if (noOrigin) {
     return (

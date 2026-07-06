@@ -1,6 +1,6 @@
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { NavRail } from "@/components/NavRail";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ import { AutomationsSection } from "@/features/automations/AutomationsSection";
 import { useAppForm } from "@/lib/form";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
+import { useLatestRef } from "@/lib/use-latest-ref";
 import { AboutSection } from "./AboutSection";
 import { AccountsSection } from "./AccountsSection";
 import { AiProviderSection } from "./AiProviderSection";
@@ -151,14 +152,21 @@ export function SettingsScreen() {
   }, [settings.data, form]);
 
   // Dirty by value-equality against the persisted settings (not "has been
-  // touched"), so typing and undoing leaves the screen clean.
-  const values = useSelector(form.store, (s) => s.values);
+  // touched"), so typing and undoing leaves the screen clean. Stringify the
+  // saved side once per settings change (the compiler caches it), then subscribe
+  // to the derived BOOLEAN: the selector still stringifies the form values per
+  // store change, but the component only re-renders when dirtiness FLIPS — not
+  // on every keystroke across all 13 panels.
   const isSubmitting = useSelector(form.store, (s) => s.isSubmitting);
   const saved = settings.data ? toDraft(settings.data) : null;
-  const dirty =
-    seeded.current &&
-    saved !== null &&
-    stableStringify(values) !== stableStringify(saved);
+  const savedStr = saved !== null ? stableStringify(saved) : null;
+  const dirty = useSelector(
+    form.store,
+    (s) =>
+      seeded.current &&
+      savedStr !== null &&
+      stableStringify(s.values) !== savedStr,
+  );
 
   function save(andClose: boolean) {
     closeAfterSave.current = andClose;
@@ -176,16 +184,19 @@ export function SettingsScreen() {
 
   // Esc closes settings (guarded). Base UI popups handle their own Esc and
   // mark the event consumed, so this only fires when nothing else claimed it.
-  // An effect event so the listener reads the current dirty state without
-  // re-subscribing on every render.
-  const onEscape = useEffectEvent(() => requestClose());
+  // The listener subscribes once; a latest-ref lets it read the current dirty
+  // state without re-subscribing on every render.
+  const dirtyRef = useLatestRef(dirty);
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && !e.defaultPrevented) onEscape();
+      if (e.key === "Escape" && !e.defaultPrevented) {
+        if (dirtyRef.current) setConfirmClose(true);
+        else closeSettings();
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [closeSettings]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

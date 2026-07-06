@@ -163,16 +163,19 @@ export const forgeBbCustomPipelines = (repoPath: string) =>
 
 // ── Queries ──────────────────────────────────────────────────────────────────
 
-/** Polls every 5s while any listed run is active, otherwise stays idle. */
+/** Polls every 5s while any listed run is active, otherwise stays idle. `active`
+ *  (the Actions tab being visible) gates the fetch so a hidden tab stops polling;
+ *  cached runs render instantly on return since React Query keeps the cache. */
 export function useWorkflowRuns(
   repo: string,
   enabled: boolean,
+  active: boolean,
   branch?: string,
 ) {
   return useQuery({
     queryKey: ["repo", repo, "actions", "runs", branch ?? ""] as const,
     queryFn: () => forgeCiRunList(repo, 40, branch),
-    enabled,
+    enabled: enabled && active,
     staleTime: 10_000,
     refetchInterval: (query) =>
       (query.state.data ?? []).some((r) => isRunActive(r.status))
@@ -181,11 +184,15 @@ export function useWorkflowRuns(
   });
 }
 
-export function useRunDetail(repo: string, runId: number | null) {
+export function useRunDetail(
+  repo: string,
+  runId: number | null,
+  active: boolean,
+) {
   return useQuery({
     queryKey: ["repo", repo, "actions", "run", runId ?? 0] as const,
     queryFn: () => forgeCiRunView(repo, runId ?? 0),
-    enabled: runId !== null,
+    enabled: runId !== null && active,
     refetchInterval: (query) =>
       query.state.data && isRunActive(query.state.data.status) ? 5000 : false,
   });

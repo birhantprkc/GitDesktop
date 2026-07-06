@@ -283,6 +283,7 @@ export function useSessionFileDiff(
     queryFn: () => api.gitSessionFileDiff(repo, filePath, base),
     enabled: enabled && Boolean(repo && filePath && base),
     refetchInterval: enabled && live ? 1500 : false,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -2872,6 +2873,7 @@ export function useGlMrMergeState(repo: string, number: number | null) {
         ? 8_000
         : 30_000;
     },
+    refetchIntervalInBackground: false,
   });
 }
 

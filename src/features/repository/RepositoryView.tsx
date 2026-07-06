@@ -95,6 +95,7 @@ export function RepositoryView() {
   const setRepoTab = useUiStore((s) => s.setRepoTab);
   const requestCreate = useUiStore((s) => s.requestCreate);
   const selectedCommitHash = useUiStore((s) => s.selectedCommitHash);
+  const compareCommitHash = useUiStore((s) => s.compareCommitHash);
   const compareBranch = useUiStore((s) => s.compareBranch);
   const selectedPr = useUiStore((s) => s.selectedPr);
   const selectedIssue = useUiStore((s) => s.selectedIssue);
@@ -105,6 +106,7 @@ export function RepositoryView() {
   // (commits, PRs) only loads + renders the item landed on, not every one
   // passed. The lists' own highlights use the live values, so they stay snappy.
   const deferredCommitHash = useDeferredValue(selectedCommitHash);
+  const deferredCompareCommitHash = useDeferredValue(compareCommitHash);
   const deferredPr = useDeferredValue(selectedPr);
   const deferredIssue = useDeferredValue(selectedIssue);
   const deferredDiscussion = useDeferredValue(selectedDiscussion);
@@ -284,7 +286,7 @@ export function RepositoryView() {
             <DiscussionsPanel repoPath={repoPath} />
           </Activity>
           <Activity mode={mode("actions")}>
-            <ActionsPanel repoPath={repoPath} />
+            <ActionsPanel repoPath={repoPath} active={repoTab === "actions"} />
           </Activity>
           <Activity mode={mode("tags")}>
             <TagsPanel repoPath={repoPath} />
@@ -316,8 +318,11 @@ export function RepositoryView() {
             )}
           </Activity>
           <Activity mode={mode("compare")}>
-            {deferredCommitHash ? (
-              <CommitDetailView repoPath={repoPath} hash={deferredCommitHash} />
+            {deferredCompareCommitHash ? (
+              <CommitDetailView
+                repoPath={repoPath}
+                hash={deferredCompareCommitHash}
+              />
             ) : compareBranch &&
               currentName &&
               compareBranch !== currentName ? (
@@ -382,6 +387,7 @@ export function RepositoryView() {
                 key={selectedRunId}
                 repoPath={repoPath}
                 runId={selectedRunId}
+                active={repoTab === "actions"}
               />
             ) : (
               <DiffPlaceholder

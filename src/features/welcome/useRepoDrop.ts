@@ -1,9 +1,10 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { validateRepo } from "@/lib/git/api";
 import { useAddRecentRepo } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { useLatestRef } from "@/lib/use-latest-ref";
 
 /**
  * Opens a git repository by dropping its folder onto the window. Subscribes
@@ -12,8 +13,7 @@ import { toastError } from "@/lib/toast";
  */
 export function useRepoDrop() {
   const addRecent = useAddRecentRepo();
-  const addRecentRef = useRef(addRecent);
-  addRecentRef.current = addRecent;
+  const addRecentRef = useLatestRef(addRecent);
 
   useEffect(() => {
     const unlisten = getCurrentWindow().onDragDropEvent(async (event) => {

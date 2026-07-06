@@ -53,14 +53,16 @@ export function usePrNotifications(repoPath: string) {
 
   const prev = useRef<Map<number, PrPollInfo> | null>(null);
   const prevRepo = useRef(repoPath);
-  if (prevRepo.current !== repoPath) {
-    prevRepo.current = repoPath;
-    prev.current = null;
-  }
 
   // Effect event: reads the latest prefs/login without re-running the diff
-  // when they change.
+  // when they change. The repo-change reset lives here too (reading the latest
+  // repoPath off the render path) so a context switch primes fresh instead of
+  // firing a backlog of transition notifications.
   const diff = useEffectEvent((data: PrPollInfo[]) => {
+    if (prevRepo.current !== repoPath) {
+      prevRepo.current = repoPath;
+      prev.current = null;
+    }
     const snapshot = new Map(data.map((p) => [p.number, p]));
     const before = prev.current;
     prev.current = snapshot;

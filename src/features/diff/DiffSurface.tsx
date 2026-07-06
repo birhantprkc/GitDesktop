@@ -1,6 +1,12 @@
 import { DiffFile, DiffModeEnum, DiffView } from "@git-diff-view/react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { type ReactNode, useDeferredValue, useMemo, useState } from "react";
+import {
+  type ReactNode,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { useFileAtRev } from "@/lib/git/queries";
@@ -19,6 +25,7 @@ import { ImageDiff, ImagePanes, type ImageRevs, imageMime } from "./ImageDiff";
 import {
   ensureBuiltinShikiLang,
   ensureShikiGrammars,
+  isBuiltinShikiLang,
   isShikiLang,
   shikiDiffHighlighter,
 } from "./shiki-highlighter";
@@ -207,9 +214,11 @@ export function createDiffFile(
     const tmLang =
       lang && customLanguages?.find((c) => c.id === lang && c.tmGrammar);
     if (tmLang) ensureShikiGrammars([tmLang]);
-    const useShiki = lang
-      ? (!!tmLang && isShikiLang(lang)) || ensureBuiltinShikiLang(lang)
-      : false;
+    // Built-in Shiki grammars load lazily (RenderedDiff kicks that off), so this
+    // synchronous build can only route to Shiki once the grammar is already
+    // loaded. Until then a built-in Shiki language falls back to highlight.js /
+    // plain; RenderedDiff rebuilds the diff when the grammar finishes loading.
+    const useShiki = lang ? isShikiLang(lang) : false;
     const file = DiffFile.createInstance({
       oldFile: {
         fileName: filePath,
@@ -382,6 +391,32 @@ function RenderedDiff({
   // active repo owns every surface that supplies content, so this matches.
   const activeRepo = useUiStore((s) => s.repoPath);
   const { syntaxMap, customLanguages } = useEffectiveSyntax(activeRepo);
+
+  // Built-in Shiki grammars (astro/tsx/rust &c.) load lazily to keep them off
+  // the startup bundle. The first time a diff needs one it isn't loaded yet, so
+  // createDiffFile falls back to highlight.js / plain; kick off the async load
+  // here and bump this counter when it settles so the memo rebuilds — now with
+  // the grammar registered — and the diff re-renders highlighted.
+  const [grammarReady, setGrammarReady] = useState(0);
+  const lang = useMemo(
+    () => diffLang(deferredPath, syntaxMap),
+    [deferredPath, syntaxMap],
+  );
+  useEffect(() => {
+    if (!lang || !isBuiltinShikiLang(lang) || isShikiLang(lang)) return;
+    let cancelled = false;
+    ensureBuiltinShikiLang(lang).then((ok) => {
+      if (ok && !cancelled) setGrammarReady((n) => n + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [lang]);
+
+  // grammarReady is a deliberate rebuild trigger: createDiffFile reads the
+  // now-loaded Shiki grammar via module state (isShikiLang), not a passed value,
+  // so bumping it is what forces the rebuild that picks the grammar up.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: grammarReady is an intentional rebuild trigger, not read directly
   const diffFile = useMemo(
     () =>
       createDiffFile(
@@ -390,7 +425,7 @@ function RenderedDiff({
         { syntaxMap, customLanguages },
         content ?? undefined,
       ),
-    [shown, deferredPath, syntaxMap, customLanguages, content],
+    [shown, deferredPath, syntaxMap, customLanguages, content, grammarReady],
   );
 
   // Build the per-side extendData maps from the anchors (keyed by String(line)).

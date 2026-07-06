@@ -5,26 +5,12 @@ import {
 } from "@git-diff-view/react";
 import { createHighlighterCoreSync, type HighlighterCore } from "@shikijs/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
-// Bundled grammars for languages highlight.js can't render. Each default export
-// is a flattened `LanguageRegistration[]` — the language plus every grammar it
-// embeds — so loading it also wires up the embeds (e.g. astro/vue frontmatter =
-// TS, <style> = CSS, expressions = TSX).
-import astroGrammar from "@shikijs/langs/astro";
-import gdscriptGrammar from "@shikijs/langs/gdscript";
-import hclGrammar from "@shikijs/langs/hcl";
+// `json` stays a static import: it's small, and it backs the synchronous
+// `highlightJson` (webhook payload viewer) which can't await a lazy load
+// without regressing to plain text on first paint. It's kept out of the lazy
+// `BUILTIN_LANGS` map so it never re-routes `.json` diffs (those stay
+// highlight.js). The heavy grammars (jsx/tsx &c.) load on demand — see below.
 import jsonGrammar from "@shikijs/langs/json";
-import jsonnetGrammar from "@shikijs/langs/jsonnet";
-import jsxGrammar from "@shikijs/langs/jsx";
-import prismaGrammar from "@shikijs/langs/prisma";
-import rustGrammar from "@shikijs/langs/rust";
-import solidityGrammar from "@shikijs/langs/solidity";
-import svelteGrammar from "@shikijs/langs/svelte";
-import terraformGrammar from "@shikijs/langs/terraform";
-import tomlGrammar from "@shikijs/langs/toml";
-import tsxGrammar from "@shikijs/langs/tsx";
-import vueGrammar from "@shikijs/langs/vue";
-import wgslGrammar from "@shikijs/langs/wgsl";
-import zigGrammar from "@shikijs/langs/zig";
 import type { LanguageRegistration } from "@shikijs/types";
 import type { CustomLanguage } from "@/lib/settings/api";
 import { gdDark, gdLight } from "./shiki-theme";
@@ -80,34 +66,40 @@ export function isShikiLang(id: string): boolean {
 
 /**
  * Languages Shiki bundles that highlight.js lacks (or renders poorly), offered
- * as built-in picker options. Each value is the full grammar bundle from
- * `@shikijs/langs` — the language plus every grammar it embeds. The key matches
- * the bundle's own grammar name (Shiki's filename convention), which is what
- * gets registered and what we pass to `codeToTokensBase`.
+ * as built-in picker options. Each value is a dynamic loader that imports the
+ * full grammar bundle from `@shikijs/langs` — the language plus every grammar it
+ * embeds (astro/vue frontmatter = TS, <style> = CSS, expressions = TSX). The
+ * grammars are imported lazily (~557KB, jsx+tsx dominating) so they stay off the
+ * startup chunk and load only when a diff of that language is first opened. The
+ * key matches the bundle's own grammar name (Shiki's filename convention), which
+ * is what gets registered and what we pass to `codeToTokensBase`.
  */
-const BUILTIN_LANGS: Record<string, LanguageRegistration[]> = {
-  astro: astroGrammar,
-  gdscript: gdscriptGrammar,
-  hcl: hclGrammar,
-  jsonnet: jsonnetGrammar,
+const BUILTIN_LANGS: Record<
+  string,
+  () => Promise<{ default: LanguageRegistration[] }>
+> = {
+  astro: () => import("@shikijs/langs/astro"),
+  gdscript: () => import("@shikijs/langs/gdscript"),
+  hcl: () => import("@shikijs/langs/hcl"),
+  jsonnet: () => import("@shikijs/langs/jsonnet"),
   // tsx/jsx render via Shiki because highlight.js's typescript/javascript
   // grammars don't tokenize JSX (the markup stayed plain).
-  jsx: jsxGrammar,
-  prisma: prismaGrammar,
+  jsx: () => import("@shikijs/langs/jsx"),
+  prisma: () => import("@shikijs/langs/prisma"),
   // Rust renders via Shiki because highlight.js's flat tokenizer can mis-scope
   // a lifetime/char-literal sequence and swallow the rest of the file as one
   // token — leaving everything past that point unhighlighted. TextMate grammars
   // are stateful and always emit one token line per source line, so coverage is
   // complete regardless of tricky/mid-edit content.
-  rust: rustGrammar,
-  solidity: solidityGrammar,
-  svelte: svelteGrammar,
-  terraform: terraformGrammar,
-  toml: tomlGrammar,
-  tsx: tsxGrammar,
-  vue: vueGrammar,
-  wgsl: wgslGrammar,
-  zig: zigGrammar,
+  rust: () => import("@shikijs/langs/rust"),
+  solidity: () => import("@shikijs/langs/solidity"),
+  svelte: () => import("@shikijs/langs/svelte"),
+  terraform: () => import("@shikijs/langs/terraform"),
+  toml: () => import("@shikijs/langs/toml"),
+  tsx: () => import("@shikijs/langs/tsx"),
+  vue: () => import("@shikijs/langs/vue"),
+  wgsl: () => import("@shikijs/langs/wgsl"),
+  zig: () => import("@shikijs/langs/zig"),
 };
 
 /** Ids of the built-in Shiki languages, for pickers / language lists. */
@@ -115,24 +107,43 @@ export function builtinShikiLangs(): readonly string[] {
   return Object.keys(BUILTIN_LANGS);
 }
 
+/** Whether `id` is a built-in Shiki language (loaded or not). Synchronous. */
+export function isBuiltinShikiLang(id: string): boolean {
+  return id in BUILTIN_LANGS;
+}
+
+// In-flight loads, so concurrent diffs of the same not-yet-loaded language
+// share one import + register rather than racing to load it twice.
+const loading = new Map<string, Promise<boolean>>();
+
 /**
  * Load a built-in Shiki language (and its embedded grammars) on demand.
- * Returns true once it's loaded and ready, false for an unknown id. Idempotent.
+ * Resolves true once it's loaded and ready, false for an unknown id or a load
+ * failure. Idempotent, and concurrent calls for the same id share one load.
  */
-export function ensureBuiltinShikiLang(id: string): boolean {
+export async function ensureBuiltinShikiLang(id: string): Promise<boolean> {
   if (loaded.has(id)) return true;
-  const bundle = BUILTIN_LANGS[id];
-  if (!bundle) return false;
-  try {
-    // The bundle is an array of grammars (the language + its embeds);
-    // loadLanguageSync accepts the array directly. Duplicate embeds across
-    // languages just overwrite — harmless.
-    getCore().loadLanguageSync(bundle);
-    loaded.add(id);
-    return true;
-  } catch {
-    return false;
-  }
+  const loader = BUILTIN_LANGS[id];
+  if (!loader) return false;
+  const inflight = loading.get(id);
+  if (inflight) return inflight;
+  const load = (async () => {
+    try {
+      const bundle = (await loader()).default;
+      // The bundle is an array of grammars (the language + its embeds);
+      // loadLanguageSync accepts the array directly. Duplicate embeds across
+      // languages just overwrite — harmless.
+      getCore().loadLanguageSync(bundle);
+      loaded.add(id);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      loading.delete(id);
+    }
+  })();
+  loading.set(id, load);
+  return load;
 }
 
 export interface CodeToken {

@@ -25,6 +25,7 @@ import {
 import type { IssueType } from "@/lib/git/types";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
+import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
 import {
   AssigneesPopover,
@@ -70,6 +71,10 @@ export function CreateIssueDialog({
   const form = useAppForm({
     defaultValues: { title: "", body: "" },
     onSubmit: async ({ value }) => {
+      // Once the remote issue exists, the sub-issue link failing must NOT re-arm
+      // the submit — retrying would open a duplicate. Track it so the catch can
+      // disclose instead of re-running.
+      let created: { number: number; url: string } | null = null;
       try {
         const { number, url } = await createIssue.mutateAsync({
           title: value.title.trim(),
@@ -79,6 +84,7 @@ export function CreateIssueDialog({
           milestone,
           type: issueType?.name ?? null,
         });
+        created = { number, url };
         const action = { label: "View", onClick: () => openUrl(url) };
         if (subIssueParentId && number > 0) {
           // Link the new issue to its parent, then stay on the parent so it
@@ -98,7 +104,22 @@ export function CreateIssueDialog({
         onOpenChange(false);
         if (number > 0) selectIssue({ kind: "remote", id: String(number) });
       } catch (e) {
-        toastError(e);
+        if (created === null) {
+          // The create itself failed — retrying is correct, keep the dialog open.
+          toastError(e);
+          return;
+        }
+        // The remote issue already exists but linking it as a sub-issue failed.
+        // Close the dialog (leaving it open is a duplicate factory) and disclose.
+        const { number, url } = created;
+        onOpenChange(false);
+        toast.error(
+          `Created issue #${number}, but linking as a sub-issue failed: ${errorMessage(e)}`,
+          {
+            duration: 10000,
+            action: { label: "View", onClick: () => openUrl(url) },
+          },
+        );
       }
     },
   });

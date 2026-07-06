@@ -120,7 +120,7 @@ export function PrReviewPanel({
     // empty-text records (trimmed to nothing) — the run feeds them no context,
     // so the banner shouldn't claim it'll "build on" them.
     for (const r of history.data ?? []) {
-      if (r.text.trim()) out[r.mode] ??= r;
+      if (r.text.trim() && out[r.mode] == null) out[r.mode] = r;
     }
     return out;
   }, [history.data]);

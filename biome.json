@@ -158,7 +158,10 @@
             "useExhaustiveDependencies": {
               "level": "warn",
               "options": {
-                "hooks": [{ "name": "useEffectEvent", "stableResult": true }]
+                "hooks": [
+                  { "name": "useEffectEvent", "stableResult": true },
+                  { "name": "useLatestRef", "stableResult": true }
+                ]
               }
             },
             "useHookAtTopLevel": "error"

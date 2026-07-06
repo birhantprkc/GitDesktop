@@ -5,7 +5,7 @@ import {
   SparkleIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +32,7 @@ import {
 import type { CommitSummary } from "@/lib/git/types";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { useLatestRef } from "@/lib/use-latest-ref";
 import { cn } from "@/lib/utils";
 import { compilePlan, type EditRow, type RowAction } from "./edit-history-plan";
 import { useGenerateSquashMessage } from "./RewriteDialogs";
@@ -114,7 +115,10 @@ export function EditHistoryDialog({
   const fullMessages = messages.data ?? {};
 
   // Per-row AI message generation (reword only — a single commit's own diff).
-  const genHashRef = useRef<string | null>(null);
+  // The hash lives in state so render can read which row is generating; the ref
+  // mirrors it for the async completion callback (which fires after streaming).
+  const [genHash, setGenHash] = useState<string | null>(null);
+  const genHashRef = useLatestRef(genHash);
   const ai = useGenerateSquashMessage(repoPath, (message) => {
     const h = genHashRef.current;
     if (h) setOverrides((o) => ({ ...o, [h]: message }));
@@ -315,7 +319,7 @@ export function EditHistoryDialog({
                       }
                     />
                     {row.action === "reword" &&
-                      (ai.generating && genHashRef.current === row.hash ? (
+                      (ai.generating && genHash === row.hash ? (
                         <Button
                           type="button"
                           variant="ghost"
@@ -333,7 +337,7 @@ export function EditHistoryDialog({
                           disabled={ai.generating || !messages.isSuccess}
                           title="Generate this commit's message with AI"
                           onClick={() => {
-                            genHashRef.current = row.hash;
+                            setGenHash(row.hash);
                             ai.generate(`${row.hash}^`, row.hash);
                           }}
                         >

@@ -28,7 +28,13 @@ import { cn } from "@/lib/utils";
 import { RunWorkflowDialog } from "./RunWorkflowDialog";
 import { StatusIcon, statusLabel } from "./status";
 
-export function ActionsPanel({ repoPath }: { repoPath: string }) {
+export function ActionsPanel({
+  repoPath,
+  active,
+}: {
+  repoPath: string;
+  active: boolean;
+}) {
   const forge = useForgeStatus(repoPath);
   // CI reads are provider-neutral (GitHub Actions + GitLab pipelines): a ready
   // repo lists runs either way. Starting a run is a SHARED write — `canWrite ||
@@ -54,6 +60,7 @@ export function ActionsPanel({ repoPath }: { repoPath: string }) {
   const runs = useWorkflowRuns(
     repoPath,
     ghReady,
+    active,
     branchOnly && currentBranch ? currentBranch : undefined,
   );
   const selectedRunId = useUiStore((s) => s.selectedRunId);

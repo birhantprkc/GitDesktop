@@ -82,6 +82,7 @@ import {
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
+import { useLatestRef } from "@/lib/use-latest-ref";
 import { settingsFormOpts } from "./settings-form";
 
 /** One editable env-var (stdio) / header (http) row in the dialog. Kept with a
@@ -1139,8 +1140,7 @@ function ImportMcpDialog({
   // Read the registry through a ref so discovery runs once (keyed on repoPath)
   // and isn't re-triggered — wiping the user's ticks — by the parent handing a
   // new `existing` array reference on re-render.
-  const existingRef = useRef(existing);
-  existingRef.current = existing;
+  const existingRef = useLatestRef(existing);
 
   useEffect(() => {
     let alive = true;
@@ -1355,8 +1355,7 @@ function BrowseRegistryDialog({
   );
   // Read the live list through a ref for name-uniqueness on add, without making
   // anything else depend on it (which would re-render the search results).
-  const existingRef = useRef(existing);
-  existingRef.current = existing;
+  const existingRef = useLatestRef(existing);
 
   // Debounce the query so typing doesn't fire a request per keystroke.
   useEffect(() => {

@@ -1,6 +1,6 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback } from "react";
 import { toast } from "sonner";
-import { createAiClient, MissingApiKeyError } from "@/lib/ai/client";
+import { useAiStream } from "@/features/conversations/useAiStream";
 import { buildBranchNamePrompt, extractBranchName } from "@/lib/ai/prompt";
 import {
   gitStagedDiff,
@@ -9,9 +9,6 @@ import {
 } from "@/lib/git/api";
 import { sanitizeRefName } from "@/lib/git/ref-name";
 import type { FileEntry } from "@/lib/git/types";
-import { loadSettings } from "@/lib/settings/api";
-import { useUiStore } from "@/lib/stores/ui";
-import { toastError } from "@/lib/toast";
 
 /** Raw diff bytes requested from the backend; prompt budgeting trims further. */
 const RAW_DIFF_MAX_BYTES = 200_000;
@@ -23,10 +20,7 @@ const RAW_DIFF_MAX_BYTES = 200_000;
  * nothing to name a branch after when the tree is clean.
  */
 export function useGenerateBranchName(repoPath: string) {
-  const [generating, setGenerating] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-
-  const cancel = useCallback(() => abortRef.current?.abort(), []);
+  const { generating, cancel, run } = useAiStream();
 
   const generate = useCallback(
     async (opts: {
@@ -34,11 +28,7 @@ export function useGenerateBranchName(repoPath: string) {
       recentBranches: string[];
       onName: (name: string) => void;
     }) => {
-      const abort = new AbortController();
-      abortRef.current = abort;
-      setGenerating(true);
-      try {
-        const settings = await loadSettings();
+      const buffer = await run(async (settings) => {
         const repoIgnore = await readRepoAiIgnore(repoPath);
         const globalIgnore = settings.aiIgnorePatterns
           .split("\n")
@@ -67,10 +57,10 @@ export function useGenerateBranchName(repoPath: string) {
               ? "All changes match your AI ignore patterns — nothing to name a branch after."
               : "No in-progress changes to name a branch after.",
           );
-          return;
+          return null;
         }
 
-        const { system, prompt } = buildBranchNamePrompt({
+        return buildBranchNamePrompt({
           diffText: diff.text,
           diffTruncated: diff.truncated,
           files: diff.files,
@@ -80,40 +70,14 @@ export function useGenerateBranchName(repoPath: string) {
           repoInstructions,
           globalInstructions: settings.globalInstructions,
         });
+      });
 
-        const client = await createAiClient(settings.ai);
-        let buffer = "";
-        for await (const chunk of client.stream({
-          system,
-          prompt,
-          abortSignal: abort.signal,
-        })) {
-          buffer += chunk;
-        }
-
-        const name = sanitizeRefName(extractBranchName(buffer));
-        if (name) opts.onName(name);
-        else toast.error("Couldn't generate a branch name — try again.");
-      } catch (e) {
-        if (!abort.signal.aborted) {
-          if (e instanceof MissingApiKeyError) {
-            toast.error(e.message, {
-              duration: 8000,
-              action: {
-                label: "Open settings",
-                onClick: () => useUiStore.getState().openSettings("ai"),
-              },
-            });
-          } else {
-            toastError(e);
-          }
-        }
-      } finally {
-        setGenerating(false);
-        abortRef.current = null;
-      }
+      if (buffer === null) return;
+      const name = sanitizeRefName(extractBranchName(buffer));
+      if (name) opts.onName(name);
+      else toast.error("Couldn't generate a branch name — try again.");
     },
-    [repoPath],
+    [repoPath, run],
   );
 
   return { generate, cancel, generating };

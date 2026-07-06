@@ -105,9 +105,14 @@ export function ConflictFileView({
     );
   }
 
-  // Track the conflict index (among conflicts) as we walk segments, so a region
-  // maps to the right block for resolveBlock.
-  let conflictIdx = -1;
+  // Precompute each segment's conflict ordinal (its index among conflicts, for
+  // resolveBlock) up front, so the render map only reads a stable array rather
+  // than mutating a counter captured by the per-region onClick lambdas.
+  const conflictOrdinals: (number | null)[] = [];
+  let conflictSeen = -1;
+  for (const seg of segments ?? []) {
+    conflictOrdinals.push(seg.kind === "context" ? null : ++conflictSeen);
+  }
 
   return (
     <div className="ph-no-capture flex h-full flex-col">
@@ -200,8 +205,8 @@ export function ConflictFileView({
                 />
               );
             }
-            conflictIdx++;
-            const index = conflictIdx;
+            // Non-context segments always have an ordinal (asserted non-null).
+            const index = conflictOrdinals[idx] as number;
             return (
               <div
                 key={`conflict-${idx}`}

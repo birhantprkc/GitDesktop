@@ -120,7 +120,7 @@ export function InsightsBoard({
   const community = useCommunityInsights(repoPath, canGhOnly);
   const traffic = useRepoTraffic(repoPath, canGhOnly);
   const dependencies = useRepoDependencies(repoPath, canGhOnly);
-  const runs = useWorkflowRuns(repoPath, canGh);
+  const runs = useWorkflowRuns(repoPath, canGh, active);
 
   const completed = (runs.data ?? []).filter((r) => r.status === "completed");
   const successRate = completed.length
