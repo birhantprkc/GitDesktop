@@ -477,7 +477,15 @@ export function cancelReview(key: string): void {
     if (i >= 0) control.lane.waiting.splice(i, 1);
     control.wakeQueued();
   }
-  useReviewStore.getState().patch(key, { phase: "cancelled", status: "" });
+  // Automation rows (`auto:` keys) never persist a finished state — remove
+  // outright so the row can't flash a "Cancelled" state (with a live View
+  // button on a display-only target) before the runner's own settle() lands.
+  // Their cancel feedback is the runner's toast.
+  if (key.startsWith("auto:")) {
+    useReviewStore.getState().remove(key);
+  } else {
+    useReviewStore.getState().patch(key, { phase: "cancelled", status: "" });
+  }
   controls.delete(key);
 }
 
@@ -489,6 +497,73 @@ export function resetReview(key: string): void {
 /** Removes a finished run from the activity dock. */
 export function dismissReview(key: string): void {
   useReviewStore.getState().remove(key);
+}
+
+/**
+ * Registers an automation-triggered review run in the store so it surfaces in
+ * the header ActivityDock (and ActivityStrip) exactly like a manual run — a
+ * "Running…" row with a working Cancel — instead of a floating persistent toast.
+ *
+ * Unlike {@link startReview}, the runner drives its own diff/prompt/stream and
+ * sequencing, so this handle is intentionally minimal: it registers a running
+ * entry + a control whose `abort` is the runner's own AbortController (so the
+ * dock's Cancel aborts the HTTP stream / kills the CLI subprocess for free via
+ * {@link cancelReview}), and hands back the few operations the runner needs.
+ * Automation rows are never persisted to a finished state — every terminal path
+ * calls `settle()` to remove the row, so its `target` is display metadata only.
+ *
+ * The key lives in a dedicated `auto:<n>` namespace off `reviewSeq`, which can
+ * never collide with a panel run's `reviewKey` (`kind:repoPath#ref`).
+ */
+export function registerAutomationRun(opts: {
+  title: string;
+  mode: ReviewMode;
+  local: boolean;
+  target: ReviewTarget;
+  abort: AbortController;
+}): {
+  key: string;
+  setCliId(id: string): void;
+  isCancelled(): boolean;
+  settle(): void;
+} {
+  const seq = ++reviewSeq;
+  const key = `auto:${seq}`;
+  const control: RunControl = {
+    abort: opts.abort,
+    cliReviewId: null,
+    cancelled: false,
+    // The runner manages its own sequencing — no lane, no concurrency slot.
+    hasSlot: false,
+    wakeQueued: null,
+    lane: null,
+  };
+  controls.set(key, control);
+  useReviewStore.getState().patch(key, {
+    phase: "running",
+    status: "",
+    mode: opts.mode,
+    local: opts.local,
+    title: opts.title,
+    target: opts.target,
+    seq,
+    error: "",
+  });
+  return {
+    key,
+    setCliId(id) {
+      control.cliReviewId = id;
+    },
+    // Closes over the control object, not the map: `cancelReview` sets
+    // `cancelled = true` BEFORE deleting the control, so this stays readable
+    // after a dock Cancel removes it from `controls`.
+    isCancelled: () => control.cancelled,
+    settle() {
+      useReviewStore.getState().remove(key);
+      // Only delete our own control — a dock Cancel may already have removed it.
+      if (controls.get(key) === control) controls.delete(key);
+    },
+  };
 }
 
 /** The runs the activity dock shows, newest first (dismissing removes them). */

@@ -52,7 +52,7 @@ createRoot(document.getElementById("root")!).render(
             </MotionConfig>
           </LazyMotion>
         </ErrorBoundary>
-        <Toaster position="bottom-right" />
+        <Toaster position="bottom-right" closeButton />
       </TooltipProvider>
     </QueryClientProvider>
   </StrictMode>,

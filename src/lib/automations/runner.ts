@@ -1,5 +1,4 @@
 import { toast } from "sonner";
-import { cancelAgentReview } from "@/lib/ai/agent";
 import { createAiClient } from "@/lib/ai/client";
 import {
   type ExternalContext,
@@ -7,7 +6,7 @@ import {
 } from "@/lib/ai/external-context";
 import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
-import { isCliProvider } from "@/lib/ai/providers";
+import { isCliProvider, isLocalProvider } from "@/lib/ai/providers";
 import { runCliStream } from "@/lib/ai/stream";
 import type { AiSettings, PromptProvider, ReviewMode } from "@/lib/ai/types";
 import {
@@ -23,6 +22,7 @@ import { listLocalPrs, updateLocalPr } from "@/lib/pulls/local";
 import { getLatestReview, saveReview } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
+import { type ReviewTarget, registerAutomationRun } from "@/lib/stores/reviews";
 import { useAutomationResults } from "./results";
 import { loadAutomations } from "./store";
 import { sameSha } from "./sync";
@@ -86,6 +86,28 @@ function modeLabel(mode: ReviewMode): string {
   return mode === "security" ? "security audit" : "review";
 }
 
+/**
+ * Builds the {@link ReviewTarget} for an automation run's ActivityDock row. For
+ * PR events it's a real target (its `kind`/`ref`/repo drive the row's label +
+ * "View" metadata); commit events have no PR, so their target is a degenerate
+ * remote placeholder. Either way it's DISPLAY-ONLY: automation rows are removed
+ * on settle and never persisted to a finished/"View"-able state. `repoName`
+ * falls back to the repo directory's basename (the app's idiom), since the
+ * automation event carries no repo name.
+ */
+function automationTarget(event: AutomationEvent): ReviewTarget {
+  const repoName = event.repoPath.split(/[/\\]/).pop() ?? event.repoPath;
+  if (event.kind === "commit") {
+    return { kind: "remote", repoPath: event.repoPath, repoName, ref: "" };
+  }
+  return {
+    kind: event.target.type,
+    repoPath: event.repoPath,
+    repoName,
+    ref: targetRef(event),
+  };
+}
+
 /** Derives a per-file +/- summary from unified diff text — for `gh pr diff`,
  *  which (unlike `git diff --numstat`) returns no file counts. */
 function filesFromDiff(text: string): DiffStatEntry[] {
@@ -147,52 +169,40 @@ async function run(event: AutomationEvent): Promise<void> {
     }
     const label = modeLabel(rule.action);
     // Per-rule cancellation: HTTP providers stop via the AbortSignal; CLI
-    // providers stop by killing the subprocess (`cancelAgentReview` once we
-    // know its id). `cancelled` lets the run guards below skip delivery and the
-    // failure toast — an abort surfaces as a thrown error or an early return.
+    // providers stop by killing the subprocess (`cancelAgentReview` once we know
+    // its id). Both are driven by the shared reviews store: the run registers a
+    // "Running…" row in the header ActivityDock, and the dock's Cancel calls
+    // `cancelReview`, which aborts THIS controller and kills the CLI subprocess —
+    // no floating persistent toast. `handle.isCancelled()` stays readable after a
+    // dock Cancel, so the guards below skip delivery + the failure toast.
     const controller = new AbortController();
-    const cli: { id: string | null } = { id: null };
-    let cancelled = false;
-
-    const toastId = toast.loading(
-      `Running AI ${label} of ${event.kind === "commit" ? event.hash.slice(0, 7) : `"${event.title}"`}…`,
-      {
-        action: {
-          label: "Cancel",
-          onClick: (e) => {
-            // Keep the toast mounted so we can update it in place.
-            e.preventDefault();
-            if (cancelled) return;
-            cancelled = true;
-            controller.abort();
-            if (cli.id) cancelAgentReview(cli.id).catch(() => undefined);
-            toast.info(`AI ${label} cancelled.`, {
-              id: toastId,
-              duration: 4000,
-            });
-          },
-        },
-      },
-    );
+    const handle = registerAutomationRun({
+      // TaskRow already prefixes the mode name, so pass the bare subject.
+      title: event.kind === "commit" ? event.hash.slice(0, 7) : event.title,
+      mode: rule.action,
+      // Same provider-kind signal the manual panel path uses to pick its lane.
+      local: isLocalProvider(settings.reviewAi.provider),
+      target: automationTarget(event),
+      abort: controller,
+    });
     try {
       const text = await generateReviewText(
         settings.reviewAi,
         rule.action,
         event,
         controller.signal,
-        (id) => {
-          cli.id = id;
-        },
+        handle.setCliId,
       );
-      if (cancelled) continue;
+      if (handle.isCancelled()) {
+        toast.info(`AI ${label} cancelled.`, { duration: 4000 });
+        continue;
+      }
       if (text === null) {
-        toast.info(`AI ${label} skipped — no changes to review.`, {
-          id: toastId,
-        });
+        toast.info(`AI ${label} skipped — no changes to review.`);
         continue;
       }
       const body = `**AI ${label} (${settings.reviewAi.model})** · automated\n\n${text}`;
-      await deliver(event, rule.action, body, text, toastId, notify);
+      await deliver(event, rule.action, body, text, notify);
       // Seed the review-history store so an automated review participates in the
       // iterative loop — the next run (manual or auto) builds on these findings,
       // and its headSha becomes the pr-sync watermark. Best-effort: a
@@ -206,13 +216,18 @@ async function run(event: AutomationEvent): Promise<void> {
         ).catch(() => undefined);
       }
     } catch (e) {
-      if (cancelled) continue;
-      toast.error(`AI ${label} failed: ${e instanceof Error ? e.message : e}`, {
-        id: toastId,
-      });
+      if (handle.isCancelled()) {
+        toast.info(`AI ${label} cancelled.`, { duration: 4000 });
+        continue;
+      }
+      toast.error(`AI ${label} failed: ${e instanceof Error ? e.message : e}`);
       if (notify) {
         void notifyIfUnfocused(`AI ${label} failed`, `"${event.title}"`);
       }
+    } finally {
+      // Every terminal path (success, skip, error, cancelled, thrown) removes the
+      // dock row — automation runs never linger in a finished state.
+      handle.settle();
     }
   }
 }
@@ -353,7 +368,6 @@ async function deliver(
   mode: ReviewMode,
   body: string,
   rawText: string,
-  toastId: string | number,
   notify: boolean,
 ): Promise<void> {
   const label = modeLabel(mode);
@@ -371,7 +385,6 @@ async function deliver(
     };
     useAutomationResults.getState().add(result);
     toast.success(`AI ${label} of ${event.hash.slice(0, 7)} ready`, {
-      id: toastId,
       duration: 15_000,
       action: {
         label: "View",
@@ -392,9 +405,7 @@ async function deliver(
     await queryClient.invalidateQueries({
       queryKey: ["repo", event.repoPath],
     });
-    toast.success(`AI ${label} posted on #${event.target.number}`, {
-      id: toastId,
-    });
+    toast.success(`AI ${label} posted on #${event.target.number}`);
     if (notify) {
       void notifyIfUnfocused(
         `AI ${label} posted on #${event.target.number}`,
@@ -409,9 +420,7 @@ async function deliver(
   const prs = await listLocalPrs(event.repoPath);
   const pr = prs.find((p) => p.id === targetId);
   if (!pr) {
-    toast.error(`AI ${label} finished, but the local PR no longer exists.`, {
-      id: toastId,
-    });
+    toast.error(`AI ${label} finished, but the local PR no longer exists.`);
     return;
   }
   await updateLocalPr(event.repoPath, targetId, (cur) => ({
@@ -424,7 +433,7 @@ async function deliver(
   await queryClient.invalidateQueries({
     queryKey: ["local-prs", event.repoPath],
   });
-  toast.success(`AI ${label} added to "${pr.title}"`, { id: toastId });
+  toast.success(`AI ${label} added to "${pr.title}"`);
   if (notify) {
     void notifyIfUnfocused(`AI ${label} finished`, `Local PR "${pr.title}"`);
   }

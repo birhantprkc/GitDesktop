@@ -1441,6 +1441,43 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
         .map_err(|e| AppError::Gh(format!("could not parse gh pr view: {e}")))?;
 
     let login = |a: Option<RawLogin>| a.map(|x| x.login).unwrap_or_default();
+
+    // `gh pr view --json files` caps at GitHub's GraphQL 100-file connection
+    // limit, so a larger PR's rail would list only the first 100. When we hit
+    // that cap, complete the list from the paginated REST files API (a PR with
+    // exactly 100 files just makes one redundant call). Best-effort: if the REST
+    // completion fails, keep the 100 GraphQL entries rather than failing the view.
+    let files: Vec<PrFileOut> = if raw.files.len() >= 100 {
+        match gh_pr_files_paginated(&repo_path, number).await {
+            Ok(complete) => complete
+                .into_iter()
+                .map(|f| PrFileOut {
+                    path: f.filename,
+                    additions: f.additions,
+                    deletions: f.deletions,
+                })
+                .collect(),
+            Err(_) => raw
+                .files
+                .into_iter()
+                .map(|f| PrFileOut {
+                    path: f.path,
+                    additions: f.additions,
+                    deletions: f.deletions,
+                })
+                .collect(),
+        }
+    } else {
+        raw.files
+            .into_iter()
+            .map(|f| PrFileOut {
+                path: f.path,
+                additions: f.additions,
+                deletions: f.deletions,
+            })
+            .collect()
+    };
+
     Ok(PrDetails {
         id: raw.id,
         number: raw.number,
@@ -1472,15 +1509,7 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                 }
             })
             .collect(),
-        files: raw
-            .files
-            .into_iter()
-            .map(|f| PrFileOut {
-                path: f.path,
-                additions: f.additions,
-                deletions: f.deletions,
-            })
-            .collect(),
+        files,
         reviews: raw
             .reviews
             .into_iter()
@@ -1580,17 +1609,180 @@ pub async fn gh_pr_reactions(repo_path: String, number: u64) -> AppResult<IssueR
 
 /// The PR's full unified diff (`gh pr diff`), capped for the webview. The
 /// frontend splits it per file for the diff viewer.
+///
+/// Past 300 files GitHub refuses the `.diff` media type with HTTP 406
+/// `too_large`, so `gh pr diff` fails outright. When we recognize that specific
+/// failure we fall back to reconstructing a unified diff from the paginated
+/// files API (`gh_pr_diff_from_files`) instead of failing the whole view. Any
+/// other error propagates raw.
 #[tauri::command]
 pub async fn gh_pr_diff(repo_path: String, number: u64) -> AppResult<String> {
-    let out = run_gh(
+    let out = match run_gh(
         Some(&repo_path),
         &["pr", "diff", &number.to_string()],
         GH_TIMEOUT,
     )
-    .await?;
+    .await
+    {
+        Ok(out) => out,
+        Err(e) if is_diff_too_large(&e.to_string()) => {
+            // Reconstruct from the files API; if THAT fails, surface its error raw.
+            return gh_pr_diff_from_files(&repo_path, number).await;
+        }
+        Err(e) => return Err(e),
+    };
     let (text, _) =
         crate::git::diff::truncate_at_char_boundary(out.stdout_lossy(), 2_000_000);
     Ok(text)
+}
+
+/// True when `gh pr diff` failed with GitHub's "diff exceeds 300 files" refusal
+/// (HTTP 406 `too_large`). Matched generously within that family — but only that
+/// family — so a real too-large diff degrades to the files-API fallback while
+/// every other failure keeps propagating raw.
+fn is_diff_too_large(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("too_large")
+        || m.contains("exceeded the maximum number of files")
+        || m.contains("http 406")
+        || m.contains("status code 406")
+}
+
+/// One entry from `repos/{owner}/{repo}/pulls/<n>/files`. Every field is
+/// optional + defaulted so one malformed entry in the (CLI-produced) JSON can't
+/// sink the whole reconstruction.
+#[derive(Deserialize, Default)]
+struct GhPrFile {
+    #[serde(default)]
+    filename: String,
+    #[serde(default)]
+    previous_filename: Option<String>,
+    /// added / removed / modified / renamed / changed / copied / unchanged.
+    #[serde(default)]
+    status: String,
+    /// The `@@` hunks only — GitHub omits this for binary or individually-huge
+    /// files. We synthesize the `---`/`+++` header lines ourselves.
+    #[serde(default)]
+    patch: Option<String>,
+    #[serde(default)]
+    additions: u32,
+    #[serde(default)]
+    deletions: u32,
+}
+
+/// Fetches the PR's complete changed-file list via the paginated files REST API.
+/// `gh pr view --json files` and `gh pr diff` both cap at GitHub's GraphQL 100-file
+/// connection limit; this endpoint paginates past it. Used both to reconstruct the
+/// >300-file diff and to complete the PR-view file rail.
+async fn gh_pr_files_paginated(repo_path: &str, number: u64) -> AppResult<Vec<GhPrFile>> {
+    // `gh` resolves the literal {owner}/{repo} placeholders from the repo cwd
+    // (run_gh runs with `current_dir`). `--paginate` on an array endpoint emits
+    // one JSON array PER PAGE concatenated, which a single `from_str::<Vec<_>>`
+    // can't parse — `--slurp` wraps the pages into one outer array of arrays,
+    // which we then flatten. (gh 2.44+ supports `--slurp`.)
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/files");
+    let out = run_gh(
+        Some(repo_path),
+        &[
+            "api",
+            "--paginate",
+            "--slurp",
+            "-X",
+            "GET",
+            &endpoint,
+            "-f",
+            "per_page=100",
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+
+    // `--slurp` yields `[[...page1...],[...page2...]]`; flatten to the file list.
+    let pages: Vec<Vec<GhPrFile>> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the PR file list: {e}")))?;
+    Ok(pages.into_iter().flatten().collect())
+}
+
+/// Fetches the PR's changed files via the paginated files API and rebuilds a
+/// unified diff from them, in the same `git`-style format `gh pr diff` produces
+/// so the frontend diff viewer parses it identically. This is the >300-file
+/// fallback for `gh_pr_diff`.
+async fn gh_pr_diff_from_files(repo_path: &str, number: u64) -> AppResult<String> {
+    let files = gh_pr_files_paginated(repo_path, number).await?;
+    let diff = reconstruct_pr_diff(&files);
+    let (text, _) = crate::git::diff::truncate_at_char_boundary(diff, 2_000_000);
+    Ok(text)
+}
+
+/// Rebuild a full unified diff from GitHub files-API entries, mirroring the
+/// GitLab reconstruction (`forge::gitlab::reconstruct_file_diff`) so the frontend
+/// splitter — which keys on `diff --git`/`+++ b/<path>` — parses it exactly like
+/// `gh pr diff` output. GitHub's `patch` carries only the `@@` hunks, so we
+/// synthesize the `diff --git`/`---`/`+++` headers; a file with no `patch`
+/// (binary or individually-huge) gets a `Binary files … differ` placeholder so it
+/// still appears in the list rather than vanishing.
+fn reconstruct_pr_diff(files: &[GhPrFile]) -> String {
+    let mut out = String::new();
+    for f in files {
+        if f.filename.is_empty() {
+            continue;
+        }
+        let new_path = f.filename.as_str();
+        let is_added = f.status == "added";
+        let is_removed = f.status == "removed";
+        let is_renamed = f.status == "renamed";
+        // The a/ side is the pre-change path — the previous filename on a rename,
+        // otherwise the file's own path.
+        let old_path = if is_renamed {
+            f.previous_filename.as_deref().unwrap_or(new_path)
+        } else {
+            new_path
+        };
+
+        out.push_str(&format!("diff --git a/{old_path} b/{new_path}\n"));
+        if is_renamed && old_path != new_path {
+            out.push_str("rename from ");
+            out.push_str(old_path);
+            out.push('\n');
+            out.push_str("rename to ");
+            out.push_str(new_path);
+            out.push('\n');
+        }
+        if is_added {
+            out.push_str("new file mode 100644\n");
+        } else if is_removed {
+            out.push_str("deleted file mode 100644\n");
+        }
+
+        match &f.patch {
+            Some(patch) if !patch.is_empty() => {
+                let minus = if is_added {
+                    "/dev/null".to_string()
+                } else {
+                    format!("a/{old_path}")
+                };
+                let plus = if is_removed {
+                    "/dev/null".to_string()
+                } else {
+                    format!("b/{new_path}")
+                };
+                out.push_str(&format!("--- {minus}\n+++ {plus}\n"));
+                out.push_str(patch);
+                if !patch.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            // No hunks: binary or an individually-huge file GitHub dropped the
+            // patch for. Emit git's binary placeholder (the frontend recognizes
+            // the `Binary files ` marker and renders it as an undisplayable file).
+            _ => {
+                out.push_str(&format!(
+                    "Binary files a/{old_path} and b/{new_path} differ\n"
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// One external (third-party) review item harvested from a GitHub PR — a
@@ -2047,7 +2239,104 @@ pub async fn gh_pr_create(
 
 #[cfg(test)]
 mod tests {
-    use super::{host_from_url, parse_auth_accounts};
+    use super::{
+        host_from_url, is_diff_too_large, parse_auth_accounts, reconstruct_pr_diff, GhPrFile,
+    };
+
+    fn file(status: &str, filename: &str, patch: Option<&str>) -> GhPrFile {
+        GhPrFile {
+            filename: filename.to_string(),
+            previous_filename: None,
+            status: status.to_string(),
+            patch: patch.map(str::to_string),
+            additions: 0,
+            deletions: 0,
+        }
+    }
+
+    #[test]
+    fn too_large_signature_matches_only_its_family() {
+        assert!(is_diff_too_large(
+            "GraphQL: PullRequest.diff too_large (repository.pullRequest.diff)"
+        ));
+        assert!(is_diff_too_large(
+            "Sorry, the diff exceeded the maximum number of files (300)."
+        ));
+        assert!(is_diff_too_large("HTTP 406: too_large"));
+        assert!(is_diff_too_large("gh: status code 406"));
+        // Case-insensitive.
+        assert!(is_diff_too_large("TOO_LARGE"));
+        // Unrelated failures do NOT route to the fallback.
+        assert!(!is_diff_too_large("HTTP 404: Not Found"));
+        assert!(!is_diff_too_large("could not resolve to a PullRequest"));
+        assert!(!is_diff_too_large("no pull requests found for branch"));
+    }
+
+    #[test]
+    fn reconstructs_modified_file() {
+        let out = reconstruct_pr_diff(&[file(
+            "modified",
+            "src/main.rs",
+            Some("@@ -1,2 +1,2 @@\n-old\n+new"),
+        )]);
+        assert!(out.contains("diff --git a/src/main.rs b/src/main.rs\n"));
+        assert!(out.contains("--- a/src/main.rs\n"));
+        assert!(out.contains("+++ b/src/main.rs\n"));
+        assert!(out.contains("@@ -1,2 +1,2 @@\n"));
+        // A patch without a trailing newline gets one appended.
+        assert!(out.ends_with("+new\n"));
+    }
+
+    #[test]
+    fn reconstructs_added_file() {
+        let out = reconstruct_pr_diff(&[file(
+            "added",
+            "new.txt",
+            Some("@@ -0,0 +1 @@\n+hello\n"),
+        )]);
+        assert!(out.contains("diff --git a/new.txt b/new.txt\n"));
+        assert!(out.contains("new file mode 100644\n"));
+        assert!(out.contains("--- /dev/null\n"));
+        assert!(out.contains("+++ b/new.txt\n"));
+    }
+
+    #[test]
+    fn reconstructs_removed_file() {
+        let out = reconstruct_pr_diff(&[file(
+            "removed",
+            "gone.txt",
+            Some("@@ -1 +0,0 @@\n-bye\n"),
+        )]);
+        assert!(out.contains("diff --git a/gone.txt b/gone.txt\n"));
+        assert!(out.contains("deleted file mode 100644\n"));
+        assert!(out.contains("--- a/gone.txt\n"));
+        assert!(out.contains("+++ /dev/null\n"));
+    }
+
+    #[test]
+    fn reconstructs_renamed_file_using_previous_filename() {
+        let mut f = file("renamed", "src/new_name.rs", Some("@@ -1 +1 @@\n-a\n+b\n"));
+        f.previous_filename = Some("src/old_name.rs".to_string());
+        let out = reconstruct_pr_diff(&[f]);
+        assert!(out.contains("diff --git a/src/old_name.rs b/src/new_name.rs\n"));
+        assert!(out.contains("rename from src/old_name.rs\n"));
+        assert!(out.contains("rename to src/new_name.rs\n"));
+        // The a/ side of the hunk header uses the previous filename.
+        assert!(out.contains("--- a/src/old_name.rs\n"));
+        assert!(out.contains("+++ b/src/new_name.rs\n"));
+    }
+
+    #[test]
+    fn omitted_patch_gets_binary_placeholder() {
+        // GitHub drops `patch` for binary or individually-huge files.
+        let out = reconstruct_pr_diff(&[file("modified", "assets/logo.png", None)]);
+        assert!(out.contains("diff --git a/assets/logo.png b/assets/logo.png\n"));
+        // The frontend keys on this exact `Binary files ` marker.
+        assert!(out.contains("Binary files a/assets/logo.png and b/assets/logo.png differ\n"));
+        // No hunk header was synthesized for a patch-less file.
+        assert!(!out.contains("@@"));
+        assert!(!out.contains("--- "));
+    }
 
     #[test]
     fn host_from_url_handles_github_and_enterprise() {
