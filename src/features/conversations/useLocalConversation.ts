@@ -41,7 +41,11 @@ export function useLocalConversation<T extends LocalConvEntity>(
     null,
   );
   const composerRef = useRef<MarkdownEditorHandle>(null);
-  const quoteReply = makeQuoteReply({ composerRef, setBody: setComment });
+  // Deferred into the handler: calling makeQuoteReply(ref) during render made the
+  // React Compiler bail out of every component consuming this hook (refs-in-render
+  // rule).
+  const quoteReply = (body: string) =>
+    makeQuoteReply({ composerRef, setBody: setComment })(body);
 
   // Merge a field patch onto the CURRENT record — whatever `apply` reloaded from
   // disk — not a stale snapshot, so a concurrent external write to the same entity

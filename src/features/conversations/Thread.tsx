@@ -1,6 +1,6 @@
 import { DotsThreeIcon } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -85,9 +85,20 @@ export function Thread({
   onUnhide,
   reactions,
   onToggleReaction,
+  renderBody,
+  copyMarkdown,
 }: {
   thread: PrThreadOut;
   onQuote?: () => void;
+  /** Overrides how the (non-editing, non-minimized) body is rendered. Absent =
+   *  the default `<Markdown>` render, byte-identical to before — issues and
+   *  discussions never pass it; the PR review card uses it to splice suggestion
+   *  blocks in between markdown segments. */
+  renderBody?: (body: string) => ReactNode;
+  /** Override for the Copy-markdown action — used by PR reviews to append their
+   *  file-anchored threads. Absent = copies `thread.body`, byte-identical to
+   *  before. */
+  copyMarkdown?: string;
   /** Present when the viewer may edit this comment; saves the new body. */
   onSaveEdit?: (body: string) => void;
   /** Present when the viewer may delete this comment. */
@@ -154,7 +165,9 @@ export function Thread({
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuItem
-                  onClick={() => copyText(thread.body, "Markdown copied")}
+                  onClick={() =>
+                    copyText(copyMarkdown ?? thread.body, "Markdown copied")
+                  }
                 >
                   Copy markdown
                 </DropdownMenuItem>
@@ -241,7 +254,12 @@ export function Thread({
               Hide comment
             </button>
           )}
-          {thread.body.trim() && <Markdown>{thread.body}</Markdown>}
+          {thread.body.trim() &&
+            (renderBody ? (
+              renderBody(thread.body)
+            ) : (
+              <Markdown>{thread.body}</Markdown>
+            ))}
         </>
       )}
       {onToggleReaction && !editing && (
