@@ -69,8 +69,10 @@ import {
   useClosePr,
   useCommentPr,
   useDeletePrComment,
+  useDeleteReviewComment,
   useEditPr,
   useEditPrComment,
+  useEditReviewComment,
   useForgeStatus,
   useGlArmAutoMerge,
   useGlCancelAutoMerge,
@@ -199,6 +201,7 @@ export function RemotePrView({
     canThreadResolve,
     canReact,
     canEditOwnComments,
+    canEditOwnThreadComments,
   } = usePrCapabilities(forge.data, provider);
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
@@ -236,6 +239,8 @@ export function RemotePrView({
   const cancelAutoMerge = useGlCancelAutoMerge(repoPath);
   const editComment = useEditPrComment(repoPath);
   const deleteComment = useDeletePrComment(repoPath);
+  const editReviewComment = useEditReviewComment(repoPath);
+  const deleteReviewComment = useDeleteReviewComment(repoPath);
   const minimizeComment = useMinimizeComment(repoPath);
   const unminimizeComment = useUnminimizeComment(repoPath);
   const readyPr = useReadyPr(repoPath);
@@ -280,6 +285,11 @@ export function RemotePrView({
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,
   );
+  // The review-thread comment pending delete-confirmation — a separate id from
+  // the conversation-comment dialog above so the two dialogs never collide.
+  const [deletingThreadCommentId, setDeletingThreadCommentId] = useState<
+    string | null
+  >(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeStrategy, setMergeStrategy] = useState<MergeStrategy>("merge");
   const [deleteBranch, setDeleteBranch] = useState(false);
@@ -563,6 +573,16 @@ export function RemotePrView({
 
   function saveCommentEdit(commentId: string, body: string) {
     editComment.mutate(
+      { number, commentId, body },
+      {
+        onSuccess: () => toast.success("Comment updated"),
+        onError,
+      },
+    );
+  }
+
+  function saveThreadCommentEdit(commentId: string, body: string) {
+    editReviewComment.mutate(
       { number, commentId, body },
       {
         onSuccess: () => toast.success("Comment updated"),
@@ -997,6 +1017,14 @@ export function RemotePrView({
                   canThreadResolve
                     ? (threadId, resolved) =>
                         threadResolve.mutateAsync({ threadId, resolved })
+                    : undefined
+                }
+                onEditComment={
+                  canEditOwnThreadComments ? saveThreadCommentEdit : undefined
+                }
+                onDeleteComment={
+                  canEditOwnThreadComments
+                    ? setDeletingThreadCommentId
                     : undefined
                 }
                 apply={suggestionApply}
@@ -1561,6 +1589,28 @@ export function RemotePrView({
               onError: (e) => {
                 onError(e);
                 setDeletingCommentId(null);
+              },
+            },
+          )
+        }
+      />
+
+      <DeleteCommentDialog
+        commentId={deletingThreadCommentId}
+        onClose={() => setDeletingThreadCommentId(null)}
+        pending={deleteReviewComment.isPending}
+        description={`This permanently deletes the comment on ${remoteLabel}. This cannot be undone.`}
+        onConfirm={(commentId) =>
+          deleteReviewComment.mutate(
+            { number, commentId },
+            {
+              onSuccess: () => {
+                toast.success("Comment deleted");
+                setDeletingThreadCommentId(null);
+              },
+              onError: (e) => {
+                onError(e);
+                setDeletingThreadCommentId(null);
               },
             },
           )

@@ -40,6 +40,7 @@ import type {
   RepoOp,
   RepoRole,
   RepoSettingsInput,
+  ReviewThreadOut,
   RewriteStep,
   RulesetEnforcement,
   SecretApp,
@@ -1777,6 +1778,7 @@ const NO_FORGE_STATUS: ForgeStatus = {
     mrReviewThreads: false,
     mrThreadReply: false,
     mrThreadResolve: false,
+    mrThreadCommentEdit: false,
   },
 };
 
@@ -3079,6 +3081,76 @@ export function useDeleteIssueComment(repo: string) {
     "issue",
     (args: { number: number; commentId: string }) =>
       api.forgeIssueDeleteComment(repo, args.number, args.commentId),
+    () => null,
+  );
+}
+
+/**
+ * Optimistically patch the NESTED comments of the review-threads cache (edit
+ * replaces one comment's body; delete removes it, dropping a thread that empties)
+ * with exact-key rollback — mirroring {@link useOptimisticCommentMutation} for the
+ * flat conversation comments, but one level down (thread → comments). `commentId`
+ * is unique across threads (provider comment ids), so no threadId is needed. The
+ * key is derived from the mutation args at mutate time so a mid-flight
+ * repo/number switch never corrupts another key's cache; onSettled keeps the
+ * repo-wide invalidation as server-truth reconciliation.
+ */
+function useOptimisticReviewCommentMutation<
+  TArgs extends { number: number; commentId: string },
+  TData,
+>(
+  repo: string,
+  mutationFn: (args: TArgs) => Promise<TData>,
+  patchComment: (comment: PrThreadOut, args: TArgs) => PrThreadOut | null,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onMutate: async (args: TArgs) => {
+      const key = prReviewThreadsKey(repo, args.number);
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<ReviewThreadOut[]>(key);
+      queryClient.setQueryData<ReviewThreadOut[]>(key, (threads) =>
+        threads?.flatMap((t) => {
+          if (!t.comments.some((c) => c.id === args.commentId)) return [t];
+          const comments = t.comments.flatMap((c) => {
+            if (c.id !== args.commentId) return [c];
+            const patched = patchComment(c, args);
+            return patched ? [patched] : [];
+          });
+          // A delete that empties the thread drops the whole card (server does too).
+          return comments.length === 0 ? [] : [{ ...t, comments }];
+        }),
+      );
+      return { prev, key };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: () =>
+      void queryClient.invalidateQueries({ queryKey: repoKeys.all(repo) }),
+  });
+}
+
+export function useEditReviewComment(repo: string) {
+  return useOptimisticReviewCommentMutation(
+    repo,
+    (args: { number: number; commentId: string; body: string }) =>
+      api.forgePrEditReviewComment(
+        repo,
+        args.number,
+        args.commentId,
+        args.body,
+      ),
+    (comment, args) => ({ ...comment, body: args.body }),
+  );
+}
+
+export function useDeleteReviewComment(repo: string) {
+  return useOptimisticReviewCommentMutation(
+    repo,
+    (args: { number: number; commentId: string }) =>
+      api.forgePrDeleteReviewComment(repo, args.number, args.commentId),
     () => null,
   );
 }

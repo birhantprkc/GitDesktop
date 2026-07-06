@@ -276,6 +276,13 @@ pub struct Implemented {
     /// Bitbucket exposed no comment-resolution field/endpoint on any probed comment,
     /// so it stays `false` there (the forge arm errors).
     pub mr_thread_resolve: bool,
+    /// Editing AND deleting a file:line-anchored review-thread comment — one flag
+    /// covering both ops. Separate from `mr_comment_edit` (which covers flat
+    /// conversation comments) because thread-scoped controls carry their own flag
+    /// family alongside `mr_thread_reply` / `mr_thread_resolve`. All three providers
+    /// wire it (GitHub via the PullRequestReviewComment mutations, GitLab/Bitbucket
+    /// reusing their note/comment endpoints), so it's true for each.
+    pub mr_thread_comment_edit: bool,
 }
 
 impl Implemented {
@@ -343,6 +350,7 @@ impl Implemented {
             mr_review_threads: true,
             mr_thread_reply: true,
             mr_thread_resolve: true,
+            mr_thread_comment_edit: true,
         }
     }
 
@@ -396,6 +404,7 @@ impl Implemented {
             mr_review_threads: false,
             mr_thread_reply: false,
             mr_thread_resolve: false,
+            mr_thread_comment_edit: false,
         }
     }
 
@@ -473,6 +482,9 @@ impl Implemented {
                 mr_review_threads: true,
                 mr_thread_reply: true,
                 mr_thread_resolve: true,
+                // Review-thread comment edit/delete: positioned notes reuse the MR
+                // note endpoint.
+                mr_thread_comment_edit: true,
             },
             // Bitbucket Cloud reads (Phase 3): PR list/view/diff, CI pipelines, and
             // repo View/URL are wired over direct HTTP. Phase 4 adds the WRITES: PR
@@ -518,6 +530,10 @@ impl Implemented {
                 // found on any probed Bitbucket comment (`resolve_thread` errors).
                 mr_review_threads: true,
                 mr_thread_reply: true,
+                // Review-thread comment edit/delete: inline comments are the same
+                // comment objects as the conversation ones, so they reuse the PR
+                // comment endpoints. (Thread RESOLUTION stays false above.)
+                mr_thread_comment_edit: true,
                 ..Self::none()
             },
         }
@@ -707,14 +723,17 @@ mod tests {
         assert!(!imp.pr_tasks);
         // Review threads: read, reply, and resolve are all wired for GitLab.
         assert!(imp.mr_review_threads && imp.mr_thread_reply && imp.mr_thread_resolve);
+        // …plus edit/delete on review-thread comments (positioned notes).
+        assert!(imp.mr_thread_comment_edit);
     }
 
     #[test]
     fn bitbucket_implements_pr_and_ci_writes() {
         let gh = Implemented::for_provider(Provider::GitHub);
         assert!(gh.issue_comment && gh.issue_state && gh.mr_comment && gh.mr_state);
-        // GitHub edits/deletes both PR and issue conversation comments.
-        assert!(gh.mr_comment_edit && gh.issue_comment_edit);
+        // GitHub edits/deletes both PR and issue conversation comments, plus
+        // review-thread comments (PullRequestReviewComment nodes).
+        assert!(gh.mr_comment_edit && gh.issue_comment_edit && gh.mr_thread_comment_edit);
         // MR merge is a shared control (both providers); approve/unapprove is the one
         // GitLab-only write — GitHub approves via the review flow, not this toggle.
         assert!(gh.mr_merge && !gh.mr_approve);
@@ -753,5 +772,8 @@ mod tests {
         // (no comment-resolution field/endpoint found on any probed Bitbucket comment).
         assert!(bb.mr_review_threads && bb.mr_thread_reply);
         assert!(!bb.mr_thread_resolve);
+        // …but review-thread comment edit/delete IS wired (inline comments reuse the
+        // PR comment endpoints).
+        assert!(bb.mr_thread_comment_edit);
     }
 }

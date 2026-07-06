@@ -2369,6 +2369,11 @@ pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<Revie
     let enc = encode_project(&project_path(repo_path).await?);
     let discussions = fetch_mr_discussions(repo_path, &enc, number).await?;
 
+    // Resolve the signed-in user once (tolerant — a failure just leaves each
+    // comment's edit/delete hidden; it must not fail the read). Drives the truthful
+    // `viewer_did_author` below.
+    let viewer = current_user_login(repo_path).await;
+
     let mut threads: Vec<ReviewThreadOut> = Vec::new();
     for d in &discussions {
         // Non-system notes only — a discussion is a thread when it carries at
@@ -2397,16 +2402,19 @@ pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<Revie
             .unwrap_or(false);
         let comments: Vec<PrThreadOut> = notes
             .iter()
-            .map(|n| PrThreadOut {
-                author: n.author.as_ref().map(|a| a.username.clone()).unwrap_or_default(),
-                state: String::new(),
-                body: n.body.clone(),
-                date: n.created_at.clone(),
-                id: n.id.to_string(),
-                url: String::new(),
-                viewer_did_author: false,
-                is_minimized: false,
-                minimized_reason: String::new(),
+            .map(|n| {
+                let author = n.author.as_ref().map(|a| a.username.clone()).unwrap_or_default();
+                PrThreadOut {
+                    viewer_did_author: note_authored_by_viewer(&author, viewer.as_deref()),
+                    author,
+                    state: String::new(),
+                    body: n.body.clone(),
+                    date: n.created_at.clone(),
+                    id: n.id.to_string(),
+                    url: String::new(),
+                    is_minimized: false,
+                    minimized_reason: String::new(),
+                }
             })
             .collect();
         if comments.is_empty() {

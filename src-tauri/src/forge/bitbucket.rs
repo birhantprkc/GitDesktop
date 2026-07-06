@@ -1589,7 +1589,9 @@ pub async fn delete_pr_comment(repo_path: &str, number: u64, comment_id: &str) -
 /// attach to their root by walking the `parent` chain (a reply's parent may itself
 /// be a reply). Deleted / pending comments are dropped first. Threads and their
 /// comments are ordered oldest-first (Bitbucket returns comments oldest-first).
-fn group_bb_threads(comments: Vec<BbComment>) -> Vec<ReviewThreadOut> {
+/// `viewer_uuid` is the signed-in user's braced account uuid (empty = unknown → every
+/// `viewer_did_author` false), compared per comment via [`comment_authored_by_viewer`].
+fn group_bb_threads(comments: Vec<BbComment>, viewer_uuid: &str) -> Vec<ReviewThreadOut> {
     // Chain topology (child id -> parent id) is built from ALL fetched comments,
     // including deleted/pending ones: they still carry id + parent, so a live reply
     // whose INTERMEDIATE parent was deleted can still walk THROUGH it up to a
@@ -1660,13 +1662,13 @@ fn group_bb_threads(comments: Vec<BbComment>) -> Vec<ReviewThreadOut> {
             let comments: Vec<PrThreadOut> = group
                 .into_iter()
                 .map(|c| PrThreadOut {
+                    viewer_did_author: comment_authored_by_viewer(c.user.as_ref(), viewer_uuid),
                     author: c.user.as_ref().map(user_login).unwrap_or_default(),
                     state: String::new(),
                     body: c.content.as_ref().map(|r| r.raw.clone()).unwrap_or_default(),
                     date: c.created_on.clone(),
                     id: c.id.to_string(),
                     url: html_href(&c.links),
-                    viewer_did_author: false,
                     is_minimized: false,
                     minimized_reason: String::new(),
                 })
@@ -1714,6 +1716,16 @@ struct BbCommentsPage {
 pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<ReviewThreadOut>> {
     let creds = http::load_credentials().await?;
     let base = repo_base(repo_path).await?;
+
+    // Resolve the viewer's account uuid once (tolerant — a failure just leaves each
+    // comment's edit/delete hidden; it must not fail the read), the same GET user
+    // idiom `view_pr` uses. Drives the truthful `viewer_did_author` in the grouping.
+    let viewer_uuid = http::bb_get_json::<BbUser>(&creds, "user", "user")
+        .await
+        .ok()
+        .and_then(|u| u.uuid)
+        .unwrap_or_default();
+
     let mut url = format!("{base}/pullrequests/{number}/comments?pagelen=100");
     let mut comments: Vec<BbComment> = Vec::new();
     for _ in 0..5 {
@@ -1724,7 +1736,7 @@ pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<Revie
             _ => break,
         }
     }
-    Ok(group_bb_threads(comments))
+    Ok(group_bb_threads(comments, &viewer_uuid))
 }
 
 /// Reply in an existing review thread (`POST …/comments`, `{"content":{"raw"},
@@ -4343,7 +4355,8 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let threads = group_bb_threads(page.values);
+        // Unknown viewer → every viewer_did_author stays false.
+        let threads = group_bb_threads(page.values, "");
         assert_eq!(threads.len(), 2);
 
         // Thread A: root + two replies (the deeper reply walks parent→parent→root),
@@ -4395,7 +4408,7 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let threads = group_bb_threads(page.values);
+        let threads = group_bb_threads(page.values, "");
         // Only the live-root thread survives; the deleted-root thread is gone.
         assert_eq!(threads.len(), 1);
         let t = &threads[0];
@@ -4404,6 +4417,37 @@ mod tests {
         assert_eq!(t.comments.len(), 2);
         assert_eq!(t.comments[0].body, "root live");
         assert_eq!(t.comments[1].body, "reply survives");
+    }
+
+    #[test]
+    fn group_bb_threads_marks_viewer_authored_on_root_and_reply() {
+        // A root the viewer authored and a reply someone else authored: with the
+        // viewer's uuid known, viewer_did_author is true for the root, false for the
+        // reply — proving the flag is per-comment, on both roots and replies.
+        let page: BbPage<BbComment> = serde_json::from_str(
+            r#"{"values":[
+                {"id":10,"content":{"raw":"my root"},
+                 "user":{"display_name":"Me","uuid":"{me-uuid}"},
+                 "created_on":"2026-01-01","inline":{"path":"a.rs","to":5}},
+                {"id":11,"content":{"raw":"their reply"},
+                 "user":{"display_name":"Them","uuid":"{other-uuid}"},
+                 "created_on":"2026-01-02","parent":{"id":10}},
+                {"id":12,"content":{"raw":"my reply"},
+                 "user":{"display_name":"Me","uuid":"{me-uuid}"},
+                 "created_on":"2026-01-03","parent":{"id":10}}
+            ]}"#,
+        )
+        .unwrap();
+        let threads = group_bb_threads(page.values, "{me-uuid}");
+        assert_eq!(threads.len(), 1);
+        let c = &threads[0].comments;
+        assert_eq!(c.len(), 3);
+        // Root authored by the viewer → true.
+        assert!(c[0].viewer_did_author);
+        // Reply by another user → false.
+        assert!(!c[1].viewer_did_author);
+        // Reply by the viewer → true (per-comment, works on replies too).
+        assert!(c[2].viewer_did_author);
     }
 
     #[test]

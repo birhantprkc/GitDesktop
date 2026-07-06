@@ -1565,6 +1565,33 @@ export const forgeIssueDeleteComment = (
 ) =>
   invoke<void>("forge_issue_delete_comment", { repoPath, number, commentId });
 
+// Edit/delete a comment inside a file:line-anchored review thread (the same
+// provider-neutral dispatch as the conversation ones; `commentId` is the thread
+// comment's provider id).
+export const forgePrEditReviewComment = (
+  repoPath: string,
+  number: number,
+  commentId: string,
+  body: string,
+) =>
+  invoke<void>("forge_pr_edit_review_comment", {
+    repoPath,
+    number,
+    commentId,
+    body,
+  });
+
+export const forgePrDeleteReviewComment = (
+  repoPath: string,
+  number: number,
+  commentId: string,
+) =>
+  invoke<void>("forge_pr_delete_review_comment", {
+    repoPath,
+    number,
+    commentId,
+  });
+
 /** GitHub `ReportedContentClassifiers` reasons for hiding a comment. */
 export type MinimizeReason =
   | "OFF_TOPIC"

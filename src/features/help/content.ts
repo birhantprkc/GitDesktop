@@ -491,7 +491,8 @@ the thread is **outdated** or a branch other than the PR's head is checked out. 
 **Files** tab, the same threads are anchored **under their exact line** in the diff (both
 unified and split), so you read each comment next to the code it's about; outdated or
 unanchored threads stay in the Conversation block instead. From either place you can
-**reply** in-thread, **resolve / unresolve** (where the provider allows it), **quote** a
+**reply** in-thread, **resolve / unresolve** (where the provider allows it), **edit or
+delete your own** thread comments, **quote** a
 comment into the main composer, and **copy** the whole thread — path, line range, the
 diff excerpt, and every reply — as Markdown.
 
@@ -521,7 +522,8 @@ merge menu also offers **auto-merge** (merge when the pipeline succeeds) — Git
 you once the pipeline passes, and an **Auto-merge enabled** indicator in the footer lets you cancel
 it in place. Its **line-anchored review comments** render too — grouped by file in the
 Conversation tab and anchored in the Files diff (see *Review comments* above) — with
-reply-in-thread and resolve/unresolve. **Creating a merge request**
+reply-in-thread, resolve/unresolve, and edit/delete of your own thread comments.
+**Creating a merge request**
 works from the app too ({{kbd:create-pr}}, the New menu, or the Compare tab) — it pushes your
 branch and opens the MR, with the same draft checkbox and AI description as GitHub, and the
 Compare tab points you at an **existing open MR** from your branch instead of creating a
@@ -720,7 +722,8 @@ Once connected:
   PR, so they never appear), and flip **draft ↔ ready** in either direction. Its
   **line-anchored review comments** render too — grouped by file in the conversation
   column and anchored in the Files diff (see *Review comments* under *Pull requests*) —
-  with reply-in-thread and resolve/unresolve. Use
+  with reply-in-thread and edit/delete of your own thread comments (Bitbucket has no
+  thread resolve/unresolve). Use
   **Create** to open a new PR (drafts included) — the create dialog also lets you pick
   **reviewers** up front (leave it empty to keep Bitbucket's default reviewers). An open PR
   also gets a **Tasks** checklist in the conversation column: **add**, **edit**, and

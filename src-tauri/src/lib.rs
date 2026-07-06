@@ -291,6 +291,8 @@ pub fn run() {
             forge::forge_pr_comment,
             forge::forge_pr_edit_comment,
             forge::forge_pr_delete_comment,
+            forge::forge_pr_edit_review_comment,
+            forge::forge_pr_delete_review_comment,
             forge::forge_pr_close,
             forge::forge_pr_reopen,
             forge::forge_pr_edit,

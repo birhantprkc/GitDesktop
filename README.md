@@ -282,7 +282,8 @@ source of truth); per PR, ignore the prior review, trim a false finding, or opt 
 of the external-bot folding. **Line-anchored review comments** — from Copilot,
 CodeRabbit, or humans — render right in the app: grouped by file in the
 Conversation tab and anchored at their exact line in the Files diff, with
-reply-in-thread and resolve/unresolve — and a reviewer's suggested change can be
+reply-in-thread, resolve/unresolve, and edit/delete of your own thread comments —
+and a reviewer's suggested change can be
 **applied straight to your working tree** (verified against the file, staged when
 safe), something even GitHub's API can't do. Write/Preview markdown editor
 (formatting toolbar and live preview) everywhere you author.

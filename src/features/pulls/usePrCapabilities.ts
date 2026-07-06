@@ -86,6 +86,11 @@ export function usePrCapabilities(
   // pending/failed; a ready GitLab/Bitbucket repo enables it too.
   const canEditOwnComments =
     canWrite || forgeFeatureReady(forgeData, "mrCommentEdit");
+  // Editing/deleting your OWN review-thread comments is a shared control too —
+  // thread-scoped like reply/resolve, same `canWrite || …` gate; the per-comment
+  // `viewerDidAuthor` check narrows it to the author.
+  const canEditOwnThreadComments =
+    canWrite || forgeFeatureReady(forgeData, "mrThreadCommentEdit");
 
   return {
     canWrite,
@@ -107,5 +112,6 @@ export function usePrCapabilities(
     canThreadResolve,
     canReact,
     canEditOwnComments,
+    canEditOwnThreadComments,
   };
 }

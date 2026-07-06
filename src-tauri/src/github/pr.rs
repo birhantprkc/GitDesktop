@@ -721,6 +721,54 @@ pub async fn delete_comment(repo_path: &str, comment_id: &str) -> AppResult<()> 
     Ok(())
 }
 
+/// Edits the body of a file:line-anchored REVIEW-thread comment, addressed by its
+/// GraphQL node id (from `gh_pr_review_threads`). These are `PullRequestReviewComment`
+/// nodes — a DISTINCT type from the `IssueComment` nodes [`edit_comment`] handles, so
+/// they take their own `updatePullRequestReviewComment` mutation (the IssueComment
+/// mutations reject a review-comment id). GitHub only lets the author edit, so it's
+/// offered solely on the viewer's own comments. Plain fn (called by the forge dispatch).
+pub async fn edit_review_comment(repo_path: &str, comment_id: &str, body: &str) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    run_gh(
+        Some(repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id:ID!,$body:String!){updatePullRequestReviewComment(input:{pullRequestReviewCommentId:$id,body:$body}){pullRequestReviewComment{id}}}",
+            "-f",
+            &format!("id={comment_id}"),
+            "-f",
+            &format!("body={body}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Permanently deletes a review-thread comment by its GraphQL node id. Like
+/// [`edit_review_comment`], these are `PullRequestReviewComment` nodes, so this uses
+/// `deletePullRequestReviewComment` (not the IssueComment delete). Plain fn.
+pub async fn delete_review_comment(repo_path: &str, comment_id: &str) -> AppResult<()> {
+    run_gh(
+        Some(repo_path),
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id:ID!){deletePullRequestReviewComment(input:{id:$id}){clientMutationId}}",
+            "-f",
+            &format!("id={comment_id}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Hides (minimizes) a comment with a reason. `classifier` is a GitHub
 /// `ReportedContentClassifiers` value: SPAM, ABUSE, OFF_TOPIC, OUTDATED,
 /// DUPLICATE, or RESOLVED.

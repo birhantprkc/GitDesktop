@@ -603,6 +603,10 @@ export interface ForgeImplemented {
   mrThreadReply: boolean;
   /** Resolving / unresolving a review thread. */
   mrThreadResolve: boolean;
+  /** Editing + deleting your own comment inside a review thread — the shared
+   *  Thread edit/delete controls, thread-scoped like reply/resolve. GitHub keeps
+   *  these via `canWrite`; GitLab and Bitbucket true. */
+  mrThreadCommentEdit: boolean;
 }
 
 /** One pull-request task (Bitbucket's PR checklist). `id`/`commentId` are numeric

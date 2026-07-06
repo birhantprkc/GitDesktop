@@ -49,6 +49,12 @@ interface ThreadCallbacks {
   onReply?: (threadId: string, body: string) => Promise<void>;
   /** Present when the viewer may resolve/unresolve; flips the thread state. */
   onResolve?: (threadId: string, resolved: boolean) => Promise<void>;
+  /** Present when the viewer may edit their own thread comments; saves the new
+   *  body. Wired to a Thread's edit control only for a comment the viewer wrote. */
+  onEditComment?: (commentId: string, body: string) => void;
+  /** Present when the viewer may delete their own thread comments; opens the
+   *  delete confirmation. Wired only for a comment the viewer wrote. */
+  onDeleteComment?: (commentId: string) => void;
 }
 
 /** The anchor label: "Lines a–b" for a range, "Line b" for a single line, "" at
@@ -487,6 +493,8 @@ export function ReviewThreadCard({
   onQuote,
   onReply,
   onResolve,
+  onEditComment,
+  onDeleteComment,
   compact = false,
   onRowFocus,
   apply,
@@ -634,6 +642,19 @@ export function ReviewThreadCard({
                 key={commentKey}
                 thread={c}
                 onQuote={onQuote ? () => onQuote(c.body) : undefined}
+                // Edit/delete only for a comment the viewer authored (the temp id
+                // would 404 otherwise); the block passes the handlers only when the
+                // provider + capability allow it.
+                onSaveEdit={
+                  onEditComment && c.viewerDidAuthor
+                    ? (body) => onEditComment(c.id, body)
+                    : undefined
+                }
+                onDelete={
+                  onDeleteComment && c.viewerDidAuthor
+                    ? () => onDeleteComment(c.id)
+                    : undefined
+                }
                 // Splice real SuggestionBlocks between markdown segments — quote
                 // and copy still act on the RAW body (Thread passes `thread.body`
                 // to both), so only the on-screen render changes.
@@ -782,6 +803,8 @@ export function ReviewThreadsBlock({
   onQuote,
   onReply,
   onResolve,
+  onEditComment,
+  onDeleteComment,
   apply,
 }: {
   threads: ReviewThreadOut[] | undefined;
@@ -912,6 +935,8 @@ export function ReviewThreadsBlock({
                     onQuote={onQuote}
                     onReply={onReply}
                     onResolve={onResolve}
+                    onEditComment={onEditComment}
+                    onDeleteComment={onDeleteComment}
                     apply={apply}
                   />
                 ))}
@@ -937,6 +962,8 @@ export function ReviewThreadsBlock({
                           onQuote={onQuote}
                           onReply={onReply}
                           onResolve={onResolve}
+                          onEditComment={onEditComment}
+                          onDeleteComment={onDeleteComment}
                           apply={apply}
                         />
                       ))}

@@ -450,6 +450,51 @@ pub async fn forge_pr_delete_comment(
     }
 }
 
+/// Edit a file:line-anchored review-THREAD comment's body, behind the abstraction.
+/// Distinct from `forge_pr_edit_comment` (which edits flat conversation comments):
+/// GitHub review comments are `PullRequestReviewComment` nodes with their own
+/// mutation, so the GitHub arm calls a dedicated fn. GitLab positioned notes and
+/// Bitbucket inline comments are the same objects as their conversation notes/
+/// comments, so those arms reuse the existing note/comment endpoints. `comment_id`
+/// is the id the review thread already carries. Gated on
+/// `implemented.mrThreadCommentEdit`.
+#[tauri::command]
+pub async fn forge_pr_edit_review_comment(
+    repo_path: String,
+    number: u64,
+    comment_id: String,
+    body: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::edit_mr_comment(&repo_path, number, &comment_id, &body).await
+        }
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::edit_pr_comment(&repo_path, number, &comment_id, &body).await
+        }
+        _ => github::edit_review_comment(&repo_path, &comment_id, &body).await,
+    }
+}
+
+/// Delete a file:line-anchored review-thread comment, behind the abstraction. Same
+/// `comment_id` carriage and per-provider routing as `forge_pr_edit_review_comment`.
+#[tauri::command]
+pub async fn forge_pr_delete_review_comment(
+    repo_path: String,
+    number: u64,
+    comment_id: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::delete_mr_comment(&repo_path, number, &comment_id).await
+        }
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::delete_pr_comment(&repo_path, number, &comment_id).await
+        }
+        _ => github::delete_review_comment(&repo_path, &comment_id).await,
+    }
+}
+
 /// Close a merge/pull request (not merge), behind the abstraction.
 #[tauri::command]
 pub async fn forge_pr_close(repo_path: String, number: u64) -> AppResult<()> {

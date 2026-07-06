@@ -168,6 +168,17 @@ pub async fn delete_comment(repo_path: &str, comment_id: &str) -> AppResult<()> 
     crate::github::pr::delete_comment(repo_path, comment_id).await
 }
 
+/// Edit a file:line-anchored review-thread comment's body (a
+/// `PullRequestReviewComment` node — distinct from conversation comments).
+pub async fn edit_review_comment(repo_path: &str, comment_id: &str, body: &str) -> AppResult<()> {
+    crate::github::pr::edit_review_comment(repo_path, comment_id, body).await
+}
+
+/// Delete a review-thread comment by node id.
+pub async fn delete_review_comment(repo_path: &str, comment_id: &str) -> AppResult<()> {
+    crate::github::pr::delete_review_comment(repo_path, comment_id).await
+}
+
 pub async fn close_pr(repo_path: &str, number: u64) -> AppResult<()> {
     crate::github::pr::gh_pr_close(repo_path.to_string(), number).await
 }

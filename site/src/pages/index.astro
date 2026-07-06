@@ -30,28 +30,60 @@ const capabilities = [
   { label: "Branch compare — ahead/behind, 3-dot" },
   { label: "Merge preview — see conflicts before you merge" },
   { label: "GitHub PRs + private local PRs" },
-  { label: "Inline review comments — anchored in the diff, reply, resolve & apply suggestions locally" },
+  {
+    label:
+      "Inline review comments — anchored in the diff, reply, resolve, edit/delete your own & apply suggestions locally",
+  },
   { label: "GitHub Enterprise — same features, via gh" },
   { label: "Multiple accounts, switch active per host" },
-  { label: "Repo switcher — forge logo & visibility badge per row, grouped by owner" },
+  {
+    label:
+      "Repo switcher — forge logo & visibility badge per row, grouped by owner",
+  },
   { label: "In-app conflict editor (current / incoming / both)" },
   { label: "AI code & security review", ai: true },
   { label: "Resolve merge conflicts with AI (review, then accept)", ai: true },
-  { label: "Delegate tasks to a Claude, Codex, Copilot, or opencode agent", ai: true },
-  { label: "Watch the agent work step by step, with an inline diff for each edit", ai: true },
-  { label: "Best-of-N — run a task across different agents/models, keep the best", ai: true },
+  {
+    label: "Delegate tasks to a Claude, Codex, Copilot, or opencode agent",
+    ai: true,
+  },
+  {
+    label:
+      "Watch the agent work step by step, with an inline diff for each edit",
+    ai: true,
+  },
+  {
+    label:
+      "Best-of-N — run a task across different agents/models, keep the best",
+    ai: true,
+  },
   { label: "Integrated terminal in each session (host & container)", ai: true },
-  { label: "Research a topic with web search on any agent — switch between Brainstorm & Deep research mid-session, cited (read-only)", ai: true },
+  {
+    label:
+      "Research a topic with web search on any agent — switch between Brainstorm & Deep research mid-session, cited (read-only)",
+    ai: true,
+  },
   { label: "Plan a task into an agent-ready issue (read-only)", ai: true },
   { label: "Hand an issue or plan to an agent to implement", ai: true },
   { label: "Agent sessions — tabs, search & completion alerts", ai: true },
   { label: "Slash commands & skills in the agent composer", ai: true },
   { label: "Bring your own MCP servers, opted in per session", ai: true },
-  { label: "Point AI at a custom or LAN Ollama / OpenAI-compatible server", ai: true },
+  {
+    label: "Point AI at a custom or LAN Ollama / OpenAI-compatible server",
+    ai: true,
+  },
   { label: "Browse the official MCP registry to add servers", ai: true },
-  { label: "Use GitDesktop as an MCP server for external AI clients (read-only, or opt-in local-PR write tools)", ai: true },
+  {
+    label:
+      "Use GitDesktop as an MCP server for external AI clients (read-only, or opt-in local-PR write tools)",
+    ai: true,
+  },
   { label: "Run agents in a Docker/Podman sandbox (opt-in)", ai: true },
-  { label: "Add per-repo tools to the agent container (e.g. Playwright) via a custom image", ai: true },
+  {
+    label:
+      "Add per-repo tools to the agent container (e.g. Playwright) via a custom image",
+    ai: true,
+  },
   { label: "Reviews keep running in the background", ai: true },
   { label: "Iterative reviews build on the last round", ai: true },
   { label: "Builds on Copilot / CodeRabbit reviews", ai: true },
@@ -69,7 +101,10 @@ const capabilities = [
   { label: "Tags, releases & assets" },
   { label: "Stash browser" },
   { label: "Cherry-pick commits onto any branch" },
-  { label: "Update a branch from its upstream & delete remote branches — no checkout needed" },
+  {
+    label:
+      "Update a branch from its upstream & delete remote branches — no checkout needed",
+  },
   { label: "Interactive rebase — reword/squash/fixup/edit/drop/reorder" },
   { label: "Submodule status & update" },
   { label: "Worktree manager — create, switch & remove" },
@@ -91,7 +126,10 @@ const capabilities = [
   { label: "Collaborators & invitations (admin)" },
   { label: "Branch rulesets — create, edit, enable/disable (admin)" },
   { label: "Code security & analysis toggles (admin)" },
-  { label: "Danger zone — rename, archive, visibility, transfer, delete (admin)" },
+  {
+    label:
+      "Danger zone — rename, archive, visibility, transfer, delete (admin)",
+  },
   { label: "GitHub Pages — source, custom domain, HTTPS (admin)" },
   { label: "Actions/Dependabot/Codespaces secrets & variables (admin)" },
   { label: "Edit the Sponsor button (.github/FUNDING.yml)" },
