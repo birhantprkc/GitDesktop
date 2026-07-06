@@ -1465,6 +1465,9 @@ pub struct CommitCommentOut {
     /// Anchored new-side line (`None` = whole-commit, or a GitHub comment whose
     /// `line` GitHub reported null).
     pub line: Option<u64>,
+    /// First line of a multi-line range; `None` = single-line. GitLab only —
+    /// GitHub/Bitbucket commit comments have no range concept.
+    pub start_line: Option<u64>,
     /// GitHub diff-position (GitHub anchored comments only; `None` elsewhere).
     pub position: Option<u64>,
 }
@@ -1843,6 +1846,8 @@ pub async fn commit_comments(repo_path: &str, sha: &str) -> AppResult<Vec<Commit
                 created_at: c.created_at,
                 path: c.path,
                 line: c.line,
+                // GitHub commit comments have no multi-line range concept.
+                start_line: None,
                 position: c.position,
             }
         })

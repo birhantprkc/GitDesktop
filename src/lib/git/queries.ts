@@ -897,6 +897,32 @@ export function useCommitComments(repo: string, sha: string | null) {
   });
 }
 
+/** Whether a commit lives on any remote — gates the History-tab commit-comment
+ *  surface (you can only comment on a commit the forge already has). A push can
+ *  flip it from false to true, hence the short stale window; pass `sha: null` when
+ *  no commit is selected so the read doesn't fire. */
+export function useCommitOnRemote(repo: string, sha: string | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "commit", sha, "on-remote"] as const,
+    queryFn: () => api.commitOnRemote(repo, sha ?? ""),
+    enabled: sha !== null,
+    staleTime: 30_000,
+  });
+}
+
+/** The forge's own unified diff for a commit, PR-independent. GitHub commit-comment
+ *  `position` mapping must walk GitHub's own patch rather than local git's (rename
+ *  detection etc. can differ), so this fetches the provider's diff. Pass `sha: null`
+ *  to keep it cold when no commit is selected. */
+export function useRemoteCommitDiff(repo: string, sha: string | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "commit", sha, "remote-diff"] as const,
+    queryFn: () => api.forgeCommitDiff(repo, sha ?? ""),
+    enabled: sha !== null,
+    staleTime: 30_000,
+  });
+}
+
 const commitCommentsKey = (repo: string, sha: string) =>
   ["repo", repo, "commit", sha, "comments"] as const;
 
@@ -919,6 +945,7 @@ export function useCreateCommitComment(repo: string) {
       body: string;
       path?: string;
       line?: number;
+      startLine?: number;
       position?: number;
     }) => api.forgeCommitCommentCreate(repo, args),
     onMutate: async (args: {
@@ -926,6 +953,7 @@ export function useCreateCommitComment(repo: string) {
       body: string;
       path?: string;
       line?: number;
+      startLine?: number;
       position?: number;
     }) => {
       const key = commitCommentsKey(repo, args.sha);
@@ -946,6 +974,7 @@ export function useCreateCommitComment(repo: string) {
         viewerDidAuthor: false,
         path: args.path ?? null,
         line: args.line ?? null,
+        startLine: args.startLine ?? null,
         position: args.position ?? null,
       };
       queryClient.setQueryData<CommitCommentOut[]>(key, (list) =>

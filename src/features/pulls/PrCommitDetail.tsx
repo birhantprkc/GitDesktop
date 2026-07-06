@@ -1,15 +1,10 @@
 import { CopyIcon } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
-import {
-  DiffContent,
-  type DiffLineAnchor,
-  type LineWidget,
-} from "@/features/diff/DiffSurface";
+import { DiffContent, type LineWidget } from "@/features/diff/DiffSurface";
 import { copyText } from "@/lib/clipboard";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import { useCommitComments, usePrCommitDiff } from "@/lib/git/queries";
@@ -20,7 +15,7 @@ import { cn } from "@/lib/utils";
 import {
   CommitComments,
   CommitLineComposer,
-  lineFromPosition,
+  useCommitLineAnchors,
 } from "./CommitComments";
 
 interface PrCommitDetailProps {
@@ -104,35 +99,12 @@ export function PrCommitDetail({
 
   // Line-anchored comments on the SELECTED file that resolve to a new-side line
   // render inline in the diff; ones that can't resolve fall back to the
-  // CommitComments labelled group. Group multiple comments on the same line into
-  // one stacked anchor (the renderer keeps one entry per line/side).
-  const lineAnchors = useMemo<DiffLineAnchor[]>(() => {
-    if (!effectivePath) return [];
-    const byLine = new Map<number, typeof comments.data>();
-    for (const c of comments.data ?? []) {
-      if (c.path !== effectivePath) continue;
-      const line =
-        c.line ?? lineFromPosition(sections.get(effectivePath), c.position);
-      if (line == null) continue;
-      const bucket = byLine.get(line);
-      if (bucket) bucket.push(c);
-      else byLine.set(line, [c]);
-    }
-    return [...byLine.entries()].map(([line, group]) => ({
-      side: "new" as const,
-      line,
-      render: () => (
-        <div className="space-y-2">
-          {(group ?? []).map((c) => (
-            <div key={c.id} className="space-y-1">
-              <p className="text-[11px] font-medium">{c.author}</p>
-              <Markdown>{c.body}</Markdown>
-            </div>
-          ))}
-        </div>
-      ),
-    }));
-  }, [effectivePath, comments.data, sections]);
+  // CommitComments labelled group. Grouping + range chips live in the shared hook.
+  const lineAnchors = useCommitLineAnchors(
+    comments.data,
+    sections,
+    effectivePath,
+  );
 
   const selected = files.find((f) => f.path === effectivePath);
   const fileDiff = selected
@@ -152,13 +124,14 @@ export function PrCommitDetail({
     if (!canCommentCommits || !effectivePath) return undefined;
     return {
       enabled: true,
-      render: ({ side, line, onClose }) => (
+      render: ({ side, line, fromLine, onClose }) => (
         <CommitLineComposer
           repoPath={repoPath}
           sha={commit.oid}
           path={effectivePath}
           side={side}
           line={line}
+          fromLine={fromLine}
           provider={provider}
           fileSection={sections.get(effectivePath)}
           onClose={onClose}

@@ -304,6 +304,14 @@ Right-click a commit (or use the commit detail view) for:
 - **Create a branch** or **create a tag** at a commit, **check out** a commit, or copy
   its SHA.
 
+## Commit comments
+
+When the repo is connected to **GitHub**, **GitLab**, or **Bitbucket** and the commit is
+**pushed**, opening it shows a **comments pane** below the diff: a **whole-commit composer**
+plus its thread, and **clickable line numbers** on the diff — click or drag a range to anchor
+a comment to those lines (create / edit / delete your own). An **unpushed** commit shows a
+push hint instead, and a local-only repo shows no comment pane at all.
+
 ## Exploring a file's past
 
 - **File history** — see every commit that touched a specific file.
@@ -500,7 +508,10 @@ diff excerpt, and every reply — as Markdown.
 ## Compose your own review
 
 In the **Files** tab, **click a line number** — or **drag across a range** of them — to
-open an inline composer right under the diff. From there you can:
+open an inline composer right under the diff. A dragged range lands as a **real multi-line
+anchor** on **GitHub and GitLab**; **Bitbucket** anchors at the last line, and the composer
+says so. Clicking the **+** on **any line** of a drag (not just its last) reopens the same
+range. From there you can:
 
 - **Add single comment** — post one line comment immediately (it appears in the thread
   right away).
@@ -525,8 +536,10 @@ A PR's **Commits** tab is arrow-navigable — **↑ / ↓** to move, **Enter** t
 A hosted commit opens a **detail view**: its full message body, a changed-file list with
 per-file diffs, and a **copy SHA** control (a local PR's commit opens the full history
 commit detail instead). The detail view also carries **commit comments** — a whole-commit
-thread and **line-anchored comments** on the commit's diff (click a line to comment), with
-create / edit / delete of your own, on GitHub, GitLab, and Bitbucket.
+thread and **line-anchored comments** on the commit's diff (click a line, or drag a range),
+with create / edit / delete of your own, on GitHub, GitLab, and Bitbucket. A dragged range is
+a real range on **GitLab**; **GitHub** and **Bitbucket** commit comments anchor to a single
+line, and the composer says so.
 
 Create a PR with **Create pull request** ({{kbd:create-pr}}) or from the Compare tab — as
 a **draft** if you like{{ai}}, optionally with an **AI-generated** title and description

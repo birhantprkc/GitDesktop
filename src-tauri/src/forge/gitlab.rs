@@ -467,6 +467,137 @@ fn reconstruct_file_diff(c: &GlabChange) -> String {
     s
 }
 
+// ── Multi-line diff-note ranges (line_range / line_code) ───────────────────────
+//
+// GitLab anchors a multi-line diff note via `position.line_range`, whose start/end
+// refs each carry a `line_code` = `sha1_hex(file_path)_<old_pos>_<new_pos>`. The
+// (old_pos, new_pos) pair follows GitLab's own diff-parser walk of the file's
+// unified-diff hunks. We send BOTH `line_code` and `type` + `new_line`/`old_line`
+// on each ref (GitLab's web UI highlights on `line_code`; our reader keys on the
+// explicit line field). A ref without `line_code` (just `type` + line) is also
+// accepted — the fallback when line_code can't be computed, so a post never fails
+// over line_code.
+
+/// The `line_code` for a diff-note range ref: `sha1_hex(file_path)_<old_pos>_<new_pos>`.
+/// GitLab keys its multi-line highlight on this value. Pure (testable).
+fn gl_line_code(file_path: &str, old_pos: u64, new_pos: u64) -> String {
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
+    hasher.update(file_path.as_bytes());
+    let digest = hasher.finalize();
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    format!("{hex}_{old_pos}_{new_pos}")
+}
+
+/// Walk a GitLab per-file unified-diff hunk string (starts at `@@`, no `---`/`+++`
+/// header — the raw `GlabChange.diff`) and return the `(old_pos, new_pos)` pair for
+/// the requested `line` on the given `side` ("new" or "old"), following GitLab's own
+/// diff-parser semantics. Returns `None` when the line isn't found in the diff.
+///
+/// Per GitLab's parser: at each `@@ -a[,b] +c[,d] @@` header, the old counter starts
+/// at `a`, the new at `c`. A `+` line takes (old, new) then advances new only (so an
+/// added line in a new file with `@@ -0,0 +1,6 @@` gets `_0_2` at new line 2). A `-`
+/// line takes (old, new) then advances old. A context (space / empty) line takes
+/// (old, new) then advances both. A `\ No newline…` marker is skipped entirely.
+/// Pure (testable).
+fn gl_diff_line_refs(file_diff: &str, side: &str, line: u64) -> Option<(u64, u64)> {
+    let mut old_pos: u64 = 0;
+    let mut new_pos: u64 = 0;
+    for raw in file_diff.lines() {
+        if let Some(header) = raw.strip_prefix("@@") {
+            // `@@ -a[,b] +c[,d] @@ …` — parse the `-a` and `+c` starts.
+            let (a, c) = parse_hunk_header(header)?;
+            old_pos = a;
+            new_pos = c;
+            continue;
+        }
+        // `\ No newline at end of file` — no refs, no counter change.
+        if raw.starts_with('\\') {
+            continue;
+        }
+        let first = raw.chars().next();
+        match first {
+            Some('+') => {
+                if side == "new" && new_pos == line {
+                    return Some((old_pos, new_pos));
+                }
+                new_pos += 1;
+            }
+            Some('-') => {
+                if side == "old" && old_pos == line {
+                    return Some((old_pos, new_pos));
+                }
+                old_pos += 1;
+            }
+            // Context line (leading space) or a bare empty line inside a hunk.
+            _ => {
+                if (side == "new" && new_pos == line) || (side == "old" && old_pos == line) {
+                    return Some((old_pos, new_pos));
+                }
+                old_pos += 1;
+                new_pos += 1;
+            }
+        }
+    }
+    None
+}
+
+/// Parse the `-a[,b] +c[,d]` starts out of a hunk header body (the text AFTER the
+/// leading `@@`). Returns `(old_start, new_start)`, or `None` if malformed. Pure.
+///
+/// ONLY the range slice between the leading `@@` and the CLOSING `@@` is parsed; the
+/// text after the closing marker is git's function-context section heading and is
+/// untrusted (it can contain arbitrary code — a `->` return type, a trailing `+5`/`-3`
+/// token, even a literal `@@` in Ruby `@@var`). Cut at the FIRST subsequent `@@`, then
+/// take the old start from the FIRST `-`-prefixed token and the new start from the
+/// FIRST `+`-prefixed token — never reassigning, so a heading number can't clobber a
+/// real range.
+fn parse_hunk_header(header: &str) -> Option<(u64, u64)> {
+    // header (text after the leading `@@`) looks like ` -a,b +c,d @@ optional context`.
+    // Everything from the first subsequent `@@` on is the section heading — drop it.
+    let range = match header.split_once("@@") {
+        Some((range, _heading)) => range,
+        None => header,
+    };
+    let mut old_start = None;
+    let mut new_start = None;
+    for tok in range.split_whitespace() {
+        if let Some(rest) = tok.strip_prefix('-') {
+            if old_start.is_none() {
+                old_start = rest.split(',').next().and_then(|n| n.parse::<u64>().ok());
+            }
+        } else if let Some(rest) = tok.strip_prefix('+') {
+            if new_start.is_none() {
+                new_start = rest.split(',').next().and_then(|n| n.parse::<u64>().ok());
+            }
+        }
+    }
+    Some((old_start?, new_start?))
+}
+
+/// Build the `line_range` object for a diff note spanning `start`..=`line` on `side`,
+/// against the file's hunk-only diff `file_diff`. Each ref carries `type` + the
+/// side-matched line field, plus `line_code` when it can be computed from the diff
+/// (the no-line_code form is the accepted fallback). `None` is never returned — the
+/// object always has the explicit line fields so the post can't fail over line_code.
+fn gl_build_line_range(
+    file_diff: &str,
+    file_path: &str,
+    side: &str,
+    start: u64,
+    line: u64,
+) -> serde_json::Value {
+    let line_field = if side == "old" { "old_line" } else { "new_line" };
+    let make_ref = |ln: u64| {
+        let mut r = serde_json::json!({ "type": side, line_field: ln });
+        if let Some((old_pos, new_pos)) = gl_diff_line_refs(file_diff, side, ln) {
+            r["line_code"] = serde_json::Value::String(gl_line_code(file_path, old_pos, new_pos));
+        }
+        r
+    };
+    serde_json::json!({ "start": make_ref(start), "end": make_ref(line) })
+}
+
 #[derive(Deserialize)]
 struct GlabCommit {
     id: String,
@@ -685,6 +816,75 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     })
 }
 
+/// Fetch an MR's changed files (`…/merge_requests/{n}/changes` → `changes[]`) as the
+/// raw `GlabChange` list, so a range-writer can find a file's hunk-only diff to
+/// compute `line_code`. Tolerant: a parse failure yields an empty list (the caller
+/// then falls back to a line_code-less range rather than failing the post).
+async fn fetch_mr_changes(repo_path: &str, enc: &str, number: u64) -> Vec<GlabChange> {
+    let out = match run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/merge_requests/{number}/changes")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    serde_json::from_str::<GlabMrChanges>(&out.stdout_lossy())
+        .map(|mr| mr.changes)
+        .unwrap_or_default()
+}
+
+/// Fetch a commit's changed files (`…/repository/commits/{sha}/diff` → `[]`) as the
+/// raw `GlabChange` list. Same tolerant contract as `fetch_mr_changes`.
+async fn fetch_commit_changes(repo_path: &str, enc: &str, sha: &str) -> Vec<GlabChange> {
+    let out = match run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/repository/commits/{sha}/diff?per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    serde_json::from_str::<Vec<GlabChange>>(&out.stdout_lossy()).unwrap_or_default()
+}
+
+/// Find a changed file's hunk-only diff by matching on the side-appropriate path
+/// (`new_path` for the new side, `old_path` for the old side). Pure (testable).
+fn gl_file_diff<'a>(changes: &'a [GlabChange], path: &str, side: &str) -> Option<&'a str> {
+    changes
+        .iter()
+        .find(|c| {
+            if side == "old" {
+                c.old_path == path
+            } else {
+                c.new_path == path
+            }
+        })
+        .map(|c| c.diff.as_str())
+}
+
+/// Compute the `line_range` for a ranged diff note against a fetched change set:
+/// find the file's diff, then build the range. `None` when the file isn't in the
+/// change set — the caller then falls back to a line_code-less range so the post
+/// never fails over an unresolved file.
+fn gl_range_from_changes(
+    changes: &[GlabChange],
+    path: &str,
+    side: &str,
+    start: u64,
+    line: u64,
+) -> serde_json::Value {
+    match gl_file_diff(changes, path, side) {
+        Some(diff) => gl_build_line_range(diff, path, side, start, line),
+        // File not in the change set: emit refs without line_code (type + line only).
+        None => gl_build_line_range("", path, side, start, line),
+    }
+}
+
 /// The unified diff for one merge request, rebuilt from `/changes` into the same
 /// `git`-style format `gh pr diff` produces so the frontend diff viewer parses it.
 pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
@@ -786,6 +986,10 @@ struct GlabCommitNotePosition {
     new_line: Option<u64>,
     #[serde(default)]
     old_path: String,
+    /// Present only on multi-line commit-diff notes: the range endpoints. We read the
+    /// START line (new side) for the neutral `start_line`. Option per untrusted-JSON.
+    #[serde(default)]
+    line_range: Option<GlabLineRange>,
 }
 
 /// Map a positioned commit note's anchor onto the neutral `(path, line)`. Pure
@@ -848,6 +1052,16 @@ pub async fn commit_comments(repo_path: &str, sha: &str) -> AppResult<Vec<Commit
                 Some(p) => gl_commit_anchor(p),
                 None => (None, None),
             };
+            // Multi-line commit-diff notes carry `line_range`; its start (new side —
+            // the commit composer only ranges the new side) is the range's first
+            // line, resolved from the explicit field or the line_code fallback.
+            let start_line = n
+                .position
+                .as_ref()
+                .and_then(|p| p.line_range.as_ref())
+                .and_then(|r| r.start.as_ref())
+                .and_then(|s| gl_range_ref_line(s, "new"))
+                .map(u64::from);
             items.push(CommitCommentOut {
                 viewer_did_author: note_authored_by_viewer(&author, viewer.as_deref()),
                 id: format!("{}:{}", d.id, n.id),
@@ -856,6 +1070,7 @@ pub async fn commit_comments(repo_path: &str, sha: &str) -> AppResult<Vec<Commit
                 created_at: n.created_at,
                 path,
                 line,
+                start_line,
                 // GitLab has no GitHub-style diff `position`; anchoring is by line.
                 position: None,
             });
@@ -889,13 +1104,19 @@ async fn commit_parent_sha(repo_path: &str, enc: &str, sha: &str) -> AppResult<S
 
 /// Post a comment on a commit. Whole-commit (`path`/`line` both None) posts a flat
 /// `-f body`; an anchored one posts the nested `position` JSON via `--input -`
-/// (flat `-f position[x]=y` is silently ignored by GitLab). Empty-body guarded.
+/// (flat `-f position[x]=y` is silently ignored by GitLab). `start_line`, when
+/// `Some(start)` and `start != line`, makes an anchored comment a MULTI-LINE range
+/// (new side only — the commit composer ranges the new side): we fetch the commit's
+/// per-file diffs, compute each endpoint's `line_code`, and attach
+/// `position.line_range` (falling back to line_code-less refs if the file/line can't
+/// be resolved — the post never fails over line_code). Empty-body guarded.
 pub async fn commit_comment_create(
     repo_path: &str,
     sha: &str,
     body: &str,
     path: Option<&str>,
     line: Option<u64>,
+    start_line: Option<u64>,
 ) -> AppResult<()> {
     if body.trim().is_empty() {
         return Err(AppError::InvalidArgument("a comment is required".into()));
@@ -906,17 +1127,20 @@ pub async fn commit_comment_create(
     match (path, line) {
         (Some(p), Some(l)) => {
             let parent = commit_parent_sha(repo_path, &enc, sha).await?;
-            let payload = serde_json::json!({
-                "body": body,
-                "position": {
-                    "base_sha": parent,
-                    "start_sha": parent,
-                    "head_sha": sha,
-                    "position_type": "text",
-                    "new_path": p,
-                    "new_line": l,
-                },
+            let mut position = serde_json::json!({
+                "base_sha": parent,
+                "start_sha": parent,
+                "head_sha": sha,
+                "position_type": "text",
+                "new_path": p,
+                "new_line": l,
             });
+            // Multi-line range (new side): attach `line_range` from the commit diffs.
+            if let Some(start) = start_line.filter(|s| *s != l) {
+                let changes = fetch_commit_changes(repo_path, &enc, sha).await;
+                position["line_range"] = gl_range_from_changes(&changes, p, "new", start, l);
+            }
+            let payload = serde_json::json!({ "body": body, "position": position });
             run_glab_ex(
                 Some(repo_path),
                 &[
@@ -2641,6 +2865,41 @@ struct GlabLineRangeRef {
     new_line: Option<u32>,
     #[serde(default)]
     old_line: Option<u32>,
+    /// `sha1_hex(file_path)_<old_pos>_<new_pos>` — GitLab's own multi-line highlight
+    /// key. API-created ranges (ours pre-echo, or another client's) may carry ONLY
+    /// this, with the explicit line field null, so it's a fallback source for the
+    /// side-matched line. Option per the untrusted-JSON rule.
+    #[serde(default)]
+    line_code: Option<String>,
+    /// The ref's side ("new"/"old"); present on API-created refs. We resolve the side
+    /// from the note's anchor, not this field, so it's captured for shape-tolerance
+    /// only (accepts GitLab's `type` key without erroring). Untrusted → Option.
+    #[serde(default, rename = "type")]
+    #[allow(dead_code)]
+    ref_type: Option<String>,
+}
+
+/// Resolve a range ref's line for `side` ("new"/"old"): the explicit side-matched
+/// field first (`new_line` for the new side, `old_line` for the old), else the
+/// trailing `_<old_pos>_<new_pos>` parsed out of `line_code` (picking the old part
+/// for the old side, the new part for the new side). `None` when neither yields a
+/// value — a garbage or absent `line_code` and no explicit field. Pure (testable).
+fn gl_range_ref_line(r: &GlabLineRangeRef, side: &str) -> Option<u32> {
+    let explicit = if side == "old" { r.old_line } else { r.new_line };
+    if explicit.is_some() {
+        return explicit;
+    }
+    let code = r.line_code.as_deref()?;
+    // The last two `_`-separated segments are `<old_pos>_<new_pos>`.
+    let mut parts = code.rsplitn(3, '_');
+    let new_pos = parts.next()?.parse::<u32>().ok()?;
+    let old_pos = parts.next()?.parse::<u32>().ok()?;
+    // Require a non-empty prefix (the sha1) so a bare `"_1_2"` isn't accepted.
+    let prefix = parts.next()?;
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(if side == "old" { old_pos } else { new_pos })
 }
 
 /// One note inside an MR discussion, as `…/merge_requests/<n>/discussions`
@@ -2816,7 +3075,7 @@ pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<Revie
             .line_range
             .as_ref()
             .and_then(|r| r.start.as_ref())
-            .and_then(|s| if side == "old" { s.old_line } else { s.new_line })
+            .and_then(|s| gl_range_ref_line(s, side))
             .unwrap_or(0);
         // GitLab resolves whole discussions; the resolvable notes share one state.
         let is_resolved = notes
@@ -2951,8 +3210,12 @@ async fn mr_diff_refs(repo_path: &str, enc: &str, number: u64) -> AppResult<Glab
 /// Create a NEW file:line-anchored review thread on an MR (`POST
 /// …/merge_requests/{n}/discussions` with the nested `position` JSON via `--input -`
 /// — flat `-f position[x]=y` is silently ignored by GitLab). `side` is `"new"`/`"old"`
-/// (old → `old_path`/`old_line`). `start_line` is honored on GitHub only; GitLab
-/// anchors at `line`, so it's ignored here.
+/// (old → `old_path`/`old_line`). `start_line`, when `Some(start)` and `start != line`,
+/// makes this a MULTI-LINE range: we fetch the MR's per-file diffs, compute each
+/// endpoint's `line_code`, and attach `position.line_range`. If the file or a line
+/// can't be resolved, the range falls back to line_code-less refs (type + line only)
+/// — the post never fails over line_code. A single-line call sends the identical
+/// payload it always has.
 #[allow(clippy::too_many_arguments)]
 pub async fn thread_create(
     repo_path: &str,
@@ -2960,7 +3223,7 @@ pub async fn thread_create(
     path: &str,
     line: u64,
     side: &str,
-    _start_line: Option<u64>,
+    start_line: Option<u64>,
     body: &str,
 ) -> AppResult<()> {
     if body.trim().is_empty() {
@@ -2986,6 +3249,11 @@ pub async fn thread_create(
     } else {
         position["new_path"] = serde_json::Value::String(path.to_string());
         position["new_line"] = serde_json::Value::from(line);
+    }
+    // Multi-line range: attach `line_range` computed from the MR's per-file diffs.
+    if let Some(start) = start_line.filter(|s| *s != line) {
+        let changes = fetch_mr_changes(repo_path, &enc, number).await;
+        position["line_range"] = gl_range_from_changes(&changes, path, side, start, line);
     }
     let payload = serde_json::json!({ "body": body, "position": position });
     let endpoint = format!("projects/{enc}/merge_requests/{number}/discussions");
@@ -3041,6 +3309,19 @@ pub async fn review_submit(
         Some(mr_diff_refs(repo_path, &enc, number).await?)
     };
 
+    // Multi-line ranges need the MR's per-file diffs to compute `line_code`. Fetch
+    // ONCE, lazily — only when at least one comment actually carries a range (a
+    // `start_line` that differs from its `line`) — and reuse across every ranged
+    // comment. Comments without a range keep byte-identical payloads.
+    let changes = if comments
+        .iter()
+        .any(|c| c.start_line.is_some_and(|s| s != c.line))
+    {
+        Some(fetch_mr_changes(repo_path, &enc, number).await)
+    } else {
+        None
+    };
+
     // The summary → a plain draft note. Failure here means nothing landed yet.
     if let Some(s) = summary.filter(|s| !s.trim().is_empty()) {
         let note_arg = format!("note={s}");
@@ -3073,6 +3354,12 @@ pub async fn review_submit(
         } else {
             position["new_path"] = serde_json::Value::String(c.path.clone());
             position["new_line"] = serde_json::Value::from(c.line);
+        }
+        // Multi-line range: attach `line_range` from the pre-fetched change set.
+        if let Some(start) = c.start_line.filter(|s| *s != c.line) {
+            let changes = changes.as_deref().unwrap_or(&[]);
+            position["line_range"] =
+                gl_range_from_changes(changes, &c.path, &c.side, start, c.line);
         }
         let payload = serde_json::json!({ "note": c.body, "position": position });
         if let Err(e) = run_glab_ex(
@@ -6267,6 +6554,7 @@ mod tests {
             new_path: "src/main.rs".into(),
             new_line: Some(42),
             old_path: "src/main.rs".into(),
+            line_range: None,
         };
         assert_eq!(
             gl_commit_anchor(&new_side),
@@ -6278,6 +6566,7 @@ mod tests {
             new_path: String::new(),
             new_line: None,
             old_path: "src/old.rs".into(),
+            line_range: None,
         };
         assert_eq!(
             gl_commit_anchor(&old_side),
@@ -6288,6 +6577,7 @@ mod tests {
             new_path: String::new(),
             new_line: None,
             old_path: String::new(),
+            line_range: None,
         };
         assert_eq!(gl_commit_anchor(&none), (None, None));
     }
@@ -7391,5 +7681,216 @@ mod tests {
         let l = from_glab_linked_issue(serde_json::from_str(json).unwrap());
         // closed → CLOSED.
         assert_eq!(l.state, "CLOSED");
+    }
+
+    // ── Multi-line range: parser refs, line_code, and read-side fallback ──────────
+
+    #[test]
+    fn diff_line_refs_new_file_added_lines() {
+        // A brand-new file: `@@ -0,0 +1,6 @@`, only `+` lines. old never advances,
+        // so line 2 ⇒ (0, 2) and line 4 ⇒ (0, 4) — GitLab's `_0_N` semantics.
+        let diff = "@@ -0,0 +1,6 @@\n+one\n+two\n+three\n+four\n+five\n+six\n";
+        assert_eq!(gl_diff_line_refs(diff, "new", 2), Some((0, 2)));
+        assert_eq!(gl_diff_line_refs(diff, "new", 4), Some((0, 4)));
+        // Line 1 is the hunk's first `+` line ⇒ (0, 1).
+        assert_eq!(gl_diff_line_refs(diff, "new", 1), Some((0, 1)));
+    }
+
+    #[test]
+    fn diff_line_refs_mixed_hunk_context_add_remove() {
+        // @@ -10,4 +10,4 @@ : ctx(10,10) -old(11) +new(11) ctx(12,12) ctx(13,13→...)
+        // Walk:
+        //   " ctx"  new=10 old=10  → advance both → old=11,new=11
+        //   "-gone" old=11         → advance old   → old=12,new=11
+        //   "+new"  new=11         → advance new   → old=12,new=12
+        //   " a"    new=12 old=12  → both          → old=13,new=13
+        //   " b"    new=13 old=13  → both          → old=14,new=14
+        let diff = "@@ -10,4 +10,4 @@\n ctx\n-gone\n+new\n a\n b\n";
+        // New-side line 11 is the `+new` line ⇒ (12, 11) (old counter is 12 there).
+        assert_eq!(gl_diff_line_refs(diff, "new", 11), Some((12, 11)));
+        // New-side context line 12 ⇒ (12, 12).
+        assert_eq!(gl_diff_line_refs(diff, "new", 12), Some((12, 12)));
+        // Old-side line 11 is the removed `-gone` line ⇒ (11, 11).
+        assert_eq!(gl_diff_line_refs(diff, "old", 11), Some((11, 11)));
+        // Old-side context line 10 ⇒ (10, 10).
+        assert_eq!(gl_diff_line_refs(diff, "old", 10), Some((10, 10)));
+    }
+
+    #[test]
+    fn diff_line_refs_multi_hunk() {
+        // Two hunks; a line only resolvable in the second hunk.
+        let diff = "@@ -1,2 +1,2 @@\n a\n b\n@@ -50,2 +50,3 @@\n c\n+added\n d\n";
+        // New line 51 is the `+added` line in the second hunk ⇒ (51, 51).
+        assert_eq!(gl_diff_line_refs(diff, "new", 51), Some((51, 51)));
+        // New line 2 is `b` in the first hunk ⇒ (2, 2).
+        assert_eq!(gl_diff_line_refs(diff, "new", 2), Some((2, 2)));
+    }
+
+    #[test]
+    fn diff_line_refs_skips_no_newline_marker() {
+        // The `\ No newline at end of file` marker must not advance any counter.
+        let diff = "@@ -0,0 +1,2 @@\n+first\n+second\n\\ No newline at end of file\n";
+        assert_eq!(gl_diff_line_refs(diff, "new", 2), Some((0, 2)));
+        // Nothing past line 2 exists.
+        assert_eq!(gl_diff_line_refs(diff, "new", 3), None);
+    }
+
+    #[test]
+    fn diff_line_refs_function_context_heading_with_arrow() {
+        // The hunk carries a git function-context heading containing a `->` return
+        // type. The `->` token must NOT clobber the old range start (it lives past the
+        // closing `@@`). Line 41 (the `+` line) must still resolve — with a line_code.
+        let diff = "@@ -40,3 +40,4 @@ fn foo() -> Result<T> {\n ctx\n+added\n more\n";
+        // Walk from (40,40): " ctx" → (40,40), advance both → (41,41); "+added"
+        // new=41 → (41,41). The `->` in the heading must not have broken the range.
+        assert_eq!(gl_diff_line_refs(diff, "new", 41), Some((41, 41)));
+        assert_eq!(gl_diff_line_refs(diff, "new", 40), Some((40, 40)));
+    }
+
+    #[test]
+    fn diff_line_refs_heading_with_trailing_signed_number() {
+        // A heading ending in a `+N`/`-N` token must NOT overwrite the real range
+        // starts. Range starts stay 1/1; the heading's "+5"/"-3" are ignored.
+        let plus = "@@ -1,2 +1,2 @@ label +5 items\n a\n b\n";
+        assert_eq!(gl_diff_line_refs(plus, "new", 2), Some((2, 2)));
+        assert_eq!(gl_diff_line_refs(plus, "old", 1), Some((1, 1)));
+        let minus = "@@ -1,2 +1,2 @@ heading -3\n a\n b\n";
+        assert_eq!(gl_diff_line_refs(minus, "new", 2), Some((2, 2)));
+        assert_eq!(gl_diff_line_refs(minus, "old", 1), Some((1, 1)));
+    }
+
+    #[test]
+    fn diff_line_refs_heading_with_literal_double_at() {
+        // A Ruby-style `@@var` in the section heading, AFTER the closing `@@`. The
+        // first-`@@`-cut isolates the true range; the second `@@` is untrusted text.
+        let diff = "@@ -5,2 +5,3 @@ def m; @@count += 1\n ctx\n+new\n tail\n";
+        // From (5,5): " ctx" → (5,5), advance both → (6,6); "+new" new=6 → (6,6). The
+        // literal `@@` in the heading must not have confused the range parse.
+        assert_eq!(gl_diff_line_refs(diff, "new", 6), Some((6, 6)));
+        assert_eq!(gl_diff_line_refs(diff, "new", 5), Some((5, 5)));
+    }
+
+    #[test]
+    fn parse_hunk_header_ignores_untrusted_heading() {
+        // Direct unit coverage of the range/heading split (input is the text AFTER the
+        // leading `@@`, as `gl_diff_line_refs` passes it).
+        assert_eq!(parse_hunk_header(" -40,3 +40,4 @@ fn f() -> T"), Some((40, 40)));
+        assert_eq!(parse_hunk_header(" -1,2 +1,2 @@ x +5"), Some((1, 1)));
+        assert_eq!(parse_hunk_header(" -5,2 +5,3 @@ @@count"), Some((5, 5)));
+        // A malformed range (no `+` start) is still None.
+        assert_eq!(parse_hunk_header(" -1,2 @@ heading"), None);
+    }
+
+    #[test]
+    fn diff_line_refs_line_not_in_diff_is_none() {
+        let diff = "@@ -0,0 +1,2 @@\n+a\n+b\n";
+        assert_eq!(gl_diff_line_refs(diff, "new", 99), None);
+        assert_eq!(gl_diff_line_refs(diff, "old", 1), None);
+        // Empty diff (unresolvable file) ⇒ None for any line → line_code-less fallback.
+        assert_eq!(gl_diff_line_refs("", "new", 1), None);
+    }
+
+    #[test]
+    fn line_code_matches_gitlab_new_file_shape() {
+        // sha1_hex(file_path)_<old>_<new>; the sha1 of "a.txt" is stable and known.
+        let code = gl_line_code("a.txt", 0, 2);
+        assert!(code.ends_with("_0_2"), "code = {code}");
+        // 40 hex chars + "_0_2".
+        let sha = code.trim_end_matches("_0_2");
+        assert_eq!(sha.len(), 40);
+        assert!(sha.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn build_line_range_carries_line_code_and_type() {
+        // A new-file range 2..=4: both refs carry type="new", the explicit new_line,
+        // and a line_code resolved from the diff.
+        let diff = "@@ -0,0 +1,6 @@\n+1\n+2\n+3\n+4\n+5\n+6\n";
+        let range = gl_build_line_range(diff, "a.txt", "new", 2, 4);
+        let start = &range["start"];
+        let end = &range["end"];
+        assert_eq!(start["type"], "new");
+        assert_eq!(start["new_line"], 2);
+        assert!(start["line_code"].as_str().unwrap().ends_with("_0_2"));
+        assert_eq!(end["type"], "new");
+        assert_eq!(end["new_line"], 4);
+        assert!(end["line_code"].as_str().unwrap().ends_with("_0_4"));
+    }
+
+    #[test]
+    fn build_line_range_falls_back_without_line_code() {
+        // Unresolvable file (empty diff): refs keep type + line but NO line_code — the
+        // accepted fallback form; a post must never fail over line_code.
+        let range = gl_build_line_range("", "missing.txt", "old", 3, 5);
+        let start = &range["start"];
+        assert_eq!(start["type"], "old");
+        assert_eq!(start["old_line"], 3);
+        assert!(start.get("line_code").is_none());
+        assert_eq!(range["end"]["old_line"], 5);
+        assert!(range["end"].get("line_code").is_none());
+    }
+
+    #[test]
+    fn range_ref_line_prefers_explicit_field_then_line_code() {
+        // Explicit new_line wins on the new side.
+        let explicit = GlabLineRangeRef {
+            new_line: Some(7),
+            old_line: None,
+            line_code: Some("abc123_0_9".into()),
+            ref_type: Some("new".into()),
+        };
+        assert_eq!(gl_range_ref_line(&explicit, "new"), Some(7));
+
+        // line_code-only: parse the trailing `_<old>_<new>` — new side ⇒ new part.
+        let code_only = GlabLineRangeRef {
+            new_line: None,
+            old_line: None,
+            line_code: Some("deadbeef_4_11".into()),
+            ref_type: Some("new".into()),
+        };
+        assert_eq!(gl_range_ref_line(&code_only, "new"), Some(11));
+        // Old side of the same ref ⇒ the old part.
+        assert_eq!(gl_range_ref_line(&code_only, "old"), Some(4));
+
+        // Garbage line_code (no numeric tail) ⇒ None.
+        let garbage = GlabLineRangeRef {
+            new_line: None,
+            old_line: None,
+            line_code: Some("not-a-code".into()),
+            ref_type: None,
+        };
+        assert_eq!(gl_range_ref_line(&garbage, "new"), None);
+        // A bare `_1_2` (empty sha prefix) is rejected.
+        let no_prefix = GlabLineRangeRef {
+            new_line: None,
+            old_line: None,
+            line_code: Some("_1_2".into()),
+            ref_type: None,
+        };
+        assert_eq!(gl_range_ref_line(&no_prefix, "new"), None);
+
+        // Absent everything ⇒ None.
+        let empty = GlabLineRangeRef::default();
+        assert_eq!(gl_range_ref_line(&empty, "new"), None);
+        assert_eq!(gl_range_ref_line(&empty, "old"), None);
+    }
+
+    #[test]
+    fn file_diff_matches_by_side_path() {
+        let changes = vec![
+            GlabChange {
+                old_path: "old_name.rs".into(),
+                new_path: "new_name.rs".into(),
+                new_file: false,
+                deleted_file: false,
+                diff: "@@ -1 +1 @@\n-a\n+b\n".into(),
+            },
+        ];
+        // New side matches on new_path; old side on old_path.
+        assert!(gl_file_diff(&changes, "new_name.rs", "new").is_some());
+        assert!(gl_file_diff(&changes, "old_name.rs", "old").is_some());
+        // Cross-side lookups miss (new_path on the old side, etc.).
+        assert!(gl_file_diff(&changes, "new_name.rs", "old").is_none());
+        assert!(gl_file_diff(&changes, "absent.rs", "new").is_none());
     }
 }

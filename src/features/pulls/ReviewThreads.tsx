@@ -15,7 +15,11 @@ import { Markdown } from "@/components/ui/markdown";
 import { Spinner } from "@/components/ui/spinner";
 import { Thread } from "@/features/conversations/Thread";
 import { copyText } from "@/lib/clipboard";
-import type { ApplyLinesResult, ReviewThreadOut } from "@/lib/git/types";
+import type {
+  ApplyLinesResult,
+  ForgeProvider,
+  ReviewThreadOut,
+} from "@/lib/git/types";
 import { formatBinding } from "@/lib/hotkeys/binding";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { toastError } from "@/lib/toast";
@@ -226,19 +230,46 @@ export function splitSuggestionSegments(body: string): BodySegment[] {
 
 /** The original new-side lines a suggestion replaces, plus the 1-based start line
  *  for the apply write — recovered from the thread's anchored hunk. Null when they
- *  can't be recovered (GitLab/Bitbucket, no hunk, or a range the hunk doesn't
- *  fully cover): the caller degrades to a replacement-only block with no Apply.
+ *  can't be recovered (Bitbucket, no hunk, or a range the hunk doesn't fully
+ *  cover): the caller degrades to a replacement-only block with no Apply.
  *  GitHub range = `[startLine>0 ? startLine : line, line]`; GitLab's `glRange`
  *  shifts it `above` lines up / `below` lines down around the anchored line. */
 function recoverOriginals(
   thread: ReviewThreadOut,
   parsed: HunkLine[] | null,
   glRange: { above: number; below: number } | undefined,
+  provider: ForgeProvider,
 ): { lines: string[]; startLine: number } | null {
   const anchor = thread.line;
-  const above = glRange?.above ?? 0;
-  const below = glRange?.below ?? 0;
-  const from = (thread.startLine > 0 ? thread.startLine : anchor) - above;
+  // The two providers' bare-fence (no `:-N+M`) semantics DIFFER, and only the
+  // fence author's provider disambiguates them:
+  //  • GitHub: a bare fence in a ranged review comment replaces the WHOLE range
+  //    `startLine..line` (documented GitHub behavior) — base = startLine.
+  //  • GitLab: fence offsets are ALWAYS anchor-relative; a bare fence means
+  //    exactly `:-0+0` — it replaces ONLY the anchored (end) line, regardless of
+  //    the comment's line_range (the range is anchor/display metadata, not fence
+  //    scope). So on GitLab a bare fence must be treated as an anchor-based range.
+  // We normalize a GitLab bare fence to an explicit `{above:0, below:0}` glRange
+  // so the shared base logic below anchors it; GitHub keeps `undefined` → the
+  // startLine base. (Bitbucket has no Apply/recover path — parsed is null there.)
+  const effectiveGlRange =
+    glRange ?? (provider === "gitlab" ? { above: 0, below: 0 } : undefined);
+  const above = effectiveGlRange?.above ?? 0;
+  const below = effectiveGlRange?.below ?? 0;
+  // The base the fence range extends from. A GitLab `suggestion:-N+M` fence's
+  // range is ANCHOR-relative (`above`/`below` count up/down from the anchored
+  // end line), so whenever a fence range is present the base is `anchor` — never
+  // `startLine`. Only the bare-fence GitHub path, where the thread carries its
+  // own `startLine` and there's no anchor-relative fence, uses `startLine`.
+  // (History: GitLab threads never had `startLine > 0` until multi-line ranges
+  // landed; `startLine - above` would now double-count the range and Apply to
+  // the wrong lines.)
+  const base = effectiveGlRange
+    ? anchor
+    : thread.startLine > 0
+      ? thread.startLine
+      : anchor;
+  const from = base - above;
   const to = anchor + below;
   if (!parsed || anchor <= 0 || from <= 0) return null;
   const lines = newSideLines(parsed, from, to);
@@ -388,6 +419,7 @@ function SuggestionBlock({
   thread,
   parsed,
   segment,
+  provider,
   apply,
   applied,
   onApplied,
@@ -395,6 +427,9 @@ function SuggestionBlock({
   thread: ReviewThreadOut;
   parsed: HunkLine[] | null;
   segment: SuggestionSegment;
+  /** The fence author's forge — disambiguates bare-fence Apply scope (GitHub =
+   *  whole range, GitLab = anchored line only). See {@link recoverOriginals}. */
+  provider: ForgeProvider;
   apply?: SuggestionApply;
   /** Whether this block was already applied in THIS view (dedupes a confusing
    *  second click; the backend content-verify would reject a real re-apply). */
@@ -402,7 +437,7 @@ function SuggestionBlock({
   onApplied: () => void;
 }) {
   const [pending, setPending] = useState(false);
-  const originals = recoverOriginals(thread, parsed, segment.glRange);
+  const originals = recoverOriginals(thread, parsed, segment.glRange, provider);
 
   async function runApply() {
     if (!apply || !originals || pending) return;
@@ -498,6 +533,7 @@ export function ReviewThreadCard({
   onDeleteComment,
   compact = false,
   onRowFocus,
+  provider = "github",
   apply,
   fileDiffLookup,
 }: {
@@ -507,6 +543,10 @@ export function ReviewThreadCard({
   compact?: boolean;
   /** Fired when the header button gains focus (keeps list activeIndex in sync). */
   onRowFocus?: () => void;
+  /** The fence author's forge — disambiguates bare-fence Apply scope for
+   *  suggestions (GitHub = whole range, GitLab = anchored line only). Defaults to
+   *  "github" so unwired callers keep byte-identical GitHub behavior. */
+  provider?: ForgeProvider;
   /** Gating inputs + the write for the per-suggestion Apply affordance. Absent =
    *  no Apply is shown (the diff-anchor call site and any unwired surface). */
   apply?: SuggestionApply;
@@ -687,6 +727,7 @@ export function ReviewThreadCard({
                           thread={thread}
                           parsed={parsedHunk}
                           segment={seg}
+                          provider={provider}
                           apply={apply}
                           applied={appliedBlocks.has(`${commentKey}:${i}`)}
                           onApplied={() =>
@@ -823,11 +864,16 @@ export function ReviewThreadsBlock({
   onResolve,
   onEditComment,
   onDeleteComment,
+  provider = "github",
   apply,
   fileDiffLookup,
 }: {
   threads: ReviewThreadOut[] | undefined;
   isError: boolean;
+  /** The forge the threads came from — disambiguates bare-fence Apply scope for
+   *  suggestions (GitHub = whole range, GitLab = anchored line only), threaded to
+   *  every card. Defaults to "github" so an unwired caller is byte-identical. */
+  provider?: ForgeProvider;
   /** Gating inputs + the write for the per-suggestion Apply affordance, threaded
    *  straight to every card. Absent = no Apply shown. */
   apply?: SuggestionApply;
@@ -959,6 +1005,7 @@ export function ReviewThreadsBlock({
                     onResolve={onResolve}
                     onEditComment={onEditComment}
                     onDeleteComment={onDeleteComment}
+                    provider={provider}
                     apply={apply}
                     fileDiffLookup={fileDiffLookup}
                   />
@@ -987,6 +1034,7 @@ export function ReviewThreadsBlock({
                           onResolve={onResolve}
                           onEditComment={onEditComment}
                           onDeleteComment={onDeleteComment}
+                          provider={provider}
                           apply={apply}
                           fileDiffLookup={fileDiffLookup}
                         />

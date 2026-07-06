@@ -1091,6 +1091,7 @@ export function RemotePrView({
                     ? setDeletingThreadCommentId
                     : undefined
                 }
+                provider={providerKey}
                 apply={suggestionApply}
                 fileDiffLookup={fileDiffLookup}
               />
@@ -1366,6 +1367,7 @@ export function RemotePrView({
                     threadResolve.mutateAsync({ threadId, resolved })
                 : undefined
             }
+            provider={providerKey}
             apply={suggestionApply}
             fileDiffLookup={fileDiffLookup}
           />

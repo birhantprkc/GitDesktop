@@ -58,10 +58,14 @@ export function ReviewComposer({
   // The multi-line range, normalized: [from, line] with from <= line.
   const rangeFrom = fromLine !== undefined && fromLine < line ? fromLine : line;
   const isRange = rangeFrom !== line;
-  // GitHub is the only provider that carries a range on the thread anchor
-  // (startLine); GitLab/Bitbucket anchor at the end line only (fromLine shown in
-  // the label). So only send startLine on GitHub, and only for a real range.
-  const startLine = provider === "github" && isRange ? rangeFrom : undefined;
+  // GitHub and GitLab both carry a real range on the thread anchor (startLine);
+  // Bitbucket's API anchors at the end line only (fromLine shown in the label
+  // plus a disclosure below). So send startLine on GitHub/GitLab for a real
+  // range, and never on Bitbucket.
+  const startLine =
+    (provider === "github" || provider === "gitlab") && isRange
+      ? rangeFrom
+      : undefined;
 
   const anchorLabel = isRange
     ? `Lines ${rangeFrom}–${line} · ${path}`
@@ -167,6 +171,11 @@ export function ReviewComposer({
           </Button>
         </span>
       </div>
+      {provider === "bitbucket" && isRange && (
+        <p className="text-[11px] text-muted-foreground">
+          Bitbucket anchors multi-line comments at the last line.
+        </p>
+      )}
       <MarkdownEditor
         aria-label={`Comment on ${anchorLabel}`}
         placeholder="Leave a comment…"

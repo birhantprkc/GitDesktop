@@ -291,7 +291,10 @@ and a reviewer's suggested change can be
 **applied straight to your working tree** (verified against the file, staged when
 safe) — now on **GitLab and Bitbucket** too, not just GitHub — something even
 GitHub's API can't do. **Compose your own review** right from the diff: click a
-line number (or drag across a range) to open an inline composer, post a single
+line number (or drag across a range — a real multi-line anchor on **GitHub and
+GitLab**; Bitbucket anchors at the last line, and the composer says so) to open an
+inline composer — clicking the "+" on any line of a drag opens the range composer —
+then post a single
 comment or **start a review** to batch drafts (persisted per-PR, surviving
 restarts) that render at their anchors with a pending-review count, then
 **Submit review…** with a verdict (Comment / Approve / Request changes,
@@ -299,7 +302,11 @@ capability-gated per provider) — and insert a **provider-correct suggestion**
 pre-filled with the selected code. **Drill into a PR's commits** too — the
 Commits tab is arrow-navigable, and opening a commit shows its full message and
 per-file diffs with a **whole-commit thread and line-anchored comments** you can
-add, edit, and delete. Write/Preview markdown editor
+add, edit, and delete (line-anchored comments carry a real drag-range on GitLab;
+GitHub and Bitbucket anchor to a single line). The same **commit comments** are also
+available straight from the **History tab** — open any pushed commit to comment on
+the whole commit or anchor to lines (an unpushed commit shows a push hint instead).
+Write/Preview markdown editor
 (formatting toolbar and live preview) everywhere you author.
 
 ![A pull request open in GitDesktop with an inline AI review summarizing the diff; the left sidebar lists both local and GitHub pull requests, and the footer offers Approve, Comment, and Publish-to-GitHub actions.](site/src/assets/app-review.png)

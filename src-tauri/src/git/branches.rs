@@ -629,6 +629,34 @@ pub async fn git_update_branch_from(
     result
 }
 
+/// Whether a commit is reachable from any remote-tracking ref (`refs/remotes/*`) —
+/// i.e. it has been pushed. Gates the History-tab commit-comment surface, which can
+/// only anchor a comment on a commit the forge already knows about. The sha is
+/// validated (hex) BEFORE spawning git; a VALID sha the repo doesn't recognise
+/// (unfetched / unpushed) makes git error, which we map to `Ok(false)` — "not on a
+/// remote" is a normal answer here, not an app failure.
+#[tauri::command]
+pub async fn commit_on_remote(repo_path: String, sha: String) -> AppResult<bool> {
+    crate::git::history::validate_hash(&sha)?;
+    let out = run_git_raw(
+        Some(&repo_path),
+        &[
+            "for-each-ref",
+            "refs/remotes",
+            "--contains",
+            &sha,
+            "--format=%(refname)",
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    // Non-zero exit (e.g. an unknown/unfetched sha) → treat as "not on a remote".
+    if out.code != 0 {
+        return Ok(false);
+    }
+    Ok(!out.stdout_lossy().trim().is_empty())
+}
+
 /// A process-unique suffix for the throwaway worktree directory name.
 fn unique_suffix() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};

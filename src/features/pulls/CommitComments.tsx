@@ -2,8 +2,10 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { Button } from "@/components/ui/button";
+import { Markdown } from "@/components/ui/markdown";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import { Thread } from "@/features/conversations/Thread";
+import type { DiffLineAnchor } from "@/features/diff/DiffSurface";
 import type { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
   useCommitComments,
@@ -15,7 +17,7 @@ import type { CommitCommentOut, PrThreadOut } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
 import { SUBMIT_HINT } from "./ReviewThreads";
 
-type DiffSections = ReturnType<typeof splitUnifiedDiff>;
+export type DiffSections = ReturnType<typeof splitUnifiedDiff>;
 
 /**
  * Derive the new-side (right) line number a GitHub commit comment anchors to
@@ -139,6 +141,57 @@ export function positionFromLine(
   return null;
 }
 
+/**
+ * The inline diff anchors for a commit's line-anchored comments on ONE file:
+ * every comment on `path` that resolves to a new-side line, grouped by that line
+ * into a single stacked {@link DiffLineAnchor} (DiffSurface keeps one entry per
+ * line/side, so multiple comments on the same line must be pre-grouped). A
+ * comment's line is its own `line` when present, else recovered from its diff
+ * `position` via {@link lineFromPosition}; unresolvable comments are dropped here
+ * and surface in {@link CommitComments}' labelled group instead. A ranged comment
+ * (`startLine != null && startLine !== line`) gets a small mono range chip so it
+ * reads as ranged. Shared by {@link PrCommitDetail} and P4's history surface.
+ */
+export function useCommitLineAnchors(
+  comments: CommitCommentOut[] | undefined,
+  sections: DiffSections | undefined,
+  path: string | null,
+): DiffLineAnchor[] {
+  return useMemo<DiffLineAnchor[]>(() => {
+    if (!path) return [];
+    const byLine = new Map<number, CommitCommentOut[]>();
+    for (const c of comments ?? []) {
+      if (c.path !== path) continue;
+      const line = c.line ?? lineFromPosition(sections?.get(path), c.position);
+      if (line == null) continue;
+      const bucket = byLine.get(line);
+      if (bucket) bucket.push(c);
+      else byLine.set(line, [c]);
+    }
+    return [...byLine.entries()].map(([line, group]) => ({
+      side: "new" as const,
+      line,
+      render: () => (
+        <div className="space-y-2">
+          {group.map((c) => (
+            <div key={c.id} className="space-y-1">
+              <div className="flex items-center gap-1.5">
+                {c.startLine != null && c.startLine !== line && (
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                    Lines {c.startLine}–{line}
+                  </span>
+                )}
+                <p className="text-[11px] font-medium">{c.author}</p>
+              </div>
+              <Markdown>{c.body}</Markdown>
+            </div>
+          ))}
+        </div>
+      ),
+    }));
+  }, [comments, sections, path]);
+}
+
 /** Map a flat commit comment onto the {@link Thread} prop shape — commit
  *  comments carry no review state / minimize / permalink, so those go empty. */
 function toThread(c: CommitCommentOut): PrThreadOut {
@@ -211,7 +264,7 @@ export function CommitComments({
         const path = c.path as string;
         const line =
           c.line ?? lineFromPosition(diffSections?.get(path), c.position);
-        return { comment: c, path, line };
+        return { comment: c, path, line, startLine: c.startLine };
       })
       .filter(({ path, line }) => !(path === selectedPath && line != null));
   }, [anchored, diffSections, selectedPath]);
@@ -272,8 +325,16 @@ export function CommitComments({
 
             {hiddenAnchored.length > 0 && (
               <div className="space-y-3">
-                {hiddenAnchored.map(({ comment: c, path, line }) => {
-                  const label = `${path}${line != null ? `:${line}` : ""}`;
+                {hiddenAnchored.map(({ comment: c, path, line, startLine }) => {
+                  // A valid range labels `path:start–end`; a single line (or an
+                  // unresolved line) keeps `path:line` / `path`.
+                  const lineLabel =
+                    line == null
+                      ? ""
+                      : startLine != null && startLine !== line
+                        ? `:${startLine}–${line}`
+                        : `:${line}`;
+                  const label = `${path}${lineLabel}`;
                   return (
                     <div key={c.id} className="space-y-1">
                       {onSelectFile ? (
@@ -393,6 +454,7 @@ export function CommitLineComposer({
   path,
   side,
   line,
+  fromLine,
   provider,
   fileSection,
   onClose,
@@ -401,7 +463,10 @@ export function CommitLineComposer({
   sha: string;
   path: string;
   side: "new" | "old";
+  /** The anchored (end) line of the comment. */
   line: number;
+  /** Range start when a range was drag-selected; absent for a single line. */
+  fromLine?: number;
   provider: "github" | "gitlab" | "bitbucket";
   /** This file's unified-diff section, for recovering the GitHub `position`. */
   fileSection: string | undefined;
@@ -410,9 +475,15 @@ export function CommitLineComposer({
   const createComment = useCreateCommitComment(repoPath);
   const [body, setBody] = useState("");
 
+  // The multi-line range, normalized: [from, line] with from <= line.
+  const rangeFrom = fromLine !== undefined && fromLine < line ? fromLine : line;
+  const isRange = rangeFrom !== line;
+
   // GitHub needs the diff `position` (not just the line); recover it from the
   // file's section. A null means the line isn't on the new side of this commit's
-  // diff for the file, so it can't be anchored — disable with a reason.
+  // diff for the file, so it can't be anchored — disable with a reason. The
+  // position is always the END line: GitHub/Bitbucket commit comments are
+  // single-line APIs, so a range still anchors there.
   const position =
     provider === "github" ? positionFromLine(fileSection, line) : null;
   const disabledReason =
@@ -422,6 +493,17 @@ export function CommitLineComposer({
         ? "This line isn't in the commit's diff for this file."
         : null;
   const canPost = disabledReason === null;
+
+  // Only GitLab commit discussions carry a real range; GitHub/Bitbucket commit
+  // comments are single-line APIs and anchor at the END line only, disclosed
+  // below so a dragged range never silently collapses without saying so.
+  const rangeHint = !isRange
+    ? null
+    : provider === "github"
+      ? `GitHub commit comments anchor to a single line — this posts on line ${line}.`
+      : provider === "bitbucket"
+        ? `Bitbucket commit comments anchor to a single line — this posts on line ${line}.`
+        : null;
 
   function submit() {
     const text = body.trim();
@@ -433,6 +515,9 @@ export function CommitLineComposer({
         body: text,
         path,
         line,
+        // GitLab commit discussions support ranges; send startLine only for a
+        // real GitLab range. GitHub/Bitbucket stay end-anchored (single-line).
+        ...(provider === "gitlab" && isRange ? { startLine: rangeFrom } : {}),
         ...(position !== null ? { position } : {}),
       },
       {
@@ -443,13 +528,18 @@ export function CommitLineComposer({
     onClose();
   }
 
-  const anchorLabel = `Line ${line} · ${path}`;
+  const anchorLabel = isRange
+    ? `Lines ${rangeFrom}–${line} · ${path}`
+    : `Line ${line} · ${path}`;
 
   return (
     <div className="space-y-2">
       <span className="block min-w-0 truncate font-mono text-[11px] text-muted-foreground">
         {anchorLabel}
       </span>
+      {rangeHint && (
+        <p className="text-[11px] text-muted-foreground">{rangeHint}</p>
+      )}
       <MarkdownEditor
         aria-label={`Comment on ${anchorLabel}`}
         placeholder="Leave a comment…"

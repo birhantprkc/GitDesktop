@@ -14,6 +14,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
   type Ref,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -250,6 +251,19 @@ export function MarkdownEditor({
   // A focus() requested while in Preview mode, honored once Write remounts.
   const pendingFocus = useRef(false);
 
+  // Focus the textarea without the native scroll-alignment jump ("flash"), then
+  // bring it into view only if it's actually off-screen, by the minimum distance
+  // (`nearest` is a no-op when already visible, so no jump). Used for the
+  // autofocus mount and the imperative handle focus() — the latter can be
+  // triggered from a quote-reply button far from the composer, so the
+  // bring-into-view is load-bearing there; a fully-visible composer stays put.
+  const focusIntoView = useCallback(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.focus({ preventScroll: true });
+    ta.scrollIntoView({ block: "nearest" });
+  }, []);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -260,14 +274,14 @@ export function MarkdownEditor({
           pendingFocus.current = true;
           setMode("write");
         } else {
-          textareaRef.current?.focus();
+          focusIntoView();
         }
       },
       showPreview() {
         setMode("preview");
       },
     }),
-    [mode],
+    [mode, focusIntoView],
   );
 
   // Restore the caret/selection after a format action rewrites the value.
@@ -278,7 +292,7 @@ export function MarkdownEditor({
     pendingSelection.current = null;
     const ta = textareaRef.current;
     if (ta) {
-      ta.focus();
+      ta.focus({ preventScroll: true });
       ta.setSelectionRange(pending[0], pending[1]);
     }
   }, [value]);
@@ -303,7 +317,7 @@ export function MarkdownEditor({
           : applyLink(value, start, end);
     // Restore the resulting selection once the value update has landed.
     pendingSelection.current = [edit.selStart, edit.selEnd];
-    ta.focus();
+    ta.focus({ preventScroll: true });
     ta.setSelectionRange(edit.rangeStart, edit.rangeEnd);
     // execCommand is the only API that writes through the document while keeping
     // the textarea's native undo stack intact, so Ctrl+Z reverts a toolbar edit
@@ -347,9 +361,24 @@ export function MarkdownEditor({
   useEffect(() => {
     if (mode === "write" && pendingFocus.current) {
       pendingFocus.current = false;
-      textareaRef.current?.focus();
+      focusIntoView();
     }
-  }, [mode]);
+  }, [mode, focusIntoView]);
+
+  // Autofocus on mount WITHOUT the native `autoFocus` attribute's aggressive
+  // scroll-alignment. Native autofocus scrolls the textarea into view by aligning
+  // it, which — for a composer that mounts inside the diff's overflow-auto
+  // container, below the clicked line — yanks the diff by a couple of rows (the
+  // "flash"). focusIntoView() instead focuses with preventScroll then
+  // scrollIntoView({ block: "nearest" }), so a fully-visible composer doesn't move
+  // at all while a genuinely below-the-fold one still comes into view. Mount-only:
+  // this replaces a one-shot attribute, and a StrictMode double-invoke is a no-op
+  // (re-focusing an already-focused element + nearest on an in-view element does
+  // nothing). Matches the app's focus/scroll idiom (PlanQuestions, list-keyboard-nav).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only autofocus — `autoFocus`/`mode` are read once at mount, deliberately not re-run on change.
+  useEffect(() => {
+    if (autoFocus && mode === "write") focusIntoView();
+  }, [focusIntoView]);
 
   return (
     <div className="space-y-1.5">
@@ -425,7 +454,6 @@ export function MarkdownEditor({
         id={id}
         placeholder={placeholder}
         aria-label={ariaLabel}
-        autoFocus={autoFocus}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}

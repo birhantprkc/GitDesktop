@@ -1251,6 +1251,9 @@ export interface CommitCommentOut {
   path: string | null;
   /** 1-based line an inline comment anchors to; null when not anchored. */
   line: number | null;
+  /** First line of a multi-line range (1-based); null for a single-line comment
+   *  (GitLab only — GitHub/Bitbucket are always null). */
+  startLine: number | null;
   /** Diff position an inline comment anchors to; null when not anchored. */
   position: number | null;
 }

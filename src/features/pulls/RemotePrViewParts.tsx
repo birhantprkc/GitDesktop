@@ -29,7 +29,7 @@ import {
   useGlMrTimeStats,
   useSetMrTimeEstimate,
 } from "@/lib/git/queries";
-import type { ReviewThreadOut } from "@/lib/git/types";
+import type { ForgeProvider, ReviewThreadOut } from "@/lib/git/types";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import type { ReviewDraft } from "@/lib/pulls/review-drafts";
 import { toastError } from "@/lib/toast";
@@ -45,6 +45,10 @@ interface DiffThreadWiring {
   onQuote?: (body: string) => void;
   onReply?: (threadId: string, body: string) => Promise<void>;
   onResolve?: (threadId: string, resolved: boolean) => Promise<void>;
+  /** The forge the threads came from — disambiguates bare-fence Apply scope for
+   *  suggestions (GitHub = whole range, GitLab = anchored line only). Defaults to
+   *  "github" in the card so an unwired caller is byte-identical. */
+  provider?: ForgeProvider;
   /** Gating inputs + the write for the per-suggestion Apply affordance. Absent =
    *  no Apply shown (identical graceful default as the Conversation block). */
   apply?: SuggestionApply;
@@ -64,6 +68,7 @@ function DiffThreadAnchor({
   onQuote,
   onReply,
   onResolve,
+  provider,
   apply,
   fileDiffLookup,
 }: { threads: ReviewThreadOut[] } & DiffThreadWiring) {
@@ -86,6 +91,7 @@ function DiffThreadAnchor({
           onQuote={onQuote}
           onReply={onReply}
           onResolve={onResolve}
+          provider={provider}
           apply={apply}
           fileDiffLookup={fileDiffLookup}
         />
@@ -112,6 +118,7 @@ export function PrFilesPane({
   onQuote,
   onReply,
   onResolve,
+  provider,
   apply,
   fileDiffLookup,
 }: {
@@ -186,6 +193,7 @@ export function PrFilesPane({
                 onQuote={onQuote}
                 onReply={onReply}
                 onResolve={onResolve}
+                provider={provider}
                 apply={apply}
                 fileDiffLookup={fileDiffLookup}
               />
@@ -213,6 +221,7 @@ export function PrFilesPane({
     onQuote,
     onReply,
     onResolve,
+    provider,
     apply,
     fileDiffLookup,
   ]);

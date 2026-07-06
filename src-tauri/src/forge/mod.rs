@@ -355,19 +355,31 @@ pub async fn forge_commit_comments(
 /// Post a comment on a commit, behind the abstraction. Whole-commit =
 /// `path`/`line`/`position` all `None`. GitHub anchored uses `path` + `position`
 /// (the frontend computes `position`; `line` is ignored); GitLab and Bitbucket
-/// anchored use `path` + `line`.
+/// anchored use `path` + `line`. `start_line` (a multi-line range) is honored on
+/// GitLab only — GitHub and Bitbucket commit comments have no range concept, so
+/// their branches ignore it.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn forge_commit_comment_create(
     repo_path: String,
     sha: String,
     body: String,
     path: Option<String>,
     line: Option<u64>,
+    start_line: Option<u64>,
     position: Option<u64>,
 ) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => {
-            gitlab::commit_comment_create(&repo_path, &sha, &body, path.as_deref(), line).await
+            gitlab::commit_comment_create(
+                &repo_path,
+                &sha,
+                &body,
+                path.as_deref(),
+                line,
+                start_line,
+            )
+            .await
         }
         Some((Provider::Bitbucket, _)) => {
             bitbucket::commit_comment_create(&repo_path, &sha, &body, path.as_deref(), line).await
@@ -478,8 +490,8 @@ pub async fn forge_pr_thread_reply(
 
 /// Create a NEW file:line-anchored review thread on a merge/pull request, behind
 /// the abstraction. `side` is `"new"` (right/added) or `"old"` (left/removed).
-/// `start_line` (a multi-line comment range) is honored on GitHub only; GitLab and
-/// Bitbucket anchor at `line`.
+/// `start_line` (a multi-line comment range) is honored on GitHub AND GitLab (both
+/// send a real range); Bitbucket has no range API, so it anchors at the end `line`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn forge_pr_thread_create(

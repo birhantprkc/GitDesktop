@@ -1020,6 +1020,18 @@ export const forgePrCommitDiff = (
   oid: string,
 ) => invoke<string>("forge_pr_commit_diff", { repoPath, number, oid });
 
+/** The forge's own unified diff for a single commit, independent of any PR/MR.
+ *  Reuses `forge_pr_commit_diff` with `number: 0` — `number` is part of the neutral
+ *  contract but ignored by every provider (documented in forge/mod.rs), so a
+ *  PR-independent commit diff just passes a placeholder. */
+export const forgeCommitDiff = (repoPath: string, sha: string) =>
+  invoke<string>("forge_pr_commit_diff", { repoPath, number: 0, oid: sha });
+
+/** Whether a commit exists on any remote (the History-tab comment surface gates on
+ *  it — you can only comment on a commit the forge already has). */
+export const commitOnRemote = (repoPath: string, sha: string) =>
+  invoke<boolean>("commit_on_remote", { repoPath, sha });
+
 // Commit comments (GitHub commit comments / GitLab commit notes) — plain or
 // diff-anchored, provider-neutral. `sha` is the commit; `commentId` addresses a
 // single comment for edit/delete.
@@ -1033,6 +1045,7 @@ export const forgeCommitCommentCreate = (
     body: string;
     path?: string;
     line?: number;
+    startLine?: number;
     position?: number;
   },
 ) =>
@@ -1042,6 +1055,7 @@ export const forgeCommitCommentCreate = (
     body: args.body,
     path: args.path ?? null,
     line: args.line ?? null,
+    startLine: args.startLine ?? null,
     position: args.position ?? null,
   });
 

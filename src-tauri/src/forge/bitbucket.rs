@@ -1143,6 +1143,8 @@ pub async fn commit_comments(repo_path: &str, sha: &str) -> AppResult<Vec<Commit
                 viewer_did_author,
                 path,
                 line,
+                // Bitbucket commit comments have no multi-line range concept.
+                start_line: None,
                 // Bitbucket has no GitHub-style diff position; anchoring is by line.
                 position: None,
             }

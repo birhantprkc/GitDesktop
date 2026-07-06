@@ -3,14 +3,20 @@ import {
   DiffModeEnum,
   DiffView,
   DiffViewWithMultiSelect,
+  type DiffViewWithMultiSelectRef,
+  type LineRange,
+  type MultiSelectResult,
+  type MultiSelectState,
   SplitSide,
 } from "@git-diff-view/react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
   type ReactNode,
+  useCallback,
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { Button } from "@/components/ui/button";
@@ -77,6 +83,15 @@ export interface LineWidget {
     onClose: () => void;
   }) => ReactNode;
 }
+
+/** A normalized diff-line range on one side (`from <= to`), used by the
+ *  drag-range survival tracking in {@link DiffContent}. */
+type SideRange = { side: "old" | "new"; from: number; to: number };
+
+/** The library's SplitSide enum (old=1, new=2) → our "old"/"new" tags, so the
+ *  widget callback speaks the same side vocabulary as the anchors and drafts. */
+const sideTag = (side: SplitSide): "new" | "old" =>
+  side === SplitSide.old ? "old" : "new";
 
 /** User syntax preferences threaded into diff building. */
 export interface SyntaxPrefs {
@@ -478,10 +493,228 @@ function RenderedDiff({
     return { oldFile, newFile };
   }, [lineAnchors]);
 
-  // The library's SplitSide enum (old=1, new=2) → our "old"/"new" tags, so the
-  // widget callback speaks the same side vocabulary as the anchors and drafts.
-  const sideTag = (side: SplitSide): "new" | "old" =>
-    side === SplitSide.old ? "old" : "new";
+  // --- Drag-range survival across the "+" click (vendored-library workaround) ---
+  // The vendored DiffViewWithMultiSelect only honors a stored multi-select range
+  // when the clicked "+" sits on the range's MAX line; a click on any other
+  // selected line wipes the range and reports single-line (index.mjs ~1829-1871).
+  // Its onSelectionComplete also only stores the range when `lines.length > 0`,
+  // so an empty lines computation loses it entirely (~1733-1745). We therefore
+  // track the last completed drag range ourselves and re-apply it in
+  // renderWidgetLine so a click on ANY line of the range still opens the composer
+  // as a range. All of this is scoped to the lineWidget-enabled branch below —
+  // read-only surfaces render the plain <DiffView> and never touch this state.
+  const multiSelectRef = useRef<DiffViewWithMultiSelectRef>(null);
+  // The last completed (or in-flight, as a fallback) drag range. `dragRangeRef`
+  // is set on onMultiSelectComplete; `changeRangeRef` mirrors the latest non-null
+  // range seen while selecting, so the secondary empty-`lines` path still
+  // captures it.
+  const dragRangeRef = useRef<SideRange | null>(null);
+  const changeRangeRef = useRef<SideRange | null>(null);
+  // The range the CURRENTLY-OPEN overridden widget resolved to, tagged with the
+  // exact reported anchor it opened at (`anchorSide`/`anchorLine` = the raw side
+  // + reported line the library passed renderWidgetLine). Rule B reuses `range`
+  // ONLY when a later call reports that SAME anchor — i.e. the same widget
+  // re-rendering — so it stays a range across parent re-renders without
+  // downgrading. A press on a DIFFERENT line reports a different anchor (the
+  // library's single-widget store just replaces the open one WITHOUT calling our
+  // onClose, react ~1192-1200/687), so it correctly falls through to fresh
+  // resolution instead of inheriting this range. Also gates capture: while set, a
+  // widget is open, so completion/change events are press-echo noise, not a real
+  // drag. Cleared in the wrapped onClose.
+  const activeOverrideRef = useRef<{
+    anchorSide: "old" | "new";
+    anchorLine: number;
+    range: SideRange;
+  } | null>(null);
+  // The range the highlight is currently pinned to (or null), so an identical
+  // re-assert no-ops instead of re-touching the DOM. The highlight is a purely
+  // imperative call on the manager (setPreselectedLines mutates the DOM only, no
+  // React state), so there is NO re-render on widget open — which is what kept
+  // the composer from flashing (a state bump would recreate this inline
+  // renderWidgetLine and thrash the memoized inner DiffView table).
+  const preselectSigRef = useRef<string>("");
+  // Re-apply the range highlight (the library wiped its own preselect on the "+"
+  // press) or clear it on close/no-override. Deferred via a microtask so it never
+  // runs DURING render — but it is a direct manager call, not routed through a
+  // React commit. Guarded by a signature so a stable open widget re-asserting the
+  // same range does nothing.
+  const syncPreselect = useCallback((next: SideRange | null) => {
+    const sig = next ? `${next.side}:${next.from}-${next.to}` : "";
+    if (sig === preselectSigRef.current) return;
+    preselectSigRef.current = sig;
+    queueMicrotask(() => {
+      const api = multiSelectRef.current;
+      if (!api) return;
+      if (next) {
+        const lines = { old: [] as number[], new: [] as number[] };
+        lines[next.side] = [next.from, next.to];
+        api.setPreselectedLines(lines);
+      } else {
+        api.setPreselectedLines({ old: [], new: [] });
+      }
+    });
+  }, []);
+
+  const normRange = useCallback(
+    (range: LineRange): SideRange => ({
+      side: range.side,
+      from: Math.min(range.startLineNumber, range.endLineNumber),
+      to: Math.max(range.startLineNumber, range.endLineNumber),
+    }),
+    [],
+  );
+
+  const onMultiSelectComplete = useCallback(
+    (result: MultiSelectResult) => {
+      // Capture EVERY completed drag — even while a widget is open. Do NOT gate
+      // this on activeOverrideRef: a widget can be replaced/dismissed WITHOUT
+      // our wrapped onClose ever firing (the library's single-widget store just
+      // swaps it, react ~1192-1200/687), leaving activeOverrideRef set forever;
+      // gating here would then silently starve every future drag → the "works
+      // once, then stops" intermittency. There is no press-echo to guard against:
+      // pressing "+" makes the wrapper call clearSelection, which resets
+      // isSelecting, so the mouseup hits handleMouseUp with isSelecting=false →
+      // resetState only, NO onSelectionComplete (core ~3603). So this only ever
+      // fires for a real user drag. A stale override is instead retired in
+      // resolveWidgetRange when a differently-anchored widget renders.
+      dragRangeRef.current = normRange(result.range);
+    },
+    [normRange],
+  );
+  const onMultiSelectChange = useCallback(
+    (range: LineRange | null, state: MultiSelectState) => {
+      // NOTE: we deliberately do NOT clear dragRangeRef when a new selection
+      // starts. Pressing the "+" button itself starts a native single-line
+      // selection on mousedown (core handleMouseDown, before any React handler),
+      // firing this with isSelecting:true — clearing here would wipe the very
+      // range the press is trying to open. A completed drag's range must SURVIVE
+      // the press restart. Staleness is instead handled by: a real new drag's
+      // COMPLETE overwriting it, resolveWidgetRange dropping it on an
+      // out-of-range click, and the wrapped onClose clearing it.
+      //
+      // Do NOT re-add an `if (activeOverrideRef.current) return` guard here (or
+      // in onMultiSelectComplete): a widget can vanish without our onClose firing
+      // (the library swaps its single widget in place), so gating on an override
+      // that never clears would starve every subsequent real drag. The "+"-press
+      // echo it was meant to suppress does not exist — the wrapper's
+      // clearSelection resets isSelecting, so mouseup produces resetState only,
+      // no onSelectionComplete. And the manager only ever fires onSelectionChange
+      // with isSelecting:true (handleMouseDown / handleMouseOver), so there is no
+      // selection-ended branch to promote/reset here — just mirror the latest
+      // in-flight range so the empty-`lines` mouseup path (no
+      // onMultiSelectComplete, react ~1736) still has a range to fall back to.
+      if (state.isSelecting && range) {
+        changeRangeRef.current = normRange(range);
+      }
+    },
+    [normRange],
+  );
+
+  // The best range we captured for a just-completed drag: the completed range
+  // when we have it, else the last in-flight change-stream range (covers the
+  // empty-`lines` mouseup path that never fires onMultiSelectComplete).
+  const capturedDragRange = useCallback(
+    () => dragRangeRef.current ?? changeRangeRef.current,
+    [],
+  );
+
+  // Map a (lineNumber, side) to its counterpart-side line number using the
+  // library's unified index. Guards every step (instance/indices may be
+  // null/undefined) and returns null rather than throwing.
+  const mapCrossSideLine = useCallback(
+    (
+      lineNumber: number,
+      fromSide: "old" | "new",
+      toSide: "old" | "new",
+    ): number | null => {
+      try {
+        const instance = multiSelectRef.current?.getDiffFileInstance();
+        if (!instance) return null;
+        const splitSide = fromSide === "old" ? SplitSide.old : SplitSide.new;
+        const index = instance.getUnifiedLineIndexByLineNumber(
+          lineNumber,
+          splitSide,
+        );
+        if (index == null || index < 0) return null;
+        const item = instance.getUnifiedLine(index);
+        const mapped =
+          toSide === "old" ? item?.oldLineNumber : item?.newLineNumber;
+        return typeof mapped === "number" ? mapped : null;
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
+
+  // True when (reportedLine, side) falls inside `range` — directly on the same
+  // side, or (unified mode) via cross-side line mapping when the "+" reports the
+  // opposite side from the one the range was stored on.
+  const clickInRange = useCallback(
+    (reportedLine: number, side: "old" | "new", range: SideRange): boolean => {
+      if (range.side === side) {
+        return reportedLine >= range.from && reportedLine <= range.to;
+      }
+      const mapped = mapCrossSideLine(reportedLine, side, range.side);
+      return mapped != null && mapped >= range.from && mapped <= range.to;
+    },
+    [mapCrossSideLine],
+  );
+
+  // Resolve the widget's effective (line, fromLine) given what the library
+  // reported, overriding a single-line report when our captured drag range
+  // contains the clicked line. Records the active-override identity (a ref) so
+  // rule B recognizes the same widget re-rendering, but calls no library method.
+  const resolveWidgetRange = useCallback(
+    (
+      reportedLine: number,
+      reportedFrom: number,
+      side: "old" | "new",
+    ): SideRange => {
+      // (B) The SAME open overridden widget re-rendering (identical reported
+      // anchor) keeps its range, so a parent re-render after the captured drag
+      // range moves on never downgrades an open composer to single-line. A press
+      // on a different line reports a different anchor and falls through.
+      const active = activeOverrideRef.current;
+      if (
+        active &&
+        active.anchorSide === side &&
+        active.anchorLine === reportedLine
+      ) {
+        return active.range;
+      }
+      // A genuinely new resolution starts here (the reported anchor differs from
+      // any active override → the old widget is gone). Always REPLACE the ref
+      // with this resolution's outcome so a dead widget's override never lingers:
+      // the new override when a range fires, or null when it resolves single-line.
+      // This is what retires the stale override that onMultiSelectComplete no
+      // longer guards against.
+      const remember = (range: SideRange) => {
+        activeOverrideRef.current =
+          range.from !== range.to
+            ? { anchorSide: side, anchorLine: reportedLine, range }
+            : null;
+        return range;
+      };
+      // The library already reported a range (its own fast path) — trust it.
+      if (reportedFrom !== reportedLine) {
+        return remember({ side, from: reportedFrom, to: reportedLine });
+      }
+      // Single-line report: override it if our captured drag range contains the
+      // clicked line (the "+"-press-restarted case — see event-order note at the
+      // mount below).
+      const stored = capturedDragRange();
+      if (stored && clickInRange(reportedLine, side, stored)) {
+        return remember(stored);
+      }
+      // Click outside any captured range — drop the stale capture and honor the
+      // single-line report.
+      dragRangeRef.current = null;
+      changeRangeRef.current = null;
+      return remember({ side, from: reportedLine, to: reportedLine });
+    },
+    [clickInRange, capturedDragRange],
+  );
 
   const diffViewMode =
     viewMode === "split" ? DiffModeEnum.Split : DiffModeEnum.Unified;
@@ -495,6 +728,71 @@ function RenderedDiff({
       )
     : undefined;
 
+  // Stable identity so a parent re-render (or a widget-open highlight sync) never
+  // recreates this prop — the library memoizes its internal widget renderer on
+  // [renderWidgetLine] (react ~1789-1804), so a fresh closure would re-render the
+  // whole inner DiffView table right after the composer mounts → a visible flash.
+  // Every helper it calls is itself a stable useCallback / module-level fn, so the
+  // dep list is honest and stable.
+  const renderWidgetLine = useCallback(
+    ({
+      lineNumber,
+      fromLineNumber,
+      side,
+      onClose,
+    }: {
+      lineNumber: number;
+      fromLineNumber: number;
+      side: SplitSide;
+      onClose: () => void;
+    }) => {
+      if (!lineWidget) return null;
+      const resolved = resolveWidgetRange(
+        lineNumber,
+        fromLineNumber,
+        sideTag(side),
+      );
+      const overrode = resolved.from !== resolved.to;
+      // Re-apply the range highlight the library wiped on the "+" press (or clear
+      // it when there's no override). Imperative-only — no React state, no
+      // re-render — deferred out of the render phase via a microtask.
+      syncPreselect(overrode ? resolved : null);
+      return (
+        // The library's widget slot gives the row no background, so anchor the
+        // composer onto its own opaque, elevated card (like the app's other
+        // floating composers). The slot otherwise resets every descendant to
+        // `color: initial` (→ black), which would flatten this content — but that
+        // reset (and its extend-wrapper twin) is stripped at build time by a tiny
+        // postcss plugin (see vite.config.ts), leaving natural inheritance intact.
+        // So no color hammer is needed: the card's `text-popover-foreground` is
+        // inherited by unstyled nodes and the composer's own color utilities keep
+        // their semantic tones.
+        //
+        // The slot renders under the CLICKED line, not the range's end line — a
+        // base-library limitation we accept; the composer's own "Lines X–Y" label
+        // carries the true anchor.
+        <div className="m-2 rounded-none border bg-popover p-3 font-sans text-xs text-popover-foreground shadow-md">
+          {lineWidget.render({
+            side: resolved.side,
+            line: resolved.to,
+            fromLine: overrode ? resolved.from : undefined,
+            onClose: () => {
+              // Clear our captured range, the active override, and the highlight
+              // when the widget closes so the next press starts clean (a
+              // previously-ranged line then opens single-line).
+              dragRangeRef.current = null;
+              changeRangeRef.current = null;
+              activeOverrideRef.current = null;
+              syncPreselect(null);
+              onClose();
+            },
+          })}
+        </div>
+      );
+    },
+    [lineWidget, resolveWidgetRange, syncPreselect],
+  );
+
   if (!diffFile) return <DiffPlaceholder message="No changes to show" />;
   return (
     <>
@@ -504,6 +802,7 @@ function RenderedDiff({
         // Only mounted when a caller opts in (PR Files tab) — every read-only
         // surface keeps the plain <DiffView> below, byte-for-byte unchanged.
         <DiffViewWithMultiSelect<{ render: () => ReactNode }>
+          ref={multiSelectRef}
           diffFile={diffFile}
           diffViewMode={diffViewMode}
           diffViewTheme={isDark ? "dark" : "light"}
@@ -516,30 +815,23 @@ function RenderedDiff({
           // DiffView), which is what opens the widget slot.
           diffViewAddWidget
           enableMultiSelect
-          renderWidgetLine={({ lineNumber, fromLineNumber, side, onClose }) => {
-            const to = lineNumber;
-            const from = fromLineNumber;
-            return (
-              // The library's widget slot gives the row no background, so anchor
-              // the composer onto its own opaque, elevated card (like the app's
-              // other floating composers). The slot otherwise resets every
-              // descendant to `color: initial` (→ black), which would flatten
-              // this content — but that reset (and its extend-wrapper twin) is
-              // stripped at build time by a tiny postcss plugin (see
-              // vite.config.ts), leaving natural inheritance intact. So no color
-              // hammer is needed: the card's `text-popover-foreground` is
-              // inherited by unstyled nodes and the composer's own color
-              // utilities keep their semantic tones.
-              <div className="m-2 rounded-none border bg-popover p-3 font-sans text-xs text-popover-foreground shadow-md">
-                {lineWidget.render({
-                  side: sideTag(side),
-                  line: to,
-                  fromLine: from !== to ? from : undefined,
-                  onClose,
-                })}
-              </div>
-            );
-          }}
+          // Track the drag range ourselves so a "+" press on ANY line of the
+          // range still opens a range composer. Necessary because the library's
+          // own max-line fast path never fires: pressing "+" starts a native
+          // single-line selection on mousedown (core handleMouseDown, an ancestor
+          // native listener that runs BEFORE React's synthetic handlers), which
+          // makes the wrapper wipe its stored multiResult (react ~1728-1730);
+          // then the React onMouseDown opens the widget and calls the manager's
+          // clearSelection, so the later mouseup fires no onSelectionComplete
+          // (core handleMouseUp ~3603: isSelecting already false → resetState
+          // only). The widget renders during the mousedown discrete-event flush,
+          // BEFORE mouseup. Because we no longer clear dragRangeRef on
+          // isSelecting-start, our captured drag range still holds at render
+          // time → resolveWidgetRange overrides the single-line report → the
+          // composer opens as "Lines X–Y".
+          onMultiSelectComplete={onMultiSelectComplete}
+          onMultiSelectChange={onMultiSelectChange}
+          renderWidgetLine={renderWidgetLine}
         />
       ) : (
         <DiffView<{ render: () => ReactNode }>
