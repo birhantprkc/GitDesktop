@@ -46,6 +46,12 @@ export interface Branch {
   lastCommitDate: string;
   /** Hidden from the branch dropdown (a personal, local-config flag). */
   archived: boolean;
+  /** Commits this branch is ahead of its own upstream. 0 when the branch is
+   *  untracked, its upstream is gone, or the two are in sync. */
+  upstreamAhead: number;
+  /** Commits this branch is behind its own upstream — drives the
+   *  "Update from {upstream}" action. 0 when untracked, gone, or in sync. */
+  upstreamBehind: number;
 }
 
 /** A branch that exists on a remote but not locally — offered in the switcher so

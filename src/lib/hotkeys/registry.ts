@@ -363,6 +363,12 @@ export const ACTIONS = [
     defaultBinding: "mod+shift+u",
   },
   {
+    id: "update-default-from-upstream",
+    label: "Update default branch from its remote",
+    category: "Branches & stash",
+    defaultBinding: null,
+  },
+  {
     id: "merge-into-current",
     label: "Merge into current branch",
     category: "Branches & stash",

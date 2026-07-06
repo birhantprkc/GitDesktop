@@ -2447,6 +2447,20 @@ export function useDeleteBranch(repo: string) {
   );
 }
 
+/** Deletes a branch on its remote (`git push <remote> --delete`). Invalidates
+ *  the remote-branches list (the row disappears) and the local branches (their
+ *  upstream may now be gone). */
+export function useDeleteRemoteBranch(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { remote: string; name: string }) =>
+      api.gitDeleteRemoteBranch(repo, args.remote, args.name),
+    {
+      invalidate: [["repo", repo, "remote-branches"], repoKeys.branches(repo)],
+    },
+  );
+}
+
 export function useDiscardAll(repo: string) {
   return useRepoMutation(repo, () => api.gitDiscardAll(repo));
 }

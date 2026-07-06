@@ -1,7 +1,9 @@
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::git::runner::{run_git, run_git_mutating, run_git_raw, DEFAULT_TIMEOUT};
+use crate::git::runner::{
+    run_git, run_git_mutating, run_git_raw, DEFAULT_TIMEOUT, NETWORK_TIMEOUT,
+};
 use crate::git::types::{Branch, BranchDivergence, RemoteBranch};
 use crate::state::AppState;
 
@@ -21,7 +23,7 @@ pub async fn git_branches(repo_path: String) -> AppResult<Vec<Branch>> {
         &[
             "for-each-ref",
             "refs/heads",
-            "--format=%(refname:short)%00%(upstream:short)%00%(HEAD)%00%(committerdate:iso8601-strict)",
+            "--format=%(refname:short)%00%(upstream:short)%00%(HEAD)%00%(committerdate:iso8601-strict)%00%(upstream:track)",
         ],
         DEFAULT_TIMEOUT,
     )
@@ -31,7 +33,8 @@ pub async fn git_branches(repo_path: String) -> AppResult<Vec<Branch>> {
     let mut branches = Vec::new();
     for line in text.lines() {
         let mut parts = line.split('\0');
-        let (Some(name), upstream, head, date) = (
+        let (Some(name), upstream, head, date, track) = (
+            parts.next(),
             parts.next(),
             parts.next(),
             parts.next(),
@@ -42,15 +45,43 @@ pub async fn git_branches(repo_path: String) -> AppResult<Vec<Branch>> {
         if name.is_empty() {
             continue;
         }
+        let (upstream_ahead, upstream_behind) = parse_upstream_track(track.unwrap_or(""));
         branches.push(Branch {
             name: name.to_string(),
             is_current: head == Some("*"),
             upstream: upstream.filter(|u| !u.is_empty()).map(str::to_string),
             last_commit_date: date.unwrap_or("").to_string(),
             archived: archived.contains(name),
+            upstream_ahead,
+            upstream_behind,
         });
     }
     Ok(branches)
+}
+
+/// Parses git's `%(upstream:track)` field into `(ahead, behind)` counts.
+///
+/// Shapes: `[ahead 1, behind 2]`, `[ahead 1]`, `[behind 2]`, `[gone]`
+/// (upstream deleted), or empty (no upstream, or in sync). `gone`, empty, and
+/// anything unparseable all yield `(0, 0)`.
+fn parse_upstream_track(track: &str) -> (u32, u32) {
+    let inner = track
+        .trim()
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'));
+    let Some(inner) = inner else {
+        return (0, 0);
+    };
+    let (mut ahead, mut behind) = (0u32, 0u32);
+    for part in inner.split(',') {
+        let mut words = part.split_whitespace();
+        match (words.next(), words.next()) {
+            (Some("ahead"), Some(n)) => ahead = n.parse().unwrap_or(0),
+            (Some("behind"), Some(n)) => behind = n.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    (ahead, behind)
 }
 
 /// Branches that exist on a remote, for the switcher's "Remote" group. Returns
@@ -191,6 +222,64 @@ pub async fn git_delete_branch(
     )
     .await?;
     Ok(())
+}
+
+/// Deletes a branch on a remote via `git push <remote> --delete`, using git's
+/// native credential flow (exactly like `git_push` — no per-provider paths).
+/// git prunes the local remote-tracking ref on success.
+#[tauri::command]
+pub async fn git_delete_remote_branch(
+    state: State<'_, AppState>,
+    repo_path: String,
+    remote: String,
+    name: String,
+) -> AppResult<()> {
+    validate_ref_name(&remote)?;
+    validate_ref_name(&name)?;
+
+    // Best-effort guard: if the remote's symbolic HEAD resolves (only set on
+    // clone, so absence is fine — skip then) to this branch, it's the remote's
+    // default and can't be deleted. The server refuses anyway, but cryptically;
+    // check locally first. Probe with a non-propagating raw run.
+    let head = run_git_raw(
+        Some(&repo_path),
+        &["symbolic-ref", "--short", &format!("refs/remotes/{remote}/HEAD")],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if head.code == 0 && head.stdout_lossy().trim() == format!("{remote}/{name}") {
+        return Err(AppError::InvalidArgument(format!(
+            "\"{name}\" is the default branch on {remote} and can't be deleted from here."
+        )));
+    }
+
+    let out = run_git_mutating(
+        &state,
+        &repo_path,
+        &["push", &remote, "--delete", "--", &name],
+        NETWORK_TIMEOUT,
+    )
+    .await;
+    match out {
+        Ok(_) => Ok(()),
+        // Idempotent: the server ref is already gone, so the goal state holds.
+        // A failed delete-push leaves the local remote-tracking ref in place
+        // (unlike the success path, which prunes it), so the switcher row would
+        // survive until the next pruning fetch — best-effort delete it now so
+        // the UI reflects the deletion immediately. The ref may already be absent.
+        Err(AppError::Git { stderr, .. })
+            if stderr.to_lowercase().contains("remote ref does not exist") =>
+        {
+            let _ = run_git_raw(
+                Some(&repo_path),
+                &["update-ref", "-d", &format!("refs/remotes/{remote}/{name}")],
+                DEFAULT_TIMEOUT,
+            )
+            .await;
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// The repository's default branch: origin's HEAD when known, otherwise a
@@ -548,4 +637,36 @@ fn unique_suffix() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{}-{}", std::process::id(), nanos)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_upstream_track;
+
+    #[test]
+    fn parses_ahead_and_behind() {
+        assert_eq!(parse_upstream_track("[ahead 1, behind 2]"), (1, 2));
+    }
+
+    #[test]
+    fn parses_ahead_only() {
+        assert_eq!(parse_upstream_track("[ahead 1]"), (1, 0));
+    }
+
+    #[test]
+    fn parses_behind_only() {
+        assert_eq!(parse_upstream_track("[behind 2]"), (0, 2));
+    }
+
+    #[test]
+    fn gone_upstream_is_zero() {
+        assert_eq!(parse_upstream_track("[gone]"), (0, 0));
+    }
+
+    #[test]
+    fn empty_or_unparseable_is_zero() {
+        assert_eq!(parse_upstream_track(""), (0, 0));
+        assert_eq!(parse_upstream_track("   "), (0, 0));
+        assert_eq!(parse_upstream_track("garbage"), (0, 0));
+    }
 }

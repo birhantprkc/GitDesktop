@@ -37,6 +37,7 @@ import {
   useCheckoutRemoteBranch,
   useDefaultBranch,
   useDeleteBranch,
+  useDeleteRemoteBranch,
   useDiscardAll,
   useForgeStatus,
   useMergeBranch,
@@ -52,7 +53,7 @@ import {
   useUserWorktrees,
 } from "@/lib/git/queries";
 import type { Branch, RemoteBranch } from "@/lib/git/types";
-import { listUserWorktrees } from "@/lib/git/worktree";
+import { listUserWorktrees, type UserWorktree } from "@/lib/git/worktree";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useLocalPrs } from "@/lib/pulls/queries";
@@ -67,6 +68,7 @@ import {
   type PickerMode,
 } from "./BranchMergePickerDialog";
 import { CreateBranchDialog } from "./CreateBranchDialog";
+import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
 import { RenameBranchDialog } from "./RenameBranchDialog";
 import { StashesDialog } from "./StashesDialog";
 import { SwitchWithChangesDialog } from "./SwitchWithChangesDialog";
@@ -137,6 +139,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const checkout = useCheckoutBranch(repoPath);
   const checkoutRemote = useCheckoutRemoteBranch(repoPath);
   const deleteBranch = useDeleteBranch(repoPath);
+  const deleteRemoteBranch = useDeleteRemoteBranch(repoPath);
   const discardAll = useDiscardAll(repoPath);
   const stashAll = useStashAll(repoPath);
   const stashPop = useStashPop(repoPath);
@@ -162,6 +165,14 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  // The worktree a branch row offers to remove (resolved from `userWorktrees`).
+  const [removeWorktreeTarget, setRemoveWorktreeTarget] =
+    useState<UserWorktree | null>(null);
+  // The remote-only branch pending a server-side delete confirm.
+  const [remoteDeleteTarget, setRemoteDeleteTarget] = useState<{
+    remote: string;
+    name: string;
+  } | null>(null);
   const [discardAllOpen, setDiscardAllOpen] = useState(false);
   const [stashAllOpen, setStashAllOpen] = useState(false);
   const [stashPopOpen, setStashPopOpen] = useState(false);
@@ -589,6 +600,25 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     );
   }
 
+  // Pull `target`'s own upstream (e.g. `origin/master`) into it without checking
+  // it out — the "just merged a PR, bring master current before I switch back"
+  // flow. Merges in place when `target` is current, fast-forwards otherwise.
+  function doUpdateFromUpstream(target: string, base: string) {
+    setOpen(false);
+    updateBranchFrom.mutate(
+      { branch: target, base },
+      {
+        onSuccess: (status) =>
+          toast.success(
+            status === "up-to-date"
+              ? `${target} is already up to date with ${base}`
+              : `Updated ${target} from ${base}`,
+          ),
+        onError,
+      },
+    );
+  }
+
   const busy =
     checkout.isPending ||
     checkoutRemote.isPending ||
@@ -617,6 +647,14 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     "update-from-default",
     () => currentName && doUpdateFromDefault(currentName),
     Boolean(defaultName && defaultName !== currentName && !busy),
+  );
+  const defaultBranchRow = allBranches.find((b) => b.name === defaultName);
+  useHotkeyAction(
+    "update-default-from-upstream",
+    () =>
+      defaultBranchRow?.upstream &&
+      doUpdateFromUpstream(defaultBranchRow.name, defaultBranchRow.upstream),
+    Boolean(defaultBranchRow?.upstream) && !busy,
   );
   useHotkeyAction(
     "merge-into-current",
@@ -736,6 +774,20 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   )}
                 </span>
               )}
+              {/* The vs-default arrows are vacuous on the default branch's own
+                  row; surface how far it's behind its OWN upstream instead, so
+                  the "Update from {upstream}" action is discoverable after a Fetch. */}
+              {branch.name === defaultName &&
+                branch.upstream &&
+                branch.upstreamBehind > 0 && (
+                  <span
+                    className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground tabular-nums"
+                    title={`${branch.upstreamBehind} behind ${branch.upstream}`}
+                  >
+                    <ArrowDownIcon className="size-3" weight="bold" />
+                    {branch.upstreamBehind}
+                  </span>
+                )}
               {branch.lastCommitDate && (
                 <span className="shrink-0 text-[11px] text-muted-foreground">
                   {formatRelativeTime(branch.lastCommitDate)}
@@ -746,14 +798,29 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
           }
         />
         <ContextMenuContent className="min-w-48">
-          {canUpdate && (
+          {(canUpdate || (branch.upstream && branch.upstreamBehind > 0)) && (
             <>
-              <ContextMenuItem
-                disabled={busy}
-                onClick={() => doUpdateFromDefault(branch.name)}
-              >
-                Update from {defaultName}
-              </ContextMenuItem>
+              {canUpdate && (
+                <ContextMenuItem
+                  disabled={busy}
+                  onClick={() => doUpdateFromDefault(branch.name)}
+                >
+                  Update from {defaultName}
+                </ContextMenuItem>
+              )}
+              {/* Pull the branch's own upstream in without switching — the star
+                  use case is the default branch after a PR merged upstream. */}
+              {branch.upstream && branch.upstreamBehind > 0 && (
+                <ContextMenuItem
+                  disabled={busy}
+                  onClick={() =>
+                    branch.upstream &&
+                    doUpdateFromUpstream(branch.name, branch.upstream)
+                  }
+                >
+                  Update from {branch.upstream}
+                </ContextMenuItem>
+              )}
               <ContextMenuSeparator />
             </>
           )}
@@ -772,6 +839,21 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             {branch.archived ? "Unarchive" : "Archive"}
           </ContextMenuItem>
           <ContextMenuSeparator />
+          {inWorktree && (
+            <ContextMenuItem
+              onClick={() => {
+                const wtPath = worktreeByBranch.get(branch.name);
+                const wt = (userWorktrees.data ?? []).find(
+                  (w) => w.path === wtPath,
+                );
+                if (!wt) return;
+                setOpen(false);
+                setRemoveWorktreeTarget(wt);
+              }}
+            >
+              Remove worktree…
+            </ContextMenuItem>
+          )}
           <ContextMenuItem
             disabled={deletionBlocked || inWorktree}
             onClick={() => {
@@ -793,44 +875,66 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   // A remote-only branch: lighter than a local row (muted, a leading "bring it
   // down" glyph). Clicking checks it out, which `git switch` turns into a local
   // tracking branch — routed through `switchTo` so in-progress changes are handled.
-  const renderRemoteRow = (branch: RemoteBranch) => (
-    <ContextMenu key={`remote/${branch.remote}/${branch.name}`}>
-      <ContextMenuTrigger
-        render={
-          <button
-            type="button"
-            data-row={branch.name}
-            title={`Check out ${branch.name} — creates a local branch tracking ${branch.remote}/${branch.name}`}
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
-            onClick={() => switchTo(branch.name, branch.remote)}
+  const renderRemoteRow = (branch: RemoteBranch) => {
+    // A protected name is protected on the remote too — reuse the local rule.
+    const deletionBlocked = isDeletionBlocked(rulesConfig, branch.name);
+    return (
+      <ContextMenu key={`remote/${branch.remote}/${branch.name}`}>
+        <ContextMenuTrigger
+          render={
+            <button
+              type="button"
+              data-row={branch.name}
+              title={`Check out ${branch.name} — creates a local branch tracking ${branch.remote}/${branch.name}`}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
+              onClick={() => switchTo(branch.name, branch.remote)}
+            >
+              <CloudArrowDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">{branch.name}</span>
+              {multipleRemotes && (
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  {branch.remote}
+                </span>
+              )}
+              {branch.lastCommitDate && (
+                <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                  {formatRelativeTime(branch.lastCommitDate)}
+                </span>
+              )}
+            </button>
+          }
+        />
+        <ContextMenuContent className="min-w-48">
+          <ContextMenuItem onClick={() => switchTo(branch.name, branch.remote)}>
+            Check out
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={() => copyText(branch.name, "Branch name copied")}
           >
-            <CloudArrowDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate">{branch.name}</span>
-            {multipleRemotes && (
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                {branch.remote}
-              </span>
-            )}
-            {branch.lastCommitDate && (
-              <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-                {formatRelativeTime(branch.lastCommitDate)}
-              </span>
-            )}
-          </button>
-        }
-      />
-      <ContextMenuContent className="min-w-48">
-        <ContextMenuItem onClick={() => switchTo(branch.name, branch.remote)}>
-          Check out
-        </ContextMenuItem>
-        <ContextMenuItem
-          onClick={() => copyText(branch.name, "Branch name copied")}
-        >
-          Copy branch name
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
+            Copy branch name
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          {/* The Remote section dedupes a name across remotes to one row, so
+              this targets THIS row's remote; after invalidation a same-name row
+              from another remote may reappear. That's expected. */}
+          <ContextMenuItem
+            disabled={deletionBlocked}
+            onClick={() => {
+              setOpen(false);
+              setRemoteDeleteTarget({
+                remote: branch.remote,
+                name: branch.name,
+              });
+            }}
+          >
+            {deletionBlocked
+              ? `Delete on ${branch.remote}… (protected)`
+              : `Delete on ${branch.remote}…`}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  };
 
   return (
     <>
@@ -1080,6 +1184,50 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         confirmVariant="destructive"
         pending={deleteBranch.isPending || checkout.isPending}
         onConfirm={doDelete}
+      />
+
+      <ConfirmDialog
+        open={remoteDeleteTarget !== null}
+        onCancel={() => setRemoteDeleteTarget(null)}
+        title={
+          remoteDeleteTarget
+            ? `Delete branch on ${remoteDeleteTarget.remote}?`
+            : "Delete branch on remote?"
+        }
+        body={
+          remoteDeleteTarget ? (
+            <>
+              Deletes{" "}
+              <span className="font-mono">{remoteDeleteTarget.name}</span> from{" "}
+              <span className="font-mono">{remoteDeleteTarget.remote}</span> for
+              everyone using that remote. This is a server-side delete and can't
+              be undone from the app.
+            </>
+          ) : null
+        }
+        confirmLabel="Delete"
+        confirmVariant="destructive"
+        pending={deleteRemoteBranch.isPending}
+        onConfirm={() => {
+          if (!remoteDeleteTarget) return;
+          const target = remoteDeleteTarget;
+          deleteRemoteBranch.mutate(target, {
+            onSuccess: () => {
+              toast.success(`Deleted ${target.name} on ${target.remote}`);
+              setRemoteDeleteTarget(null);
+            },
+            onError: (e) => {
+              onError(e);
+              setRemoteDeleteTarget(null);
+            },
+          });
+        }}
+      />
+
+      <DeleteWorktreeDialog
+        repoPath={repoPath}
+        worktree={removeWorktreeTarget}
+        onClose={() => setRemoveWorktreeTarget(null)}
       />
 
       <StashesDialog

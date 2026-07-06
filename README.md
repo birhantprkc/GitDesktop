@@ -231,7 +231,10 @@ co-authors suggested from history, amend, undo, reset, and revert.
 **Branches** — switch (bring-changes / stash prompt), create, rename, delete,
 and **archive** (hide from the switcher without deleting). Per-branch ahead/behind
 vs. the default branch and a PR badge in the switcher, update a branch *without*
-checking it out, a Compare tab
+checking it out — from the default branch or from its own upstream (bring the
+default current after a merged PR) — check out or delete remote-only branches
+right from the switcher's Remote section, remove a branch's worktree from its
+menu, a Compare tab
 (three-dot diff, commits ahead/behind, merge/rebase, jump to PR), and **local
 branch-protection rules** (naming, merge methods, require-PR, force-push) that
 are shareable via a committed file or importable from GitHub. Merging shows an

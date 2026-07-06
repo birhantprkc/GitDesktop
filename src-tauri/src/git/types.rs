@@ -64,6 +64,11 @@ pub struct Branch {
     pub last_commit_date: String,
     /// Hidden from the branch dropdown (a personal, local-config flag).
     pub archived: bool,
+    /// Commits on this branch that its own upstream doesn't have.
+    pub upstream_ahead: u32,
+    /// Commits on this branch's upstream that it doesn't have (drives
+    /// "Update from origin/x" only when there's something to bring down).
+    pub upstream_behind: u32,
 }
 
 /// A branch that exists on a remote but not (yet) as a local branch — offered in

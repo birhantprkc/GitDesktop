@@ -668,6 +668,14 @@ export const gitRenameBranch = (
 export const gitDeleteBranch = (repoPath: string, name: string) =>
   invoke<void>("git_delete_branch", { repoPath, name });
 
+/** Deletes `name` on `remote` (`git push <remote> --delete`). Idempotent when
+ *  the remote ref is already gone. */
+export const gitDeleteRemoteBranch = (
+  repoPath: string,
+  remote: string,
+  name: string,
+) => invoke<void>("git_delete_remote_branch", { repoPath, remote, name });
+
 export const gitDefaultBranch = (repoPath: string) =>
   invoke<string | null>("git_default_branch", { repoPath });
 

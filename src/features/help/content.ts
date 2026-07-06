@@ -329,6 +329,15 @@ The branch name in the header opens the **branch switcher** ({{kbd:show-branches
 - Right-click a branch to **merge**, **squash and merge**, **rebase**, or **update it
   from the default branch** ({{kbd:update-from-default}}) — the last *without* checking it
   out.
+- **Update a branch from its own upstream** without switching to it: when a branch is
+  behind the remote it tracks, its right-click menu offers **Update from _origin/…_**. This
+  is the "just merged a PR — bring the default branch current before I switch back" flow;
+  the default branch's row shows how far behind its upstream it is after a fetch, and
+  *Update default branch from its remote* is available from the command palette too.
+- The **Remote** section lists branches on your remotes you haven't checked out locally
+  yet — click one to check it out (creating a local tracking branch), or right-click to
+  **Delete on _origin_…**, a server-side delete that removes the branch from the remote for
+  everyone (protected names are blocked, and it can't be undone from the app).
 - The **Merge** dialog previews the result before you commit to it — *fast-forward*, *clean
   merge*, or *which files will conflict* — worked out in memory without touching your files.
   Two options sit alongside: **Always create a merge commit** (no fast-forward), and an **On
@@ -378,7 +387,9 @@ test, or review several branches at once without stashing or switching.
 A branch can only be checked out in one worktree at a time, so the list excludes branches
 already in use. The **branch switcher** knows this too: a branch that's checked out in
 another worktree is badged, and choosing it offers to open that worktree instead of failing
-with a checkout error.{{ai}} Worktrees that AI agent sessions use internally are hidden here.{{/ai}}`,
+with a checkout error. You can also **Remove worktree…** straight from that badged branch's
+right-click menu — the branch stays, and its **Delete…** item un-disables once the worktree
+is gone.{{ai}} Worktrees that AI agent sessions use internally are hidden here.{{/ai}}`,
   },
   {
     id: "syncing",
