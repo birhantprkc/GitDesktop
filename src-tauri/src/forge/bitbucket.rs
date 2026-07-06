@@ -37,8 +37,8 @@ use crate::forge::model::{
 use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::pr::{
-    ApprovalState, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrPollInfo,
-    PrRef, PrThreadOut, ReviewThreadOut,
+    ApprovalState, CommitCommentOut, DraftCommentIn, PrAuthor, PrCommitOut, PrDetails, PrFileOut,
+    PrInfo, PrListLabel, PrPollInfo, PrRef, PrThreadOut, ReviewSubmitOut, ReviewThreadOut,
 };
 
 /// Failed-step logs can run to many MB; keep the tail (failures land at the end).
@@ -847,6 +847,13 @@ fn commit_headline(c: &BbCommit) -> String {
     c.message.lines().next().unwrap_or("").trim().to_string()
 }
 
+/// The commit-message body (everything after the headline), derived the same
+/// title-strip way as GitLab's (`gitlab::message_body_from_full`). Empty when the
+/// message is a single line.
+fn commit_body(c: &BbCommit) -> String {
+    crate::forge::gitlab::message_body_from_full(&c.message)
+}
+
 fn commit_author(c: &BbCommit) -> String {
     c.author
         .as_ref()
@@ -891,6 +898,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
             .into_iter()
             .map(|c| PrCommitOut {
                 headline: commit_headline(&c),
+                message_body: commit_body(&c),
                 author: commit_author(&c),
                 oid: c.hash,
                 date: c.date,
@@ -1065,6 +1073,141 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
     let diff = http::bb_get_text(&creds, &path).await?;
     let (text, _) = crate::git::diff::truncate_at_char_boundary(diff, PR_DIFF_CAP);
     Ok(text)
+}
+
+/// Validate a commit sha before it's interpolated into an API path — a hex value.
+/// Rejects empty/non-hex before any network call.
+fn validate_commit_sha(sha: &str) -> AppResult<()> {
+    if sha.is_empty() || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(AppError::InvalidArgument(format!("invalid commit id: {sha}")));
+    }
+    Ok(())
+}
+
+/// The raw unified diff of ONE commit (`GET …/diff/{sha}` → raw diff text). Bitbucket
+/// returns the unified diff directly, so no synthesis is needed. Sha validated first.
+pub async fn commit_diff(repo_path: &str, sha: &str) -> AppResult<String> {
+    validate_commit_sha(sha)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/diff/{sha}");
+    let diff = http::bb_get_text(&creds, &path).await?;
+    let (text, _) = crate::git::diff::truncate_at_char_boundary(diff, PR_DIFF_CAP);
+    Ok(text)
+}
+
+// ── Commit comments ───────────────────────────────────────────────────────────
+//
+// Bitbucket commit comments live under `…/commit/{sha}/comments` — the same
+// `BbComment` shape as PR comments (id / content.raw / user / inline.path+to). An
+// anchored comment sends `inline: {path, to: line}`; a whole-commit one omits it.
+
+/// List a commit's comments (`GET …/commit/{sha}/comments?pagelen=100`, deleted
+/// filtered). `viewer_did_author` compares each author's uuid to the viewer's.
+pub async fn commit_comments(repo_path: &str, sha: &str) -> AppResult<Vec<CommitCommentOut>> {
+    validate_commit_sha(sha)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let viewer_uuid = http::bb_get_json::<BbUser>(&creds, "user", "user")
+        .await
+        .ok()
+        .and_then(|u| u.uuid)
+        .unwrap_or_default();
+    let page: BbPage<BbComment> = http::bb_get_json(
+        &creds,
+        &format!("{base}/commit/{sha}/comments?pagelen=100"),
+        "commit comments",
+    )
+    .await?;
+    Ok(page
+        .values
+        .into_iter()
+        .filter(|c| !c.deleted)
+        .map(|c| {
+            let viewer_did_author = comment_authored_by_viewer(c.user.as_ref(), &viewer_uuid);
+            let author = c.user.as_ref().map(user_login).unwrap_or_default();
+            // `inline.path` is side-agnostic, so keep it whenever present — an
+            // old-side-only anchor (a comment on a removed line) carries `from` but no
+            // `to`. `line` is defined as the NEW-side line, so it stays `None` there
+            // (mapping `from` into `line` would mis-anchor on the new side); the
+            // comment still renders against its file rather than as whole-commit.
+            let (path, line) = match &c.inline {
+                Some(i) if !i.path.is_empty() => (Some(i.path.clone()), i.to),
+                _ => (None, None),
+            };
+            CommitCommentOut {
+                id: c.id.to_string(),
+                author,
+                body: c.content.map(|r| r.raw).unwrap_or_default(),
+                created_at: c.created_on,
+                viewer_did_author,
+                path,
+                line,
+                // Bitbucket has no GitHub-style diff position; anchoring is by line.
+                position: None,
+            }
+        })
+        .collect())
+}
+
+/// Post a comment on a commit (`POST …/commit/{sha}/comments`). Anchored comments
+/// add `inline: {path, to: line}`; whole-commit ones send only `content.raw`.
+pub async fn commit_comment_create(
+    repo_path: &str,
+    sha: &str,
+    body: &str,
+    path: Option<&str>,
+    line: Option<u64>,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    validate_commit_sha(sha)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let endpoint = format!("{base}/commit/{sha}/comments");
+    let mut payload = serde_json::json!({ "content": { "raw": body } });
+    if let (Some(p), Some(l)) = (path, line) {
+        payload["inline"] = serde_json::json!({ "path": p, "to": l });
+    }
+    http::bb_post_json::<serde_json::Value>(&creds, &endpoint, &payload, "commit comment").await?;
+    Ok(())
+}
+
+/// Edit a commit comment (`PUT …/commit/{sha}/comments/{id}`). Empty-body guard +
+/// id parse both run BEFORE the request.
+pub async fn commit_comment_edit(
+    repo_path: &str,
+    sha: &str,
+    comment_id: &str,
+    body: &str,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    validate_commit_sha(sha)?;
+    let cid = parse_bb_comment_id(comment_id)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/commit/{sha}/comments/{cid}");
+    let payload = serde_json::json!({ "content": { "raw": body } });
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "commit comment").await?;
+    Ok(())
+}
+
+/// Delete a commit comment (`DELETE …/commit/{sha}/comments/{id}`). Id parse runs
+/// BEFORE the request.
+pub async fn commit_comment_delete(
+    repo_path: &str,
+    sha: &str,
+    comment_id: &str,
+) -> AppResult<()> {
+    validate_commit_sha(sha)?;
+    let cid = parse_bb_comment_id(comment_id)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/commit/{sha}/comments/{cid}");
+    http::bb_delete(&creds, &path).await
 }
 
 // ── Pipelines (CI, read) ───────────────────────────────────────────────────────
@@ -1764,6 +1907,42 @@ pub async fn reply_thread(
     Ok(())
 }
 
+/// Create a NEW file:line-anchored review thread on a PR (`POST
+/// …/pullrequests/{n}/comments` with `inline: {path, to|from: line}`). `side` is
+/// `"new"`/`"old"` — "new" anchors on the added side (`to`), "old" on the removed
+/// side (`from`). `start_line` is GitHub-only (multi-line range); Bitbucket anchors
+/// at `line`, so it's ignored.
+#[allow(clippy::too_many_arguments)]
+pub async fn thread_create(
+    repo_path: &str,
+    number: u64,
+    path: &str,
+    line: u64,
+    side: &str,
+    _start_line: Option<u64>,
+    body: &str,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    if path.is_empty() {
+        return Err(AppError::InvalidArgument("a file path is required".into()));
+    }
+    let inline = match side {
+        "new" => serde_json::json!({ "path": path, "to": line }),
+        "old" => serde_json::json!({ "path": path, "from": line }),
+        other => {
+            return Err(AppError::InvalidArgument(format!("invalid side: {other}")));
+        }
+    };
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let endpoint = format!("{base}/pullrequests/{number}/comments");
+    let payload = serde_json::json!({ "content": { "raw": body }, "inline": inline });
+    http::bb_post_json::<serde_json::Value>(&creds, &endpoint, &payload, "review comment").await?;
+    Ok(())
+}
+
 /// Resolve / unresolve a review thread. Bitbucket surfaced no comment-resolution
 /// field or endpoint on any probed comment (three repos), so this is unwired —
 /// `mr_thread_resolve` is false for Bitbucket and the command errors if reached.
@@ -2246,6 +2425,96 @@ pub async fn request_changes_pr(repo_path: &str, number: u64, body: &str) -> App
         }
     }
     Ok(())
+}
+
+/// Submit a review on a PR — SEQUENTIAL. Bitbucket has NO invisible-draft flow that
+/// can be cleared (a `pending:true` comment is stranded invisible — probed), so each
+/// comment posts LIVE: the summary as a plain PR comment, each inline comment as an
+/// anchored one, then the verdict (approve / request-changes reuse the existing fns;
+/// comment does nothing extra). Partial failure STOPS at the first error and discloses
+/// exactly what landed. Guards run in the dispatch.
+pub async fn review_submit(
+    repo_path: &str,
+    number: u64,
+    verdict: &str,
+    summary: Option<&str>,
+    comments: &[DraftCommentIn],
+) -> AppResult<ReviewSubmitOut> {
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let endpoint = format!("{base}/pullrequests/{number}/comments");
+    let total = comments.len() as u32;
+    let has_summary = summary.map(str::trim).is_some_and(|s| !s.is_empty());
+
+    // The summary → a plain PR comment. Failure here means nothing landed yet.
+    if let Some(s) = summary.filter(|s| !s.trim().is_empty()) {
+        let payload = serde_json::json!({ "content": { "raw": s } });
+        http::bb_post_json::<serde_json::Value>(&creds, &endpoint, &payload, "review summary")
+            .await
+            .map_err(|e| {
+                AppError::Bitbucket(format!(
+                    "The review summary couldn't be posted, so the review was not submitted: {e}"
+                ))
+            })?;
+    }
+
+    // Each comment → a LIVE anchored comment. Stop at the first failure and disclose.
+    for (i, c) in comments.iter().enumerate() {
+        let inline = match c.side.as_str() {
+            "new" => serde_json::json!({ "path": c.path, "to": c.line }),
+            "old" => serde_json::json!({ "path": c.path, "from": c.line }),
+            other => {
+                return Err(AppError::InvalidArgument(format!("invalid side: {other}")));
+            }
+        };
+        let payload = serde_json::json!({ "content": { "raw": c.body }, "inline": inline });
+        if let Err(e) =
+            http::bb_post_json::<serde_json::Value>(&creds, &endpoint, &payload, "review comment")
+                .await
+        {
+            return Err(AppError::Bitbucket(format!(
+                "Posted {} of {} review comments before the failure; the review was not \
+                 submitted. Check the pull request on Bitbucket before retrying. ({e})",
+                i, total
+            )));
+        }
+    }
+
+    // Apply the verdict. Approve / request-changes reuse the existing fns. Every
+    // comment (and the summary) already posted LIVE above, so a verdict failure must
+    // disclose that — otherwise a retry double-posts every comment.
+    let verdict_result = match verdict {
+        "approve" => approve_pr(repo_path, number).await,
+        "request_changes" => request_changes_pr(repo_path, number, "").await,
+        _ => Ok(()),
+    };
+    if let Err(e) = verdict_result {
+        let action = if verdict == "approve" {
+            "approve"
+        } else {
+            "request changes"
+        };
+        // Only mention what actually landed (an approve-only review posted nothing).
+        let landed = if has_summary || total > 0 {
+            let n = if has_summary { total + 1 } else { total };
+            format!(
+                "the {n} review comment(s) were already posted successfully — do NOT resubmit \
+                 them; "
+            )
+        } else {
+            String::new()
+        };
+        return Err(AppError::Bitbucket(format!(
+            "The review was posted, but the {action} step failed: {landed}only re-run the \
+             {action} action on Bitbucket. ({e})"
+        )));
+    }
+
+    Ok(ReviewSubmitOut {
+        posted: total,
+        total,
+        verdict_applied: verdict != "comment",
+    })
 }
 
 /// Revoke the viewer's requested-changes state

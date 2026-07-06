@@ -1,4 +1,10 @@
-import { DiffFile, DiffModeEnum, DiffView } from "@git-diff-view/react";
+import {
+  DiffFile,
+  DiffModeEnum,
+  DiffView,
+  DiffViewWithMultiSelect,
+  SplitSide,
+} from "@git-diff-view/react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
   type ReactNode,
@@ -47,6 +53,29 @@ export interface DiffLineAnchor {
   /** 1-based line number in that side's file. */
   line: number;
   render: () => ReactNode;
+}
+
+/**
+ * An inline composer widget opened from a diff line: click a line number (or
+ * drag-select a range on the gutter) to open a slot BELOW that line, rendered by
+ * `render` with the resolved anchor. Generic so any surface (PR review today,
+ * commit comments later) can reuse it. When absent, the diff renders exactly as
+ * before — the plain vendored `<DiffView>`, no clickable line numbers, no
+ * range-select wrapper (a hard zero-diff requirement, since this component backs
+ * history/working-tree/PR diffs).
+ *
+ * `render` receives the anchored `line` (the END line of a range) and `fromLine`
+ * (the range start, equal to `line` for a single line), the resolved `side`, and
+ * an `onClose` that dismisses the slot.
+ */
+export interface LineWidget {
+  enabled: boolean;
+  render: (args: {
+    side: "new" | "old";
+    line: number;
+    fromLine?: number;
+    onClose: () => void;
+  }) => ReactNode;
 }
 
 /** User syntax preferences threaded into diff building. */
@@ -152,6 +181,7 @@ export function GitDiffView({
   repoPath,
   contentRevs,
   lineAnchors,
+  lineWidget,
 }: {
   filePath: string;
   text: string;
@@ -160,6 +190,8 @@ export function GitDiffView({
   contentRevs?: DiffContentRevs;
   /** Line-anchored annotations (e.g. PR review threads) rendered under a line. */
   lineAnchors?: DiffLineAnchor[];
+  /** Inline composer opened from a diff line. Absent = plain read-only diff. */
+  lineWidget?: LineWidget;
 }) {
   return (
     <DiffErrorBoundary resetKey={`${filePath} ${text.length}`}>
@@ -169,6 +201,7 @@ export function GitDiffView({
         repoPath={repoPath}
         contentRevs={contentRevs}
         lineAnchors={lineAnchors}
+        lineWidget={lineWidget}
       />
     </DiffErrorBoundary>
   );
@@ -341,12 +374,14 @@ function RenderedDiff({
   repoPath,
   contentRevs,
   lineAnchors,
+  lineWidget,
 }: {
   filePath: string;
   text: string;
   repoPath?: string;
   contentRevs?: DiffContentRevs;
   lineAnchors?: DiffLineAnchor[];
+  lineWidget?: LineWidget;
 }) {
   const settings = useSettings();
   const isDark = useIsDark();
@@ -443,31 +478,81 @@ function RenderedDiff({
     return { oldFile, newFile };
   }, [lineAnchors]);
 
+  // The library's SplitSide enum (old=1, new=2) → our "old"/"new" tags, so the
+  // widget callback speaks the same side vocabulary as the anchors and drafts.
+  const sideTag = (side: SplitSide): "new" | "old" =>
+    side === SplitSide.old ? "old" : "new";
+
+  const diffViewMode =
+    viewMode === "split" ? DiffModeEnum.Split : DiffModeEnum.Unified;
+  // A card renders inside the diff table; give it a neutral, non-mono container
+  // so it doesn't inherit the code cell's font/background.
+  const renderExtendLine = extendData
+    ? ({ data }: { data: { render: () => ReactNode } }) => (
+        <div className="border-y bg-background px-3 py-2 font-sans text-xs">
+          {data.render()}
+        </div>
+      )
+    : undefined;
+
   if (!diffFile) return <DiffPlaceholder message="No changes to show" />;
   return (
     <>
-      <DiffView<{ render: () => ReactNode }>
-        diffFile={diffFile}
-        diffViewMode={
-          viewMode === "split" ? DiffModeEnum.Split : DiffModeEnum.Unified
-        }
-        diffViewTheme={isDark ? "dark" : "light"}
-        diffViewHighlight
-        diffViewWrap
-        diffViewFontSize={12}
-        extendData={extendData}
-        // A card renders inside the diff table; give it a neutral, non-mono
-        // container so it doesn't inherit the code cell's font/background.
-        renderExtendLine={
-          extendData
-            ? ({ data }) => (
-                <div className="border-y bg-background px-3 py-2 font-sans text-xs">
-                  {data.render()}
-                </div>
-              )
-            : undefined
-        }
-      />
+      {lineWidget?.enabled ? (
+        // Line-comment mode: the multi-select variant adds clickable line numbers
+        // and drag-to-select-a-range, opening the composer widget below the line.
+        // Only mounted when a caller opts in (PR Files tab) — every read-only
+        // surface keeps the plain <DiffView> below, byte-for-byte unchanged.
+        <DiffViewWithMultiSelect<{ render: () => ReactNode }>
+          diffFile={diffFile}
+          diffViewMode={diffViewMode}
+          diffViewTheme={isDark ? "dark" : "light"}
+          diffViewHighlight
+          diffViewWrap
+          diffViewFontSize={12}
+          extendData={extendData}
+          renderExtendLine={renderExtendLine}
+          // Makes line-number cells clickable (flows through to the inner
+          // DiffView), which is what opens the widget slot.
+          diffViewAddWidget
+          enableMultiSelect
+          renderWidgetLine={({ lineNumber, fromLineNumber, side, onClose }) => {
+            const to = lineNumber;
+            const from = fromLineNumber;
+            return (
+              // The library's widget slot gives the row no background, so anchor
+              // the composer onto its own opaque, elevated card (like the app's
+              // other floating composers). The slot otherwise resets every
+              // descendant to `color: initial` (→ black), which would flatten
+              // this content — but that reset (and its extend-wrapper twin) is
+              // stripped at build time by a tiny postcss plugin (see
+              // vite.config.ts), leaving natural inheritance intact. So no color
+              // hammer is needed: the card's `text-popover-foreground` is
+              // inherited by unstyled nodes and the composer's own color
+              // utilities keep their semantic tones.
+              <div className="m-2 rounded-none border bg-popover p-3 font-sans text-xs text-popover-foreground shadow-md">
+                {lineWidget.render({
+                  side: sideTag(side),
+                  line: to,
+                  fromLine: from !== to ? from : undefined,
+                  onClose,
+                })}
+              </div>
+            );
+          }}
+        />
+      ) : (
+        <DiffView<{ render: () => ReactNode }>
+          diffFile={diffFile}
+          diffViewMode={diffViewMode}
+          diffViewTheme={isDark ? "dark" : "light"}
+          diffViewHighlight
+          diffViewWrap
+          diffViewFontSize={12}
+          extendData={extendData}
+          renderExtendLine={renderExtendLine}
+        />
+      )}
       {hidden > 0 && (
         <div className="flex items-center justify-center gap-3 border-t bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
           <span>
@@ -494,6 +579,7 @@ export function DiffSurface({
   imageRevs,
   contentRevs,
   lineAnchors,
+  lineWidget,
 }: {
   filePath: string;
   diff: UseQueryResult<FileDiff>;
@@ -501,6 +587,7 @@ export function DiffSurface({
   imageRevs?: ImageRevs;
   contentRevs?: DiffContentRevs;
   lineAnchors?: DiffLineAnchor[];
+  lineWidget?: LineWidget;
 }) {
   return (
     <DiffContent
@@ -512,6 +599,7 @@ export function DiffSurface({
       imageRevs={imageRevs}
       contentRevs={contentRevs}
       lineAnchors={lineAnchors}
+      lineWidget={lineWidget}
     />
   );
 }
@@ -529,6 +617,7 @@ export function DiffContent({
   imageRevs,
   contentRevs,
   lineAnchors,
+  lineWidget,
 }: {
   filePath: string;
   data: FileDiff | undefined;
@@ -541,6 +630,8 @@ export function DiffContent({
   contentRevs?: DiffContentRevs;
   /** Line-anchored annotations (e.g. PR review threads). Absent = no anchors. */
   lineAnchors?: DiffLineAnchor[];
+  /** Inline composer opened from a diff line (PR review). Absent = read-only. */
+  lineWidget?: LineWidget;
 }) {
   // Diffs load near-instantly from local git, so a skeleton only adds a flash
   // and a layout shift on the way to the real content — render nothing until
@@ -599,6 +690,7 @@ export function DiffContent({
           // full file text, so don't try whole-file highlighting there.
           contentRevs={data.isTruncated ? undefined : contentRevs}
           lineAnchors={lineAnchors}
+          lineWidget={lineWidget}
         />
       </div>
     </div>

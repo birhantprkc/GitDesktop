@@ -20,7 +20,10 @@ import { useAppForm } from "@/lib/form";
 import { forgeBbClearAccount, forgeBbSetAccount } from "@/lib/git/api";
 import {
   useBbAccount,
+  useClearGitlabReviewToken,
   useGhAccounts,
+  useGitlabReviewBotStatus,
+  useSetGitlabReviewToken,
   useSwitchAccount,
 } from "@/lib/git/queries";
 import type { GhAccount } from "@/lib/git/types";
@@ -30,6 +33,10 @@ import { toastError } from "@/lib/toast";
 /** Where a Bitbucket / Atlassian API token is created. */
 const ATLASSIAN_TOKEN_URL =
   "https://id.atlassian.com/manage-profile/security/api-tokens";
+
+/** GitLab docs for minting a project/group access token (the review-bot token). */
+const GITLAB_PROJECT_TOKEN_URL =
+  "https://docs.gitlab.com/ee/user/project/settings/project_access_tokens.html";
 
 /** The scopes a token needs for full Bitbucket support: the read scopes that power
  *  browsing/PR/Pipeline reads, the write/admin scopes for acting on PRs and Pipelines,
@@ -61,14 +68,16 @@ function supportsSwitching(version: string): boolean {
 
 /**
  * Sign-in settings for the hosted providers: the GitHub CLI accounts (switch the
- * active account per host) and a Bitbucket Cloud account (an Atlassian API token
- * in the OS keychain). GitLab is CLI-driven like GitHub (via `glab auth login`),
- * so it has no block here.
+ * active account per host), a GitLab review-bot token (so AI reviews post as the
+ * project bot rather than the signed-in `glab` account), and a Bitbucket Cloud
+ * account (an Atlassian API token in the OS keychain). GitLab's day-to-day
+ * sign-in is still CLI-driven like GitHub (via `glab auth login`).
  */
 export function AccountsSection() {
   return (
     <div className="space-y-8">
       <GitHubAccounts />
+      <GitLabAccount />
       <BitbucketAccount />
     </div>
   );
@@ -224,6 +233,182 @@ function GitHubAccounts() {
           </div>
         </>
       )}
+    </section>
+  );
+}
+
+/**
+ * The GitLab review-bot token — a project or group access token so AI reviews
+ * post as that project's bot user instead of the signed-in `glab` account.
+ * Immediate-apply like the AI-provider keys (the token isn't part of the
+ * settings draft): connecting validates the token against GitLab, saves it to
+ * the OS keychain, and returns the bot login the status line then reflects. The
+ * token itself never leaves the backend — it's never rendered or logged, and the
+ * input clears on success.
+ */
+function GitLabAccount() {
+  const status = useGitlabReviewBotStatus();
+  const setToken = useSetGitlabReviewToken();
+  const clearToken = useClearGitlabReviewToken();
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const botLogin = status.data ?? null;
+
+  const form = useAppForm({
+    defaultValues: { token: "" },
+    onSubmit: async ({ value }) => {
+      setError(null);
+      try {
+        const login = await setToken.mutateAsync(value.token.trim());
+        form.reset({ token: "" });
+        toast.success(`AI reviews now post as @${login}`);
+      } catch (e) {
+        setError(errorMessage(e));
+      }
+    },
+  });
+
+  const token = useSelector(form.store, (s) => s.values.token);
+  const canSubmit = token.trim().length > 0;
+
+  async function disconnect() {
+    try {
+      await clearToken.mutateAsync();
+      setConfirmClear(false);
+      form.reset({ token: "" });
+      toast.success("GitLab review bot disconnected");
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  return (
+    <section className="space-y-4 border-t pt-6">
+      <div>
+        <h2 className="text-sm font-medium">GitLab</h2>
+        <p className="text-xs text-muted-foreground">
+          Add a GitLab project or group access token to post AI reviews as that
+          project's bot user instead of your signed-in account. Tokens are
+          stored in the OS keychain, never in app files.
+        </p>
+      </div>
+
+      {status.isPending ? (
+        <Skeleton className="h-16 w-full" />
+      ) : (
+        <div className="max-w-xl space-y-4">
+          {botLogin ? (
+            <div className="space-y-3 border">
+              <div className="flex items-center gap-2 border-b px-3 py-2">
+                <p className="min-w-0 truncate text-xs">
+                  AI reviews post as{" "}
+                  <span className="font-medium">@{botLogin}</span>
+                </p>
+                <Badge variant="secondary" className="ml-auto shrink-0">
+                  connected
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2 px-3 pb-3">
+                <Button
+                  variant="destructive"
+                  size="xs"
+                  onClick={() => setConfirmClear(true)}
+                >
+                  Disconnect
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                form.handleSubmit();
+              }}
+            >
+              <form.AppField name="token">
+                {(field) => (
+                  <field.TextField
+                    type="password"
+                    label="Project or group access token"
+                    placeholder="Paste a GitLab project or group access token"
+                  />
+                )}
+              </form.AppField>
+
+              <div className="flex items-center gap-2">
+                {/* A natively-disabled button swallows its title tooltip, so wrap
+                    it in a span that carries the reason. */}
+                <span
+                  title={
+                    canSubmit
+                      ? undefined
+                      : "Paste a project or group access token"
+                  }
+                >
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={!canSubmit || setToken.isPending}
+                  >
+                    {setToken.isPending && <Spinner data-icon="inline-start" />}
+                    Connect
+                  </Button>
+                </span>
+                {!canSubmit && (
+                  <span className="text-xs text-warning">
+                    Paste a project or group access token
+                  </span>
+                )}
+              </div>
+
+              {error && <p className="text-xs text-destructive">{error}</p>}
+            </form>
+          )}
+
+          <div className="space-y-1.5 text-xs text-muted-foreground">
+            <p>
+              The token needs the <span className="font-mono">api</span> scope
+              and a role of <span className="font-medium">Maintainer</span> or{" "}
+              <span className="font-medium">Owner</span> to mint. On gitlab.com,
+              project access tokens require a{" "}
+              <span className="font-medium">Premium or Ultimate</span> namespace
+              (they're free on self-managed GitLab). This applies to gitlab.com
+              in this version.
+            </p>
+            <button
+              type="button"
+              className="cursor-pointer underline underline-offset-2"
+              onClick={() => openUrl(GITLAB_PROJECT_TOKEN_URL)}
+              title="Open the GitLab project access token docs"
+            >
+              Create one on GitLab
+            </button>
+          </div>
+        </div>
+      )}
+
+      <Dialog open={confirmClear} onOpenChange={setConfirmClear}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Disconnect the GitLab review bot?</DialogTitle>
+            <DialogDescription>
+              Removes the saved project access token from the OS keychain. AI
+              reviews will post as your signed-in GitLab account again. This
+              can't be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmClear(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={disconnect}>
+              Disconnect
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

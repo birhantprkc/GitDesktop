@@ -481,7 +481,8 @@ excerpt** — the diff hunk the comment was left on — above the first reply; G
 Bitbucket don't expose that hunk, so their cards show the line chip alone. Reviewer
 \`\`\`suggestion blocks render as a **Suggested change** diff — the anchored lines against
 the proposed replacement (a labeled block of just the replacement where the originals
-can't be recovered). On a **GitHub** PR, that block gets an **Apply** button — GitDesktop's
+can't be recovered). That block gets an **Apply** button on **GitHub, GitLab, and
+Bitbucket** PRs alike — GitDesktop's
 local answer to GitHub's *Commit suggestion* (which has no public API): it writes the
 change straight to your **working tree**, first verifying the target lines still match what
 the reviewer saw (it refuses honestly if the file has drifted) and preserving the file's
@@ -495,6 +496,37 @@ unanchored threads stay in the Conversation block instead. From either place you
 delete your own** thread comments, **quote** a
 comment into the main composer, and **copy** the whole thread — path, line range, the
 diff excerpt, and every reply — as Markdown.
+
+## Compose your own review
+
+In the **Files** tab, **click a line number** — or **drag across a range** of them — to
+open an inline composer right under the diff. From there you can:
+
+- **Add single comment** — post one line comment immediately (it appears in the thread
+  right away).
+- **Start a review** — batch the comment as a **draft** instead of posting it. Once a
+  review is in progress the button reads **Add to review**, and each draft renders at its
+  anchor with a **Pending** badge and inline **Edit** / **Delete**. Pending drafts are
+  **saved to disk per PR**, so they survive closing the PR or restarting the app.
+- **Add suggestion** — insert a provider-correct \`\`\`suggestion block pre-filled with the
+  selected code, ready to edit (GitHub carries the range on the anchor, GitLab uses its
+  \`:-N+0\` form, and Bitbucket suggestions are single-line).
+
+A **Review in progress** bar shows the pending count with **Submit review…** and
+**Discard**. Submitting opens a dialog to choose a **verdict** — **Comment**, **Approve**,
+or **Request changes** — each offered only where the provider allows it; **Request changes**
+requires a summary. Submit posts all your pending drafts as one batch review (it works with
+no drafts too, for a plain verdict + summary). **Submit review…** and **Discard pending
+review** are also available from the command palette ({{kbd:command-palette}}).
+
+## The Commits tab
+
+A PR's **Commits** tab is arrow-navigable — **↑ / ↓** to move, **Enter** to open a commit.
+A hosted commit opens a **detail view**: its full message body, a changed-file list with
+per-file diffs, and a **copy SHA** control (a local PR's commit opens the full history
+commit detail instead). The detail view also carries **commit comments** — a whole-commit
+thread and **line-anchored comments** on the commit's diff (click a line to comment), with
+create / edit / delete of your own, on GitHub, GitLab, and Bitbucket.
 
 Create a PR with **Create pull request** ({{kbd:create-pr}}) or from the Compare tab — as
 a **draft** if you like{{ai}}, optionally with an **AI-generated** title and description
@@ -547,7 +579,13 @@ On any PR — GitHub or a GitLab MR — run a streamed **code review** or a focu
 using your chosen review model, and optionally post the result as a comment. A general
 review can build on prior reviews as soft context. With a CLI agent (Claude, Copilot, or
 opencode), a **repo-aware** toggle lets the reviewer read the repo's files for deeper
-context (slower). See *AI & automations* to pick the review model.{{/ai}}`,
+context (slower). See *AI & automations* to pick the review model.
+
+Every AI-posted review is **clearly machine-authored**: a branded GitDesktop header and
+footer on the comment, and on a **local PR** a "GitDesktop" bot author with a robot avatar.
+On **GitLab**, add a project or group access token in **Settings → Accounts** (see
+*Settings & updates*) and your AI reviews post as the real **GitLab project bot** rather
+than your signed-in \`glab\` account.{{/ai}}`,
   },
   {
     id: "issues",
@@ -1084,7 +1122,10 @@ Open **Settings** from the header gear (or {{kbd:open-settings}}). Sections:
   API token: enter your Atlassian account email + a token with the five \`read:…:bitbucket\`
   scopes, plus the \`write:…:bitbucket\` scopes to act on PRs and Pipelines and the
   \`admin:…:bitbucket\` / \`delete:…:bitbucket\` / webhook scopes to manage repositories;
-  stored in the OS keychain, replaceable or removable here).
+  stored in the OS keychain, replaceable or removable here).{{ai}} A **GitLab** block here
+  takes an optional **project or group access token** so your AI reviews post as that
+  project's bot rather than your signed-in \`glab\` account (also OS-keychain-stored,
+  connect or disconnect here).{{/ai}}
 - **Git** — the default branch name for new repos, your global identity, a per-repository
   identity override, and line endings (\`core.autocrlf\`).
 - **Syntax** — map file extensions to languages or add custom grammars, personally or

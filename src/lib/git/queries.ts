@@ -19,8 +19,10 @@ import type {
   BbEnvironment,
   BitbucketHookInput,
   BitbucketRepoSettingsInput,
+  CommitCommentOut,
   DiffStatEntry,
   DiscussionDetails,
+  DraftCommentIn,
   ForgeCapabilities,
   ForgeImplemented,
   ForgeProvider,
@@ -867,6 +869,259 @@ export function useApplySuggestion(repo: string) {
   );
 }
 
+/** The unified diff for one commit of a PR/MR — the per-commit review view. Pass
+ *  `oid: null` (no commit selected) so the read doesn't fire; keyed by oid so each
+ *  commit's diff caches independently, with the same short stale window as the
+ *  other PR-detail queries. */
+export function usePrCommitDiff(
+  repo: string,
+  number: number,
+  oid: string | null,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "pr", number, "commit-diff", oid] as const,
+    queryFn: () => api.forgePrCommitDiff(repo, number, oid ?? ""),
+    enabled: oid !== null,
+    staleTime: 30_000,
+  });
+}
+
+/** Comments on a commit (GitHub commit comments / GitLab commit notes). Pass
+ *  `sha: null` when no commit is selected so the read doesn't fire. */
+export function useCommitComments(repo: string, sha: string | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "commit", sha, "comments"] as const,
+    queryFn: () => api.forgeCommitComments(repo, sha ?? ""),
+    enabled: sha !== null,
+    staleTime: 30_000,
+  });
+}
+
+const commitCommentsKey = (repo: string, sha: string) =>
+  ["repo", repo, "commit", sha, "comments"] as const;
+
+/**
+ * Optimistically append a synthetic commit comment to the commit-comments cache,
+ * with exact-key rollback — mirroring {@link useOptimisticCreateCommentMutation}
+ * for the flat commit-comment list. The synthetic row carries a collision-proof
+ * `optimistic:<n>` id and `viewerDidAuthor: false` (so it offers no edit/delete
+ * until the reconciliation refetch replaces it with the real comment). `author` is
+ * the viewer's forge login when cheaply cached, else "You". The key is derived
+ * from `sha` at mutate time so a mid-flight commit switch never corrupts another
+ * key's cache; onSettled keeps the repo-wide invalidation as server-truth
+ * reconciliation.
+ */
+export function useCreateCommitComment(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      sha: string;
+      body: string;
+      path?: string;
+      line?: number;
+      position?: number;
+    }) => api.forgeCommitCommentCreate(repo, args),
+    onMutate: async (args: {
+      sha: string;
+      body: string;
+      path?: string;
+      line?: number;
+      position?: number;
+    }) => {
+      const key = commitCommentsKey(repo, args.sha);
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<CommitCommentOut[]>(key);
+      // The viewer's login is read from the already-cached forge status (no fetch);
+      // "You" until the reconciliation refetch swaps in the real comment.
+      const login = queryClient.getQueryData<ForgeStatus>([
+        "repo",
+        repo,
+        "forge-status",
+      ])?.login;
+      const synthetic: CommitCommentOut = {
+        id: `optimistic:${(optimisticCommentSeq += 1)}`,
+        author: login ?? "You",
+        body: args.body,
+        createdAt: new Date().toISOString(),
+        viewerDidAuthor: false,
+        path: args.path ?? null,
+        line: args.line ?? null,
+        position: args.position ?? null,
+      };
+      queryClient.setQueryData<CommitCommentOut[]>(key, (list) =>
+        list ? [...list, synthetic] : list,
+      );
+      return { prev, key };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: () =>
+      void queryClient.invalidateQueries({ queryKey: repoKeys.all(repo) }),
+  });
+}
+
+/**
+ * Optimistically patch the commit-comments cache (edit replaces one comment's
+ * body; delete removes it) with exact-key rollback — the commit-comment analogue
+ * of {@link useOptimisticCommentMutation}. The key is derived from `sha` at mutate
+ * time so a mid-flight commit switch never corrupts another key's cache; onSettled
+ * keeps the repo-wide invalidation as server-truth reconciliation.
+ */
+function useOptimisticCommitCommentMutation<TData>(
+  repo: string,
+  mutationFn: (args: {
+    sha: string;
+    commentId: string;
+    body?: string;
+  }) => Promise<TData>,
+  patchComment: (
+    comment: CommitCommentOut,
+    args: { sha: string; commentId: string; body?: string },
+  ) => CommitCommentOut | null,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onMutate: async (args: {
+      sha: string;
+      commentId: string;
+      body?: string;
+    }) => {
+      const key = commitCommentsKey(repo, args.sha);
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<CommitCommentOut[]>(key);
+      queryClient.setQueryData<CommitCommentOut[]>(key, (list) =>
+        list?.flatMap((c) => {
+          if (c.id !== args.commentId) return [c];
+          const patched = patchComment(c, args);
+          return patched ? [patched] : [];
+        }),
+      );
+      return { prev, key };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: () =>
+      void queryClient.invalidateQueries({ queryKey: repoKeys.all(repo) }),
+  });
+}
+
+export function useEditCommitComment(repo: string) {
+  return useOptimisticCommitCommentMutation(
+    repo,
+    (args: { sha: string; commentId: string; body?: string }) =>
+      api.forgeCommitCommentEdit(repo, {
+        sha: args.sha,
+        commentId: args.commentId,
+        body: args.body ?? "",
+      }),
+    (comment, args) => ({ ...comment, body: args.body ?? comment.body }),
+  );
+}
+
+export function useDeleteCommitComment(repo: string) {
+  return useOptimisticCommitCommentMutation(
+    repo,
+    (args: { sha: string; commentId: string }) =>
+      api.forgeCommitCommentDelete(repo, {
+        sha: args.sha,
+        commentId: args.commentId,
+      }),
+    () => null,
+  );
+}
+
+/**
+ * Create a new file:line-anchored review thread, optimistically appending a
+ * synthetic single-comment {@link ReviewThreadOut} to the review-threads cache
+ * with exact-key rollback — so the thread card shows instantly instead of waiting
+ * on the write + refetch. The synthetic thread carries a collision-proof
+ * `optimistic:<n>` comment id and `viewerDidAuthor: false` (no edit/delete until
+ * the reconciliation refetch replaces it); onSettled keeps the repo-wide
+ * invalidation as server-truth reconciliation.
+ */
+export function useCreateReviewThread(repo: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      number: number;
+      path: string;
+      line: number;
+      side: "new" | "old";
+      startLine?: number;
+      body: string;
+    }) => api.forgePrThreadCreate(repo, args),
+    onMutate: async (args: {
+      number: number;
+      path: string;
+      line: number;
+      side: "new" | "old";
+      startLine?: number;
+      body: string;
+    }) => {
+      const key = prReviewThreadsKey(repo, args.number);
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<ReviewThreadOut[]>(key);
+      const login = queryClient.getQueryData<ForgeStatus>([
+        "repo",
+        repo,
+        "forge-status",
+      ])?.login;
+      const synthetic: ReviewThreadOut = {
+        id: `optimistic:${(optimisticCommentSeq += 1)}`,
+        reviewId: "",
+        path: args.path,
+        line: args.line,
+        startLine: args.startLine ?? 0,
+        side: args.side,
+        isResolved: false,
+        isOutdated: false,
+        diffHunk: "",
+        comments: [
+          {
+            author: login ?? "You",
+            state: "",
+            body: args.body,
+            date: new Date().toISOString(),
+            id: `optimistic:${(optimisticCommentSeq += 1)}`,
+            url: "",
+            viewerDidAuthor: false,
+            isMinimized: false,
+            minimizedReason: "",
+          },
+        ],
+      };
+      queryClient.setQueryData<ReviewThreadOut[]>(key, (threads) =>
+        threads ? [...threads, synthetic] : threads,
+      );
+      return { prev, key };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: () =>
+      void queryClient.invalidateQueries({ queryKey: repoKeys.all(repo) }),
+  });
+}
+
+/** Submit a batch review (verdict + summary + staged draft comments). NOT
+ *  optimistic — on some providers it fans out to several calls, so it just
+ *  invalidates the repo subtree on success and returns the {@link ReviewSubmitOut}
+ *  so the caller can toast the posted/total counts. */
+export function useSubmitReview(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      number: number;
+      verdict: api.ReviewVerdict;
+      summary?: string;
+      comments: DraftCommentIn[];
+    }) => api.forgePrReviewSubmit(repo, args),
+  );
+}
+
 export function useThreadReply(repo: string, number: number) {
   return useRepoMutation(
     repo,
@@ -1709,6 +1964,41 @@ export function useBbAccount() {
   });
 }
 
+const gitlabReviewBotKey = ["settings", "gitlab-review-bot"] as const;
+
+/** The configured GitLab review-bot login, or null when none. A fast keyring
+ *  check — no network. The stored value is only ever the returned login; the
+ *  token itself never lands in query data. */
+export function useGitlabReviewBotStatus() {
+  return useQuery({
+    queryKey: gitlabReviewBotKey,
+    queryFn: api.forgeGitlabReviewTokenStatus,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+/** Save a GitLab review-bot token (validated backend-side); returns the bot login,
+ *  which is what the status query then reflects. */
+export function useSetGitlabReviewToken() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) => api.forgeGitlabReviewTokenSet(token),
+    onSettled: () =>
+      void queryClient.invalidateQueries({ queryKey: gitlabReviewBotKey }),
+  });
+}
+
+/** Clear the configured GitLab review-bot token. */
+export function useClearGitlabReviewToken() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.forgeGitlabReviewTokenClear(),
+    onSettled: () =>
+      void queryClient.invalidateQueries({ queryKey: gitlabReviewBotKey }),
+  });
+}
+
 /** The "no hosted integration" status cold-start test mode forces. */
 const NO_FORGE_STATUS: ForgeStatus = {
   provider: null,
@@ -1779,6 +2069,9 @@ const NO_FORGE_STATUS: ForgeStatus = {
     mrThreadReply: false,
     mrThreadResolve: false,
     mrThreadCommentEdit: false,
+    commitComments: false,
+    mrThreadCreate: false,
+    mrReviewSubmit: false,
   },
 };
 
@@ -2627,7 +2920,7 @@ export function useReviewPr(repo: string) {
 
 export function useCommentPr(repo: string) {
   return useOptimisticCreateCommentMutation(repo, "pr", (args) =>
-    api.forgePrComment(repo, args.number, args.body),
+    api.forgePrComment(repo, args.number, args.body, args.asBot),
   );
 }
 
@@ -2958,16 +3251,28 @@ let optimisticCommentSeq = 0;
 function useOptimisticCreateCommentMutation<TData>(
   repo: string,
   kind: "pr" | "issue",
-  mutationFn: (args: { number: number; body: string }) => Promise<TData>,
+  // `asBot` is threaded through for the PR path (posts as the review-bot identity
+  // on GitLab; ignored elsewhere). Optional + additive — the issue path and the
+  // existing PR callers never pass it, so their behavior is unchanged.
+  mutationFn: (args: {
+    number: number;
+    body: string;
+    asBot?: boolean;
+  }) => Promise<TData>,
 ) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (args: { number: number; body: string; author: string }) =>
-      mutationFn(args),
+    mutationFn: (args: {
+      number: number;
+      body: string;
+      author: string;
+      asBot?: boolean;
+    }) => mutationFn(args),
     onMutate: async (args: {
       number: number;
       body: string;
       author: string;
+      asBot?: boolean;
     }) => {
       const key = ["repo", repo, kind, args.number] as const;
       await queryClient.cancelQueries({ queryKey: key });

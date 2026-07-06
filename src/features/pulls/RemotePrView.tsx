@@ -17,6 +17,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   MarkdownEditor,
   type MarkdownEditorHandle,
@@ -50,15 +51,12 @@ import {
   Thread,
 } from "@/features/conversations/Thread";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
+import type { LineWidget } from "@/features/diff/DiffSurface";
 import { AssigneesPopover } from "@/features/issues/IssueMetaPickers";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
-import type {
-  MergeStrategy,
-  MinimizeReason,
-  ReviewAction,
-} from "@/lib/git/api";
+import type { MergeStrategy, MinimizeReason } from "@/lib/git/api";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
   PIPELINE_IN_FLIGHT,
@@ -88,7 +86,6 @@ import {
   useReopenPr,
   useRepoStatus,
   useRequestChangesPr,
-  useReviewPr,
   useSetPrAssignees,
   useSetPrDraft,
   useSetPrReviewers,
@@ -99,11 +96,22 @@ import {
   useUnminimizeComment,
   useUnrequestChangesPr,
 } from "@/lib/git/queries";
-import { type ApprovalState, providerLabel } from "@/lib/git/types";
+import {
+  type ApprovalState,
+  type ForgeProvider,
+  providerLabel,
+} from "@/lib/git/types";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import {
+  useClearReviewDrafts,
+  useReviewDrafts,
+} from "@/lib/pulls/review-drafts";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { PendingReviewBar } from "./PendingReviewBar";
+import { PrCommitDetail } from "./PrCommitDetail";
 import { PrReviewPanel } from "./PrReviewPanel";
 import { PrTasksChip, PrTasksSection } from "./PrTasksSection";
 import {
@@ -111,6 +119,7 @@ import {
   MrTimeTracking,
   PrFilesPane,
 } from "./RemotePrViewParts";
+import { ReviewComposer } from "./ReviewComposer";
 import { ReviewersPopover, userRefHint } from "./ReviewersPopover";
 import {
   ReviewThreadsBlock,
@@ -118,6 +127,7 @@ import {
   type SuggestionApply,
   threadToMarkdown,
 } from "./ReviewThreads";
+import { SubmitReviewDialog } from "./SubmitReviewDialog";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 import { usePrCapabilities } from "./usePrCapabilities";
 
@@ -202,10 +212,12 @@ export function RemotePrView({
     canReact,
     canEditOwnComments,
     canEditOwnThreadComments,
+    canCommentCommits,
+    canCreateThread,
+    canSubmitReview,
   } = usePrCapabilities(forge.data, provider);
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
-  const review = useReviewPr(repoPath);
   const setAssignees = useSetPrAssignees(repoPath);
   const setReviewers = useSetPrReviewers(repoPath);
   const comment = useCommentPr(repoPath);
@@ -281,6 +293,37 @@ export function RemotePrView({
   const aiEnabled = useAiEnabled();
   const rulesConfig = useEffectiveBranchRules(repoPath);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // Commits-tab drill-in: the selected commit's oid, or null for the list. Reset
+  // when the PR number changes (below, alongside the file-selection reset).
+  const [selectedCommitOid, setSelectedCommitOid] = useState<string | null>(
+    null,
+  );
+  // The submit-review dialog's open state (the Review control + palette action).
+  const [submitOpen, setSubmitOpen] = useState(false);
+  // Pending-review drafts (local-only until submitted); shared by the Files-tab
+  // anchors, the PendingReviewBar count, and the ReviewComposer's draft count.
+  const drafts = useReviewDrafts(repoPath, number);
+  const clearDrafts = useClearReviewDrafts(repoPath, number);
+  // The composer/thread-create side of the forge detection: a strict provider key
+  // (default "github" — gh is the authoritative default for an unrecognized host).
+  const providerKey: ForgeProvider = provider ?? "github";
+
+  // Palette-only PR actions (mounted here, so only live while a remote PR is
+  // open). "Submit review…" opens the dialog when the provider allows a batch
+  // review; "Discard pending review" confirms then clears the drafts.
+  const draftCount = drafts.data?.length ?? 0;
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  useHotkeyAction(
+    "submit-review",
+    () => setSubmitOpen(true),
+    canSubmitReview && details.data?.state === "OPEN",
+  );
+  useHotkeyAction(
+    "discard-pending-review",
+    () => setDiscardConfirmOpen(true),
+    draftCount > 0,
+  );
+
   const [composeBody, setComposeBody] = useState("");
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,
@@ -311,25 +354,6 @@ export function RemotePrView({
   // React Compiler bail out of this whole component (refs-in-render rule).
   const quoteReply = (body: string) =>
     makeQuoteReply({ composerRef, setBody: setComposeBody })(body);
-
-  function submitReview(action: ReviewAction) {
-    review.mutate(
-      { number, action, body: composeBody.trim() },
-      {
-        onSuccess: () => {
-          toast.success(
-            action === "approve"
-              ? "Approved"
-              : action === "request_changes"
-                ? "Requested changes"
-                : "Review submitted",
-          );
-          setComposeBody("");
-        },
-        onError,
-      },
-    );
-  }
 
   // GitLab approve/unapprove — a single toggle keyed on whether the viewer has
   // approved. `user_can_approve` is unreliable on Free (false even when approving
@@ -487,6 +511,7 @@ export function RemotePrView({
   if (number !== lastNumber) {
     setLastNumber(number);
     setSelectedPath(null);
+    setSelectedCommitOid(null);
   }
   // Default to the first changed file until the user picks one.
   const effectivePath =
@@ -543,6 +568,38 @@ export function RemotePrView({
       }
     : undefined;
 
+  // A file's unified-diff section by path, so the in-diff thread cards (Files tab)
+  // and the Conversation suggestion threads can synthesize a hunk on hunk-less
+  // providers (GitLab/Bitbucket) to gain the Apply affordance.
+  const fileDiffLookup = (path: string): string | undefined =>
+    fileSections.get(path);
+
+  // The inline line-comment composer for the Files tab: enabled only when the
+  // provider allows creating a new review thread. Anchored to the currently
+  // selected file (its section prefills a suggestion's code). Absent otherwise,
+  // so the diff stays read-only exactly as before.
+  const reviewLineWidget: LineWidget | undefined =
+    canCreateThread && effectivePath
+      ? {
+          enabled: true,
+          render: ({ side, line, fromLine, onClose }) => (
+            <ReviewComposer
+              repoPath={repoPath}
+              number={number}
+              path={effectivePath}
+              side={side}
+              line={line}
+              fromLine={fromLine}
+              provider={providerKey}
+              fileSection={fileSections.get(effectivePath) ?? ""}
+              draftCount={draftCount}
+              canCreateThread={canCreateThread}
+              onClose={onClose}
+            />
+          ),
+        }
+      : undefined;
+
   // Gating inputs + the write for the per-suggestion Apply affordance, shared by
   // the Conversation review-thread block and the Files-tab diff anchors. The
   // current branch is the same status field the header's "Checked out" gate reads
@@ -557,7 +614,6 @@ export function RemotePrView({
 
   const isOpen = pr.state === "OPEN";
   const busy =
-    review.isPending ||
     comment.isPending ||
     mergePr.isPending ||
     closePr.isPending ||
@@ -874,9 +930,17 @@ export function RemotePrView({
                 })),
           }}
           posting={comment.isPending}
-          onPost={(body) =>
+          // The panel posts its AI review as a comment and passes `asBot: true`,
+          // forwarded to the mutation so GitLab attributes it to the review-bot
+          // identity (other providers ignore the flag).
+          onPost={(body, opts) =>
             comment
-              .mutateAsync({ number, body, author: forge.data?.login ?? "You" })
+              .mutateAsync({
+                number,
+                body,
+                author: forge.data?.login ?? "You",
+                asBot: opts?.asBot,
+              })
               .catch((e) => {
                 onError(e);
                 throw e; // let the panel skip its success toast / text clear
@@ -1028,6 +1092,7 @@ export function RemotePrView({
                     : undefined
                 }
                 apply={suggestionApply}
+                fileDiffLookup={fileDiffLookup}
               />
               {pr.comments
                 .filter((c) => hasVisibleBody(c.body))
@@ -1116,30 +1181,21 @@ export function RemotePrView({
                 >
                   Comment
                 </Button>
-                {isOpen && canWrite && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <Button variant="outline" size="sm" disabled={busy}>
-                          Review
-                          <CaretDownIcon data-icon="inline-end" />
-                        </Button>
-                      }
-                    />
-                    <DropdownMenuContent className="w-52">
-                      <DropdownMenuItem onClick={() => submitReview("approve")}>
-                        Approve
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => submitReview("comment")}>
-                        Comment
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => submitReview("request_changes")}
-                      >
-                        Request changes
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                {/* The Review control now opens the batch submit dialog for
+                    EVERY provider (verdict + summary + any pending draft
+                    comments), replacing the legacy GitHub-only verdict menu.
+                    GitHub rides `canWrite` via canSubmitReview; a ready
+                    GitLab/Bitbucket repo enables it through the forge flag. */}
+                {isOpen && canSubmitReview && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => setSubmitOpen(true)}
+                    title="Submit a review (verdict, summary, and any pending comments)"
+                  >
+                    Review…
+                  </Button>
                 )}
                 {isOpen && canApprove && (
                   <>
@@ -1238,44 +1294,82 @@ export function RemotePrView({
         </>
       )}
 
-      {section === "commits" && (
-        <CommitsList
-          commits={pr.commits.map((c) => ({
-            id: c.oid,
-            subject: c.headline,
-            shortSha: c.oid.slice(0, 7),
-            author: c.author,
-            date: c.date,
-          }))}
-        />
-      )}
+      {section === "commits" &&
+        (() => {
+          // Drill-in: render the selected commit's detail, or the list. A stale
+          // oid (e.g. after a refetch dropped the commit) falls back to the list.
+          const selectedCommit = selectedCommitOid
+            ? pr.commits.find((c) => c.oid === selectedCommitOid)
+            : undefined;
+          if (selectedCommit) {
+            return (
+              <PrCommitDetail
+                repoPath={repoPath}
+                number={number}
+                commit={selectedCommit}
+                onBack={() => setSelectedCommitOid(null)}
+                canCommentCommits={canCommentCommits}
+                remoteLabel={remoteLabel}
+                provider={providerKey}
+              />
+            );
+          }
+          return (
+            <CommitsList
+              commits={pr.commits.map((c) => ({
+                id: c.oid,
+                subject: c.headline,
+                shortSha: c.oid.slice(0, 7),
+                author: c.author,
+                date: c.date,
+              }))}
+              onSelect={setSelectedCommitOid}
+              selectedId={selectedCommitOid}
+            />
+          );
+        })()}
 
       {section === "files" && (
-        <PrFilesPane
-          files={pr.files}
-          effectivePath={effectivePath}
-          onSelectPath={setSelectedPath}
-          fileDiff={fileDiff}
-          isPending={prDiff.isPending}
-          isError={prDiff.isError}
-          // The same threads + handlers/gates the Conversation block uses —
-          // reuse the top-level read/mutations, don't re-fetch. Quoting from a
-          // diff card feeds the view-level composer (persists to Conversation).
-          threads={reviewThreads.data}
-          onQuote={quoteReply}
-          onReply={
-            canThreadReply
-              ? (threadId, body) => threadReply.mutateAsync({ threadId, body })
-              : undefined
-          }
-          onResolve={
-            canThreadResolve
-              ? (threadId, resolved) =>
-                  threadResolve.mutateAsync({ threadId, resolved })
-              : undefined
-          }
-          apply={suggestionApply}
-        />
+        <div className="flex min-h-0 flex-1 flex-col">
+          {/* Pending-review status bar: hidden until a draft exists, then a
+              live count + Submit/Discard. Sits directly above the files pane. */}
+          <PendingReviewBar
+            repoPath={repoPath}
+            number={number}
+            onSubmit={() => setSubmitOpen(true)}
+          />
+          <PrFilesPane
+            files={pr.files}
+            effectivePath={effectivePath}
+            onSelectPath={setSelectedPath}
+            fileDiff={fileDiff}
+            isPending={prDiff.isPending}
+            isError={prDiff.isError}
+            // The same threads + handlers/gates the Conversation block uses —
+            // reuse the top-level read/mutations, don't re-fetch. Quoting from a
+            // diff card feeds the view-level composer (persists to Conversation).
+            threads={reviewThreads.data}
+            drafts={drafts.data}
+            repoPath={repoPath}
+            number={number}
+            lineWidget={reviewLineWidget}
+            onQuote={quoteReply}
+            onReply={
+              canThreadReply
+                ? (threadId, body) =>
+                    threadReply.mutateAsync({ threadId, body })
+                : undefined
+            }
+            onResolve={
+              canThreadResolve
+                ? (threadId, resolved) =>
+                    threadResolve.mutateAsync({ threadId, resolved })
+                : undefined
+            }
+            apply={suggestionApply}
+            fileDiffLookup={fileDiffLookup}
+          />
+        </div>
       )}
 
       {/* The open-MR footer hosts Close + Merge (GitLab writes too) alongside Ready
@@ -1614,6 +1708,39 @@ export function RemotePrView({
               },
             },
           )
+        }
+      />
+
+      {/* The batch submit-review dialog: opened from the Review control, the
+          pending-review bar, and the palette action. Verdict caps ride canWrite
+          for GitHub, the forge flags for GitLab/Bitbucket. */}
+      <SubmitReviewDialog
+        repoPath={repoPath}
+        number={number}
+        open={submitOpen}
+        onOpenChange={setSubmitOpen}
+        caps={{
+          canApprove: canWrite || canApprove,
+          canRequestChanges: canWrite || canRequestChanges,
+        }}
+        remoteLabel={remoteLabel}
+      />
+
+      {/* Palette-triggered "Discard pending review" confirmation (the bar has its
+          own inline confirm; this is the keyboard/command-palette entry point). */}
+      <ConfirmDialog
+        open={discardConfirmOpen}
+        onCancel={() => setDiscardConfirmOpen(false)}
+        title="Discard pending review?"
+        body={`This deletes all ${draftCount} pending comment${draftCount === 1 ? "" : "s"}. They haven't been posted yet and can't be recovered.`}
+        confirmLabel="Discard review"
+        confirmVariant="destructive"
+        pending={clearDrafts.isPending}
+        onConfirm={() =>
+          clearDrafts.mutate(undefined, {
+            onError,
+            onSuccess: () => setDiscardConfirmOpen(false),
+          })
         }
       />
     </div>

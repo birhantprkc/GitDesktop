@@ -1,6 +1,7 @@
-import { DotsThreeIcon } from "@phosphor-icons/react";
+import { DotsThreeIcon, RobotIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { MarkdownEditor } from "@/components/markdown-editor";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -25,7 +26,12 @@ export function LocalComment({
   onHide,
   onUnhide,
 }: {
-  comment: { body: string; createdAt: string; hidden?: boolean };
+  comment: {
+    body: string;
+    createdAt: string;
+    author?: string;
+    hidden?: boolean;
+  };
   onQuote?: () => void;
   /** Replaces the comment body in local storage. */
   onSaveEdit: (body: string) => void;
@@ -43,6 +49,18 @@ export function LocalComment({
   return (
     <div className="group space-y-1">
       <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        {comment.author && (
+          <>
+            <Avatar size="sm" className="shrink-0">
+              <AvatarFallback>
+                <RobotIcon aria-hidden className="size-3" />
+              </AvatarFallback>
+            </Avatar>
+            <span className="font-medium text-foreground">
+              {comment.author}
+            </span>
+          </>
+        )}
         {formatRelativeTime(comment.createdAt)}
         {hidden && <span className="italic">hidden</span>}
         {!editing && (

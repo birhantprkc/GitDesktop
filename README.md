@@ -187,7 +187,11 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 - **AI review that doesn't quit or repeat itself** — it keeps running while you
   move between PRs, and finishes in the tray even after you close the window.
   Re-runs remember the last round and fold in other reviewers' findings, so it
-  builds on what's already been flagged instead of re-raising it.
+  builds on what's already been flagged instead of re-raising it. Every AI-posted
+  review is **clearly machine-authored** — a branded GitDesktop header/footer, a
+  "GitDesktop" bot author with a robot avatar on local PRs, and (with a GitLab
+  project/group access token in Settings → Accounts) posting as the real **GitLab
+  project bot** rather than your own account.
 - **Debug failed CI with AI** — turn a failed job's logs into a streamed
   root-cause + fix, ending with a ready-to-paste prompt for a coding agent.
 - **Markdown everywhere you write** — Write/Preview tabs and a formatting toolbar
@@ -285,7 +289,17 @@ Conversation tab and anchored at their exact line in the Files diff, with
 reply-in-thread, resolve/unresolve, and edit/delete of your own thread comments —
 and a reviewer's suggested change can be
 **applied straight to your working tree** (verified against the file, staged when
-safe), something even GitHub's API can't do. Write/Preview markdown editor
+safe) — now on **GitLab and Bitbucket** too, not just GitHub — something even
+GitHub's API can't do. **Compose your own review** right from the diff: click a
+line number (or drag across a range) to open an inline composer, post a single
+comment or **start a review** to batch drafts (persisted per-PR, surviving
+restarts) that render at their anchors with a pending-review count, then
+**Submit review…** with a verdict (Comment / Approve / Request changes,
+capability-gated per provider) — and insert a **provider-correct suggestion**
+pre-filled with the selected code. **Drill into a PR's commits** too — the
+Commits tab is arrow-navigable, and opening a commit shows its full message and
+per-file diffs with a **whole-commit thread and line-anchored comments** you can
+add, edit, and delete. Write/Preview markdown editor
 (formatting toolbar and live preview) everywhere you author.
 
 ![A pull request open in GitDesktop with an inline AI review summarizing the diff; the left sidebar lists both local and GitHub pull requests, and the footer offers Approve, Comment, and Publish-to-GitHub actions.](site/src/assets/app-review.png)

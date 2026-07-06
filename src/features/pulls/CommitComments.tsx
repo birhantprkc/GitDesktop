@@ -1,0 +1,499 @@
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
+import { MarkdownEditor } from "@/components/markdown-editor";
+import { Button } from "@/components/ui/button";
+import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
+import { Thread } from "@/features/conversations/Thread";
+import type { splitUnifiedDiff } from "@/lib/git/diff-split";
+import {
+  useCommitComments,
+  useCreateCommitComment,
+  useDeleteCommitComment,
+  useEditCommitComment,
+} from "@/lib/git/queries";
+import type { CommitCommentOut, PrThreadOut } from "@/lib/git/types";
+import { toastError } from "@/lib/toast";
+import { SUBMIT_HINT } from "./ReviewThreads";
+
+type DiffSections = ReturnType<typeof splitUnifiedDiff>;
+
+/**
+ * Derive the new-side (right) line number a GitHub commit comment anchors to
+ * from its diff `position`. GitHub sends `position` (1-based index of the line
+ * within the file's patch, counting EVERY line after the first `@@` hunk
+ * header — the headers of subsequent hunks included) but often leaves `line`
+ * null, so the position must be walked against the file's own diff section to
+ * recover the line. Returns null when the section is absent, the position is
+ * out of range, or the target line isn't on the new side (context/added lines
+ * carry a new-side number; a removed line does not).
+ *
+ * `\ No newline at end of file` markers are counted toward `position` (GitHub
+ * indexes every patch line after the first `@@` header, including them) but are
+ * NOT content — they annotate the previous line, so they never advance the
+ * new-side counter and are never a valid anchor target. Advancing on them would
+ * shift every line after a no-trailing-newline transition by one (the same rule
+ * `parseHunk` in ReviewThreads.tsx documents).
+ */
+export function lineFromPosition(
+  section: string | undefined,
+  position: number | null,
+): number | null {
+  if (!section || position == null || position < 1) return null;
+  const lines = section.split("\n");
+  // Walk from the first hunk header; count every line after it (position 1 is
+  // the first line following that header).
+  let firstHunk = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith("@@")) {
+      firstHunk = i;
+      break;
+    }
+  }
+  if (firstHunk === -1) return null;
+
+  let pos = 0;
+  let newLine = 0;
+  for (let i = firstHunk; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.startsWith("@@")) {
+      // Re-seat the new-side counter from this hunk's header (`@@ -a,b +c,d @@`).
+      const m = l.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (m) newLine = Number(m[1]) - 1;
+      if (i !== firstHunk) pos += 1; // subsequent headers count toward position
+      if (pos === position) return null; // a header line has no new-side line
+      continue;
+    }
+    pos += 1;
+    if (l.startsWith("\\")) {
+      // `\ No newline at end of file`: counts toward position but is not content
+      // — no new-side number, and never a valid anchor target.
+      if (pos === position) return null;
+      continue;
+    }
+    if (l.startsWith("-")) {
+      // Removed line: no new-side number; if the position lands here, unresolved.
+      if (pos === position) return null;
+      continue;
+    }
+    // Context (" ") or added ("+") line advances the new-side counter.
+    newLine += 1;
+    if (pos === position) return newLine;
+  }
+  return null;
+}
+
+/**
+ * The inverse of {@link lineFromPosition}: given a new-side (right) line number,
+ * derive the GitHub commit-comment `position` (1-based index within the file's
+ * patch, counting EVERY line after the first `@@` hunk header — the headers of
+ * subsequent hunks included) that anchors to it. Walks the file's own diff
+ * section with the same counting rules as `lineFromPosition`, in the forward
+ * direction, and returns the position at which the target new-side line is first
+ * reached. Returns null when the section is absent, has no hunk header, or the
+ * requested line never appears on the new side (it wasn't part of this commit's
+ * diff for that file) — the caller then disables the post with a visible reason.
+ *
+ * `\ No newline at end of file` markers are counted toward `position` (to stay
+ * symmetric with {@link lineFromPosition}) but never advance the new-side
+ * counter and are never a returned target: a `\` line is not content, so the
+ * position it occupies can't anchor a comment (the same rule `parseHunk` in
+ * ReviewThreads.tsx documents).
+ */
+export function positionFromLine(
+  section: string | undefined,
+  line: number | null,
+): number | null {
+  if (!section || line == null || line < 1) return null;
+  const lines = section.split("\n");
+  // Find the first hunk header; position 1 is the first line following it.
+  let firstHunk = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith("@@")) {
+      firstHunk = i;
+      break;
+    }
+  }
+  if (firstHunk === -1) return null;
+
+  let pos = 0;
+  let newLine = 0;
+  for (let i = firstHunk; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.startsWith("@@")) {
+      // Re-seat the new-side counter from this hunk's header (`@@ -a,b +c,d @@`).
+      const m = l.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (m) newLine = Number(m[1]) - 1;
+      if (i !== firstHunk) pos += 1; // subsequent headers count toward position
+      continue;
+    }
+    pos += 1;
+    // `\ No newline at end of file`: counts toward position but is not content,
+    // so it never advances the new-side counter nor anchors a comment.
+    if (l.startsWith("\\")) continue;
+    // Removed line: no new-side number, so it can never match the target line.
+    if (l.startsWith("-")) continue;
+    // Context (" ") or added ("+") line advances the new-side counter.
+    newLine += 1;
+    if (newLine === line) return pos;
+  }
+  return null;
+}
+
+/** Map a flat commit comment onto the {@link Thread} prop shape — commit
+ *  comments carry no review state / minimize / permalink, so those go empty. */
+function toThread(c: CommitCommentOut): PrThreadOut {
+  return {
+    author: c.author,
+    state: "",
+    body: c.body,
+    date: c.createdAt,
+    id: c.id,
+    url: "",
+    viewerDidAuthor: c.viewerDidAuthor,
+    isMinimized: false,
+    minimizedReason: "",
+  };
+}
+
+/**
+ * The comment surface for a single commit: whole-commit comments as a flat
+ * thread list, line-anchored comments grouped by `path:line`, and a
+ * whole-commit composer. Consumes the already-optimistic commit-comment hooks
+ * (P2); the diff pane owns rendering anchored comments inline via `lineAnchors`,
+ * but ONLY for the currently-selected file. So the labelled group here lists
+ * every anchored comment that isn't visible inline — anchored to a non-selected
+ * file, or on the selected file but unresolvable to a new-side line — so no
+ * anchored comment is ever silently dropped.
+ */
+export function CommitComments({
+  repoPath,
+  sha,
+  canComment,
+  remoteLabel,
+  diffSections,
+  selectedPath,
+  onSelectFile,
+}: {
+  repoPath: string;
+  sha: string;
+  canComment: boolean;
+  remoteLabel: string;
+  /** Per-file diff sections, so line-anchored comments can resolve their line. */
+  diffSections?: DiffSections;
+  /** The file currently open in the diff pane — its resolvable anchored comments
+   *  render inline there, so they're excluded from the labelled group below. */
+  selectedPath?: string | null;
+  /** Selects a file in the sidebar; makes each group's path label a button that
+   *  jumps to that file's diff. Absent = the label is plain text. */
+  onSelectFile?: (path: string) => void;
+}) {
+  const comments = useCommitComments(repoPath, sha);
+  const createComment = useCreateCommitComment(repoPath);
+  const editComment = useEditCommitComment(repoPath);
+  const deleteComment = useDeleteCommitComment(repoPath);
+
+  const [body, setBody] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const list = comments.data ?? [];
+  const whole = list.filter((c) => c.path == null);
+  const anchored = list.filter((c) => c.path != null);
+
+  // Anchored comments NOT visible inline in the diff. A comment renders inline
+  // only when it's on the currently-selected file AND resolves to a new-side
+  // line (the parent's `lineAnchors` cover exactly that set). Everything else —
+  // comments on other files, or unresolvable ones on this file — surfaces here
+  // under its `path:line` label so it's never silently dropped. Each carries the
+  // resolved line for a precise label when we have one.
+  const hiddenAnchored = useMemo(() => {
+    return anchored
+      .map((c) => {
+        const path = c.path as string;
+        const line =
+          c.line ?? lineFromPosition(diffSections?.get(path), c.position);
+        return { comment: c, path, line };
+      })
+      .filter(({ path, line }) => !(path === selectedPath && line != null));
+  }, [anchored, diffSections, selectedPath]);
+
+  const busy =
+    createComment.isPending || editComment.isPending || deleteComment.isPending;
+
+  function submit() {
+    const text = body.trim();
+    if (!text) return;
+    // Clear the draft immediately (perceived-speed win); the hook appends the
+    // synthetic comment optimistically. On error restore the draft, but only if
+    // the composer is still empty so newly-typed text is never clobbered.
+    setBody("");
+    createComment.mutate(
+      { sha, body: text },
+      {
+        onSuccess: () => toast.success("Comment added"),
+        onError: (e) => {
+          setBody((cur) => (cur.trim() ? cur : text));
+          toastError(e);
+        },
+      },
+    );
+  }
+
+  function saveEdit(commentId: string, next: string) {
+    editComment.mutate(
+      { sha, commentId, body: next },
+      {
+        onSuccess: () => toast.success("Comment updated"),
+        onError: (e) => toastError(e),
+      },
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-col">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
+        {comments.isError ? (
+          <p className="text-xs text-destructive">
+            Couldn't load comments for this commit.
+          </p>
+        ) : (
+          <>
+            {whole.map((c) => (
+              <Thread
+                key={c.id}
+                thread={toThread(c)}
+                onSaveEdit={
+                  c.viewerDidAuthor ? (next) => saveEdit(c.id, next) : undefined
+                }
+                onDelete={
+                  c.viewerDidAuthor ? () => setDeletingId(c.id) : undefined
+                }
+              />
+            ))}
+
+            {hiddenAnchored.length > 0 && (
+              <div className="space-y-3">
+                {hiddenAnchored.map(({ comment: c, path, line }) => {
+                  const label = `${path}${line != null ? `:${line}` : ""}`;
+                  return (
+                    <div key={c.id} className="space-y-1">
+                      {onSelectFile ? (
+                        <button
+                          type="button"
+                          onClick={() => onSelectFile(path)}
+                          className="block max-w-full cursor-pointer truncate text-left font-mono text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                          title={`Open ${label} in the diff`}
+                        >
+                          {label}
+                        </button>
+                      ) : (
+                        <p className="truncate font-mono text-[11px] text-muted-foreground">
+                          {label}
+                        </p>
+                      )}
+                      <Thread
+                        thread={toThread(c)}
+                        onSaveEdit={
+                          c.viewerDidAuthor
+                            ? (next) => saveEdit(c.id, next)
+                            : undefined
+                        }
+                        onDelete={
+                          c.viewerDidAuthor
+                            ? () => setDeletingId(c.id)
+                            : undefined
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {!comments.isPending && list.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                No comments on this commit yet.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      {canComment && (
+        <div className="space-y-2 border-t p-3">
+          <MarkdownEditor
+            aria-label="Comment on this commit"
+            placeholder="Leave a comment…"
+            value={body}
+            onChange={setBody}
+            onKeyDown={(e) => {
+              if (
+                (e.ctrlKey || e.metaKey) &&
+                e.key === "Enter" &&
+                body.trim() &&
+                !busy
+              ) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            rows={2}
+            textareaClassName="max-h-32 min-h-12 resize-y"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!body.trim() || busy}
+            onClick={submit}
+            title={SUBMIT_HINT}
+          >
+            Comment
+          </Button>
+        </div>
+      )}
+
+      <DeleteCommentDialog
+        commentId={deletingId}
+        onClose={() => setDeletingId(null)}
+        pending={deleteComment.isPending}
+        description={`This permanently deletes the comment on ${remoteLabel}. This cannot be undone.`}
+        onConfirm={(commentId) =>
+          deleteComment.mutate(
+            { sha, commentId },
+            {
+              onSuccess: () => {
+                toast.success("Comment deleted");
+                setDeletingId(null);
+              },
+              onError: (e) => {
+                toastError(e);
+                setDeletingId(null);
+              },
+            },
+          )
+        }
+      />
+    </div>
+  );
+}
+
+/**
+ * The inline composer rendered inside a commit-diff line-widget slot: a compact
+ * MarkdownEditor + Comment button that creates a line-anchored commit comment via
+ * {@link useCreateCommitComment}. Commit comments anchor to the NEW side only, so
+ * an old-side line is disabled with a visible reason. On GitHub the `position` is
+ * recovered from the file's diff section via {@link positionFromLine}; when the
+ * line isn't in this commit's diff for the file that resolves to null and the
+ * post is disabled with a reason. GitLab commit notes anchor by `line` alone.
+ * Posting is optimistic (the hook appends the synthetic comment), so it closes
+ * the slot immediately. Wired by PrCommitDetail via the diff `lineWidget`.
+ */
+export function CommitLineComposer({
+  repoPath,
+  sha,
+  path,
+  side,
+  line,
+  provider,
+  fileSection,
+  onClose,
+}: {
+  repoPath: string;
+  sha: string;
+  path: string;
+  side: "new" | "old";
+  line: number;
+  provider: "github" | "gitlab" | "bitbucket";
+  /** This file's unified-diff section, for recovering the GitHub `position`. */
+  fileSection: string | undefined;
+  onClose: () => void;
+}) {
+  const createComment = useCreateCommitComment(repoPath);
+  const [body, setBody] = useState("");
+
+  // GitHub needs the diff `position` (not just the line); recover it from the
+  // file's section. A null means the line isn't on the new side of this commit's
+  // diff for the file, so it can't be anchored — disable with a reason.
+  const position =
+    provider === "github" ? positionFromLine(fileSection, line) : null;
+  const disabledReason =
+    side === "old"
+      ? "Commit comments anchor to the new side — pick a line on the right."
+      : provider === "github" && position === null
+        ? "This line isn't in the commit's diff for this file."
+        : null;
+  const canPost = disabledReason === null;
+
+  function submit() {
+    const text = body.trim();
+    if (!text || !canPost) return;
+    // Optimistic: the hook appends the synthetic comment, so close right away.
+    createComment.mutate(
+      {
+        sha,
+        body: text,
+        path,
+        line,
+        ...(position !== null ? { position } : {}),
+      },
+      {
+        onSuccess: () => toast.success("Comment added"),
+        onError: (e) => toastError(e),
+      },
+    );
+    onClose();
+  }
+
+  const anchorLabel = `Line ${line} · ${path}`;
+
+  return (
+    <div className="space-y-2">
+      <span className="block min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+        {anchorLabel}
+      </span>
+      <MarkdownEditor
+        aria-label={`Comment on ${anchorLabel}`}
+        placeholder="Leave a comment…"
+        value={body}
+        onChange={setBody}
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && canPost) {
+            e.preventDefault();
+            submit();
+          } else if (e.key === "Escape") {
+            // Close only this widget — don't leak Escape to global handlers.
+            e.preventDefault();
+            e.stopPropagation();
+            onClose();
+          }
+        }}
+        autoFocus
+        rows={3}
+        textareaClassName="max-h-48 min-h-16 resize-y"
+      />
+      <div className="flex items-center gap-2">
+        {/* Wrap the (possibly) disabled submit so its `title` — the reason —
+            still shows; a native-disabled button swallows the tooltip. */}
+        <span
+          title={disabledReason ?? (!body.trim() ? undefined : SUBMIT_HINT)}
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!body.trim() || !canPost || createComment.isPending}
+            onClick={submit}
+          >
+            Comment
+          </Button>
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={createComment.isPending}
+          onClick={onClose}
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}

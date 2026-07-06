@@ -20,6 +20,7 @@ import { formatBinding } from "@/lib/hotkeys/binding";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { synthesizeThreadHunk } from "./suggestion-utils";
 
 /** Platform-correct submit-shortcut hint (⌘+Enter on macOS, Ctrl+Enter else) —
  *  never hardcode the modifier (house platform-mod-key rule). Exported so
@@ -498,6 +499,7 @@ export function ReviewThreadCard({
   compact = false,
   onRowFocus,
   apply,
+  fileDiffLookup,
 }: {
   thread: ReviewThreadOut;
   expanded: boolean;
@@ -508,6 +510,10 @@ export function ReviewThreadCard({
   /** Gating inputs + the write for the per-suggestion Apply affordance. Absent =
    *  no Apply is shown (the diff-anchor call site and any unwired surface). */
   apply?: SuggestionApply;
+  /** Returns a path's unified-diff section. When a thread has no `diffHunk`
+   *  (GitLab/Bitbucket) and isn't outdated, a hunk is synthesized from it so the
+   *  excerpt + Apply gating work as they do for GitHub. Absent = no synthesis. */
+  fileDiffLookup?: (path: string) => string | undefined;
 } & ThreadCallbacks) {
   const [replying, setReplying] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -519,14 +525,26 @@ export function ReviewThreadCard({
   const [appliedBlocks, setAppliedBlocks] = useState<Set<string>>(
     () => new Set(),
   );
+  // The hunk this thread renders/gates Apply against: the provider's own
+  // `diffHunk` when present (GitHub), else a hunk synthesized from the file's
+  // current unified-diff section (GitLab/Bitbucket, whose API returns none) so
+  // the excerpt + Apply work the same. Outdated threads keep the degraded render
+  // — never synthesize against a diff the thread may no longer match.
+  const effectiveHunk =
+    thread.diffHunk !== ""
+      ? thread.diffHunk
+      : !thread.isOutdated && fileDiffLookup
+        ? (synthesizeThreadHunk(fileDiffLookup(thread.path) ?? "", thread) ??
+          "")
+        : "";
   // Parse the anchored hunk once for every suggestion block in this thread's
-  // comments to recover the originals it replaces (null for GitLab/Bitbucket).
-  const parsedHunk = thread.diffHunk !== "" ? parseHunk(thread.diffHunk) : null;
+  // comments to recover the originals it replaces (null when there's no hunk).
+  const parsedHunk = effectiveHunk !== "" ? parseHunk(effectiveHunk) : null;
   const anchorLabel = lineLabel(thread.startLine, thread.line);
   // The anchored-code excerpt only makes sense in the conversation (non-compact)
   // context; inside a diff the card already sits under the real lines. Absent
-  // when the provider has no hunk (GitLab/Bitbucket) — graceful degradation.
-  const showExcerpt = !compact && thread.diffHunk !== "";
+  // when there's no hunk at all — graceful degradation.
+  const showExcerpt = !compact && effectiveHunk !== "";
 
   async function submitReply() {
     if (!onReply || !replyBody.trim() || replyPending) return;
@@ -633,7 +651,7 @@ export function ReviewThreadCard({
           )}
         >
           {showExcerpt && (
-            <HunkExcerpt hunk={thread.diffHunk} label={anchorLabel} />
+            <HunkExcerpt hunk={effectiveHunk} label={anchorLabel} />
           )}
           {thread.comments.map((c) => {
             const commentKey = c.id || `${c.author}-${c.date}`;
@@ -806,12 +824,16 @@ export function ReviewThreadsBlock({
   onEditComment,
   onDeleteComment,
   apply,
+  fileDiffLookup,
 }: {
   threads: ReviewThreadOut[] | undefined;
   isError: boolean;
   /** Gating inputs + the write for the per-suggestion Apply affordance, threaded
    *  straight to every card. Absent = no Apply shown. */
   apply?: SuggestionApply;
+  /** File-section lookup for synthesizing a hunk on hunk-less providers, threaded
+   *  to every card. Absent = no synthesis (unchanged GitHub behavior). */
+  fileDiffLookup?: (path: string) => string | undefined;
 } & ThreadCallbacks) {
   // Which threads are expanded (unresolved default-open, resolved default-closed).
   const [collapsedUnresolved, setCollapsedUnresolved] = useState<Set<string>>(
@@ -938,6 +960,7 @@ export function ReviewThreadsBlock({
                     onEditComment={onEditComment}
                     onDeleteComment={onDeleteComment}
                     apply={apply}
+                    fileDiffLookup={fileDiffLookup}
                   />
                 ))}
                 {resolved.length > 0 && (
@@ -965,6 +988,7 @@ export function ReviewThreadsBlock({
                           onEditComment={onEditComment}
                           onDeleteComment={onDeleteComment}
                           apply={apply}
+                          fileDiffLookup={fileDiffLookup}
                         />
                       ))}
                   </div>

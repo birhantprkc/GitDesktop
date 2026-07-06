@@ -4,7 +4,7 @@ use tauri::State;
 use crate::error::{AppError, AppResult};
 use crate::git::runner::{run_git_mutating, NETWORK_TIMEOUT};
 use crate::github::issue::{map_reaction_groups, repo_owner_name, IssueReactions};
-use crate::github::runner::{run_gh, run_gh_raw, GH_NETWORK_TIMEOUT, GH_TIMEOUT};
+use crate::github::runner::{run_gh, run_gh_input, run_gh_raw, GH_NETWORK_TIMEOUT, GH_TIMEOUT};
 use crate::state::AppState;
 
 fn validate_branch(name: &str) -> AppResult<()> {
@@ -1234,6 +1234,8 @@ struct RawCommit {
     #[serde(default)]
     message_headline: String,
     #[serde(default)]
+    message_body: String,
+    #[serde(default)]
     authored_date: String,
     #[serde(default)]
     authors: Vec<RawCommitAuthor>,
@@ -1346,6 +1348,10 @@ struct RawPr {
 pub struct PrCommitOut {
     pub oid: String,
     pub headline: String,
+    /// The commit message body (everything after the headline), empty when the
+    /// commit has no body. GitHub carries it as `messageBody`; GitLab/Bitbucket
+    /// derive it by stripping the title line from the full message.
+    pub message_body: String,
     pub date: String,
     pub author: String,
 }
@@ -1413,6 +1419,54 @@ pub struct ReviewThreadOut {
 pub struct PrCheckOut {
     pub name: String,
     pub status: String,
+}
+
+/// One draft inline comment in a batched review submission, provider-neutral.
+/// `side` is `"new"`/`"old"`; `start_line` (a multi-line range) is GitHub-only.
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftCommentIn {
+    pub path: String,
+    pub line: u64,
+    pub side: String,
+    #[serde(default)]
+    pub start_line: Option<u64>,
+    pub body: String,
+}
+
+/// The outcome of a batched review submission. `posted` = inline comments that
+/// landed, `total` = comments requested, `verdict_applied` = whether the
+/// approve/request-changes verdict was applied (false for a plain comment review).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewSubmitOut {
+    pub posted: u32,
+    pub total: u32,
+    pub verdict_applied: bool,
+}
+
+/// One comment on a commit, provider-neutral. Whole-commit comments carry no
+/// anchor (`path`/`line`/`position` all `None`); anchored ones carry a `path` plus
+/// a `line` (new-side line, GitLab/Bitbucket) and/or a `position` (GitHub's
+/// diff-position — GitHub anchored comments only).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitCommentOut {
+    /// Provider comment id (GitHub/Bitbucket numeric-as-string; GitLab composite
+    /// `"discussionId:noteId"`). Large ids must not cross IPC as numbers.
+    pub id: String,
+    pub author: String,
+    pub body: String,
+    pub created_at: String,
+    /// Whether the signed-in user wrote it — drives the edit/delete affordance.
+    pub viewer_did_author: bool,
+    /// Anchored file path (`None` = whole-commit comment).
+    pub path: Option<String>,
+    /// Anchored new-side line (`None` = whole-commit, or a GitHub comment whose
+    /// `line` GitHub reported null).
+    pub line: Option<u64>,
+    /// GitHub diff-position (GitHub anchored comments only; `None` elsewhere).
+    pub position: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -1552,6 +1606,7 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                 PrCommitOut {
                     oid: c.oid,
                     headline: c.message_headline,
+                    message_body: c.message_body,
                     date: c.authored_date,
                     author,
                 }
@@ -1682,6 +1737,328 @@ pub async fn gh_pr_diff(repo_path: String, number: u64) -> AppResult<String> {
     let (text, _) =
         crate::git::diff::truncate_at_char_boundary(out.stdout_lossy(), 2_000_000);
     Ok(text)
+}
+
+/// Validate a commit oid before it's interpolated into an API path — a hex sha
+/// (git allows abbreviated ones, so length isn't fixed). Rejects empty / non-hex
+/// values before any network call rather than passing a guessed path to gh.
+fn validate_commit_oid(oid: &str) -> AppResult<()> {
+    if oid.is_empty() || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(AppError::InvalidArgument(format!("invalid commit id: {oid}")));
+    }
+    Ok(())
+}
+
+/// The unified diff of ONE commit in a PR (`gh api repos/{owner}/{repo}/commits/{oid}`
+/// with the `application/vnd.github.diff` media type — gh resolves the `{owner}/{repo}`
+/// placeholders from the repo cwd). Returns the raw unified diff string, capped like
+/// `gh_pr_diff`. Plain fn (called by the forge dispatch).
+pub async fn commit_diff(repo_path: &str, oid: &str) -> AppResult<String> {
+    validate_commit_oid(oid)?;
+    let endpoint = format!("repos/{{owner}}/{{repo}}/commits/{oid}");
+    let out = run_gh(
+        Some(repo_path),
+        &[
+            "api",
+            "-H",
+            "Accept: application/vnd.github.diff",
+            &endpoint,
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let (text, _) = crate::git::diff::truncate_at_char_boundary(out.stdout_lossy(), 2_000_000);
+    Ok(text)
+}
+
+/// The signed-in user's login, resolved TOLERANTLY (`gh api user -q .login`) — any
+/// failure yields `None`, so a commit comment's `viewer_did_author` falls back to
+/// `false` (edit/delete hidden) rather than wrongly claiming authorship. Never
+/// returns an empty string. Mirrors gitlab.rs's `current_user_login`.
+async fn current_login(repo_path: &str) -> Option<String> {
+    run_gh(Some(repo_path), &["api", "user", "-q", ".login"], GH_NETWORK_TIMEOUT)
+        .await
+        .ok()
+        .map(|o| o.stdout_lossy().trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// One commit comment as the REST list returns it. Every field tolerant/defaulted
+/// (untrusted API JSON) — `line` is often null (map as-is), `position` nullable.
+#[derive(Deserialize)]
+struct GhCommitComment {
+    #[serde(default)]
+    id: u64,
+    #[serde(default)]
+    user: Option<RawLogin>,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    line: Option<u64>,
+    #[serde(default)]
+    position: Option<u64>,
+}
+
+/// List a commit's comments (`GET repos/{o}/{r}/commits/{sha}/comments`, paginated
+/// via the `--slurp` idiom). `viewer_did_author` compares each author against the
+/// tolerantly-resolved current login.
+pub async fn commit_comments(repo_path: &str, sha: &str) -> AppResult<Vec<CommitCommentOut>> {
+    validate_commit_oid(sha)?;
+    let viewer = current_login(repo_path).await;
+    let endpoint = format!("repos/{{owner}}/{{repo}}/commits/{sha}/comments");
+    let out = run_gh(
+        Some(repo_path),
+        &[
+            "api",
+            "--paginate",
+            "--slurp",
+            "-X",
+            "GET",
+            &endpoint,
+            "-f",
+            "per_page=100",
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    // `--slurp` yields `[[...page1...],[...page2...]]`; flatten.
+    let pages: Vec<Vec<GhCommitComment>> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the commit comments: {e}")))?;
+    Ok(pages
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            let author = c.user.map(|u| u.login).unwrap_or_default();
+            CommitCommentOut {
+                viewer_did_author: viewer
+                    .as_deref()
+                    .is_some_and(|v| !author.is_empty() && author == v),
+                id: c.id.to_string(),
+                author,
+                body: c.body,
+                created_at: c.created_at,
+                path: c.path,
+                line: c.line,
+                position: c.position,
+            }
+        })
+        .collect())
+}
+
+/// Post a comment on a commit (`POST repos/{o}/{r}/commits/{sha}/comments`). A
+/// whole-commit comment sends only `body`; an anchored one adds `path` + `position`
+/// (GitHub's diff-position — the frontend computes it; `line` is ignored for GitHub).
+pub async fn commit_comment_create(
+    repo_path: &str,
+    sha: &str,
+    body: &str,
+    path: Option<&str>,
+    position: Option<u64>,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    validate_commit_oid(sha)?;
+    let endpoint = format!("repos/{{owner}}/{{repo}}/commits/{sha}/comments");
+    let mut payload = serde_json::json!({ "body": body });
+    if let (Some(p), Some(pos)) = (path, position) {
+        payload["path"] = serde_json::Value::String(p.to_string());
+        payload["position"] = serde_json::Value::from(pos);
+    }
+    run_gh_input(
+        Some(repo_path),
+        &["api", "-X", "POST", &endpoint, "--input", "-"],
+        &payload.to_string(),
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Edit a commit comment (`PATCH repos/{o}/{r}/comments/{id}`). Empty-body guard +
+/// id parse run before the request.
+pub async fn commit_comment_edit(
+    repo_path: &str,
+    comment_id: &str,
+    body: &str,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    let id: u64 = comment_id
+        .trim()
+        .parse()
+        .map_err(|_| AppError::InvalidArgument(format!("invalid comment id: {comment_id}")))?;
+    let endpoint = format!("repos/{{owner}}/{{repo}}/comments/{id}");
+    let payload = serde_json::json!({ "body": body });
+    run_gh_input(
+        Some(repo_path),
+        &["api", "-X", "PATCH", &endpoint, "--input", "-"],
+        &payload.to_string(),
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Delete a commit comment (`DELETE repos/{o}/{r}/comments/{id}`). Id parse runs
+/// before the request.
+pub async fn commit_comment_delete(repo_path: &str, comment_id: &str) -> AppResult<()> {
+    let id: u64 = comment_id
+        .trim()
+        .parse()
+        .map_err(|_| AppError::InvalidArgument(format!("invalid comment id: {comment_id}")))?;
+    let endpoint = format!("repos/{{owner}}/{{repo}}/comments/{id}");
+    run_gh(
+        Some(repo_path),
+        &["api", "-X", "DELETE", &endpoint],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Resolve a PR's head commit oid (`gh pr view {n} --json headRefOid`). Used to
+/// anchor a new inline review comment/thread to the current head — the commits list
+/// caps at 100, so this dedicated read is the reliable source.
+async fn head_ref_oid(repo_path: &str, number: u64) -> AppResult<String> {
+    let out = run_gh(
+        Some(repo_path),
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--json",
+            "headRefOid",
+            "-q",
+            ".headRefOid",
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let oid = out.stdout_lossy().trim().to_string();
+    if oid.is_empty() {
+        return Err(AppError::Gh("could not resolve the pull request head commit".into()));
+    }
+    Ok(oid)
+}
+
+/// Map the neutral side `"new"`/`"old"` onto GitHub's `RIGHT`/`LEFT`.
+fn gh_side(side: &str) -> AppResult<&'static str> {
+    match side {
+        "new" => Ok("RIGHT"),
+        "old" => Ok("LEFT"),
+        other => Err(AppError::InvalidArgument(format!("invalid side: {other}"))),
+    }
+}
+
+/// Create a NEW file:line-anchored review thread on a PR (`POST
+/// repos/{o}/{r}/pulls/{n}/comments` via `--input -`). `side` is `"new"`/`"old"`;
+/// `start_line` (GitHub-only multi-line range) adds `start_line` + `start_side`.
+/// The head oid is resolved internally. Plain fn (called by the forge dispatch).
+pub async fn thread_create(
+    repo_path: &str,
+    number: u64,
+    path: &str,
+    line: u64,
+    side: &str,
+    start_line: Option<u64>,
+    body: &str,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    if path.is_empty() {
+        return Err(AppError::InvalidArgument("a file path is required".into()));
+    }
+    let gh_side = gh_side(side)?;
+    let commit_id = head_ref_oid(repo_path, number).await?;
+    let mut payload = serde_json::json!({
+        "body": body,
+        "commit_id": commit_id,
+        "path": path,
+        "line": line,
+        "side": gh_side,
+    });
+    if let Some(start) = start_line {
+        payload["start_line"] = serde_json::Value::from(start);
+        payload["start_side"] = serde_json::Value::String(gh_side.to_string());
+    }
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments");
+    run_gh_input(
+        Some(repo_path),
+        &["api", "-X", "POST", &endpoint, "--input", "-"],
+        &payload.to_string(),
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Submit a review in ONE atomic call (`POST repos/{o}/{r}/pulls/{n}/reviews` via
+/// `--input -`). `verdict` is `"comment"`/`"approve"`/`"request_changes"` → the
+/// GitHub `event` (COMMENT / APPROVE / REQUEST_CHANGES). The summary is omitted when
+/// None/empty (GitHub docs claim body is required for COMMENT — we let a 422 surface
+/// verbatim rather than substitute placeholder text). Inline comments carry
+/// path/line/side (+ start_line/start_side for multi-line ranges). The guards
+/// (verdict validity, request_changes needs a summary) run in the dispatch before
+/// this is reached. Returns the posted/total counts (GitHub is atomic → all or none).
+pub async fn review_submit(
+    repo_path: &str,
+    number: u64,
+    verdict: &str,
+    summary: Option<&str>,
+    comments: &[DraftCommentIn],
+) -> AppResult<ReviewSubmitOut> {
+    let event = match verdict {
+        "comment" => "COMMENT",
+        "approve" => "APPROVE",
+        "request_changes" => "REQUEST_CHANGES",
+        other => return Err(AppError::InvalidArgument(format!("invalid verdict: {other}"))),
+    };
+    // Anchor the review's inline comments against the head the reviewer's lines were
+    // computed on (not whatever head exists at submit time), like `thread_create`.
+    let commit_id = head_ref_oid(repo_path, number).await?;
+    let mut payload = serde_json::json!({ "event": event, "commit_id": commit_id });
+    if let Some(s) = summary.filter(|s| !s.trim().is_empty()) {
+        payload["body"] = serde_json::Value::String(s.to_string());
+    }
+    let mut arr: Vec<serde_json::Value> = Vec::with_capacity(comments.len());
+    for c in comments {
+        let side = gh_side(&c.side)?;
+        let mut o = serde_json::json!({
+            "path": c.path,
+            "line": c.line,
+            "side": side,
+            "body": c.body,
+        });
+        if let Some(start) = c.start_line {
+            o["start_line"] = serde_json::Value::from(start);
+            o["start_side"] = serde_json::Value::String(side.to_string());
+        }
+        arr.push(o);
+    }
+    if !arr.is_empty() {
+        payload["comments"] = serde_json::Value::Array(arr);
+    }
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/reviews");
+    run_gh_input(
+        Some(repo_path),
+        &["api", "-X", "POST", &endpoint, "--input", "-"],
+        &payload.to_string(),
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let total = comments.len() as u32;
+    Ok(ReviewSubmitOut {
+        posted: total,
+        total,
+        verdict_applied: verdict != "comment",
+    })
 }
 
 /// True when `gh pr diff` failed with GitHub's "diff exceeds 300 files" refusal

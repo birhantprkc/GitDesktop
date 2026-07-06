@@ -46,6 +46,7 @@ import {
 import { LocalComment } from "@/features/conversations/LocalComment";
 import { useLocalConversation } from "@/features/conversations/useLocalConversation";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
+import { CommitDetailView } from "@/features/history/CommitDetailView";
 import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
@@ -89,6 +90,16 @@ export function LocalPrView({
   const pendingPrSection = useUiStore((s) => s.pendingPrSection);
   const setPendingPrSection = useUiStore((s) => s.setPendingPrSection);
   const [section, setSection] = useState<Section>("conversation");
+  // Commits-tab drill-in: the selected commit's hash, or null for the list.
+  // Reset when the viewed PR changes (below).
+  const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(
+    null,
+  );
+  const [lastId, setLastId] = useState(id);
+  if (id !== lastId) {
+    setLastId(id);
+    setSelectedCommitHash(null);
+  }
   // The activity dock's "View" lands here via a pending hint; switch to the
   // review sub-tab once, then clear it. Guarded on this being the *selected* PR
   // so a still-mounted lagging view (deferredPr) can't swallow the hint first.
@@ -345,6 +356,9 @@ export function LocalPrView({
               })),
           }}
           posting={update.isPending}
+          // The body arrives pre-branded from the panel; stamp the synthetic
+          // author so it renders as a GitDesktop-posted review, not authorless.
+          // `opts` (asBot) is a remote-forge concern — ignored for local PRs.
           onPost={async (body) => {
             try {
               await update.mutateAsync({
@@ -356,6 +370,7 @@ export function LocalPrView({
                     {
                       id: crypto.randomUUID(),
                       body,
+                      author: "GitDesktop",
                       createdAt: new Date().toISOString(),
                     },
                   ],
@@ -485,18 +500,40 @@ export function LocalPrView({
         </>
       )}
 
-      {section === "commits" && (
-        <CommitsList
-          commits={ahead.map((c) => ({
-            id: c.hash,
-            subject: c.subject,
-            shortSha: c.hash.slice(0, 7),
-            author: c.author,
-            date: c.date,
-          }))}
-          emptyMessage="No commits to merge."
-        />
-      )}
+      {section === "commits" &&
+        (selectedCommitHash ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="border-b px-4 py-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedCommitHash(null)}
+                aria-label="Back to commits"
+                className="-ml-2 h-7 text-muted-foreground hover:text-foreground"
+              >
+                ‹ Commits
+              </Button>
+            </div>
+            {/* Local commits exist in the repo, so the full commit detail (with
+                its actions menu — checkout/revert/cherry-pick/amend) applies. */}
+            <div className="min-h-0 flex-1">
+              <CommitDetailView repoPath={repoPath} hash={selectedCommitHash} />
+            </div>
+          </div>
+        ) : (
+          <CommitsList
+            commits={ahead.map((c) => ({
+              id: c.hash,
+              subject: c.subject,
+              shortSha: c.hash.slice(0, 7),
+              author: c.author,
+              date: c.date,
+            }))}
+            emptyMessage="No commits to merge."
+            onSelect={setSelectedCommitHash}
+            selectedId={selectedCommitHash}
+          />
+        ))}
 
       {section === "files" && (
         <div className="min-h-0 flex-1">

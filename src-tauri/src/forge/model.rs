@@ -283,6 +283,18 @@ pub struct Implemented {
     /// wire it (GitHub via the PullRequestReviewComment mutations, GitLab/Bitbucket
     /// reusing their note/comment endpoints), so it's true for each.
     pub mr_thread_comment_edit: bool,
+    /// Reading + writing comments on an individual commit (whole-commit and
+    /// file:line-anchored). All three providers wire it (GitHub commit-comments REST,
+    /// GitLab commit discussions, Bitbucket commit comments), so it's true for each.
+    pub commit_comments: bool,
+    /// Creating a NEW file:line-anchored review thread on a merge/pull request (as
+    /// opposed to replying in an existing one — `mr_thread_reply`). All three
+    /// providers wire it, so it's true for each.
+    pub mr_thread_create: bool,
+    /// Submitting a batched review (summary + inline comments + approve/comment/
+    /// request-changes verdict) in one action. All three providers wire it, so it's
+    /// true for each.
+    pub mr_review_submit: bool,
 }
 
 impl Implemented {
@@ -351,6 +363,9 @@ impl Implemented {
             mr_thread_reply: true,
             mr_thread_resolve: true,
             mr_thread_comment_edit: true,
+            commit_comments: true,
+            mr_thread_create: true,
+            mr_review_submit: true,
         }
     }
 
@@ -405,6 +420,9 @@ impl Implemented {
             mr_thread_reply: false,
             mr_thread_resolve: false,
             mr_thread_comment_edit: false,
+            commit_comments: false,
+            mr_thread_create: false,
+            mr_review_submit: false,
         }
     }
 
@@ -485,6 +503,11 @@ impl Implemented {
                 // Review-thread comment edit/delete: positioned notes reuse the MR
                 // note endpoint.
                 mr_thread_comment_edit: true,
+                // Commit comments, new-thread create, and batched review submit are
+                // all wired for GitLab.
+                commit_comments: true,
+                mr_thread_create: true,
+                mr_review_submit: true,
             },
             // Bitbucket Cloud reads (Phase 3): PR list/view/diff, CI pipelines, and
             // repo View/URL are wired over direct HTTP. Phase 4 adds the WRITES: PR
@@ -534,6 +557,11 @@ impl Implemented {
                 // comment objects as the conversation ones, so they reuse the PR
                 // comment endpoints. (Thread RESOLUTION stays false above.)
                 mr_thread_comment_edit: true,
+                // Commit comments, new-thread create, and batched review submit are
+                // all wired for Bitbucket.
+                commit_comments: true,
+                mr_thread_create: true,
+                mr_review_submit: true,
                 ..Self::none()
             },
         }
@@ -678,6 +706,8 @@ mod tests {
         assert!(!i.pr_tasks);
         // Review threads: read, reply, and resolve are all built for GitHub.
         assert!(i.mr_review_threads && i.mr_thread_reply && i.mr_thread_resolve);
+        // Commit comments, new-thread create, and batched review submit — all three.
+        assert!(i.commit_comments && i.mr_thread_create && i.mr_review_submit);
     }
 
     #[test]
@@ -725,6 +755,8 @@ mod tests {
         assert!(imp.mr_review_threads && imp.mr_thread_reply && imp.mr_thread_resolve);
         // …plus edit/delete on review-thread comments (positioned notes).
         assert!(imp.mr_thread_comment_edit);
+        // …plus commit comments, new-thread create, and batched review submit.
+        assert!(imp.commit_comments && imp.mr_thread_create && imp.mr_review_submit);
     }
 
     #[test]
@@ -775,5 +807,7 @@ mod tests {
         // …but review-thread comment edit/delete IS wired (inline comments reuse the
         // PR comment endpoints).
         assert!(bb.mr_thread_comment_edit);
+        // …plus commit comments, new-thread create, and batched review submit.
+        assert!(bb.commit_comments && bb.mr_thread_create && bb.mr_review_submit);
     }
 }

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
-use crate::forge::glab::{run_glab, run_glab_raw, GLAB_NETWORK_TIMEOUT, GLAB_TIMEOUT};
+use crate::forge::glab::{run_glab, run_glab_ex, run_glab_raw, GLAB_NETWORK_TIMEOUT, GLAB_TIMEOUT};
 use crate::forge::model::{
     Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, Implemented, Provider,
 };
@@ -21,8 +21,9 @@ use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::issue::{IssueDetails, IssueInfo, IssueReactions, Milestone, Reaction};
 use crate::github::pr::{
-    ApprovalState, ExternalReviewItem, PrAuthor, PrCommitOut, PrDetails, PrFileOut, PrInfo,
-    PrListLabel, PrPollInfo, PrRef, PrThreadOut, RepoLabel, ReviewThreadOut,
+    ApprovalState, CommitCommentOut, DraftCommentIn, ExternalReviewItem, PrAuthor, PrCommitOut,
+    PrDetails, PrFileOut, PrInfo, PrListLabel, PrPollInfo, PrRef, PrThreadOut, RepoLabel,
+    ReviewSubmitOut, ReviewThreadOut,
 };
 use crate::state::AppState;
 use crate::github::release::{ReleaseAsset, ReleaseDetails, ReleaseInfo};
@@ -471,10 +472,35 @@ struct GlabCommit {
     id: String,
     #[serde(default)]
     title: String,
+    /// The full commit message (title + body). The commits API returns it; we
+    /// strip the title line (+ the following blank) to derive the body.
+    #[serde(default)]
+    message: String,
     #[serde(default)]
     author_name: String,
     #[serde(default)]
     created_at: String,
+}
+
+/// Derive a commit-message body from the full message by dropping the title line
+/// (the first line) and a single blank separator line after it. Pure (testable).
+/// Shared shape with the Bitbucket derivation (`bb_message_body`) so all three
+/// providers produce the same "body = everything after the headline" semantics.
+/// Returns "" when the message is a single line (no body).
+pub(crate) fn message_body_from_full(message: &str) -> String {
+    // Split off the first line (title); the rest, with one leading blank line
+    // consumed, is the body. `splitn(2, '\n')` keeps embedded newlines in the body.
+    let rest = match message.split_once('\n') {
+        Some((_, rest)) => rest,
+        None => return String::new(),
+    };
+    // Conventional git messages separate title and body with one blank line —
+    // strip exactly that separator (a single leading "\n" or "\r\n").
+    let rest = rest
+        .strip_prefix("\r\n")
+        .or_else(|| rest.strip_prefix('\n'))
+        .unwrap_or(rest);
+    rest.trim_end().to_string()
 }
 
 #[derive(Deserialize)]
@@ -573,6 +599,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     .unwrap_or_default()
     .into_iter()
     .map(|c| PrCommitOut {
+        message_body: message_body_from_full(&c.message),
         oid: c.id,
         headline: c.title,
         date: c.created_at,
@@ -681,6 +708,293 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
     Ok(text)
 }
 
+/// Validate a commit sha before it's interpolated into an API path — a hex value
+/// (GitLab accepts abbreviated shas, so length isn't fixed). Rejects empty/non-hex
+/// before any network call.
+fn validate_commit_sha(sha: &str) -> AppResult<()> {
+    if sha.is_empty() || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(AppError::InvalidArgument(format!("invalid commit id: {sha}")));
+    }
+    Ok(())
+}
+
+/// The unified diff of ONE commit (`GET projects/{enc}/repository/commits/{sha}/diff`),
+/// rebuilt from GitLab's per-file diff array into the same `git`-style format
+/// `gh pr diff` produces (via `reconstruct_file_diff`, the same synthesis `diff_pr`
+/// uses for the MR changes array). Sha validated before the request.
+pub async fn commit_diff(repo_path: &str, sha: &str) -> AppResult<String> {
+    validate_commit_sha(sha)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/repository/commits/{sha}/diff?per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let changes: Vec<GlabChange> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab commit diff: {e}")))?;
+    let mut diff = String::new();
+    for c in &changes {
+        diff.push_str(&reconstruct_file_diff(c));
+    }
+    let (text, _) = crate::git::diff::truncate_at_char_boundary(diff, 2_000_000);
+    Ok(text)
+}
+
+// ── Commit comments ───────────────────────────────────────────────────────────
+//
+// GitLab has no first-class "commit comment" object — a comment on a commit is a
+// note inside a commit DISCUSSION (`…/repository/commits/{sha}/discussions`). So
+// the neutral comment id is the COMPOSITE `"{discussion_id}:{note_id}"`, which
+// edit/delete parse back apart. A whole-commit comment posts a flat `-f body`;
+// an anchored one needs the nested `position` JSON (flat `-f position[x]=y` is
+// silently ignored by GitLab — the known trap), fed via `--input -`.
+
+/// A note inside a commit discussion (the fields we map). `position` (present only
+/// on diff-anchored notes) carries the anchored path/line.
+#[derive(Deserialize)]
+struct GlabCommitNote {
+    id: u64,
+    #[serde(default)]
+    system: bool,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    author: Option<GlabMrUser>,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    position: Option<GlabCommitNotePosition>,
+}
+
+/// A commit discussion (`{id, notes:[…]}`).
+#[derive(Deserialize)]
+struct GlabCommitDiscussion {
+    id: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    notes: Vec<GlabCommitNote>,
+}
+
+/// The diff-anchor of a positioned commit note. New side (`new_path`/`new_line`)
+/// when present; an old-side-only anchor (a comment on a removed line) carries
+/// `old_path` with no `new_line`.
+#[derive(Deserialize)]
+struct GlabCommitNotePosition {
+    #[serde(default)]
+    new_path: String,
+    #[serde(default)]
+    new_line: Option<u64>,
+    #[serde(default)]
+    old_path: String,
+}
+
+/// Map a positioned commit note's anchor onto the neutral `(path, line)`. Pure
+/// (testable). `line` is defined as the NEW-side line, so an old-side-only anchor
+/// keeps its `old_path` (so the comment still renders against a file, not as a
+/// whole-commit comment) but leaves `line: None` — mapping the old-side number into
+/// `line` would mis-anchor it on the new side.
+fn gl_commit_anchor(pos: &GlabCommitNotePosition) -> (Option<String>, Option<u64>) {
+    if !pos.new_path.is_empty() {
+        (Some(pos.new_path.clone()), pos.new_line)
+    } else if !pos.old_path.is_empty() {
+        (Some(pos.old_path.clone()), None)
+    } else {
+        (None, None)
+    }
+}
+
+/// Parse the neutral composite commit-comment id `"{discussionId}:{noteId}"` into
+/// its parts. Pure (testable). Rejects a malformed value (missing colon, empty
+/// half, non-numeric note id) BEFORE any remote call — the discussion id is an
+/// opaque hex string, the note id numeric.
+fn parse_commit_comment_id(comment_id: &str) -> AppResult<(String, u64)> {
+    let (did, nid) = comment_id.split_once(':').ok_or_else(|| {
+        AppError::InvalidArgument(format!("invalid commit comment id: {comment_id}"))
+    })?;
+    if did.is_empty() {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid commit comment id: {comment_id}"
+        )));
+    }
+    let note_id: u64 = nid.parse().map_err(|_| {
+        AppError::InvalidArgument(format!("invalid commit comment id: {comment_id}"))
+    })?;
+    Ok((did.to_string(), note_id))
+}
+
+/// List a commit's comments — the non-system notes of its discussions, flattened.
+/// Each neutral id is `"{discussion_id}:{note_id}"`; anchored notes carry path/line
+/// from `position`. `viewer_did_author` uses the tolerant current-login compare.
+pub async fn commit_comments(repo_path: &str, sha: &str) -> AppResult<Vec<CommitCommentOut>> {
+    validate_commit_sha(sha)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let viewer = current_user_login(repo_path).await;
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/repository/commits/{sha}/discussions?per_page=100")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let discussions: Vec<GlabCommitDiscussion> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse GitLab commit discussions: {e}")))?;
+    let mut items = Vec::new();
+    for d in discussions {
+        for n in d.notes {
+            if n.system {
+                continue;
+            }
+            let author = n.author.map(|a| a.username).unwrap_or_default();
+            let (path, line) = match &n.position {
+                Some(p) => gl_commit_anchor(p),
+                None => (None, None),
+            };
+            items.push(CommitCommentOut {
+                viewer_did_author: note_authored_by_viewer(&author, viewer.as_deref()),
+                id: format!("{}:{}", d.id, n.id),
+                author,
+                body: n.body,
+                created_at: n.created_at,
+                path,
+                line,
+                // GitLab has no GitHub-style diff `position`; anchoring is by line.
+                position: None,
+            });
+        }
+    }
+    Ok(items)
+}
+
+/// The parent sha of a commit (`GET …/commits/{sha}` → `.parent_ids[0]`), needed to
+/// anchor a positioned commit note. Errors clearly when the commit has no parent.
+async fn commit_parent_sha(repo_path: &str, enc: &str, sha: &str) -> AppResult<String> {
+    #[derive(Deserialize)]
+    struct GlabCommitParents {
+        #[serde(default, deserialize_with = "null_to_default")]
+        parent_ids: Vec<String>,
+    }
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/repository/commits/{sha}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let c: GlabCommitParents = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab commit: {e}")))?;
+    c.parent_ids.into_iter().next().ok_or_else(|| {
+        AppError::InvalidArgument(
+            "can't anchor a comment on this commit — it has no parent commit to diff against.".into(),
+        )
+    })
+}
+
+/// Post a comment on a commit. Whole-commit (`path`/`line` both None) posts a flat
+/// `-f body`; an anchored one posts the nested `position` JSON via `--input -`
+/// (flat `-f position[x]=y` is silently ignored by GitLab). Empty-body guarded.
+pub async fn commit_comment_create(
+    repo_path: &str,
+    sha: &str,
+    body: &str,
+    path: Option<&str>,
+    line: Option<u64>,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    validate_commit_sha(sha)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/repository/commits/{sha}/discussions");
+    match (path, line) {
+        (Some(p), Some(l)) => {
+            let parent = commit_parent_sha(repo_path, &enc, sha).await?;
+            let payload = serde_json::json!({
+                "body": body,
+                "position": {
+                    "base_sha": parent,
+                    "start_sha": parent,
+                    "head_sha": sha,
+                    "position_type": "text",
+                    "new_path": p,
+                    "new_line": l,
+                },
+            });
+            run_glab_ex(
+                Some(repo_path),
+                &[
+                    "api",
+                    "--method",
+                    "POST",
+                    &endpoint,
+                    "--input",
+                    "-",
+                    "--header",
+                    "Content-Type: application/json",
+                ],
+                Some(&payload.to_string()),
+                &[],
+                GLAB_NETWORK_TIMEOUT,
+            )
+            .await?;
+        }
+        _ => {
+            let body_arg = format!("body={body}");
+            run_glab(
+                Some(repo_path),
+                &["api", "--method", "POST", &endpoint, "-f", &body_arg],
+                GLAB_NETWORK_TIMEOUT,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Edit a commit comment (`PUT …/commits/{sha}/discussions/{did}/notes/{nid}`,
+/// `-f body`). Empty-body guard + composite-id parse both run BEFORE the request.
+pub async fn commit_comment_edit(
+    repo_path: &str,
+    sha: &str,
+    comment_id: &str,
+    body: &str,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    validate_commit_sha(sha)?;
+    let (did, nid) = parse_commit_comment_id(comment_id)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint =
+        format!("projects/{enc}/repository/commits/{sha}/discussions/{did}/notes/{nid}");
+    let body_arg = format!("body={body}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &body_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Delete a commit comment (`DELETE …/commits/{sha}/discussions/{did}/notes/{nid}`).
+/// Composite-id parse runs BEFORE the request.
+pub async fn commit_comment_delete(
+    repo_path: &str,
+    sha: &str,
+    comment_id: &str,
+) -> AppResult<()> {
+    validate_commit_sha(sha)?;
+    let (did, nid) = parse_commit_comment_id(comment_id)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint =
+        format!("projects/{enc}/repository/commits/{sha}/discussions/{did}/notes/{nid}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 // ── Merge requests (write) ────────────────────────────────────────────────────
 //
 // Comment (note), close/reopen, title/body edit, approve/unapprove, and merge —
@@ -689,21 +1003,131 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
 // writes (validated live against the demo). Unlike issue close, MR close has no
 // reason on either platform.
 
-/// Post a comment (note) on a merge request.
-pub async fn comment_mr(repo_path: &str, number: u64, body: &str) -> AppResult<()> {
+/// Post a comment (note) on a merge request. When `as_bot` is set and a review-bot
+/// token is stored for this repo's GitLab host, the note is authored by the project
+/// bot (the POST runs with the bot `GITLAB_TOKEN` in the env, which overrides glab's
+/// configured auth — probe-proven); with no token stored it falls back silently to
+/// the normal (signed-in-user) path and still succeeds.
+pub async fn comment_mr(repo_path: &str, number: u64, body: &str, as_bot: bool) -> AppResult<()> {
     if body.trim().is_empty() {
         return Err(AppError::InvalidArgument("a comment is required".into()));
     }
     let enc = encode_project(&project_path(repo_path).await?);
     let endpoint = format!("projects/{enc}/merge_requests/{number}/notes");
     let body_arg = format!("body={body}");
-    run_glab(
-        Some(repo_path),
-        &["api", "--method", "POST", &endpoint, "-f", &body_arg],
+    let args: &[&str] = &["api", "--method", "POST", &endpoint, "-f", &body_arg];
+
+    // Try the bot token only when asked AND one is stored for this repo's host.
+    let bot_token = if as_bot {
+        review_bot_token_for_host(repo_path).await
+    } else {
+        None
+    };
+    if let Some(token) = bot_token {
+        run_glab_ex(
+            Some(repo_path),
+            args,
+            None,
+            &[("GITLAB_TOKEN", &token), ("GITLAB_HOST", REVIEW_TOKEN_HOST)],
+            GLAB_NETWORK_TIMEOUT,
+        )
+        .await?;
+    } else {
+        run_glab(Some(repo_path), args, GLAB_NETWORK_TIMEOUT).await?;
+    }
+    Ok(())
+}
+
+// ── Review-bot token (gitlab.com scope, v1) ───────────────────────────────────
+//
+// A project bot's PAT, stored so AI-review notes can be authored by the bot instead
+// of the signed-in user. Keyring-namespaced under `forge/gitlab.com/*` (the same
+// scheme Bitbucket uses), gitlab.com-only for v1. NEVER logged or echoed.
+
+/// The host the review-bot token is scoped to (gitlab.com only, v1).
+const REVIEW_TOKEN_HOST: &str = "gitlab.com";
+const REVIEW_TOKEN_KEY: &str = "review_token";
+const REVIEW_BOT_LOGIN_KEY: &str = "review_bot_login";
+
+/// The stored review-bot token, but ONLY when this repo is on the token's host
+/// (gitlab.com) — the v1 scope. `None` when off-host or nothing is stored (a
+/// keyring read on a blocking thread; any failure → `None`, so `comment_mr` falls
+/// back to the signed-in-user path).
+async fn review_bot_token_for_host(repo_path: &str) -> Option<String> {
+    let url = crate::git::remote::git_remote_url(repo_path.to_string(), "origin".to_string())
+        .await
+        .ok()?;
+    if crate::forge::remote_host(&url).as_deref() != Some(REVIEW_TOKEN_HOST) {
+        return None;
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        crate::secrets::read_forge_secret(REVIEW_TOKEN_HOST, REVIEW_TOKEN_KEY)
+            .ok()
+            .flatten()
+    })
+    .await
+    .ok()
+    .flatten()
+    .filter(|t| !t.is_empty())
+}
+
+/// The configured review-bot login, if any (`Some(bot_login)` when a token is
+/// stored). A keyring existence read only (no network).
+pub async fn review_token_status() -> AppResult<Option<String>> {
+    tauri::async_runtime::spawn_blocking(|| {
+        crate::secrets::read_forge_secret(REVIEW_TOKEN_HOST, REVIEW_BOT_LOGIN_KEY)
+    })
+    .await
+    .map_err(|e| AppError::Glab(format!("keyring task failed: {e}")))?
+    .map(|opt| opt.filter(|s| !s.is_empty()))
+}
+
+/// Validate a review-bot token live (`glab api user` with the token in the env,
+/// which overrides glab's configured auth — an invalid token 401s even when glab is
+/// logged in), store the token + resolved login, and return the login. On validation
+/// failure the error surfaces and NOTHING is stored. The token is never logged.
+pub async fn review_token_set(token: String) -> AppResult<String> {
+    if token.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a token is required".into()));
+    }
+    // Validate against the token's host with the token injected via env.
+    let out = run_glab_ex(
+        None,
+        &["api", "user"],
+        None,
+        &[
+            ("GITLAB_TOKEN", token.trim()),
+            ("GITLAB_HOST", REVIEW_TOKEN_HOST),
+        ],
         GLAB_NETWORK_TIMEOUT,
     )
     .await?;
-    Ok(())
+    let user: GlabUser = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab user: {e}")))?;
+    if user.username.is_empty() {
+        return Err(AppError::Glab(
+            "the token validated but returned no username.".into(),
+        ));
+    }
+    let login = user.username.clone();
+    let stored_token = token.trim().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::secrets::set_forge_secret(REVIEW_TOKEN_HOST, REVIEW_TOKEN_KEY, &stored_token)?;
+        crate::secrets::set_forge_secret(REVIEW_TOKEN_HOST, REVIEW_BOT_LOGIN_KEY, &login)
+    })
+    .await
+    .map_err(|e| AppError::Glab(format!("keyring task failed: {e}")))??;
+    Ok(user.username)
+}
+
+/// Clear the stored review-bot token + login (a missing entry is tolerated).
+pub async fn review_token_clear() -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(|| {
+        crate::secrets::delete_forge_secret(REVIEW_TOKEN_HOST, REVIEW_TOKEN_KEY)?;
+        crate::secrets::delete_forge_secret(REVIEW_TOKEN_HOST, REVIEW_BOT_LOGIN_KEY)
+    })
+    .await
+    .map_err(|e| AppError::Glab(format!("keyring task failed: {e}")))?
 }
 
 /// Close or reopen a merge request via the `state_event` field (`close` / `reopen`).
@@ -1119,7 +1543,7 @@ pub async fn request_changes_mr(repo_path: &str, number: u64, body: &str) -> App
     // The optional review comment rides as a plain note. The state change above
     // already stood, so a note failure must say so rather than read as a no-op.
     if !body.trim().is_empty() {
-        if let Err(e) = comment_mr(repo_path, number, body).await {
+        if let Err(e) = comment_mr(repo_path, number, body, false).await {
             return Err(AppError::Glab(format!(
                 "Changes were requested, but posting the comment failed: {e}"
             )));
@@ -2489,6 +2913,249 @@ pub async fn resolve_thread(
     )
     .await?;
     Ok(())
+}
+
+/// The MR's `diff_refs` (`base_sha` / `start_sha` / `head_sha`) — the three SHAs a
+/// positioned diff note anchors against.
+#[derive(Deserialize)]
+struct GlabDiffRefs {
+    #[serde(default)]
+    base_sha: String,
+    #[serde(default)]
+    start_sha: String,
+    #[serde(default)]
+    head_sha: String,
+}
+
+/// Fetch an MR's `diff_refs`. Errors clearly when GitLab omits them (a not-yet-diffable
+/// MR), before any write.
+async fn mr_diff_refs(repo_path: &str, enc: &str, number: u64) -> AppResult<GlabDiffRefs> {
+    #[derive(Deserialize)]
+    struct GlabMrDiffRefs {
+        #[serde(default)]
+        diff_refs: Option<GlabDiffRefs>,
+    }
+    let out = run_glab(
+        Some(repo_path),
+        &["api", &format!("projects/{enc}/merge_requests/{number}")],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let mr: GlabMrDiffRefs = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Glab(format!("could not parse the GitLab merge request: {e}")))?;
+    mr.diff_refs.ok_or_else(|| {
+        AppError::Glab("this merge request has no diff refs to anchor a comment against.".into())
+    })
+}
+
+/// Create a NEW file:line-anchored review thread on an MR (`POST
+/// …/merge_requests/{n}/discussions` with the nested `position` JSON via `--input -`
+/// — flat `-f position[x]=y` is silently ignored by GitLab). `side` is `"new"`/`"old"`
+/// (old → `old_path`/`old_line`). `start_line` is honored on GitHub only; GitLab
+/// anchors at `line`, so it's ignored here.
+#[allow(clippy::too_many_arguments)]
+pub async fn thread_create(
+    repo_path: &str,
+    number: u64,
+    path: &str,
+    line: u64,
+    side: &str,
+    _start_line: Option<u64>,
+    body: &str,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    if path.is_empty() {
+        return Err(AppError::InvalidArgument("a file path is required".into()));
+    }
+    if side != "new" && side != "old" {
+        return Err(AppError::InvalidArgument(format!("invalid side: {side}")));
+    }
+    let enc = encode_project(&project_path(repo_path).await?);
+    let refs = mr_diff_refs(repo_path, &enc, number).await?;
+    let mut position = serde_json::json!({
+        "base_sha": refs.base_sha,
+        "start_sha": refs.start_sha,
+        "head_sha": refs.head_sha,
+        "position_type": "text",
+    });
+    if side == "old" {
+        position["old_path"] = serde_json::Value::String(path.to_string());
+        position["old_line"] = serde_json::Value::from(line);
+    } else {
+        position["new_path"] = serde_json::Value::String(path.to_string());
+        position["new_line"] = serde_json::Value::from(line);
+    }
+    let payload = serde_json::json!({ "body": body, "position": position });
+    let endpoint = format!("projects/{enc}/merge_requests/{number}/discussions");
+    run_glab_ex(
+        Some(repo_path),
+        &[
+            "api",
+            "--method",
+            "POST",
+            &endpoint,
+            "--input",
+            "-",
+            "--header",
+            "Content-Type: application/json",
+        ],
+        Some(&payload.to_string()),
+        &[],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Submit a review on an MR — SEQUENTIAL (GitLab draft notes are invisible until
+/// bulk-published, so we stage them, publish, then apply the verdict). The summary
+/// (when present) is a plain draft note; each comment is a positioned draft note
+/// (nested `position` JSON via `--input -`). Then `draft_notes/bulk_publish`, then
+/// the verdict (approve / request-changes reuse the existing fns; comment does
+/// nothing extra). Partial failure STOPS at the first error and discloses exactly
+/// what landed (never claims success on partial state). Guards run in the dispatch.
+pub async fn review_submit(
+    repo_path: &str,
+    number: u64,
+    verdict: &str,
+    summary: Option<&str>,
+    comments: &[DraftCommentIn],
+) -> AppResult<ReviewSubmitOut> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let draft_endpoint = format!("projects/{enc}/merge_requests/{number}/draft_notes");
+    let total = comments.len() as u32;
+    let has_summary = summary.map(str::trim).is_some_and(|s| !s.is_empty());
+    // Whether ANYTHING gets staged — drives whether we run the draft/publish phase at
+    // all. An approve-only review (no summary, no comments) stages nothing, and
+    // `bulk_publish` on an empty draft set fails with a misleading error, so we skip
+    // straight to the verdict.
+    let staged_any = has_summary || !comments.is_empty();
+
+    // The diff refs anchor every positioned draft note; fetch once (only when there
+    // are inline comments — a summary-only review needs no anchoring).
+    let refs = if comments.is_empty() {
+        None
+    } else {
+        Some(mr_diff_refs(repo_path, &enc, number).await?)
+    };
+
+    // The summary → a plain draft note. Failure here means nothing landed yet.
+    if let Some(s) = summary.filter(|s| !s.trim().is_empty()) {
+        let note_arg = format!("note={s}");
+        run_glab(
+            Some(repo_path),
+            &["api", "--method", "POST", &draft_endpoint, "-f", &note_arg],
+            GLAB_NETWORK_TIMEOUT,
+        )
+        .await
+        .map_err(|e| {
+            AppError::Glab(format!(
+                "The review summary couldn't be saved as a draft, so the review was not \
+                 submitted: {e}"
+            ))
+        })?;
+    }
+
+    // Each comment → a positioned draft note. Stop at the first failure and disclose.
+    for (i, c) in comments.iter().enumerate() {
+        let refs = refs.as_ref().expect("refs fetched when comments present");
+        let mut position = serde_json::json!({
+            "base_sha": refs.base_sha,
+            "start_sha": refs.start_sha,
+            "head_sha": refs.head_sha,
+            "position_type": "text",
+        });
+        if c.side == "old" {
+            position["old_path"] = serde_json::Value::String(c.path.clone());
+            position["old_line"] = serde_json::Value::from(c.line);
+        } else {
+            position["new_path"] = serde_json::Value::String(c.path.clone());
+            position["new_line"] = serde_json::Value::from(c.line);
+        }
+        let payload = serde_json::json!({ "note": c.body, "position": position });
+        if let Err(e) = run_glab_ex(
+            Some(repo_path),
+            &[
+                "api",
+                "--method",
+                "POST",
+                &draft_endpoint,
+                "--input",
+                "-",
+                "--header",
+                "Content-Type: application/json",
+            ],
+            Some(&payload.to_string()),
+            &[],
+            GLAB_NETWORK_TIMEOUT,
+        )
+        .await
+        {
+            return Err(AppError::Glab(format!(
+                "Saved {} of {} review comments as drafts before the failure; the review was \
+                 not submitted. Check the merge request on GitLab before retrying. ({e})",
+                i, total
+            )));
+        }
+    }
+
+    // Publish all drafts at once — but only when something was actually staged.
+    // `bulk_publish` on an empty draft set fails misleadingly, so an approve-only
+    // review (no summary, no comments) skips straight to the verdict below. A failure
+    // here leaves the drafts staged (invisible).
+    if staged_any {
+        let publish_endpoint = format!("{draft_endpoint}/bulk_publish");
+        run_glab(
+            Some(repo_path),
+            &["api", "--method", "POST", &publish_endpoint],
+            GLAB_NETWORK_TIMEOUT,
+        )
+        .await
+        .map_err(|e| {
+            AppError::Glab(format!(
+                "The review's draft notes couldn't be published, so the review was not \
+                 submitted. Check the merge request on GitLab before retrying. ({e})"
+            ))
+        })?;
+    }
+
+    // Apply the verdict. Approve / request-changes reuse the existing fns; comment
+    // needs nothing extra. The review CONTENT already published above, so a verdict
+    // failure must disclose that — otherwise a retry double-posts every comment.
+    let verdict_result = match verdict {
+        "approve" => approve_pr(repo_path, number).await,
+        "request_changes" => request_changes_mr(repo_path, number, "").await,
+        _ => Ok(()),
+    };
+    if let Err(e) = verdict_result {
+        let action = if verdict == "approve" {
+            "approve"
+        } else {
+            "request changes"
+        };
+        // Only mention what actually landed (an approve-only review published nothing).
+        let landed = if staged_any {
+            let n = if has_summary { total + 1 } else { total };
+            format!(
+                "the {n} review note(s) were already posted successfully — do NOT resubmit \
+                 them; "
+            )
+        } else {
+            String::new()
+        };
+        return Err(AppError::Glab(format!(
+            "The review was posted, but the {action} step failed: {landed}only re-run the \
+             {action} action on GitLab. ({e})"
+        )));
+    }
+
+    Ok(ReviewSubmitOut {
+        posted: total,
+        total,
+        verdict_applied: verdict != "comment",
+    })
 }
 
 /// The award endpoint for a subject: the issue/MR body (`note_id` None) or one
@@ -5553,6 +6220,77 @@ pub async fn unlink_issue(repo_path: &str, number: u64, link_id: &str) -> AppRes
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_body_strips_title_and_separator() {
+        // Title + blank separator + body → the body only.
+        assert_eq!(
+            message_body_from_full("Fix the thing\n\nDetails here\nMore details"),
+            "Details here\nMore details"
+        );
+        // A single-line message has no body.
+        assert_eq!(message_body_from_full("Just a title"), "");
+        // No blank separator (title directly followed by body) still drops the title.
+        assert_eq!(message_body_from_full("Title\nbody line"), "body line");
+        // Trailing whitespace/newlines are trimmed.
+        assert_eq!(message_body_from_full("Title\n\nbody\n\n"), "body");
+        // Empty message → empty body.
+        assert_eq!(message_body_from_full(""), "");
+        // CRLF: the separator after the title's own "\r" line is consumed.
+        assert_eq!(
+            message_body_from_full("Title\r\n\r\nbody"),
+            "body".trim_end()
+        );
+    }
+
+    #[test]
+    fn commit_comment_id_parses_and_rejects_malformed() {
+        // Valid composite: opaque hex discussion id + numeric note id.
+        assert_eq!(
+            parse_commit_comment_id("abc123def:456").unwrap(),
+            ("abc123def".to_string(), 456u64)
+        );
+        // No colon → rejected.
+        assert!(parse_commit_comment_id("abc123").is_err());
+        // Empty discussion id → rejected.
+        assert!(parse_commit_comment_id(":456").is_err());
+        // Non-numeric note id → rejected.
+        assert!(parse_commit_comment_id("abc:notanumber").is_err());
+        // Empty note id → rejected.
+        assert!(parse_commit_comment_id("abc:").is_err());
+    }
+
+    #[test]
+    fn commit_anchor_keeps_old_side_path_without_line() {
+        // New side present → path + new line.
+        let new_side = GlabCommitNotePosition {
+            new_path: "src/main.rs".into(),
+            new_line: Some(42),
+            old_path: "src/main.rs".into(),
+        };
+        assert_eq!(
+            gl_commit_anchor(&new_side),
+            (Some("src/main.rs".to_string()), Some(42))
+        );
+        // Old-side-only (a comment on a removed line): keep old_path, but line stays
+        // None — the old-side number must NOT be mapped into the new-side `line`.
+        let old_side = GlabCommitNotePosition {
+            new_path: String::new(),
+            new_line: None,
+            old_path: "src/old.rs".into(),
+        };
+        assert_eq!(
+            gl_commit_anchor(&old_side),
+            (Some("src/old.rs".to_string()), None)
+        );
+        // Neither side → whole-commit (no path, no line).
+        let none = GlabCommitNotePosition {
+            new_path: String::new(),
+            new_line: None,
+            old_path: String::new(),
+        };
+        assert_eq!(gl_commit_anchor(&none), (None, None));
+    }
 
     #[test]
     fn external_reviews_drop_system_notes_and_map_kinds() {

@@ -31,6 +31,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { detectAgentCli, providerKind } from "@/lib/ai/agent";
+import { buildAiCommentBody } from "@/lib/ai/comment-branding";
 import { useAvailableModels } from "@/lib/ai/models";
 import {
   MODEL_SUGGESTIONS,
@@ -81,7 +82,7 @@ export function PrReviewPanel({
   /** The change-request noun for idle copy ("PR" / "merge request"). Defaults to
    *  "PR" (local PRs / commit reviews). */
   prNoun?: string;
-  onPost?: (body: string) => void | Promise<void>;
+  onPost?: (body: string, opts?: { asBot?: boolean }) => void | Promise<void>;
   posting?: boolean;
 }) {
   const settings = useSettings();
@@ -204,9 +205,14 @@ export function PrReviewPanel({
   async function post() {
     if (!onPost || !text.trim() || posting) return;
     const label = mode === "security" ? "security audit" : "review";
-    const body = `**AI ${label} (${model || reviewAi?.model || "model"})**\n\n${text}`;
+    const body = buildAiCommentBody({
+      kind: label,
+      model: model || reviewAi?.model || "model",
+      automated: false,
+      text,
+    });
     try {
-      await onPost(body);
+      await onPost(body, { asBot: true });
       reset();
       toast.success("Review posted to the conversation");
     } catch {

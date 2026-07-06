@@ -18,7 +18,11 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
-import { DiffContent, type DiffLineAnchor } from "@/features/diff/DiffSurface";
+import {
+  DiffContent,
+  type DiffLineAnchor,
+  type LineWidget,
+} from "@/features/diff/DiffSurface";
 import { TimeTrackingControls } from "@/features/issues/RemoteIssueViewParts";
 import {
   useAddMrSpentTime,
@@ -27,8 +31,10 @@ import {
 } from "@/lib/git/queries";
 import type { ReviewThreadOut } from "@/lib/git/types";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
+import type { ReviewDraft } from "@/lib/pulls/review-drafts";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { DraftCommentCard } from "./PendingReviewBar";
 import { ReviewThreadCard, type SuggestionApply } from "./ReviewThreads";
 
 type PrFile = { path: string; additions: number; deletions: number };
@@ -42,6 +48,9 @@ interface DiffThreadWiring {
   /** Gating inputs + the write for the per-suggestion Apply affordance. Absent =
    *  no Apply shown (identical graceful default as the Conversation block). */
   apply?: SuggestionApply;
+  /** File-section lookup for synthesizing a hunk on hunk-less providers, so the
+   *  in-diff thread cards get the same Apply affordance. Absent = no synthesis. */
+  fileDiffLookup?: (path: string) => string | undefined;
 }
 
 /**
@@ -56,6 +65,7 @@ function DiffThreadAnchor({
   onReply,
   onResolve,
   apply,
+  fileDiffLookup,
 }: { threads: ReviewThreadOut[] } & DiffThreadWiring) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const isExpanded = (t: ReviewThreadOut) => expanded[t.id] ?? !t.isResolved;
@@ -77,6 +87,7 @@ function DiffThreadAnchor({
           onReply={onReply}
           onResolve={onResolve}
           apply={apply}
+          fileDiffLookup={fileDiffLookup}
         />
       ))}
     </div>
@@ -94,10 +105,15 @@ export function PrFilesPane({
   isPending,
   isError,
   threads,
+  drafts,
+  repoPath,
+  number,
+  lineWidget,
   onQuote,
   onReply,
   onResolve,
   apply,
+  fileDiffLookup,
 }: {
   files: PrFile[];
   effectivePath: string | null;
@@ -107,6 +123,14 @@ export function PrFilesPane({
   isError: boolean;
   /** All PR review threads; the pane anchors those on the selected file. */
   threads?: ReviewThreadOut[];
+  /** Pending-review drafts; those on the selected file render as anchored cards
+   *  under their line (needs `repoPath`/`number` for the edit/delete writes). */
+  drafts?: ReviewDraft[];
+  repoPath?: string;
+  number?: number;
+  /** The inline line-comment composer, passed straight to the diff. Absent =
+   *  a read-only diff (unchanged). */
+  lineWidget?: LineWidget;
 } & DiffThreadWiring) {
   // Arrow keys walk the file list, mirroring the app's other diff lists.
   const onFilesKeyDown = listKeyboardNav({
@@ -117,37 +141,81 @@ export function PrFilesPane({
     rowAttr: "data-path",
   });
 
-  // Anchors for the SELECTED file only: threads with a known line on this path
-  // that aren't outdated (outdated/line-0 threads live in the Conversation tab).
-  // Multiple threads on the same side+line collapse into one stacked anchor.
+  // Anchors for the SELECTED file only: threads (with a known line, not outdated)
+  // AND pending-review drafts on this path. Multiple items on the same side+line
+  // collapse into ONE stacked anchor (the diff library keeps a single render per
+  // side+line — last write wins — so threads + a draft here must share it).
   const lineAnchors = useMemo<DiffLineAnchor[]>(() => {
-    if (!effectivePath || !threads) return [];
-    const bySideLine = new Map<string, ReviewThreadOut[]>();
-    for (const t of threads) {
+    if (!effectivePath) return [];
+    const threadsBySideLine = new Map<string, ReviewThreadOut[]>();
+    for (const t of threads ?? []) {
       if (t.path !== effectivePath || t.line <= 0 || t.isOutdated) continue;
       const side = t.side === "old" ? "old" : "new";
       const key = `${side}:${t.line}`;
-      const bucket = bySideLine.get(key);
+      const bucket = threadsBySideLine.get(key);
       if (bucket) bucket.push(t);
-      else bySideLine.set(key, [t]);
+      else threadsBySideLine.set(key, [t]);
     }
-    return [...bySideLine.entries()].map(([key, group]) => {
+    const draftsBySideLine = new Map<string, ReviewDraft[]>();
+    // Drafts only render when the store owner keys (repoPath/number) are present.
+    if (repoPath !== undefined && number !== undefined) {
+      for (const d of drafts ?? []) {
+        if (d.path !== effectivePath || d.line <= 0) continue;
+        const key = `${d.side}:${d.line}`;
+        const bucket = draftsBySideLine.get(key);
+        if (bucket) bucket.push(d);
+        else draftsBySideLine.set(key, [d]);
+      }
+    }
+    const keys = new Set([
+      ...threadsBySideLine.keys(),
+      ...draftsBySideLine.keys(),
+    ]);
+    return [...keys].map((key) => {
       const [side, line] = key.split(":");
+      const threadGroup = threadsBySideLine.get(key) ?? [];
+      const draftGroup = draftsBySideLine.get(key) ?? [];
       return {
         side: side as "old" | "new",
         line: Number(line),
         render: () => (
-          <DiffThreadAnchor
-            threads={group}
-            onQuote={onQuote}
-            onReply={onReply}
-            onResolve={onResolve}
-            apply={apply}
-          />
+          <div className="flex flex-col gap-2">
+            {threadGroup.length > 0 && (
+              <DiffThreadAnchor
+                threads={threadGroup}
+                onQuote={onQuote}
+                onReply={onReply}
+                onResolve={onResolve}
+                apply={apply}
+                fileDiffLookup={fileDiffLookup}
+              />
+            )}
+            {repoPath !== undefined &&
+              number !== undefined &&
+              draftGroup.map((d) => (
+                <DraftCommentCard
+                  key={d.id}
+                  repoPath={repoPath}
+                  number={number}
+                  draft={d}
+                />
+              ))}
+          </div>
         ),
       };
     });
-  }, [effectivePath, threads, onQuote, onReply, onResolve, apply]);
+  }, [
+    effectivePath,
+    threads,
+    drafts,
+    repoPath,
+    number,
+    onQuote,
+    onReply,
+    onResolve,
+    apply,
+    fileDiffLookup,
+  ]);
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -188,6 +256,7 @@ export function PrFilesPane({
             isPending={isPending}
             isError={isError}
             lineAnchors={lineAnchors}
+            lineWidget={lineWidget}
           />
         ) : (
           <DiffPlaceholder message="Select a file to see its changes" />

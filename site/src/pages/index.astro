@@ -32,7 +32,15 @@ const capabilities = [
   { label: "GitHub PRs + private local PRs" },
   {
     label:
-      "Inline review comments — anchored in the diff, reply, resolve, edit/delete your own & apply suggestions locally",
+      "Inline review comments — anchored in the diff, reply, resolve, edit/delete your own & apply suggestions locally (GitHub, GitLab & Bitbucket)",
+  },
+  {
+    label:
+      "Compose a review from the diff — click a line or drag a range to comment, batch drafts into a pending review (saved across restarts), suggest changes, and submit with a verdict",
+  },
+  {
+    label:
+      "Drill into a PR's commits — full message, per-file diffs & whole-commit + line-anchored comments",
   },
   { label: "GitHub Enterprise — same features, via gh" },
   { label: "Multiple accounts, switch active per host" },
@@ -87,6 +95,11 @@ const capabilities = [
   { label: "Reviews keep running in the background", ai: true },
   { label: "Iterative reviews build on the last round", ai: true },
   { label: "Builds on Copilot / CodeRabbit reviews", ai: true },
+  {
+    label:
+      "AI reviews are clearly branded & machine-authored — post as a GitLab project bot",
+    ai: true,
+  },
   { label: "File history & line blame" },
   { label: "Unpushed commits flagged in history" },
   { label: "GitHub Actions — runs, jobs & re-run" },

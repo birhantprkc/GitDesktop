@@ -12,8 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { useAppForm } from "@/lib/form";
-import { isWindows } from "@/lib/hotkeys/binding";
 import { deleteRepoFolder } from "@/lib/git/api";
+import { isWindows } from "@/lib/hotkeys/binding";
 import { type RecentRepo, repoDisplayName } from "@/lib/settings/api";
 import { useRemoveRecentRepo, useSetRepoAlias } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";

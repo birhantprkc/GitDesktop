@@ -318,6 +318,106 @@ pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> 
     }
 }
 
+/// The unified diff of ONE commit within a merge/pull request, behind the
+/// abstraction. GitHub uses the commit's `.diff` media type; GitLab rebuilds it
+/// from the per-file commit-diff array; Bitbucket returns the raw commit diff.
+#[tauri::command]
+pub async fn forge_pr_commit_diff(
+    repo_path: String,
+    number: u64,
+    oid: String,
+) -> AppResult<String> {
+    // `number` is part of the neutral contract (the diff is scoped to a PR in the
+    // UI), but every provider addresses the commit by sha alone.
+    let _ = number;
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::commit_diff(&repo_path, &oid).await,
+        Some((Provider::Bitbucket, _)) => bitbucket::commit_diff(&repo_path, &oid).await,
+        _ => github::commit_diff(&repo_path, &oid).await,
+    }
+}
+
+/// A commit's comments, behind the abstraction. GitHub lists the commit-comments
+/// REST endpoint; GitLab flattens its commit discussions (composite ids); Bitbucket
+/// lists its commit comments.
+#[tauri::command]
+pub async fn forge_commit_comments(
+    repo_path: String,
+    sha: String,
+) -> AppResult<Vec<crate::github::pr::CommitCommentOut>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::commit_comments(&repo_path, &sha).await,
+        Some((Provider::Bitbucket, _)) => bitbucket::commit_comments(&repo_path, &sha).await,
+        _ => github::commit_comments(&repo_path, &sha).await,
+    }
+}
+
+/// Post a comment on a commit, behind the abstraction. Whole-commit =
+/// `path`/`line`/`position` all `None`. GitHub anchored uses `path` + `position`
+/// (the frontend computes `position`; `line` is ignored); GitLab and Bitbucket
+/// anchored use `path` + `line`.
+#[tauri::command]
+pub async fn forge_commit_comment_create(
+    repo_path: String,
+    sha: String,
+    body: String,
+    path: Option<String>,
+    line: Option<u64>,
+    position: Option<u64>,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::commit_comment_create(&repo_path, &sha, &body, path.as_deref(), line).await
+        }
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::commit_comment_create(&repo_path, &sha, &body, path.as_deref(), line).await
+        }
+        _ => {
+            github::commit_comment_create(&repo_path, &sha, &body, path.as_deref(), position).await
+        }
+    }
+}
+
+/// Edit a commit comment's body, behind the abstraction. `comment_id`: GitHub /
+/// Bitbucket numeric-as-string; GitLab composite `"discussionId:noteId"`.
+#[tauri::command]
+pub async fn forge_commit_comment_edit(
+    repo_path: String,
+    sha: String,
+    comment_id: String,
+    body: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::commit_comment_edit(&repo_path, &sha, &comment_id, &body).await
+        }
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::commit_comment_edit(&repo_path, &sha, &comment_id, &body).await
+        }
+        // GitHub edits by comment id alone (sha unused, but kept for the neutral shape).
+        _ => github::commit_comment_edit(&repo_path, &comment_id, &body).await,
+    }
+}
+
+/// Delete a commit comment, behind the abstraction. Same `comment_id` carriage as
+/// `forge_commit_comment_edit`.
+#[tauri::command]
+pub async fn forge_commit_comment_delete(
+    repo_path: String,
+    sha: String,
+    comment_id: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::commit_comment_delete(&repo_path, &sha, &comment_id).await
+        }
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::commit_comment_delete(&repo_path, &sha, &comment_id).await
+        }
+        _ => github::commit_comment_delete(&repo_path, &comment_id).await,
+    }
+}
+
 /// Third-party AI-reviewer findings on a merge/pull request (Copilot/CodeRabbit/…),
 /// behind the abstraction. GitHub delegates unchanged (`gh_pr_external_reviews`);
 /// GitLab maps MR discussion notes onto the same neutral shape; Bitbucket returns
@@ -376,6 +476,68 @@ pub async fn forge_pr_thread_reply(
     }
 }
 
+/// Create a NEW file:line-anchored review thread on a merge/pull request, behind
+/// the abstraction. `side` is `"new"` (right/added) or `"old"` (left/removed).
+/// `start_line` (a multi-line comment range) is honored on GitHub only; GitLab and
+/// Bitbucket anchor at `line`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn forge_pr_thread_create(
+    repo_path: String,
+    number: u64,
+    path: String,
+    line: u64,
+    side: String,
+    start_line: Option<u64>,
+    body: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::thread_create(&repo_path, number, &path, line, &side, start_line, &body).await
+        }
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::thread_create(&repo_path, number, &path, line, &side, start_line, &body).await
+        }
+        _ => github::thread_create(&repo_path, number, &path, line, &side, start_line, &body).await,
+    }
+}
+
+/// Submit a review on a merge/pull request — an optional summary + a batch of inline
+/// comments + a verdict, behind the abstraction. `verdict` is `"comment"` /
+/// `"approve"` / `"request_changes"`. GitHub submits atomically (one call); GitLab and
+/// Bitbucket run sequentially and disclose partial state on failure. All
+/// locally-checkable preconditions are validated HERE, before any remote call.
+#[tauri::command]
+pub async fn forge_pr_review_submit(
+    repo_path: String,
+    number: u64,
+    verdict: String,
+    summary: Option<String>,
+    comments: Vec<crate::github::pr::DraftCommentIn>,
+) -> AppResult<crate::github::pr::ReviewSubmitOut> {
+    // Pre-mutation guards: verdict validity, and request_changes needs a summary.
+    if !matches!(verdict.as_str(), "comment" | "approve" | "request_changes") {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid review verdict: {verdict}"
+        )));
+    }
+    if verdict == "request_changes" && summary.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return Err(AppError::InvalidArgument(
+            "A summary is required when requesting changes".into(),
+        ));
+    }
+    let summary = summary.as_deref();
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::review_submit(&repo_path, number, &verdict, summary, &comments).await
+        }
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::review_submit(&repo_path, number, &verdict, summary, &comments).await
+        }
+        _ => github::review_submit(&repo_path, number, &verdict, summary, &comments).await,
+    }
+}
+
 /// Resolve / unresolve a review thread, behind the abstraction. Bitbucket has no
 /// thread-resolution surface wired (`mr_thread_resolve` false), so its arm errors.
 #[tauri::command]
@@ -398,14 +560,47 @@ pub async fn forge_pr_thread_resolve(
 
 /// Post a comment on a merge/pull request, behind the abstraction. GitHub delegates
 /// to `gh pr comment`; GitLab posts a note via `glab`. (Full reviews stay
-/// GitHub-only — approve/merge/edit each have their own forge command.)
+/// GitHub-only — approve/merge/edit each have their own forge command.) `as_bot`
+/// (optional — existing callers omit it) is honored only by the GitLab arm: when
+/// `Some(true)` and a review-bot token is configured for this repo's GitLab host,
+/// the note is authored by the project bot (else it falls back to the signed-in
+/// user). GitHub/Bitbucket ignore the flag.
 #[tauri::command]
-pub async fn forge_pr_comment(repo_path: String, number: u64, body: String) -> AppResult<()> {
+pub async fn forge_pr_comment(
+    repo_path: String,
+    number: u64,
+    body: String,
+    as_bot: Option<bool>,
+) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
-        Some((Provider::GitLab, _)) => gitlab::comment_mr(&repo_path, number, &body).await,
+        Some((Provider::GitLab, _)) => {
+            gitlab::comment_mr(&repo_path, number, &body, as_bot.unwrap_or(false)).await
+        }
         Some((Provider::Bitbucket, _)) => bitbucket::comment_pr(&repo_path, number, &body).await,
         _ => github::comment_pr(&repo_path, number, &body).await,
     }
+}
+
+/// The configured GitLab review-bot login, if any (`Some(bot_login)` when a token is
+/// stored). Account-scoped (no repo path); a keyring existence read only (no network).
+/// gitlab.com scope (v1).
+#[tauri::command]
+pub async fn forge_gitlab_review_token_status() -> AppResult<Option<String>> {
+    gitlab::review_token_status().await
+}
+
+/// Validate a GitLab review-bot token live, store it, and return the bot login. On
+/// validation failure the error surfaces and nothing is stored. The token is never
+/// logged or returned.
+#[tauri::command]
+pub async fn forge_gitlab_review_token_set(token: String) -> AppResult<String> {
+    gitlab::review_token_set(token).await
+}
+
+/// Clear the stored GitLab review-bot token + login.
+#[tauri::command]
+pub async fn forge_gitlab_review_token_clear() -> AppResult<()> {
+    gitlab::review_token_clear().await
 }
 
 /// Edit a merge/pull request conversation comment's body, behind the abstraction.

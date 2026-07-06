@@ -12,6 +12,12 @@ import { loadSettings } from "@/lib/settings/api";
 import { darkQuery } from "@/lib/use-is-dark";
 import App from "./App.tsx";
 import "./App.css";
+// Position is load-bearing: the vendored diff-view CSS must be imported plain
+// (UNLAYERED) and LAST, so its rules win utility-name ties on the library's own
+// markup — e.g. the add-widget "+" button reveals via `group-hover:visible`,
+// which our `.invisible` utility would otherwise beat if this sheet were demoted
+// into a cascade layer. Its two harmful `color: initial` slot-resets are stripped
+// at build time instead (see vite.config.ts), so no layering is needed.
 import "@git-diff-view/react/styles/diff-view.css";
 
 // Follow the OS color scheme; the theme css switches on the .dark class.

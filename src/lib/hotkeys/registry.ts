@@ -533,6 +533,18 @@ export const ACTIONS = [
     category: "Pull requests",
     defaultBinding: null,
   },
+  {
+    id: "submit-review",
+    label: "Submit review…",
+    category: "Pull requests",
+    defaultBinding: null,
+  },
+  {
+    id: "discard-pending-review",
+    label: "Discard pending review",
+    category: "Pull requests",
+    defaultBinding: null,
+  },
 ] as const satisfies readonly ActionDef[];
 
 export type ActionId = (typeof ACTIONS)[number]["id"];

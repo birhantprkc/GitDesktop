@@ -91,6 +91,64 @@ pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
     crate::github::pr::gh_pr_diff(repo_path.to_string(), number).await
 }
 
+pub async fn commit_diff(repo_path: &str, oid: &str) -> AppResult<String> {
+    crate::github::pr::commit_diff(repo_path, oid).await
+}
+
+pub async fn commit_comments(
+    repo_path: &str,
+    sha: &str,
+) -> AppResult<Vec<crate::github::pr::CommitCommentOut>> {
+    crate::github::pr::commit_comments(repo_path, sha).await
+}
+
+/// Create a commit comment. GitHub anchored comments use `path` + `position`; `line`
+/// is ignored (the frontend computes the diff-position).
+pub async fn commit_comment_create(
+    repo_path: &str,
+    sha: &str,
+    body: &str,
+    path: Option<&str>,
+    position: Option<u64>,
+) -> AppResult<()> {
+    crate::github::pr::commit_comment_create(repo_path, sha, body, path, position).await
+}
+
+pub async fn commit_comment_edit(
+    repo_path: &str,
+    comment_id: &str,
+    body: &str,
+) -> AppResult<()> {
+    crate::github::pr::commit_comment_edit(repo_path, comment_id, body).await
+}
+
+pub async fn commit_comment_delete(repo_path: &str, comment_id: &str) -> AppResult<()> {
+    crate::github::pr::commit_comment_delete(repo_path, comment_id).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn thread_create(
+    repo_path: &str,
+    number: u64,
+    path: &str,
+    line: u64,
+    side: &str,
+    start_line: Option<u64>,
+    body: &str,
+) -> AppResult<()> {
+    crate::github::pr::thread_create(repo_path, number, path, line, side, start_line, body).await
+}
+
+pub async fn review_submit(
+    repo_path: &str,
+    number: u64,
+    verdict: &str,
+    summary: Option<&str>,
+    comments: &[crate::github::pr::DraftCommentIn],
+) -> AppResult<crate::github::pr::ReviewSubmitOut> {
+    crate::github::pr::review_submit(repo_path, number, verdict, summary, comments).await
+}
+
 pub async fn external_reviews(
     repo_path: &str,
     number: u64,

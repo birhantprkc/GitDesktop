@@ -27,6 +27,7 @@ import type {
   CodeFreqPoint,
   Collaborator,
   CommitAuthor,
+  CommitCommentOut,
   CommitDetails,
   CommitResult,
   CommitSummary,
@@ -37,6 +38,7 @@ import type {
   DiscussionDetails,
   DiscussionInfo,
   DiscussionMeta,
+  DraftCommentIn,
   ExternalReviewItem,
   FileDiff,
   ForgeProvider,
@@ -100,6 +102,7 @@ import type {
   RepoStats,
   RepoStatus,
   RepoTraffic,
+  ReviewSubmitOut,
   ReviewThreadOut,
   RewriteStep,
   RulesetEnforcement,
@@ -1010,6 +1013,59 @@ export const forgePrView = (repoPath: string, number: number) =>
 export const forgePrDiff = (repoPath: string, number: number) =>
   invoke<string>("forge_pr_diff", { repoPath, number });
 
+/** The unified diff for a single commit of a PR/MR (per-commit review view). */
+export const forgePrCommitDiff = (
+  repoPath: string,
+  number: number,
+  oid: string,
+) => invoke<string>("forge_pr_commit_diff", { repoPath, number, oid });
+
+// Commit comments (GitHub commit comments / GitLab commit notes) — plain or
+// diff-anchored, provider-neutral. `sha` is the commit; `commentId` addresses a
+// single comment for edit/delete.
+export const forgeCommitComments = (repoPath: string, sha: string) =>
+  invoke<CommitCommentOut[]>("forge_commit_comments", { repoPath, sha });
+
+export const forgeCommitCommentCreate = (
+  repoPath: string,
+  args: {
+    sha: string;
+    body: string;
+    path?: string;
+    line?: number;
+    position?: number;
+  },
+) =>
+  invoke<void>("forge_commit_comment_create", {
+    repoPath,
+    sha: args.sha,
+    body: args.body,
+    path: args.path ?? null,
+    line: args.line ?? null,
+    position: args.position ?? null,
+  });
+
+export const forgeCommitCommentEdit = (
+  repoPath: string,
+  args: { sha: string; commentId: string; body: string },
+) =>
+  invoke<void>("forge_commit_comment_edit", {
+    repoPath,
+    sha: args.sha,
+    commentId: args.commentId,
+    body: args.body,
+  });
+
+export const forgeCommitCommentDelete = (
+  repoPath: string,
+  args: { sha: string; commentId: string },
+) =>
+  invoke<void>("forge_commit_comment_delete", {
+    repoPath,
+    sha: args.sha,
+    commentId: args.commentId,
+  });
+
 /** Provider-neutral PR poll for the notification poller + remote pr-sync — the
  *  backend dispatches (GitHub `gh`, GitLab `glab`, Bitbucket HTTP) onto the same
  *  neutral `PrPollInfo`. GitLab/Bitbucket carry no check rollup or review decision
@@ -1461,6 +1517,67 @@ export const forgePrThreadResolve = (
     resolved,
   });
 
+/** Create a new file:line-anchored review thread on a PR/MR (distinct from
+ *  replying into an existing one). `side` is "new" (right) or "old" (left);
+ *  `startLine` opens a multi-line range. */
+export const forgePrThreadCreate = (
+  repoPath: string,
+  args: {
+    number: number;
+    path: string;
+    line: number;
+    side: "new" | "old";
+    startLine?: number;
+    body: string;
+  },
+) =>
+  invoke<void>("forge_pr_thread_create", {
+    repoPath,
+    number: args.number,
+    path: args.path,
+    line: args.line,
+    side: args.side,
+    startLine: args.startLine ?? null,
+    body: args.body,
+  });
+
+export type ReviewVerdict = "comment" | "approve" | "request_changes";
+
+/** Submit a batch review — a verdict, an optional summary, and any staged draft
+ *  comments posted together. Returns how many comments landed and whether the
+ *  verdict applied. */
+export const forgePrReviewSubmit = (
+  repoPath: string,
+  args: {
+    number: number;
+    verdict: ReviewVerdict;
+    summary?: string;
+    comments: DraftCommentIn[];
+  },
+) =>
+  invoke<ReviewSubmitOut>("forge_pr_review_submit", {
+    repoPath,
+    number: args.number,
+    verdict: args.verdict,
+    summary: args.summary ?? null,
+    comments: args.comments,
+  });
+
+// The GitLab review-bot token — a second GitLab token so batch reviews / bot
+// comments post under a distinct identity. Status returns the bot login when one
+// is configured (null otherwise); the token itself is never returned. Cold-start
+// test mode has no keychain, so status reports null.
+export const forgeGitlabReviewTokenStatus = () =>
+  COLD_START
+    ? Promise.resolve<string | null>(null)
+    : invoke<string | null>("forge_gitlab_review_token_status", {});
+
+export const forgeGitlabReviewTokenSet = (token: string) =>
+  invoke<string>("forge_gitlab_review_token_set", { token });
+
+export const forgeGitlabReviewTokenClear = () =>
+  invoke<void>("forge_gitlab_review_token_clear", {});
+
 export type ReviewAction = "approve" | "comment" | "request_changes";
 
 export const ghPrReview = (
@@ -1473,11 +1590,21 @@ export const ghPrReview = (
 // MR comment, close/reopen, title/body edit, and merge are provider-neutral
 // (GitHub via `gh`, GitLab via `glab`); the GitHub path is byte-identical to the
 // old `gh_pr_*`. Full reviews stay GitHub-only (`gh_pr_review`).
+// `asBot` posts the comment as the configured GitLab review-bot identity instead
+// of the signed-in user (GitLab-only; other providers ignore it). Omitted (null)
+// leaves existing callers unchanged.
 export const forgePrComment = (
   repoPath: string,
   number: number,
   body: string,
-) => invoke<void>("forge_pr_comment", { repoPath, number, body });
+  asBot?: boolean,
+) =>
+  invoke<void>("forge_pr_comment", {
+    repoPath,
+    number,
+    body,
+    asBot: asBot ?? null,
+  });
 
 // MR approve/unapprove and request-changes are GitLab-only controls (GitHub does
 // both via its Review menu); the approvals read drives their states.

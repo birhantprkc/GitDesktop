@@ -91,6 +91,20 @@ export function usePrCapabilities(
   // `viewerDidAuthor` check narrows it to the author.
   const canEditOwnThreadComments =
     canWrite || forgeFeatureReady(forgeData, "mrThreadCommentEdit");
+  // Commenting on individual commits is a shared control (GitHub commit comments +
+  // GitLab commit notes) — same `canWrite || …` gate so GitHub keeps it while
+  // forge-status is pending/failed, and a ready GitLab repo positively enables it.
+  const canCommentCommits =
+    canWrite || forgeFeatureReady(forgeData, "commitComments");
+  // Creating a new file:line review thread is a shared control too (distinct from
+  // reply/resolve on an existing thread), same `canWrite || …` gate.
+  const canCreateThread =
+    canWrite || forgeFeatureReady(forgeData, "mrThreadCreate");
+  // Submitting a batch review (verdict + summary + draft comments) is a shared
+  // control — same gate; GitHub keeps its Review-menu submit while forge-status is
+  // pending/failed, a ready provider enables the batch path.
+  const canSubmitReview =
+    canWrite || forgeFeatureReady(forgeData, "mrReviewSubmit");
 
   return {
     canWrite,
@@ -113,5 +127,8 @@ export function usePrCapabilities(
     canReact,
     canEditOwnComments,
     canEditOwnThreadComments,
+    canCommentCommits,
+    canCreateThread,
+    canSubmitReview,
   };
 }

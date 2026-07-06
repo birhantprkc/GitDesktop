@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::error::{AppError, AppResult};
@@ -215,6 +216,81 @@ pub async fn run_glab(
     timeout: Duration,
 ) -> AppResult<GlabOutput> {
     let out = run_glab_raw(repo_path, args, timeout).await?;
+    if out.code != 0 {
+        let msg = out.stderr.trim();
+        return Err(AppError::Glab(if msg.is_empty() {
+            format!("glab exited with code {}", out.code)
+        } else {
+            msg.to_string()
+        }));
+    }
+    Ok(out)
+}
+
+/// Runs glab with optional stdin `input` and optional extra environment variables,
+/// treating a non-zero exit as an error (like `run_glab`). The additive variant
+/// backing two needs the base `run_glab` signature can't serve without churning
+/// every call site:
+///  - `input` feeds a nested-JSON body to `glab api --input -` (flat `-f
+///    position[x]=y` is SILENTLY IGNORED by GitLab — the known nested-JSON trap).
+///  - `envs` carries a bot `GITLAB_TOKEN` (+ `GITLAB_HOST`) so a note is authored by
+///    the project bot rather than the signed-in user (env overrides glab's config,
+///    probe-proven). NEVER logged.
+pub async fn run_glab_ex(
+    repo_path: Option<&str>,
+    args: &[&str],
+    input: Option<&str>,
+    envs: &[(&str, &str)],
+    timeout: Duration,
+) -> AppResult<GlabOutput> {
+    let Some(glab) = crate::agent::resolve_named(&["glab"], None).await else {
+        return Err(AppError::GlabNotFound);
+    };
+    let mut cmd = Command::new(&glab);
+    cmd.args(args);
+    if let Some(repo) = repo_path {
+        cmd.current_dir(repo);
+    }
+    cmd.env("GLAB_PAGER", "")
+        .env("PAGER", "")
+        .env("NO_COLOR", "1")
+        .env("CLICOLOR", "0");
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    cmd.stdin(if input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd.kill_on_drop(true);
+
+    let mut child = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            AppError::GlabNotFound
+        } else {
+            AppError::Io(e)
+        }
+    })?;
+    if let Some(body) = input {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(body.as_bytes()).await.map_err(AppError::Io)?;
+            stdin.shutdown().await.ok();
+        }
+    }
+    let output = tokio::time::timeout(timeout, child.wait_with_output())
+        .await
+        .map_err(|_| AppError::Timeout(timeout.as_secs()))?
+        .map_err(AppError::Io)?;
+    let out = GlabOutput {
+        stdout: output.stdout,
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        code: output.status.code().unwrap_or(-1),
+    };
     if out.code != 0 {
         let msg = out.stderr.trim();
         return Err(AppError::Glab(if msg.is_empty() {

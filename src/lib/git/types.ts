@@ -607,6 +607,15 @@ export interface ForgeImplemented {
    *  Thread edit/delete controls, thread-scoped like reply/resolve. GitHub keeps
    *  these via `canWrite`; GitLab and Bitbucket true. */
   mrThreadCommentEdit: boolean;
+  /** Commenting on individual commits of a merge/pull request (plain or
+   *  diff-anchored commit comments) — a shared control. */
+  commitComments: boolean;
+  /** Creating a new file:line-anchored review thread on a merge/pull request — a
+   *  shared control (distinct from replying into an existing thread). */
+  mrThreadCreate: boolean;
+  /** Submitting a batch review (verdict + summary + staged draft comments) — a
+   *  shared control (GitHub review submit, GitLab batch note post). */
+  mrReviewSubmit: boolean;
 }
 
 /** One pull-request task (Bitbucket's PR checklist). `id`/`commentId` are numeric
@@ -1225,6 +1234,45 @@ export interface PrCommitOut {
   headline: string;
   date: string;
   author: string;
+  /** The commit message body (below the headline); "" when the commit has none. */
+  messageBody: string;
+}
+
+/** One comment on a commit (GitHub commit comment / GitLab commit note). A plain
+ *  commit comment carries no `path`/`line`/`position`; a diff-anchored one does. */
+export interface CommitCommentOut {
+  id: string;
+  author: string;
+  body: string;
+  createdAt: string;
+  /** Whether the signed-in user wrote it (only their own comments are editable). */
+  viewerDidAuthor: boolean;
+  /** File path an inline comment anchors to; null for a plain commit comment. */
+  path: string | null;
+  /** 1-based line an inline comment anchors to; null when not anchored. */
+  line: number | null;
+  /** Diff position an inline comment anchors to; null when not anchored. */
+  position: number | null;
+}
+
+/** One pending draft comment in a batch review submission — a file:line-anchored
+ *  note the reviewer stages before submitting the whole review at once. */
+export interface DraftCommentIn {
+  path: string;
+  line: number;
+  /** "new" (right side) or "old" (left side). */
+  side: "new" | "old";
+  /** First line of a multi-line range (1-based); omitted for a single line. */
+  startLine?: number;
+  body: string;
+}
+
+/** The outcome of submitting a batch review: how many draft comments posted out
+ *  of the total, and whether the verdict (approve / request changes) applied. */
+export interface ReviewSubmitOut {
+  posted: number;
+  total: number;
+  verdictApplied: boolean;
 }
 
 export interface PrFileOut {

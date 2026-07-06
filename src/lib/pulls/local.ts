@@ -5,6 +5,10 @@ export interface LocalPrComment {
   id: string;
   body: string;
   createdAt: string;
+  /** Display name of a synthetic author (e.g. "GitDesktop" for AI-posted
+   *  reviews). Optional: user-authored comments have none, and comments stored
+   *  before this field existed stay valid (rendered authorless). */
+  author?: string;
   /** Collapsed in the conversation (local equivalent of GitHub's "hide"). */
   hidden?: boolean;
 }

@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { createAiClient } from "@/lib/ai/client";
+import { buildAiCommentBody } from "@/lib/ai/comment-branding";
 import {
   type ExternalContext,
   resolveExternalContext,
@@ -82,7 +83,7 @@ function targetRef(event: PrAutomationEvent): string {
     : event.target.id;
 }
 
-function modeLabel(mode: ReviewMode): string {
+function modeLabel(mode: ReviewMode): "security audit" | "review" {
   return mode === "security" ? "security audit" : "review";
 }
 
@@ -201,7 +202,12 @@ async function run(event: AutomationEvent): Promise<void> {
         toast.info(`AI ${label} skipped — no changes to review.`);
         continue;
       }
-      const body = `**AI ${label} (${settings.reviewAi.model})** · automated\n\n${text}`;
+      const body = buildAiCommentBody({
+        kind: label,
+        model: settings.reviewAi.model,
+        automated: true,
+        text,
+      });
       await deliver(event, rule.action, body, text, notify);
       // Seed the review-history store so an automated review participates in the
       // iterative loop — the next run (manual or auto) builds on these findings,
@@ -401,7 +407,7 @@ async function deliver(
   }
 
   if (event.target.type === "remote") {
-    await forgePrComment(event.repoPath, event.target.number, body);
+    await forgePrComment(event.repoPath, event.target.number, body, true);
     await queryClient.invalidateQueries({
       queryKey: ["repo", event.repoPath],
     });
@@ -427,7 +433,12 @@ async function deliver(
     ...cur,
     comments: [
       ...cur.comments,
-      { id: crypto.randomUUID(), body, createdAt: new Date().toISOString() },
+      {
+        id: crypto.randomUUID(),
+        body,
+        createdAt: new Date().toISOString(),
+        author: "GitDesktop",
+      },
     ],
   }));
   await queryClient.invalidateQueries({
