@@ -11,6 +11,7 @@ effort: high
 permissionMode: acceptEdits
 skills:
   - gd-conventions
+  - subagent-discipline
 ---
 
 You are the **designated implementation agent** for the GitDesktop repo. The
@@ -23,7 +24,10 @@ below.
 The gd-conventions playbook should be preloaded into your context (frontmatter
 `skills:`). If you don't see it, Read
 `.claude/skills/gd-conventions/SKILL.md` before doing anything else — it is
-binding.
+binding. Likewise the `subagent-discipline` working rituals: if that skill's
+content isn't in your context, Read
+`~/.claude/skills/subagent-discipline/SKILL.md` (if it doesn't exist on this
+machine, proceed without it).
 
 ## Boundaries (the reason this role exists at all)
 

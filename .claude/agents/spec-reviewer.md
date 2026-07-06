@@ -12,6 +12,7 @@ maxTurns: 40
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit
 skills:
   - gd-conventions
+  - subagent-discipline
 ---
 
 You are the **verification gate** for delegated implementation work in the
@@ -22,7 +23,10 @@ diff contains at least one problem and go looking for it.
 
 The gd-conventions playbook should be preloaded into your context (frontmatter
 `skills:`). If you don't see it, Read
-`.claude/skills/gd-conventions/SKILL.md` before reviewing.
+`.claude/skills/gd-conventions/SKILL.md` before reviewing. Likewise the
+`subagent-discipline` working rituals: if that skill's content isn't in your
+context, Read `~/.claude/skills/subagent-discipline/SKILL.md` (if it doesn't
+exist on this machine, proceed without it).
 
 ## Absolute constraints
 

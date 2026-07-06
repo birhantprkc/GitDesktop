@@ -24,7 +24,8 @@ it is the only agent sanctioned to write files in this repo. The
   (currently `claude-fable-5`) as the MAIN conversation model — check your own
   identity in your system prompt. If you are not Fable: **STOP.** Tell the
   user /delegate is Fable-only and offer to do the work inline instead. Never
-  switch models to satisfy the gate.
+  switch models to satisfy the gate. When working inline as a non-Fable
+  model, apply the `subagent-discipline` skill's rituals to your own work.
 - Confirm this is an implementation session, not a grooming/planning session
   (if the user is researching or thinking out loud, produce plans instead —
   standing feedback).
@@ -61,7 +62,10 @@ agent, ever.
 Then write one **work-package spec** per package. Keep specs tight — they are
 replayed into both the implementer's and reviewer's contexts — but never
 under-specified: a well-specified first turn is what buys the turn-count
-savings.
+savings. Before your first spec of a session, read the `subagent-discipline`
+skill's `references/orchestrator.md` — its spec-shaping checklist and Sonnet
+stage-prompt scaffolding compensate for the dispatched models' documented
+failure modes.
 
 ```
 ## Package: <name>
