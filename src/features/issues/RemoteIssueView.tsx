@@ -47,9 +47,9 @@ import {
   useCloseIssue,
   useCommentIssue,
   useDeleteIssue,
-  useDeletePrComment,
+  useDeleteIssueComment,
   useEditIssue,
-  useEditPrComment,
+  useEditIssueComment,
   useForgeStatus,
   useGhRepos,
   useGlMemberProjects,
@@ -149,8 +149,8 @@ export function RemoteIssueView({
   const closeIssue = useCloseIssue(repoPath);
   const reopenIssue = useReopenIssue(repoPath);
   const editIssue = useEditIssue(repoPath);
-  const editComment = useEditPrComment(repoPath);
-  const deleteComment = useDeletePrComment(repoPath);
+  const editComment = useEditIssueComment(repoPath);
+  const deleteComment = useDeleteIssueComment(repoPath);
   const minimizeComment = useMinimizeComment(repoPath);
   const unminimizeComment = useUnminimizeComment(repoPath);
   const pinIssue = usePinIssue(repoPath);
@@ -163,6 +163,12 @@ export function RemoteIssueView({
   // Reactions are a shared control (GitLab awards emoji); the fetch is gated so
   // it never fires for a provider whose reactions aren't wired (Bitbucket).
   const canReact = canWrite || forgeFeatureReady(forge.data, "issueReactions");
+  // Editing/deleting your OWN comments is a shared control (GitHub + GitLab) —
+  // same `canWrite || …` gate as comment CREATE above; the per-comment
+  // `viewerDidAuthor` check narrows it to the author. Bitbucket issues aren't
+  // wired, so `issueCommentEdit` is false there.
+  const canEditOwnComments =
+    canWrite || forgeFeatureReady(forge.data, "issueCommentEdit");
   const reactions = useIssueReactions(repoPath, canReact ? number : null);
   const toggleReactionMutation = useToggleReaction(
     repoPath,
@@ -218,12 +224,19 @@ export function RemoteIssueView({
   const comments = issue.comments.filter((c) => hasVisibleBody(c.body));
 
   function submitComment() {
-    if (!composeBody.trim()) return;
+    const body = composeBody.trim();
+    if (!body) return;
+    // Clear the draft immediately (the perceived-speed win) and append the
+    // synthetic comment optimistically; on error restore the draft, but only if
+    // the composer is still empty so we never clobber newly-typed text.
+    setComposeBody("");
     comment.mutate(
-      { number, body: composeBody.trim() },
+      { number, body, author: forge.data?.login ?? "You" },
       {
-        onSuccess: () => setComposeBody(""),
-        onError,
+        onError: (e) => {
+          setComposeBody((cur) => (cur.trim() ? cur : body));
+          onError(e);
+        },
       },
     );
   }
@@ -242,7 +255,7 @@ export function RemoteIssueView({
 
   function saveCommentEdit(commentId: string, body: string) {
     editComment.mutate(
-      { commentId, body },
+      { number, commentId, body },
       { onSuccess: () => toast.success("Comment updated"), onError },
     );
   }
@@ -593,12 +606,12 @@ export function RemoteIssueView({
                   thread={c}
                   onQuote={canWrite ? () => quoteReply(c.body) : undefined}
                   onSaveEdit={
-                    canWrite && c.viewerDidAuthor
+                    canEditOwnComments && c.viewerDidAuthor
                       ? (body) => saveCommentEdit(c.id, body)
                       : undefined
                   }
                   onDelete={
-                    canWrite && c.viewerDidAuthor
+                    canEditOwnComments && c.viewerDidAuthor
                       ? () => setDeletingCommentId(c.id)
                       : undefined
                   }
@@ -775,17 +788,21 @@ export function RemoteIssueView({
         commentId={deletingCommentId}
         onClose={() => setDeletingCommentId(null)}
         pending={deleteComment.isPending}
+        description={`This permanently deletes the comment on ${remoteLabel}. This cannot be undone.`}
         onConfirm={(commentId) =>
-          deleteComment.mutate(commentId, {
-            onSuccess: () => {
-              toast.success("Comment deleted");
-              setDeletingCommentId(null);
+          deleteComment.mutate(
+            { number, commentId },
+            {
+              onSuccess: () => {
+                toast.success("Comment deleted");
+                setDeletingCommentId(null);
+              },
+              onError: (e) => {
+                onError(e);
+                setDeletingCommentId(null);
+              },
             },
-            onError: (e) => {
-              onError(e);
-              setDeletingCommentId(null);
-            },
-          })
+          )
         }
       />
 

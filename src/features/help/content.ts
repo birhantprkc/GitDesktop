@@ -506,7 +506,8 @@ time — including for pull requests from forks{{/ai}}.
 Point the app at a **GitLab** repo and the same tab lists its **merge requests** (open and
 closed/merged) next to any local PRs. Open one for the description, comments, commits, and a
 highlighted **diff** (with an **Open on GitLab** link) — and the GitLab MR writes:
-**comment** on it, **close / reopen** it, **edit** its title and description,
+**comment** on it (and **edit** or **delete** your own comments), **close / reopen** it,
+**edit** its title and description,
 **approve / unapprove** it (a reviewer action,
 with the approval count shown inline), **request changes** (the blocking reviewer state —
 it adds you as a reviewer if needed, posts your drafted comment alongside, and clears when
@@ -570,7 +571,8 @@ add labels, **close / reopen**, **lock**, and **transfer** an issue to another r
 
 Point the app at a **GitLab** repo and the same tab lists its **issues** (open and closed)
 next to any local issues. Open one to read the description and comments — and the GitLab
-issue **writes**: **comment** on the issue, **close / reopen** it, **edit** its title and
+issue **writes**: **comment** on the issue (and **edit** or **delete** your own comments),
+**close / reopen** it, **edit** its title and
 description, **react** with emoji on the description and comments (GitLab's award emoji),
 and set its **labels**, **assignees**, and **milestone** right in the side
 rail. The rail also carries GitLab-unique fields: a **due date** (type a date and

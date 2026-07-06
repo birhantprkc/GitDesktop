@@ -932,6 +932,15 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     })
     .unwrap_or_default();
 
+    // Resolve the viewer's account uuid once (tolerant — a failure just leaves
+    // every comment's edit/delete hidden; it must not fail the view). Drives the
+    // truthful `viewer_did_author` below.
+    let viewer_uuid = http::bb_get_json::<BbUser>(&creds, "user", "user")
+        .await
+        .ok()
+        .and_then(|u| u.uuid)
+        .unwrap_or_default();
+
     // Comments — drop deleted + pending, AND inline (diff-anchored) comments,
     // which now surface as `review_threads` with real file/line context instead of
     // leaking their bodies context-free into the flat conversation list.
@@ -945,7 +954,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         page.values
             .into_iter()
             .filter(|c| !c.deleted && !c.pending && c.inline.is_none())
-            .map(from_bb_comment)
+            .map(|c| from_bb_comment(c, &viewer_uuid))
             .collect()
     })
     .unwrap_or_default();
@@ -1012,8 +1021,13 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
 /// raw content verbatim — inline (diff-anchored) comments carry their file/line
 /// context structurally now (via `ReviewThreadOut.path`/`line` when grouped as a
 /// review thread), so there is no longer a `**path** (line N):` text prefix.
-fn from_bb_comment(c: BbComment) -> PrThreadOut {
+/// `viewer_uuid` is the signed-in user's braced account uuid (empty = unknown →
+/// `viewer_did_author` false). A comment's author carries a uuid only via its
+/// nested user object; a missing/mismatched uuid maps to `false` — the safe
+/// direction (edit/delete hidden), never the reverse.
+fn from_bb_comment(c: BbComment, viewer_uuid: &str) -> PrThreadOut {
     let body = c.content.map(|r| r.raw).unwrap_or_default();
+    let viewer_did_author = comment_authored_by_viewer(c.user.as_ref(), viewer_uuid);
     PrThreadOut {
         author: c.user.as_ref().map(user_login).unwrap_or_default(),
         state: String::new(),
@@ -1021,10 +1035,20 @@ fn from_bb_comment(c: BbComment) -> PrThreadOut {
         date: c.created_on,
         id: c.id.to_string(),
         url: html_href(&c.links),
-        viewer_did_author: false,
+        viewer_did_author,
         is_minimized: false,
         minimized_reason: String::new(),
     }
+}
+
+/// Whether a comment's author is the signed-in viewer, by account uuid. Pure
+/// (testable): an unknown viewer (empty uuid) or an author with no uuid is never
+/// a match — the safe default (hides edit/delete), never exposes another user's.
+fn comment_authored_by_viewer(user: Option<&BbUser>, viewer_uuid: &str) -> bool {
+    if viewer_uuid.is_empty() {
+        return false;
+    }
+    user.and_then(|u| u.uuid.as_deref()) == Some(viewer_uuid)
 }
 
 /// The unified diff for one PR. The `/diff` endpoint 302-redirects (same host) to
@@ -1518,6 +1542,46 @@ pub async fn comment_pr(repo_path: &str, number: u64, body: &str) -> AppResult<(
     let payload = serde_json::json!({ "content": { "raw": body } });
     http::bb_post_json::<serde_json::Value>(&creds, &path, &payload, "comment").await?;
     Ok(())
+}
+
+/// Parse a comment id (a comment id, sent as a string over IPC) to the numeric id
+/// Bitbucket's comment endpoints take — a pre-mutation guard, before any network
+/// call.
+fn parse_bb_comment_id(comment_id: &str) -> AppResult<u64> {
+    comment_id.trim().parse::<u64>().map_err(|_| {
+        AppError::InvalidArgument(format!("invalid comment id: {comment_id}"))
+    })
+}
+
+/// Edit a PR comment's body (`PUT …/pullrequests/{n}/comments/{cid}`,
+/// `{"content":{"raw": body}}`). Empty-body guard + comment-id parse both run
+/// BEFORE the request.
+pub async fn edit_pr_comment(
+    repo_path: &str,
+    number: u64,
+    comment_id: &str,
+    body: &str,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    let cid = parse_bb_comment_id(comment_id)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/comments/{cid}");
+    let payload = serde_json::json!({ "content": { "raw": body } });
+    http::bb_put_json::<serde_json::Value>(&creds, &path, &payload, "comment").await?;
+    Ok(())
+}
+
+/// Delete a PR comment (`DELETE …/pullrequests/{n}/comments/{cid}`). Comment-id
+/// parse runs BEFORE the request.
+pub async fn delete_pr_comment(repo_path: &str, number: u64, comment_id: &str) -> AppResult<()> {
+    let cid = parse_bb_comment_id(comment_id)?;
+    let creds = http::load_credentials().await?;
+    let base = repo_base(repo_path).await?;
+    let path = format!("{base}/pullrequests/{number}/comments/{cid}");
+    http::bb_delete(&creds, &path).await
 }
 
 /// Group a flat list of PR comments into file:line-anchored review threads. Pure
@@ -4208,12 +4272,52 @@ mod tests {
             .values
             .into_iter()
             .filter(|c| !c.deleted && !c.pending && c.inline.is_none())
-            .map(from_bb_comment)
+            .map(|c| from_bb_comment(c, ""))
             .collect();
         // Only the general comment survives — inline/deleted/pending are excluded.
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].body, "general note");
         assert_eq!(threads[0].author, "Bob");
+    }
+
+    #[test]
+    fn comment_authored_by_viewer_matches_uuid() {
+        let mine = BbUser {
+            uuid: Some("{me-uuid}".into()),
+            username: None,
+            display_name: Some("Me".into()),
+            nickname: None,
+        };
+        let theirs = BbUser {
+            uuid: Some("{other-uuid}".into()),
+            username: None,
+            display_name: Some("Them".into()),
+            nickname: None,
+        };
+        let no_uuid = BbUser {
+            uuid: None,
+            username: None,
+            display_name: Some("Anon".into()),
+            nickname: None,
+        };
+        // Match → true.
+        assert!(comment_authored_by_viewer(Some(&mine), "{me-uuid}"));
+        // Different uuid → false.
+        assert!(!comment_authored_by_viewer(Some(&theirs), "{me-uuid}"));
+        // Author has no uuid → false.
+        assert!(!comment_authored_by_viewer(Some(&no_uuid), "{me-uuid}"));
+        // Unknown viewer (empty uuid) → false even for a real author.
+        assert!(!comment_authored_by_viewer(Some(&mine), ""));
+        // No author at all → false.
+        assert!(!comment_authored_by_viewer(None, "{me-uuid}"));
+    }
+
+    #[test]
+    fn parse_bb_comment_id_rejects_non_numeric() {
+        assert_eq!(parse_bb_comment_id("42").unwrap(), 42);
+        assert!(parse_bb_comment_id("").is_err());
+        assert!(parse_bb_comment_id("abc").is_err());
+        assert!(parse_bb_comment_id("{node}").is_err());
     }
 
     #[test]

@@ -551,6 +551,13 @@ export interface ForgeImplemented {
   /** Editing an existing merge/pull request's title/body — the same shared
    *  edit control. */
   mrEdit: boolean;
+  /** Editing + deleting your own comments on a merge/pull request — the shared
+   *  Thread edit/delete controls (GitLab notes by id, Bitbucket PR comments by
+   *  id). GitHub keeps these via `canWrite`; GitLab and Bitbucket true. */
+  mrCommentEdit: boolean;
+  /** Editing + deleting your own comments on an issue — the same shared
+   *  Thread controls. GitLab true; Bitbucket issues aren't wired, so false. */
+  issueCommentEdit: boolean;
   /** Setting or clearing an issue's milestone — the shared picker. `Milestone.
    *  number` is whatever key the provider's write takes (GitHub milestone
    *  number, GitLab global milestone id). */

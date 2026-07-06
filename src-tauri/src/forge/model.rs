@@ -154,6 +154,15 @@ pub struct Implemented {
     pub mr_comment: bool,
     /// Closing / reopening a merge/pull request (not merge).
     pub mr_state: bool,
+    /// Editing AND deleting a merge/pull request conversation comment — one flag
+    /// covering both ops (like `mr_state` covers close + reopen). GitHub edits/deletes
+    /// the IssueComment node; GitLab the MR note; Bitbucket the PR comment, so it's
+    /// true for all three.
+    pub mr_comment_edit: bool,
+    /// Editing AND deleting an issue conversation comment — one flag covering both
+    /// ops. GitHub and GitLab wire it; Bitbucket's native tracker is being retired,
+    /// so it stays `false` there.
+    pub issue_comment_edit: bool,
     /// Approving / unapproving a merge request via the bodyless toggle. GitLab-only:
     /// GitHub surfaces approval through the older review flow (the Review menu), not
     /// this control, so it's the one write GitHub leaves `false` (see `all`).
@@ -288,6 +297,8 @@ impl Implemented {
             issue_state: true,
             mr_comment: true,
             mr_state: true,
+            mr_comment_edit: true,
+            issue_comment_edit: true,
             mr_approve: false,
             mr_merge: true,
             // Like `mr_approve`: no in-app GitHub PR auto-merge control here.
@@ -350,6 +361,8 @@ impl Implemented {
             issue_state: false,
             mr_comment: false,
             mr_state: false,
+            mr_comment_edit: false,
+            issue_comment_edit: false,
             mr_approve: false,
             mr_merge: false,
             mr_auto_merge: false,
@@ -421,6 +434,8 @@ impl Implemented {
                 issue_state: true,
                 mr_comment: true,
                 mr_state: true,
+                mr_comment_edit: true,
+                issue_comment_edit: true,
                 mr_approve: true,
                 mr_merge: true,
                 mr_auto_merge: true,
@@ -484,6 +499,9 @@ impl Implemented {
                 repo_settings: true,
                 mr_comment: true,
                 mr_state: true,
+                // PR-comment edit + delete are wired; issue_comment_edit stays false
+                // (via `..Self::none()`) — Bitbucket's tracker is being retired.
+                mr_comment_edit: true,
                 mr_merge: true,
                 mr_edit: true,
                 mr_create: true,
@@ -664,6 +682,8 @@ mod tests {
         // plus the GitLab-only MR approve/unapprove toggle and MR merge.
         assert!(imp.issue_comment && imp.issue_state);
         assert!(imp.mr_comment && imp.mr_state && imp.mr_approve && imp.mr_merge);
+        // …plus comment edit/delete on both MR and issue comments.
+        assert!(imp.mr_comment_edit && imp.issue_comment_edit);
         // …plus the GitLab-only auto-merge (MWPS) arm/cancel control.
         assert!(imp.mr_auto_merge);
         // Labels (issue + MR) and issue assignees now wired for GitLab too.
@@ -693,6 +713,8 @@ mod tests {
     fn bitbucket_implements_pr_and_ci_writes() {
         let gh = Implemented::for_provider(Provider::GitHub);
         assert!(gh.issue_comment && gh.issue_state && gh.mr_comment && gh.mr_state);
+        // GitHub edits/deletes both PR and issue conversation comments.
+        assert!(gh.mr_comment_edit && gh.issue_comment_edit);
         // MR merge is a shared control (both providers); approve/unapprove is the one
         // GitLab-only write — GitHub approves via the review flow, not this toggle.
         assert!(gh.mr_merge && !gh.mr_approve);
@@ -705,6 +727,8 @@ mod tests {
         // bodyless approve/unapprove toggle.
         assert!(bb.mr_comment && bb.mr_state && bb.mr_merge && bb.mr_edit && bb.mr_create);
         assert!(bb.mr_approve);
+        // PR-comment edit/delete is wired; issue-comment edit stays off (no tracker).
+        assert!(bb.mr_comment_edit && !bb.issue_comment_edit);
         // …the request-changes toggle and the reviewers picker (both Bitbucket
         // writes; GitLab's reviewer list stays unwired)…
         assert!(bb.mr_request_changes && bb.mr_reviewers);

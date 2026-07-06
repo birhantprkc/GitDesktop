@@ -80,6 +80,12 @@ export function usePrCapabilities(
   // Reactions are a shared control (GitLab awards emoji); the fetch is gated so
   // it never fires for a provider whose reactions aren't wired (Bitbucket).
   const canReact = canWrite || forgeFeatureReady(forgeData, "mrReactions");
+  // Editing/deleting your OWN comments is a shared control (GitHub + GitLab +
+  // Bitbucket) — same `canWrite || …` gate; the per-comment `viewerDidAuthor`
+  // check narrows it to the author. GitHub keeps it while forge-status is
+  // pending/failed; a ready GitLab/Bitbucket repo enables it too.
+  const canEditOwnComments =
+    canWrite || forgeFeatureReady(forgeData, "mrCommentEdit");
 
   return {
     canWrite,
@@ -100,5 +106,6 @@ export function usePrCapabilities(
     canThreadReply,
     canThreadResolve,
     canReact,
+    canEditOwnComments,
   };
 }

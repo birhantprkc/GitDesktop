@@ -1528,14 +1528,42 @@ export const forgePrReviewerCandidates = (
 ) =>
   invoke<ForgeUserRef[]>("forge_pr_reviewer_candidates", { repoPath, number });
 
-export const ghPrEditComment = (
+// Comment edit/delete are provider-neutral (GitHub via `gh`, GitLab via `glab`,
+// Bitbucket via its API). `number` is the PR/MR (or issue) the comment lives on —
+// GitLab/Bitbucket address the note by MR/issue + comment id, GitHub ignores it.
+export const forgePrEditComment = (
   repoPath: string,
+  number: number,
   commentId: string,
   body: string,
-) => invoke<void>("gh_pr_edit_comment", { repoPath, commentId, body });
+) =>
+  invoke<void>("forge_pr_edit_comment", { repoPath, number, commentId, body });
 
-export const ghPrDeleteComment = (repoPath: string, commentId: string) =>
-  invoke<void>("gh_pr_delete_comment", { repoPath, commentId });
+export const forgePrDeleteComment = (
+  repoPath: string,
+  number: number,
+  commentId: string,
+) => invoke<void>("forge_pr_delete_comment", { repoPath, number, commentId });
+
+export const forgeIssueEditComment = (
+  repoPath: string,
+  number: number,
+  commentId: string,
+  body: string,
+) =>
+  invoke<void>("forge_issue_edit_comment", {
+    repoPath,
+    number,
+    commentId,
+    body,
+  });
+
+export const forgeIssueDeleteComment = (
+  repoPath: string,
+  number: number,
+  commentId: string,
+) =>
+  invoke<void>("forge_issue_delete_comment", { repoPath, number, commentId });
 
 /** GitHub `ReportedContentClassifiers` reasons for hiding a comment. */
 export type MinimizeReason =

@@ -35,6 +35,7 @@ import type {
   IssueRelation,
   IssueType,
   PrDetails,
+  PrThreadOut,
   Reaction,
   RepoOp,
   RepoRole,
@@ -1568,7 +1569,7 @@ export function useDiscussionReactions(repo: string, number: number | null) {
 }
 
 export function useCommentIssue(repo: string) {
-  return useRepoMutation(repo, (args: { number: number; body: string }) =>
+  return useOptimisticCreateCommentMutation(repo, "issue", (args) =>
     api.forgeIssueComment(repo, args.number, args.body),
   );
 }
@@ -1758,6 +1759,8 @@ const NO_FORGE_STATUS: ForgeStatus = {
     mrReviewers: false,
     issueEdit: false,
     mrEdit: false,
+    mrCommentEdit: false,
+    issueCommentEdit: false,
     issueMilestone: false,
     issueReactions: false,
     mrReactions: false,
@@ -2621,7 +2624,7 @@ export function useReviewPr(repo: string) {
 }
 
 export function useCommentPr(repo: string) {
-  return useRepoMutation(repo, (args: { number: number; body: string }) =>
+  return useOptimisticCreateCommentMutation(repo, "pr", (args) =>
     api.forgePrComment(repo, args.number, args.body),
   );
 }
@@ -2932,15 +2935,151 @@ export function useReopenPr(repo: string) {
   );
 }
 
+/** Monotonic counter for synthetic optimistic-comment ids — combined with the
+ *  `optimistic:` prefix it can never collide with a real provider node id. */
+let optimisticCommentSeq = 0;
+
+/**
+ * Optimistically append a synthetic conversation comment to a PR/issue detail
+ * cache, with exact-key rollback — so a freshly-posted comment shows instantly
+ * instead of waiting on the write + repo-wide refetch (a full glab round trip is
+ * ~2-4s on GitLab). The synthetic row carries a collision-proof `optimistic:<n>`
+ * id and `viewerDidAuthor: false`, so it offers no edit/delete (its temp id would
+ * 404 server-side); the reconciliation refetch replaces it with the real comment,
+ * whose real controls then appear. `author` is the viewer's login when the caller
+ * has it cheaply, else "You". Only the flat `comments` array is touched; inline
+ * review threads live in a separate query. The key is derived from the mutation
+ * args at mutate time so a mid-flight repo/number switch never corrupts another
+ * key's cache. onSettled keeps the repo-wide invalidation as server-truth
+ * reconciliation (what useRepoMutation did before).
+ */
+function useOptimisticCreateCommentMutation<TData>(
+  repo: string,
+  kind: "pr" | "issue",
+  mutationFn: (args: { number: number; body: string }) => Promise<TData>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; body: string; author: string }) =>
+      mutationFn(args),
+    onMutate: async (args: {
+      number: number;
+      body: string;
+      author: string;
+    }) => {
+      const key = ["repo", repo, kind, args.number] as const;
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<PrDetails | IssueDetails>(key);
+      const synthetic: PrThreadOut = {
+        author: args.author,
+        state: "",
+        body: args.body,
+        date: new Date().toISOString(),
+        id: `optimistic:${(optimisticCommentSeq += 1)}`,
+        url: "",
+        viewerDidAuthor: false,
+        isMinimized: false,
+        minimizedReason: "",
+      };
+      queryClient.setQueryData<PrDetails | IssueDetails>(key, (d) =>
+        d ? { ...d, comments: [...d.comments, synthetic] } : d,
+      );
+      return { prev, key };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: () =>
+      void queryClient.invalidateQueries({ queryKey: repoKeys.all(repo) }),
+  });
+}
+
+/**
+ * Optimistically patch the flat conversation comments of a PR/issue detail cache
+ * (edit replaces one comment's body; delete removes it), with exact-key rollback
+ * — so the body swaps / row vanishes instantly instead of waiting on the write +
+ * repo-wide refetch (a full glab round trip is ~2-4s on GitLab). Only the flat
+ * `comments` array is touched; inline review threads live in a separate query and
+ * aren't editable here. `kind` selects the detail subtree ("pr" | "issue"); the
+ * key is derived from the mutation args at mutate time so a mid-flight repo/number
+ * switch never corrupts another key's cache. onSettled keeps the repo-wide
+ * invalidation as server-truth reconciliation (what useRepoMutation did before).
+ */
+function useOptimisticCommentMutation<
+  TArgs extends { number: number; commentId: string },
+  TData,
+>(
+  repo: string,
+  kind: "pr" | "issue",
+  mutationFn: (args: TArgs) => Promise<TData>,
+  patchComment: (comment: PrThreadOut, args: TArgs) => PrThreadOut | null,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onMutate: async (args: TArgs) => {
+      const key = ["repo", repo, kind, args.number] as const;
+      await queryClient.cancelQueries({ queryKey: key });
+      const prev = queryClient.getQueryData<PrDetails | IssueDetails>(key);
+      queryClient.setQueryData<PrDetails | IssueDetails>(key, (d) =>
+        d
+          ? {
+              ...d,
+              comments: d.comments.flatMap((c) => {
+                if (c.id !== args.commentId) return [c];
+                const patched = patchComment(c, args);
+                return patched ? [patched] : [];
+              }),
+            }
+          : d,
+      );
+      return { prev, key };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: () =>
+      void queryClient.invalidateQueries({ queryKey: repoKeys.all(repo) }),
+  });
+}
+
 export function useEditPrComment(repo: string) {
-  return useRepoMutation(repo, (args: { commentId: string; body: string }) =>
-    api.ghPrEditComment(repo, args.commentId, args.body),
+  return useOptimisticCommentMutation(
+    repo,
+    "pr",
+    (args: { number: number; commentId: string; body: string }) =>
+      api.forgePrEditComment(repo, args.number, args.commentId, args.body),
+    (comment, args) => ({ ...comment, body: args.body }),
   );
 }
 
 export function useDeletePrComment(repo: string) {
-  return useRepoMutation(repo, (commentId: string) =>
-    api.ghPrDeleteComment(repo, commentId),
+  return useOptimisticCommentMutation(
+    repo,
+    "pr",
+    (args: { number: number; commentId: string }) =>
+      api.forgePrDeleteComment(repo, args.number, args.commentId),
+    () => null,
+  );
+}
+
+export function useEditIssueComment(repo: string) {
+  return useOptimisticCommentMutation(
+    repo,
+    "issue",
+    (args: { number: number; commentId: string; body: string }) =>
+      api.forgeIssueEditComment(repo, args.number, args.commentId, args.body),
+    (comment, args) => ({ ...comment, body: args.body }),
+  );
+}
+
+export function useDeleteIssueComment(repo: string) {
+  return useOptimisticCommentMutation(
+    repo,
+    "issue",
+    (args: { number: number; commentId: string }) =>
+      api.forgeIssueDeleteComment(repo, args.number, args.commentId),
+    () => null,
   );
 }
 

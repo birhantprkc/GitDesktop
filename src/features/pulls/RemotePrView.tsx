@@ -198,6 +198,7 @@ export function RemotePrView({
     canThreadReply,
     canThreadResolve,
     canReact,
+    canEditOwnComments,
   } = usePrCapabilities(forge.data, provider);
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
@@ -403,15 +404,20 @@ export function RemotePrView({
   }
 
   function submitComment() {
-    if (!composeBody.trim()) return;
+    const body = composeBody.trim();
+    if (!body) return;
+    // Clear the draft immediately (the perceived-speed win) and append the
+    // synthetic comment optimistically; on error restore the draft, but only if
+    // the composer is still empty so we never clobber newly-typed text.
+    setComposeBody("");
     comment.mutate(
-      { number, body: composeBody.trim() },
+      { number, body, author: forge.data?.login ?? "You" },
       {
-        onSuccess: () => {
-          toast.success("Comment added");
-          setComposeBody("");
+        onSuccess: () => toast.success("Comment added"),
+        onError: (e) => {
+          setComposeBody((cur) => (cur.trim() ? cur : body));
+          onError(e);
         },
-        onError,
       },
     );
   }
@@ -557,7 +563,7 @@ export function RemotePrView({
 
   function saveCommentEdit(commentId: string, body: string) {
     editComment.mutate(
-      { commentId, body },
+      { number, commentId, body },
       {
         onSuccess: () => toast.success("Comment updated"),
         onError,
@@ -849,10 +855,12 @@ export function RemotePrView({
           }}
           posting={comment.isPending}
           onPost={(body) =>
-            comment.mutateAsync({ number, body }).catch((e) => {
-              onError(e);
-              throw e; // let the panel skip its success toast / text clear
-            })
+            comment
+              .mutateAsync({ number, body, author: forge.data?.login ?? "You" })
+              .catch((e) => {
+                onError(e);
+                throw e; // let the panel skip its success toast / text clear
+              })
           }
         />
       )}
@@ -1004,12 +1012,12 @@ export function RemotePrView({
                       thread={c}
                       onQuote={canWrite ? () => quoteReply(c.body) : undefined}
                       onSaveEdit={
-                        canWrite && c.viewerDidAuthor
+                        canEditOwnComments && c.viewerDidAuthor
                           ? (body) => saveCommentEdit(c.id, body)
                           : undefined
                       }
                       onDelete={
-                        canWrite && c.viewerDidAuthor
+                        canEditOwnComments && c.viewerDidAuthor
                           ? () => setDeletingCommentId(c.id)
                           : undefined
                       }
@@ -1541,17 +1549,21 @@ export function RemotePrView({
         commentId={deletingCommentId}
         onClose={() => setDeletingCommentId(null)}
         pending={deleteComment.isPending}
+        description={`This permanently deletes the comment on ${remoteLabel}. This cannot be undone.`}
         onConfirm={(commentId) =>
-          deleteComment.mutate(commentId, {
-            onSuccess: () => {
-              toast.success("Comment deleted");
-              setDeletingCommentId(null);
+          deleteComment.mutate(
+            { number, commentId },
+            {
+              onSuccess: () => {
+                toast.success("Comment deleted");
+                setDeletingCommentId(null);
+              },
+              onError: (e) => {
+                onError(e);
+                setDeletingCommentId(null);
+              },
             },
-            onError: (e) => {
-              onError(e);
-              setDeletingCommentId(null);
-            },
-          })
+          )
         }
       />
     </div>

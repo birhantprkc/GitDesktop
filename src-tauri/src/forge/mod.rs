@@ -408,6 +408,48 @@ pub async fn forge_pr_comment(repo_path: String, number: u64, body: String) -> A
     }
 }
 
+/// Edit a merge/pull request conversation comment's body, behind the abstraction.
+/// GitHub edits the IssueComment node (both PR and issue comments share the
+/// mutation); GitLab PUTs the MR note; Bitbucket PUTs the PR comment. `comment_id`
+/// is the id the thread already carries (GitHub node id / GitLab note id /
+/// Bitbucket comment id). Gated on `implemented.mrCommentEdit`.
+#[tauri::command]
+pub async fn forge_pr_edit_comment(
+    repo_path: String,
+    number: u64,
+    comment_id: String,
+    body: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::edit_mr_comment(&repo_path, number, &comment_id, &body).await
+        }
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::edit_pr_comment(&repo_path, number, &comment_id, &body).await
+        }
+        _ => github::edit_comment(&repo_path, &comment_id, &body).await,
+    }
+}
+
+/// Delete a merge/pull request conversation comment, behind the abstraction. Same
+/// `comment_id` carriage as `forge_pr_edit_comment`.
+#[tauri::command]
+pub async fn forge_pr_delete_comment(
+    repo_path: String,
+    number: u64,
+    comment_id: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::delete_mr_comment(&repo_path, number, &comment_id).await
+        }
+        Some((Provider::Bitbucket, _)) => {
+            bitbucket::delete_pr_comment(&repo_path, number, &comment_id).await
+        }
+        _ => github::delete_comment(&repo_path, &comment_id).await,
+    }
+}
+
 /// Close a merge/pull request (not merge), behind the abstraction.
 #[tauri::command]
 pub async fn forge_pr_close(repo_path: String, number: u64) -> AppResult<()> {
@@ -897,6 +939,47 @@ pub async fn forge_issue_comment(repo_path: String, number: u64, body: String) -
             "Bitbucket issues aren't supported yet.".into(),
         )),
         _ => github::comment_issue(&repo_path, number, &body).await,
+    }
+}
+
+/// Edit an issue conversation comment's body, behind the abstraction. GitHub edits
+/// the IssueComment node (the same mutation the PR path uses); GitLab PUTs the
+/// issue note; Bitbucket's tracker is being retired, so its arm errors. Gated on
+/// `implemented.issueCommentEdit` (GitLab true; Bitbucket false; GitHub true).
+#[tauri::command]
+pub async fn forge_issue_edit_comment(
+    repo_path: String,
+    number: u64,
+    comment_id: String,
+    body: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::edit_issue_comment(&repo_path, number, &comment_id, &body).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::edit_comment(&repo_path, &comment_id, &body).await,
+    }
+}
+
+/// Delete an issue conversation comment, behind the abstraction. Same `comment_id`
+/// carriage as `forge_issue_edit_comment`; Bitbucket's arm errors.
+#[tauri::command]
+pub async fn forge_issue_delete_comment(
+    repo_path: String,
+    number: u64,
+    comment_id: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            gitlab::delete_issue_comment(&repo_path, number, &comment_id).await
+        }
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket issues aren't supported yet.".into(),
+        )),
+        _ => github::delete_comment(&repo_path, &comment_id).await,
     }
 }
 

@@ -581,6 +581,11 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     .collect();
     commits.reverse();
 
+    // Resolve the signed-in user once (tolerantly — a failure must not fail the
+    // view; it just means every comment's edit/delete stays hidden). Drives the
+    // truthful `viewer_did_author` below.
+    let viewer = current_user_login(repo_path).await;
+
     // Comments — drop GitLab's system notes (auto "added a commit", etc.) AND
     // diff-anchored (positioned) notes, which now surface as `review_threads` with
     // real file/line context instead of leaking into the flat conversation list.
@@ -595,16 +600,19 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     .unwrap_or_default()
     .into_iter()
     .filter(|n| !n.system && n.position.is_none())
-    .map(|n| PrThreadOut {
-        author: n.author.map(|a| a.username).unwrap_or_default(),
-        state: String::new(),
-        body: n.body,
-        date: n.created_at,
-        id: n.id.to_string(),
-        url: String::new(),
-        viewer_did_author: false,
-        is_minimized: false,
-        minimized_reason: String::new(),
+    .map(|n| {
+        let author = n.author.map(|a| a.username).unwrap_or_default();
+        PrThreadOut {
+            viewer_did_author: note_authored_by_viewer(&author, viewer.as_deref()),
+            author,
+            state: String::new(),
+            body: n.body,
+            date: n.created_at,
+            id: n.id.to_string(),
+            url: String::new(),
+            is_minimized: false,
+            minimized_reason: String::new(),
+        }
     })
     .collect();
 
@@ -745,6 +753,53 @@ pub async fn edit_mr(repo_path: &str, number: u64, title: &str, body: &str) -> A
     Ok(())
 }
 
+/// Parse a comment id (a note id, sent as a string over IPC) to the numeric id
+/// GitLab's notes endpoint takes — a pre-mutation guard, before any network call.
+fn parse_note_id(comment_id: &str) -> AppResult<u64> {
+    comment_id.trim().parse::<u64>().map_err(|_| {
+        AppError::InvalidArgument(format!("invalid comment id: {comment_id}"))
+    })
+}
+
+/// Edit a merge request note's body (`PUT …/merge_requests/{n}/notes/{id}`).
+/// Empty-body guard + comment-id parse both run BEFORE the request.
+pub async fn edit_mr_comment(
+    repo_path: &str,
+    number: u64,
+    comment_id: &str,
+    body: &str,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    let note_id = parse_note_id(comment_id)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/merge_requests/{number}/notes/{note_id}");
+    let body_arg = format!("body={body}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &body_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Delete a merge request note (`DELETE …/merge_requests/{n}/notes/{id}`).
+/// Comment-id parse runs BEFORE the request.
+pub async fn delete_mr_comment(repo_path: &str, number: u64, comment_id: &str) -> AppResult<()> {
+    let note_id = parse_note_id(comment_id)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/merge_requests/{number}/notes/{note_id}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 // ── Merge requests (approvals & reviewer states) ──────────────────────────────
 //
 // GitLab's approve/unapprove is a bodyless toggle with no GitHub analogue (GitHub
@@ -819,6 +874,28 @@ async fn current_user(repo_path: &str) -> AppResult<GlabReviewerUser> {
     let out = run_glab(Some(repo_path), &["api", "user"], GLAB_NETWORK_TIMEOUT).await?;
     serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Glab(format!("could not parse the GitLab user: {e}")))
+}
+
+/// The signed-in user's username, resolved TOLERANTLY for the read views — any
+/// failure (glab error, parse error, empty username) yields `None`, so a comment's
+/// `viewer_did_author` falls back to `false` (edit/delete hidden) rather than
+/// failing the whole view. Never returns an empty string.
+async fn current_user_login(repo_path: &str) -> Option<String> {
+    current_user(repo_path)
+        .await
+        .ok()
+        .map(|u| u.username)
+        .filter(|u| !u.is_empty())
+}
+
+/// Whether a note's author is the signed-in viewer. Pure (testable): an unknown
+/// viewer (`None`) or an empty author is never a match — the safe direction, which
+/// only ever HIDES a comment's edit/delete, never exposes someone else's.
+fn note_authored_by_viewer(author: &str, viewer: Option<&str>) -> bool {
+    match viewer {
+        Some(v) => !author.is_empty() && author == v,
+        None => false,
+    }
 }
 
 /// The viewer's + the MR's approval state, mapped onto the neutral `ApprovalState`.
@@ -1424,6 +1501,11 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
     let issue: GlabIssueDetail = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Glab(format!("could not parse GitLab issue: {e}")))?;
 
+    // Resolve the signed-in user once (tolerant — a failure just hides every
+    // comment's edit/delete; it must not fail the view). Drives the truthful
+    // `viewer_did_author` below.
+    let viewer = current_user_login(repo_path).await;
+
     // Comments — drop GitLab's system notes (auto "changed the milestone", etc.).
     let comments: Vec<PrThreadOut> = run_glab(
         Some(repo_path),
@@ -1436,16 +1518,19 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
     .unwrap_or_default()
     .into_iter()
     .filter(|n| !n.system)
-    .map(|n| PrThreadOut {
-        author: n.author.map(|a| a.username).unwrap_or_default(),
-        state: String::new(),
-        body: n.body,
-        date: n.created_at,
-        id: n.id.to_string(),
-        url: String::new(),
-        viewer_did_author: false,
-        is_minimized: false,
-        minimized_reason: String::new(),
+    .map(|n| {
+        let author = n.author.map(|a| a.username).unwrap_or_default();
+        PrThreadOut {
+            viewer_did_author: note_authored_by_viewer(&author, viewer.as_deref()),
+            author,
+            state: String::new(),
+            body: n.body,
+            date: n.created_at,
+            id: n.id.to_string(),
+            url: String::new(),
+            is_minimized: false,
+            minimized_reason: String::new(),
+        }
     })
     .collect();
 
@@ -1567,6 +1652,49 @@ pub async fn edit_issue(repo_path: &str, number: u64, title: &str, body: &str) -
         &[
             "api", "--method", "PUT", &endpoint, "-f", &title_arg, "-f", &desc_arg,
         ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Edit an issue note's body (`PUT …/issues/{n}/notes/{id}`). Empty-body guard +
+/// comment-id parse both run BEFORE the request.
+pub async fn edit_issue_comment(
+    repo_path: &str,
+    number: u64,
+    comment_id: &str,
+    body: &str,
+) -> AppResult<()> {
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidArgument("a comment is required".into()));
+    }
+    let note_id = parse_note_id(comment_id)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}/notes/{note_id}");
+    let body_arg = format!("body={body}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &body_arg],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Delete an issue note (`DELETE …/issues/{n}/notes/{id}`). Comment-id parse runs
+/// BEFORE the request.
+pub async fn delete_issue_comment(
+    repo_path: &str,
+    number: u64,
+    comment_id: &str,
+) -> AppResult<()> {
+    let note_id = parse_note_id(comment_id)?;
+    let enc = encode_project(&project_path(repo_path).await?);
+    let endpoint = format!("projects/{enc}/issues/{number}/notes/{note_id}");
+    run_glab(
+        Some(repo_path),
+        &["api", "--method", "DELETE", &endpoint],
         GLAB_NETWORK_TIMEOUT,
     )
     .await?;

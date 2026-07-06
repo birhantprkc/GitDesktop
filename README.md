@@ -50,7 +50,8 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   **releases** in the same panels: lists, plus detail views (MR
   comments/commits/diff; issue conversation with a labels/assignees/milestone rail;
   pipeline jobs with logs and a branch CI badge; release notes with asset links). And
-  GitLab **writes** — **comment** on and **close / reopen** a GitLab issue
+  GitLab **writes** — **comment** on (and **edit / delete** your own comments) and
+  **close / reopen** a GitLab issue
   **or merge request**, **edit titles and descriptions**, **react** with emoji
   (award emoji on descriptions and comments), edit **labels** and
   **assignees** (issues *and* MRs), set an issue's **milestone**,
@@ -79,7 +80,8 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 - **Bitbucket Cloud** — connect with an **Atlassian API token**
   (Settings → Accounts), then **browse & clone** your Bitbucket repositories,
   read **pull requests** (diffs, comments, build statuses) and watch **Pipelines**
-  (with step logs) in the same panels — and act on them: comment, decline,
+  (with step logs) in the same panels — and act on them: comment (and edit / delete
+  your own comments), decline,
   merge (merge commit / squash / fast-forward, optionally deleting the source
   branch), edit, create (drafts included, and pick **reviewers** at create time),
   approve/unapprove, **request changes**

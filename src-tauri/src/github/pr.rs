@@ -672,20 +672,19 @@ pub async fn gh_pr_reopen(repo_path: String, number: u64) -> AppResult<()> {
     Ok(())
 }
 
-/// Edits the body of an existing PR conversation comment, addressed by its
-/// GraphQL node id (from `gh pr view`). GitHub only lets the comment's author
-/// edit it, so this is offered solely on the viewer's own comments.
-#[tauri::command]
-pub async fn gh_pr_edit_comment(
-    repo_path: String,
-    comment_id: String,
-    body: String,
-) -> AppResult<()> {
+/// Edits the body of an existing conversation comment, addressed by its GraphQL
+/// node id (from `gh pr view` / `gh issue view`). The `updateIssueComment`
+/// mutation operates on `IssueComment` nodes, which back BOTH pull-request and
+/// issue conversation comments — so this one fn serves both forge dispatch arms.
+/// GitHub only lets the comment's author edit it, so it's offered solely on the
+/// viewer's own comments. Plain fn (called by the forge dispatch); no longer a
+/// Tauri command.
+pub async fn edit_comment(repo_path: &str, comment_id: &str, body: &str) -> AppResult<()> {
     if body.trim().is_empty() {
         return Err(AppError::InvalidArgument("a comment is required".into()));
     }
     run_gh(
-        Some(&repo_path),
+        Some(repo_path),
         &[
             "api",
             "graphql",
@@ -702,11 +701,12 @@ pub async fn gh_pr_edit_comment(
     Ok(())
 }
 
-/// Permanently deletes a PR conversation comment by its GraphQL node id.
-#[tauri::command]
-pub async fn gh_pr_delete_comment(repo_path: String, comment_id: String) -> AppResult<()> {
+/// Permanently deletes a conversation comment by its GraphQL node id. Like
+/// [`edit_comment`], the `deleteIssueComment` mutation serves both PR and issue
+/// conversation comments. Plain fn (called by the forge dispatch).
+pub async fn delete_comment(repo_path: &str, comment_id: &str) -> AppResult<()> {
     run_gh(
-        Some(&repo_path),
+        Some(repo_path),
         &[
             "api",
             "graphql",
@@ -2102,7 +2102,7 @@ pub async fn gh_pr_review_threads(
 
 /// Replies in an existing review thread, addressed by its GraphQL node id. The id
 /// and body travel as GraphQL variables (never format!-embedded) — the
-/// injection-safe idiom `gh_pr_edit_comment` uses.
+/// injection-safe idiom `edit_comment` uses.
 #[tauri::command]
 pub async fn gh_pr_reply_review_thread(
     repo_path: String,

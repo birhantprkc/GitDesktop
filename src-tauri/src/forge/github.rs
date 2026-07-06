@@ -155,6 +155,19 @@ pub async fn comment_pr(repo_path: &str, number: u64, body: &str) -> AppResult<(
     crate::github::pr::gh_pr_comment(repo_path.to_string(), number, body.to_string()).await
 }
 
+/// Edit a conversation comment's body. GitHub's `updateIssueComment` mutation
+/// backs both PR and issue conversation comments, so PR + issue forge arms share
+/// this delegate.
+pub async fn edit_comment(repo_path: &str, comment_id: &str, body: &str) -> AppResult<()> {
+    crate::github::pr::edit_comment(repo_path, comment_id, body).await
+}
+
+/// Delete a conversation comment by node id — shared by the PR + issue forge arms
+/// (the `deleteIssueComment` mutation serves both).
+pub async fn delete_comment(repo_path: &str, comment_id: &str) -> AppResult<()> {
+    crate::github::pr::delete_comment(repo_path, comment_id).await
+}
+
 pub async fn close_pr(repo_path: &str, number: u64) -> AppResult<()> {
     crate::github::pr::gh_pr_close(repo_path.to_string(), number).await
 }
