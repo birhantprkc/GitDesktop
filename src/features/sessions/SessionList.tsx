@@ -471,6 +471,12 @@ export function SessionList({ repoPath }: { repoPath: string }) {
   const keptCount = repoSessions.length - activeSessionCount;
   const archivedCount = archivedPlanCount + archivedResearchCount;
 
+  // The Archived tab only exists while there are archived plans; if it empties
+  // (e.g. its session was discarded) while you're on it, fall back to Active —
+  // derived at render so the raw `tab` state stays the user's chosen tab.
+  const effectiveTab: SessionTab =
+    tab === "archived" && archivedCount === 0 ? "active" : tab;
+
   // Audit: link each session's branch to its pull request and merge state. Keep
   // local PRs honest with git while the agent tab is open, then look up by branch
   // (local + GitHub). Remote PRs are only fetched once something's been kept —
@@ -482,15 +488,16 @@ export function SessionList({ repoPath }: { repoPath: string }) {
   // on Active (working) / Kept (finalized); plans show on Active (in-progress) /
   // Archived (implemented).
   const sessions = useMemo(() => {
-    if (tab === "archived") return [];
+    if (effectiveTab === "archived") return [];
     const q = query.trim().toLowerCase();
     return repoSessions.filter(
       (s) =>
-        s.kept === (tab === "kept") && (!q || sessionHaystack(s).includes(q)),
+        s.kept === (effectiveTab === "kept") &&
+        (!q || sessionHaystack(s).includes(q)),
     );
-  }, [repoSessions, tab, query]);
+  }, [repoSessions, effectiveTab, query]);
   const plans = useMemo(() => {
-    if (tab === "kept") return [];
+    if (effectiveTab === "kept") return [];
     const q = query.trim().toLowerCase();
     const archived = (r: PlanRun) =>
       Boolean(
@@ -498,21 +505,21 @@ export function SessionList({ repoPath }: { repoPath: string }) {
       );
     return repoPlans.filter(
       (r) =>
-        archived(r) === (tab === "archived") &&
+        archived(r) === (effectiveTab === "archived") &&
         (!q || planHaystack(r).includes(q)),
     );
-  }, [repoPlans, tab, query, keptSessionIds]);
+  }, [repoPlans, effectiveTab, query, keptSessionIds]);
   // Research shows on Active (in-progress / report ready) and Archived (handed off
   // to a plan). Never on Kept (that's finalized write-sessions only).
   const research = useMemo(() => {
-    if (tab === "kept") return [];
+    if (effectiveTab === "kept") return [];
     const q = query.trim().toLowerCase();
     return repoResearch.filter(
       (r) =>
-        seededResearchIds.has(r.id) === (tab === "archived") &&
+        seededResearchIds.has(r.id) === (effectiveTab === "archived") &&
         (!q || researchHaystack(r).includes(q)),
     );
-  }, [repoResearch, tab, query, seededResearchIds]);
+  }, [repoResearch, effectiveTab, query, seededResearchIds]);
 
   const newSession = () => clearAgentSelection();
   const openPlanComposer = () => {
@@ -532,12 +539,6 @@ export function SessionList({ repoPath }: { repoPath: string }) {
     ),
   );
   useHotkeyAction("focus-filter", () => searchRef.current?.focus());
-
-  // The Archived tab only exists while there are archived plans; if it empties
-  // (e.g. its session was discarded) while you're on it, fall back to Active.
-  useEffect(() => {
-    if (tab === "archived" && archivedCount === 0) setTab("active");
-  }, [tab, archivedCount]);
 
   // Rows fade + collapse on add/remove so the list reflows calmly. Reduced
   // motion → opacity only (no height motion). py-2 (8px) is mirrored here because
@@ -621,7 +622,10 @@ export function SessionList({ repoPath }: { repoPath: string }) {
       ) : (
         <>
           <div className="shrink-0 space-y-2 border-b p-2">
-            <Tabs value={tab} onValueChange={(v) => setTab(v as SessionTab)}>
+            <Tabs
+              value={effectiveTab}
+              onValueChange={(v) => setTab(v as SessionTab)}
+            >
               <TabsList className="w-full">
                 <TabsTrigger value="active" className="min-w-0 flex-1">
                   Active
@@ -653,7 +657,7 @@ export function SessionList({ repoPath }: { repoPath: string }) {
             </div>
           </div>
           {navItems.length === 0 ? (
-            <ListEmpty tab={tab} hasQuery={query.trim().length > 0} />
+            <ListEmpty tab={effectiveTab} hasQuery={query.trim().length > 0} />
           ) : (
             <div
               role="listbox"
@@ -663,7 +667,7 @@ export function SessionList({ repoPath }: { repoPath: string }) {
             >
               {/* Keyed by tab so switching tabs is an instant swap; within a tab,
                   add/remove animates. */}
-              <AnimatePresence key={tab} initial={false}>
+              <AnimatePresence key={effectiveTab} initial={false}>
                 {showGroups && research.length > 0 && (
                   <GroupLabel key="g-research">Research</GroupLabel>
                 )}
@@ -673,7 +677,7 @@ export function SessionList({ repoPath }: { repoPath: string }) {
                   <ResearchRow
                     key={`research:${r.id}`}
                     run={r}
-                    planned={tab === "archived"}
+                    planned={effectiveTab === "archived"}
                     active={r.id === activeResearchId}
                     tabIndex={i === rovingIndex ? 0 : -1}
                     motionProps={rowMotion}

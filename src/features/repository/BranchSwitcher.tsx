@@ -7,19 +7,13 @@ import {
   CloudArrowDownIcon,
   GitBranchIcon,
   GitPullRequestIcon,
-  InfoIcon,
-  LightningIcon,
-  SparkleIcon,
   TreeStructureIcon,
-  WarningIcon,
 } from "@phosphor-icons/react";
-import { useSelector } from "@tanstack/react-store";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -27,52 +21,28 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
-import {
-  branchNameError,
-  branchNameHint,
   isDeletionBlocked,
   isMergeMethodAllowed,
   requiresPullRequest,
 } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
-import { required, useAppForm } from "@/lib/form";
-import type { MergeConflictStrategy } from "@/lib/git/api";
 import {
   forgeFeatureReady,
   useBranchDivergence,
   useBranches,
   useCheckoutBranch,
   useCheckoutRemoteBranch,
-  useCreateBranch,
   useDefaultBranch,
   useDeleteBranch,
   useDiscardAll,
   useForgeStatus,
   useMergeBranch,
-  useMergePreview,
   usePrList,
   useRebaseBranch,
   useRemoteBranches,
-  useRenameBranch,
   useRepoStatus,
   useSetBranchArchived,
   useStashAll,
@@ -81,7 +51,6 @@ import {
   useUpdateBranchFrom,
   useUserWorktrees,
 } from "@/lib/git/queries";
-import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import type { Branch, RemoteBranch } from "@/lib/git/types";
 import { listUserWorktrees } from "@/lib/git/worktree";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
@@ -92,27 +61,20 @@ import { type SelectedPr, useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import {
+  BranchMergePickerDialog,
+  type MergeRunOptions,
+  type PickerMode,
+} from "./BranchMergePickerDialog";
+import { CreateBranchDialog } from "./CreateBranchDialog";
+import { RenameBranchDialog } from "./RenameBranchDialog";
 import { StashesDialog } from "./StashesDialog";
-import { useGenerateBranchName } from "./useGenerateBranchName";
+import { SwitchWithChangesDialog } from "./SwitchWithChangesDialog";
 import { useOpenWorktree } from "./useOpenRepoByPath";
 
 /** Lower-cased, forward-slashed path for cross-source comparison — git emits
  *  "/", the app stores "\" on Windows. */
 const normPath = (p: string) => p.replace(/\\/g, "/").toLowerCase();
-
-type PickerMode = "merge" | "squash" | "rebase";
-
-const PICKER_COPY: Record<
-  PickerMode,
-  { title: (current: string) => string; action: string }
-> = {
-  merge: { title: (c) => `Merge into ${c}`, action: "Merge" },
-  squash: {
-    title: (c) => `Squash and merge into ${c}`,
-    action: "Squash and merge",
-  },
-  rebase: { title: (c) => `Rebase ${c} onto`, action: "Rebase" },
-};
 
 type PrState = "open" | "draft" | "merged" | "closed";
 
@@ -174,8 +136,6 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const stashCount = useStashCount(repoPath);
   const checkout = useCheckoutBranch(repoPath);
   const checkoutRemote = useCheckoutRemoteBranch(repoPath);
-  const createBranch = useCreateBranch(repoPath);
-  const renameBranch = useRenameBranch(repoPath);
   const deleteBranch = useDeleteBranch(repoPath);
   const discardAll = useDiscardAll(repoPath);
   const stashAll = useStashAll(repoPath);
@@ -190,7 +150,6 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const openSettings = useUiStore((s) => s.openSettings);
   const aiEnabled = useAiEnabled();
   const aiConfigured = useAiConfigured();
-  const branchNameGen = useGenerateBranchName(repoPath);
 
   const [open, setOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -208,19 +167,6 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [stashPopOpen, setStashPopOpen] = useState(false);
   const [stashesOpen, setStashesOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
-  const [pickerBranch, setPickerBranch] = useState("");
-  // Advanced merge options (merge mode only).
-  const [mergeNoFf, setMergeNoFf] = useState(false);
-  const [mergeStrategy, setMergeStrategy] =
-    useState<MergeConflictStrategy>("none");
-  // In-memory conflict prediction for the selected branch, while the merge
-  // picker is open.
-  const mergePreview = useMergePreview(
-    repoPath,
-    pickerBranch,
-    mergeStrategy,
-    pickerMode === "merge",
-  );
   // The pending switch target. `remote` is set only for remote-only rows, which
   // check out via `--track <remote>/<name>` (honoring the row's promised remote
   // + dodging multi-remote DWIM ambiguity); local switches leave it null.
@@ -513,46 +459,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     }
   }
 
-  const createForm = useAppForm({
-    defaultValues: { name: "", base: "" },
-    onSubmit: async ({ value }) => {
-      try {
-        await createBranch.mutateAsync({
-          name: sanitizeRefName(value.name),
-          checkout: true,
-          startPoint: value.base || undefined,
-        });
-        setCreateOpen(false);
-      } catch (e) {
-        onError(e);
-      }
-    },
-  });
-  // Drives the "Branches from …" copy in the dialog description.
-  const createBase = useSelector(createForm.store, (s) => s.values.base);
-
-  const renameForm = useAppForm({
-    defaultValues: { name: "" },
-    onSubmit: async ({ value }) => {
-      if (!renameTarget) return;
-      const newName = sanitizeRefName(value.name);
-      try {
-        await renameBranch.mutateAsync({ oldName: renameTarget, newName });
-        toast.success(`Renamed to ${newName}`);
-        setRenameTarget(null);
-      } catch (e) {
-        onError(e);
-      }
-    },
-  });
-
-  // NOTE: seeding resets must pass keepDefaultValues — otherwise reset()
-  // rewrites the form's defaultValues, and react-form's per-render options
-  // sync sees "different defaults + untouched form" and clobbers the seeded
-  // values right back on the next render.
+  // The dialog seeds its own form field on open; the switcher only flags which
+  // branch is being renamed.
   function openRename(branch: string) {
     setOpen(false);
-    renameForm.reset({ name: branch }, { keepDefaultValues: true });
     setRenameTarget(branch);
   }
 
@@ -611,10 +521,20 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     }
   }
 
-  function runPicker() {
-    if (!pickerMode || !pickerBranch) return;
-    const mode = pickerMode;
-    const branch = pickerBranch;
+  // The picker dialog seeds its own branch + options on open; the switcher only
+  // flags which mode is active.
+  function openPicker(mode: PickerMode) {
+    setOpen(false);
+    setPickerMode(mode);
+  }
+
+  // The dialog collects the branch + options; the switcher owns the mutations
+  // (they feed `busy`) and dispatches them here after closing the picker.
+  function runPicker(
+    mode: PickerMode,
+    branch: string,
+    options: MergeRunOptions,
+  ) {
     setPickerMode(null);
     if (mode === "rebase") {
       rebaseBranch.mutate(branch, {
@@ -627,8 +547,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
           branch,
           squash: mode === "squash",
           // Options apply to a regular merge only, not squash.
-          noFf: mode === "merge" && mergeNoFf,
-          strategy: mode === "merge" ? mergeStrategy : "none",
+          noFf: mode === "merge" && options.noFf,
+          strategy: mode === "merge" ? options.strategy : "none",
         },
         {
           onSuccess: () =>
@@ -643,84 +563,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     }
   }
 
-  function openPicker(mode: PickerMode) {
-    setOpen(false);
-    setPickerBranch(otherBranches[0]?.name ?? "");
-    setMergeNoFf(false);
-    setMergeStrategy("none");
-    setPickerMode(mode);
-  }
-
-  // The merge picker's in-memory conflict prediction, as a calm status line.
-  function renderMergePreview() {
-    if (mergePreview.isFetching) {
-      return (
-        <span className="flex items-center gap-1.5 text-muted-foreground">
-          <Spinner className="size-3" /> Checking…
-        </span>
-      );
-    }
-    const p = mergePreview.data;
-    if (!p || p.status === "unknown") return null;
-    if (p.status === "fast-forward") {
-      // --no-ff suppresses the fast-forward, so reflect that when it's ticked.
-      return mergeNoFf ? (
-        <span className="flex items-center gap-1.5 text-info">
-          <InfoIcon className="size-3.5 shrink-0" /> Fast-forward available —
-          will create a merge commit
-        </span>
-      ) : (
-        <span className="flex items-center gap-1.5 text-info">
-          <LightningIcon className="size-3.5 shrink-0" /> Fast-forward — no
-          merge commit needed
-        </span>
-      );
-    }
-    if (p.status === "up-to-date") {
-      return (
-        <span className="flex items-center gap-1.5 text-muted-foreground">
-          <CheckIcon className="size-3.5 shrink-0" /> Already up to date —
-          nothing to merge
-        </span>
-      );
-    }
-    if (p.status === "clean") {
-      // The preview already ran with the chosen strategy, so a "clean" result
-      // means it really will be clean (any conflicts auto-resolved).
-      return (
-        <span className="flex items-center gap-1.5 text-success">
-          <CheckIcon className="size-3.5 shrink-0" /> Clean merge — creates a
-          merge commit
-        </span>
-      );
-    }
-    // conflict — the preview is strategy-aware, so these are real conflicts that
-    // remain even with the chosen strategy ("still" once a strategy can't take
-    // them, e.g. structural delete/rename conflicts).
-    const n = p.conflicts.length;
-    const files = p.conflicts.slice(0, 4).join(", ");
-    const more = n > 4 ? `, +${n - 4}` : "";
-    const noun = n === 1 ? "file" : "files";
-    const still = mergeStrategy !== "none" ? "still " : "";
-    return (
-      <span className="flex items-start gap-1.5 text-warning">
-        <WarningIcon className="mt-px size-3.5 shrink-0" />
-        <span>
-          {n > 0
-            ? `${n} ${noun} will ${still}conflict`
-            : `This merge will ${still}conflict`}
-          {files && `: ${files}${more}`}
-        </span>
-      </span>
-    );
-  }
-
   function openCreate() {
     setOpen(false);
-    createForm.reset(
-      { name: "", base: currentName ?? defaultName ?? "" },
-      { keepDefaultValues: true },
-    );
     setCreateOpen(true);
   }
 
@@ -1197,184 +1041,28 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         </Popover.Portal>
       </Popover.Root>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              createForm.handleSubmit();
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>New branch</DialogTitle>
-              <DialogDescription>
-                Branches from{" "}
-                <span className="font-mono">{createBase || "HEAD"}</span> and
-                switches to it.
-              </DialogDescription>
-            </DialogHeader>
-            <createForm.AppField
-              name="name"
-              validators={{
-                onChange: ({ value }) =>
-                  required(value) ??
-                  branchNameError(rulesConfig, sanitizeRefName(value)) ??
-                  undefined,
-              }}
-            >
-              {(field) => (
-                <field.TextField
-                  label="Branch name"
-                  placeholder="feature/my-change"
-                  // Surface the branch-rules naming requirement (so a disabled
-                  // Create button is explained), else the sanitization hint.
-                  warning={(value) =>
-                    branchNameHint(rulesConfig, sanitizeRefName(value)) ??
-                    refNameWarning(value)
-                  }
-                />
-              )}
-            </createForm.AppField>
-            {aiEnabled && (
-              <div className="flex justify-end">
-                {!aiConfigured ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    className="text-muted-foreground"
-                    title="Connect an AI provider to generate branch names"
-                    onClick={() => {
-                      setCreateOpen(false);
-                      openSettings("ai");
-                    }}
-                  >
-                    <SparkleIcon data-icon="inline-start" />
-                    Set up AI to name branches
-                  </Button>
-                ) : branchNameGen.generating ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    className="text-muted-foreground"
-                    onClick={branchNameGen.cancel}
-                  >
-                    <Spinner data-icon="inline-start" />
-                    Generating…
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    className="text-muted-foreground"
-                    disabled={!hasChanges || !headExists}
-                    title={
-                      !headExists
-                        ? "Make your first commit before branching from changes"
-                        : !hasChanges
-                          ? "No in-progress changes — make some edits to name a branch after them"
-                          : "Suggest a name from your in-progress changes"
-                    }
-                    onClick={() =>
-                      branchNameGen.generate({
-                        entries: status.data?.entries ?? [],
-                        recentBranches: allBranches
-                          .map((b) => b.name)
-                          .slice(0, 20),
-                        onName: (name) =>
-                          createForm.setFieldValue("name", name),
-                      })
-                    }
-                  >
-                    <SparkleIcon data-icon="inline-start" />
-                    Generate from changes
-                  </Button>
-                )}
-              </div>
-            )}
-            {baseOptions.length > 0 && (
-              <createForm.AppField name="base">
-                {(field) => (
-                  <field.SelectField
-                    label="Base it on"
-                    items={Object.fromEntries(
-                      baseOptions.map((b) => [
-                        b,
-                        `${b}${b === currentName ? " (current)" : ""}${
-                          b === defaultName ? " (default)" : ""
-                        }`,
-                      ]),
-                    )}
-                  />
-                )}
-              </createForm.AppField>
-            )}
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setCreateOpen(false)}
-              >
-                Cancel
-              </Button>
-              <createForm.AppForm>
-                <createForm.SubmitButton>Create branch</createForm.SubmitButton>
-              </createForm.AppForm>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <CreateBranchDialog
+        repoPath={repoPath}
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        rulesConfig={rulesConfig}
+        aiEnabled={aiEnabled}
+        aiConfigured={aiConfigured}
+        hasChanges={hasChanges}
+        headExists={headExists}
+        entries={status.data?.entries ?? []}
+        allBranchNames={allBranches.map((b) => b.name)}
+        baseOptions={baseOptions}
+        currentName={currentName}
+        defaultName={defaultName}
+        onOpenSettings={openSettings}
+      />
 
-      <Dialog
-        open={renameTarget !== null}
-        onOpenChange={(o) => {
-          if (!o) setRenameTarget(null);
-        }}
-      >
-        <DialogContent>
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              renameForm.handleSubmit();
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>Rename branch</DialogTitle>
-              <DialogDescription>Renames {renameTarget}.</DialogDescription>
-            </DialogHeader>
-            <renameForm.AppField
-              name="name"
-              validators={{
-                onChange: ({ value }) =>
-                  required(value) ??
-                  (sanitizeRefName(value) === renameTarget
-                    ? "Unchanged"
-                    : undefined),
-              }}
-            >
-              {(field) => (
-                <field.TextField label="New name" warning={refNameWarning} />
-              )}
-            </renameForm.AppField>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setRenameTarget(null)}
-              >
-                Cancel
-              </Button>
-              <renameForm.AppForm>
-                <renameForm.SubmitButton>Rename</renameForm.SubmitButton>
-              </renameForm.AppForm>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <RenameBranchDialog
+        repoPath={repoPath}
+        target={renameTarget}
+        onClose={() => setRenameTarget(null)}
+      />
 
       <ConfirmDialog
         open={deleteTarget !== null}
@@ -1485,144 +1173,26 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         }
       />
 
-      <Dialog
-        open={pickerMode !== null}
-        onOpenChange={(o) => {
-          if (!o) setPickerMode(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {pickerMode ? PICKER_COPY[pickerMode].title(currentLabel) : ""}
-            </DialogTitle>
-            <DialogDescription>
-              {pickerMode === "rebase"
-                ? "Replays your branch's commits on top of the selected branch. Aborted automatically on conflicts."
-                : pickerMode === "squash"
-                  ? "Combines the selected branch's changes into staged changes for a single commit."
-                  : "Merge conflicts, if any, will appear in the changes list."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label>Branch</Label>
-            <Select
-              items={Object.fromEntries(
-                otherBranches.map((b) => [b.name, b.name]),
-              )}
-              value={pickerBranch || null}
-              onValueChange={(v) => v && setPickerBranch(v)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {otherBranches.map((b) => (
-                  <SelectItem key={b.name} value={b.name}>
-                    {b.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {pickerMode === "merge" && (
-            <div className="space-y-3">
-              <div className="min-h-5 text-xs">{renderMergePreview()}</div>
-              <label className="flex cursor-pointer items-center gap-2 text-xs">
-                <Checkbox
-                  checked={mergeNoFf}
-                  onCheckedChange={(c) => setMergeNoFf(c === true)}
-                />
-                Always create a merge commit
-              </label>
-              <div className="space-y-1.5">
-                <Label className="text-xs">On conflict</Label>
-                <Select
-                  items={{
-                    none: "Stop and let me resolve",
-                    ours: "Prefer current branch",
-                    theirs: "Prefer incoming branch",
-                  }}
-                  value={mergeStrategy}
-                  onValueChange={(v) =>
-                    v && setMergeStrategy(v as MergeConflictStrategy)
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">
-                      Stop and let me resolve
-                    </SelectItem>
-                    <SelectItem value="ours">Prefer current branch</SelectItem>
-                    <SelectItem value="theirs">
-                      Prefer incoming branch
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                {mergeStrategy !== "none" &&
-                  mergePreview.data?.status !== "fast-forward" &&
-                  mergePreview.data?.status !== "up-to-date" && (
-                    <p className="text-[11px] text-muted-foreground">
-                      Conflicting changes from the{" "}
-                      {mergeStrategy === "ours" ? "incoming" : "current"} side
-                      are discarded.
-                    </p>
-                  )}
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPickerMode(null)}>
-              Cancel
-            </Button>
-            <Button onClick={runPicker} disabled={!pickerBranch}>
-              {pickerMode ? PICKER_COPY[pickerMode].action : ""}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <BranchMergePickerDialog
+        repoPath={repoPath}
+        mode={pickerMode}
+        onClose={() => setPickerMode(null)}
+        onRun={runPicker}
+        otherBranches={otherBranches}
+        currentLabel={currentLabel}
+      />
 
-      <Dialog
-        open={switchTarget !== null}
-        onOpenChange={(o) => {
-          if (!o) setSwitchTarget(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>You have changes in progress</DialogTitle>
-            <DialogDescription>
-              Bring your uncommitted changes along to {switchTarget?.name}, or
-              stash them so {currentLabel} stays as you left it. "Pop latest
-              stash" restores stashed changes later.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSwitchTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="outline"
-              disabled={
-                stashAll.isPending ||
-                checkout.isPending ||
-                checkoutRemote.isPending
-              }
-              onClick={stashAndSwitch}
-            >
-              Stash and switch
-            </Button>
-            <Button
-              disabled={checkout.isPending || checkoutRemote.isPending}
-              onClick={bringAndSwitch}
-            >
-              Bring changes
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <SwitchWithChangesDialog
+        target={switchTarget}
+        currentLabel={currentLabel}
+        onCancel={() => setSwitchTarget(null)}
+        onBringChanges={bringAndSwitch}
+        onStashAndSwitch={stashAndSwitch}
+        bringPending={checkout.isPending || checkoutRemote.isPending}
+        stashPending={
+          stashAll.isPending || checkout.isPending || checkoutRemote.isPending
+        }
+      />
     </>
   );
 }

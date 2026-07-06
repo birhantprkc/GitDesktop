@@ -100,9 +100,11 @@ function newSideLines(
   from: number,
   to: number,
 ): string[] | null {
+  const byNumber = new Map<number, HunkLine>();
+  for (const ln of parsed) if (ln.number !== null) byNumber.set(ln.number, ln);
   const picked: string[] = [];
   for (let n = from; n <= to; n += 1) {
-    const hit = parsed.find((ln) => ln.number === n);
+    const hit = byNumber.get(n);
     if (!hit) return null; // gap — range not fully in the hunk
     // Strip the single leading marker (+ or space); del lines have no number.
     picked.push(hit.text.slice(1));

@@ -189,7 +189,8 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   function visible(entry: FileEntry): boolean {
     if (text && !entry.path.toLowerCase().includes(text)) return false;
     if (activeKinds.size === 0) return true;
-    return [...activeKinds].some((k) => FILTER_PREDICATES[k](entry));
+    for (const k of activeKinds) if (FILTER_PREDICATES[k](entry)) return true;
+    return false;
   }
 
   const unstagedEntries = entries.filter(

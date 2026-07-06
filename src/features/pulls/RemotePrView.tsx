@@ -61,7 +61,6 @@ import type {
 } from "@/lib/git/api";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
-  forgeFeatureReady,
   PIPELINE_IN_FLIGHT,
   prDiffOptions,
   useApplySuggestion,
@@ -118,6 +117,7 @@ import {
   threadToMarkdown,
 } from "./ReviewThreads";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
+import { usePrCapabilities } from "./usePrCapabilities";
 
 type Section = "conversation" | "commits" | "files" | "review";
 
@@ -174,59 +174,31 @@ export function RemotePrView({
   // before — only an explicitly-detected GitLab/Bitbucket repo suppresses them.
   const forge = useForgeStatus(repoPath);
   const provider = forge.data?.provider;
-  const canWrite = provider !== "gitlab" && provider !== "bitbucket";
   const remoteLabel = providerLabel(provider);
   const prNoun = provider === "gitlab" ? "merge request" : "pull request";
-  // GitLab MR WRITES land per-action (full reviews stay GitHub-only via
-  // `canWrite`). Each shared control is
-  // `canWrite || forgeFeatureReady(...)` so GitHub keeps its controls while a
-  // forge-status query is pending/failed (canWrite default-true) AND a ready GitLab
-  // repo positively enables just these.
-  const canComment = canWrite || forgeFeatureReady(forge.data, "mrComment");
-  const canChangeState = canWrite || forgeFeatureReady(forge.data, "mrState");
-  // Title/body editing is a shared control too.
-  const canEdit = canWrite || forgeFeatureReady(forge.data, "mrEdit");
-  // GitLab's approve/unapprove is a bodyless toggle with no GitHub analogue (GitHub
-  // approves via the Review menu above), so it's GitLab-only and gated on the forge
-  // feature directly — NOT `canWrite || …`, which would duplicate the Review control.
-  const canApprove = forgeFeatureReady(forge.data, "mrApprove");
-  // Request-changes follows the same forge-only shape (GitHub's lives in the
-  // Review menu). On GitLab it's one-shot (the direct undo is Premium-only); on
-  // Bitbucket the revoke works everywhere, so the control is a true toggle.
-  const canRequestChanges = forgeFeatureReady(forge.data, "mrRequestChanges");
-  // Bitbucket's revoke — drives the toggle direction below.
-  const canUnrequestChanges = provider === "bitbucket";
-  // Merge is a SHARED control (GitHub `gh pr merge`, GitLab `glab`), so it uses the
-  // `canWrite || …` gate like comment/close — GitHub keeps it while forge-status is
-  // pending/failed; a ready GitLab repo enables it too.
-  const canMerge = canWrite || forgeFeatureReady(forge.data, "mrMerge");
-  // Auto-merge (merge-when-pipeline-succeeds) is GitLab-only like the approve toggle
-  // (GitHub has no in-app PR auto-merge), so the flag alone gates — never `canWrite || …`.
-  const canAutoMerge = forgeFeatureReady(forge.data, "mrAutoMerge");
-  // Labels are a shared control (both providers) — same `canWrite || …` gate.
-  const canEditLabels = canWrite || forgeFeatureReady(forge.data, "mrLabels");
-  // MR assignees are GitLab-only like the approve toggle (GitHub PRs have no
-  // assignee picker here), so the flag alone gates — never `canWrite || …`.
-  const canEditAssignees = forgeFeatureReady(forge.data, "mrAssignees");
-  // The reviewers picker is Bitbucket-only the same way (GitHub's review
-  // requests live in its own flow; the GitLab reviewer list isn't wired).
-  const canEditReviewers = forgeFeatureReady(forge.data, "mrReviewers");
-  // Bitbucket toggles draft BOTH ways via the same edit surface (GitHub's
-  // one-way Ready button below stays on `canWrite` + `gh pr ready`).
-  const canToggleDraft =
-    provider === "bitbucket" && forgeFeatureReady(forge.data, "mrEdit");
-  // Time tracking is GitLab-only too (GitHub has no built-in time tracking).
-  const canTrackTime = forgeFeatureReady(forge.data, "timeTracking");
-  // PR tasks are a native Bitbucket concept (no GitHub/GitLab analogue wired), so
-  // the flag alone gates the section + header chip — never `canWrite || …`.
-  const canTasks = forgeFeatureReady(forge.data, "prTasks");
-  // Review-thread reply/resolve are shared controls (GitHub + wired providers) —
-  // same `canWrite || …` gate as comment/merge so GitHub keeps them while
-  // forge-status is pending/failed, and a ready provider positively enables them.
-  const canThreadReply =
-    canWrite || forgeFeatureReady(forge.data, "mrThreadReply");
-  const canThreadResolve =
-    canWrite || forgeFeatureReady(forge.data, "mrThreadResolve");
+  // Per-action write-capability flags, derived purely from forge status + provider
+  // (see usePrCapabilities for the full gating convention). Destructured so every
+  // downstream reference keeps compiling unchanged.
+  const {
+    canWrite,
+    canComment,
+    canChangeState,
+    canEdit,
+    canApprove,
+    canRequestChanges,
+    canUnrequestChanges,
+    canMerge,
+    canAutoMerge,
+    canEditLabels,
+    canEditAssignees,
+    canEditReviewers,
+    canToggleDraft,
+    canTrackTime,
+    canTasks,
+    canThreadReply,
+    canThreadResolve,
+    canReact,
+  } = usePrCapabilities(forge.data, provider);
   const details = usePrDetails(repoPath, number);
   const prDiff = usePrDiff(repoPath, number);
   const review = useReviewPr(repoPath);
@@ -276,9 +248,8 @@ export function RemotePrView({
   const reviewThreads = usePrReviewThreads(repoPath, number);
   const threadReply = useThreadReply(repoPath, number);
   const threadResolve = useThreadResolve(repoPath, number);
-  // Reactions are a shared control (GitLab awards emoji); the fetch is gated so
-  // it never fires for a provider whose reactions aren't wired (Bitbucket).
-  const canReact = canWrite || forgeFeatureReady(forge.data, "mrReactions");
+  // The reactions fetch is gated on `canReact` (see usePrCapabilities) so it never
+  // fires for a provider whose reactions aren't wired (Bitbucket).
   const reactions = usePrReactions(repoPath, canReact ? number : null);
   const toggleReactionMutation = useToggleReaction(
     repoPath,

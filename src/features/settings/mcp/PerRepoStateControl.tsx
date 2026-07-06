@@ -1,0 +1,51 @@
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { McpServer } from "@/lib/settings/api";
+import type { McpRepoState } from "@/lib/settings/mcp";
+
+/** Per-repo state picker for a GLOBAL server, shown on its row when a repo is
+ *  open: On (available + default-on) / Optional (available, off by default) /
+ *  Off (not offered here), or "Default" to follow the global Enabled. Muted
+ *  while inheriting; solid once this repo overrides it. */
+export function PerRepoStateControl({
+  server,
+  repoPath,
+  disabled,
+  onChange,
+}: {
+  server: McpServer;
+  repoPath: string;
+  disabled?: boolean;
+  onChange: (state: McpRepoState | null) => void;
+}) {
+  const override = server.repoOverrides?.[repoPath];
+  const baseline = server.enabled ? "On" : "Optional";
+  return (
+    <Select
+      value={override ?? "default"}
+      disabled={disabled}
+      onValueChange={(v) =>
+        v && onChange(v === "default" ? null : (v as McpRepoState))
+      }
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label={`Availability of ${server.name} in this repo`}
+        className={`w-auto gap-1 ${override ? "" : "text-muted-foreground"}`}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="default">Default · {baseline}</SelectItem>
+        <SelectItem value="on">On</SelectItem>
+        <SelectItem value="optional">Optional</SelectItem>
+        <SelectItem value="off">Off</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
