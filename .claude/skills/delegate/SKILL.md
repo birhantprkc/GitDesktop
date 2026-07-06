@@ -1,16 +1,17 @@
 ---
 name: delegate
 description: >-
-  Orchestrate delegated implementation in GitDesktop — the main model (Fable)
-  architects, plans, and integrates; Opus subagents implement and review.
-  Fable-orchestrator-only. Use whenever the user asks to delegate, fan out, or
+  Orchestrate delegated implementation in GitDesktop — the main model (Fable
+  or Opus) architects, plans, and integrates; Opus subagents implement and
+  review. Gated to Fable/Opus orchestrators (Sonnet and smaller work inline
+  instead). Use whenever the user asks to delegate, fan out, or
   parallelize implementation work, says "have opus build/implement X", or hands
   over a well-scoped multi-file feature that should be built by subagents
   rather than inline. Also applies when resuming a partially delegated feature.
 argument-hint: "[task description]"
 ---
 
-# /delegate — Fable orchestrates, Opus implements
+# /delegate — Fable or Opus orchestrates, Opus implements
 
 The division of labor: **you** (the main conversation) own architecture,
 decomposition, dispatch, integration, and everything the user sees. The
@@ -20,12 +21,22 @@ it is the only agent sanctioned to write files in this repo. The
 
 ## Phase 0 — Gate & ground
 
-- **Fable gate.** This workflow requires a Fable-family orchestrator
-  (currently `claude-fable-5`) as the MAIN conversation model — check your own
-  identity in your system prompt. If you are not Fable: **STOP.** Tell the
-  user /delegate is Fable-only and offer to do the work inline instead. Never
-  switch models to satisfy the gate. When working inline as a non-Fable
-  model, apply the `subagent-discipline` skill's rituals to your own work.
+- **Orchestrator gate.** This workflow requires a Fable- or Opus-family
+  orchestrator (`claude-fable-5` or `claude-opus-4-*`) as the MAIN
+  conversation model — check your own identity in your system prompt. If you
+  are Sonnet, Haiku, or any smaller model: **STOP.** Tell the user /delegate
+  is gated to Fable/Opus and offer to do the work inline instead. Never
+  switch models to satisfy the gate; when working inline, apply the
+  `subagent-discipline` skill's rituals to your own work.
+- **Opus-orchestrator addendum.** If you are Opus (not Fable), you are a
+  weaker orchestrator than this workflow was originally tuned for, so apply
+  `subagent-discipline` to your OWN architecture, decomposition, and
+  integration — not just the subagents' work. Read its
+  `references/orchestrator.md` § "When the orchestrator is Opus or Sonnet"
+  (you open that file for spec-shaping in Phase 1 regardless). Concretely:
+  keep an epic-level constraint ledger in a scratchpad, and never accept a
+  subagent's "done" as evidence — run the integration checks and read the
+  load-bearing hunks yourself.
 - Confirm this is an implementation session, not a grooming/planning session
   (if the user is researching or thinking out loud, produce plans instead —
   standing feedback).
