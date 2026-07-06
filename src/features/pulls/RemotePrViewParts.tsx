@@ -248,30 +248,32 @@ export function MergePrDialog({
             {auto ? (
               <>
                 {strategyLabel} when the pipeline passes — merges{" "}
-                <span className="font-mono">{headRefName}</span> into{" "}
-                <span className="font-mono">{baseRefName}</span> on {host} once
-                the running pipeline succeeds. This cannot be easily undone once
-                it merges.
+                <span className="font-mono break-all">{headRefName}</span> into{" "}
+                <span className="font-mono break-all">{baseRefName}</span> on{" "}
+                {host} once the running pipeline succeeds. This cannot be easily
+                undone once it merges.
               </>
             ) : (
               <>
                 {strategyLabel} — merges{" "}
-                <span className="font-mono">{headRefName}</span> into{" "}
-                <span className="font-mono">{baseRefName}</span> on {host}. This
-                cannot be easily undone.
+                <span className="font-mono break-all">{headRefName}</span> into{" "}
+                <span className="font-mono break-all">{baseRefName}</span> on{" "}
+                {host}. This cannot be easily undone.
               </>
             )}
           </DialogDescription>
         </DialogHeader>
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+        <label className="flex cursor-pointer items-start gap-2 text-xs text-muted-foreground">
           <Checkbox
             checked={deleteBranch}
             onCheckedChange={(checked) =>
               onDeleteBranchChange(checked === true)
             }
           />
-          Delete <span className="font-mono">{headRefName}</span> on the remote
-          after merging
+          <span className="min-w-0">
+            Delete <span className="font-mono break-all">{headRefName}</span> on
+            the remote after merging
+          </span>
         </label>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
