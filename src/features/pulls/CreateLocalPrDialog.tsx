@@ -14,7 +14,6 @@ import {
 import { triggerAutomations } from "@/lib/automations/runner";
 import { required, useAppForm } from "@/lib/form";
 import {
-  useBranches,
   useCompareBranches,
   useDefaultBranch,
   useRepoStatus,
@@ -23,6 +22,7 @@ import { useCreateLocalPr } from "@/lib/pulls/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { useBranchPickerOptions } from "./useBranchPickerOptions";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 
 export function CreateLocalPrDialog({
@@ -39,7 +39,6 @@ export function CreateLocalPrDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const status = useRepoStatus(repoPath);
-  const branches = useBranches(repoPath);
   const defaultBranch = useDefaultBranch(repoPath);
   const createPr = useCreateLocalPr(repoPath);
   const { generate, cancel, generating } = useGeneratePrDescription(repoPath);
@@ -48,7 +47,9 @@ export function CreateLocalPrDialog({
   const setRepoTab = useUiStore((s) => s.setRepoTab);
 
   const currentName = status.data?.branch?.name ?? null;
-  const names = (branches.data ?? []).map((b) => b.name);
+  // Branch options + per-branch worktree/archived chips; drops the app-internal
+  // `gd/session/*` branches (a local PR must never target one).
+  const { names, items, annotations } = useBranchPickerOptions(repoPath, open);
 
   const form = useAppForm({
     defaultValues: { head: "", base: "", title: "", body: "" },
@@ -116,8 +117,6 @@ export function CreateLocalPrDialog({
   const ahead = comparison.data?.ahead ?? [];
   const sameBranch = base === head;
 
-  const items = Object.fromEntries(names.map((n) => [n, n]));
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
@@ -142,7 +141,14 @@ export function CreateLocalPrDialog({
             <div className="flex items-end gap-2">
               <div className="min-w-0 flex-initial">
                 <form.AppField name="head">
-                  {(field) => <field.SelectField label="Merge" items={items} />}
+                  {(field) => (
+                    <field.SelectField
+                      label="Merge"
+                      items={items}
+                      annotations={annotations}
+                      sizeToContent
+                    />
+                  )}
                 </form.AppField>
               </div>
               <span className="shrink-0 pb-2 text-xs text-muted-foreground">
@@ -150,7 +156,14 @@ export function CreateLocalPrDialog({
               </span>
               <div className="min-w-0 flex-initial">
                 <form.AppField name="base">
-                  {(field) => <field.SelectField label="Base" items={items} />}
+                  {(field) => (
+                    <field.SelectField
+                      label="Base"
+                      items={items}
+                      annotations={annotations}
+                      sizeToContent
+                    />
+                  )}
                 </form.AppField>
               </div>
             </div>

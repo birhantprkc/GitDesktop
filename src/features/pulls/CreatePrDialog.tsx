@@ -18,7 +18,6 @@ import { triggerAutomations } from "@/lib/automations/runner";
 import { required, useAppForm } from "@/lib/form";
 import {
   forgeFeatureReady,
-  useBranches,
   useCompareBranches,
   useCreatePr,
   useDefaultBranch,
@@ -29,6 +28,7 @@ import { type ForgeUserRef, providerLabel } from "@/lib/git/types";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
 import { ReviewersPopover } from "./ReviewersPopover";
+import { useBranchPickerOptions } from "./useBranchPickerOptions";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 
 export function CreatePrDialog({
@@ -47,7 +47,6 @@ export function CreatePrDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const status = useRepoStatus(repoPath);
-  const branches = useBranches(repoPath);
   const defaultBranch = useDefaultBranch(repoPath);
   const createPr = useCreatePr(repoPath);
   const forge = useForgeStatus(repoPath);
@@ -61,11 +60,10 @@ export function CreatePrDialog({
   const aiDescriptionRef = useRef(false);
 
   const currentName = status.data?.branch?.name ?? null;
-  // Agent-session branches (`gd/session/*`) are app-internal — never offer them
-  // as a head/base (submitting would even PUSH one), same rule as BranchSwitcher.
-  const names = (branches.data ?? [])
-    .map((b) => b.name)
-    .filter((n) => !n.startsWith("gd/session/"));
+  // Branch options + per-branch worktree/archived chips; also drops the
+  // app-internal `gd/session/*` branches (submitting one would even PUSH it),
+  // the same rule as BranchSwitcher.
+  const { names, items, annotations } = useBranchPickerOptions(repoPath, open);
 
   const form = useAppForm({
     defaultValues: { head: "", base: "", title: "", body: "", draft: false },
@@ -153,8 +151,6 @@ export function CreatePrDialog({
   const sameBranch = base === head;
   const nothingToMerge = sameBranch || ahead.length === 0;
 
-  const items = Object.fromEntries(names.map((n) => [n, n]));
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
@@ -180,7 +176,14 @@ export function CreatePrDialog({
             <div className="flex items-end gap-2">
               <div className="min-w-0 flex-initial">
                 <form.AppField name="head">
-                  {(field) => <field.SelectField label="Merge" items={items} />}
+                  {(field) => (
+                    <field.SelectField
+                      label="Merge"
+                      items={items}
+                      annotations={annotations}
+                      sizeToContent
+                    />
+                  )}
                 </form.AppField>
               </div>
               <span className="shrink-0 pb-2 text-xs text-muted-foreground">
@@ -188,7 +191,14 @@ export function CreatePrDialog({
               </span>
               <div className="min-w-0 flex-initial">
                 <form.AppField name="base">
-                  {(field) => <field.SelectField label="Base" items={items} />}
+                  {(field) => (
+                    <field.SelectField
+                      label="Base"
+                      items={items}
+                      annotations={annotations}
+                      sizeToContent
+                    />
+                  )}
                 </form.AppField>
               </div>
             </div>

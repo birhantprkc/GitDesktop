@@ -169,13 +169,26 @@ export function SelectField({
   label,
   items,
   disabled,
+  annotations,
+  sizeToContent = false,
 }: {
   label?: ReactNode;
   /** value → display label; option order follows the object's key order. */
   items: Record<string, string>;
   disabled?: boolean;
+  /** Optional per-option trailing content (e.g. status chips), keyed by value.
+   *  Rendered after a truncating label; keys with no entry render label-only.
+   *  Never surfaces in the closed trigger — that reads the `items` map. */
+  annotations?: Record<string, ReactNode>;
+  /** Let the options popup grow to its widest option (floored at the trigger
+   *  width, capped at 28rem) instead of clamping to the trigger — for long
+   *  values like branch names. Overlong options truncate with an ellipsis. */
+  sizeToContent?: boolean;
 }) {
   const field = useFieldContext<string>();
+  // Opt-in rich rows: wrap the label so it can truncate and leave room for a
+  // trailing annotation. Plain callers keep the exact prior markup.
+  const rich = sizeToContent || annotations !== undefined;
   return (
     <div className="space-y-2">
       {label && <Label>{label}</Label>}
@@ -190,12 +203,28 @@ export function SelectField({
         <SelectTrigger className="w-full">
           <SelectValue />
         </SelectTrigger>
-        <SelectContent>
-          {Object.entries(items).map(([value, display]) => (
-            <SelectItem key={value} value={value}>
-              {display}
-            </SelectItem>
-          ))}
+        <SelectContent
+          {...(sizeToContent
+            ? {
+                // Break free of the trigger-anchored width so the list can size
+                // to its longest option (min = trigger width, max = 28rem).
+                alignItemWithTrigger: false,
+                className: "w-auto min-w-(--anchor-width) max-w-[28rem]",
+              }
+            : {})}
+        >
+          {Object.entries(items).map(([value, display]) =>
+            rich ? (
+              <SelectItem key={value} value={value}>
+                <span className="min-w-0 flex-1 truncate">{display}</span>
+                {annotations?.[value]}
+              </SelectItem>
+            ) : (
+              <SelectItem key={value} value={value}>
+                {display}
+              </SelectItem>
+            ),
+          )}
         </SelectContent>
       </Select>
     </div>

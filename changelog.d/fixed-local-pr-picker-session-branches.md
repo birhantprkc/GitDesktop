@@ -1,0 +1,1 @@
+- The local pull-request dialog's branch picker no longer lists internal agent-session branches (`gd/session/*`).
