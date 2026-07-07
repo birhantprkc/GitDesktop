@@ -1459,17 +1459,240 @@ pub async fn git_rebase(
     Ok(())
 }
 
+/// The outcome of a local-PR merge attempt (`git_merge_local_pr` /
+/// `git_finish_local_pr_merge`). The frontend package consumes this verbatim, so
+/// the `#[serde(rename_all = "camelCase")]` shape is a frozen contract.
+///
+/// Conflicts are now resolved in an isolated DETACHED worktree (GitHub-style):
+/// the user's current branch and uncommitted work are never touched, so there is
+/// no branch to switch back to — the old `original_ref`/`detached` fields are
+/// gone. On a conflict the tree lives in a throwaway worktree (`worktree_id` /
+/// `worktree_path`); the frontend points its conflict editor at that path.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalPrMergeOutcome {
+    /// `"merged"` (the merge landed and `base` was advanced) or `"conflicts"`
+    /// (the merge is paused in the resolve worktree for the user to resolve).
+    pub status: String,
+    /// Unmerged paths **in the resolve worktree** (empty when merged). From
+    /// `diff --name-only --diff-filter=U` run with cwd = the worktree.
+    pub conflicts: Vec<String>,
+    /// Base's tip captured at the start of the op (informational).
+    pub base_tip: String,
+    /// The resolve worktree's id — set only on `"conflicts"`, threaded to
+    /// finish/abort so they can find and tear it down. `None` when merged.
+    pub worktree_id: Option<String>,
+    /// Absolute path to the resolve worktree — set only on `"conflicts"`. The
+    /// frontend points its conflict editor here. `None` when merged.
+    pub worktree_path: Option<String>,
+    /// The oplog entry id, threaded to finish/abort so they can close it.
+    pub op_id: Option<String>,
+}
+
+/// The current unmerged (conflicted) paths in `repo`'s working tree, via
+/// `diff --name-only --diff-filter=U`. Uses `run_git_raw` so a non-zero exit
+/// (e.g. mid-operation) is treated as "no readable conflicts" rather than an
+/// error. Empty ⇒ no conflicts / a clean tree.
+async fn unmerged_paths(repo_path: &str) -> Vec<String> {
+    let out = run_git_raw(
+        Some(repo_path),
+        &["diff", "--name-only", "--diff-filter=U"],
+        DEFAULT_TIMEOUT,
+    )
+    .await;
+    match out {
+        Ok(o) if o.code == 0 => o
+            .stdout_lossy()
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A short, stable hash of the repo path, matching `worktree.rs::repo_hash` so
+/// resolve worktrees land under the SAME `<app_data>/worktrees/<repo-hash>` root
+/// as agent-session worktrees. That placement is what makes the user-facing
+/// worktree manager hide them: `git_worktree_list_user` filters out anything
+/// under the app-data worktrees root (`is_session_worktree`'s app-data-root
+/// check). Kept in sync by hand (worktree.rs is out of this package's scope);
+/// both hash the lower-cased path with `DefaultHasher` for the identical value.
+fn repo_hash(repo_path: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    repo_path.to_lowercase().hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+/// The app-data worktree root for a repo — `<data_dir>/<identifier>/worktrees/
+/// <repo-hash>`. Mirrors `worktree.rs::worktree_root`, but resolved via
+/// `dirs::data_dir()` (as `local_prs.rs` / `oplog.rs` do) since the local-PR
+/// merge commands carry no `AppHandle`. Tauri's `app_data_dir()` is exactly
+/// `dirs::data_dir()/<identifier>`, so this points at the same directory.
+fn worktree_root_dir(repo_path: &str) -> AppResult<std::path::PathBuf> {
+    let data = dirs::data_dir()
+        .ok_or_else(|| AppError::Command("could not resolve the app-data directory".to_string()))?;
+    Ok(data
+        .join("com.thebguy.gitdesktop")
+        .join("worktrees")
+        .join(repo_hash(repo_path)))
+}
+
+/// Tears down a resolve worktree: `git worktree remove --force <path>` then
+/// `git worktree prune`, both in the MAIN repo, both best-effort (a resolve
+/// worktree is detached and holds no branch, so nothing else needs cleanup).
+async fn remove_resolve_worktree(state: &AppState, repo_path: &str, worktree_path: &str) {
+    let _ = run_git_mutating(
+        state,
+        repo_path,
+        &["worktree", "remove", "--force", worktree_path],
+        DEFAULT_TIMEOUT,
+    )
+    .await;
+    let _ = run_git_mutating(state, repo_path, &["worktree", "prune"], DEFAULT_TIMEOUT).await;
+}
+
+/// Parses `git worktree list --porcelain` into the checked-out branch name of
+/// each stanza — the only field `finalize_base` needs. Each stanza starts with a
+/// `worktree <path>` line and carries a `branch refs/heads/<name>` line unless it
+/// is `detached`; a detached stanza (like our resolve worktree) yields an empty
+/// string, so it never matches `base`. Blank lines separate stanzas.
+fn parse_worktree_branches(porcelain: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in porcelain.lines() {
+        let line = line.trim_end();
+        if line.starts_with("worktree ") {
+            // A new stanza — default its branch to empty (detached) until a
+            // `branch` line fills it in.
+            out.push(String::new());
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            if let Some(cur) = out.last_mut() {
+                *cur = b.strip_prefix("refs/heads/").unwrap_or(b).to_string();
+            }
+        }
+    }
+    out
+}
+
+/// The `worktree <path>` line of every stanza in `git worktree list --porcelain`,
+/// in list order.
+fn parse_worktree_paths(porcelain: &str) -> Vec<String> {
+    porcelain
+        .lines()
+        .filter_map(|line| line.trim_end().strip_prefix("worktree "))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether a worktree path is one of our resolve worktrees — its final path
+/// segment starts with `gd-resolve-`. The basename is the reliable signal:
+/// `git_merge_local_pr` names them `gd-resolve-<uuid>`, and porcelain may
+/// normalize the leading path so an app-data-root prefix check is less robust.
+fn is_resolve_worktree_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|name| name.starts_with("gd-resolve-"))
+        .unwrap_or(false)
+}
+
+/// Pure decision for [`git_cleanup_orphaned_resolve_worktrees`]: from all
+/// worktree paths, pick the resolve worktrees (basename `gd-resolve-*`) whose
+/// normalized path is NOT among `keep`. Normalization matches how the app
+/// compares worktree paths elsewhere (`normalize_wt_path`: forward-slashed +
+/// lower-cased), so a kept path git prints with slashes still matches a kept
+/// path the frontend stored with back-slashes.
+fn orphaned_resolve_worktrees(all_paths: &[String], keep: &[String]) -> Vec<String> {
+    use crate::git::worktree::normalize_wt_path;
+    let keep_norm: std::collections::HashSet<String> =
+        keep.iter().map(|p| normalize_wt_path(p)).collect();
+    all_paths
+        .iter()
+        .filter(|p| is_resolve_worktree_path(p))
+        .filter(|p| !keep_norm.contains(&normalize_wt_path(p)))
+        .cloned()
+        .collect()
+}
+
+/// Advances `base` to `new_sha` after the merge landed in the resolve worktree,
+/// picking the safe mechanic for wherever `base` is checked out:
+///
+/// - `base` is the MAIN repo's current branch → `merge --ff-only <new_sha>` in
+///   the main repo. The tree was gated clean upfront, so this fast-forwards the
+///   working tree to the merged result. A failure propagates (commit-or-stash).
+/// - `base` is checked out in ANOTHER worktree → refuse: updating a
+///   checked-out branch out from under a worktree would desync its index/tree.
+/// - `base` is checked out nowhere (the common case — the main tree is on a
+///   different branch) → move the ref directly with `update-ref`, leaving every
+///   working tree untouched.
+async fn finalize_base(
+    state: &AppState,
+    repo_path: &str,
+    base: &str,
+    new_sha: &str,
+    current: &str,
+) -> AppResult<()> {
+    if base == current {
+        // `base` is the main repo's current branch — fast-forward its working
+        // tree to the merged commit. (Guaranteed a fast-forward: `new_sha` was
+        // built from base's tip in the resolve worktree.)
+        run_git_mutating(
+            state,
+            repo_path,
+            &["merge", "--ff-only", new_sha],
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+        return Ok(());
+    }
+
+    // Is `base` checked out in some OTHER worktree? Our resolve worktree is
+    // detached, so it never carries `base` as a branch and is safely excluded.
+    let listed = run_git(
+        Some(repo_path),
+        &["worktree", "list", "--porcelain"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let checked_out_elsewhere = parse_worktree_branches(&listed.stdout_lossy())
+        .iter()
+        .any(|b| b == base);
+    if checked_out_elsewhere {
+        return Err(AppError::Command(format!(
+            "{base} is checked out in another worktree; can't update it"
+        )));
+    }
+
+    // Not checked out anywhere — move the ref directly, no working tree touched.
+    run_git_mutating(
+        state,
+        repo_path,
+        &["update-ref", &format!("refs/heads/{base}"), new_sha],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Merges `head` into `base` for a local PR using one of three strategies,
 /// matching GitHub's merge options:
-/// - "merge"  â†’ a `--no-ff` merge commit carrying `message`
-/// - "squash" â†’ squash all of head's commits into one commit with `message`
-/// - "rebase" â†’ replay head's commits onto base (cherry-pick range, no merge
+/// - "merge"  → a `--no-ff` merge commit carrying `message`
+/// - "squash" → squash all of head's commits into one commit with `message`
+/// - "rebase" → replay head's commits onto base (cherry-pick range, no merge
 ///   commit), preserving their individual messages
 ///
-/// Checks out `base` to perform the merge, then returns you to the branch (or
-/// detached commit) you started on. Any failure (conflict, etc.) is rolled back:
-/// base is reset to its prior tip and your original branch restored, so nothing
-/// is left half-merged.
+/// GitHub-style **isolated** conflict resolution: the merge runs in a hidden
+/// DETACHED worktree checked out at `base`'s tip, so the user's current branch
+/// and uncommitted work are NEVER touched. On a **clean** merge, `base` is
+/// advanced to the resolved commit (`finalize_base`) and the worktree torn down —
+/// `status: "merged"`. On a **conflict** the worktree is kept and returned
+/// (`worktree_id` / `worktree_path`) so the frontend can drive resolution there,
+/// then call `git_finish_local_pr_merge` or `git_abort_local_pr_merge`. Only when
+/// `base` IS the current branch AND the main tree is dirty is a clean-tree
+/// required (advancing that branch unavoidably touches the tree); otherwise the
+/// main tree needn't be clean.
 #[tauri::command]
 pub async fn git_merge_local_pr(
     state: State<'_, AppState>,
@@ -1478,22 +1701,230 @@ pub async fn git_merge_local_pr(
     head: String,
     message: String,
     strategy: String,
-) -> AppResult<()> {
-    use crate::git::runner::run_git;
-
+) -> AppResult<LocalPrMergeOutcome> {
     validate_branch_arg(&base)?;
     validate_branch_arg(&head)?;
-    // Every failure path below hard-resets `base` to its prior tip, which would
-    // discard uncommitted work when base is the current branch — refuse first.
-    ensure_clean_tree(&repo_path).await?;
+    let root = worktree_root_dir(&repo_path)?;
+    merge_local_pr(&state, &repo_path, &base, &head, &message, &strategy, &root).await
+}
+
+/// Testable core of [`git_merge_local_pr`] — takes a plain `&AppState` and an
+/// explicit worktree-root dir so real-repo tokio tests can drive it against a
+/// temp dir (mirrors `rewrite_commits` / `replace_file_lines`). The command
+/// resolves `root` to the app-data worktrees dir.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn merge_local_pr(
+    state: &AppState,
+    repo_path: &str,
+    base: &str,
+    head: &str,
+    message: &str,
+    strategy: &str,
+    root: &Path,
+) -> AppResult<LocalPrMergeOutcome> {
+    use crate::git::runner::run_git;
+
     let message = if message.trim().is_empty() {
         format!("Merge {head} into {base}")
     } else {
-        message
+        message.to_string()
     };
 
-    // Remember where we are + base's tip so any failure can be undone.
-    let original = run_git(
+    // Where the main tree is now, and base's tip — captured before any mutation.
+    let current = run_git(
+        Some(repo_path),
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?
+    .stdout_lossy()
+    .trim()
+    .to_string();
+    let base_tip = run_git(Some(repo_path), &["rev-parse", base], DEFAULT_TIMEOUT)
+        .await?
+        .stdout_lossy()
+        .trim()
+        .to_string();
+
+    // Only advancing the CURRENT branch touches the main tree — gate that one
+    // case on a clean tree (finalize_base's `merge --ff-only` would otherwise
+    // fail, or clobber uncommitted work). Merging into any other branch leaves
+    // the main tree alone, so no clean-tree requirement.
+    if base == current {
+        ensure_clean_tree(repo_path).await?;
+    }
+
+    // Journal a pending entry AFTER the state capture, BEFORE the first mutation.
+    // Best-effort: a journal failure returns None and the op proceeds unchanged.
+    let verb = match strategy {
+        "squash" => "Squash-merge",
+        "rebase" => "Rebase-merge",
+        _ => "Merge",
+    };
+    let label = format!("{verb} {head} → {base}");
+    let op_id = crate::oplog::begin(
+        repo_path,
+        "merge_local_pr",
+        &label,
+        Some(base.to_string()),
+        &base_tip,
+        Some(&base_tip),
+    )
+    .await;
+
+    // Create the isolated DETACHED resolve worktree at base's tip.
+    let worktree_id = uuid::Uuid::new_v4().to_string();
+    let worktree_path = root.join(format!("gd-resolve-{worktree_id}"));
+    let worktree_path = worktree_path.to_string_lossy().into_owned();
+    if let Err(e) = std::fs::create_dir_all(root) {
+        crate::oplog::finish(repo_path, &op_id, Some(e.to_string())).await;
+        return Err(AppError::Io(e));
+    }
+    let add = run_git_mutating(
+        state,
+        repo_path,
+        &["worktree", "add", "--detach", &worktree_path, &base_tip],
+        DEFAULT_TIMEOUT,
+    )
+    .await;
+    if let Err(err) = add {
+        // The worktree was never created — nothing to tear down.
+        crate::oplog::finish(repo_path, &op_id, Some(err.to_string())).await;
+        return Err(err);
+    }
+
+    // Run the strategy IN the worktree (cwd = worktree_path). Squash/merge write
+    // a commit; rebase cherry-picks the range. Conflicts leave unmerged paths.
+    let range = format!("{base_tip}..{head}");
+    let result: AppResult<()> = match strategy {
+        "squash" => {
+            match run_git_raw(
+                Some(&worktree_path),
+                &["merge", "--squash", head],
+                DEFAULT_TIMEOUT,
+            )
+            .await
+            {
+                Ok(o) if o.code == 0 => run_git_raw(
+                    Some(&worktree_path),
+                    &["commit", "-m", &message],
+                    DEFAULT_TIMEOUT,
+                )
+                .await
+                .and_then(check_code),
+                Ok(o) => Err(AppError::Git {
+                    code: o.code,
+                    stderr: o.stderr,
+                }),
+                Err(e) => Err(e),
+            }
+        }
+        "rebase" => run_git_raw(
+            Some(&worktree_path),
+            &["cherry-pick", &range],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .and_then(check_code),
+        _ => run_git_raw(
+            Some(&worktree_path),
+            &["merge", "--no-ff", "-m", &message, head],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .and_then(check_code),
+    };
+
+    match result {
+        Ok(()) => {
+            // Clean: the worktree HEAD is the merged commit. Advance base to it,
+            // tear the worktree down, close the oplog.
+            let new_sha = run_git(Some(&worktree_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
+                .await?
+                .stdout_lossy()
+                .trim()
+                .to_string();
+            if let Err(err) = finalize_base(state, repo_path, base, &new_sha, &current).await {
+                // base couldn't be advanced (e.g. checked out elsewhere, or the
+                // ff-only failed) — clean up the worktree and surface the cause.
+                remove_resolve_worktree(state, repo_path, &worktree_path).await;
+                crate::oplog::finish(repo_path, &op_id, Some(err.to_string())).await;
+                return Err(err);
+            }
+            remove_resolve_worktree(state, repo_path, &worktree_path).await;
+            crate::oplog::finish(repo_path, &op_id, None).await;
+            Ok(LocalPrMergeOutcome {
+                status: "merged".to_string(),
+                conflicts: Vec::new(),
+                base_tip,
+                worktree_id: None,
+                worktree_path: None,
+                op_id,
+            })
+        }
+        Err(err) => {
+            // Conflict vs. genuine error: unmerged paths in the WORKTREE is the
+            // conflict signal (covers merge/squash/cherry-pick alike — squash
+            // never writes MERGE_HEAD, so this is more reliable than op markers).
+            let conflicts = unmerged_paths(&worktree_path).await;
+            if !conflicts.is_empty() {
+                // Keep the worktree + leave the oplog pending; the frontend drives
+                // resolution there, then finish/abort close it.
+                Ok(LocalPrMergeOutcome {
+                    status: "conflicts".to_string(),
+                    conflicts,
+                    base_tip,
+                    worktree_id: Some(worktree_id),
+                    worktree_path: Some(worktree_path),
+                    op_id,
+                })
+            } else {
+                // Genuine (non-conflict) failure: tear the worktree down (the main
+                // tree and base were never touched) and propagate.
+                remove_resolve_worktree(state, repo_path, &worktree_path).await;
+                crate::oplog::finish(repo_path, &op_id, Some(err.to_string())).await;
+                match err {
+                    AppError::Git { code, stderr } => Err(AppError::Git {
+                        code,
+                        stderr: format!(
+                            "{strategy} merge failed; {base} is unchanged.\n{stderr}"
+                        ),
+                    }),
+                    other => Err(other),
+                }
+            }
+        }
+    }
+}
+
+/// Completes a local-PR merge that `git_merge_local_pr` left conflicted, once the
+/// user has resolved (and staged) every conflict IN THE RESOLVE WORKTREE. Refuses
+/// while any unmerged path remains there. On success `base` is advanced to the
+/// resolved commit (`finalize_base`), the worktree is removed, and it reports
+/// `status: "merged"`. For a `rebase` strategy a *later* commit in the range can
+/// re-conflict — it then stays in the worktree and reports `status: "conflicts"`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // one flat arg per field, IPC-shaped
+pub async fn git_finish_local_pr_merge(
+    state: State<'_, AppState>,
+    repo_path: String,
+    base: String,
+    strategy: String,
+    message: String,
+    worktree_path: String,
+    worktree_id: String,
+    op_id: Option<String>,
+) -> AppResult<LocalPrMergeOutcome> {
+    validate_branch_arg(&base)?;
+
+    // Where the main tree is now. When `base` IS the current branch,
+    // `finalize_base` will `merge --ff-only` into the main tree at the end — so
+    // re-guard a clean tree HERE (the user may have dirtied it during
+    // resolution, after `git_merge_local_pr`'s upfront check). This surfaces the
+    // "commit or stash" message up front instead of a raw late ff-only failure.
+    // When base != current, base is advanced via `update-ref` and the main tree
+    // is never touched, so no clean-tree requirement.
+    let current = run_git(
         Some(&repo_path),
         &["rev-parse", "--abbrev-ref", "HEAD"],
         DEFAULT_TIMEOUT,
@@ -1502,156 +1933,250 @@ pub async fn git_merge_local_pr(
     .stdout_lossy()
     .trim()
     .to_string();
-    let detached = original == "HEAD";
-    let original_restore = if detached {
-        run_git(Some(&repo_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
-            .await?
-            .stdout_lossy()
-            .trim()
-            .to_string()
-    } else {
-        original
-    };
-    let base_tip = run_git(Some(&repo_path), &["rev-parse", &base], DEFAULT_TIMEOUT)
-        .await?
-        .stdout_lossy()
-        .trim()
-        .to_string();
+    if base == current {
+        ensure_clean_tree(&repo_path).await?;
+    }
 
-    // Journal a pending entry AFTER the state capture, BEFORE the `switch` below.
-    // Best-effort: a journal failure returns None and the op proceeds unchanged.
-    let original_sha = run_git(Some(&repo_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
-        .await
-        .ok()
-        .map(|o| o.stdout_lossy().trim().to_string())
-        .unwrap_or_default();
-    let verb = match strategy.as_str() {
-        "squash" => "Squash-merge",
-        "rebase" => "Rebase-merge",
-        _ => "Merge",
-    };
-    let label = format!("{verb} {head} → {base}");
-    let original_ref_label = if detached {
-        "HEAD".to_string()
-    } else {
-        original_restore.clone()
-    };
-    let op_id = crate::oplog::begin(
-        &repo_path,
-        "merge_local_pr",
-        &label,
-        Some(original_ref_label),
-        &original_sha,
-        Some(&base_tip),
-    )
-    .await;
+    // Guard: every conflict in the worktree must be resolved first.
+    let remaining = unmerged_paths(&worktree_path).await;
+    if !remaining.is_empty() {
+        return Err(AppError::Command("Resolve every conflict first".to_string()));
+    }
 
-    let op_result: AppResult<()> = async {
-        run_git_mutating(&state, &repo_path, &["switch", &base], DEFAULT_TIMEOUT).await?;
-
-        let range = format!("{base}..{head}");
-        let result: AppResult<()> = match strategy.as_str() {
-            "squash" => {
-                match run_git_mutating(
-                    &state,
-                    &repo_path,
-                    &["merge", "--squash", &head],
-                    DEFAULT_TIMEOUT,
-                )
-                .await
-                {
-                    Ok(_) => run_git_mutating(
-                        &state,
-                        &repo_path,
-                        &["commit", "-m", &message],
-                        DEFAULT_TIMEOUT,
-                    )
-                    .await
-                    .map(|_| ()),
-                    Err(e) => Err(e),
-                }
-            }
-            "rebase" => {
-                run_git_mutating(&state, &repo_path, &["cherry-pick", &range], DEFAULT_TIMEOUT)
-                    .await
-                    .map(|_| ())
-            }
-            _ => run_git_mutating(
-                &state,
-                &repo_path,
-                &["merge", "--no-ff", "-m", &message, &head],
+    match strategy.as_str() {
+        "rebase" => {
+            // Continue the cherry-pick in the worktree with a non-interactive
+            // editor so git never blocks (mirrors git_op_continue / git_rebase).
+            let out = run_git_raw(
+                Some(&worktree_path),
+                &["-c", "core.editor=true", "cherry-pick", "--continue"],
                 DEFAULT_TIMEOUT,
             )
-            .await
-            .map(|_| ()),
-        };
-
-        match result {
-            Ok(()) => {
-                // The merge landed on `base`; return the user to the branch (or
-                // detached commit) they started on, unless they were already there.
-                // Best-effort and always safe: the merge went *into* base, so the
-                // original ref is untouched and still exists, and the tree is clean
-                // after the commit, so the switch-back can't be blocked. A failure
-                // here at worst leaves them on `base` — no worse than before.
-                if original_restore != base {
-                    let restore: Vec<&str> = if detached {
-                        vec!["switch", "--detach", &original_restore]
-                    } else {
-                        vec!["switch", &original_restore]
-                    };
-                    let _ = run_git_mutating(&state, &repo_path, &restore, DEFAULT_TIMEOUT).await;
-                }
-                Ok(())
+            .await?;
+            // A later commit in the range may re-conflict; if so, stay in the
+            // worktree and re-report conflicts (do NOT finalize or remove).
+            let conflicts = unmerged_paths(&worktree_path).await;
+            if !conflicts.is_empty() {
+                let tip = run_git(Some(&worktree_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
+                    .await
+                    .ok()
+                    .map(|o| o.stdout_lossy().trim().to_string())
+                    .unwrap_or_default();
+                return Ok(LocalPrMergeOutcome {
+                    status: "conflicts".to_string(),
+                    conflicts,
+                    base_tip: tip,
+                    worktree_id: Some(worktree_id),
+                    worktree_path: Some(worktree_path),
+                    op_id,
+                });
             }
-            Err(err) => {
-                // Roll back any half-applied state, then return home. The aborts
-                // are best-effort (only one applies); the hard reset is the
-                // guarantee that base is left exactly as it was.
-                let _ =
-                    run_git_mutating(&state, &repo_path, &["merge", "--abort"], DEFAULT_TIMEOUT)
-                        .await;
-                let _ = run_git_mutating(
-                    &state,
-                    &repo_path,
-                    &["cherry-pick", "--abort"],
+            // A non-conflict, non-zero exit means something genuinely failed
+            // (e.g. "no cherry-pick in progress" when nothing was staged). Surface
+            // it rather than silently reporting success.
+            if out.code != 0 && !out.stderr.trim().is_empty() {
+                return Err(AppError::Git {
+                    code: out.code,
+                    stderr: out.stderr,
+                });
+            }
+        }
+        _ => {
+            // squash / merge → conclude with a commit in the worktree. If the user
+            // committed the resolution by hand there is nothing staged; tolerate
+            // git's "nothing to commit" instead of erroring.
+            let staged = run_git_raw(
+                Some(&worktree_path),
+                &["diff", "--cached", "--quiet"],
+                DEFAULT_TIMEOUT,
+            )
+            .await?;
+            // exit 0 ⇒ nothing staged ⇒ already committed (or empty) ⇒ skip commit.
+            if staged.code != 0 {
+                let commit = run_git_raw(
+                    Some(&worktree_path),
+                    &["commit", "-m", &message],
                     DEFAULT_TIMEOUT,
                 )
-                .await;
-                let _ = run_git_mutating(
-                    &state,
-                    &repo_path,
-                    &["reset", "--hard", &base_tip],
-                    DEFAULT_TIMEOUT,
-                )
-                .await;
-                let restore: Vec<&str> = if detached {
-                    vec!["switch", "--detach", &original_restore]
-                } else {
-                    vec!["switch", &original_restore]
-                };
-                let _ = run_git_mutating(&state, &repo_path, &restore, DEFAULT_TIMEOUT).await;
-                match err {
-                    AppError::Git { code, stderr } => Err(AppError::Git {
-                        code,
-                        stderr: format!(
-                            "{strategy} merge hit conflicts and was rolled back; {base} is unchanged.\n{stderr}"
-                        ),
-                    }),
-                    other => Err(other),
+                .await?;
+                if commit.code != 0 {
+                    let lower = commit.stderr.to_lowercase();
+                    let already = lower.contains("nothing to commit")
+                        || lower.contains("no changes added");
+                    if !already {
+                        return Err(AppError::Git {
+                            code: commit.code,
+                            stderr: commit.stderr,
+                        });
+                    }
                 }
             }
         }
     }
-    .await;
 
-    crate::oplog::finish(
-        &repo_path,
-        &op_id,
-        op_result.as_ref().err().map(|e| e.to_string()),
+    // Completed with no remaining conflicts: advance base, tear down, close oplog.
+    // `current` was resolved up top (and re-guarded clean when base == current).
+    let new_sha = run_git(Some(&worktree_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
+        .await?
+        .stdout_lossy()
+        .trim()
+        .to_string();
+    finalize_base(&state, &repo_path, &base, &new_sha, &current).await?;
+    remove_resolve_worktree(&state, &repo_path, &worktree_path).await;
+    crate::oplog::finish(&repo_path, &op_id, None).await;
+    Ok(LocalPrMergeOutcome {
+        status: "merged".to_string(),
+        conflicts: Vec::new(),
+        base_tip: new_sha,
+        worktree_id: None,
+        worktree_path: None,
+        op_id,
+    })
+}
+
+/// Abandons a local-PR merge that `git_merge_local_pr` left conflicted: removes
+/// the resolve worktree (`--force`) and prunes. The user's main tree and branch
+/// were never touched, so there is nothing else to roll back. Best-effort, then
+/// closes the oplog entry as failed ("aborted by user").
+#[tauri::command]
+pub async fn git_abort_local_pr_merge(
+    state: State<'_, AppState>,
+    repo_path: String,
+    worktree_path: String,
+    op_id: Option<String>,
+) -> AppResult<()> {
+    remove_resolve_worktree(&state, &repo_path, &worktree_path).await;
+    crate::oplog::finish(&repo_path, &op_id, Some("aborted by user".to_string())).await;
+    Ok(())
+}
+
+/// Sweeps orphaned resolve worktrees (`gd-resolve-<uuid>`) — the detached
+/// worktrees a paused local-PR merge leaves under the app-data root. The only
+/// live handle to one is a local PR's `pendingMerge`; if the app crashed
+/// mid-resolve, or the PR / its `pendingMerge` was lost, the worktree orphans
+/// with no UI path to remove it (being detached, the user-facing worktree
+/// manager excludes it). The frontend calls this on repo open, passing the paths
+/// of every STILL-ACTIVE `pendingMerge` worktree as `keep_paths`; every other
+/// `gd-resolve-*` worktree is torn down (`worktree remove --force` + `prune`).
+///
+/// Best-effort per worktree — one removal failure (e.g. a file locked by another
+/// process) never aborts the sweep. Always returns `Ok(())`.
+#[tauri::command]
+pub async fn git_cleanup_orphaned_resolve_worktrees(
+    state: State<'_, AppState>,
+    repo_path: String,
+    keep_paths: Vec<String>,
+) -> AppResult<()> {
+    let listed = run_git(
+        Some(&repo_path),
+        &["worktree", "list", "--porcelain"],
+        DEFAULT_TIMEOUT,
     )
-    .await;
-    op_result
+    .await?;
+    let all = parse_worktree_paths(&listed.stdout_lossy());
+    for path in orphaned_resolve_worktrees(&all, &keep_paths) {
+        // remove_resolve_worktree is itself best-effort (both git calls swallow
+        // errors), so one stuck worktree can't stop the rest.
+        remove_resolve_worktree(&state, &repo_path, &path).await;
+    }
+    Ok(())
+}
+
+/// Maps a raw git output into a `Result`, turning a non-zero exit into
+/// `AppError::Git` (so `run_git_raw` calls in the worktree can distinguish a
+/// clean commit from a conflict via the returned `Err`, while still surfacing the
+/// unmerged-paths signal for the conflict branch).
+fn check_code(o: crate::git::runner::GitOutput) -> AppResult<()> {
+    if o.code == 0 {
+        Ok(())
+    } else {
+        Err(AppError::Git {
+            code: o.code,
+            stderr: o.stderr,
+        })
+    }
+}
+
+/// Predicts whether merging `head` into `base` would conflict, **without touching
+/// the working tree or index** — the read-only precheck for a local-PR merge.
+/// Reuses `git merge-tree --write-tree --name-only` (git 2.38+, file names need
+/// 2.40+): exit 0 ⇒ `"clean"`; exit 1 ⇒ `"conflict"` with the conflicted names;
+/// anything else / old git ⇒ `"unknown"`. Up-to-date and fast-forward cases are
+/// short-circuited via merge-base and reported as `"clean"` (the merge would
+/// succeed).
+#[tauri::command]
+pub async fn git_conflict_preview(
+    repo_path: String,
+    base: String,
+    head: String,
+) -> AppResult<MergePreview> {
+    validate_branch_arg(&base)?;
+    validate_branch_arg(&head)?;
+    let unknown = || MergePreview {
+        status: "unknown".to_string(),
+        conflicts: Vec::new(),
+    };
+
+    let base_sha = run_git_raw(Some(&repo_path), &["rev-parse", &base], DEFAULT_TIMEOUT).await?;
+    let head_sha = run_git_raw(Some(&repo_path), &["rev-parse", &head], DEFAULT_TIMEOUT).await?;
+    if base_sha.code != 0 || head_sha.code != 0 {
+        return Ok(unknown());
+    }
+    let base_sha = base_sha.stdout_lossy().trim().to_string();
+    let head_sha = head_sha.stdout_lossy().trim().to_string();
+
+    // Already-merged (head reachable from base) or fast-forward (base reachable
+    // from head): both merge cleanly.
+    let mb = run_git_raw(
+        Some(&repo_path),
+        &["merge-base", &base, &head],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if mb.code == 0 {
+        let mbase = mb.stdout_lossy().trim().to_string();
+        if mbase == head_sha || mbase == base_sha {
+            return Ok(MergePreview {
+                status: "clean".to_string(),
+                conflicts: Vec::new(),
+            });
+        }
+    }
+
+    let mt = run_git_raw(
+        Some(&repo_path),
+        &["merge-tree", "--write-tree", "--name-only", &base, &head],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    match mt.code {
+        0 => Ok(MergePreview {
+            status: "clean".to_string(),
+            conflicts: Vec::new(),
+        }),
+        1 => {
+            // Line 1 is the merged-tree OID; conflicted file names follow, ending
+            // at the blank line before any informational messages. Empty stdout
+            // means git refused the merge (no tree OID) — an "unknown", not a
+            // zero-file conflict.
+            let text = mt.stdout_lossy();
+            if text.trim().is_empty() {
+                return Ok(unknown());
+            }
+            let conflicts: Vec<String> = text
+                .lines()
+                .skip(1)
+                .take_while(|l| !l.trim().is_empty())
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            Ok(MergePreview {
+                status: "conflict".to_string(),
+                conflicts,
+            })
+        }
+        _ => Ok(unknown()),
+    }
 }
 
 /// Rewrites the unpushed tip of the current branch (`base..HEAD`): each step
@@ -2446,6 +2971,81 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[tokio::test]
+    async fn conflict_preview_reports_clean_and_conflict() {
+        let (dir, repo) = setup_repo("conflict-preview").await;
+        let main = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .trim()
+            .to_string();
+
+        // A non-conflicting feature: touches a different file than base advances.
+        git(&repo, &["checkout", "-b", "clean-feat"]).await;
+        commit_file(&repo, &dir, "feat.txt", "feat\n", "feat only").await;
+        git(&repo, &["checkout", &main]).await;
+        commit_file(&repo, &dir, "base-only.txt", "b\n", "base only").await;
+        let clean = git_conflict_preview(repo.clone(), main.clone(), "clean-feat".to_string())
+            .await
+            .unwrap();
+        assert_eq!(clean.status, "clean", "conflicts: {:?}", clean.conflicts);
+
+        // A conflicting feature: divergent edits to the same file as base.
+        git(&repo, &["checkout", "-b", "bad-feat"]).await;
+        commit_file(&repo, &dir, "a.txt", "feat-edit\n", "feat edit a").await;
+        git(&repo, &["checkout", &main]).await;
+        commit_file(&repo, &dir, "a.txt", "main-edit\n", "main edit a").await;
+        let conflict = git_conflict_preview(repo.clone(), main.clone(), "bad-feat".to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            conflict.status, "conflict",
+            "conflicts: {:?}",
+            conflict.conflicts
+        );
+        assert!(
+            conflict.conflicts.iter().any(|f| f.contains("a.txt")),
+            "{:?}",
+            conflict.conflicts
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn unmerged_paths_lists_conflicts_only_when_present() {
+        // Drives the conflict-vs-clean detection that git_merge_local_pr relies on
+        // to decide between "leave it for the user" and "roll back".
+        let (dir, repo) = setup_repo("unmerged").await;
+        let main = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .trim()
+            .to_string();
+        // Clean tree ⇒ no unmerged paths.
+        assert!(unmerged_paths(&repo).await.is_empty());
+
+        // Manufacture a real conflicted merge on `main`.
+        git(&repo, &["checkout", "-b", "feat"]).await;
+        commit_file(&repo, &dir, "a.txt", "feat\n", "feat edit").await;
+        git(&repo, &["checkout", &main]).await;
+        commit_file(&repo, &dir, "a.txt", "main\n", "main edit").await;
+        // A conflicting merge exits non-zero and leaves unmerged paths in place.
+        let merged = run_git_raw(
+            Some(&repo),
+            &["merge", "--no-ff", "-m", "m", "feat"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_ne!(merged.code, 0, "the merge should conflict");
+        let paths = unmerged_paths(&repo).await;
+        assert!(
+            paths.iter().any(|p| p == "a.txt"),
+            "expected a.txt among {paths:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Makes a throwaway dir and writes `.gitignore` with the given raw bytes.
     fn gitignore_dir(marker: &str, content: &str) -> (std::path::PathBuf, String) {
         let dir = std::env::temp_dir().join(format!(
@@ -2792,5 +3392,240 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_worktree_branches_reads_path_and_branch_and_detached() {
+        // Main worktree on a branch, a linked worktree on another branch, and a
+        // DETACHED worktree (no `branch` line → empty branch, like our resolve wt).
+        let porcelain = "\
+worktree C:/repos/app
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/master
+
+worktree C:/repos/app-feature
+HEAD 2222222222222222222222222222222222222222
+branch refs/heads/feature
+
+worktree C:/data/worktrees/h/gd-resolve-abc
+HEAD 3333333333333333333333333333333333333333
+detached
+";
+        let got = parse_worktree_branches(porcelain);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], "master");
+        assert_eq!(got[1], "feature");
+        // Detached stanza carries no branch — must not match `base` in finalize_base.
+        assert_eq!(got[2], "");
+        // Membership check mirrors finalize_base's "checked out elsewhere" test.
+        assert!(got.iter().any(|b| b == "feature"));
+        assert!(!got.iter().any(|b| b == "nope"));
+    }
+
+    #[test]
+    fn parse_worktree_paths_reads_every_stanza_path() {
+        let porcelain = "\
+worktree C:/repos/app
+HEAD 1111
+branch refs/heads/master
+
+worktree C:/data/worktrees/h/gd-resolve-abc
+HEAD 2222
+detached
+";
+        assert_eq!(
+            parse_worktree_paths(porcelain),
+            vec![
+                "C:/repos/app".to_string(),
+                "C:/data/worktrees/h/gd-resolve-abc".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn orphaned_resolve_worktrees_picks_gd_resolve_paths_not_kept() {
+        let all = vec![
+            // Main worktree — not a resolve worktree, never swept.
+            "C:/repos/app".to_string(),
+            // A user worktree that merely contains "gd-resolve-" mid-path but whose
+            // BASENAME doesn't start with it — must NOT be swept.
+            "C:/repos/gd-resolve-ish/feature".to_string(),
+            // The kept (active) resolve worktree — frontend passed it in keep_paths,
+            // but with back-slashes and different case (as the store holds it).
+            "C:/data/worktrees/h/gd-resolve-keep".to_string(),
+            // An orphaned resolve worktree — swept.
+            "C:/data/worktrees/h/gd-resolve-orphan".to_string(),
+        ];
+        let keep = vec!["c:\\data\\worktrees\\h\\gd-resolve-keep".to_string()];
+
+        let got = orphaned_resolve_worktrees(&all, &keep);
+        assert_eq!(got, vec!["C:/data/worktrees/h/gd-resolve-orphan".to_string()]);
+
+        // The basename test is the gate: a mid-path "gd-resolve-" is not a match.
+        assert!(!is_resolve_worktree_path("C:/repos/gd-resolve-ish/feature"));
+        assert!(is_resolve_worktree_path("C:/data/worktrees/h/gd-resolve-orphan"));
+        // Empty keep list → every resolve worktree is orphaned.
+        let all_orphans = orphaned_resolve_worktrees(&all, &[]);
+        assert_eq!(all_orphans.len(), 2);
+    }
+
+    #[test]
+    fn repo_hash_is_case_insensitive_and_16_hex() {
+        // Mirrors worktree.rs::repo_hash's contract: case-insensitive (Windows
+        // paths) and a stable 16-hex string, so resolve worktrees land under the
+        // identical app-data root worktree.rs uses (and are hidden by the
+        // user-facing manager's app-data-root filter).
+        assert_eq!(super::repo_hash("C:/Repos/App"), super::repo_hash("c:/repos/app"));
+        assert_ne!(super::repo_hash("C:/Repos/App"), super::repo_hash("C:/Repos/Other"));
+        assert_eq!(super::repo_hash("C:/Repos/App").len(), 16);
+    }
+
+    /// A clean local-PR merge where `base` is NOT the current branch: the main
+    /// tree stays on its branch with its uncommitted work intact, and `base`
+    /// advances to the merged commit via `update-ref` (never checked out).
+    #[tokio::test]
+    async fn merge_local_pr_clean_leaves_main_tree_untouched_and_advances_base() {
+        let (dir, repo) = setup_repo("lpr-clean").await;
+        let base_start = rev(&repo, "HEAD").await;
+        // The base branch is whatever `git init` created (main/master varies by
+        // config) — capture it rather than hardcoding.
+        let base = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .trim()
+            .to_string();
+
+        // Add a feature branch off base with one non-conflicting commit, then
+        // return to base and DIRTY the tree + move onto another branch.
+        git(&repo, &["branch", "feature"]).await;
+        git(&repo, &["switch", "feature"]).await;
+        commit_file(&repo, &dir, "feat.txt", "feature\n", "feat commit").await;
+        git(&repo, &["switch", &base]).await;
+        // Move the main tree OFF base onto `work`, and leave uncommitted changes.
+        git(&repo, &["switch", "-c", "work"]).await;
+        std::fs::write(dir.join("wip.txt"), "uncommitted\n").unwrap();
+        std::fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+
+        let root = std::env::temp_dir().join(format!(
+            "gd-lpr-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state = AppState::default();
+        let outcome = merge_local_pr(
+            &state,
+            &repo,
+            &base,
+            "feature",
+            "merge it",
+            "merge",
+            &root,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.status, "merged");
+        assert!(outcome.conflicts.is_empty());
+        assert!(outcome.worktree_path.is_none());
+        assert_eq!(outcome.base_tip, base_start);
+
+        // Main tree is untouched: still on `work`, dirty files intact.
+        assert_eq!(
+            git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]).await.trim(),
+            "work"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "dirty\n"
+        );
+        assert!(dir.join("wip.txt").exists(), "untracked WIP survives");
+
+        // base advanced: it now contains feature's commit. `cat-file -e` exits 0
+        // only when the blob is reachable; `git()` unwraps, so a missing file
+        // would panic the test.
+        let base_tip = rev(&repo, &base).await;
+        assert_ne!(base_tip, base_start, "base moved");
+        git(&repo, &["cat-file", "-e", &format!("{base}:feat.txt")]).await;
+
+        // No resolve worktree left behind.
+        let wts = git(&repo, &["worktree", "list", "--porcelain"]).await;
+        assert!(
+            !wts.contains("gd-resolve-"),
+            "resolve worktree removed: {wts}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A conflicting local-PR merge keeps the resolve worktree and reports the
+    /// conflicted paths + the worktree id/path; the main tree and `base` are
+    /// untouched. Aborting then removes the worktree.
+    #[tokio::test]
+    async fn merge_local_pr_conflict_keeps_worktree_then_abort_removes_it() {
+        let (dir, repo) = setup_repo("lpr-conflict").await;
+        let base_start = rev(&repo, "HEAD").await; // base @ a.txt="v0\n"
+        let base = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .trim()
+            .to_string();
+
+        // feature edits a.txt one way; base edits it another → conflict on merge.
+        git(&repo, &["switch", "-c", "feature"]).await;
+        commit_file(&repo, &dir, "a.txt", "feature-side\n", "feat edit").await;
+        git(&repo, &["switch", &base]).await;
+        commit_file(&repo, &dir, "a.txt", "base-side\n", "base edit").await;
+        let base_before = rev(&repo, &base).await;
+
+        let root = std::env::temp_dir().join(format!(
+            "gd-lpr-croot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState::default();
+        let outcome = merge_local_pr(
+            &state,
+            &repo,
+            &base,
+            "feature",
+            "merge it",
+            "merge",
+            &root,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.status, "conflicts");
+        assert!(
+            outcome.conflicts.iter().any(|p| p == "a.txt"),
+            "a.txt conflicts: {:?}",
+            outcome.conflicts
+        );
+        let wt_path = outcome.worktree_path.clone().expect("worktree path set");
+        assert!(outcome.worktree_id.is_some());
+        assert!(std::path::Path::new(&wt_path).exists(), "worktree kept");
+
+        // Main tree + base untouched during the conflict.
+        assert_eq!(rev(&repo, &base).await, base_before);
+        assert_ne!(base_before, base_start);
+
+        // Abort: `git_abort_local_pr_merge` is a thin wrapper over
+        // `remove_resolve_worktree` (+ oplog finish, which no-ops on op_id None
+        // here). Call the shared helper directly — the command form needs a real
+        // `tauri::State`, not constructible in a unit test.
+        remove_resolve_worktree(&state, &repo, &wt_path).await;
+        assert!(
+            !std::path::Path::new(&wt_path).exists(),
+            "worktree removed after abort"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

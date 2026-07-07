@@ -39,7 +39,11 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   edit, and merge (merge/squash/rebase) GitHub PRs without the browser — and set
   **labels and assignees** right when you **open** the PR/MR (GitHub and GitLab).
   Plus **local PRs**: the same workflow against any two branches with no remote,
-  promotable to a real GitHub PR (comments and all) in one click.
+  promotable to a real GitHub PR (comments and all) in one click. A local-PR
+  merge **pre-shows whether it will conflict**, and if it does you resolve the
+  conflicts in an **in-app editor** — in an isolated worktree that never touches
+  your branch or working tree — then **Finish** (commit + mark merged) or
+  **Abort**.
 - **Issues & Discussions, in-app** — triage GitHub issues (types, sub-issues,
   dependencies, linked PRs and branches) and Discussions without the browser, plus
   private **local to-dos** that need no remote.

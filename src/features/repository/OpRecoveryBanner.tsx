@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useDismissOplog, useOplogCheck } from "@/lib/git/queries";
+import { useLocalPrs } from "@/lib/pulls/queries";
 import { toastError } from "@/lib/toast";
 import { OperationHistoryDialog } from "./OperationHistoryDialog";
 import { StashesDialog } from "./StashesDialog";
@@ -18,10 +19,19 @@ import { StashesDialog } from "./StashesDialog";
 export function OpRecoveryBanner({ repoPath }: { repoPath: string }) {
   const check = useOplogCheck(repoPath);
   const dismiss = useDismissOplog(repoPath);
+  const localPrs = useLocalPrs(repoPath);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [recoverOpen, setRecoverOpen] = useState(false);
 
-  const op = check.data?.[0];
+  // A paused local-PR merge leaves its oplog entry pending, but the guided-finish
+  // banner already owns that op (Finish/Abort). Skip any interrupted op whose id
+  // matches an active pendingMerge so it isn't double-surfaced here.
+  const guidedOpIds = new Set(
+    (localPrs.data ?? [])
+      .map((p) => p.pendingMerge?.opId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const op = check.data?.find((o) => !guidedOpIds.has(o.id));
   if (!op) return null;
 
   const sha7 = op.originalSha ? op.originalSha.slice(0, 7) : "";

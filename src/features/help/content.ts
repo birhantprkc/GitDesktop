@@ -607,6 +607,14 @@ A **local PR** is the same review workflow against any two branches with **no re
 all** — describe it in Markdown, comment, label, approve, and merge locally. Local PRs
 are private to you and never written into the repo. When you're ready, **promote** a
 local PR to a real GitHub PR or GitLab MR in one click, history preserved.
+
+Before you merge, the PR footer previews whether the merge will **conflict** or land
+cleanly. If a merge does hit conflicts, GitDesktop runs it in an **isolated worktree** —
+your branch and working tree are left untouched, so you don't need a clean tree (unless
+you're merging into the branch you're currently on). The PR view opens a **resolve
+surface** with the conflicted files and the in-app conflict editor (see *Syncing &
+conflicts*); once every conflict is resolved, **Finish merge** commits and marks the PR
+merged, or **Abort** throws the merge away.
 {{ai}}
 ## AI review
 

@@ -1,19 +1,24 @@
 import { Popover } from "@base-ui/react/popover";
 import {
   ArchiveIcon,
+  ArrowClockwiseIcon,
   ArrowCounterClockwiseIcon,
   CaretDownIcon,
   CheckCircleIcon,
+  CheckIcon,
   DotsThreeIcon,
   GithubLogoIcon,
   GitlabLogoIcon,
   GitMergeIcon,
+  InfoIcon,
   PencilSimpleIcon,
   SparkleIcon,
   TagIcon,
   TrashIcon,
+  WarningIcon,
   XIcon,
 } from "@phosphor-icons/react";
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { MarkdownEditor } from "@/components/markdown-editor";
@@ -55,9 +60,11 @@ import {
   forgeFeatureReady,
   useBranchDiffFiles,
   useCompareBranches,
+  useConflictPreview,
   useForgeStatus,
   useMergeLocalPr,
   useRepoStatus,
+  useUpdateBranchFrom,
 } from "@/lib/git/queries";
 import {
   useDeleteLocalPr,
@@ -70,6 +77,7 @@ import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { PromoteLocalPrDialog } from "./PromoteLocalPrDialog";
 import { PrReviewPanel } from "./PrReviewPanel";
+import { ResolveConflictsView } from "./ResolveConflictsView";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 
 type Section = "conversation" | "commits" | "files" | "review";
@@ -86,6 +94,7 @@ export function LocalPrView({
   const update = useUpdateLocalPr(repoPath);
   const del = useDeleteLocalPr(repoPath);
   const merge = useMergeLocalPr(repoPath);
+  const updateBranchFrom = useUpdateBranchFrom(repoPath);
   const status = useRepoStatus(repoPath);
   const selectPr = useUiStore((s) => s.selectPr);
   const selectedPr = useUiStore((s) => s.selectedPr);
@@ -156,6 +165,28 @@ export function LocalPrView({
     pr?.base ?? null,
     pr?.head ?? null,
   );
+  // The merge runs in an isolated worktree, so a dirty working tree only blocks
+  // it when `base` IS the branch you're currently on (git won't check that ref
+  // out into a second worktree while it has uncommitted tracked changes). When
+  // base is some other branch, the merge never touches your tree.
+  const baseIsCurrent =
+    pr !== undefined && status.data?.branch?.name === pr.base;
+  const hasTrackedChanges = (status.data?.entries ?? []).some(
+    (e) =>
+      e.staged !== null || (e.unstaged !== null && e.unstaged !== "untracked"),
+  );
+  const dirtyBlocks = baseIsCurrent && hasTrackedChanges;
+  const canMerge = pr?.status === "open" && pr.approved;
+  // Predict whether the merge will conflict, shown as a calm line by the Merge
+  // button. `git_conflict_preview` is a read-only merge-tree prediction, so run
+  // it whenever the PR is open — even when merging is currently blocked (not
+  // approved / dirty tree), the user still wants to see the prediction.
+  const conflictPreview = useConflictPreview(
+    repoPath,
+    pr?.base ?? "",
+    pr?.head ?? "",
+    pr?.status === "open",
+  );
 
   if (!pr) {
     return (
@@ -164,15 +195,10 @@ export function LocalPrView({
   }
 
   const ahead = comparison.data?.ahead ?? [];
+  // Commits on `base` that `head` lacks — i.e. how far the PR's head branch has
+  // fallen behind base. Non-empty ⇒ offer GitHub's "Update branch".
+  const behind = comparison.data?.behind ?? [];
   const fileCount = diffFiles.data?.length;
-  const canMerge = pr.status === "open" && pr.approved;
-  // A local-PR merge hard-resets on failure, so the backend refuses when the
-  // tree has TRACKED changes (commit or stash first). Surface that up front.
-  // Untracked files are fine — a hard reset never removes them — so mirror that.
-  const hasTrackedChanges = (status.data?.entries ?? []).some(
-    (e) =>
-      e.staged !== null || (e.unstaged !== null && e.unstaged !== "untracked"),
-  );
 
   function toggleApprove() {
     if (!pr) return;
@@ -193,25 +219,144 @@ export function LocalPrView({
     merge.mutate(
       { base: pr.base, head: pr.head, message, strategy },
       {
-        onSuccess: () => {
+        onSuccess: (outcome) => {
+          if (outcome.status === "merged") {
+            update.mutate({
+              id: pr.id,
+              mutate: (cur) => ({
+                ...cur,
+                status: "merged",
+                mergedAt: new Date().toISOString(),
+              }),
+            });
+            const verb =
+              strategy === "squash"
+                ? "Squashed and merged"
+                : strategy === "rebase"
+                  ? "Rebased and merged"
+                  : "Merged";
+            toast.success(`${verb} ${pr.head} into ${pr.base}`);
+            return;
+          }
+          // Conflicts: the merge is paused in an isolated worktree (the user's
+          // branch and working tree are untouched). Record it on the PR so this
+          // view swaps to the in-place ResolveConflictsView, where the conflict
+          // editor is pointed at that worktree.
+          if (!outcome.worktreePath || !outcome.worktreeId) {
+            toastError(
+              new Error("Merge paused on conflicts but returned no worktree"),
+            );
+            return;
+          }
           update.mutate({
             id: pr.id,
             mutate: (cur) => ({
               ...cur,
-              status: "merged",
-              mergedAt: new Date().toISOString(),
+              pendingMerge: {
+                base: pr.base,
+                head: pr.head,
+                strategy: strategy as "merge" | "squash" | "rebase",
+                message,
+                worktreePath: outcome.worktreePath as string,
+                worktreeId: outcome.worktreeId as string,
+                opId: outcome.opId,
+                startedAt: new Date().toISOString(),
+              },
             }),
           });
-          const verb =
-            strategy === "squash"
-              ? "Squashed and merged"
-              : strategy === "rebase"
-                ? "Rebased and merged"
-                : "Merged";
-          toast.success(`${verb} ${pr.head} into ${pr.base}`);
+          toast.warning("Merge has conflicts — resolve them to finish");
         },
         onError: toastError,
       },
+    );
+  }
+
+  // A calm status block above the Merge button: up to two INDEPENDENT lines —
+  // the in-memory conflict prediction, and (when merging is currently blocked)
+  // the visible reason it's disabled. The reason is shown here because a
+  // disabled <Button>'s `title` never surfaces a tooltip (the repo's
+  // explain-disabled-actions gotcha).
+  function renderMergeStatus() {
+    if (!pr) return null;
+    const p = conflictPreview.data;
+    const blocked = !canMerge || dirtyBlocks;
+
+    // Prediction line — nothing for up-to-date / fast-forward / unknown.
+    let prediction: ReactNode = null;
+    if (p?.status === "conflict") {
+      const files = p.conflicts;
+      const shown = files.slice(0, 3);
+      const list =
+        files.length <= 3
+          ? shown.join(", ")
+          : `${shown.join(", ")} and ${files.length - 3} more`;
+      prediction = (
+        <>
+          <div className="flex items-start gap-1.5 text-warning">
+            <WarningIcon className="mt-px size-3.5 shrink-0" />
+            <span className="min-w-0">
+              This merge will conflict in{" "}
+              <span className="font-mono">{list}</span>
+            </span>
+          </div>
+          <div className="pl-5 text-muted-foreground">
+            You'll resolve the conflicts in an editor — your working tree stays
+            untouched.
+          </div>
+        </>
+      );
+    } else if (p?.status === "clean") {
+      prediction = (
+        <div className="flex items-center gap-1.5 text-muted-foreground">
+          <CheckIcon className="size-3.5 shrink-0" />
+          Merges cleanly
+        </div>
+      );
+    }
+
+    // Blocked-reason line — independent of the prediction.
+    const reason = blocked ? (
+      <div className="flex items-center gap-1.5 text-muted-foreground">
+        <InfoIcon className="size-3.5 shrink-0" />
+        {!canMerge
+          ? "Approve this PR to merge"
+          : "Commit or stash your changes to merge into the current branch"}
+      </div>
+    ) : null;
+
+    if (!prediction && !reason) return null;
+    return (
+      <div className="space-y-1 border-t px-3 py-1.5 text-xs">
+        {prediction}
+        {reason}
+      </div>
+    );
+  }
+
+  // A merge paused on conflicts takes over the whole PR view: the merge lives in
+  // an isolated worktree, and ResolveConflictsView drives its file list + editor +
+  // Finish/Abort in place of the PR's normal sections and footer actions.
+  if (pr.pendingMerge?.worktreePath) {
+    return (
+      <div className="flex h-full flex-col">
+        <header className="space-y-2 border-b px-4 py-3">
+          <div className="flex items-start gap-2">
+            <h2 className="text-sm font-medium">{pr.title}</h2>
+            <span className="flex-1" />
+            <Badge variant="secondary" className="capitalize">
+              {pr.status}
+            </Badge>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span className="font-mono">{pr.head}</span>
+            <span>→</span>
+            <span className="font-mono">{pr.base}</span>
+            <span>•</span>
+            <span>local · {formatRelativeTime(pr.createdAt)}</span>
+          </div>
+        </header>
+        <ResolveConflictsView repoPath={repoPath} pr={pr} />
+      </div>
     );
   }
 
@@ -554,6 +699,8 @@ export function LocalPrView({
         </div>
       )}
 
+      {pr.status === "open" && renderMergeStatus()}
+
       <div className="flex items-center gap-2 border-t p-3">
         <Button
           variant="outline"
@@ -616,17 +763,44 @@ export function LocalPrView({
             >
               Close
             </Button>
+            {/* GitHub-style "Update branch": only when head has fallen behind
+                base. Merges base into head (in a throwaway worktree, so it
+                doesn't touch your working tree unless head IS your current
+                branch) so the branch catches up; the repo-scoped invalidation
+                then refreshes the comparison (behind → 0, this button hides)
+                and the conflict preview. */}
+            {behind.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={updateBranchFrom.isPending}
+                title={`Merge ${pr.base} into ${pr.head} to catch it up`}
+                onClick={() =>
+                  updateBranchFrom.mutate(
+                    { branch: pr.head, base: pr.base },
+                    {
+                      onSuccess: () =>
+                        toast.success(`Updated ${pr.head} from ${pr.base}`),
+                      onError: toastError,
+                    },
+                  )
+                }
+              >
+                <ArrowClockwiseIcon data-icon="inline-start" />
+                Update branch
+              </Button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
                   <Button
                     size="sm"
-                    disabled={!canMerge || merge.isPending || hasTrackedChanges}
+                    disabled={!canMerge || merge.isPending || dirtyBlocks}
                     title={
                       !canMerge
                         ? "Approve the PR before merging"
-                        : hasTrackedChanges
-                          ? "Commit or stash your changes before merging"
+                        : dirtyBlocks
+                          ? "Commit or stash your changes before merging into the current branch"
                           : `Merge ${pr.head} into ${pr.base}`
                     }
                   >

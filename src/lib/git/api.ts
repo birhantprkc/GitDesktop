@@ -794,6 +794,24 @@ export const gitUpdateBranchFrom = (
 
 export type MergeStrategy = "merge" | "squash" | "rebase" | "fast_forward";
 
+/** Outcome of starting or finishing a local-PR merge. `merged` means it committed;
+ *  `conflicts` means it paused with conflicts in an isolated worktree for the user
+ *  to resolve — the worktree fields feed the finish (`gitFinishLocalPrMerge`) /
+ *  abort (`gitAbortLocalPrMerge`) commands, which point the conflict editor at the
+ *  worktree without touching the user's branch or working tree. */
+export interface LocalPrMergeOutcome {
+  status: "merged" | "conflicts";
+  conflicts: string[];
+  /** The base tip after a successful merge (informational). */
+  baseTip: string;
+  /** The detached worktree holding the in-progress merge; null when merged clean. */
+  worktreePath: string | null;
+  /** The worktree's id, passed to finish; null when merged clean. */
+  worktreeId: string | null;
+  /** The oplog entry id, passed to finish/abort. */
+  opId: string | null;
+}
+
 export const gitMergeLocalPr = (
   repoPath: string,
   base: string,
@@ -801,13 +819,56 @@ export const gitMergeLocalPr = (
   message: string,
   strategy: MergeStrategy,
 ) =>
-  invoke<void>("git_merge_local_pr", {
+  invoke<LocalPrMergeOutcome>("git_merge_local_pr", {
     repoPath,
     base,
     head,
     message,
     strategy,
   });
+
+/** Commits a paused local-PR merge once its conflicts are resolved (staged) in the
+ *  worktree at `worktreePath`. May itself return `conflicts` again for a multi-step
+ *  rebase that re-pauses (in the same worktree). */
+export const gitFinishLocalPrMerge = (
+  repoPath: string,
+  base: string,
+  strategy: MergeStrategy,
+  message: string,
+  worktreePath: string,
+  worktreeId: string,
+  opId: string | null,
+) =>
+  invoke<LocalPrMergeOutcome>("git_finish_local_pr_merge", {
+    repoPath,
+    base,
+    strategy,
+    message,
+    worktreePath,
+    worktreeId,
+    opId,
+  });
+
+/** Rolls a paused local-PR merge back by deleting the merge worktree — the user's
+ *  branch and working tree were never touched, so nothing else to undo. */
+export const gitAbortLocalPrMerge = (
+  repoPath: string,
+  worktreePath: string,
+  opId: string | null,
+) =>
+  invoke<void>("git_abort_local_pr_merge", {
+    repoPath,
+    worktreePath,
+    opId,
+  });
+
+/** In-memory prediction of whether merging `head` into `base` will conflict, for
+ *  the pre-merge preview line. Reuses the existing `MergePreview` shape. */
+export const gitConflictPreview = (
+  repoPath: string,
+  base: string,
+  head: string,
+) => invoke<MergePreview>("git_conflict_preview", { repoPath, base, head });
 
 export const gitRepoStats = (repoPath: string) =>
   invoke<RepoStats>("git_repo_stats", { repoPath });
@@ -918,6 +979,21 @@ export const gitReviewWorktree = (repoPath: string, sha: string) =>
 /** Removes a review worktree (best-effort, idempotent). */
 export const gitRemoveWorktree = (repoPath: string, worktreePath: string) =>
   invoke<void>("git_remove_worktree", { repoPath, worktreePath });
+
+/** Reclaims leaked local-PR conflict-resolution worktrees: removes every hidden
+ *  `gd-resolve-*` worktree whose path is NOT in `keepPaths`. Pass the worktree
+ *  paths of all currently-active paused merges (each local PR's
+ *  `pendingMerge.worktreePath`) so a genuinely in-progress resolve is spared;
+ *  the backend normalizes paths, so pass them as they came from the merge
+ *  outcome. Best-effort housekeeping, run once on repo open. */
+export const gitCleanupOrphanedResolveWorktrees = (
+  repoPath: string,
+  keepPaths: string[],
+) =>
+  invoke<void>("git_cleanup_orphaned_resolve_worktrees", {
+    repoPath,
+    keepPaths,
+  });
 
 /** Provider-neutral hosted-integration status (GitHub today; GitLab/Bitbucket as
  *  their impls land) — the gate hosted panels read for any provider. */

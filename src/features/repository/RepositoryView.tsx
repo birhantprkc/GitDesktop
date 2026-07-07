@@ -43,6 +43,7 @@ import { RemoteIssueView } from "@/features/issues/RemoteIssueView";
 import { LocalPrView } from "@/features/pulls/LocalPrView";
 import { PullRequestsPanel } from "@/features/pulls/PullRequestsPanel";
 import { RemotePrView } from "@/features/pulls/RemotePrView";
+import { useCleanupResolveWorktrees } from "@/features/pulls/useCleanupResolveWorktrees";
 import { useWatchPrHeads } from "@/features/pulls/useWatchPrHeads";
 import { SessionList } from "@/features/sessions/SessionList";
 import { SessionView } from "@/features/sessions/SessionView";
@@ -142,6 +143,9 @@ export function RepositoryView() {
   // Auto re-review open PRs (local + remote) whose head branch gets new
   // commits — pr-sync, gated by the runner's opt-in + per-mode watermark.
   useWatchPrHeads(repoPath ?? "");
+  // Reclaim any local-PR resolve worktrees leaked by a crash mid-resolve (runs
+  // once per repo, after the local-PR list loads so active ones are spared).
+  useCleanupResolveWorktrees(repoPath ?? "");
   // Refresh the repo's stored visibility badge on every open (fire-and-forget).
   useRepoVisibilityProbe(repoPath);
 

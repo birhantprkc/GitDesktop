@@ -1,0 +1,1 @@
+- **Cherry-picking commits onto another branch no longer risks uncommitted work.** Cherry-picking onto the branch you're currently on could, if it hit a conflict, discard your uncommitted changes during rollback — it now refuses up front on a dirty working tree with a clear "commit or stash your changes first" message. (Untracked files are still fine.)

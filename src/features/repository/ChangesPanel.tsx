@@ -658,6 +658,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     // wrapping this whole tree in a motion component). Reduced-motion-safe.
     <div className="flex min-h-0 flex-1 flex-col motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
       <ConflictBanner repoPath={repoPath} conflictedPaths={conflictedPaths} />
+
       {entries.length === 0 ? (
         <ChangesEmptyState
           repoPath={repoPath}

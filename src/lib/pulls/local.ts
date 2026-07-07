@@ -15,6 +15,29 @@ export interface LocalPrComment {
 
 export type LocalPrStatus = "open" | "merged" | "closed";
 
+/** A local-PR merge that hit conflicts and is paused for the user to resolve in
+ *  an isolated worktree. Carries everything `git_finish_local_pr_merge` /
+ *  `git_abort_local_pr_merge` need to commit the result or roll it back. The
+ *  conflicts are unmerged paths in the hidden worktree at `worktreePath` — the
+ *  user's branch and working tree stay untouched. Set on the PR while resolution
+ *  is in flight; cleared (set to `undefined`, which JSON omits) once finished or
+ *  aborted. */
+export interface PendingMerge {
+  base: string;
+  head: string;
+  strategy: "merge" | "squash" | "rebase";
+  /** The intended commit message (`pr.title\n\npr.body`). */
+  message: string;
+  /** The detached worktree holding the in-progress merge — point the conflict
+   *  editor (and a worktree-scoped `git status`) at this path to resolve. */
+  worktreePath: string;
+  /** The worktree's id, passed to finish so the backend can locate/prune it. */
+  worktreeId: string;
+  /** The oplog entry id, passed to finish/abort (null if none was recorded). */
+  opId: string | null;
+  startedAt: string;
+}
+
 export interface LocalPr {
   id: string;
   title: string;
@@ -30,6 +53,10 @@ export interface LocalPr {
   mergedAt?: string;
   /** Hidden from the list unless "Show archived" — a soft alternative to delete. */
   archived?: boolean;
+  /** Set while a merge of this PR is paused on conflicts (resolved in an isolated
+   *  worktree); cleared once finished or aborted. Absent on PRs stored before it
+   *  existed. */
+  pendingMerge?: PendingMerge;
 }
 
 // Personal app-data, keyed by repo path — never written into the repo itself.

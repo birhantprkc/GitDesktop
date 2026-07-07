@@ -3039,6 +3039,56 @@ export function useMergeLocalPr(repo: string) {
   );
 }
 
+/** Commits a paused local-PR merge once its conflicts are resolved in the worktree. */
+export function useFinishLocalPrMerge(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      base: string;
+      strategy: api.MergeStrategy;
+      message: string;
+      worktreePath: string;
+      worktreeId: string;
+      opId: string | null;
+    }) =>
+      api.gitFinishLocalPrMerge(
+        repo,
+        args.base,
+        args.strategy,
+        args.message,
+        args.worktreePath,
+        args.worktreeId,
+        args.opId,
+      ),
+  );
+}
+
+/** Rolls a paused local-PR merge back by deleting its isolated worktree. */
+export function useAbortLocalPrMerge(repo: string) {
+  return useRepoMutation(
+    repo,
+    (args: { worktreePath: string; opId: string | null }) =>
+      api.gitAbortLocalPrMerge(repo, args.worktreePath, args.opId),
+  );
+}
+
+/** Pre-merge conflict prediction for a local PR's `base`/`head`, keyed under the
+ *  repo so merge mutations invalidate it. Gate with `enabled` (skip while the tree
+ *  has tracked changes or the PR can't merge). */
+export function useConflictPreview(
+  repo: string,
+  base: string,
+  head: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repo, "conflict-preview", base, head] as const,
+    queryFn: () => api.gitConflictPreview(repo, base, head),
+    enabled: enabled && base !== "" && head !== "",
+    staleTime: 15_000,
+  });
+}
+
 export function useReviewPr(repo: string) {
   return useRepoMutation(
     repo,
