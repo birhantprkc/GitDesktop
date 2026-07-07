@@ -11,7 +11,10 @@ import type { ResearchRun } from "./store";
 /** The durable shape of a research run — live streaming fields dropped on load
  *  (a reloaded run is never mid-turn, and a reload must never resurrect a stuck
  *  `distilling` flag — excluding it here makes that type-enforced). */
-type PersistedResearch = Omit<ResearchRun, "generating" | "status" | "distilling">;
+type PersistedResearch = Omit<
+  ResearchRun,
+  "generating" | "status" | "distilling"
+>;
 
 let storePromise: Promise<Store> | null = null;
 function getStore(): Promise<Store> {

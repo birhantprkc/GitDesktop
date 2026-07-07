@@ -100,7 +100,11 @@ export function CreateBranchDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <form
-          className="space-y-4"
+          // min-w-0: DialogContent is display:grid, so this grid item must be
+          // allowed to shrink below its content — otherwise a long base branch
+          // name (e.g. feature/ollama-cloud-provider-custom-endpoints) pushes
+          // the form past the dialog's max-width and the text overflows.
+          className="min-w-0 space-y-4"
           onSubmit={(e) => {
             e.preventDefault();
             createForm.handleSubmit();
@@ -110,8 +114,10 @@ export function CreateBranchDialog({
             <DialogTitle>New branch</DialogTitle>
             <DialogDescription>
               Branches from{" "}
-              <span className="font-mono">{createBase || "HEAD"}</span> and
-              switches to it.
+              <span className="font-mono wrap-break-word">
+                {createBase || "HEAD"}
+              </span>{" "}
+              and switches to it.
             </DialogDescription>
           </DialogHeader>
           <createForm.AppField
