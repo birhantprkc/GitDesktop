@@ -80,6 +80,7 @@ import type {
   IssueType,
   MergePreview,
   Milestone,
+  OrphanedStash,
   PagesInfo,
   PrDetails,
   PrInfo,
@@ -246,6 +247,22 @@ export const gitStashApply = (repoPath: string, index: number, pop: boolean) =>
 
 export const gitStashDrop = (repoPath: string, index: number) =>
   invoke<void>("git_stash_drop", { repoPath, index });
+
+export const gitOrphanedStashes = (repoPath: string) =>
+  invoke<OrphanedStash[]>("git_orphaned_stashes", { repoPath });
+
+export const gitOrphanedStashFiles = (repoPath: string, sha: string) =>
+  invoke<StashFile[]>("git_orphaned_stash_files", { repoPath, sha });
+
+export const gitOrphanedStashFileDiff = (
+  repoPath: string,
+  sha: string,
+  filePath: string,
+) =>
+  invoke<FileDiff>("git_orphaned_stash_file_diff", { repoPath, sha, filePath });
+
+export const gitRestoreOrphaned = (repoPath: string, sha: string) =>
+  invoke<void>("git_restore_orphaned", { repoPath, sha });
 
 export const gitOpState = (repoPath: string) =>
   invoke<RepoOpState>("git_op_state", { repoPath });

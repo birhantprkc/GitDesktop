@@ -992,21 +992,30 @@ pub struct StashFile {
     pub untracked: bool,
 }
 
-/// The files a stash holds, including untracked ones, so it can be browsed
-/// file by file instead of as one combined diff (where a single binary file
-/// would mark the whole preview unreadable).
-#[tauri::command]
-pub async fn git_stash_files(repo_path: String, index: u32) -> AppResult<Vec<StashFile>> {
-    let spec = format!("stash@{{{index}}}");
+/// A stash commit that has fallen out of `git stash list` (dropped, or
+/// orphaned by an interrupted operation) but still holds recoverable work,
+/// found by walking dangling commits.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanedStash {
+    pub sha: String,
+    pub message: String,
+    pub date: String,
+    pub file_count: u32,
+}
+
+/// The files a stash-shaped ref holds, including untracked ones, keyed by a
+/// ref spec (`stash@{N}` for a live stash, or a raw sha for a dangling one).
+async fn stash_files_at(repo: &str, spec: &str) -> AppResult<Vec<StashFile>> {
     let out = run_git(
-        Some(&repo_path),
+        Some(repo),
         &[
             "stash",
             "show",
             "--numstat",
             "-z",
             "--include-untracked",
-            &spec,
+            spec,
         ],
         DEFAULT_TIMEOUT,
     )
@@ -1015,10 +1024,10 @@ pub async fn git_stash_files(repo_path: String, index: u32) -> AppResult<Vec<Sta
 
     // Paths in the untracked parent (^3, present only when untracked files
     // were stashed) need their "new" content read from there.
-    let untracked_ref = format!("stash@{{{index}}}^3");
+    let untracked_ref = format!("{spec}^3");
     let mut untracked = std::collections::HashSet::new();
     if let Ok(o) = run_git(
-        Some(&repo_path),
+        Some(repo),
         &["ls-tree", "-r", "--name-only", "-z", &untracked_ref],
         DEFAULT_TIMEOUT,
     )
@@ -1041,30 +1050,25 @@ pub async fn git_stash_files(repo_path: String, index: u32) -> AppResult<Vec<Sta
         .collect())
 }
 
-/// One file's diff from a stash. Tracked changes diff the stash against its
-/// base; untracked files live in the stash's third parent (`^3`, created by
-/// `--include-untracked`), so an empty tracked diff falls back to that.
-#[tauri::command]
-pub async fn git_stash_file_diff(
-    repo_path: String,
-    index: u32,
-    file_path: String,
-) -> AppResult<FileDiff> {
-    let base = format!("stash@{{{index}}}^1");
-    let stash = format!("stash@{{{index}}}");
+/// One file's diff from a stash-shaped ref. Tracked changes diff the stash
+/// against its base (`^1`); untracked files live in the stash's third parent
+/// (`^3`, created by `--include-untracked`), so an empty tracked diff falls
+/// back to that. `spec` is `stash@{N}` for a live stash or a raw sha.
+async fn stash_file_diff_at(repo: &str, spec: &str, file_path: &str) -> AppResult<FileDiff> {
+    let base = format!("{spec}^1");
     let out = run_git(
-        Some(&repo_path),
-        &["diff", "--no-color", &base, &stash, "--", &file_path],
+        Some(repo),
+        &["diff", "--no-color", &base, spec, "--", file_path],
         DEFAULT_TIMEOUT,
     )
     .await?;
     let mut text = out.stdout_lossy();
     if text.trim().is_empty() {
         // Not a tracked change — try the untracked-files parent if present.
-        let untracked = format!("stash@{{{index}}}^3");
+        let untracked = format!("{spec}^3");
         if let Ok(o) = run_git(
-            Some(&repo_path),
-            &["diff", "--no-color", &base, &untracked, "--", &file_path],
+            Some(repo),
+            &["diff", "--no-color", &base, &untracked, "--", file_path],
             DEFAULT_TIMEOUT,
         )
         .await
@@ -1077,11 +1081,152 @@ pub async fn git_stash_file_diff(
         .any(|l| l.starts_with("Binary files ") && l.ends_with(" differ"));
     let (text, is_truncated) = crate::git::diff::truncate_at_char_boundary(text, 1_000_000);
     Ok(FileDiff {
-        file_path,
+        file_path: file_path.to_string(),
         is_binary,
         is_truncated,
         text,
     })
+}
+
+/// The files a stash holds, including untracked ones, so it can be browsed
+/// file by file instead of as one combined diff (where a single binary file
+/// would mark the whole preview unreadable).
+#[tauri::command]
+pub async fn git_stash_files(repo_path: String, index: u32) -> AppResult<Vec<StashFile>> {
+    stash_files_at(&repo_path, &format!("stash@{{{index}}}")).await
+}
+
+/// One file's diff from a stash. Tracked changes diff the stash against its
+/// base; untracked files live in the stash's third parent (`^3`, created by
+/// `--include-untracked`), so an empty tracked diff falls back to that.
+#[tauri::command]
+pub async fn git_stash_file_diff(
+    repo_path: String,
+    index: u32,
+    file_path: String,
+) -> AppResult<FileDiff> {
+    stash_file_diff_at(&repo_path, &format!("stash@{{{index}}}"), &file_path).await
+}
+
+/// Find dangling stash commits — work a `git stash` created that has since
+/// fallen out of `git stash list` (dropped, or abandoned by an interrupted
+/// operation). Walks `git fsck` dangling commits, keeps only stash-shaped
+/// ones not already live, and reports each with its file count, newest first.
+#[tauri::command]
+pub async fn git_orphaned_stashes(repo_path: String) -> AppResult<Vec<OrphanedStash>> {
+    // Candidate dangling commits.
+    let fsck = run_git(
+        Some(&repo_path),
+        &["fsck", "--no-progress"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let candidates: Vec<String> = fsck
+        .stdout_lossy()
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            match (parts.next(), parts.next(), parts.next()) {
+                (Some("dangling"), Some("commit"), Some(sha)) => Some(sha.to_string()),
+                _ => None,
+            }
+        })
+        .collect();
+
+    // Shas already live in `git stash list` — don't double-list them.
+    let live = run_git(
+        Some(&repo_path),
+        &["stash", "list", "--format=%H"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    let live: std::collections::HashSet<String> = live
+        .stdout_lossy()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    let mut out: Vec<OrphanedStash> = Vec::new();
+    for sha in candidates {
+        if live.contains(&sha) {
+            continue;
+        }
+        // Tolerant: a candidate whose metadata won't parse is simply skipped
+        // rather than failing the whole list.
+        let Ok(meta) = run_git(
+            Some(&repo_path),
+            &["log", "-1", "--format=%s%x00%cI%x00%P", &sha],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        else {
+            continue;
+        };
+        let meta = meta.stdout_lossy();
+        let mut parts = meta.trim_end_matches('\n').splitn(3, '\0');
+        let (Some(subject), Some(date), Some(parents)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        // Stash-shaped: a `WIP on <branch>:`/`On <branch>:` subject and at
+        // least two parents (base + index; a third holds untracked files).
+        if !(subject.starts_with("WIP on ") || subject.starts_with("On ")) {
+            continue;
+        }
+        if parents.split_whitespace().count() < 2 {
+            continue;
+        }
+        let file_count = stash_files_at(&repo_path, &sha)
+            .await
+            .map(|f| f.len() as u32)
+            .unwrap_or(0);
+        out.push(OrphanedStash {
+            sha,
+            message: subject.to_string(),
+            date: date.to_string(),
+            file_count,
+        });
+    }
+
+    // Newest first by committer date (ISO 8601 sorts lexically).
+    out.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(out)
+}
+
+/// The files a dangling (orphaned) stash holds, browsed by sha.
+#[tauri::command]
+pub async fn git_orphaned_stash_files(
+    repo_path: String,
+    sha: String,
+) -> AppResult<Vec<StashFile>> {
+    validate_hash(&sha)?;
+    stash_files_at(&repo_path, &sha).await
+}
+
+/// One file's diff from a dangling (orphaned) stash, by sha.
+#[tauri::command]
+pub async fn git_orphaned_stash_file_diff(
+    repo_path: String,
+    sha: String,
+    file_path: String,
+) -> AppResult<FileDiff> {
+    validate_hash(&sha)?;
+    stash_file_diff_at(&repo_path, &sha, &file_path).await
+}
+
+/// Restore a dangling (orphaned) stash into the working tree. Applies (never
+/// drops or commits); a conflict surfaces through the normal error path.
+#[tauri::command]
+pub async fn git_restore_orphaned(
+    state: State<'_, AppState>,
+    repo_path: String,
+    sha: String,
+) -> AppResult<()> {
+    validate_hash(&sha)?;
+    run_git_mutating(&state, &repo_path, &["stash", "apply", &sha], DEFAULT_TIMEOUT).await?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2449,6 +2594,42 @@ mod tests {
         assert!(replace_file_lines(&state, &repo, "missing.txt", 1, &lines(&["a"]), &[], false)
             .await
             .is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn orphaned_stashes_finds_a_dropped_stash() {
+        let (dir, repo) = setup_repo("orphaned-stash").await;
+        // Make a tracked change plus an untracked file, then stash both.
+        std::fs::write(dir.join("a.txt"), "changed\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "fresh\n").unwrap();
+        git(&repo, &["stash", "push", "-u", "-m", "rescue me"]).await;
+        let sha = rev(&repo, "stash@{0}").await;
+        // Drop it → the commit becomes dangling but still reachable by sha.
+        git(&repo, &["stash", "drop"]).await;
+
+        let found = git_orphaned_stashes(repo.clone()).await.unwrap();
+        let entry = found
+            .iter()
+            .find(|o| o.sha == sha)
+            .expect("dropped stash should appear as orphaned");
+        assert!(
+            entry.message.starts_with("On ") || entry.message.contains("rescue me"),
+            "message was {:?}",
+            entry.message
+        );
+        assert!(entry.file_count > 0, "file_count was {}", entry.file_count);
+
+        // A live stash must NOT be reported as orphaned.
+        std::fs::write(dir.join("a.txt"), "changed again\n").unwrap();
+        git(&repo, &["stash", "push", "-m", "still live"]).await;
+        let live_sha = rev(&repo, "stash@{0}").await;
+        let found2 = git_orphaned_stashes(repo.clone()).await.unwrap();
+        assert!(
+            !found2.iter().any(|o| o.sha == live_sha),
+            "live stash should be excluded"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

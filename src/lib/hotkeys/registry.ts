@@ -405,6 +405,12 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "recover-lost-work",
+    label: "Recover lost work",
+    category: "Branches & stash",
+    defaultBinding: null,
+  },
+  {
     id: "discard-all",
     label: "Discard all changes",
     category: "Branches & stash",

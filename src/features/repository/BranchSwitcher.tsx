@@ -177,6 +177,11 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [stashAllOpen, setStashAllOpen] = useState(false);
   const [stashPopOpen, setStashPopOpen] = useState(false);
   const [stashesOpen, setStashesOpen] = useState(false);
+  // Which view the Stashes dialog opens to — "recoverable" for "Recover lost
+  // work…" and its palette action, "stashes" otherwise.
+  const [stashesView, setStashesView] = useState<"stashes" | "recoverable">(
+    "stashes",
+  );
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
   // The pending switch target. `remote` is set only for remote-only rows, which
   // check out via `--track <remote>/<name>` (honoring the row's promised remote
@@ -673,7 +678,19 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   );
   useHotkeyAction("stash-all", () => setStashAllOpen(true), hasChanges);
   useHotkeyAction("pop-stash", () => setStashPopOpen(true), stashes > 0);
-  useHotkeyAction("view-stashes", () => setStashesOpen(true), stashes > 0);
+  useHotkeyAction(
+    "view-stashes",
+    () => {
+      setStashesView("stashes");
+      setStashesOpen(true);
+    },
+    stashes > 0,
+  );
+  // Always enabled — orphaned work commonly exists even with zero live stashes.
+  useHotkeyAction("recover-lost-work", () => {
+    setStashesView("recoverable");
+    setStashesOpen(true);
+  });
   useHotkeyAction("discard-all", () => setDiscardAllOpen(true), hasChanges);
 
   // Shared by the visible list and the Archived section.
@@ -1099,10 +1116,22 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   disabled={stashes === 0}
                   onClick={() => {
                     setOpen(false);
+                    setStashesView("stashes");
                     setStashesOpen(true);
                   }}
                 >
                   View stashes{stashes > 0 ? ` (${stashes})` : ""}…
+                </MenuRow>
+                {/* Not gated on stash count — orphaned work commonly exists
+                    with zero live stashes. */}
+                <MenuRow
+                  onClick={() => {
+                    setOpen(false);
+                    setStashesView("recoverable");
+                    setStashesOpen(true);
+                  }}
+                >
+                  Recover lost work…
                 </MenuRow>
               </div>
               <div className="border-t py-1">
@@ -1234,6 +1263,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={stashesOpen}
         onOpenChange={setStashesOpen}
+        initialView={stashesView}
       />
 
       <ConfirmDialog

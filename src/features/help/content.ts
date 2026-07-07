@@ -362,6 +362,14 @@ The branch name in the header opens the **branch switcher** ({{kbd:show-branches
 stashes** lists them to apply, pop, or drop, and **Pop latest stash** restores the most
 recent.
 
+**Recover lost work** ({{kbd:recover-lost-work}}, also in the branch ⋮ menu) opens the
+**Recoverable** tab in the stashes dialog. It scans your repository (with \`git fsck\`) for
+*orphaned* stashes — uncommitted work a stash once saved that has since fallen out of
+**View stashes** (dropped, or abandoned by an interrupted operation) — and lists each one
+with a file-by-file diff preview. **Restore to working tree** re-applies the one you pick;
+it's non-destructive (it applies the stash, never dropping or committing anything), so you
+can safely preview and recover work you thought was gone.
+
 ## Compare
 
 The **Compare** tab ({{kbd:tab-compare}}) lets you pick any base branch and see what the

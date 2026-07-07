@@ -2862,6 +2862,59 @@ export function useStashDrop(repo: string) {
   );
 }
 
+/** Dangling stash commits recovered via `git fsck` — the LAZY fsck trigger for
+ *  the Stashes dialog's "Recoverable" view. `fsck` is slow, so enable this only
+ *  while that view is actually shown. */
+export function useOrphanedStashes(repo: string, enabled = false) {
+  return useQuery({
+    queryKey: ["repo", repo, "orphaned-stashes"] as const,
+    queryFn: () => api.gitOrphanedStashes(repo),
+    enabled,
+    // fsck is slow: don't re-scan on every toggle back to the Recoverable view
+    // within a session (the Rescan button forces a fresh scan), and keep the
+    // list on screen during a refetch instead of blanking to the spinner.
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useOrphanedStashFiles(repo: string, sha: string | null) {
+  return useQuery({
+    queryKey: ["repo", repo, "orphaned-stash-files", sha ?? ""] as const,
+    queryFn: () => api.gitOrphanedStashFiles(repo, sha ?? ""),
+    enabled: sha !== null,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useOrphanedStashFileDiff(
+  repo: string,
+  sha: string | null,
+  filePath: string | null,
+) {
+  return useQuery({
+    queryKey: [
+      "repo",
+      repo,
+      "orphaned-stash-diff",
+      sha ?? "",
+      filePath ?? "",
+    ] as const,
+    queryFn: () => api.gitOrphanedStashFileDiff(repo, sha ?? "", filePath ?? ""),
+    enabled: sha !== null && filePath !== null,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** Restore an orphaned stash to the working tree (`git stash apply <sha>` — never
+ *  drops). Default invalidation refetches the whole repo subtree, so the status
+ *  and stash lists reflect the applied change. */
+export function useRestoreOrphaned(repo: string) {
+  return useRepoMutation(repo, (sha: string) =>
+    api.gitRestoreOrphaned(repo, sha),
+  );
+}
+
 export function useMergeBranch(repo: string) {
   return useRepoMutation(
     repo,

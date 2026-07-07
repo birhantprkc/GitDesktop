@@ -261,9 +261,13 @@ full **interactive rebase** ⭐ — an *Edit history* editor to reword / squash 
 fixup / drop / reorder unpushed commits behind an atomic replay engine (any
 conflict rolls back untouched), or **edit** a commit to pause and amend its
 contents (a real resumable rebase) — which GitHub Desktop doesn't offer; a stash
-browser, tag management, submodule management, and a **worktree manager**
-(create, switch between, and remove linked worktrees, so you can work on several
-branches in parallel folders without stashing).
+browser with a **Recover lost work** ⭐ view that scans (via `git fsck`) for
+orphaned/dangling stashes — uncommitted work a `git stash` saved but that fell
+out of `git stash list` (dropped, or abandoned by an interrupted operation) — and
+restores any of them non-destructively to the working tree; tag management,
+submodule management, and a **worktree manager** (create, switch between, and
+remove linked worktrees, so you can work on several branches in parallel folders
+without stashing).
 
 **Syncing** — fetch / pull / push with ahead/behind indicators; pull is
 `--ff-only`, and divergence routes to a guarded force push with
