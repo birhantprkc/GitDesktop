@@ -57,6 +57,7 @@ import {
   useCompareBranches,
   useForgeStatus,
   useMergeLocalPr,
+  useRepoStatus,
 } from "@/lib/git/queries";
 import {
   useDeleteLocalPr,
@@ -85,6 +86,7 @@ export function LocalPrView({
   const update = useUpdateLocalPr(repoPath);
   const del = useDeleteLocalPr(repoPath);
   const merge = useMergeLocalPr(repoPath);
+  const status = useRepoStatus(repoPath);
   const selectPr = useUiStore((s) => s.selectPr);
   const selectedPr = useUiStore((s) => s.selectedPr);
   const pendingPrSection = useUiStore((s) => s.pendingPrSection);
@@ -164,6 +166,13 @@ export function LocalPrView({
   const ahead = comparison.data?.ahead ?? [];
   const fileCount = diffFiles.data?.length;
   const canMerge = pr.status === "open" && pr.approved;
+  // A local-PR merge hard-resets on failure, so the backend refuses when the
+  // tree has TRACKED changes (commit or stash first). Surface that up front.
+  // Untracked files are fine — a hard reset never removes them — so mirror that.
+  const hasTrackedChanges = (status.data?.entries ?? []).some(
+    (e) =>
+      e.staged !== null || (e.unstaged !== null && e.unstaged !== "untracked"),
+  );
 
   function toggleApprove() {
     if (!pr) return;
@@ -612,11 +621,13 @@ export function LocalPrView({
                 render={
                   <Button
                     size="sm"
-                    disabled={!canMerge || merge.isPending}
+                    disabled={!canMerge || merge.isPending || hasTrackedChanges}
                     title={
-                      canMerge
-                        ? `Merge ${pr.head} into ${pr.base}`
-                        : "Approve the PR before merging"
+                      !canMerge
+                        ? "Approve the PR before merging"
+                        : hasTrackedChanges
+                          ? "Commit or stash your changes before merging"
+                          : `Merge ${pr.head} into ${pr.base}`
                     }
                   >
                     <GitMergeIcon data-icon="inline-start" />

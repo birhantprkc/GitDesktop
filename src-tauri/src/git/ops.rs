@@ -12,6 +12,32 @@ use crate::git::runner::{
 use crate::git::types::{FileDiff, RepoOpState, RewriteStep, StashEntry, TagInfo};
 use crate::state::AppState;
 
+/// Refuses when the working tree has **tracked** changes (staged or unstaged).
+///
+/// Compound ops whose failure/rollback path does `reset --hard` (local-PR merge,
+/// cherry-pick-onto) call this FIRST, so a rollback can never discard the user's
+/// uncommitted work — they must commit or stash it. This closes the hole where
+/// the protective `switch <target>` is a no-op because the target equals the
+/// current branch, letting a dirty tree flow into the destructive reset (a real
+/// data-loss incident). Mirrors the inline guard in `rewrite_commits` /
+/// `git_rebase_edit`. Untracked files are intentionally allowed: `reset --hard`
+/// never removes them (no data-loss surface), and a merge that would clobber one
+/// is refused by git itself.
+async fn ensure_clean_tree(repo: &str) -> AppResult<()> {
+    let status = run_git(
+        Some(repo),
+        &["status", "--porcelain", "--untracked-files=no"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if !status.stdout_lossy().trim().is_empty() {
+        return Err(AppError::InvalidArgument(
+            "the working tree has uncommitted changes — commit or stash them first".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Resolves a path inside .git (worktree-safe via --git-path) to an absolute one.
 async fn git_dir_path(repo: &str, name: &str) -> Option<std::path::PathBuf> {
     let out = run_git(
@@ -275,6 +301,9 @@ pub async fn git_cherry_pick_onto(
             skipped: 0,
         });
     }
+    // The failure path hard-resets `target` to its prior tip, which would discard
+    // uncommitted work when target is the current branch — refuse first.
+    ensure_clean_tree(&repo_path).await?;
 
     // Where we are now, so we can return on failure. A detached HEAD has no
     // branch name, so fall back to restoring its commit directly.
@@ -1270,6 +1299,9 @@ pub async fn git_merge_local_pr(
 
     validate_branch_arg(&base)?;
     validate_branch_arg(&head)?;
+    // Every failure path below hard-resets `base` to its prior tip, which would
+    // discard uncommitted work when base is the current branch — refuse first.
+    ensure_clean_tree(&repo_path).await?;
     let message = if message.trim().is_empty() {
         format!("Merge {head} into {base}")
     } else {
@@ -1906,6 +1938,24 @@ mod tests {
             message: None,
             edit: false,
         }
+    }
+
+    #[tokio::test]
+    async fn ensure_clean_tree_allows_clean_and_untracked_but_refuses_tracked() {
+        let (dir, repo) = setup_repo("clean-tree").await;
+        // Clean tree → Ok.
+        assert!(ensure_clean_tree(&repo).await.is_ok());
+        // Untracked file → still Ok (`reset --hard` never removes it).
+        std::fs::write(dir.join("scratch.txt"), "x\n").unwrap();
+        assert!(ensure_clean_tree(&repo).await.is_ok());
+        // Unstaged tracked change → refused (this is the reset --hard loss surface).
+        std::fs::write(dir.join("a.txt"), "v1\n").unwrap();
+        assert!(ensure_clean_tree(&repo).await.is_err());
+        // Staged tracked change → refused (the exact incident state).
+        git(&repo, &["add", "a.txt"]).await;
+        assert!(ensure_clean_tree(&repo).await.is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
