@@ -362,13 +362,24 @@ The branch name in the header opens the **branch switcher** ({{kbd:show-branches
 stashes** lists them to apply, pop, or drop, and **Pop latest stash** restores the most
 recent.
 
-**Recover lost work** ({{kbd:recover-lost-work}}, also in the branch ⋮ menu) opens the
+**Recover lost work** (in the branch ⋮ menu, or the command palette) opens the
 **Recoverable** tab in the stashes dialog. It scans your repository (with \`git fsck\`) for
 *orphaned* stashes — uncommitted work a stash once saved that has since fallen out of
 **View stashes** (dropped, or abandoned by an interrupted operation) — and lists each one
 with a file-by-file diff preview. **Restore to working tree** re-applies the one you pick;
 it's non-destructive (it applies the stash, never dropping or committing anything), so you
 can safely preview and recover work you thought was gone.
+
+**Operation history** (in the branch ⋮ menu, or the command palette) opens a
+journal of the *risky* operations GitDesktop runs — local PR merges, cherry-picks, history
+edits, and interactive rebases — each recorded with the exact branch and commit it started
+from, and whether it finished, failed, or is still pending. If one of these operations is
+interrupted (a crash or a restart mid-op), a calm recovery line appears above the **Changes**
+list naming what was interrupted and the state it started from. That notice only informs — it
+never resets or continues anything on its own (the git-native **Continue**/**Abort** for an
+in-progress merge, rebase, or cherry-pick live in the conflict bar right above it); from it
+you can open this history, jump to **Recover lost work** to rescue any orphaned changes, or
+dismiss the notice.
 
 ## Compare
 

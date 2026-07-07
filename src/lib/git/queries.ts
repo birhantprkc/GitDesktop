@@ -2914,7 +2914,8 @@ export function useOrphanedStashFileDiff(
       sha ?? "",
       filePath ?? "",
     ] as const,
-    queryFn: () => api.gitOrphanedStashFileDiff(repo, sha ?? "", filePath ?? ""),
+    queryFn: () =>
+      api.gitOrphanedStashFileDiff(repo, sha ?? "", filePath ?? ""),
     enabled: sha !== null && filePath !== null,
     placeholderData: keepPreviousData,
   });
@@ -2927,6 +2928,38 @@ export function useRestoreOrphaned(repo: string) {
   return useRepoMutation(repo, (sha: string) =>
     api.gitRestoreOrphaned(repo, sha),
   );
+}
+
+/**
+ * Reconcile-on-read: renders the interrupted-op recovery banner. Lives under
+ * the repo subtree, so a ConflictBanner Continue/Abort (a repo mutation) re-runs
+ * it and clears the banner once the op is resolved.
+ */
+export function useOplogCheck(repo: string, enabled = true) {
+  return useQuery({
+    queryKey: ["repo", repo, "oplog-check"] as const,
+    queryFn: () => api.gitOplogCheck(repo),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** The full operation journal, gated to fetch only while the history dialog is
+ *  open (a pure read, but no reason to run it otherwise). */
+export function useOplogHistory(repo: string, enabled = false) {
+  return useQuery({
+    queryKey: ["repo", repo, "oplog"] as const,
+    queryFn: () => api.gitOplogList(repo),
+    enabled,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** Dismiss a journal entry so it stops surfacing as interrupted. Default
+ *  invalidation refetches the repo subtree, clearing the banner. */
+export function useDismissOplog(repo: string) {
+  return useRepoMutation(repo, (id: string) => api.gitOplogDismiss(repo, id));
 }
 
 export function useMergeBranch(repo: string) {

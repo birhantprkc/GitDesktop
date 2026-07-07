@@ -411,6 +411,12 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "operation-history",
+    label: "Operation history",
+    category: "Branches & stash",
+    defaultBinding: null,
+  },
+  {
     id: "discard-all",
     label: "Discard all changes",
     category: "Branches & stash",

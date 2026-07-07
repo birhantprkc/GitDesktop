@@ -69,6 +69,7 @@ import {
 } from "./BranchMergePickerDialog";
 import { CreateBranchDialog } from "./CreateBranchDialog";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
+import { OperationHistoryDialog } from "./OperationHistoryDialog";
 import { RenameBranchDialog } from "./RenameBranchDialog";
 import { StashesDialog } from "./StashesDialog";
 import { SwitchWithChangesDialog } from "./SwitchWithChangesDialog";
@@ -182,6 +183,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [stashesView, setStashesView] = useState<"stashes" | "recoverable">(
     "stashes",
   );
+  const [opHistoryOpen, setOpHistoryOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
   // The pending switch target. `remote` is set only for remote-only rows, which
   // check out via `--track <remote>/<name>` (honoring the row's promised remote
@@ -691,6 +693,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     setStashesView("recoverable");
     setStashesOpen(true);
   });
+  useHotkeyAction("operation-history", () => setOpHistoryOpen(true));
   useHotkeyAction("discard-all", () => setDiscardAllOpen(true), hasChanges);
 
   // Shared by the visible list and the Archived section.
@@ -1133,6 +1136,14 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 >
                   Recover lost work…
                 </MenuRow>
+                <MenuRow
+                  onClick={() => {
+                    setOpen(false);
+                    setOpHistoryOpen(true);
+                  }}
+                >
+                  Operation history…
+                </MenuRow>
               </div>
               <div className="border-t py-1">
                 <MenuRow
@@ -1264,6 +1275,12 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         open={stashesOpen}
         onOpenChange={setStashesOpen}
         initialView={stashesView}
+      />
+
+      <OperationHistoryDialog
+        repoPath={repoPath}
+        open={opHistoryOpen}
+        onOpenChange={setOpHistoryOpen}
       />
 
       <ConfirmDialog

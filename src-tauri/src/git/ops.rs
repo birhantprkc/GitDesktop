@@ -338,61 +338,100 @@ pub async fn git_cherry_pick_onto(
     .trim()
     .to_string();
 
-    run_git_mutating(&state, &repo_path, &["switch", &target_branch], DEFAULT_TIMEOUT).await?;
+    // Journal a pending entry AFTER the guards + state capture, BEFORE the first
+    // mutation. Best-effort: a journal failure returns None and the op proceeds.
+    let original_sha = run_git(Some(&repo_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
+        .await
+        .ok()
+        .map(|o| o.stdout_lossy().trim().to_string())
+        .unwrap_or_default();
+    let label = format!(
+        "Cherry-pick {} commit(s) onto {target_branch}",
+        hashes.len()
+    );
+    let original_ref_label = if detached {
+        "HEAD".to_string()
+    } else {
+        original_restore.clone()
+    };
+    let op_id = crate::oplog::begin(
+        &repo_path,
+        "cherry_pick_onto",
+        &label,
+        Some(original_ref_label),
+        &original_sha,
+        Some(&target_tip),
+    )
+    .await;
 
-    let mut applied = 0usize;
-    let mut skipped = 0usize;
-    for hash in &hashes {
-        match run_git_mutating(&state, &repo_path, &["cherry-pick", hash], DEFAULT_TIMEOUT).await {
-            Ok(_) => applied += 1,
-            Err(AppError::Git { stderr, .. })
-                if stderr.contains("is now empty") || stderr.contains("--allow-empty") =>
+    let result: AppResult<CherryPickRangeResult> = async {
+        run_git_mutating(&state, &repo_path, &["switch", &target_branch], DEFAULT_TIMEOUT).await?;
+
+        let mut applied = 0usize;
+        let mut skipped = 0usize;
+        for hash in &hashes {
+            match run_git_mutating(&state, &repo_path, &["cherry-pick", hash], DEFAULT_TIMEOUT).await
             {
-                let _ = run_git_mutating(
-                    &state,
-                    &repo_path,
-                    &["cherry-pick", "--skip"],
-                    DEFAULT_TIMEOUT,
-                )
-                .await;
-                skipped += 1;
+                Ok(_) => applied += 1,
+                Err(AppError::Git { stderr, .. })
+                    if stderr.contains("is now empty") || stderr.contains("--allow-empty") =>
+                {
+                    let _ = run_git_mutating(
+                        &state,
+                        &repo_path,
+                        &["cherry-pick", "--skip"],
+                        DEFAULT_TIMEOUT,
+                    )
+                    .await;
+                    skipped += 1;
+                }
+                Err(AppError::Git { code, stderr }) => {
+                    // Roll everything back: abort the in-progress pick, drop the
+                    // commits already applied in this batch, and return home.
+                    let _ = run_git_mutating(
+                        &state,
+                        &repo_path,
+                        &["cherry-pick", "--abort"],
+                        DEFAULT_TIMEOUT,
+                    )
+                    .await;
+                    let _ = run_git_mutating(
+                        &state,
+                        &repo_path,
+                        &["reset", "--hard", &target_tip],
+                        DEFAULT_TIMEOUT,
+                    )
+                    .await;
+                    let restore_args: Vec<&str> = if detached {
+                        vec!["switch", "--detach", &original_restore]
+                    } else {
+                        vec!["switch", &original_restore]
+                    };
+                    let _ =
+                        run_git_mutating(&state, &repo_path, &restore_args, DEFAULT_TIMEOUT).await;
+                    let short = &hash[..hash.len().min(7)];
+                    return Err(AppError::Git {
+                        code,
+                        stderr: format!(
+                            "Cherry-pick hit conflicts on {short} and was rolled back; {target_branch} is unchanged.\n{stderr}"
+                        ),
+                    });
+                }
+                Err(e) => return Err(e),
             }
-            Err(AppError::Git { code, stderr }) => {
-                // Roll everything back: abort the in-progress pick, drop the
-                // commits already applied in this batch, and return home.
-                let _ = run_git_mutating(
-                    &state,
-                    &repo_path,
-                    &["cherry-pick", "--abort"],
-                    DEFAULT_TIMEOUT,
-                )
-                .await;
-                let _ = run_git_mutating(
-                    &state,
-                    &repo_path,
-                    &["reset", "--hard", &target_tip],
-                    DEFAULT_TIMEOUT,
-                )
-                .await;
-                let restore_args: Vec<&str> = if detached {
-                    vec!["switch", "--detach", &original_restore]
-                } else {
-                    vec!["switch", &original_restore]
-                };
-                let _ = run_git_mutating(&state, &repo_path, &restore_args, DEFAULT_TIMEOUT).await;
-                let short = &hash[..hash.len().min(7)];
-                return Err(AppError::Git {
-                    code,
-                    stderr: format!(
-                        "Cherry-pick hit conflicts on {short} and was rolled back; {target_branch} is unchanged.\n{stderr}"
-                    ),
-                });
-            }
-            Err(e) => return Err(e),
         }
-    }
 
-    Ok(CherryPickRangeResult { applied, skipped })
+        Ok(CherryPickRangeResult { applied, skipped })
+    }
+    .await;
+
+    crate::oplog::finish(
+        &repo_path,
+        &op_id,
+        result.as_ref().err().map(|e| e.to_string()),
+    )
+    .await;
+    result
 }
 
 /// Discards every uncommitted change: untracked files go to the recycle bin,
@@ -1479,97 +1518,140 @@ pub async fn git_merge_local_pr(
         .trim()
         .to_string();
 
-    run_git_mutating(&state, &repo_path, &["switch", &base], DEFAULT_TIMEOUT).await?;
+    // Journal a pending entry AFTER the state capture, BEFORE the `switch` below.
+    // Best-effort: a journal failure returns None and the op proceeds unchanged.
+    let original_sha = run_git(Some(&repo_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
+        .await
+        .ok()
+        .map(|o| o.stdout_lossy().trim().to_string())
+        .unwrap_or_default();
+    let verb = match strategy.as_str() {
+        "squash" => "Squash-merge",
+        "rebase" => "Rebase-merge",
+        _ => "Merge",
+    };
+    let label = format!("{verb} {head} → {base}");
+    let original_ref_label = if detached {
+        "HEAD".to_string()
+    } else {
+        original_restore.clone()
+    };
+    let op_id = crate::oplog::begin(
+        &repo_path,
+        "merge_local_pr",
+        &label,
+        Some(original_ref_label),
+        &original_sha,
+        Some(&base_tip),
+    )
+    .await;
 
-    let range = format!("{base}..{head}");
-    let result: AppResult<()> = match strategy.as_str() {
-        "squash" => {
-            match run_git_mutating(
-                &state,
-                &repo_path,
-                &["merge", "--squash", &head],
-                DEFAULT_TIMEOUT,
-            )
-            .await
-            {
-                Ok(_) => run_git_mutating(
+    let op_result: AppResult<()> = async {
+        run_git_mutating(&state, &repo_path, &["switch", &base], DEFAULT_TIMEOUT).await?;
+
+        let range = format!("{base}..{head}");
+        let result: AppResult<()> = match strategy.as_str() {
+            "squash" => {
+                match run_git_mutating(
                     &state,
                     &repo_path,
-                    &["commit", "-m", &message],
+                    &["merge", "--squash", &head],
                     DEFAULT_TIMEOUT,
                 )
                 .await
-                .map(|_| ()),
-                Err(e) => Err(e),
+                {
+                    Ok(_) => run_git_mutating(
+                        &state,
+                        &repo_path,
+                        &["commit", "-m", &message],
+                        DEFAULT_TIMEOUT,
+                    )
+                    .await
+                    .map(|_| ()),
+                    Err(e) => Err(e),
+                }
             }
-        }
-        "rebase" => run_git_mutating(&state, &repo_path, &["cherry-pick", &range], DEFAULT_TIMEOUT)
+            "rebase" => {
+                run_git_mutating(&state, &repo_path, &["cherry-pick", &range], DEFAULT_TIMEOUT)
+                    .await
+                    .map(|_| ())
+            }
+            _ => run_git_mutating(
+                &state,
+                &repo_path,
+                &["merge", "--no-ff", "-m", &message, &head],
+                DEFAULT_TIMEOUT,
+            )
             .await
             .map(|_| ()),
-        _ => run_git_mutating(
-            &state,
-            &repo_path,
-            &["merge", "--no-ff", "-m", &message, &head],
-            DEFAULT_TIMEOUT,
-        )
-        .await
-        .map(|_| ()),
-    };
+        };
 
-    match result {
-        Ok(()) => {
-            // The merge landed on `base`; return the user to the branch (or
-            // detached commit) they started on, unless they were already there.
-            // Best-effort and always safe: the merge went *into* base, so the
-            // original ref is untouched and still exists, and the tree is clean
-            // after the commit, so the switch-back can't be blocked. A failure
-            // here at worst leaves them on `base` — no worse than before.
-            if original_restore != base {
+        match result {
+            Ok(()) => {
+                // The merge landed on `base`; return the user to the branch (or
+                // detached commit) they started on, unless they were already there.
+                // Best-effort and always safe: the merge went *into* base, so the
+                // original ref is untouched and still exists, and the tree is clean
+                // after the commit, so the switch-back can't be blocked. A failure
+                // here at worst leaves them on `base` — no worse than before.
+                if original_restore != base {
+                    let restore: Vec<&str> = if detached {
+                        vec!["switch", "--detach", &original_restore]
+                    } else {
+                        vec!["switch", &original_restore]
+                    };
+                    let _ = run_git_mutating(&state, &repo_path, &restore, DEFAULT_TIMEOUT).await;
+                }
+                Ok(())
+            }
+            Err(err) => {
+                // Roll back any half-applied state, then return home. The aborts
+                // are best-effort (only one applies); the hard reset is the
+                // guarantee that base is left exactly as it was.
+                let _ =
+                    run_git_mutating(&state, &repo_path, &["merge", "--abort"], DEFAULT_TIMEOUT)
+                        .await;
+                let _ = run_git_mutating(
+                    &state,
+                    &repo_path,
+                    &["cherry-pick", "--abort"],
+                    DEFAULT_TIMEOUT,
+                )
+                .await;
+                let _ = run_git_mutating(
+                    &state,
+                    &repo_path,
+                    &["reset", "--hard", &base_tip],
+                    DEFAULT_TIMEOUT,
+                )
+                .await;
                 let restore: Vec<&str> = if detached {
                     vec!["switch", "--detach", &original_restore]
                 } else {
                     vec!["switch", &original_restore]
                 };
                 let _ = run_git_mutating(&state, &repo_path, &restore, DEFAULT_TIMEOUT).await;
-            }
-            Ok(())
-        }
-        Err(err) => {
-            // Roll back any half-applied state, then return home. The aborts
-            // are best-effort (only one applies); the hard reset is the
-            // guarantee that base is left exactly as it was.
-            let _ = run_git_mutating(&state, &repo_path, &["merge", "--abort"], DEFAULT_TIMEOUT).await;
-            let _ = run_git_mutating(
-                &state,
-                &repo_path,
-                &["cherry-pick", "--abort"],
-                DEFAULT_TIMEOUT,
-            )
-            .await;
-            let _ = run_git_mutating(
-                &state,
-                &repo_path,
-                &["reset", "--hard", &base_tip],
-                DEFAULT_TIMEOUT,
-            )
-            .await;
-            let restore: Vec<&str> = if detached {
-                vec!["switch", "--detach", &original_restore]
-            } else {
-                vec!["switch", &original_restore]
-            };
-            let _ = run_git_mutating(&state, &repo_path, &restore, DEFAULT_TIMEOUT).await;
-            match err {
-                AppError::Git { code, stderr } => Err(AppError::Git {
-                    code,
-                    stderr: format!(
-                        "{strategy} merge hit conflicts and was rolled back; {base} is unchanged.\n{stderr}"
-                    ),
-                }),
-                other => Err(other),
+                match err {
+                    AppError::Git { code, stderr } => Err(AppError::Git {
+                        code,
+                        stderr: format!(
+                            "{strategy} merge hit conflicts and was rolled back; {base} is unchanged.\n{stderr}"
+                        ),
+                    }),
+                    other => Err(other),
+                }
             }
         }
     }
+    .await;
+
+    crate::oplog::finish(
+        &repo_path,
+        &op_id,
+        op_result.as_ref().err().map(|e| e.to_string()),
+    )
+    .await;
+    op_result
 }
 
 /// Rewrites the unpushed tip of the current branch (`base..HEAD`): each step
@@ -1663,60 +1745,96 @@ pub(crate) async fn rewrite_commits(
         .trim()
         .to_string();
 
-    run_git_mutating(state, repo_path, &["reset", "--hard", base], DEFAULT_TIMEOUT).await?;
-    let mut failure: Option<AppError> = None;
-    'steps: for step in steps {
-        let single_pick = step.hashes.len() == 1 && step.message.is_none();
-        if single_pick {
-            let args = ["cherry-pick", step.hashes[0].as_str()];
-            if let Err(e) = run_git_mutating(state, repo_path, &args, DEFAULT_TIMEOUT).await {
-                failure = Some(e);
-                break 'steps;
-            }
-        } else {
-            let mut args = vec!["cherry-pick", "-n"];
-            args.extend(step.hashes.iter().map(String::as_str));
-            if let Err(e) = run_git_mutating(state, repo_path, &args, DEFAULT_TIMEOUT).await {
-                failure = Some(e);
-                break 'steps;
-            }
-            let message = step.message.as_deref().map(str::trim).unwrap_or("");
-            // With a message → squash/reword. Without → fixup: reuse the first
-            // (leader) commit's message and authorship.
-            let commit_args: Vec<&str> = if message.is_empty() {
-                vec!["commit", "-C", step.hashes[0].as_str()]
+    // Journal a pending entry AFTER the guards + `orig` capture, BEFORE the first
+    // mutation (`reset --hard`). Best-effort: a journal failure returns None and
+    // the op proceeds unchanged.
+    let original_ref = run_git(
+        Some(repo_path),
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    .ok()
+    .map(|o| o.stdout_lossy().trim().to_string())
+    .filter(|s| !s.is_empty());
+    let label = format!("Rewrite {} commit(s)", steps.len());
+    let op_id = crate::oplog::begin(
+        repo_path,
+        "rewrite_commits",
+        &label,
+        original_ref,
+        &orig,
+        Some(&orig),
+    )
+    .await;
+
+    let op_result: AppResult<()> = async {
+        run_git_mutating(state, repo_path, &["reset", "--hard", base], DEFAULT_TIMEOUT).await?;
+        let mut failure: Option<AppError> = None;
+        'steps: for step in steps {
+            let single_pick = step.hashes.len() == 1 && step.message.is_none();
+            if single_pick {
+                let args = ["cherry-pick", step.hashes[0].as_str()];
+                if let Err(e) = run_git_mutating(state, repo_path, &args, DEFAULT_TIMEOUT).await {
+                    failure = Some(e);
+                    break 'steps;
+                }
             } else {
-                vec!["commit", "-m", message]
-            };
-            if let Err(e) =
-                run_git_mutating(state, repo_path, &commit_args, DEFAULT_TIMEOUT).await
-            {
-                failure = Some(e);
-                break 'steps;
+                let mut args = vec!["cherry-pick", "-n"];
+                args.extend(step.hashes.iter().map(String::as_str));
+                if let Err(e) = run_git_mutating(state, repo_path, &args, DEFAULT_TIMEOUT).await {
+                    failure = Some(e);
+                    break 'steps;
+                }
+                let message = step.message.as_deref().map(str::trim).unwrap_or("");
+                // With a message → squash/reword. Without → fixup: reuse the first
+                // (leader) commit's message and authorship.
+                let commit_args: Vec<&str> = if message.is_empty() {
+                    vec!["commit", "-C", step.hashes[0].as_str()]
+                } else {
+                    vec!["commit", "-m", message]
+                };
+                if let Err(e) =
+                    run_git_mutating(state, repo_path, &commit_args, DEFAULT_TIMEOUT).await
+                {
+                    failure = Some(e);
+                    break 'steps;
+                }
             }
         }
-    }
 
-    if let Some(err) = failure {
-        let _ = run_git_mutating(state, repo_path,
-            &["cherry-pick", "--abort"],
-            DEFAULT_TIMEOUT,
-        )
-        .await;
-        let _ =
-            run_git_mutating(state, repo_path, &["reset", "--hard", &orig], DEFAULT_TIMEOUT)
-                .await;
-        return Err(match err {
-            AppError::Git { code, stderr } => AppError::Git {
-                code,
-                stderr: format!(
-                    "The rewrite couldn't be applied (usually a conflict, or a squash/fixup that left nothing to commit) and was rolled back; your branch is unchanged.\n{stderr}"
-                ),
-            },
-            other => other,
-        });
+        if let Some(err) = failure {
+            let _ = run_git_mutating(
+                state,
+                repo_path,
+                &["cherry-pick", "--abort"],
+                DEFAULT_TIMEOUT,
+            )
+            .await;
+            let _ =
+                run_git_mutating(state, repo_path, &["reset", "--hard", &orig], DEFAULT_TIMEOUT)
+                    .await;
+            return Err(match err {
+                AppError::Git { code, stderr } => AppError::Git {
+                    code,
+                    stderr: format!(
+                        "The rewrite couldn't be applied (usually a conflict, or a squash/fixup that left nothing to commit) and was rolled back; your branch is unchanged.\n{stderr}"
+                    ),
+                },
+                other => other,
+            });
+        }
+        Ok(())
     }
-    Ok(())
+    .await;
+
+    crate::oplog::finish(
+        repo_path,
+        &op_id,
+        op_result.as_ref().err().map(|e| e.to_string()),
+    )
+    .await;
+    op_result
 }
 
 /// Rewrites the unpushed tip via a **real, resumable** `git rebase -i` — used
@@ -1772,73 +1890,115 @@ pub async fn git_rebase_edit(
         ));
     }
 
-    // Scratch dir inside .git for the generated todo + message files. The
-    // message files are referenced by `exec` lines that run on each --continue,
-    // so they must outlive this call — clear stale ones up front instead.
-    let dir = git_dir_path(&repo_path, "gd-rebase-edit")
+    // Journal a pending entry AFTER the guards, BEFORE the first side effect
+    // (scratch-dir setup / the rebase itself). Best-effort: a journal failure
+    // returns None and the op proceeds unchanged. A paused rebase returns Ok, so
+    // `finish` marks it "done" (git tracks the paused state); only a real Err is
+    // "failed". `git_oplog_check` sees `rebasing` true only if the PROCESS died.
+    let original_sha = run_git(Some(&repo_path), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
         .await
-        .ok_or_else(|| AppError::InvalidArgument("couldn't resolve the git dir".into()))?;
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| AppError::InvalidArgument(format!("couldn't create scratch dir: {e}")))?;
-
-    let mut todo = String::new();
-    for (i, step) in steps.iter().enumerate() {
-        todo.push_str(if step.edit { "edit " } else { "pick " });
-        todo.push_str(&step.hashes[0]);
-        todo.push('\n');
-        for fold in &step.hashes[1..] {
-            todo.push_str("fixup ");
-            todo.push_str(fold);
-            todo.push('\n');
-        }
-        let message = step.message.as_deref().map(str::trim).unwrap_or("");
-        if !message.is_empty() {
-            let msg_path = dir.join(format!("msg-{i}"));
-            std::fs::write(&msg_path, message)
-                .map_err(|e| AppError::InvalidArgument(format!("couldn't write message: {e}")))?;
-            let msg_fwd = msg_path.to_string_lossy().replace('\\', "/");
-            // --no-verify: the message is already composed; don't let a
-            // pre-commit/commit-msg hook stall the rebase mid-flight.
-            todo.push_str(&format!(
-                "exec git commit --amend --no-verify -F \"{msg_fwd}\"\n"
-            ));
-        }
-    }
-    let todo_path = dir.join("todo");
-    std::fs::write(&todo_path, &todo)
-        .map_err(|e| AppError::InvalidArgument(format!("couldn't write todo: {e}")))?;
-    let todo_fwd = todo_path.to_string_lossy().replace('\\', "/");
-    // `sequence.editor` swaps git's generated todo for ours (a plain copy);
-    // `core.editor=true` guarantees nothing ever blocks waiting for an editor.
-    let seq_editor = format!("sequence.editor=cp \"{todo_fwd}\"");
-
-    let out = run_git_raw(
+        .ok()
+        .map(|o| o.stdout_lossy().trim().to_string())
+        .unwrap_or_default();
+    let original_ref = run_git(
         Some(&repo_path),
-        &[
-            "-c",
-            "core.editor=true",
-            "-c",
-            &seq_editor,
-            "rebase",
-            "-i",
-            &base,
-        ],
+        &["rev-parse", "--abbrev-ref", "HEAD"],
         DEFAULT_TIMEOUT,
     )
-    .await?;
+    .await
+    .ok()
+    .map(|o| o.stdout_lossy().trim().to_string())
+    .filter(|s| !s.is_empty());
+    let label = format!("Interactive rebase onto {base}");
+    let op_id = crate::oplog::begin(
+        &repo_path,
+        "rebase_edit",
+        &label,
+        original_ref,
+        &original_sha,
+        Some(&original_sha),
+    )
+    .await;
 
-    // A paused rebase leaves rebase-merge in place — that's the hand-off to the
-    // banner, not a failure. Only error when nothing's in progress.
-    let rebasing = git_path_exists(&repo_path, "rebase-merge").await
-        || git_path_exists(&repo_path, "rebase-apply").await;
-    if !rebasing && out.code != 0 {
-        return Err(AppError::Git {
-            code: out.code,
-            stderr: format!("Couldn't start the rebase.\n{}", out.stderr),
-        });
+    let op_result: AppResult<()> = async {
+        // Scratch dir inside .git for the generated todo + message files. The
+        // message files are referenced by `exec` lines that run on each --continue,
+        // so they must outlive this call — clear stale ones up front instead.
+        let dir = git_dir_path(&repo_path, "gd-rebase-edit")
+            .await
+            .ok_or_else(|| AppError::InvalidArgument("couldn't resolve the git dir".into()))?;
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| AppError::InvalidArgument(format!("couldn't create scratch dir: {e}")))?;
+
+        let mut todo = String::new();
+        for (i, step) in steps.iter().enumerate() {
+            todo.push_str(if step.edit { "edit " } else { "pick " });
+            todo.push_str(&step.hashes[0]);
+            todo.push('\n');
+            for fold in &step.hashes[1..] {
+                todo.push_str("fixup ");
+                todo.push_str(fold);
+                todo.push('\n');
+            }
+            let message = step.message.as_deref().map(str::trim).unwrap_or("");
+            if !message.is_empty() {
+                let msg_path = dir.join(format!("msg-{i}"));
+                std::fs::write(&msg_path, message).map_err(|e| {
+                    AppError::InvalidArgument(format!("couldn't write message: {e}"))
+                })?;
+                let msg_fwd = msg_path.to_string_lossy().replace('\\', "/");
+                // --no-verify: the message is already composed; don't let a
+                // pre-commit/commit-msg hook stall the rebase mid-flight.
+                todo.push_str(&format!(
+                    "exec git commit --amend --no-verify -F \"{msg_fwd}\"\n"
+                ));
+            }
+        }
+        let todo_path = dir.join("todo");
+        std::fs::write(&todo_path, &todo)
+            .map_err(|e| AppError::InvalidArgument(format!("couldn't write todo: {e}")))?;
+        let todo_fwd = todo_path.to_string_lossy().replace('\\', "/");
+        // `sequence.editor` swaps git's generated todo for ours (a plain copy);
+        // `core.editor=true` guarantees nothing ever blocks waiting for an editor.
+        let seq_editor = format!("sequence.editor=cp \"{todo_fwd}\"");
+
+        let out = run_git_raw(
+            Some(&repo_path),
+            &[
+                "-c",
+                "core.editor=true",
+                "-c",
+                &seq_editor,
+                "rebase",
+                "-i",
+                &base,
+            ],
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+
+        // A paused rebase leaves rebase-merge in place — that's the hand-off to the
+        // banner, not a failure. Only error when nothing's in progress.
+        let rebasing = git_path_exists(&repo_path, "rebase-merge").await
+            || git_path_exists(&repo_path, "rebase-apply").await;
+        if !rebasing && out.code != 0 {
+            return Err(AppError::Git {
+                code: out.code,
+                stderr: format!("Couldn't start the rebase.\n{}", out.stderr),
+            });
+        }
+        Ok(())
     }
-    Ok(())
+    .await;
+
+    crate::oplog::finish(
+        &repo_path,
+        &op_id,
+        op_result.as_ref().err().map(|e| e.to_string()),
+    )
+    .await;
+    op_result
 }
 
 #[derive(serde::Serialize)]

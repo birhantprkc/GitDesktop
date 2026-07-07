@@ -264,7 +264,12 @@ contents (a real resumable rebase) — which GitHub Desktop doesn't offer; a sta
 browser with a **Recover lost work** ⭐ view that scans (via `git fsck`) for
 orphaned/dangling stashes — uncommitted work a `git stash` saved but that fell
 out of `git stash list` (dropped, or abandoned by an interrupted operation) — and
-restores any of them non-destructively to the working tree; tag management,
+restores any of them non-destructively to the working tree; an **operation
+journal** ⭐ that records the risky compound operations GitDesktop runs (local PR
+merges, cherry-picks, history edits, rebases) and, if one is interrupted by a
+crash or restart, surfaces a calm recovery notice naming what was interrupted and
+the exact branch + commit it started from — browsable any time via the *Operation
+history* command; tag management,
 submodule management, and a **worktree manager** (create, switch between, and
 remove linked worktrees, so you can work on several branches in parallel folders
 without stashing).

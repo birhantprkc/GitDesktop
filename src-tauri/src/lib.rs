@@ -13,6 +13,7 @@ mod instructions;
 mod local_prs;
 mod mcp;
 mod mcp_server;
+mod oplog;
 mod pty;
 mod research;
 mod secrets;
@@ -178,6 +179,9 @@ pub fn run() {
             git::ops::git_orphaned_stash_files,
             git::ops::git_orphaned_stash_file_diff,
             git::ops::git_restore_orphaned,
+            oplog::git_oplog_list,
+            oplog::git_oplog_check,
+            oplog::git_oplog_dismiss,
             git::ops::git_merge,
             git::ops::git_merge_preview,
             git::ops::git_rebase,

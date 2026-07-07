@@ -359,6 +359,33 @@ export interface RepoOpState {
 
 export type RepoOp = "merge" | "rebase" | "cherry-pick";
 
+/**
+ * One journaled entry from GitDesktop's operation log — a record of a risky
+ * compound git op (see `oplog.rs`), capturing the state it started from so an
+ * interrupted op can be traced or recovered. `op`/`status` are typed as their
+ * known values but rendered tolerantly (a future backend value must not crash
+ * the UI). Wire shape is camelCase (`#[serde(rename_all="camelCase")]`).
+ */
+export interface OpLogEntry {
+  id: string;
+  op: "merge_local_pr" | "cherry_pick_onto" | "rewrite_commits" | "rebase_edit";
+  /** Human label, e.g. "Squash-merge feature → main". */
+  label: string;
+  status: "pending" | "done" | "failed" | "dismissed";
+  /** ISO timestamp the op started. */
+  startedAt: string;
+  /** ISO timestamp the op finished, or null while still open. */
+  finishedAt: string | null;
+  /** The branch (or "HEAD" if detached) we were on before the op. */
+  originalRef: string | null;
+  /** Pre-op HEAD sha. */
+  originalSha: string;
+  /** The reset-rollback target tip, if one was captured. */
+  preOpTip: string | null;
+  /** Failure detail when `status === "failed"`. */
+  error: string | null;
+}
+
 export interface BranchComparison {
   /** On `compare` but not `base` — what a PR would introduce. */
   ahead: CommitSummary[];

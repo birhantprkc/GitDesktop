@@ -59,6 +59,7 @@ import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
 import { ChangesPanel } from "./ChangesPanel";
 import { InsightsPanel } from "./insights/InsightsPanel";
+import { OpRecoveryBanner } from "./OpRecoveryBanner";
 import { RepoHeader } from "./RepoHeader";
 import { usePrNotifications } from "./usePrNotifications";
 import { useRepoVisibilityProbe } from "./useRepoVisibilityProbe";
@@ -217,6 +218,7 @@ export function RepositoryView() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <RepoHeader repoPath={repoPath} />
+      <OpRecoveryBanner repoPath={repoPath} />
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-96 shrink-0 flex-col border-r">
           <Tabs

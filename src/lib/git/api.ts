@@ -80,6 +80,7 @@ import type {
   IssueType,
   MergePreview,
   Milestone,
+  OpLogEntry,
   OrphanedStash,
   PagesInfo,
   PrDetails,
@@ -268,6 +269,19 @@ export const gitOrphanedStashFileDiff = (
 
 export const gitRestoreOrphaned = (repoPath: string, sha: string) =>
   invoke<void>("git_restore_orphaned", { repoPath, sha });
+
+/** Full operation journal, newest-first (pure read). */
+export const gitOplogList = (repoPath: string) =>
+  invoke<OpLogEntry[]>("git_oplog_list", { repoPath });
+
+/** Reconciles the journal against the repo and returns the genuinely
+ *  interrupted op (0 or 1). Writes the store as an idempotent side effect. */
+export const gitOplogCheck = (repoPath: string) =>
+  invoke<OpLogEntry[]>("git_oplog_check", { repoPath });
+
+/** Marks a journal entry "dismissed" so it stops surfacing as interrupted. */
+export const gitOplogDismiss = (repoPath: string, id: string) =>
+  invoke<void>("git_oplog_dismiss", { repoPath, id });
 
 export const gitOpState = (repoPath: string) =>
   invoke<RepoOpState>("git_op_state", { repoPath });
