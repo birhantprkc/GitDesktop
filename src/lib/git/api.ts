@@ -147,6 +147,11 @@ export const createRepo = (options: CreateRepoOptions) =>
 export const gitStatus = (repoPath: string) =>
   invoke<RepoStatus>("git_status", { repoPath });
 
+/** Count of commits on HEAD not on any remote-tracking ref — the "unpublished"
+ *  count for a branch with no upstream (where `branch.ahead` is undefined). */
+export const gitUnpushedCount = (repoPath: string) =>
+  invoke<number>("git_unpushed_count", { repoPath });
+
 export const gitBranches = (repoPath: string) =>
   invoke<Branch[]>("git_branches", { repoPath });
 

@@ -657,6 +657,29 @@ pub async fn commit_on_remote(repo_path: String, sha: String) -> AppResult<bool>
     Ok(!out.stdout_lossy().trim().is_empty())
 }
 
+/// Count of commits reachable from `HEAD` but not from any remote-tracking ref
+/// (`git rev-list --count HEAD --not --remotes`) — i.e. how many commits haven't
+/// been published anywhere. The History tab uses this to mark the "not pushed"
+/// rows on a branch with **no upstream** (a never-pushed branch), where "ahead of
+/// upstream" is undefined: the fork point and everything below it live on
+/// `origin/<base>` and ARE published, so only the commits above it are unpushed —
+/// not the whole branch. A repo with no remotes at all yields the full `HEAD`
+/// count (nothing is published), which is the correct answer. A benign git error
+/// (e.g. an unborn `HEAD`) maps to `0` — nothing to mark.
+#[tauri::command]
+pub async fn git_unpushed_count(repo_path: String) -> AppResult<u32> {
+    let out = run_git_raw(
+        Some(&repo_path),
+        &["rev-list", "--count", "HEAD", "--not", "--remotes"],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    if out.code != 0 {
+        return Ok(0);
+    }
+    Ok(out.stdout_lossy().trim().parse().unwrap_or(0))
+}
+
 /// A process-unique suffix for the throwaway worktree directory name.
 fn unique_suffix() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};

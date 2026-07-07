@@ -46,6 +46,7 @@ import {
   useRepoStatus,
   useRevertCommit,
   useUndoCommit,
+  useUnpushedCount,
 } from "@/lib/git/queries";
 import { sanitizeRefName } from "@/lib/git/ref-name";
 import type { CommitSummary, RewriteStep } from "@/lib/git/types";
@@ -239,13 +240,18 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
     [commits, selected],
   );
 
-  // Commits not yet on the remote: the top `ahead` commits, or everything when
-  // there's no upstream (an unpublished branch — all commits are unpushed).
+  // Commits not yet on the remote. Published branch → the top `ahead` commits
+  // (ahead of its upstream). Unpublished branch (no upstream) → count them
+  // against the remotes, NOT `commits.length`: the fork point and everything
+  // below it live on `origin/<base>` and are already published, so only the
+  // branch's own commits are unpushed. (Queried only in the no-upstream case.)
   // Drives both the rewrite gating below and the per-row "not pushed" marker.
+  const noUpstream = head != null && head.upstream === null;
+  const unpushedVsRemotes = useUnpushedCount(repoPath, noUpstream);
   const unpushedCount = head
     ? head.upstream
       ? head.ahead
-      : commits.length
+      : (unpushedVsRemotes.data ?? 0)
     : 0;
   // The unpushed set (top `unpushedCount` of the HEAD-order log), for marking
   // rows. Memoized — the React Compiler won't hoist the .slice/.map/new Set.
