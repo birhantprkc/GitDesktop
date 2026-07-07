@@ -37,6 +37,56 @@ export type TranscriptSegment =
   | { type: "text"; text: string }
   | { type: "tool"; tool: AgentToolKind; target: string | null };
 
+/** The deduped, structured record of what a pipeline stage already examined —
+ *  distilled from its transcript's tool steps so the next stage (research → plan →
+ *  implement) can be handed it as grounding data instead of re-exploring from zero. */
+export interface ContextPack {
+  /** File/dir paths the stage read or listed (deduped, first-touch order). */
+  files: string[];
+  /** Search patterns/queries it ran (deduped). */
+  searches: string[];
+  /** URLs fetched / web queries run (deduped). */
+  web: string[];
+}
+
+/** Distill a transcript into a {@link ContextPack}: file reads/lists, searches, and
+ *  web fetches/searches, keyed by tool kind. Steps with no target (or another tool
+ *  kind — edit/write/run/task/other) are skipped. Each list dedupes on exact string
+ *  and preserves first-touch order. */
+export function extractContextPack(segments: TranscriptSegment[]): ContextPack {
+  const files: string[] = [];
+  const searches: string[] = [];
+  const web: string[] = [];
+  const filesSeen = new Set<string>();
+  const searchesSeen = new Set<string>();
+  const webSeen = new Set<string>();
+  const pushUnique = (seen: Set<string>, list: string[], value: string) => {
+    if (seen.has(value)) return;
+    seen.add(value);
+    list.push(value);
+  };
+  for (const seg of segments) {
+    if (seg.type !== "tool") continue;
+    const target = seg.target?.trim();
+    if (!target) continue;
+    switch (seg.tool) {
+      case "read":
+      case "list":
+        pushUnique(filesSeen, files, target);
+        break;
+      case "search":
+        pushUnique(searchesSeen, searches, target);
+        break;
+      case "web-fetch":
+      case "web-search":
+        pushUnique(webSeen, web, target);
+        break;
+      // edit/write/run/task/other carry no grounding value for the next stage.
+    }
+  }
+  return { files, searches, web };
+}
+
 /** Append streamed text to the transcript, coalescing into the trailing text run
  *  (so consecutive deltas don't fragment a paragraph). Returns a new array. */
 export function appendTranscriptText(
@@ -165,6 +215,12 @@ export interface AgentSessionArgs {
   sessionId: string;
   /** false = first turn (start the session), true = a follow-up turn (resume it). */
   resume: boolean;
+  /** Claude-only: a resume turn forks the conversation to a throwaway session id
+   *  (`--fork-session`) so it reads the full transcript as context but doesn't
+   *  pollute it — a later follow-up then resumes a clean conversation. Ignored by
+   *  the other agents (no equivalent). Omitted/false everywhere except the
+   *  research→plan distill turn. */
+  fork?: boolean;
   /** Read-only mode (a Plan conversation): swaps each CLI's write toolset for its
    *  read-only one, so the resumable turn can explore but never write. */
   readOnly: boolean;
@@ -212,6 +268,9 @@ export async function runAgentSession(args: AgentSessionArgs): Promise<void> {
     worktreePath: args.worktreePath,
     sessionId: args.sessionId,
     resume: args.resume,
+    // Default false so every non-distill caller (Plan/Delegate/Research turns +
+    // follow-ups/Implement) is byte-identical — `--fork-session` is never added.
+    fork: args.fork ?? false,
     readOnly: args.readOnly,
     // Default false so Plan/Delegate (which omit it) stay on the non-web profile.
     web: args.web ?? false,

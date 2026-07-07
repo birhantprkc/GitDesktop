@@ -9,8 +9,9 @@ import type { ResearchRun } from "./store";
 // run can still be resumed (follow-up) via its persisted session ids.
 
 /** The durable shape of a research run — live streaming fields dropped on load
- *  (a reloaded run is never mid-turn). */
-type PersistedResearch = Omit<ResearchRun, "generating" | "status">;
+ *  (a reloaded run is never mid-turn, and a reload must never resurrect a stuck
+ *  `distilling` flag — excluding it here makes that type-enforced). */
+type PersistedResearch = Omit<ResearchRun, "generating" | "status" | "distilling">;
 
 let storePromise: Promise<Store> | null = null;
 function getStore(): Promise<Store> {

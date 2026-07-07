@@ -9,7 +9,7 @@ import {
 } from "@/features/sessions/AgentPickers";
 import { clearAgentSelection } from "@/features/sessions/agentSelect";
 import { useSessionsStore } from "@/features/sessions/store";
-import type { AgentKind } from "@/lib/ai/agent";
+import { type AgentKind, extractContextPack } from "@/lib/ai/agent";
 import { buildImplementPrompt } from "@/lib/ai/prompt";
 import { MODEL_SUGGESTIONS } from "@/lib/ai/providers";
 import { type PlanRun, usePlanStore } from "./store";
@@ -43,7 +43,13 @@ export function ImplementPlanButton({ run }: { run: PlanRun }) {
     clearAgentSelection();
     const sessionId = await start(
       run.repoPath,
-      buildImplementPrompt({ title: run.draft.title, body: run.draft.body }),
+      buildImplementPrompt({
+        title: run.draft.title,
+        body: run.draft.body,
+        // The plan run's OWN reads — the paths its plan body cites (not unioned with
+        // the upstream research pack; the plan already digested that).
+        contextPack: extractContextPack(run.segments ?? []),
+      }),
       model,
       agent,
       effort,

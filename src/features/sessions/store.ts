@@ -26,6 +26,7 @@ import {
 } from "@/lib/settings/mcp";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
+import { bumpNavVersion } from "./navVersion";
 import {
   appendEffort,
   appendMcp,
@@ -494,7 +495,12 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     set({ hydrated: true });
   },
 
-  setActive: (id) => set({ activeId: id }),
+  setActive: (id) => {
+    // Tick the agent-surface nav counter so an in-flight handoff can tell the
+    // user navigated (see navVersion.ts).
+    bumpNavVersion();
+    set({ activeId: id });
+  },
 
   setPendingTask: (pendingTask) => set({ pendingTask }),
 

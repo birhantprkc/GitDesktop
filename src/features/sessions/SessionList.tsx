@@ -36,6 +36,7 @@ import { useReconcileLocalPrs } from "@/features/pulls/useReconcileLocalPrs";
 import {
   assembleSessionReport,
   type ResearchRun,
+  researchRunContextPack,
   useResearchStore,
 } from "@/features/research/store";
 import type { AgentKind } from "@/lib/ai/agent";
@@ -48,6 +49,8 @@ import { cn } from "@/lib/utils";
 import { AGENT_LABELS } from "./AgentPickers";
 import { useAgentNumber, useAgentNumbers } from "./agentNumber";
 import {
+  agentSelectionUnchanged,
+  captureAgentSelection,
   clearAgentSelection,
   selectPlan,
   selectResearch,
@@ -265,13 +268,27 @@ function ResearchMenuItems({
   requestConfirm: (req: ConfirmReq) => void;
 }) {
   const store = useResearchStore.getState;
-  const turnIntoPlan = () => {
-    if (!run.report) return;
-    clearAgentSelection();
+  const turnIntoPlan = async () => {
+    if (!run.report || run.distilling) return;
+    // Snapshot the agent-surface selection AT CLICK, so on completion we can tell
+    // whether the user navigated to another run/plan/session mid-distill.
+    const selectionAtClick = captureAgentSelection();
+    // Distill the whole session into a plan-ready brief (one resumed turn); on
+    // error/cancel/empty fall back to the raw assembly. Never blocks the handoff.
+    const brief = await store().distillPlanBrief(run.id);
+    // Re-read from the store — the captured `run` is stale after the await.
+    const cur = store().runs.find((r) => r.id === run.id);
+    if (!cur?.report) return;
+    // Only steal the canvas if the selection is unchanged since the click (the user
+    // is still waiting on this handoff). If they moved to another surface mid-distill,
+    // leave their view alone; the pending seed still lands and is consumed later.
+    if (agentSelectionUnchanged(selectionAtClick)) clearAgentSelection();
     usePlanStore.getState().setPendingPlanSeed({
-      issueTitle: run.report.title,
-      issueBody: assembleSessionReport(run),
+      issueTitle: cur.report.title,
+      issueBody: brief ?? assembleSessionReport(cur),
       originResearchId: run.id,
+      // Carry forward what research already examined (all turns), as grounding data.
+      contextPack: researchRunContextPack(cur),
     });
   };
   return (
@@ -281,8 +298,11 @@ function ResearchMenuItems({
       </ContextMenuItem>
       {run.report && (
         <>
-          <ContextMenuItem onClick={turnIntoPlan}>
-            Turn into a Plan
+          <ContextMenuItem
+            onClick={() => void turnIntoPlan()}
+            disabled={run.distilling}
+          >
+            {run.distilling ? "Distilling…" : "Turn into a Plan"}
           </ContextMenuItem>
           <ContextMenuItem
             onClick={() => void store().saveReport(run.id).catch(toastError)}
@@ -298,7 +318,7 @@ function ResearchMenuItems({
           </ContextMenuItem>
         </>
       )}
-      {run.generating && (
+      {(run.generating || run.distilling) && (
         <ContextMenuItem onClick={() => store().cancel(run.id)}>
           Stop
         </ContextMenuItem>
@@ -1010,11 +1030,15 @@ function ResearchStatus({
     s.runs.find((p) => p.seed?.originResearchId === run.id),
   );
   const planNumber = useAgentNumber(plan?.id ?? "");
-  if (run.generating) {
+  if (run.generating || run.distilling) {
     return (
       <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
         <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" />
-        {run.depth === "deep" ? "Researching…" : "Brainstorming…"}
+        {run.distilling
+          ? "Distilling plan brief…"
+          : run.depth === "deep"
+            ? "Researching…"
+            : "Brainstorming…"}
       </span>
     );
   }

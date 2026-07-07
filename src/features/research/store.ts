@@ -1,15 +1,19 @@
 import { create } from "zustand";
+import { bumpNavVersion } from "@/features/sessions/navVersion";
 import { isWatchingAgentSurface } from "@/features/sessions/watching";
 import {
   type AgentKind,
   appendTranscriptText,
   appendTranscriptTool,
+  type ContextPack,
   cancelAgentSession,
   ensureTranscriptText,
+  extractContextPack,
   runAgentSession,
   type TranscriptSegment,
 } from "@/lib/ai/agent";
 import {
+  buildResearchDistillPrompt,
   buildResearchFollowUp,
   buildResearchPrompt,
   extractResearchReport,
@@ -44,7 +48,8 @@ export interface ResearchReport {
 export interface ResearchHistoryTurn {
   /** The user's message for this turn — "" for turn 1 (its topic is the header). */
   prompt: string;
-  /** Interleaved render (in-memory; absent on reload → falls back to `text`). */
+  /** Interleaved render (persisted; absent only on turns saved before this field
+   *  existed → falls back to `text`). */
   segments?: TranscriptSegment[];
   /** Full prose of the turn (persisted, so the session survives a reload). */
   text: string;
@@ -105,6 +110,11 @@ export interface ResearchRun {
    *  follow-up shows this as a "You" bubble above its transcript. */
   currentPrompt?: string;
   generating: boolean;
+  /** True while a "Turn into a Plan" handoff is running its one-shot distill turn
+   *  (resumes the conversation to synthesize a plan brief). Transient UI state only:
+   *  deliberately NOT persisted (see persistence.ts `toPersisted`), so a reload can
+   *  never resurrect a stuck flag on a run whose distill was interrupted. */
+  distilling?: boolean;
   /** The user stopped this run mid-turn (Stop). Idle but restartable; tells the
    *  canvas to offer Restart instead of treating partial output as a report. */
   stopped: boolean;
@@ -114,7 +124,8 @@ export interface ResearchRun {
   status: string;
   /** The interleaved render of the latest turn — prose runs + tool steps in order
    *  (`text` is the same prose, concatenated, kept for parsing the report).
-   *  In-memory only (not persisted; absent on a reloaded run → falls back to `text`). */
+   *  Persisted with the run (absent only on runs saved before this field existed →
+   *  the transcript falls back to `text`). */
   segments?: TranscriptSegment[];
   /** Parsed report (title + markdown), set when the turn completes. */
   report: ResearchReport | null;
@@ -154,6 +165,12 @@ interface ResearchState {
     depth: ResearchDepth,
     model: string,
   ) => void;
+  /** Distill the whole session into a plan-ready brief by resuming the run's own
+   *  CLI conversation for ONE synthesis turn (the agent already holds the full
+   *  context). Resolves to the cleaned brief, or `null` on no-op / error / cancel /
+   *  empty result — the caller then falls back to the raw session assembly. Never
+   *  throws, never mutates the run's visible transcript (`text`/`segments`/`report`). */
+  distillPlanBrief: (id: string) => Promise<string | null>;
   /** Save the run's report as a local Markdown file (scaffold-local-files: the
    *  user commits it, we never do). Resolves to the repo-relative path written. */
   saveReport: (id: string) => Promise<string>;
@@ -221,6 +238,19 @@ export function assembleSessionReport(run: ResearchRun): string {
     })
     .join("\n\n---\n\n");
   return `${current}\n\n---\n\n## Earlier in this research session\n\n_Prior turns of this session, kept for full transparency._\n\n${prior}`;
+}
+
+/**
+ * Distill the whole research session (every turn's tool steps — prior history +
+ * the current turn) into a {@link ContextPack}, so a "Turn into a Plan" handoff can
+ * carry forward what research already read, searched, and fetched. Turns saved
+ * before segments existed contribute nothing (graceful degradation → empty pack).
+ */
+export function researchRunContextPack(run: ResearchRun): ContextPack {
+  return extractContextPack([
+    ...(run.history ?? []).flatMap((h) => h.segments ?? []),
+    ...(run.segments ?? []),
+  ]);
 }
 
 /**
@@ -415,7 +445,12 @@ export const useResearchStore = create<ResearchState>((set, get) => {
       });
     },
 
-    setActiveResearch: (activeResearchId) => set({ activeResearchId }),
+    setActiveResearch: (activeResearchId) => {
+      // Tick the agent-surface nav counter so an in-flight handoff can tell the
+      // user navigated (see navVersion.ts) — covers the direct "Back" button too.
+      bumpNavVersion();
+      set({ activeResearchId });
+    },
     setPendingResearchSeed: (pendingResearchSeed) =>
       set({ pendingResearchSeed }),
 
@@ -455,7 +490,8 @@ export const useResearchStore = create<ResearchState>((set, get) => {
     sendFollowUp: (id, message, depth, model) => {
       const run = get().runs.find((r) => r.id === id);
       const text = message.trim();
-      if (!run || run.generating || !text) return;
+      // A distill turn is resuming the same conversation — treat it like generating.
+      if (!run || run.generating || run.distilling || !text) return;
       // A persona change vs the turn that just ran — re-inject the new persona for
       // this and following turns (see buildResearchFollowUp).
       const switched = depth !== run.depth;
@@ -502,8 +538,104 @@ export const useResearchStore = create<ResearchState>((set, get) => {
       return rel;
     },
 
+    distillPlanBrief: async (id) => {
+      const run0 = get().runs.find((r) => r.id === id);
+      // No-op unless idle: a mid-turn or already-distilling run has nothing stable
+      // to resume against. The caller falls back to the raw assembly on null.
+      // Claude-only: the distill runs on a FORKED session (`--fork-session`) so it
+      // never pollutes the conversation; no other CLI has a fork mechanism, so
+      // distilling them would append to their transcript — the raw fallback (null) is
+      // the correct, regression-free behavior there.
+      if (
+        !run0 ||
+        run0.generating ||
+        run0.distilling ||
+        run0.agent !== "claude"
+      )
+        return null;
+      patch(id, { distilling: true });
+      // Stale once the run is gone, its session was replaced (restart), it was
+      // stopped, or the distill flag was cleared (cancel) — mirrors runTurn's guard.
+      const superseded = () => {
+        const cur = get().runs.find((r) => r.id === id);
+        return (
+          !cur ||
+          cur.sessionId !== run0.sessionId ||
+          cur.stopped ||
+          !cur.distilling
+        );
+      };
+      let finalText = "";
+      let errored = false;
+      // Captured in `finally` BEFORE clearing `distilling` — superseded() reads
+      // `cur.distilling`, so re-evaluating it AFTER the clear would always report
+      // "stale" and discard every successful distill (the raw fallback would mask it).
+      let wasSuperseded = true;
+      try {
+        await runAgentSession({
+          binPath: null,
+          agent: run0.agent,
+          model: run0.model,
+          effort: run0.effort,
+          // Resume: system prompt is set only on turn 1 (empty here, like a follow-up).
+          systemPrompt: "",
+          userPrompt: buildResearchDistillPrompt(),
+          worktreePath: run0.repoPath,
+          sessionId: run0.sessionId,
+          resume: true,
+          // Fork the resumed conversation to a throwaway session: the distill reads
+          // the full research context but never appends to the original transcript,
+          // so a later follow-up resumes a clean conversation (no distill turn in it).
+          fork: true,
+          readOnly: true,
+          web: true,
+          isolation: "worktree",
+          nativeSessionId: run0.nativeSessionId,
+          // Deliberately DON'T touch text/segments/report/status/reportPath: this is
+          // a background synthesis turn, the visible transcript must stay byte-identical.
+          onEvent: (ev) => {
+            if (ev.kind === "delta") {
+              finalText += ev.text;
+            } else if (ev.kind === "done") {
+              // Defensive fallback — Claude's `done` event may carry more text than
+              // the accumulated deltas (this branch is Claude-only: non-Claude runs
+              // return null above, so no whole-message agent ever reaches here).
+              if (ev.text.length > finalText.length) finalText = ev.text;
+              // The distill IS the latest turn, so its cost is the run's latest cost.
+              if (ev.costUsd != null) patch(id, { costUsd: ev.costUsd });
+              if (ev.isError) errored = true;
+            } else if (ev.kind === "error") {
+              errored = true;
+            }
+          },
+        });
+      } catch {
+        // A killed/failed process (incl. cancel) — fall through to the null return.
+        errored = true;
+      } finally {
+        // Evaluate staleness ONCE here, then clear the flag — clearing `distilling`
+        // itself makes superseded() true, so we must capture the verdict first.
+        // (Cancel clears the flag mid-flight → wasSuperseded is true here → null.)
+        wasSuperseded = superseded();
+        if (!wasSuperseded) patch(id, { distilling: false });
+      }
+      if (wasSuperseded || errored) return null;
+      // Defensively strip a leading fence / pre-heading narration (cleanReportText
+      // returns the text unchanged when there's no heading — the brief has no H1).
+      const brief = cleanReportText(finalText);
+      return brief.trim() ? brief : null;
+    },
+
     cancel: (id) => {
       const run = get().runs.find((r) => r.id === id);
+      // Cancel covers both a streaming turn and a running distill. Killing the
+      // session makes the in-flight runAgentSession error → distillPlanBrief
+      // resolves null → the handoff proceeds with the raw fallback.
+      if (run?.distilling) {
+        void cancelAgentSession(run.sessionId);
+        patch(id, { distilling: false });
+        return;
+      }
       if (!run?.generating) return;
       void cancelAgentSession(run.sessionId);
       // Settle to a clear stopped state right away; the in-flight turn sees
@@ -513,7 +645,7 @@ export const useResearchStore = create<ResearchState>((set, get) => {
 
     restart: (id) => {
       const run = get().runs.find((r) => r.id === id);
-      if (!run || run.generating) return;
+      if (!run || run.generating || run.distilling) return;
       // Fresh conversation (the stopped one was killed): a new session id so the
       // old turn — if it's still resolving — is detected as stale and bails, then
       // re-run turn 1 from the original topic + persona. Reset the persona to the

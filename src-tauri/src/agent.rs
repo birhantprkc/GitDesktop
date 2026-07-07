@@ -539,12 +539,18 @@ fn claude_review_args(
 /// keeps the full conversation AND the worktree's evolving state. Persistence is
 /// ON (no `--no-session-persistence`) so `--resume` can find the transcript; the
 /// system prompt is set only on turn 1 (the resumed session already carries it).
+///
+/// `fork` (resume-only): branch the resumed conversation to a NEW throwaway session
+/// id via `--fork-session`, so this turn reads the full transcript as context but
+/// never appends to the original. Used by the research→plan distill so a later
+/// follow-up resumes a clean conversation with no distill turn in it.
 #[allow(clippy::too_many_arguments)]
 fn claude_session_args(
     model: &str,
     system_prompt: &str,
     session_id: &str,
     resume: bool,
+    fork: bool,
     read_only: bool,
     // Web-enabled read-only profile (a Research conversation): add WebSearch/WebFetch
     // to the read tools so the agent can investigate the web while STILL being unable
@@ -603,6 +609,12 @@ fn claude_session_args(
     if resume {
         args.push("--resume".into());
         args.push(session_id.into());
+        // A forked resume: branch the conversation to a NEW (throwaway) session id so
+        // this turn never appends to the original transcript. Used by the distill
+        // handoff so a subsequent follow-up resumes a clean conversation.
+        if fork {
+            args.push("--fork-session".into());
+        }
     } else {
         args.push("--session-id".into());
         args.push(session_id.into());
@@ -1655,6 +1667,10 @@ pub async fn agent_session(
     worktree_path: String,
     session_id: String,
     resume: bool,
+    // Claude-only: forks a resumed conversation to a throwaway session id
+    // (`--fork-session`) so this turn never pollutes the original transcript. Used by
+    // the research→plan distill handoff; ignored by the other agents (no equivalent).
+    fork: bool,
     // Read-only mode: a Plan conversation. Swaps every CLI's write toolset/sandbox
     // for its read-only one (Claude read tools + no bypass, Codex `-s read-only`,
     // Copilot deny-write/shell, opencode `--agent plan`), so the turn can explore
@@ -1795,6 +1811,7 @@ pub async fn agent_session(
                     &system_prompt,
                     &session_id,
                     resume,
+                    fork,
                     read_only,
                     web,
                     mcp_config_path.as_deref(),
@@ -2258,7 +2275,7 @@ mod tests {
         // The web-enabled read-only profile (Research / deep research): web search +
         // fetch are added, but Edit/Write/Bash stay out — live-repo safety holds.
         let args =
-            claude_session_args("", "sys", "sid", false, true, true, None, &[]);
+            claude_session_args("", "sys", "sid", false, false, true, true, None, &[]);
         assert_eq!(tools_of(&args), "Read,Grep,Glob,WebSearch,WebFetch");
         // Bypass IS set so the (non-auto-approved) web tools are authorized in
         // non-interactive mode; the strict allowlist above keeps the run read-only.
@@ -2270,7 +2287,7 @@ mod tests {
         // Plan with web off: the original read-only toolset, no web, and NO bypass
         // (read tools are auto-approved; the prompt gate stays for plan).
         let args =
-            claude_session_args("", "sys", "sid", false, true, false, None, &[]);
+            claude_session_args("", "sys", "sid", false, false, true, false, None, &[]);
         assert_eq!(tools_of(&args), "Read,Grep,Glob");
         assert!(!args.iter().any(|a| a == "bypassPermissions"));
     }
@@ -2280,7 +2297,36 @@ mod tests {
         // A write session is never web-gated here: even with web=true it gets the
         // full write toolset and no web tools (web is a read-only-profile concept).
         let args =
-            claude_session_args("", "sys", "sid", false, false, true, None, &[]);
+            claude_session_args("", "sys", "sid", false, false, false, true, None, &[]);
         assert_eq!(tools_of(&args), "Read,Grep,Glob,Edit,Write,Bash");
+    }
+
+    #[test]
+    fn claude_forked_resume_adds_fork_session() {
+        // A forked resume (the distill handoff): `--fork-session` branches to a new
+        // throwaway session so the turn never appends to the original transcript.
+        let args =
+            claude_session_args("", "sys", "sid", true, true, true, true, None, &[]);
+        assert!(args.iter().any(|a| a == "--fork-session"));
+        assert!(args.iter().any(|a| a == "--resume"));
+    }
+
+    #[test]
+    fn claude_unforked_resume_has_no_fork_session() {
+        // A normal follow-up resume must NOT fork — it continues the real conversation.
+        let args =
+            claude_session_args("", "sys", "sid", true, false, true, true, None, &[]);
+        assert!(!args.iter().any(|a| a == "--fork-session"));
+        assert!(args.iter().any(|a| a == "--resume"));
+    }
+
+    #[test]
+    fn claude_turn_one_never_forks() {
+        // `--fork-session` only has meaning with `--resume`; a turn-1 start (resume
+        // false) must never emit it, even if fork were somehow set.
+        let args =
+            claude_session_args("", "sys", "sid", false, true, true, true, None, &[]);
+        assert!(!args.iter().any(|a| a == "--fork-session"));
+        assert!(args.iter().any(|a| a == "--session-id"));
     }
 }

@@ -1,9 +1,11 @@
 import { create } from "zustand";
+import { bumpNavVersion } from "@/features/sessions/navVersion";
 import { isWatchingAgentSurface } from "@/features/sessions/watching";
 import {
   type AgentKind,
   appendTranscriptText,
   appendTranscriptTool,
+  type ContextPack,
   cancelAgentSession,
   ensureTranscriptText,
   runAgentSession,
@@ -37,6 +39,10 @@ export interface PlanSeed {
    *  Recorded on the plan so the research sidebar can derive that its run was
    *  converted (and archive it). Reversible: discard the plan and it reverts. */
   originResearchId?: string;
+  /** What the origin research stage already examined (files/searches/web), carried
+   *  forward as grounding data for the planner. Plain JSON ⇒ persists with the seed
+   *  and survives the Re-plan round-trip. Absent on a bare Plan (no handoff). */
+  contextPack?: ContextPack;
 }
 
 export interface GenerateArgs extends PlanSeed {
@@ -86,7 +92,8 @@ export interface PlanRun {
   status: string;
   /** The interleaved render of the latest turn — prose runs + tool steps in order
    *  (`text` is the same prose, concatenated, kept for parsing the draft).
-   *  In-memory only (not persisted; absent on a reloaded run → falls back to `text`). */
+   *  Persisted with the run (absent only on runs saved before this field existed →
+   *  the transcript falls back to `text`). */
   segments?: TranscriptSegment[];
   /** Parsed + path-validated result, set when the turn completes. */
   draft: PlanDraft | null;
@@ -316,7 +323,7 @@ export const usePlanStore = create<PlanState>((set, get) => {
   /** Build turn 1's system + user prompt (grounded in the repo's instructions),
    *  then stream it. */
   const runFirstTurn = async (id: string, args: GenerateArgs) => {
-    const { repoPath, goal = "", issueTitle, issueBody } = args;
+    const { repoPath, goal = "", issueTitle, issueBody, contextPack } = args;
     const [repoInstructions, settings] = await Promise.all([
       readRepoInstructions(repoPath).catch(() => null),
       loadSettings().catch(() => null),
@@ -328,6 +335,7 @@ export const usePlanStore = create<PlanState>((set, get) => {
       repoName: repoName(repoPath),
       repoInstructions,
       globalInstructions: settings?.globalInstructions ?? "",
+      contextPack,
     });
     await runTurn(id, system, prompt, false);
   };
@@ -354,7 +362,12 @@ export const usePlanStore = create<PlanState>((set, get) => {
       });
     },
 
-    setActivePlan: (activePlanId) => set({ activePlanId }),
+    setActivePlan: (activePlanId) => {
+      // Tick the agent-surface nav counter so an in-flight handoff can tell the
+      // user navigated (see navVersion.ts) — covers the direct "Back" button too.
+      bumpNavVersion();
+      set({ activePlanId });
+    },
     setPendingPlanSeed: (pendingPlanSeed) => set({ pendingPlanSeed }),
 
     start: (args) => {
@@ -374,6 +387,7 @@ export const usePlanStore = create<PlanState>((set, get) => {
           issueTitle: args.issueTitle,
           issueBody: args.issueBody,
           originResearchId: args.originResearchId,
+          contextPack: args.contextPack,
         },
         generating: true,
         stopped: false,
@@ -446,6 +460,7 @@ export const usePlanStore = create<PlanState>((set, get) => {
         goal: run.seed?.goal ?? run.origin?.goal ?? "",
         issueTitle: run.seed?.issueTitle,
         issueBody: run.seed?.issueBody,
+        contextPack: run.seed?.contextPack,
         agent: run.agent,
         model: run.model,
         effort: run.effort,

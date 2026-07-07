@@ -129,6 +129,7 @@ export function PlanComposer({
       issueTitle: seed?.issueTitle,
       issueBody: seed?.issueBody,
       originResearchId: seed?.originResearchId,
+      contextPack: seed?.contextPack,
       agent,
       model,
       effort,

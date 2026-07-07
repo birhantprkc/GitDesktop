@@ -873,7 +873,8 @@ The natural flow: start in **Brainstorm** to widen your options, then **switch t
 research** to flesh out the direction you chose — the whole conversation carries over, so the
 agent keeps everything it already explored. Keep refining with follow-up messages; the agent
 keeps its sources in context. When a report is ready you can **Turn it into a Plan** (it
-carries the whole session over as the goal to converge) or **Save report** as a local Markdown
+distills the whole session into a plan-ready brief to hand the planner, falling back to the
+full session if distillation is unavailable) or **Save report** as a local Markdown
 file (written to \`.gitdesktop/research/\` for you to review and commit — never committed for
 you). It's **read-only**: it searches and reads, but never changes your code. Pick any agent —
 **Claude**, **Codex**, **GitHub Copilot**, or **opencode** — each uses its own native web search

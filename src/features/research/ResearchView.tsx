@@ -26,7 +26,11 @@ import {
   modelsForAgent,
 } from "@/features/sessions/AgentPickers";
 import { AgentTranscript } from "@/features/sessions/AgentTranscript";
-import { clearAgentSelection } from "@/features/sessions/agentSelect";
+import {
+  agentSelectionUnchanged,
+  captureAgentSelection,
+  clearAgentSelection,
+} from "@/features/sessions/agentSelect";
 import type { AgentKind } from "@/lib/ai/agent";
 import { formatUsd } from "@/lib/ai/cost";
 import { copyText } from "@/lib/clipboard";
@@ -38,6 +42,7 @@ import {
   type ResearchHistoryTurn,
   type ResearchRun,
   type ResearchSeed,
+  researchRunContextPack,
   useActiveResearchRun,
   useResearchStore,
 } from "./store";
@@ -353,9 +358,12 @@ function ResearchResult({ run }: { run: ResearchRun }) {
   const cancel = useResearchStore((s) => s.cancel);
   const restart = useResearchStore((s) => s.restart);
   const saveReport = useResearchStore((s) => s.saveReport);
+  const distillPlanBrief = useResearchStore((s) => s.distillPlanBrief);
   const setPendingPlanSeed = usePlanStore((s) => s.setPendingPlanSeed);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
+
+  const distilling = run.distilling ?? false;
 
   const {
     generating,
@@ -379,18 +387,33 @@ function ResearchResult({ run }: { run: ResearchRun }) {
     prevDepth !== undefined && run.depth !== prevDepth ? run.depth : undefined;
 
   // Hand the report to the Plan composer as data (treated as the goal to converge,
-  // not as instructions). Recording originResearchId archives this run's sidebar
-  // row once the plan exists. Clear the selection first so the activation surface
-  // (which hosts the composer) shows — it only renders when nothing is selected;
-  // then it consumes the pending seed and opens the Plan tab.
-  const turnIntoPlan = () => {
-    if (!report) return;
-    clearAgentSelection();
+  // not as instructions). We first distill the whole session into a plan-ready brief
+  // (one resumed turn on the same conversation) so the plan gets a clean synthesis
+  // instead of the raw multi-turn transcript; on error/cancel/empty we fall back to
+  // the raw assembly (never blocks the handoff). Recording originResearchId archives
+  // this run's sidebar row once the plan exists.
+  const turnIntoPlan = async () => {
+    if (!report || run.distilling) return;
+    // Snapshot the agent-surface selection AT CLICK, so on completion we can tell
+    // whether the user has since navigated to another run/plan/session.
+    const selectionAtClick = captureAgentSelection();
+    const brief = await distillPlanBrief(run.id);
+    // Read fresh from the store: the run captured above is stale after the await
+    // (and it may even be gone — bail silently if so).
+    const cur = useResearchStore.getState().runs.find((r) => r.id === run.id);
+    if (!cur?.report) return;
+    // Only steal the canvas if the selection hasn't changed since the click — the
+    // user is still waiting on this handoff, so navigating fulfills their click. If
+    // they moved to another surface mid-distill, leave their view alone; the pending
+    // seed still lands and the activation surface consumes it whenever it next shows.
+    if (agentSelectionUnchanged(selectionAtClick)) clearAgentSelection();
     setPendingPlanSeed({
-      issueTitle: report.title,
-      // Hand the whole session (latest report + prior turns) to Plan for context.
-      issueBody: assembleSessionReport(run),
+      issueTitle: cur.report.title,
+      // The distilled brief, or the raw whole-session assembly as a fallback.
+      issueBody: brief ?? assembleSessionReport(cur),
       originResearchId: run.id,
+      // Carry forward what research already examined (all turns), as grounding data.
+      contextPack: researchRunContextPack(cur),
     });
   };
 
@@ -537,8 +560,31 @@ function ResearchResult({ run }: { run: ResearchRun }) {
                   <FloppyDiskIcon className="size-3.5" />
                   {reportPath ? "Re-save" : "Save report"}
                 </Button>
-                <Button size="sm" onClick={turnIntoPlan}>
-                  Turn into a Plan
+                {/* Always rendered to reserve its slot so the row doesn't reflow
+                    when distillation starts/ends. When idle: `invisible`
+                    (visibility:hidden) already removes it from the tab order + a11y
+                    tree, and pointer-events-none makes the reserved slot unclickable
+                    — `tabIndex={-1}` + `aria-hidden` make that explicit and hold even
+                    if the hiding mechanism later changes. */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => cancel(run.id)}
+                  tabIndex={distilling ? undefined : -1}
+                  aria-hidden={!distilling}
+                  className={
+                    distilling ? undefined : "invisible pointer-events-none"
+                  }
+                >
+                  <StopIcon weight="fill" />
+                  Stop
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => void turnIntoPlan()}
+                  disabled={distilling}
+                >
+                  {distilling ? "Distilling…" : "Turn into a Plan"}
                 </Button>
               </div>
             )}
