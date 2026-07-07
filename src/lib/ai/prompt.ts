@@ -226,9 +226,23 @@ export function buildPrPrompt(input: PrPromptInput): {
     diffSection += `\n[diff truncated —${omitted} Rely on the commit list and file summary above for full coverage.]`;
   }
   promptParts.push(diffSection);
-  promptParts.push(
-    `Write the ${prNoun} title and description. Lead with a summary of the goal, then group related changes by theme under \`###\` headings when the diff touches several areas, citing the files involved.`,
-  );
+
+  // Label proposal — only when the repo actually has labels to choose from. The
+  // model must pick ONLY from this set (the parser drops anything not in it, so an
+  // invented label is silently discarded rather than applied). Listed here in the
+  // prompt body and reinforced in the system prompt.
+  const labels = input.availableLabels.filter((l) => l.trim());
+  if (labels.length > 0) {
+    systemParts.push(
+      `## Labels\nThe repository has these labels: ${labels.join(", ")}.\nAfter the description, if one or more of these labels fit this ${prNoun}, add a final line exactly like \`Labels: name1, name2\` listing ONLY labels from that list, copied verbatim. Choose only labels that genuinely apply — never invent a label that isn't in the list, and omit the line entirely when none apply.`,
+    );
+  }
+
+  let closing = `Write the ${prNoun} title and description. Lead with a summary of the goal, then group related changes by theme under \`###\` headings when the diff touches several areas, citing the files involved.`;
+  if (labels.length > 0) {
+    closing += ` Then, if any of the repository's labels apply, end with a single \`Labels:\` line as instructed.`;
+  }
+  promptParts.push(closing);
 
   return {
     system: systemParts.join("\n\n"),
@@ -548,6 +562,74 @@ export function splitCommitMessage(raw: string): {
     .replace(/^\n+/, "")
     .trimEnd();
   return { title, body };
+}
+
+/**
+ * Splits a (possibly still streaming) PR/MR response into title, body, and a
+ * validated set of label NAMES. Reuses {@link splitCommitMessage} for the
+ * title/body split, then:
+ * - Strips a trailing `Labels: …` line from the body so it never shows in the
+ *   description. This runs on EVERY chunk, so a partial `Labels:` line that
+ *   appears mid-stream (e.g. `Labels` or `Labels: bu`) is peeled off too and
+ *   never flickers into the rendered body.
+ * - Parses the comma-separated names and validates each (case-insensitively)
+ *   against `availableLabels`, returning the canonical repo casing and DROPPING
+ *   anything not in the set — the model can only surface labels that truly exist.
+ * `labels` is `[]` when `availableLabels` is empty (nothing to match against).
+ */
+export function extractPrDraft(
+  raw: string,
+  availableLabels: string[],
+): { title: string; body: string; labels: string[] } {
+  const { title, body: fullBody } = splitCommitMessage(raw);
+
+  // Peel a trailing line that begins with `Labels:` (or a partial `Labels`
+  // prefix still streaming in) off the end of the body. Only the LAST
+  // non-empty line is a candidate, so a legitimate "Labels:" mention earlier
+  // in the description is untouched.
+  const lines = fullBody.split("\n");
+  let lastIdx = lines.length - 1;
+  while (lastIdx >= 0 && lines[lastIdx].trim() === "") lastIdx--;
+  const lastLine = lastIdx >= 0 ? lines[lastIdx].trim() : "";
+  // Require the colon so a normal sentence that merely starts with "Labels"
+  // (e.g. "Labels are applied by CI.") is NOT mistaken for the label line and
+  // dropped from the body; the nascent pre-colon case is handled just below.
+  const labelLineMatch = lastLine.match(/^labels\s*:\s*(.*)$/i);
+  // A trailing bare `Label`/`Labels` prefix mid-stream (no colon yet) also counts
+  // as a nascent label line to strip, so it doesn't briefly render as body text.
+  const isNascentLabelLine =
+    !labelLineMatch && /^labels?$/i.test(lastLine.replace(/[:\s]*$/, ""));
+
+  let body = fullBody;
+  if (labelLineMatch || isNascentLabelLine) {
+    body = lines.slice(0, lastIdx).join("\n").trimEnd();
+  }
+
+  if (availableLabels.length === 0) {
+    return { title, body, labels: [] };
+  }
+
+  // Canonical lookup keyed by lowercased name → the repo's own casing.
+  const canonical = new Map<string, string>();
+  for (const name of availableLabels) {
+    const trimmed = name.trim();
+    if (trimmed) canonical.set(trimmed.toLowerCase(), trimmed);
+  }
+
+  const rawNames = labelLineMatch?.[1]?.trim() ?? "";
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const part of rawNames.split(",")) {
+    const key = part.trim().toLowerCase();
+    if (!key) continue;
+    const match = canonical.get(key);
+    if (match && !seen.has(key)) {
+      seen.add(key);
+      labels.push(match);
+    }
+  }
+
+  return { title, body, labels };
 }
 
 /** First non-empty line of a branch-name response, with wrapping quotes/fences

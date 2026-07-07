@@ -4107,6 +4107,7 @@ pub async fn create_issue(
 /// The push injects glab's token as a one-shot git credential helper (the same
 /// trick as `forge_clone`) — git alone 401s on a private GitLab remote because
 /// glab's token isn't in git's credential store.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_mr(
     state: &AppState,
     repo_path: &str,
@@ -4115,6 +4116,8 @@ pub async fn create_mr(
     title: &str,
     body: &str,
     draft: bool,
+    labels: &[String],
+    assignees: &[String],
 ) -> AppResult<PrRef> {
     for b in [base, head] {
         if b.is_empty() || b.starts_with('-') {
@@ -4125,6 +4128,14 @@ pub async fn create_mr(
     if title.is_empty() {
         return Err(AppError::InvalidArgument("an MR title is required".into()));
     }
+
+    // Resolve assignee usernames→ids up front (before the push), so a resolution
+    // miss aborts cleanly rather than leaving a branch pushed with no MR opened.
+    let assignee_ids = if assignees.is_empty() {
+        Vec::new()
+    } else {
+        resolve_assignee_ids(repo_path, assignees).await?
+    };
 
     // An MR needs the branch on the remote first.
     let origin =
@@ -4156,25 +4167,40 @@ pub async fn create_mr(
     let target_arg = format!("target_branch={base}");
     let title_arg = format!("title={full_title}");
     let desc_arg = format!("description={body}");
-    let out = run_glab(
-        Some(repo_path),
-        &[
-            "api",
-            "--method",
-            "POST",
-            &endpoint,
-            "-f",
-            &source_arg,
-            "-f",
-            &target_arg,
-            "-f",
-            &title_arg,
-            "-f",
-            &desc_arg,
-        ],
-        GLAB_NETWORK_TIMEOUT,
-    )
-    .await?;
+    let mut args = vec![
+        "api",
+        "--method",
+        "POST",
+        &endpoint,
+        "-f",
+        &source_arg,
+        "-f",
+        &target_arg,
+        "-f",
+        &title_arg,
+        "-f",
+        &desc_arg,
+    ];
+    // Labels travel as a comma-joined name list; assignees as comma-joined ids
+    // (resolved above). Omitted entirely when empty so create behavior is unchanged.
+    let labels_arg = format!("labels={}", labels.join(","));
+    if !labels.is_empty() {
+        args.push("-f");
+        args.push(&labels_arg);
+    }
+    let assignees_arg = format!(
+        "assignee_ids={}",
+        assignee_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    if !assignee_ids.is_empty() {
+        args.push("-f");
+        args.push(&assignees_arg);
+    }
+    let out = run_glab(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await?;
     let created: GlabCreated = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Glab(format!("could not parse the created merge request: {e}")))?;
     Ok(PrRef {

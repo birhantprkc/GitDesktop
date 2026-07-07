@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { useAiStream } from "@/features/conversations/useAiStream";
-import { buildPrPrompt, splitCommitMessage } from "@/lib/ai/prompt";
+import { buildPrPrompt, extractPrDraft } from "@/lib/ai/prompt";
 import type { PromptProvider } from "@/lib/ai/types";
 import { gitBranchDiff, readRepoInstructions } from "@/lib/git/api";
 
@@ -23,14 +23,21 @@ export function useGeneratePrDescription(repoPath: string) {
   const { generating, cancel, run } = useAiStream();
 
   /** Shared streaming core: gets the diff from `getDiff`, budgets it into a PR
-   *  prompt, and streams the parsed title/body draft to `onUpdate`. */
+   *  prompt, and streams the parsed title/body/labels draft to `onUpdate`.
+   *  `availableLabels` are the repo's existing label names the model may propose
+   *  from (validated in the parser — invented labels are dropped). */
   const runFromDiff = useCallback(
     async (
       getDiff: () => Promise<SuppliedDiff>,
       base: string,
       head: string,
       commitSubjects: string[],
-      onUpdate: (draft: { title: string; body: string }) => void,
+      onUpdate: (draft: {
+        title: string;
+        body: string;
+        labels: string[];
+      }) => void,
+      availableLabels: string[],
       provider?: PromptProvider,
     ) => {
       await run(
@@ -52,10 +59,14 @@ export function useGeneratePrDescription(repoPath: string) {
             headBranch: head,
             repoInstructions,
             globalInstructions: settings.globalInstructions,
+            availableLabels,
             provider,
           });
         },
-        { onChunk: (buffer) => onUpdate(splitCommitMessage(buffer)) },
+        {
+          onChunk: (buffer) =>
+            onUpdate(extractPrDraft(buffer, availableLabels)),
+        },
       );
     },
     [repoPath, run],
@@ -68,10 +79,17 @@ export function useGeneratePrDescription(repoPath: string) {
       base: string,
       head: string,
       commitSubjects: string[],
-      onUpdate: (draft: { title: string; body: string }) => void,
+      onUpdate: (draft: {
+        title: string;
+        body: string;
+        labels: string[];
+      }) => void,
       /** Target host — swaps the change-request noun + markdown flavor in the
        *  prompt. Omit (local PRs) to keep the base GitHub wording. */
       provider?: PromptProvider,
+      /** The repo's existing label names to propose from. Empty ⇒ no labels
+       *  proposed. Invented labels the model returns are dropped by the parser. */
+      availableLabels: string[] = [],
     ) =>
       runFromDiff(
         () => gitBranchDiff(repoPath, base, head, RAW_DIFF_MAX_BYTES),
@@ -79,6 +97,7 @@ export function useGeneratePrDescription(repoPath: string) {
         head,
         commitSubjects,
         onUpdate,
+        availableLabels,
         provider,
       ),
     [repoPath, runFromDiff],
@@ -93,9 +112,25 @@ export function useGeneratePrDescription(repoPath: string) {
       base: string,
       head: string,
       commitSubjects: string[],
-      onUpdate: (draft: { title: string; body: string }) => void,
+      onUpdate: (draft: {
+        title: string;
+        body: string;
+        labels: string[];
+      }) => void,
       provider?: PromptProvider,
-    ) => runFromDiff(getDiff, base, head, commitSubjects, onUpdate, provider),
+      /** The repo's existing label names to propose from. Empty ⇒ no labels
+       *  proposed. Invented labels the model returns are dropped by the parser. */
+      availableLabels: string[] = [],
+    ) =>
+      runFromDiff(
+        getDiff,
+        base,
+        head,
+        commitSubjects,
+        onUpdate,
+        availableLabels,
+        provider,
+      ),
     [runFromDiff],
   );
 

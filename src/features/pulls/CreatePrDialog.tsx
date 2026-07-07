@@ -1,9 +1,11 @@
-import { SparkleIcon, XIcon } from "@phosphor-icons/react";
+import { Popover } from "@base-ui/react/popover";
+import { SparkleIcon, TagIcon, XIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -13,6 +15,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { LabelChip } from "@/features/conversations/Thread";
+import { AssigneesPopover } from "@/features/issues/IssueMetaPickers";
 import { track } from "@/lib/analytics";
 import { triggerAutomations } from "@/lib/automations/runner";
 import { required, useAppForm } from "@/lib/form";
@@ -22,6 +26,7 @@ import {
   useCreatePr,
   useDefaultBranch,
   useForgeStatus,
+  useRepoLabels,
   useRepoStatus,
 } from "@/lib/git/queries";
 import { type ForgeUserRef, providerLabel } from "@/lib/git/types";
@@ -51,7 +56,14 @@ export function CreatePrDialog({
   const createPr = useCreatePr(repoPath);
   const forge = useForgeStatus(repoPath);
   const canPickReviewers = forgeFeatureReady(forge.data, "mrReviewers");
+  // Labels + assignees are GitHub/GitLab; a repo is exactly one provider, so
+  // these and the Bitbucket-only reviewers picker are mutually exclusive.
+  const canPickLabels = forgeFeatureReady(forge.data, "mrLabels");
+  const canPickAssignees = forgeFeatureReady(forge.data, "mrAssignees");
   const [reviewers, setReviewers] = useState<ForgeUserRef[]>([]);
+  const [labels, setLabels] = useState<Set<string>>(new Set());
+  const [assignees, setAssignees] = useState<string[]>([]);
+  const repoLabels = useRepoLabels(repoPath, open);
   const isGitLab = forge.data?.provider === "gitlab";
   const remoteLabel = providerLabel(forge.data?.provider);
   const prNoun = isGitLab ? "merge request" : "pull request";
@@ -85,6 +97,10 @@ export function CreatePrDialog({
           ...(canPickReviewers && reviewers.length > 0
             ? { reviewers: reviewers.map((r) => r.id) }
             : {}),
+          // GitHub/GitLab only; omit the key (and for empty selections) so the
+          // backend leaves create behavior untouched.
+          ...(canPickLabels && labels.size > 0 ? { labels: [...labels] } : {}),
+          ...(canPickAssignees && assignees.length > 0 ? { assignees } : {}),
         });
         track({
           name: "pull_request_created",
@@ -123,6 +139,8 @@ export function CreatePrDialog({
   const seedOnOpen = useEffectEvent(() => {
     aiDescriptionRef.current = false;
     setReviewers([]);
+    setLabels(new Set());
+    setAssignees([]);
     const h = defaultHead ?? currentName ?? names[0] ?? "";
     const fallbackBase =
       defaultBranch.data && defaultBranch.data !== h
@@ -150,6 +168,19 @@ export function CreatePrDialog({
   const ahead = comparison.data?.ahead ?? [];
   const sameBranch = base === head;
   const nothingToMerge = sameBranch || ahead.length === 0;
+
+  function toggleLabel(name: string, on: boolean) {
+    setLabels((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(name);
+      else next.delete(name);
+      return next;
+    });
+  }
+
+  const selectedChips = (repoLabels.data ?? []).filter((l) =>
+    labels.has(l.name),
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -231,6 +262,81 @@ export function CreatePrDialog({
               </div>
             )}
 
+            {canPickLabels && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Popover.Root>
+                  <Popover.Trigger
+                    render={
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        aria-label="Add labels"
+                      />
+                    }
+                  >
+                    <TagIcon data-icon="inline-start" />
+                    Labels
+                  </Popover.Trigger>
+                  <Popover.Portal>
+                    <Popover.Positioner
+                      align="start"
+                      sideOffset={4}
+                      className="isolate z-50"
+                    >
+                      <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
+                        <p className="px-1 pb-1.5 text-xs font-medium">
+                          Labels
+                        </p>
+                        {(repoLabels.data ?? []).length === 0 && (
+                          <p className="px-1 py-1 text-xs text-muted-foreground">
+                            {repoLabels.isPending
+                              ? "Loading labels…"
+                              : "This repository has no labels."}
+                          </p>
+                        )}
+                        {(repoLabels.data ?? []).map((label) => (
+                          <label
+                            key={label.name}
+                            className="flex cursor-pointer items-center gap-2 px-1 py-1.5 text-xs hover:bg-muted/60"
+                          >
+                            <Checkbox
+                              checked={labels.has(label.name)}
+                              onCheckedChange={(v) =>
+                                toggleLabel(label.name, v === true)
+                              }
+                            />
+                            <span
+                              aria-hidden
+                              className="size-2 shrink-0 rounded-full"
+                              style={{ backgroundColor: `#${label.color}` }}
+                            />
+                            <span className="flex-1 truncate">
+                              {label.name}
+                            </span>
+                          </label>
+                        ))}
+                      </Popover.Popup>
+                    </Popover.Positioner>
+                  </Popover.Portal>
+                </Popover.Root>
+                {selectedChips.map((label) => (
+                  <LabelChip key={label.name} label={label} />
+                ))}
+              </div>
+            )}
+
+            {canPickAssignees && (
+              <div className="space-y-1.5">
+                <Label>Assignees</Label>
+                <AssigneesPopover
+                  repoPath={repoPath}
+                  enabled={open}
+                  value={assignees}
+                  onChange={setAssignees}
+                />
+              </div>
+            )}
+
             <form.AppField
               name="title"
               validators={{ onChange: ({ value }) => required(value) }}
@@ -275,10 +381,18 @@ export function CreatePrDialog({
                             (d) => {
                               form.setFieldValue("title", d.title);
                               form.setFieldValue("body", d.body);
+                              // Additive: union the model's (already repo-validated)
+                              // labels with the user's manual picks, never replace.
+                              setLabels(
+                                (prev) => new Set([...prev, ...d.labels]),
+                              );
                             },
                             // Provider-aware prompt copy (MR/merge-request noun,
                             // markdown flavor); null host → base GitHub wording.
                             forge.data?.provider ?? undefined,
+                            // Existing repo label names the model may propose from;
+                            // empty ⇒ no labels proposed.
+                            repoLabels.data?.map((l) => l.name) ?? [],
                           );
                         }}
                         title="Generate the title and description with AI"

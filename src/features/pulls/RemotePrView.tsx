@@ -763,9 +763,9 @@ export function RemotePrView({
             </div>
           )
         )}
-        {/* GitLab-only assignee picker (same affordance as the issue sidebar);
-            a closed/merged MR falls back to read-only chips like the labels row.
-            GitHub PRs carry no assignees, so they show nothing here, as before. */}
+        {/* Assignee picker (GitHub + GitLab; same affordance as the issue
+            sidebar). A closed/merged PR falls back to read-only chips like the
+            labels row. */}
         {isOpen && canEditAssignees ? (
           <AssigneesPopover
             repoPath={repoPath}

@@ -941,6 +941,8 @@ export const forgePrCreate = (
   body: string,
   draft: boolean,
   reviewers?: string[],
+  labels?: string[],
+  assignees?: string[],
 ) =>
   invoke<PrRef>("forge_pr_create", {
     repoPath,
@@ -952,6 +954,10 @@ export const forgePrCreate = (
     // Create-time reviewers are Bitbucket-only; omit (null) for other providers so
     // the backend leaves behavior untouched.
     reviewers: reviewers ?? null,
+    // Labels (names) + assignees (login/username strings) are GitHub/GitLab; omit
+    // (null) for Bitbucket so the backend leaves behavior untouched.
+    labels: labels ?? null,
+    assignees: assignees ?? null,
   });
 
 /** Which providers this machine can publish to (CLI installed + signed in) —

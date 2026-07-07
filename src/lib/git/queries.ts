@@ -3131,10 +3131,10 @@ export function useSetPrReviewers(repo: string) {
 }
 
 /**
- * Set an MR's assignees (GitLab-only, gated on `implemented.mrAssignees`) with
- * an optimistic patch of the PR-details cache + rollback, mirroring
+ * Set a PR/MR's assignees (GitHub + GitLab, gated on `implemented.mrAssignees`)
+ * with an optimistic patch of the PR-details cache + rollback, mirroring
  * `useSetIssueAssignees` — the picker's chips update instantly instead of
- * waiting on the PUT + refetch (glab spawns a process per call).
+ * waiting on the PATCH/PUT + refetch (the CLI spawns a process per call).
  */
 export function useSetPrAssignees(repo: string) {
   const queryClient = useQueryClient();
@@ -4683,6 +4683,10 @@ export function useCreatePr(repo: string) {
       draft: boolean;
       /** Create-time reviewer account uuids (Bitbucket-only; omit elsewhere). */
       reviewers?: string[];
+      /** Create-time label names (GitHub/GitLab; omit for Bitbucket). */
+      labels?: string[];
+      /** Create-time assignee login/username strings (GitHub/GitLab; omit for Bitbucket). */
+      assignees?: string[];
     }) =>
       api.forgePrCreate(
         repo,
@@ -4692,6 +4696,8 @@ export function useCreatePr(repo: string) {
         args.body,
         args.draft,
         args.reviewers,
+        args.labels,
+        args.assignees,
       ),
   );
 }

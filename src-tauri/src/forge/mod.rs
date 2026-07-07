@@ -1534,10 +1534,11 @@ pub async fn forge_issue_set_assignees(
     }
 }
 
-/// Set a merge request's assignees, behind the abstraction. GitLab-only, like
-/// `forge_pr_approvals`: GitHub PRs have no assignee picker in this app (the
-/// `mrAssignees` flag stays false there), so the GitHub arm is never reachable
-/// from the UI and errors defensively.
+/// Set a merge/pull request's assignees, behind the abstraction. GitHub PRs are
+/// issues under the hood, so the GitHub arm PATCHes the issues endpoint with the
+/// login set (reusing the issue assignee-set path — a PR number is valid there);
+/// GitLab resolves logins→ids and PUTs `assignee_ids`. Gated on
+/// `implemented.mrAssignees` (GitHub true, GitLab true, Bitbucket false).
 #[tauri::command]
 pub async fn forge_mr_set_assignees(
     repo_path: String,
@@ -1551,9 +1552,8 @@ pub async fn forge_mr_set_assignees(
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
             "Bitbucket assignees aren't supported yet.".into(),
         )),
-        _ => Err(AppError::InvalidArgument(
-            "Pull request assignees aren't editable here for GitHub.".into(),
-        )),
+        // A PR number addresses the same issues endpoint (PRs are issues on GitHub).
+        _ => github::set_issue_assignees(&repo_path, number, assignees).await,
     }
 }
 
@@ -2609,6 +2609,8 @@ pub async fn forge_pr_create(
     body: String,
     draft: bool,
     reviewers: Option<Vec<String>>,
+    labels: Option<Vec<String>>,
+    assignees: Option<Vec<String>>,
 ) -> AppResult<crate::github::pr::PrRef> {
     let detected = detect_non_github(&repo_path).await;
     // Create-time reviewers are Bitbucket-only. GitHub/GitLab reject a non-empty list
@@ -2620,9 +2622,24 @@ pub async fn forge_pr_create(
             "Create-time reviewers aren't supported for this provider.".into(),
         ));
     }
+    // Labels/assignees are the mirror case: GitHub and GitLab carry them at create
+    // time; Bitbucket PRs have no label/assignee concept, so reject a non-empty list
+    // BEFORE dispatching (existing callers omit the keys → `None` → untouched behavior).
+    let labels = labels.unwrap_or_default();
+    let assignees = assignees.unwrap_or_default();
+    if (!labels.is_empty() || !assignees.is_empty())
+        && matches!(detected, Some((Provider::Bitbucket, _)))
+    {
+        return Err(AppError::InvalidArgument(
+            "Labels and assignees aren't supported for Bitbucket pull requests.".into(),
+        ));
+    }
     match detected {
         Some((Provider::GitLab, _)) => {
-            gitlab::create_mr(&state, &repo_path, &base, &head, &title, &body, draft).await
+            gitlab::create_mr(
+                &state, &repo_path, &base, &head, &title, &body, draft, &labels, &assignees,
+            )
+            .await
         }
         Some((Provider::Bitbucket, _)) => {
             bitbucket::create_pr(
@@ -2637,8 +2654,12 @@ pub async fn forge_pr_create(
             )
             .await
         }
-        _ => crate::github::pr::gh_pr_create(state, repo_path, base, head, title, body, draft)
-            .await,
+        _ => {
+            crate::github::pr::gh_pr_create(
+                state, repo_path, base, head, title, body, draft, labels, assignees,
+            )
+            .await
+        }
     }
 }
 

@@ -55,9 +55,12 @@ export function usePrCapabilities(
   const canAutoMerge = forgeFeatureReady(forgeData, "mrAutoMerge");
   // Labels are a shared control (both providers) — same `canWrite || …` gate.
   const canEditLabels = canWrite || forgeFeatureReady(forgeData, "mrLabels");
-  // MR assignees are GitLab-only like the approve toggle (GitHub PRs have no
-  // assignee picker here), so the flag alone gates — never `canWrite || …`.
-  const canEditAssignees = forgeFeatureReady(forgeData, "mrAssignees");
+  // Assignees are a shared control now (GitHub + GitLab), so they use the same
+  // `canWrite || …` gate as labels: GitHub keeps the picker while forge-status is
+  // pending/failed, and a ready GitLab repo enables it. Bitbucket stays out —
+  // `canWrite` is false there and `mrAssignees` is false.
+  const canEditAssignees =
+    canWrite || forgeFeatureReady(forgeData, "mrAssignees");
   // The reviewers picker is Bitbucket-only the same way (GitHub's review
   // requests live in its own flow; the GitLab reviewer list isn't wired).
   const canEditReviewers = forgeFeatureReady(forgeData, "mrReviewers");

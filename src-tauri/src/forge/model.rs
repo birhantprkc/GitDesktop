@@ -179,8 +179,8 @@ pub struct Implemented {
     pub issue_labels: bool,
     /// Editing labels on a merge/pull request — the same shared label control.
     pub mr_labels: bool,
-    /// Setting an issue's assignees — a shared issue control. (MR assignees are the
-    /// separate GitLab-only `mr_assignees` below — GitHub PRs have no picker here.)
+    /// Setting an issue's assignees — a shared issue control. (MR/PR assignees are
+    /// the separate `mr_assignees` below — a shared control for GitHub and GitLab.)
     pub issue_assignees: bool,
     /// Creating an issue from the app — a shared control (the same create dialog;
     /// the GitHub-only org issue type hides per provider — milestone works on both).
@@ -203,9 +203,10 @@ pub struct Implemented {
     /// Managing an existing release (edit title/notes, delete, upload assets,
     /// delete assets) — a shared control.
     pub release_edit: bool,
-    /// Setting a merge request's assignees. GitLab-only: GitHub PRs expose no
-    /// assignee picker in this app (issue assignees are the shared control), so
-    /// like `mr_approve` this flag stays `false` for GitHub (see `all`).
+    /// Setting a merge/pull request's assignees — a shared control for GitHub and
+    /// GitLab. GitHub PRs are issues under the hood, so the PATCH issues endpoint
+    /// sets PR assignees; GitLab resolves usernames→ids and PUTs `assignee_ids`.
+    /// Bitbucket PRs have no assignee concept, so it stays `false` there.
     pub mr_assignees: bool,
     /// Requesting changes on a merge request — the blocking reviewer state.
     /// GitLab and Bitbucket share the control; GitHub requests changes through
@@ -332,9 +333,10 @@ impl Implemented {
             ci_dispatch: true,
             release_create: true,
             release_edit: true,
-            // Like `mr_approve`: GitHub PRs have no assignee picker in this app, so
-            // the MR-assignees control is GitLab-only.
-            mr_assignees: false,
+            // GitHub PRs are issues under the hood, so the same assignee control the
+            // issue path uses works on PRs too — the MR/PR-assignees picker is wired
+            // for both GitHub and GitLab.
+            mr_assignees: true,
             // Like `mr_approve`: GitHub requests changes via its Review menu.
             mr_request_changes: false,
             // Like `mr_approve`: GitHub's reviewer requests live in its own
@@ -687,14 +689,16 @@ mod tests {
         assert!(!i.mr_auto_merge);
         // Labels (issue + MR) and issue assignees are shared controls — built for both.
         assert!(i.issue_labels && i.mr_labels && i.issue_assignees);
+        // MR/PR assignees are a shared control too (GitHub PRs are issues under the hood).
+        assert!(i.mr_assignees);
         assert!(i.issue_create && i.mr_create);
         // CI actions and release management are shared controls too.
         assert!(i.ci_rerun && i.ci_cancel && i.ci_dispatch);
         assert!(i.release_create && i.release_edit);
-        // MR assignees, request-changes, and the reviewers picker mirror
-        // mr_approve: forge-only controls (GitHub's analogues live in its own
-        // Review menu / nowhere), so GitHub stays false.
-        assert!(!i.mr_assignees && !i.mr_request_changes && !i.mr_reviewers);
+        // Request-changes and the reviewers picker mirror mr_approve: forge-only
+        // controls (GitHub's analogues live in its own Review menu / nowhere), so
+        // GitHub stays false. (MR/PR assignees ARE built for GitHub — asserted above.)
+        assert!(!i.mr_request_changes && !i.mr_reviewers);
         // Title/body editing, issue milestones, and reactions are shared controls.
         assert!(i.issue_edit && i.mr_edit && i.issue_milestone);
         assert!(i.issue_reactions && i.mr_reactions);

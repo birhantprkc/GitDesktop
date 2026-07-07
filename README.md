@@ -35,10 +35,11 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 
 ## Highlights
 
-- **The whole PR lifecycle, in-app** — review, comment, label, approve, edit, and
-  merge (merge/squash/rebase) GitHub PRs without the browser. Plus **local PRs**:
-  the same workflow against any two branches with no remote, promotable to a real
-  GitHub PR (comments and all) in one click.
+- **The whole PR lifecycle, in-app** — review, comment, label, **assign**, approve,
+  edit, and merge (merge/squash/rebase) GitHub PRs without the browser — and set
+  **labels and assignees** right when you **open** the PR/MR (GitHub and GitLab).
+  Plus **local PRs**: the same workflow against any two branches with no remote,
+  promotable to a real GitHub PR (comments and all) in one click.
 - **Issues & Discussions, in-app** — triage GitHub issues (types, sub-issues,
   dependencies, linked PRs and branches) and Discussions without the browser, plus
   private **local to-dos** that need no remote.
@@ -180,7 +181,8 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   GitHub issue (and on a finished plan) seeds the agent composer with the spec, so
   you pick the agent and confirm — then it builds it in an isolated worktree.
 - **AI where it helps** — commit messages, branch names, PR and issue
-  titles/descriptions, repository descriptions and topics, and a streaming code
+  titles/descriptions (and **suggested labels** from the repo's existing set when
+  you generate a PR/MR), repository descriptions and topics, and a streaming code
   review or security audit. Bring your own provider: cloud APIs, local **Ollama**,
   or a **keyless CLI agent** you already pay for — the full list is under
   [AI configuration](#ai-configuration).

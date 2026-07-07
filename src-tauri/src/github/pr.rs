@@ -1341,6 +1341,8 @@ struct RawPr {
     status_check_rollup: Vec<RawCheck>,
     #[serde(default)]
     labels: Vec<RepoLabel>,
+    #[serde(default)]
+    assignees: Vec<RawLogin>,
 }
 
 #[derive(Serialize)]
@@ -1494,9 +1496,9 @@ pub struct PrDetails {
     pub comments: Vec<PrThreadOut>,
     pub checks: Vec<PrCheckOut>,
     pub labels: Vec<RepoLabel>,
-    /// Assignee usernames. Only GitLab fills this — the MR-assignees picker is
-    /// GitLab-only (`implemented.mrAssignees`), so the GitHub view doesn't request
-    /// assignees and leaves it empty.
+    /// Assignee usernames. GitHub and GitLab both fill this — the MR/PR-assignees
+    /// picker is wired for both (`implemented.mrAssignees`); Bitbucket PRs have no
+    /// assignee concept, so it stays empty there.
     pub assignees: Vec<String>,
     /// The reviewer list. Only Bitbucket fills this — the reviewers picker is
     /// Bitbucket-only (`implemented.mrReviewers`); identity is the provider's
@@ -1531,7 +1533,7 @@ pub struct ApprovalState {
     pub viewer_requested_changes: bool,
 }
 
-const PR_VIEW_FIELDS: &str = "id,number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup,labels";
+const PR_VIEW_FIELDS: &str = "id,number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup,labels,assignees";
 
 /// Full details for one PR's read view.
 #[tauri::command]
@@ -1659,7 +1661,7 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
             })
             .collect(),
         labels: raw.labels,
-        assignees: Vec::new(),
+        assignees: raw.assignees.into_iter().map(|a| a.login).collect(),
         reviewers: Vec::new(),
     })
 }
@@ -2617,6 +2619,7 @@ pub async fn gh_prs_for_branch(repo_path: String, head: String) -> AppResult<Vec
 /// Pushes `head` to origin, then opens a PR from `head` into `base`. Returns
 /// the new PR's number and URL.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn gh_pr_create(
     state: State<'_, AppState>,
     repo_path: String,
@@ -2625,6 +2628,8 @@ pub async fn gh_pr_create(
     title: String,
     body: String,
     draft: bool,
+    labels: Vec<String>,
+    assignees: Vec<String>,
 ) -> AppResult<PrRef> {
     validate_branch(&base)?;
     validate_branch(&head)?;
@@ -2646,6 +2651,15 @@ pub async fn gh_pr_create(
     ];
     if draft {
         args.push("--draft");
+    }
+    // `gh pr create` takes one `--label`/`--assignee` per value (repeatable flags).
+    for label in &labels {
+        args.push("--label");
+        args.push(label);
+    }
+    for assignee in &assignees {
+        args.push("--assignee");
+        args.push(assignee);
     }
     let out = run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT).await?;
 

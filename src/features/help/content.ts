@@ -467,8 +467,8 @@ authenticated.)
 Browse open/closed PRs and open one in a full in-app view: description, commits, changed
 files with diffs, and CI checks. From there you can **comment** (with quote-reply),
 **review** (approve / comment / request changes), **edit** the title and body, manage
-**labels**, mark a draft **ready**, **merge** (merge commit, squash, or rebase, with
-optional branch deletion), and **close**.
+**labels** and **assignees**, mark a draft **ready**, **merge** (merge commit, squash, or
+rebase, with optional branch deletion), and **close**.
 
 Comments, replies, edits, and descriptions use a Markdown editor with **Write / Preview**
 tabs and a formatting toolbar (bold, italic, headings, quote, code, links, and bulleted
@@ -542,10 +542,14 @@ a real range on **GitLab**; **GitHub** and **Bitbucket** commit comments anchor 
 line, and the composer says so.
 
 Create a PR with **Create pull request** ({{kbd:create-pr}}) or from the Compare tab — as
-a **draft** if you like{{ai}}, optionally with an **AI-generated** title and description
-from the branch diff and commit subjects. The same **Generate** button is on the **Edit**
-dialog too, so you can write or regenerate an existing PR's title and description at any
-time — including for pull requests from forks{{/ai}}.
+a **draft** if you like, and set its **labels** and **assignees** right in the dialog
+(GitHub and GitLab; Bitbucket PRs have neither, so it shows only its reviewers picker
+instead){{ai}}. You can also fill the title and description with an **AI-generated** draft
+from the branch diff and commit subjects — which additionally **proposes labels**, chosen
+only from the repository's existing labels and added to whatever you've already picked
+(never invented). The same **Generate** button is on the **Edit** dialog too, so you can
+write or regenerate an existing PR's title and description at any time — including for pull
+requests from forks{{/ai}}.
 
 ## GitLab merge requests
 
