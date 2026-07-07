@@ -91,12 +91,35 @@ fn oplog_lock() -> &'static Mutex<()> {
     OPLOG_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// Resolve the absolute path of `opslog.json` under the app-data dir. Mirrors
-/// `local_prs.rs`'s `store_path()` (`dirs::data_dir()/<identifier>/<file>`).
+/// Pure resolution of the store's base directory (the dir the `STORE_FILE` lives
+/// in), in precedence order:
+/// 1. `GD_OPLOG_DIR` override (any non-empty value) — an explicit escape hatch for
+///    headless/test callers.
+/// 2. Under `cfg!(test)` — a temp subdir, so no in-crate test can ever write the
+///    user's real store (the instrumented ops run for real under `cargo test`).
+/// 3. Otherwise the real app-data dir (`dirs::data_dir()/<identifier>`), unchanged.
+///
+/// No filesystem side effects — `atomic_write` creates the parent dir at write time.
+fn resolve_store_base(gd_oplog_dir: Option<&str>, is_test: bool) -> AppResult<PathBuf> {
+    match gd_oplog_dir {
+        Some(dir) if !dir.is_empty() => Ok(PathBuf::from(dir)),
+        _ if is_test => Ok(std::env::temp_dir().join("gd-oplog-test")),
+        _ => {
+            let data = dirs::data_dir().ok_or_else(|| {
+                AppError::Command("could not resolve the app-data directory".to_string())
+            })?;
+            Ok(data.join(APP_IDENTIFIER))
+        }
+    }
+}
+
+/// Resolve the absolute path of `opslog.json`. Real path is
+/// `dirs::data_dir()/<identifier>/opslog.json` (mirrors `local_prs.rs`); a
+/// `GD_OPLOG_DIR` override or a `cfg!(test)` build redirect the base — see
+/// [`resolve_store_base`].
 pub fn store_path() -> AppResult<PathBuf> {
-    let data = dirs::data_dir()
-        .ok_or_else(|| AppError::Command("could not resolve the app-data directory".to_string()))?;
-    Ok(data.join(APP_IDENTIFIER).join(STORE_FILE))
+    let base = resolve_store_base(std::env::var("GD_OPLOG_DIR").ok().as_deref(), cfg!(test))?;
+    Ok(base.join(STORE_FILE))
 }
 
 /// Read the whole store file as a JSON object. A missing file is an empty object;
@@ -493,6 +516,61 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         p
+    }
+
+    #[test]
+    fn store_path_avoids_the_real_store_under_test() {
+        // This runs in a cfg(test) build, so `store_path` takes arm 2 (temp subdir)
+        // UNLESS a GD_OPLOG_DIR override is present in the environment. Branch on the
+        // var rather than mutating process env (which would race parallel tests).
+        let path = store_path().unwrap();
+        match std::env::var("GD_OPLOG_DIR").ok().filter(|d| !d.is_empty()) {
+            Some(dir) => {
+                // Override wins even under test: path is under the override dir.
+                assert!(
+                    path.starts_with(&dir),
+                    "override path {path:?} should be under {dir}"
+                );
+            }
+            None => {
+                // The real store must NOT be reachable from an in-crate test.
+                assert!(
+                    path.starts_with(std::env::temp_dir()),
+                    "test store {path:?} should be under the temp dir"
+                );
+                assert!(
+                    !path.components().any(|c| c.as_os_str() == APP_IDENTIFIER),
+                    "test store {path:?} must not contain the real app-data segment {APP_IDENTIFIER}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn store_path_honors_gd_oplog_dir_override() {
+        // Drive the pure resolver directly — deterministic + parallel-safe (no
+        // process-env mutation).
+        // 1. An explicit override wins regardless of the test flag.
+        let over = resolve_store_base(Some("C:/tmp/x"), true).unwrap();
+        assert_eq!(over, PathBuf::from("C:/tmp/x"));
+        let over_nontest = resolve_store_base(Some("C:/tmp/x"), false).unwrap();
+        assert_eq!(over_nontest, PathBuf::from("C:/tmp/x"));
+        // An empty override is ignored (falls through to the next arm).
+        assert_eq!(
+            resolve_store_base(Some(""), true).unwrap(),
+            std::env::temp_dir().join("gd-oplog-test")
+        );
+        // 2. No override + test → the temp subdir.
+        assert_eq!(
+            resolve_store_base(None, true).unwrap(),
+            std::env::temp_dir().join("gd-oplog-test")
+        );
+        // 3. No override + non-test → the real app-data dir (ends with the identifier).
+        let real = resolve_store_base(None, false).unwrap();
+        assert!(
+            real.components().any(|c| c.as_os_str() == APP_IDENTIFIER),
+            "real base {real:?} should contain {APP_IDENTIFIER}"
+        );
     }
 
     #[test]
