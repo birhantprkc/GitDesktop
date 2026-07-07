@@ -1,0 +1,1 @@
+- The Rename branch dialog can now suggest a name from your in-progress changes with AI — the same **✧ Generate from changes** action the New branch dialog has.

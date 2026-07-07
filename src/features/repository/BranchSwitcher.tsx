@@ -1206,6 +1206,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         target={renameTarget}
         onClose={() => setRenameTarget(null)}
+        aiEnabled={aiEnabled}
+        aiConfigured={aiConfigured}
+        hasChanges={hasChanges}
+        headExists={headExists}
+        entries={status.data?.entries ?? []}
+        allBranchNames={allBranches.map((b) => b.name)}
+        onOpenSettings={openSettings}
       />
 
       <ConfirmDialog

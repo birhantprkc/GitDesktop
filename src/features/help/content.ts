@@ -334,7 +334,7 @@ The branch name in the header opens the **branch switcher** ({{kbd:show-branches
   ({{kbd:delete-branch}}), or **archive** it — archiving hides a branch without deleting
   it, collapsing it into an "Archived" section.
 {{ai}}- **Generate a branch name with AI** from your working-tree changes when creating
-  one.
+  or renaming one.
 {{/ai}}- Switching with **uncommitted changes** prompts you to bring them along or stash
   and switch.
 - Right-click a branch to **merge**, **squash and merge**, **rebase**, or **update it

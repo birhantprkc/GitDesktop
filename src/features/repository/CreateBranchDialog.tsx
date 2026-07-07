@@ -1,4 +1,3 @@
-import { SparkleIcon } from "@phosphor-icons/react";
 import { useSelector } from "@tanstack/react-store";
 import { useEffect, useEffectEvent } from "react";
 import { Button } from "@/components/ui/button";
@@ -10,7 +9,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Spinner } from "@/components/ui/spinner";
 import { branchNameError, branchNameHint } from "@/lib/branch-rules/match";
 import type { BranchRulesConfig } from "@/lib/branch-rules/types";
 import { required, useAppForm } from "@/lib/form";
@@ -18,7 +16,7 @@ import { useCreateBranch } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import type { FileEntry } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
-import { useGenerateBranchName } from "./useGenerateBranchName";
+import { GenerateBranchNameButton } from "./GenerateBranchNameButton";
 
 /**
  * Create-branch dialog: names a new branch (with optional AI generation from
@@ -59,7 +57,6 @@ export function CreateBranchDialog({
   onOpenSettings: (section: "ai") => void;
 }) {
   const createBranch = useCreateBranch(repoPath);
-  const branchNameGen = useGenerateBranchName(repoPath);
 
   const createForm = useAppForm({
     defaultValues: { name: "", base: "" },
@@ -142,62 +139,20 @@ export function CreateBranchDialog({
               />
             )}
           </createForm.AppField>
-          {aiEnabled && (
-            <div className="flex justify-end">
-              {!aiConfigured ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground"
-                  title="Connect an AI provider to generate branch names"
-                  onClick={() => {
-                    onOpenChange(false);
-                    onOpenSettings("ai");
-                  }}
-                >
-                  <SparkleIcon data-icon="inline-start" />
-                  Set up AI to name branches
-                </Button>
-              ) : branchNameGen.generating ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground"
-                  onClick={branchNameGen.cancel}
-                >
-                  <Spinner data-icon="inline-start" />
-                  Generating…
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground"
-                  disabled={!hasChanges || !headExists}
-                  title={
-                    !headExists
-                      ? "Make your first commit before branching from changes"
-                      : !hasChanges
-                        ? "No in-progress changes — make some edits to name a branch after them"
-                        : "Suggest a name from your in-progress changes"
-                  }
-                  onClick={() =>
-                    branchNameGen.generate({
-                      entries,
-                      recentBranches: allBranchNames.slice(0, 20),
-                      onName: (name) => createForm.setFieldValue("name", name),
-                    })
-                  }
-                >
-                  <SparkleIcon data-icon="inline-start" />
-                  Generate from changes
-                </Button>
-              )}
-            </div>
-          )}
+          <GenerateBranchNameButton
+            repoPath={repoPath}
+            aiEnabled={aiEnabled}
+            aiConfigured={aiConfigured}
+            hasChanges={hasChanges}
+            headExists={headExists}
+            entries={entries}
+            recentBranches={allBranchNames}
+            onName={(name) => createForm.setFieldValue("name", name)}
+            onSetupAi={() => {
+              onOpenChange(false);
+              onOpenSettings("ai");
+            }}
+          />
           {baseOptions.length > 0 && (
             <createForm.AppField name="base">
               {(field) => (

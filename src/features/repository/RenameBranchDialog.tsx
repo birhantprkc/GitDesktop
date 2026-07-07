@@ -12,7 +12,9 @@ import {
 import { required, useAppForm } from "@/lib/form";
 import { useRenameBranch } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
+import type { FileEntry } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
+import { GenerateBranchNameButton } from "./GenerateBranchNameButton";
 
 /**
  * Rename-branch dialog. Open when `target` is the branch being renamed (null =
@@ -23,10 +25,24 @@ export function RenameBranchDialog({
   repoPath,
   target,
   onClose,
+  aiEnabled,
+  aiConfigured,
+  hasChanges,
+  headExists,
+  entries,
+  allBranchNames,
+  onOpenSettings,
 }: {
   repoPath: string;
   target: string | null;
   onClose: () => void;
+  aiEnabled: boolean;
+  aiConfigured: boolean;
+  hasChanges: boolean;
+  headExists: boolean;
+  entries: FileEntry[];
+  allBranchNames: string[];
+  onOpenSettings: (section: "ai") => void;
 }) {
   const renameBranch = useRenameBranch(repoPath);
 
@@ -65,7 +81,10 @@ export function RenameBranchDialog({
     >
       <DialogContent>
         <form
-          className="space-y-4"
+          // min-w-0: DialogContent is display:grid, so this grid item must be
+          // allowed to shrink below its content — otherwise a long branch name
+          // pushes the form past the dialog's max-width and the text overflows.
+          className="min-w-0 space-y-4"
           onSubmit={(e) => {
             e.preventDefault();
             renameForm.handleSubmit();
@@ -73,7 +92,10 @@ export function RenameBranchDialog({
         >
           <DialogHeader>
             <DialogTitle>Rename branch</DialogTitle>
-            <DialogDescription>Renames {target}.</DialogDescription>
+            <DialogDescription>
+              Renames{" "}
+              <span className="font-mono wrap-break-word">{target}</span>.
+            </DialogDescription>
           </DialogHeader>
           <renameForm.AppField
             name="name"
@@ -87,6 +109,20 @@ export function RenameBranchDialog({
               <field.TextField label="New name" warning={refNameWarning} />
             )}
           </renameForm.AppField>
+          <GenerateBranchNameButton
+            repoPath={repoPath}
+            aiEnabled={aiEnabled}
+            aiConfigured={aiConfigured}
+            hasChanges={hasChanges}
+            headExists={headExists}
+            entries={entries}
+            recentBranches={allBranchNames}
+            onName={(name) => renameForm.setFieldValue("name", name)}
+            onSetupAi={() => {
+              onClose();
+              onOpenSettings("ai");
+            }}
+          />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
