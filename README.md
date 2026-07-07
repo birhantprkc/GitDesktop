@@ -142,14 +142,26 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   each one runs shown so you can vet before adding — or **Import** ones you've already
   configured. Change the selection **mid-session**, too.
 - **Use GitDesktop *as* an MCP server** — the reverse direction: expose this repo's
-  **read-only-by-default** git & GitHub tools (status, log, diff, blame, branches, file
+  **read-only-by-default** git & forge tools (status, log, diff, blame, branches, file
   history/read, PRs, issues, CI logs) to any external MCP client — **Claude Desktop**,
-  **Cursor**, **Claude Code**. **Settings → MCP servers** shows a ready-to-paste config
-  snippet — or **writes it straight into the repo's `.mcp.json`** for you, with a
-  **Shareable** toggle for portable, teammate-committable paths. The app runs as a stdio
-  server (`gitdesktop mcp --repo <path>`), so an agent can *understand* a repo without
-  touching it — and an opt-in **Allow write tools** (`--allow-write`) lets it create,
-  comment on, and approve *this repo's* local PRs when you want it to.
+  **Cursor**, **Claude Code**. The PR/issue/CI tools work across **GitHub, GitLab &
+  Bitbucket** (routed through the forge abstraction — they dispatch by the repo's remote;
+  Bitbucket covers PRs and pipelines, but not issues). **Settings → MCP servers** shows a
+  ready-to-paste config snippet — or **writes it straight into the repo's `.mcp.json`**
+  for you (with a **Shareable** toggle for portable, teammate-committable paths), or
+  **installs it globally** for **Claude Code** or **Copilot** in one click (into the
+  client's user config, available in every project) — plus a
+  one-click **Add to PATH** launcher so the bare `gitdesktop` command resolves in any
+  terminal (adds the app to your user PATH on Windows, or symlinks it into `~/.local/bin`
+  on macOS/Linux — reversible, no admin). The app runs as a stdio server
+  (`gitdesktop mcp --repo <path>`), so an agent can *understand* a repo without touching
+  it. Two **separate, orthogonal** write opt-ins layer on top:
+  **Allow write tools** (`--allow-write`) lets it create, comment on, and approve *this
+  repo's* local PRs (GitDesktop's own app-data review artifacts — nothing is pushed);
+  **Allow remote write** (`--allow-remote-write`) lets it make *real* forge writes under
+  your authenticated identity (GitHub `gh`, GitLab `glab`, or a stored Bitbucket token) —
+  create issues, comment on issues and PRs, and close/reopen issues. Neither flag implies
+  the other, and read-only stays the default.
 - **Run commands without leaving the app** — every agent session has an integrated
   terminal: a real shell in a resizable bottom dock, toggled with `Ctrl`/`⌘`+`J`. For a
   container session it runs *inside* the session's container — you pick which dev-server

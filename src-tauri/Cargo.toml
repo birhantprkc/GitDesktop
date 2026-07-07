@@ -62,6 +62,12 @@ tauri-plugin-updater = "2"
 # pushes PATH edits into a running process). See agent.rs `registry_path_dirs`.
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# Broadcasting WM_SETTINGCHANGE so a freshly-added PATH entry (the "add gitdesktop
+# to PATH" launcher) reaches new terminals without a logout. See path_launcher.rs.
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 # Vendored portable-pty carrying a 1-line Windows ConPTY fix: pass NULL (not
 # INVALID_HANDLE_VALUE) std handles when spawning the pty child, so it attaches to

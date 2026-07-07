@@ -1,0 +1,533 @@
+//! One-click "add `gitdesktop` to your PATH" launcher.
+//!
+//! The "Use GitDesktop as an MCP server" config points external clients at the
+//! command `gitdesktop mcp …`. That bare command only resolves if the app's
+//! executable is reachable on the shell's `PATH` — otherwise users must hardcode
+//! an absolute path (Personal variant) or set `GITDESKTOP_BIN` (Shareable
+//! variant). This module makes the bare command work in one click:
+//!
+//! * **Windows** — append the app's own directory to the *user* `PATH`
+//!   (`HKCU\Environment`, no admin) and broadcast `WM_SETTINGCHANGE` so new
+//!   terminals pick it up without a logout. The command `gitdesktop` resolves to
+//!   `GitDesktop.exe` case-insensitively.
+//! * **macOS / Linux** — symlink `gitdesktop` → the app binary into
+//!   `~/.local/bin` (the lowercase name matters; Unix is case-sensitive).
+//!
+//! Every install is reversible via [`path_launcher_remove`], and we only ever
+//! remove what we created (a user-`PATH` entry we added / a symlink we own).
+
+use crate::error::{AppError, AppResult};
+use serde::Serialize;
+use std::path::PathBuf;
+
+/// State of the `gitdesktop` command-line launcher, surfaced in Settings →
+/// "Use GitDesktop as an MCP server".
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathLauncherStatus {
+    /// `gitdesktop` resolves in a newly-opened terminal (from the *persisted*
+    /// PATH — the registry on Windows / `$PATH` on Unix — not this process's
+    /// possibly-stale environment).
+    pub on_path: bool,
+    /// GitDesktop installed the launcher itself, so **Remove** can undo it.
+    /// `false` when `gitdesktop` is on PATH by other means (a manual edit, or a
+    /// dev build already on PATH) — there is nothing of ours to remove.
+    pub managed: bool,
+    /// Human-readable install location for the UI (the PATH directory on
+    /// Windows, the symlink path on Unix). Empty when it can't be determined.
+    pub target: String,
+    /// A non-blocking caveat to surface persistently (e.g. on Unix the bin dir
+    /// isn't on `$PATH`). `None` in the clean case.
+    pub warning: Option<String>,
+    /// A one-shot success note from install/remove, worded per-platform (e.g.
+    /// the Windows "open a new terminal" caveat). `None` for a plain status
+    /// query — the frontend shows it as a toast and does not persist it.
+    pub note: Option<String>,
+}
+
+/// Absolute path to this app's executable.
+fn exe_path() -> AppResult<PathBuf> {
+    std::env::current_exe().map_err(AppError::Io)
+}
+
+#[tauri::command]
+pub fn path_launcher_status() -> AppResult<PathLauncherStatus> {
+    status_impl()
+}
+
+#[tauri::command]
+pub fn path_launcher_install() -> AppResult<PathLauncherStatus> {
+    install_impl()
+}
+
+#[tauri::command]
+pub fn path_launcher_remove() -> AppResult<PathLauncherStatus> {
+    remove_impl()
+}
+
+// ── Windows ─────────────────────────────────────────────────────────────────
+
+#[cfg(windows)]
+mod platform {
+    use super::*;
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_EXPAND_SZ};
+    use winreg::types::FromRegValue;
+    use winreg::{RegKey, RegValue};
+
+    /// The app's own directory — adding it to PATH makes `GitDesktop.exe`
+    /// resolvable as the (case-insensitive) command `gitdesktop`.
+    fn exe_dir() -> AppResult<String> {
+        let exe = exe_path()?;
+        exe.parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .ok_or_else(|| {
+                AppError::Command("could not determine the app's directory".into())
+            })
+    }
+
+    /// Normalize a PATH entry for case-insensitive comparison (Windows paths are
+    /// case-insensitive; a trailing separator is not significant).
+    pub(super) fn norm(p: &str) -> String {
+        p.trim().trim_end_matches(['\\', '/']).to_ascii_lowercase()
+    }
+
+    /// Whether `dir` is already present among the `;`-separated `current` PATH.
+    pub(super) fn path_contains(current: &str, dir: &str) -> bool {
+        let target = norm(dir);
+        current
+            .split(';')
+            .any(|e| !e.trim().is_empty() && norm(e) == target)
+    }
+
+    /// `current` PATH with `dir` appended, or `None` if it is already present.
+    /// Avoids a leading separator on an empty value and a doubled separator when
+    /// `current` already ends with one.
+    pub(super) fn path_with_dir_added(current: &str, dir: &str) -> Option<String> {
+        if path_contains(current, dir) {
+            return None;
+        }
+        let trimmed = current.trim_end_matches(';');
+        Some(if trimmed.trim().is_empty() {
+            dir.to_string()
+        } else {
+            format!("{trimmed};{dir}")
+        })
+    }
+
+    /// `current` PATH with every entry equal to `dir` removed. Other segments —
+    /// including any pre-existing empty one — are kept verbatim, so that an
+    /// install+remove round-trips the user's PATH byte-for-byte (we reverse only
+    /// what we added). Removing our own entry never leaves an empty segment
+    /// behind, so no `;;` artifact is introduced.
+    pub(super) fn path_with_dir_removed(current: &str, dir: &str) -> String {
+        let target = norm(dir);
+        current
+            .split(';')
+            .filter(|e| norm(e) != target)
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Open the current user's `Environment` registry key with the given access
+    /// (`KEY_READ`, or `KEY_READ | KEY_WRITE` to also mutate).
+    fn open_user_env(access: u32) -> AppResult<RegKey> {
+        RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey_with_flags("Environment", access)
+            .map_err(AppError::Io)
+    }
+
+    /// Read the PATH raw value from an opened Environment key, decoded to a
+    /// `String`, alongside its registry type so a write can preserve
+    /// `REG_EXPAND_SZ` (keeping any `%VAR%` entries expandable). A missing value
+    /// reads as empty + `REG_EXPAND_SZ` (the type Windows uses to create PATH).
+    /// Takes the key as a parameter so it round-trips against a scratch key in
+    /// tests without ever touching the live `HKCU\Environment`.
+    pub(super) fn read_path_value(
+        env: &RegKey,
+    ) -> AppResult<(String, winreg::enums::RegType)> {
+        match env.get_raw_value("Path") {
+            Ok(raw) => {
+                let s = String::from_reg_value(&raw)
+                    .map_err(|e| AppError::Command(format!("reading PATH from the registry: {e}")))?;
+                Ok((s, raw.vtype))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Ok((String::new(), REG_EXPAND_SZ))
+            }
+            Err(e) => Err(AppError::Io(e)),
+        }
+    }
+
+    /// Write the PATH value back to an opened Environment key, preserving the
+    /// original value type. Encodes to NUL-terminated UTF-16LE (the on-disk form
+    /// for `REG_SZ`/`REG_EXPAND_SZ`).
+    pub(super) fn write_path_value(
+        env: &RegKey,
+        value: &str,
+        vtype: winreg::enums::RegType,
+    ) -> AppResult<()> {
+        let bytes: Vec<u8> = value
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        env.set_raw_value("Path", &RegValue { bytes, vtype })
+            .map_err(AppError::Io)
+    }
+
+    /// Whether the exe dir appears in the *persisted* (registry) user+system
+    /// PATH — i.e. whether a new terminal would resolve `gitdesktop` to us.
+    fn persisted_path_contains_exe_dir(dir: &str) -> bool {
+        let target = norm(dir);
+        crate::agent::registry_path_dirs()
+            .iter()
+            .any(|p| norm(&p.to_string_lossy()) == target)
+    }
+
+    /// Tell Explorer (and thus terminals launched afterward) that the
+    /// environment changed, so the edited PATH is picked up without a logout.
+    ///
+    /// Runs on a **detached thread**, deliberately. These commands are invoked
+    /// synchronously on Tauri's main (UI) thread, and `SendMessageTimeoutW`
+    /// against `HWND_BROADCAST` blocks the caller until every top-level window
+    /// acknowledges — *including our own window, whose UI thread is the caller*.
+    /// Broadcasting inline therefore froze the app ("Not Responding") for the
+    /// full timeout. Off-thread, the UI thread stays free to answer the
+    /// broadcast immediately and the command returns the instant the (already
+    /// persisted) registry write is done. Best-effort: we don't await the nudge.
+    fn broadcast_env_change() {
+        std::thread::spawn(|| {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+            };
+            let param: Vec<u16> = "Environment"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let mut result: usize = 0;
+            // SAFETY: a standard, documented environment-change broadcast.
+            // `param` is a valid NUL-terminated wide string owned by this
+            // closure that outlives the (timed-out) call; `result` is a valid
+            // out-pointer. HWND_BROADCAST + a 5s abort-if-hung timeout means a
+            // wedged window can't block this thread forever.
+            unsafe {
+                SendMessageTimeoutW(
+                    HWND_BROADCAST,
+                    WM_SETTINGCHANGE,
+                    0,
+                    param.as_ptr() as isize,
+                    SMTO_ABORTIFHUNG,
+                    5000,
+                    &mut result,
+                );
+            }
+        });
+    }
+
+    pub(super) fn status_impl() -> AppResult<PathLauncherStatus> {
+        let dir = exe_dir()?;
+        let (user_path, _) = read_path_value(&open_user_env(KEY_READ)?)?;
+        Ok(PathLauncherStatus {
+            on_path: persisted_path_contains_exe_dir(&dir),
+            managed: path_contains(&user_path, &dir),
+            target: dir,
+            warning: None,
+            note: None,
+        })
+    }
+
+    pub(super) fn install_impl() -> AppResult<PathLauncherStatus> {
+        let dir = exe_dir()?;
+        let env = open_user_env(KEY_READ | KEY_WRITE)?;
+        let (current, vtype) = read_path_value(&env)?;
+        if let Some(next) = path_with_dir_added(&current, &dir) {
+            write_path_value(&env, &next, vtype)?;
+            broadcast_env_change();
+        }
+        Ok(PathLauncherStatus {
+            on_path: true,
+            managed: true,
+            target: dir,
+            warning: None,
+            note: Some(
+                "Added to your PATH — open a new terminal to use gitdesktop.".into(),
+            ),
+        })
+    }
+
+    pub(super) fn remove_impl() -> AppResult<PathLauncherStatus> {
+        let dir = exe_dir()?;
+        let env = open_user_env(KEY_READ | KEY_WRITE)?;
+        let (current, vtype) = read_path_value(&env)?;
+        if path_contains(&current, &dir) {
+            let next = path_with_dir_removed(&current, &dir);
+            write_path_value(&env, &next, vtype)?;
+            broadcast_env_change();
+        }
+        // Recompute from the registry — the dir might still be on the *system*
+        // PATH, in which case `gitdesktop` stays resolvable (just not ours).
+        let mut status = status_impl()?;
+        status.note = Some("Removed gitdesktop from your PATH.".into());
+        Ok(status)
+    }
+}
+
+// ── macOS / Linux ───────────────────────────────────────────────────────────
+
+#[cfg(unix)]
+mod platform {
+    use super::*;
+    use std::path::Path;
+
+    /// Preferred user bin directory — on `$PATH` in virtually all modern shells.
+    fn user_bin_dir() -> AppResult<PathBuf> {
+        let home = std::env::var_os("HOME")
+            .ok_or_else(|| AppError::Command("HOME is not set".into()))?;
+        Ok(PathBuf::from(home).join(".local").join("bin"))
+    }
+
+    fn link_path() -> AppResult<PathBuf> {
+        Ok(user_bin_dir()?.join("gitdesktop"))
+    }
+
+    /// Whether `dir` is on this process's `$PATH`.
+    fn dir_on_path(dir: &Path) -> bool {
+        let Some(path) = std::env::var_os("PATH") else {
+            return false;
+        };
+        std::env::split_paths(&path).any(|p| p == dir)
+    }
+
+    /// Whether some `gitdesktop` is resolvable on `$PATH` (a file or a symlink).
+    fn gitdesktop_on_path() -> bool {
+        let Some(path) = std::env::var_os("PATH") else {
+            return false;
+        };
+        std::env::split_paths(&path).any(|dir| {
+            let cand = dir.join("gitdesktop");
+            std::fs::symlink_metadata(&cand)
+                .map(|m| m.file_type().is_symlink() || m.file_type().is_file())
+                .unwrap_or(false)
+        })
+    }
+
+    /// Whether our symlink exists and points at *this* binary.
+    fn managed(link: &Path, exe: &Path) -> bool {
+        std::fs::symlink_metadata(link)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+            && std::fs::read_link(link).map(|t| t == exe).unwrap_or(false)
+    }
+
+    pub(super) fn status_impl() -> AppResult<PathLauncherStatus> {
+        let exe = exe_path()?;
+        let bin = user_bin_dir()?;
+        let link = link_path()?;
+        let is_managed = managed(&link, &exe);
+        let warning = if is_managed && !dir_on_path(&bin) {
+            Some(format!(
+                "{} may not be on your PATH — add it to your shell profile, or use the Shareable entry's GITDESKTOP_BIN.",
+                bin.display()
+            ))
+        } else {
+            None
+        };
+        Ok(PathLauncherStatus {
+            on_path: gitdesktop_on_path(),
+            managed: is_managed,
+            target: link.to_string_lossy().into_owned(),
+            warning,
+            note: None,
+        })
+    }
+
+    pub(super) fn install_impl() -> AppResult<PathLauncherStatus> {
+        use std::os::unix::fs::symlink;
+        let exe = exe_path()?;
+        let bin = user_bin_dir()?;
+        let link = link_path()?;
+        std::fs::create_dir_all(&bin).map_err(AppError::Io)?;
+        // Clear the path for our symlink, but only when it's safe — symmetric with
+        // remove_impl's ownership guard: repoint our own link (same target) or a
+        // dangling one (e.g. ours after the app moved), but never clobber a live
+        // symlink to a DIFFERENT binary, and never a real file the user put here.
+        match std::fs::symlink_metadata(&link) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let target = std::fs::read_link(&link).unwrap_or_default();
+                if target != exe && target.exists() {
+                    return Err(AppError::Command(format!(
+                        "{} is symlinked to a different binary — remove it manually first.",
+                        link.display()
+                    )));
+                }
+                std::fs::remove_file(&link).map_err(AppError::Io)?;
+            }
+            Ok(_) => {
+                return Err(AppError::Command(format!(
+                    "{} already exists and isn't a symlink — remove it manually first.",
+                    link.display()
+                )));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(AppError::Io(e)),
+        }
+        symlink(&exe, &link).map_err(AppError::Io)?;
+        let mut status = status_impl()?;
+        status.note = Some(if dir_on_path(&bin) {
+            format!("Linked gitdesktop into {}.", bin.display())
+        } else {
+            format!(
+                "Linked gitdesktop into {} — add that folder to your PATH to use it.",
+                bin.display()
+            )
+        });
+        Ok(status)
+    }
+
+    pub(super) fn remove_impl() -> AppResult<PathLauncherStatus> {
+        let exe = exe_path()?;
+        let link = link_path()?;
+        match std::fs::symlink_metadata(&link) {
+            // Only remove OUR launcher — a symlink pointing at *this* binary
+            // (the same ownership test `managed()`/status use). Never delete a
+            // gitdesktop symlink the user aimed at a different install, and
+            // never a real file they placed here.
+            Ok(meta) if meta.file_type().is_symlink() => {
+                if std::fs::read_link(&link).map(|t| t == exe).unwrap_or(false) {
+                    std::fs::remove_file(&link).map_err(AppError::Io)?;
+                } else {
+                    return Err(AppError::Command(format!(
+                        "{} points to a different binary — leaving it alone.",
+                        link.display()
+                    )));
+                }
+            }
+            Ok(_) => {
+                return Err(AppError::Command(format!(
+                    "{} isn't a symlink GitDesktop created — leaving it alone.",
+                    link.display()
+                )));
+            }
+            _ => {} // already gone
+        }
+        let mut status = status_impl()?;
+        status.note = Some("Removed the gitdesktop launcher.".into());
+        Ok(status)
+    }
+}
+
+// Fallback for exotic targets (none of the desktop builds hit this).
+#[cfg(not(any(windows, unix)))]
+mod platform {
+    use super::*;
+    fn unsupported() -> AppError {
+        AppError::Command("adding gitdesktop to PATH isn't supported on this platform".into())
+    }
+    pub(super) fn status_impl() -> AppResult<PathLauncherStatus> {
+        Err(unsupported())
+    }
+    pub(super) fn install_impl() -> AppResult<PathLauncherStatus> {
+        Err(unsupported())
+    }
+    pub(super) fn remove_impl() -> AppResult<PathLauncherStatus> {
+        Err(unsupported())
+    }
+}
+
+use platform::{install_impl, remove_impl, status_impl};
+
+#[cfg(all(test, windows))]
+mod windows_path_tests {
+    use super::platform::{norm, path_contains, path_with_dir_added, path_with_dir_removed};
+
+    const DIR: &str = r"C:\Users\me\AppData\Local\GitDesktop";
+
+    #[test]
+    fn norm_is_case_and_trailing_slash_insensitive() {
+        assert_eq!(norm(r"C:\Foo\Bar\"), norm(r"c:\foo\bar"));
+        assert_eq!(norm("  C:\\Foo/  "), r"c:\foo");
+    }
+
+    #[test]
+    fn add_appends_without_leading_or_doubled_separator() {
+        // Empty PATH -> just the dir, no leading ';'.
+        assert_eq!(path_with_dir_added("", DIR).as_deref(), Some(DIR));
+        // Trailing ';' isn't doubled.
+        assert_eq!(
+            path_with_dir_added(r"C:\Windows;", DIR).as_deref(),
+            Some(&*format!(r"C:\Windows;{DIR}"))
+        );
+        assert_eq!(
+            path_with_dir_added(r"C:\Windows", DIR).as_deref(),
+            Some(&*format!(r"C:\Windows;{DIR}"))
+        );
+    }
+
+    #[test]
+    fn add_is_idempotent_case_insensitively() {
+        let current = format!(r"C:\Windows;{}", DIR.to_lowercase());
+        assert!(path_with_dir_added(&current, DIR).is_none());
+        assert!(path_contains(&current, DIR));
+    }
+
+    #[test]
+    fn remove_drops_only_the_dir_preserving_other_segments() {
+        // Our dir goes; a pre-existing empty segment (the `;;`) stays put, so an
+        // install+remove round-trips a real PATH byte-for-byte.
+        let current = format!(r"C:\Windows;{DIR};;C:\Tools");
+        assert_eq!(
+            path_with_dir_removed(&current, DIR),
+            r"C:\Windows;;C:\Tools"
+        );
+        // Removing an absent dir is a no-op.
+        assert_eq!(path_with_dir_removed(r"C:\Windows", DIR), r"C:\Windows");
+        // Removing our dir never introduces a `;;` of its own.
+        assert_eq!(
+            path_with_dir_removed(&format!(r"A;{DIR};B"), DIR),
+            "A;B"
+        );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_registry_tests {
+    use super::platform::{path_with_dir_added, read_path_value, write_path_value};
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_EXPAND_SZ, REG_SZ};
+    use winreg::RegKey;
+
+    /// Round-trips the *real* registry read/write helpers against a throwaway key
+    /// under `HKCU\Software`, validating the UTF-16LE encoding and — critically —
+    /// that a write preserves `REG_EXPAND_SZ` so a user's `%VAR%` PATH entries
+    /// keep working. Never touches the live `HKCU\Environment`.
+    #[test]
+    fn registry_roundtrip_preserves_type_and_appends_literally() {
+        const SCRATCH: &str = r"Software\GitDesktopTest\PathLauncherRoundtrip";
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let _ = hkcu.delete_subkey_all(SCRATCH); // clear a stale key from a crashed run
+        let (key, _) = hkcu
+            .create_subkey_with_flags(SCRATCH, KEY_READ | KEY_WRITE)
+            .expect("create scratch key");
+
+        // Seed a REG_EXPAND_SZ Path carrying a %VAR%, like real user PATHs.
+        let seeded = r"%SystemRoot%\System32;C:\Tools";
+        write_path_value(&key, seeded, REG_EXPAND_SZ).expect("seed write");
+        let (val, vtype) = read_path_value(&key).expect("read seeded");
+        assert_eq!(val, seeded, "%VAR% must survive the round-trip unexpanded");
+        assert!(matches!(vtype, REG_EXPAND_SZ), "type preserved: got {vtype:?}");
+
+        // Append our dir at the same type — the actual install mutation.
+        let dir = r"C:\Users\me\AppData\Local\GitDesktop";
+        let next = path_with_dir_added(&val, dir).expect("dir is new");
+        write_path_value(&key, &next, vtype).expect("append write");
+        let (val2, vtype2) = read_path_value(&key).expect("read appended");
+        assert_eq!(val2, format!(r"{seeded};{dir}"));
+        assert!(matches!(vtype2, REG_EXPAND_SZ));
+
+        // A REG_SZ value is honored as REG_SZ, not forced to expand-sz.
+        write_path_value(&key, r"C:\Only", REG_SZ).expect("sz write");
+        let (_, sz_type) = read_path_value(&key).expect("read sz");
+        assert!(matches!(sz_type, REG_SZ), "type honored: got {sz_type:?}");
+
+        hkcu.delete_subkey_all(SCRATCH).expect("cleanup scratch key");
+    }
+}

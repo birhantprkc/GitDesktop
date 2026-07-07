@@ -32,6 +32,15 @@ const READ_FILE_MAX_BYTES: usize = 200_000;
 /// Cap GitHub text output (PR diffs, CI logs) for the same reason.
 const GH_TEXT_MAX_BYTES: usize = 100_000;
 
+/// Attribution appended to every PR comment posted through the MCP server, so the
+/// comment is identifiable as coming from GitDesktop (an automated agent acting via
+/// the server) rather than a human. Shares the `Posted by [GitDesktop](…)` anchor
+/// with the in-app AI-review footer (`src/lib/ai/comment-branding.ts`) so a single
+/// detection rule catches both — e.g. the PR reviewer skipping/attributing our own
+/// comments when it re-reviews after changes.
+const GD_COMMENT_FOOTER: &str =
+    "\n\n---\n\n_Posted by [GitDesktop](https://gitdesktop.app) — automated agent comment, verify before acting on it._";
+
 /// The MCP server handler, bound to a single repository — the `--repo` the server
 /// was launched against. Every tool operates on `repo` (no ambient "active repo"
 /// state exists in the backend; the binding is explicit, which keeps tools
@@ -43,6 +52,13 @@ pub struct GitDesktopMcp {
     /// server was launched with `--allow-write`; when off, the write tools stay
     /// registered but return a clear "disabled" error so an agent sees why.
     allow_write: bool,
+    /// Whether the opt-in forge remote-write tools (create/comment/close/reopen issues,
+    /// comment on PRs) are enabled. Off unless the server was launched with
+    /// `--allow-remote-write` — a SEPARATE, orthogonal opt-in from `--allow-write`
+    /// (local-PR writes are app-data-only; these act on the repo's forge under your
+    /// authenticated CLI identity — `gh`, `glab`, or a stored Bitbucket token). When
+    /// off, the remote-write tools stay registered but return a clear "disabled" error.
+    allow_remote_write: bool,
     // Read by the `#[tool_handler]`-generated `list_tools`/`call_tool`; the
     // dead-code lint misses that (it only sees the derived `Clone` touch it).
     #[allow(dead_code)]
@@ -195,6 +211,54 @@ struct ApproveLocalPrArgs {
     id: String,
     /// Whether the local PR is approved.
     approved: bool,
+}
+
+// ---- Forge remote-write tool parameters (opt-in via --allow-remote-write) --
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CreateIssueArgs {
+    /// The issue title.
+    title: String,
+    /// Optional issue body (markdown). Defaults to empty.
+    #[serde(default)]
+    body: String,
+    /// Optional labels to apply by name (must already exist in the repo).
+    #[serde(default)]
+    labels: Vec<String>,
+    /// Optional assignees to apply by login (must have repo access).
+    #[serde(default)]
+    assignees: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CommentIssueArgs {
+    /// The issue number.
+    number: u64,
+    /// The comment body (markdown).
+    body: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CloseIssueArgs {
+    /// The issue number.
+    number: u64,
+    /// Close reason: "completed" (default) or "not_planned". Empty defaults to "completed".
+    #[serde(default)]
+    reason: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ReopenIssueArgs {
+    /// The issue number.
+    number: u64,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CommentPullRequestArgs {
+    /// The pull request number.
+    number: u64,
+    /// The comment body (markdown).
+    body: String,
 }
 
 #[tool_router]
@@ -383,18 +447,27 @@ impl GitDesktopMcp {
         json_result(&out)
     }
 
-    // ---- GitHub (P1b) — all require an authenticated `gh` and hit the network -
+    // ---- Forge: PRs / issues / CI (P1b) -----------------------------------
+    //
+    // Routed through the forge abstraction (`crate::forge::forge_*`), which dispatches
+    // by the repo's git host — so one tool set serves GitHub, GitLab, and Bitbucket.
+    // Each requires the matching authenticated CLI/credential (GitHub `gh`, GitLab
+    // `glab`, Bitbucket a stored API token) and hits the network. GitHub behavior +
+    // serialized JSON are unchanged from the prior `gh_*`-only surface. Bitbucket's
+    // native issue tracker is deprecated, so the issue tools return an actionable
+    // error there (GitHub + GitLab only).
 
     #[tool(
-        description = "List pull requests. `state` is \"open\" (default) or \"closed\". Returns up \
-                       to ~30 (the GitHub CLI default); narrow by state if the repo has more. \
-                       Requires an authenticated GitHub CLI. Returns JSON."
+        description = "List pull requests from the repository's forge (GitHub, GitLab, or \
+                       Bitbucket, per its remote). `state` is \"open\" (default) or \"closed\". \
+                       Returns up to ~30 (the CLI default); narrow by state if the repo has more. \
+                       Requires the forge's authenticated CLI/credential. Returns JSON."
     )]
     async fn list_pull_requests(
         &self,
         Parameters(args): Parameters<StateArg>,
     ) -> Result<CallToolResult, McpError> {
-        let prs = crate::github::pr::gh_pr_list(
+        let prs = crate::forge::forge_pr_list(
             self.repo.clone(),
             args.state.unwrap_or_else(|| "open".to_string()),
         )
@@ -404,25 +477,30 @@ impl GitDesktopMcp {
     }
 
     #[tool(
-        description = "Get a pull request's full details (title, body, state, reviews, files) by \
-                       number. Returns JSON."
+        description = "Get a pull request's full details (title, body, state, reviews, comments, \
+                       files) by number from the repository's forge (GitHub, GitLab, or Bitbucket, \
+                       per its remote). For just the conversation — including file:line review \
+                       threads — see list_pull_request_comments. Returns JSON."
     )]
     async fn get_pull_request(
         &self,
         Parameters(args): Parameters<NumberArg>,
     ) -> Result<CallToolResult, McpError> {
-        let pr = crate::github::pr::gh_pr_view(self.repo.clone(), args.number)
+        let pr = crate::forge::forge_pr_view(self.repo.clone(), args.number)
             .await
             .map_err(app_err)?;
         json_result(&pr)
     }
 
-    #[tool(description = "Get the unified diff of a pull request by number. Large diffs are truncated.")]
+    #[tool(
+        description = "Get the unified diff of a pull request by number from the repository's forge \
+                       (GitHub, GitLab, or Bitbucket, per its remote). Large diffs are truncated."
+    )]
     async fn pull_request_diff(
         &self,
         Parameters(args): Parameters<NumberArg>,
     ) -> Result<CallToolResult, McpError> {
-        let diff = crate::github::pr::gh_pr_diff(self.repo.clone(), args.number)
+        let diff = crate::forge::forge_pr_diff(self.repo.clone(), args.number)
             .await
             .map_err(app_err)?;
         Ok(CallToolResult::success(vec![Content::text(cap_head(
@@ -432,15 +510,44 @@ impl GitDesktopMcp {
     }
 
     #[tool(
-        description = "List issues. `state` is \"open\" (default) or \"closed\". Returns up to ~30 \
-                       (the GitHub CLI default); narrow by state if the repo has more. Requires an \
-                       authenticated GitHub CLI. Returns JSON."
+        description = "List a pull request's comments (by number) from the repository's forge \
+                       (GitHub, GitLab, or Bitbucket, per its remote): `comments` (the top-level \
+                       conversation), `reviews` (review summaries), and `review_threads` (file:line \
+                       -anchored threads, each with its full reply chain) — every entry carries the \
+                       author, date, and the original markdown body. Read-only; returns JSON. (For \
+                       the PR's metadata + changed files use get_pull_request; for its diff, \
+                       pull_request_diff.)"
+    )]
+    async fn list_pull_request_comments(
+        &self,
+        Parameters(args): Parameters<NumberArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let pr = crate::forge::forge_pr_view(self.repo.clone(), args.number)
+            .await
+            .map_err(app_err)?;
+        let review_threads = crate::forge::forge_pr_review_threads(self.repo.clone(), args.number)
+            .await
+            .map_err(app_err)?;
+        json_result(&serde_json::json!({
+            "number": args.number,
+            "comments": pr.comments,
+            "reviews": pr.reviews,
+            "review_threads": review_threads,
+        }))
+    }
+
+    #[tool(
+        description = "List issues from the repository's forge (GitHub or GitLab, per its remote; \
+                       Bitbucket issues aren't supported — its native tracker is deprecated). \
+                       `state` is \"open\" (default) or \"closed\". Returns up to ~30 (the CLI \
+                       default); narrow by state if the repo has more. Requires the forge's \
+                       authenticated CLI/credential. Returns JSON."
     )]
     async fn list_issues(
         &self,
         Parameters(args): Parameters<StateArg>,
     ) -> Result<CallToolResult, McpError> {
-        let issues = crate::github::issue::gh_issue_list(
+        let issues = crate::forge::forge_issue_list(
             self.repo.clone(),
             args.state.unwrap_or_else(|| "open".to_string()),
         )
@@ -451,20 +558,23 @@ impl GitDesktopMcp {
 
     #[tool(
         description = "Get an issue's full details (title, body, comments, labels, assignees) by \
-                       number. Returns JSON."
+                       number from the repository's forge (GitHub or GitLab, per its remote; \
+                       Bitbucket issues aren't supported — its native tracker is deprecated). \
+                       Returns JSON."
     )]
     async fn get_issue(
         &self,
         Parameters(args): Parameters<NumberArg>,
     ) -> Result<CallToolResult, McpError> {
-        let issue = crate::github::issue::gh_issue_view(self.repo.clone(), args.number)
+        let issue = crate::forge::forge_issue_view(self.repo.clone(), args.number)
             .await
             .map_err(app_err)?;
         json_result(&issue)
     }
 
     #[tool(
-        description = "List recent GitHub Actions workflow runs, optionally filtered to a branch. \
+        description = "List recent CI runs from the repository's forge (GitHub Actions, GitLab CI, \
+                       or Bitbucket Pipelines, per its remote), optionally filtered to a branch. \
                        Returns JSON."
     )]
     async fn list_workflow_runs(
@@ -472,32 +582,38 @@ impl GitDesktopMcp {
         Parameters(args): Parameters<RunListArgs>,
     ) -> Result<CallToolResult, McpError> {
         let runs =
-            crate::github::actions::gh_run_list(self.repo.clone(), args.limit.unwrap_or(20), args.branch)
+            crate::forge::forge_ci_run_list(self.repo.clone(), args.limit.unwrap_or(20), args.branch)
                 .await
                 .map_err(app_err)?;
         json_result(&runs)
     }
 
-    #[tool(description = "Get a workflow run's details (status, conclusion, jobs) by run id. Returns JSON.")]
+    #[tool(
+        description = "Get a CI run's details (status, conclusion, jobs) by run id from the \
+                       repository's forge (GitHub Actions, GitLab CI, or Bitbucket Pipelines, per \
+                       its remote). Returns JSON."
+    )]
     async fn get_workflow_run(
         &self,
         Parameters(args): Parameters<RunIdArg>,
     ) -> Result<CallToolResult, McpError> {
-        let run = crate::github::actions::gh_run_view(self.repo.clone(), args.run_id)
+        let run = crate::forge::forge_ci_run_view(self.repo.clone(), args.run_id)
             .await
             .map_err(app_err)?;
         json_result(&run)
     }
 
     #[tool(
-        description = "Get the logs of the FAILED steps of a workflow run by run id — the most \
-                       useful view for diagnosing a CI failure. Large logs are truncated to the tail."
+        description = "Get the logs of the FAILED steps of a CI run by run id from the repository's \
+                       forge (GitHub Actions, GitLab CI, or Bitbucket Pipelines, per its remote) — \
+                       the most useful view for diagnosing a CI failure. Large logs are truncated \
+                       to the tail."
     )]
     async fn workflow_failed_logs(
         &self,
         Parameters(args): Parameters<RunIdArg>,
     ) -> Result<CallToolResult, McpError> {
-        let logs = crate::github::actions::gh_run_failed_logs(self.repo.clone(), args.run_id)
+        let logs = crate::forge::forge_ci_run_failed_logs(self.repo.clone(), args.run_id)
             .await
             .map_err(app_err)?;
         Ok(CallToolResult::success(vec![Content::text(cap_tail(
@@ -585,25 +701,166 @@ impl GitDesktopMcp {
             crate::local_prs::set_approved(&self.repo, &args.id, args.approved).map_err(app_err)?;
         json_result(&record)
     }
+
+    // ---- Forge remote-write tools (opt-in via --allow-remote-write) --------
+    //
+    // These are REAL forge writes, routed through the forge abstraction
+    // (`crate::forge::forge_*`), which dispatches by the repo's git host — so they
+    // act on the bound repository's GitHub, GitLab, or Bitbucket remote under the
+    // matching authenticated identity (GitHub `gh`, GitLab `glab`, Bitbucket a stored
+    // API token), and hit the network. Bitbucket's native issue tracker is deprecated,
+    // so the issue tools return an actionable error there (GitHub + GitLab only);
+    // comment_pull_request works on all three. Gated on `allow_remote_write` — a
+    // SEPARATE opt-in from `--allow-write` (which only gates the app-data-only local-PR
+    // tools); enabling one never grants the other. All are annotated non-read-only, and
+    // non-destructive (create/comment/close/reopen are additive or reversible — none
+    // destroy data), though they DO post/create publicly under the user's identity.
+
+    #[tool(
+        description = "Create a real issue in the bound repository's forge (GitHub or GitLab, per \
+                       its remote; Bitbucket issues aren't supported — its native tracker is \
+                       deprecated), under the authenticated forge user. NOT reversible without \
+                       deleting it. Optional labels/assignees are applied by name/login (must \
+                       already exist). Returns the created issue ref (number + URL) as JSON. \
+                       Requires --allow-remote-write.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn create_issue(
+        &self,
+        Parameters(args): Parameters<CreateIssueArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_remote_write()?;
+        let pr_ref = crate::forge::forge_issue_create(
+            self.repo.clone(),
+            args.title,
+            args.body,
+            args.labels,
+            args.assignees,
+            None,
+            None,
+        )
+        .await
+        .map_err(app_err)?;
+        json_result(&pr_ref)
+    }
+
+    #[tool(
+        description = "Post a comment to an issue (by number) in the bound repository's forge \
+                       (GitHub or GitLab, per its remote; Bitbucket issues aren't supported — its \
+                       native tracker is deprecated), under the authenticated forge user. \
+                       Requires --allow-remote-write.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn comment_issue(
+        &self,
+        Parameters(args): Parameters<CommentIssueArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_remote_write()?;
+        crate::forge::forge_issue_comment(self.repo.clone(), args.number, args.body)
+            .await
+            .map_err(app_err)?;
+        json_result(&serde_json::json!({ "issue": args.number, "action": "commented" }))
+    }
+
+    #[tool(
+        description = "Close an issue (by number) in the bound repository's forge (GitHub or \
+                       GitLab, per its remote; Bitbucket issues aren't supported — its native \
+                       tracker is deprecated). Reversible via reopen_issue. `reason` is \
+                       \"completed\" (default) or \"not_planned\" (GitHub; GitLab has no close \
+                       reason and ignores it). Requires --allow-remote-write.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn close_issue(
+        &self,
+        Parameters(args): Parameters<CloseIssueArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_remote_write()?;
+        // Empty resolves to "completed" in the GitHub core; mirror that in the confirmation.
+        let resolved = if args.reason.is_empty() {
+            "completed"
+        } else {
+            args.reason.as_str()
+        };
+        crate::forge::forge_issue_close(self.repo.clone(), args.number, args.reason.clone())
+            .await
+            .map_err(app_err)?;
+        json_result(
+            &serde_json::json!({ "issue": args.number, "status": "closed", "reason": resolved }),
+        )
+    }
+
+    #[tool(
+        description = "Reopen a closed issue (by number) in the bound repository's forge (GitHub or \
+                       GitLab, per its remote; Bitbucket issues aren't supported — its native \
+                       tracker is deprecated). Requires --allow-remote-write.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn reopen_issue(
+        &self,
+        Parameters(args): Parameters<ReopenIssueArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_remote_write()?;
+        crate::forge::forge_issue_reopen(self.repo.clone(), args.number)
+            .await
+            .map_err(app_err)?;
+        json_result(&serde_json::json!({ "issue": args.number, "status": "open" }))
+    }
+
+    #[tool(
+        description = "Post a comment to a pull request (by number) in the bound repository's forge \
+                       (GitHub, GitLab, or Bitbucket, per its remote), under the authenticated \
+                       forge user — e.g. an agent posting its review. A short \"Posted by \
+                       GitDesktop\" attribution footer is appended automatically. Requires \
+                       --allow-remote-write.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn comment_pull_request(
+        &self,
+        Parameters(args): Parameters<CommentPullRequestArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_remote_write()?;
+        // Append the attribution footer so the comment is identifiable as ours.
+        let body = format!("{}{GD_COMMENT_FOOTER}", args.body);
+        crate::forge::forge_pr_comment(self.repo.clone(), args.number, body, None)
+            .await
+            .map_err(app_err)?;
+        json_result(&serde_json::json!({ "pull_request": args.number, "action": "commented" }))
+    }
 }
 
 impl GitDesktopMcp {
-    pub fn with_options(repo: String, allow_write: bool) -> Self {
+    pub fn with_options(repo: String, allow_write: bool, allow_remote_write: bool) -> Self {
         Self {
             repo,
             allow_write,
+            allow_remote_write,
             tool_router: Self::tool_router(),
         }
     }
 
-    /// Gate for the write tools: an actionable error when the server wasn't launched
-    /// with `--allow-write`.
+    /// Gate for the local-PR write tools: an actionable error when the server wasn't
+    /// launched with `--allow-write`.
     fn ensure_write(&self) -> Result<(), McpError> {
         if self.allow_write {
             Ok(())
         } else {
             Err(McpError::invalid_request(
                 "Write tools are disabled. Restart the server with --allow-write to enable them.",
+                None,
+            ))
+        }
+    }
+
+    /// Gate for the forge remote-write tools: an actionable error when the server
+    /// wasn't launched with `--allow-remote-write` (a separate opt-in from
+    /// `--allow-write`).
+    fn ensure_remote_write(&self) -> Result<(), McpError> {
+        if self.allow_remote_write {
+            Ok(())
+        } else {
+            Err(McpError::invalid_request(
+                "Forge remote-write tools are disabled. Restart the server with \
+                 --allow-remote-write to enable them.",
                 None,
             ))
         }
@@ -619,10 +876,20 @@ impl ServerHandler for GitDesktopMcp {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
             "GitDesktop as an MCP server. Tools act on the repository this server was launched \
-             against (--repo). GitHub tools require an authenticated `gh` CLI. The read tools are \
-             always available; the local-PR write tools (create/comment/status/approve — \
-             GitDesktop's own app-data review artifacts, never git or remote writes) are enabled \
-             only when the server was launched with --allow-write."
+             against (--repo). The PR/issue/CI tools route through GitDesktop's forge abstraction, \
+             so they work against whichever forge the repo's remote points at — GitHub, GitLab, or \
+             Bitbucket — each using its own authenticated identity (GitHub the `gh` CLI, GitLab the \
+             `glab` CLI, Bitbucket a stored API token). One exception: Bitbucket's native issue \
+             tracker is deprecated, so the issue tools (list/get/create/comment/close/reopen) work \
+             on GitHub and GitLab only and return an actionable error on a Bitbucket repo. \
+             Read-only tools are always available and are the default; writes require an explicit \
+             opt-in. There are two SEPARATE, orthogonal write opt-ins: (1) --allow-write enables \
+             the local-PR write tools (create/comment/status/approve — GitDesktop's own app-data \
+             review artifacts, never git or remote writes); (2) --allow-remote-write enables the \
+             forge remote-write tools (create_issue, comment_issue, close_issue, reopen_issue, \
+             comment_pull_request) — REAL writes to the repository's forge, made under the \
+             authenticated forge identity, so they post/create publicly and are not freely \
+             reversible. Enabling one opt-in never grants the other."
                 .into(),
         );
         info
@@ -851,18 +1118,20 @@ pub fn run_mcp_server() {
 }
 
 async fn serve(args: McpArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let service = GitDesktopMcp::with_options(args.repo, args.allow_write)
+    let service = GitDesktopMcp::with_options(args.repo, args.allow_write, args.allow_remote_write)
         .serve(stdio())
         .await?;
     service.waiting().await?;
     Ok(())
 }
 
-/// The parsed MCP-server launch arguments: the bound `--repo` and the `--allow-write`
-/// opt-in for the local-PR write tools.
+/// The parsed MCP-server launch arguments: the bound `--repo`, the `--allow-write`
+/// opt-in for the local-PR write tools, and the separate `--allow-remote-write`
+/// opt-in for the forge remote-write tools.
 struct McpArgs {
     repo: String,
     allow_write: bool,
+    allow_remote_write: bool,
 }
 
 impl McpArgs {
@@ -870,12 +1139,15 @@ impl McpArgs {
         Self::parse(std::env::args().skip(1))
     }
 
-    /// Reads `--repo <path>` (or `--repo=<path>`) and the `--allow-write` flag from an
-    /// argv iterator; the repo falls back to the current working directory, matching
-    /// how reference MCP git servers are configured. `--allow-write` off by default.
+    /// Reads `--repo <path>` (or `--repo=<path>`), the `--allow-write` flag, and the
+    /// `--allow-remote-write` flag from an argv iterator; the repo falls back to the
+    /// current working directory, matching how reference MCP git servers are
+    /// configured. Both `--allow-write` and `--allow-remote-write` are off by default
+    /// and are independent of each other.
     fn parse(args: impl Iterator<Item = String>) -> Self {
         let mut repo: Option<String> = None;
         let mut allow_write = false;
+        let mut allow_remote_write = false;
         let mut args = args;
         while let Some(arg) = args.next() {
             if arg == "--repo" {
@@ -886,6 +1158,8 @@ impl McpArgs {
                 repo = Some(path.to_string());
             } else if arg == "--allow-write" {
                 allow_write = true;
+            } else if arg == "--allow-remote-write" {
+                allow_remote_write = true;
             }
         }
         let repo = repo.unwrap_or_else(|| {
@@ -893,7 +1167,11 @@ impl McpArgs {
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| ".".to_string())
         });
-        Self { repo, allow_write }
+        Self {
+            repo,
+            allow_write,
+            allow_remote_write,
+        }
     }
 }
 
@@ -924,5 +1202,43 @@ mod tests {
         let args = parse(&["--allow-write", "--repo", "/tmp/y"]);
         assert_eq!(args.repo, "/tmp/y");
         assert!(args.allow_write);
+    }
+
+    #[test]
+    fn allow_remote_write_defaults_off() {
+        let args = parse(&["--repo", "/tmp/x"]);
+        assert_eq!(args.repo, "/tmp/x");
+        assert!(!args.allow_remote_write);
+    }
+
+    #[test]
+    fn allow_remote_write_flag_enables_it() {
+        let args = parse(&["--repo=/tmp/x", "--allow-remote-write"]);
+        assert_eq!(args.repo, "/tmp/x");
+        assert!(args.allow_remote_write);
+    }
+
+    #[test]
+    fn allow_remote_write_order_independent() {
+        let args = parse(&["--allow-remote-write", "--repo", "/tmp/y"]);
+        assert_eq!(args.repo, "/tmp/y");
+        assert!(args.allow_remote_write);
+    }
+
+    #[test]
+    fn write_flags_are_independent() {
+        // Both can be set together.
+        let both = parse(&["--repo", "/tmp/x", "--allow-write", "--allow-remote-write"]);
+        assert!(both.allow_write);
+        assert!(both.allow_remote_write);
+
+        // Each flag alone leaves the other off.
+        let local_only = parse(&["--repo", "/tmp/x", "--allow-write"]);
+        assert!(local_only.allow_write);
+        assert!(!local_only.allow_remote_write);
+
+        let remote_only = parse(&["--repo", "/tmp/x", "--allow-remote-write"]);
+        assert!(!remote_only.allow_write);
+        assert!(remote_only.allow_remote_write);
     }
 }

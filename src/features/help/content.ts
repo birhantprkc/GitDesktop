@@ -955,18 +955,42 @@ new choice applies from your next turn.
 
 **The other direction — GitDesktop *as* a server.** At the bottom of the panel, **Use
 GitDesktop as an MCP server** lets any external MCP client — Claude Desktop, Cursor, Claude
-Code — use *this* repo's **read-only-by-default** git & GitHub tools (status, log, diffs,
-blame, branches, file history/read, PRs, issues, CI logs). The app itself runs as a stdio
-server (\`gitdesktop mcp --repo <path>\`), so an agent can understand a repo without changing
-it. **Copy** the snippet and paste it into your client's config, or hit **Write to
+Code — use *this* repo's **read-only-by-default** git & forge tools (status, log, diffs,
+blame, branches, file history/read, PRs, issues, CI logs). The PR, issue, and CI tools work
+across **GitHub, GitLab, and Bitbucket** — they route through GitDesktop's forge layer and
+dispatch by the repo's remote (Bitbucket covers PRs and pipelines, but not issues — its
+native tracker is deprecated). The app itself runs as a stdio server
+(\`gitdesktop mcp --repo <path>\`), so an agent can understand a repo without changing it.
+**Copy** the snippet and paste it into your client's config, or hit **Write to
 .mcp.json** to merge the \`gitdesktop\` entry into the open repo's \`.mcp.json\` for you —
 existing servers are preserved, and you're asked before an existing GitDesktop entry is
-replaced. Two toggles shape what gets written: **Shareable entry** swaps machine-specific
+replaced. Or **install it globally** for **Claude Code** or **Copilot** — a one-click
+button that adds \`gitdesktop\` to that client's user config (so it's in *every* project, no
+per-repo file) via the client's own CLI, with a project-aware \`--repo\` so the single entry
+follows whatever repo you open. Two toggles shape what gets written: **Shareable entry** swaps machine-specific
 absolute paths for portable \`\${GITDESKTOP_BIN}\` / \`\${CLAUDE_PROJECT_DIR}\` ones a
 teammate can commit (they point \`GITDESKTOP_BIN\` at their own install, or keep
 \`gitdesktop\` on their PATH), and **Allow write tools** adds \`--allow-write\` so an agent
 can also **create**, **comment on**, set the **status** of, and **approve** *this repo's*
-local PRs — off by default, keeping the server read-only.
+local PRs (GitDesktop's own app-data review artifacts — nothing is pushed).
+
+To make the bare \`gitdesktop\` command actually resolve in a terminal (so the **Shareable
+entry** works with no hardcoded path and no \`GITDESKTOP_BIN\`), use the **Command-line
+launcher** at the bottom of the disclosure: **Add to PATH** appends the app to your user
+PATH on Windows (open a new terminal afterward) or symlinks \`gitdesktop\` into
+\`~/.local/bin\` on macOS/Linux, and **Remove** undoes exactly that — no admin needed either
+way.
+
+Separately, **Allow remote write** adds \`--allow-remote-write\` — a distinct opt-in that
+lets an agent make **real forge writes** in this repo under your authenticated identity
+(GitHub \`gh\`, GitLab \`glab\`, or a stored Bitbucket token): **create issues**, **comment**
+on issues and pull requests, and **close/reopen** issues. Issue writes cover GitHub and
+GitLab (not Bitbucket); PR comments cover all three. The two flags are independent —
+enabling local-PR writes never grants remote writes, or vice versa — and both are **off by
+default**, so read-only stays the default. PR comments an agent posts carry a small
+**Posted by GitDesktop** footer so they're identifiable as automated, and on the read side
+an agent can pull a pull request's full comment set — the conversation, review summaries,
+and the file:line review threads.
 
 New to MCP? **Browse** opens the official Model Context Protocol registry right in that
 panel — search it and add a server in a click; it arrives **disabled** for you to review

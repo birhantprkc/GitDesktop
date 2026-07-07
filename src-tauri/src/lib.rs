@@ -14,6 +14,7 @@ mod local_prs;
 mod mcp;
 mod mcp_server;
 mod oplog;
+mod path_launcher;
 mod pty;
 mod research;
 mod secrets;
@@ -532,6 +533,9 @@ pub fn run() {
             fsops::detect_editors,
             fsops::detect_terminals,
             fsops::app_exe_path,
+            path_launcher::path_launcher_status,
+            path_launcher::path_launcher_install,
+            path_launcher::path_launcher_remove,
             git::remote::git_fetch,
             git::remote::git_pull,
             git::remote::git_push,
@@ -549,6 +553,7 @@ pub fn run() {
             secrets::mcp_secret_exists,
             mcp::discover_mcp_servers,
             mcp::mcp_json_write,
+            mcp::mcp_global_install,
             instructions::read_repo_instructions,
             instructions::read_repo_ai_ignore,
             instructions::read_repo_branch_rules,

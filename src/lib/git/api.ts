@@ -2637,6 +2637,33 @@ export const readTextFile = (path: string) =>
  *  GitDesktop as an MCP server" config snippet (`<exe> mcp --repo <path>`). */
 export const appExePath = () => invoke<string>("app_exe_path");
 
+/** State of the `gitdesktop` command-line launcher (Settings → MCP servers).
+ *  Windows adds the app dir to the user PATH; macOS/Linux symlink into
+ *  ~/.local/bin. See src-tauri/src/path_launcher.rs. */
+export interface PathLauncherStatus {
+  /** `gitdesktop` resolves in a newly-opened terminal (persisted PATH). */
+  onPath: boolean;
+  /** We installed it, so Remove can undo it (false when on PATH by other means). */
+  managed: boolean;
+  /** Install location for display (the PATH dir on Windows, symlink path on Unix). */
+  target: string;
+  /** Persistent caveat, e.g. Unix "~/.local/bin isn't on your PATH". */
+  warning: string | null;
+  /** One-shot success note from install/remove (shown as a toast, not persisted). */
+  note: string | null;
+}
+
+export const pathLauncherStatus = () =>
+  invoke<PathLauncherStatus>("path_launcher_status");
+
+/** Add `gitdesktop` to PATH (append app dir / symlink), returning fresh status. */
+export const pathLauncherInstall = () =>
+  invoke<PathLauncherStatus>("path_launcher_install");
+
+/** Reverse exactly what we added, returning fresh status. */
+export const pathLauncherRemove = () =>
+  invoke<PathLauncherStatus>("path_launcher_remove");
+
 /** Merge the `gitdesktop` MCP entry into `<repo>/.mcp.json`, preserving any
  *  sibling servers. Returns whether it wrote and whether an entry already
  *  existed; with `overwrite:false` an existing entry is left untouched
@@ -2649,6 +2676,24 @@ export const mcpJsonWrite = (
   invoke<{ written: boolean; existed: boolean }>("mcp_json_write", {
     repoPath,
     entry,
+    overwrite,
+  });
+
+/** Install the `gitdesktop` MCP server into a client's GLOBAL (user-scope) config
+ *  via that client's own CLI — `claude mcp add-json … -s user` /
+ *  `copilot mcp add … -- <cmd>`. Mirrors mcpJsonWrite's existed/overwrite dance:
+ *  `{ existed: true, written: false }` when an entry already exists and
+ *  `overwrite` is false. See src-tauri/src/mcp.rs. */
+export const mcpGlobalInstall = (
+  client: "claude" | "copilot",
+  command: string,
+  args: string[],
+  overwrite: boolean,
+) =>
+  invoke<{ written: boolean; existed: boolean }>("mcp_global_install", {
+    client,
+    command,
+    args,
     overwrite,
   });
 

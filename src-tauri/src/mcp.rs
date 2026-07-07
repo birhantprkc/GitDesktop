@@ -628,6 +628,146 @@ pub async fn mcp_json_write(
     })
 }
 
+/// Result of a GLOBAL (user-scope) MCP install, mirroring [`McpJsonWriteResult`]:
+/// `existed` = an entry was already there; with `overwrite:false` it's left
+/// untouched (`written:false`) so the GUI confirms, then re-calls `overwrite:true`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpGlobalInstallResult {
+    pub written: bool,
+    pub existed: bool,
+}
+
+const MCP_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Run a client CLI (`claude` / `copilot`) non-interactively, returning
+/// (stdout, stderr, exit_code). A missing binary is a friendly, actionable error.
+async fn run_client_cli(bin: &str, args: &[&str]) -> AppResult<(String, String, i32)> {
+    use std::process::Stdio;
+
+    use tokio::process::Command;
+
+    let mut cmd = Command::new(bin);
+    cmd.args(args)
+        .env("NO_COLOR", "1")
+        .env("CLICOLOR", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd.kill_on_drop(true);
+
+    let output = tokio::time::timeout(MCP_CLI_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| AppError::Timeout(MCP_CLI_TIMEOUT.as_secs()))?
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AppError::Command(format!(
+                    "`{bin}` was not found on PATH. Install it, or copy the snippet into the config manually."
+                ))
+            } else {
+                AppError::Io(e)
+            }
+        })?;
+    Ok((
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code().unwrap_or(-1),
+    ))
+}
+
+/// Both `claude` and `copilot` report a duplicate name with "already exists" —
+/// distinguish that (a benign "confirm to replace") from a real add failure.
+/// `output` is the CLI's combined stdout+stderr (either stream may carry it).
+fn is_already_exists(output: &str) -> bool {
+    output.to_lowercase().contains("already exists")
+}
+
+/// Install the `gitdesktop` server into a client's GLOBAL (user-scope) config via
+/// the client's OWN CLI — safer than hand-editing `~/.claude.json` /
+/// `~/.copilot/mcp-config.json`. `command` + `args` are the stdio entry to write
+/// (the caller already picked the client-appropriate dynamic `--repo`). Both CLIs
+/// error on a duplicate name, so `overwrite` removes the existing entry first.
+#[tauri::command]
+pub async fn mcp_global_install(
+    client: String,
+    command: String,
+    args: Vec<String>,
+    overwrite: bool,
+) -> AppResult<McpGlobalInstallResult> {
+    match client.as_str() {
+        "claude" => claude_global_install(&command, &args, overwrite).await,
+        "copilot" => copilot_global_install(&command, &args, overwrite).await,
+        other => Err(AppError::Command(format!(
+            "unknown MCP client \"{other}\" (expected \"claude\" or \"copilot\")"
+        ))),
+    }
+}
+
+async fn claude_global_install(
+    command: &str,
+    args: &[String],
+    overwrite: bool,
+) -> AppResult<McpGlobalInstallResult> {
+    let entry_str = serde_json::to_string(&json!({ "command": command, "args": args }))
+        .map_err(|e| AppError::Command(format!("serialize entry: {e}")))?;
+    if overwrite {
+        // May or may not exist; a "not found" remove is harmless.
+        let _ = run_client_cli("claude", &["mcp", "remove", "gitdesktop", "-s", "user"]).await;
+    }
+    let (stdout, stderr, code) = run_client_cli(
+        "claude",
+        &["mcp", "add-json", "gitdesktop", &entry_str, "-s", "user"],
+    )
+    .await?;
+    if code == 0 {
+        return Ok(McpGlobalInstallResult { written: true, existed: overwrite });
+    }
+    // Fold both streams — a CLI may print the duplicate-name / error text to
+    // stdout, and either detecting a benign "already exists" or surfacing a real
+    // failure must not depend on which stream it chose.
+    let out = format!("{stdout}{stderr}");
+    if is_already_exists(&out) {
+        return Ok(McpGlobalInstallResult { written: false, existed: true });
+    }
+    Err(AppError::Command(format!(
+        "`claude mcp add-json` failed: {}",
+        out.trim()
+    )))
+}
+
+async fn copilot_global_install(
+    command: &str,
+    args: &[String],
+    overwrite: bool,
+) -> AppResult<McpGlobalInstallResult> {
+    if overwrite {
+        // `copilot mcp remove` takes NO scope flag — it only ever manages the user
+        // config (`~/.copilot/mcp-config.json`), which is exactly where `add`
+        // writes, so there's no scope to mismatch. A "not found" remove is harmless.
+        let _ = run_client_cli("copilot", &["mcp", "remove", "gitdesktop"]).await;
+    }
+    // `copilot mcp add gitdesktop -- <command> <args...>` — everything after `--`
+    // is the stdio launch command, written to Copilot's user config.
+    let mut argv: Vec<&str> = vec!["mcp", "add", "gitdesktop", "--", command];
+    argv.extend(args.iter().map(String::as_str));
+    let (stdout, stderr, code) = run_client_cli("copilot", &argv).await?;
+    if code == 0 {
+        return Ok(McpGlobalInstallResult { written: true, existed: overwrite });
+    }
+    // Fold both streams (see claude_global_install) — don't depend on which one
+    // the CLI uses for the duplicate-name / error text.
+    let out = format!("{stdout}{stderr}");
+    if is_already_exists(&out) {
+        return Ok(McpGlobalInstallResult { written: false, existed: true });
+    }
+    Err(AppError::Command(format!(
+        "`copilot mcp add` failed: {}",
+        out.trim()
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

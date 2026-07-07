@@ -188,7 +188,7 @@ fn candidate_dirs() -> Vec<PathBuf> {
 /// PATH addition without a restart and makes Settings → About's "Re-check"
 /// button actually find a freshly-installed tool (e.g. glab, or an agent CLI).
 #[cfg(windows)]
-fn registry_path_dirs() -> Vec<PathBuf> {
+pub(crate) fn registry_path_dirs() -> Vec<PathBuf> {
     use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     use winreg::RegKey;
 
