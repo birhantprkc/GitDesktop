@@ -29,7 +29,7 @@ import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
 import { type ReviewTarget, registerAutomationRun } from "@/lib/stores/reviews";
 import { useAutomationResults } from "./results";
-import { loadAutomations } from "./store";
+import { loadAutomations, repoAutomationsFor } from "./store";
 import { sameSha } from "./sync";
 import { effectiveRules } from "./types";
 
@@ -149,7 +149,8 @@ export function triggerAutomations(event: AutomationEvent): void {
 
 async function run(event: AutomationEvent): Promise<void> {
   const config = await loadAutomations();
-  const rules = effectiveRules(config, event.repoPath, event.kind);
+  const repo = await repoAutomationsFor(config, event.repoPath);
+  const rules = effectiveRules(config, repo, event.kind);
   if (rules.length === 0) return;
 
   const settings = await loadSettings();

@@ -59,6 +59,12 @@ pub struct GitDesktopMcp {
     /// authenticated CLI identity — `gh`, `glab`, or a stored Bitbucket token). When
     /// off, the remote-write tools stay registered but return a clear "disabled" error.
     allow_remote_write: bool,
+    /// Set once this session has folded any legacy checkout-path local-PR records
+    /// onto the repo's identity key (see `local_pr_key`), so later write tools skip
+    /// the migration — including its store read — instead of re-reading the file on
+    /// every call. `Arc` so the flag is shared across the handler's clones (rmcp
+    /// clones it per request). Mirrors the frontend's `foldedGuards`.
+    consolidated: std::sync::Arc<std::sync::atomic::AtomicBool>,
     // Read by the `#[tool_handler]`-generated `list_tools`/`call_tool`; the
     // dead-code lint misses that (it only sees the derived `Clone` touch it).
     #[allow(dead_code)]
@@ -671,8 +677,9 @@ impl GitDesktopMcp {
         // naming the missing one — before any app-data write.
         verify_branch(&self.repo, &args.base).await?;
         verify_branch(&self.repo, &args.head).await?;
+        let repo = self.local_pr_key().await?;
         let record = crate::local_prs::create(
-            &self.repo,
+            &repo,
             &args.title,
             args.body.as_deref().unwrap_or(""),
             &args.base,
@@ -692,8 +699,8 @@ impl GitDesktopMcp {
         Parameters(args): Parameters<CommentLocalPrArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_write()?;
-        let record =
-            crate::local_prs::add_comment(&self.repo, &args.id, &args.body).map_err(app_err)?;
+        let repo = self.local_pr_key().await?;
+        let record = crate::local_prs::add_comment(&repo, &args.id, &args.body).map_err(app_err)?;
         json_result(&record)
     }
 
@@ -708,8 +715,9 @@ impl GitDesktopMcp {
         Parameters(args): Parameters<SetLocalPrStatusArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_write()?;
+        let repo = self.local_pr_key().await?;
         let record =
-            crate::local_prs::set_status(&self.repo, &args.id, &args.status).map_err(app_err)?;
+            crate::local_prs::set_status(&repo, &args.id, &args.status).map_err(app_err)?;
         json_result(&record)
     }
 
@@ -723,8 +731,9 @@ impl GitDesktopMcp {
         Parameters(args): Parameters<ApproveLocalPrArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_write()?;
+        let repo = self.local_pr_key().await?;
         let record =
-            crate::local_prs::set_approved(&self.repo, &args.id, args.approved).map_err(app_err)?;
+            crate::local_prs::set_approved(&repo, &args.id, args.approved).map_err(app_err)?;
         json_result(&record)
     }
 
@@ -860,6 +869,7 @@ impl GitDesktopMcp {
             repo,
             allow_write,
             allow_remote_write,
+            consolidated: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_router: Self::tool_router(),
         }
     }
@@ -875,6 +885,28 @@ impl GitDesktopMcp {
                 None,
             ))
         }
+    }
+
+    /// The worktree-stable store key for this server's local PRs, after folding any
+    /// records still stored under the raw `--repo` checkout path onto it. Every
+    /// local-PR write tool routes through this so the MCP and the GUI agree on the
+    /// key no matter which checkout (main or a worktree) `--repo` points at — the
+    /// fix for the "no local PRs found" failure when the server bound a worktree.
+    /// One shared resolver (`git::repo::repo_identity`) is used here and by the
+    /// GUI's `git_repo_identity` command, so the two can never diverge.
+    async fn local_pr_key(&self) -> Result<String, McpError> {
+        use std::sync::atomic::Ordering;
+        let identity = crate::git::repo::repo_identity(&self.repo).await;
+        // Fold legacy checkout-path records onto the identity key ONCE per session
+        // (the server is bound to one repo, so `--repo` never changes). After the
+        // first success, skip the fold — and its store read — so a busy write
+        // session doesn't re-read the file on every call. The flag is set only
+        // AFTER a successful fold, so a transient failure retries next call.
+        if !self.consolidated.load(Ordering::Relaxed) {
+            crate::local_prs::consolidate(&identity, &self.repo).map_err(app_err)?;
+            self.consolidated.store(true, Ordering::Relaxed);
+        }
+        Ok(identity)
     }
 
     /// Gate for the forge remote-write tools: an actionable error when the server

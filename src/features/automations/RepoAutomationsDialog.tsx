@@ -14,8 +14,10 @@ import {
 import {
   ACTION_LABELS,
   type AutomationRule,
+  repoEntry,
   TRIGGER_LABELS,
 } from "@/lib/automations/types";
+import { useRepoIdentity } from "@/lib/git/queries";
 import { toastError } from "@/lib/toast";
 import { RuleList } from "./RuleList";
 
@@ -35,7 +37,13 @@ export function RepoAutomationsDialog({
   const automations = useAutomations();
   const save = useSaveRepoAutomations(repoPath);
 
-  const repo = automations.data?.repos[repoPath];
+  // Look up this repo's overrides by its worktree-stable identity (so a worktree
+  // checkout and main share one entry); falls back to the raw path while identity
+  // resolves or for a not-yet-folded legacy key.
+  const repoId = useRepoIdentity(repoPath).data;
+  const repo = automations.data
+    ? repoEntry(automations.data, repoId ?? repoPath, repoPath)
+    : undefined;
   const disabledIds = new Set(repo?.disabledGlobalIds ?? []);
   const globalRules = (automations.data?.global ?? []).filter((r) => r.enabled);
 

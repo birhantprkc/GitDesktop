@@ -1277,6 +1277,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         defaultBranch={defaultName}
         currentBranch={currentName}
         isProtected={(name) => isDeletionBlocked(rulesConfig, name)}
+        isInWorktree={(name) => worktreeByBranch.has(name)}
       />
 
       <ConfirmDialog

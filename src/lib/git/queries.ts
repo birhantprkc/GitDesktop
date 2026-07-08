@@ -15,6 +15,7 @@ import {
   conflictSides,
   resolveConflict,
 } from "./conflict";
+import { repoIdentity } from "./repo-identity";
 import type {
   BbEnvironment,
   BitbucketHookInput,
@@ -60,6 +61,18 @@ import {
   repairWorktrees,
   unlockWorktree,
 } from "./worktree";
+
+/** A repo's worktree-stable identity key (its common git dir), for keying
+ *  per-repo app-data the same across the main checkout and every worktree.
+ *  Infinite staleTime — a repo's identity never changes while it's open. */
+export function useRepoIdentity(repo: string) {
+  return useQuery({
+    queryKey: ["repo-identity", repo] as const,
+    queryFn: () => repoIdentity(repo),
+    enabled: repo !== "",
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
 
 export const repoKeys = {
   all: (repo: string) => ["repo", repo] as const,

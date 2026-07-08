@@ -1,5 +1,10 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import type { ReviewMode } from "@/lib/ai/types";
+import {
+  identityKeyFor,
+  mergeById,
+  repoIdentity,
+} from "@/lib/git/repo-identity";
 import { storeName } from "@/lib/test-mode";
 
 /**
@@ -45,17 +50,40 @@ function getStore(): Promise<Store> {
   return storePromise;
 }
 
-async function readAll(repo: string): Promise<PersistedReview[]> {
+// Records are keyed by the repo's worktree-stable identity (not its checkout
+// path) so a PR's review history is shared across the main checkout and every
+// worktree. Reads merge in any records still under a legacy checkout-path key
+// (folded onto the identity key by the next write via `keyFor`).
+async function readMerged(repo: string): Promise<PersistedReview[]> {
   const store = await getStore();
-  return (await store.get<PersistedReview[]>(repo)) ?? [];
+  const id = await repoIdentity(repo);
+  const primary = (await store.get<PersistedReview[]>(id)) ?? [];
+  const legacy =
+    id === repo ? [] : ((await store.get<PersistedReview[]>(repo)) ?? []);
+  return mergeById(primary, legacy);
+}
+
+async function keyFor(repo: string): Promise<string> {
+  const store = await getStore();
+  return identityKeyFor<PersistedReview[]>(
+    store,
+    "pr-reviews",
+    repo,
+    mergeById,
+  );
+}
+
+async function readByKey(key: string): Promise<PersistedReview[]> {
+  const store = await getStore();
+  return (await store.get<PersistedReview[]>(key)) ?? [];
 }
 
 async function writeAll(
-  repo: string,
+  key: string,
   records: PersistedReview[],
 ): Promise<void> {
   const store = await getStore();
-  await store.set(repo, records);
+  await store.set(key, records);
 }
 
 /** Keeps only the newest `MAX_PER_GROUP` reviews per `(kind, ref, mode)`. */
@@ -82,7 +110,7 @@ export async function getLatestReview(
   ref: string,
   mode: ReviewMode,
 ): Promise<PersistedReview | undefined> {
-  const all = await readAll(repo);
+  const all = await readMerged(repo);
   return all
     .filter((r) => r.kind === kind && r.ref === ref && r.mode === mode)
     .sort((a, b) => b.finishedAt - a.finishedAt)[0];
@@ -95,7 +123,7 @@ export async function listReviews(
   kind: "remote" | "local",
   ref: string,
 ): Promise<PersistedReview[]> {
-  const all = await readAll(repo);
+  const all = await readMerged(repo);
   return all
     .filter((r) => r.kind === kind && r.ref === ref)
     .sort((a, b) => b.finishedAt - a.finishedAt);
@@ -106,9 +134,10 @@ export async function saveReview(
   repo: string,
   record: PersistedReview,
 ): Promise<void> {
-  const all = await readAll(repo);
+  const key = await keyFor(repo);
+  const all = await readByKey(key);
   const without = all.filter((r) => r.id !== record.id);
-  await writeAll(repo, prune([record, ...without]));
+  await writeAll(key, prune([record, ...without]));
 }
 
 /** Replaces a stored review's text — backs "trim before re-running" so a user
@@ -118,17 +147,19 @@ export async function updateReviewText(
   id: string,
   text: string,
 ): Promise<void> {
-  const all = await readAll(repo);
+  const key = await keyFor(repo);
+  const all = await readByKey(key);
   await writeAll(
-    repo,
+    key,
     all.map((r) => (r.id === id ? { ...r, text } : r)),
   );
 }
 
 export async function deleteReview(repo: string, id: string): Promise<void> {
-  const all = await readAll(repo);
+  const key = await keyFor(repo);
+  const all = await readByKey(key);
   await writeAll(
-    repo,
+    key,
     all.filter((r) => r.id !== id),
   );
 }
@@ -140,9 +171,10 @@ export async function clearReviewsFor(
   kind: "remote" | "local",
   ref: string,
 ): Promise<void> {
-  const all = await readAll(repo);
+  const key = await keyFor(repo);
+  const all = await readByKey(key);
   await writeAll(
-    repo,
+    key,
     all.filter((r) => !(r.kind === kind && r.ref === ref)),
   );
 }

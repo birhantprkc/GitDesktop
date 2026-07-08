@@ -1,5 +1,6 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { readRepoBranchRules, writeRepoBranchRules } from "@/lib/git/api";
+import { identityKeyFor, repoIdentity } from "@/lib/git/repo-identity";
 import { storeName } from "@/lib/test-mode";
 import {
   ALL_MERGE_METHODS,
@@ -44,11 +45,18 @@ function getStore(): Promise<Store> {
   return storePromise;
 }
 
+// Keyed by the repo's worktree-stable identity (not its checkout path) so a repo's
+// personal branch rules apply the same from the main checkout and every worktree.
+// The read prefers the identity key, falling back to a legacy checkout-path key
+// (folded onto the identity key by the next save).
 export async function loadBranchRules(
   repo: string,
 ): Promise<BranchRulesConfig> {
   const store = await getStore();
-  return normalizeBranchRules(await store.get(repo));
+  const id = await repoIdentity(repo);
+  const saved =
+    (await store.get(id)) ?? (id === repo ? undefined : await store.get(repo));
+  return normalizeBranchRules(saved);
 }
 
 export async function saveBranchRules(
@@ -56,7 +64,19 @@ export async function saveBranchRules(
   config: BranchRulesConfig,
 ): Promise<void> {
   const store = await getStore();
-  await store.set(repo, config);
+  // Resolve the identity key FIRST: identityKeyFor folds + deletes any legacy
+  // checkout-path entry (writing the merged value), then we overwrite it with the
+  // new config (persisted by the store's autoSave). This order is intentional —
+  // folding AFTER store.set would merge the stale legacy entry back over the fresh
+  // config. The brief window where disk holds the merged value is harmless: branch
+  // rules are GUI-only, so a crash there just leaves valid data one save behind.
+  const key = await identityKeyFor<BranchRulesConfig>(
+    store,
+    "branch-rules",
+    repo,
+    (identityVal, legacyVal) => identityVal ?? legacyVal,
+  );
+  await store.set(key, config);
 }
 
 // ── Shared scope: committed `<repo>/.gitdesktop/branch-rules.json` ───────────

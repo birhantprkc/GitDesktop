@@ -68,6 +68,7 @@ pub fn run() {
             git::repo::clone_repo,
             git::repo::create_repo,
             git::repo::git_repo_owners,
+            git::repo::git_repo_identity,
             git::status::git_status,
             git::branches::git_branches,
             git::branches::git_remote_branches,

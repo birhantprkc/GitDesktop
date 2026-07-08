@@ -95,6 +95,48 @@ pub async fn git_repo_owners(repo_paths: Vec<String>) -> AppResult<Vec<RepoOwner
     Ok(out)
 }
 
+/// A repository's worktree-stable identity key: the absolute path of its common
+/// git directory (`git rev-parse --path-format=absolute --git-common-dir`), which
+/// is identical for the main checkout and every linked worktree of the same repo
+/// (verified: main and a `gd/session/*` worktree both resolve to `<repo>/.git`).
+/// The per-repo app-data stores (local PRs/issues, review history + drafts, branch
+/// rules, automations) key their records on this so a PR created inside a worktree
+/// is visible from the main checkout and vice-versa, instead of being split by
+/// checkout path — the worktree-unaware bug. Falls back to the input path when git
+/// can't resolve it (a non-repo path, or git missing) so the key is always a
+/// stable, usable string that matches the frontend's own fallback (`repoIdentity`
+/// in `src/lib/git/repo-identity.ts`). The GUI reaches this via the
+/// `git_repo_identity` command; the MCP server calls it directly — ONE shared
+/// resolver so the two processes can never disagree on the key.
+pub async fn repo_identity(repo_path: &str) -> String {
+    match run_git(
+        Some(repo_path),
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        Ok(out) => {
+            let dir = out.stdout_lossy().trim().to_string();
+            if dir.is_empty() {
+                repo_path.to_string()
+            } else {
+                dir
+            }
+        }
+        // Not a git repo, git missing, timeout — degrade to the raw path so the
+        // caller still gets a stable key (matches the frontend fallback exactly).
+        Err(_) => repo_path.to_string(),
+    }
+}
+
+/// Resolve a repo's worktree-stable identity key for the frontend stores (see
+/// [`repo_identity`]).
+#[tauri::command]
+pub async fn git_repo_identity(repo_path: String) -> AppResult<String> {
+    Ok(repo_identity(&repo_path).await)
+}
+
 #[tauri::command]
 pub async fn check_git_installed(state: State<'_, AppState>) -> AppResult<GitInfo> {
     let info = state

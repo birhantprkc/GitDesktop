@@ -1,5 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { load, type Store } from "@tauri-apps/plugin-store";
+import {
+  identityKeyFor,
+  mergeById,
+  repoIdentity,
+} from "@/lib/git/repo-identity";
 import { storeName } from "@/lib/test-mode";
 
 /** One pending draft comment in a not-yet-submitted batch review. `id` is a local
@@ -44,14 +49,42 @@ function serialize<T>(op: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function readRepo(repo: string): Promise<PrDrafts> {
-  const store = await getStore();
-  return (await store.get<PrDrafts>(repo)) ?? {};
+/** Merge two per-PR draft maps, de-duplicating each PR's drafts by id (`keep`
+ *  wins). Folds a legacy checkout-path draft map into the identity key's. */
+function mergeDrafts(keep: PrDrafts | undefined, extra: PrDrafts): PrDrafts {
+  const out: PrDrafts = { ...(keep ?? {}) };
+  for (const [num, drafts] of Object.entries(extra)) {
+    out[num] = mergeById(out[num], drafts);
+  }
+  return out;
 }
 
-async function writeRepo(repo: string, drafts: PrDrafts): Promise<void> {
+// Keyed by the repo's worktree-stable identity (not its checkout path) so draft
+// reviews are shared across the main checkout and every worktree. Reads merge in
+// any drafts still under a legacy checkout-path key (folded on the next write).
+async function readMerged(repo: string): Promise<PrDrafts> {
   const store = await getStore();
-  await store.set(repo, drafts);
+  const id = await repoIdentity(repo);
+  const primary = (await store.get<PrDrafts>(id)) ?? {};
+  const legacy = id === repo ? {} : ((await store.get<PrDrafts>(repo)) ?? {});
+  return mergeDrafts(primary, legacy);
+}
+
+/** Identity store key for `repo`, folding any legacy checkout-path drafts onto it
+ *  once. Call inside the serialized queue. */
+async function keyFor(repo: string): Promise<string> {
+  const store = await getStore();
+  return identityKeyFor<PrDrafts>(store, "pr-review-drafts", repo, mergeDrafts);
+}
+
+async function readByKey(key: string): Promise<PrDrafts> {
+  const store = await getStore();
+  return (await store.get<PrDrafts>(key)) ?? {};
+}
+
+async function writeRepo(key: string, drafts: PrDrafts): Promise<void> {
+  const store = await getStore();
+  await store.set(key, drafts);
   // Flush now instead of on autoSave's debounce, so the next serialized read can't
   // re-read a pre-write disk snapshot and drop this change.
   await store.save();
@@ -61,7 +94,7 @@ export async function listDrafts(
   repo: string,
   number: number,
 ): Promise<ReviewDraft[]> {
-  const all = await readRepo(repo);
+  const all = await readMerged(repo);
   return all[String(number)] ?? [];
 }
 
@@ -71,9 +104,10 @@ export async function addDraft(
   draft: ReviewDraft,
 ): Promise<void> {
   return serialize(async () => {
-    const all = await readRepo(repo);
-    const key = String(number);
-    await writeRepo(repo, { ...all, [key]: [...(all[key] ?? []), draft] });
+    const repoKey = await keyFor(repo);
+    const all = await readByKey(repoKey);
+    const k = String(number);
+    await writeRepo(repoKey, { ...all, [k]: [...(all[k] ?? []), draft] });
   });
 }
 
@@ -84,12 +118,11 @@ export async function updateDraft(
   body: string,
 ): Promise<void> {
   return serialize(async () => {
-    const all = await readRepo(repo);
-    const key = String(number);
-    const next = (all[key] ?? []).map((d) =>
-      d.id === id ? { ...d, body } : d,
-    );
-    await writeRepo(repo, { ...all, [key]: next });
+    const repoKey = await keyFor(repo);
+    const all = await readByKey(repoKey);
+    const k = String(number);
+    const next = (all[k] ?? []).map((d) => (d.id === id ? { ...d, body } : d));
+    await writeRepo(repoKey, { ...all, [k]: next });
   });
 }
 
@@ -99,21 +132,23 @@ export async function removeDraft(
   id: string,
 ): Promise<void> {
   return serialize(async () => {
-    const all = await readRepo(repo);
-    const key = String(number);
-    await writeRepo(repo, {
+    const repoKey = await keyFor(repo);
+    const all = await readByKey(repoKey);
+    const k = String(number);
+    await writeRepo(repoKey, {
       ...all,
-      [key]: (all[key] ?? []).filter((d) => d.id !== id),
+      [k]: (all[k] ?? []).filter((d) => d.id !== id),
     });
   });
 }
 
 export async function clearDrafts(repo: string, number: number): Promise<void> {
   return serialize(async () => {
-    const all = await readRepo(repo);
+    const repoKey = await keyFor(repo);
+    const all = await readByKey(repoKey);
     const next = { ...all };
     delete next[String(number)];
-    await writeRepo(repo, next);
+    await writeRepo(repoKey, next);
   });
 }
 

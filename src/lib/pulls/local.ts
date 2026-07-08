@@ -1,4 +1,9 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
+import {
+  identityKeyFor,
+  mergeById,
+  repoIdentity,
+} from "@/lib/git/repo-identity";
 import { storeName } from "@/lib/test-mode";
 
 export interface LocalPrComment {
@@ -101,16 +106,39 @@ export async function reloadLocalPrs(): Promise<void> {
   return serialize(reloadRaw);
 }
 
+const withLabels = (p: LocalPr): LocalPr => ({ ...p, labels: p.labels ?? [] });
+
+/** Records are keyed by the repo's worktree-stable identity, not its checkout
+ *  path, so a PR is shared across the main checkout and every worktree. This
+ *  read-only path merges in any records still under a legacy checkout-path key
+ *  (not yet folded by a mutation), so a worktree-created PR shows up right away.
+ *  Never writes — the fold happens on the next mutation (see `keyFor`). */
 export async function listLocalPrs(repo: string): Promise<LocalPr[]> {
   const store = await getStore();
-  const prs = (await store.get<LocalPr[]>(repo)) ?? [];
+  const id = await repoIdentity(repo);
+  const primary = (await store.get<LocalPr[]>(id)) ?? [];
+  const legacy = id === repo ? [] : ((await store.get<LocalPr[]>(repo)) ?? []);
   // Tolerate PRs saved before the labels field existed.
-  return prs.map((p) => ({ ...p, labels: p.labels ?? [] }));
+  return mergeById(primary, legacy).map(withLabels);
 }
 
-async function writeAll(repo: string, prs: LocalPr[]): Promise<void> {
+/** The identity store key for `repo`, folding any legacy checkout-path-keyed
+ *  records onto it once. Call inside the serialized queue (after `reloadRaw`) so
+ *  the fold is ordered with the mutation and a delete/update can't leave a
+ *  lingering legacy record that would reappear via `listLocalPrs`'s read-merge. */
+async function keyFor(repo: string): Promise<string> {
   const store = await getStore();
-  await store.set(repo, prs);
+  return identityKeyFor<LocalPr[]>(store, "local-prs", repo, mergeById);
+}
+
+async function readByKey(key: string): Promise<LocalPr[]> {
+  const store = await getStore();
+  return ((await store.get<LocalPr[]>(key)) ?? []).map(withLabels);
+}
+
+async function writeAll(key: string, prs: LocalPr[]): Promise<void> {
+  const store = await getStore();
+  await store.set(key, prs);
   // Flush now instead of on autoSave's debounce, so the next serialized reload can't
   // re-read a pre-write disk snapshot and drop this change.
   await store.save();
@@ -124,6 +152,7 @@ export async function createLocalPr(
     // Reconcile any external MCP (--allow-write) writes from disk before we read-modify-
     // write, so a GUI mutation never clobbers a PR the server added while we were focused.
     await reloadRaw();
+    const key = await keyFor(repo);
     const pr: LocalPr = {
       id: crypto.randomUUID(),
       title: input.title,
@@ -136,8 +165,8 @@ export async function createLocalPr(
       comments: [],
       createdAt: new Date().toISOString(),
     };
-    const all = await listLocalPrs(repo);
-    await writeAll(repo, [pr, ...all]);
+    const all = await readByKey(key);
+    await writeAll(key, [pr, ...all]);
     return pr;
   });
 }
@@ -154,12 +183,13 @@ export async function updateLocalPr(
 ): Promise<LocalPr> {
   return serialize(async () => {
     await reloadRaw();
-    const all = await listLocalPrs(repo);
+    const key = await keyFor(repo);
+    const all = await readByKey(key);
     const idx = all.findIndex((p) => p.id === id);
     if (idx === -1) throw new Error(`no local PR with id ${id}`);
     const next = [...all];
     next[idx] = mutate(all[idx]);
-    await writeAll(repo, next);
+    await writeAll(key, next);
     return next[idx];
   });
 }
@@ -168,9 +198,10 @@ export async function deleteLocalPr(repo: string, id: string): Promise<void> {
   return serialize(async () => {
     // Fresh disk state first, so we don't drop a concurrent external MCP write.
     await reloadRaw();
-    const all = await listLocalPrs(repo);
+    const key = await keyFor(repo);
+    const all = await readByKey(key);
     await writeAll(
-      repo,
+      key,
       all.filter((p) => p.id !== id),
     );
   });

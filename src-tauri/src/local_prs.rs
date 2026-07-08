@@ -265,6 +265,70 @@ pub fn set_approved(repo: &str, id: &str, approved: bool) -> AppResult<Value> {
     })
 }
 
+/// Fold any local-PR records still stored under a legacy checkout-PATH key into
+/// the repo's worktree-stable identity key, one time. `identity` is
+/// [`crate::git::repo::repo_identity`]'s output (the absolute common git dir);
+/// `legacy` is the raw `--repo` path the server was launched with. Before identity
+/// keying, records were stored under the checkout path, so a repo opened via a
+/// worktree (or a differently spelled path) got its own disjoint entry — the same
+/// split that made the GUI's PRs invisible to the MCP ("no local PRs found"). This
+/// migrates that entry onto the identity key (merging by `id` when the identity
+/// key already holds records — identity's own come first) and removes the legacy
+/// one. Callers pass `identity` as the `repo` arg to every other fn here, so once
+/// this has run the reads/writes land on the shared key. Idempotent: a no-op once
+/// no distinct legacy key remains (already consolidated, or `--repo` already
+/// resolved to the identity).
+pub fn consolidate(identity: &str, legacy: &str) -> AppResult<()> {
+    let path = store_path()?;
+    let mut store = read_store(&path)?;
+    if fold_legacy_key(&mut store, identity, legacy) {
+        write_store(&path, &store)?;
+    }
+    Ok(())
+}
+
+/// The pure in-memory fold behind [`consolidate`] (so it's testable against a
+/// plain map). Moves the legacy checkout-path key's array onto the identity key,
+/// de-duplicating by `id` (identity's own records come first). Returns whether the
+/// store changed — `false` when there's nothing to fold, so the caller can skip
+/// the write.
+fn fold_legacy_key(store: &mut Map<String, Value>, identity: &str, legacy: &str) -> bool {
+    // The key the raw checkout path maps to (exact, or slash/drive-tolerant).
+    let Some(legacy_key) = existing_key(store, legacy) else {
+        return false; // nothing stored under the checkout path
+    };
+    // The key the identity maps to (reuse an existing spelling if one's present).
+    let id_key = existing_key(store, identity).unwrap_or_else(|| identity.to_string());
+    if legacy_key == id_key {
+        return false; // already consolidated, or --repo already == identity
+    }
+    // Take the legacy array out; anything non-array is left untouched (read paths
+    // surface a clear error rather than us silently dropping it).
+    let Some(Value::Array(legacy_list)) = store.remove(&legacy_key) else {
+        return false;
+    };
+    let entry = store
+        .entry(id_key)
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Some(arr) = entry.as_array_mut() {
+        let seen: std::collections::HashSet<String> = arr
+            .iter()
+            .filter_map(|v| v.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        for rec in legacy_list {
+            let dup = rec
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| seen.contains(id));
+            if !dup {
+                arr.push(rec);
+            }
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,6 +453,58 @@ mod tests {
         );
         // A genuinely new repo has no key.
         assert_eq!(existing_key(&store, r"C:\repo\two"), None);
+    }
+
+    #[test]
+    fn fold_legacy_key_migrates_checkout_path_to_identity() {
+        // A repo whose PRs were stored under the checkout path folds onto the
+        // worktree-stable identity key (the common git dir).
+        let legacy = r"C:\ProjectRepos\demo\harbor";
+        let identity = "C:/ProjectRepos/demo/harbor/.git";
+        let mut store = Map::new();
+        store.insert(legacy.to_string(), json!([{ "id": "pr-1" }, { "id": "pr-2" }]));
+
+        assert!(fold_legacy_key(&mut store, identity, legacy));
+        // Legacy key gone, identity key now holds both records.
+        assert!(!store.contains_key(legacy));
+        assert_eq!(store[identity].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn fold_legacy_key_merges_deduping_by_id() {
+        // The identity key already has one PR; folding a legacy key that shares an
+        // id keeps identity's copy and appends only the genuinely new record.
+        let legacy = "C:/wt/harbor"; // a worktree checkout
+        let identity = "C:/ProjectRepos/demo/harbor/.git";
+        let mut store = Map::new();
+        store.insert(
+            identity.to_string(),
+            json!([{ "id": "shared", "from": "identity" }]),
+        );
+        store.insert(
+            legacy.to_string(),
+            json!([{ "id": "shared", "from": "legacy" }, { "id": "wt-only" }]),
+        );
+
+        assert!(fold_legacy_key(&mut store, identity, legacy));
+        let arr = store[identity].as_array().unwrap();
+        assert_eq!(arr.len(), 2); // shared (kept once) + wt-only
+        // Identity's own copy of the shared id won — not the legacy one.
+        assert_eq!(arr[0]["from"], "identity");
+        assert_eq!(arr[1]["id"], "wt-only");
+        assert!(!store.contains_key(legacy));
+    }
+
+    #[test]
+    fn fold_legacy_key_is_a_noop_without_a_distinct_legacy_key() {
+        // Only the identity key present → nothing to fold.
+        let identity = "C:/ProjectRepos/demo/harbor/.git";
+        let mut store = Map::new();
+        store.insert(identity.to_string(), json!([{ "id": "pr-1" }]));
+        assert!(!fold_legacy_key(&mut store, identity, r"C:\ProjectRepos\demo\harbor"));
+        // Unchanged.
+        assert_eq!(store[identity].as_array().unwrap().len(), 1);
+        assert_eq!(store.len(), 1);
     }
 
     #[test]

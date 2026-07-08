@@ -2,9 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useRef } from "react";
 import { useAutomations } from "@/lib/automations/queries";
 import { maybeFireSync } from "@/lib/automations/sync";
-import { effectiveRules } from "@/lib/automations/types";
+import { effectiveRules, repoEntry } from "@/lib/automations/types";
 import { forgePrPoll } from "@/lib/git/api";
-import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
+import {
+  forgeFeatureReady,
+  useForgeStatus,
+  useRepoIdentity,
+} from "@/lib/git/queries";
 import type { PrPollInfo } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { useSettings } from "@/lib/settings/queries";
@@ -33,8 +37,15 @@ export function usePrNotifications(repoPath: string) {
   // A pr-sync rule needs this head-OID poll to spot new commits on remote PRs;
   // otherwise the poll only earns its keep when a PR notification is enabled, so
   // the default (no notifications, no pr-sync rule) makes no background call.
+  // Resolve the repo's identity so a worktree checkout sees the same rules as main
+  // (falls back to the raw path while identity is still resolving / for legacy keys).
+  const repoId = useRepoIdentity(repoPath).data;
   const hasPrSync = automations.data
-    ? effectiveRules(automations.data, repoPath, "pr-sync").length > 0
+    ? effectiveRules(
+        automations.data,
+        repoEntry(automations.data, repoId ?? repoPath, repoPath),
+        "pr-sync",
+      ).length > 0
     : false;
   // The head-OID poll (and pr-sync) run through the provider-neutral `forge_pr_poll`,
   // so the poller works for any ready hosted repo (GitHub/GitLab/Bitbucket). For

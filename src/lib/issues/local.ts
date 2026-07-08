@@ -1,4 +1,9 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
+import {
+  identityKeyFor,
+  mergeById,
+  repoIdentity,
+} from "@/lib/git/repo-identity";
 import { storeName } from "@/lib/test-mode";
 
 export interface LocalIssueComment {
@@ -52,16 +57,40 @@ async function reloadRaw(): Promise<void> {
   await store.reload({ ignoreDefaults: true });
 }
 
+const withLabels = (i: LocalIssue): LocalIssue => ({
+  ...i,
+  labels: i.labels ?? [],
+});
+
+/** Keyed by the repo's worktree-stable identity (not its checkout path) so issues
+ *  are shared across the main checkout and every worktree. This read-only path
+ *  merges in any records still under a legacy checkout-path key (folded on the
+ *  next mutation), so a worktree-created issue shows up right away. */
 export async function listLocalIssues(repo: string): Promise<LocalIssue[]> {
   const store = await getStore();
-  const issues = (await store.get<LocalIssue[]>(repo)) ?? [];
+  const id = await repoIdentity(repo);
+  const primary = (await store.get<LocalIssue[]>(id)) ?? [];
+  const legacy =
+    id === repo ? [] : ((await store.get<LocalIssue[]>(repo)) ?? []);
   // Tolerate issues saved before the labels field existed.
-  return issues.map((i) => ({ ...i, labels: i.labels ?? [] }));
+  return mergeById(primary, legacy).map(withLabels);
 }
 
-async function writeAll(repo: string, issues: LocalIssue[]): Promise<void> {
+/** Identity store key for `repo`, folding any legacy checkout-path records onto it
+ *  once. Call inside the serialized queue (after `reloadRaw`). */
+async function keyFor(repo: string): Promise<string> {
   const store = await getStore();
-  await store.set(repo, issues);
+  return identityKeyFor<LocalIssue[]>(store, "local-issues", repo, mergeById);
+}
+
+async function readByKey(key: string): Promise<LocalIssue[]> {
+  const store = await getStore();
+  return ((await store.get<LocalIssue[]>(key)) ?? []).map(withLabels);
+}
+
+async function writeAll(key: string, issues: LocalIssue[]): Promise<void> {
+  const store = await getStore();
+  await store.set(key, issues);
   // Flush now (not on autoSave's debounce) so the next serialized reload can't drop this.
   await store.save();
 }
@@ -80,6 +109,7 @@ export async function createLocalIssue(
 ): Promise<LocalIssue> {
   return serialize(async () => {
     await reloadRaw();
+    const key = await keyFor(repo);
     const issue: LocalIssue = {
       id: crypto.randomUUID(),
       title: input.title,
@@ -89,8 +119,8 @@ export async function createLocalIssue(
       comments: [],
       createdAt: new Date().toISOString(),
     };
-    const all = await listLocalIssues(repo);
-    await writeAll(repo, [issue, ...all]);
+    const all = await readByKey(key);
+    await writeAll(key, [issue, ...all]);
     return issue;
   });
 }
@@ -105,12 +135,13 @@ export async function updateLocalIssue(
 ): Promise<LocalIssue> {
   return serialize(async () => {
     await reloadRaw();
-    const all = await listLocalIssues(repo);
+    const key = await keyFor(repo);
+    const all = await readByKey(key);
     const idx = all.findIndex((i) => i.id === id);
     if (idx === -1) throw new Error(`no local issue with id ${id}`);
     const next = [...all];
     next[idx] = mutate(all[idx]);
-    await writeAll(repo, next);
+    await writeAll(key, next);
     return next[idx];
   });
 }
@@ -121,9 +152,10 @@ export async function deleteLocalIssue(
 ): Promise<void> {
   return serialize(async () => {
     await reloadRaw();
-    const all = await listLocalIssues(repo);
+    const key = await keyFor(repo);
+    const all = await readByKey(key);
     await writeAll(
-      repo,
+      key,
       all.filter((i) => i.id !== id),
     );
   });

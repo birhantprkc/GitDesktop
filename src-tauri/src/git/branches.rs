@@ -206,6 +206,33 @@ pub async fn git_rename_branch(
     Ok(())
 }
 
+/// If `name` is checked out in a LINKED worktree (one other than `repo_path`
+/// itself), returns that worktree's path. git refuses to delete a branch that's
+/// checked out anywhere, so a caller turns this into an actionable message.
+/// Best-effort: a `worktree list` failure yields `None` and lets git's own error
+/// speak. The `repo_path` checkout is excluded so deleting its *current* branch
+/// isn't misreported here (that path pre-switches, and git errors clearly if not).
+async fn worktree_holding_branch(repo_path: &str, name: &str) -> Option<String> {
+    use crate::git::ops::{parse_worktree_branches, parse_worktree_paths};
+    use crate::git::worktree::normalize_wt_path;
+    let listed = run_git(
+        Some(repo_path),
+        &["worktree", "list", "--porcelain"],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    .ok()?;
+    let porcelain = listed.stdout_lossy();
+    let self_norm = normalize_wt_path(repo_path);
+    // Both parsers emit one entry per `worktree …` stanza in the same list order,
+    // so the zip is length-safe and pairs each worktree's path with its branch.
+    parse_worktree_paths(&porcelain)
+        .into_iter()
+        .zip(parse_worktree_branches(&porcelain))
+        .find(|(path, branch)| branch == name && normalize_wt_path(path) != self_norm)
+        .map(|(path, _)| path)
+}
+
 /// Force-deletes a local branch (the UI confirms first, GitHub Desktop style).
 #[tauri::command]
 pub async fn git_delete_branch(
@@ -214,6 +241,16 @@ pub async fn git_delete_branch(
     name: String,
 ) -> AppResult<()> {
     validate_ref_name(&name)?;
+    // Pre-mutation guard: git refuses to delete a branch checked out in a worktree
+    // with a terse message. Detect a linked worktree holding it and surface a
+    // clear, actionable one — shared by every caller (branch switcher, bulk
+    // cleanup, and any future path), not just the switcher's own UI guard.
+    if let Some(path) = worktree_holding_branch(&repo_path, &name).await {
+        return Err(AppError::Command(format!(
+            "{name} is checked out in the worktree at {path} — remove that worktree \
+             (or switch it to another branch) before deleting {name}."
+        )));
+    }
     run_git_mutating(
         &state,
         &repo_path,

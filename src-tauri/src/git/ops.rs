@@ -1600,7 +1600,7 @@ async fn remove_resolve_worktree(state: &AppState, repo_path: &str, worktree_pat
 /// `worktree <path>` line and carries a `branch refs/heads/<name>` line unless it
 /// is `detached`; a detached stanza (like our resolve worktree) yields an empty
 /// string, so it never matches `base`. Blank lines separate stanzas.
-fn parse_worktree_branches(porcelain: &str) -> Vec<String> {
+pub(crate) fn parse_worktree_branches(porcelain: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for line in porcelain.lines() {
         let line = line.trim_end();
@@ -1619,7 +1619,7 @@ fn parse_worktree_branches(porcelain: &str) -> Vec<String> {
 
 /// The `worktree <path>` line of every stanza in `git worktree list --porcelain`,
 /// in list order.
-fn parse_worktree_paths(porcelain: &str) -> Vec<String> {
+pub(crate) fn parse_worktree_paths(porcelain: &str) -> Vec<String> {
     porcelain
         .lines()
         .filter_map(|line| line.trim_end().strip_prefix("worktree "))
@@ -1663,8 +1663,12 @@ fn orphaned_resolve_worktrees(all_paths: &[String], keep: &[String]) -> Vec<Stri
 /// - `base` is the MAIN repo's current branch → `merge --ff-only <new_sha>` in
 ///   the main repo. The tree was gated clean upfront, so this fast-forwards the
 ///   working tree to the merged result. A failure propagates (commit-or-stash).
-/// - `base` is checked out in ANOTHER worktree → refuse: updating a
-///   checked-out branch out from under a worktree would desync its index/tree.
+/// - `base` is checked out in ANOTHER worktree → route the fast-forward INTO
+///   that worktree (`git -C <that worktree> merge --ff-only`) so its index and
+///   working tree advance consistently. A bare `update-ref` here would desync
+///   that worktree (phantom reverts), which is why we can't just move the ref.
+///   If that worktree is dirty the ff-only fails and we surface a clean error
+///   naming it — `base` stays unchanged.
 /// - `base` is checked out nowhere (the common case — the main tree is on a
 ///   different branch) → move the ref directly with `update-ref`, leaving every
 ///   working tree untouched.
@@ -1689,21 +1693,42 @@ async fn finalize_base(
         return Ok(());
     }
 
-    // Is `base` checked out in some OTHER worktree? Our resolve worktree is
-    // detached, so it never carries `base` as a branch and is safely excluded.
+    // Is `base` checked out in some OTHER worktree? `paths` and `branches` come
+    // from the same porcelain stanzas in list order, so they line up per stanza.
+    // Our resolve worktree is detached, so it never carries `base` as a branch and
+    // is safely excluded.
     let listed = run_git(
         Some(repo_path),
         &["worktree", "list", "--porcelain"],
         DEFAULT_TIMEOUT,
     )
     .await?;
-    let checked_out_elsewhere = parse_worktree_branches(&listed.stdout_lossy())
-        .iter()
-        .any(|b| b == base);
-    if checked_out_elsewhere {
-        return Err(AppError::Command(format!(
-            "{base} is checked out in another worktree; can't update it"
-        )));
+    let porcelain = listed.stdout_lossy();
+    let owning_worktree = parse_worktree_paths(&porcelain)
+        .into_iter()
+        .zip(parse_worktree_branches(&porcelain))
+        .find(|(_, branch)| branch == base)
+        .map(|(path, _)| path);
+
+    if let Some(worktree) = owning_worktree {
+        // Route the fast-forward into the worktree that has `base` checked out, so
+        // its index + working tree advance too. Fails cleanly (base untouched) if
+        // that tree is dirty or it isn't actually a fast-forward.
+        return run_git_mutating(
+            state,
+            &worktree,
+            &["merge", "--ff-only", new_sha],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| match e {
+            AppError::Git { stderr, .. } => AppError::Command(format!(
+                "{base} is checked out at {worktree}; couldn't fast-forward it there \
+                 (its working tree may be dirty, or its history has diverged). {base} is unchanged.\n{stderr}"
+            )),
+            other => other,
+        });
     }
 
     // Not checked out anywhere — move the ref directly, no working tree touched.

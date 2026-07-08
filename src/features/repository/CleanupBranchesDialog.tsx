@@ -57,6 +57,7 @@ export function CleanupBranchesDialog({
   defaultBranch,
   currentBranch,
   isProtected,
+  isInWorktree,
 }: {
   repoPath: string;
   open: boolean;
@@ -66,6 +67,9 @@ export function CleanupBranchesDialog({
   currentBranch: string | null;
   /** True when a branch is blocked from deletion by an effective branch rule. */
   isProtected: (name: string) => boolean;
+  /** True when a branch is checked out in another worktree — git can't delete it,
+   *  so it's dropped from the delete candidates (it can still be archived). */
+  isInWorktree: (name: string) => boolean;
 }) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<Mode>("archive");
@@ -128,13 +132,15 @@ export function CleanupBranchesDialog({
     const list =
       mode === "archive"
         ? stale.filter((c) => !c.branch.archived)
-        : stale.filter((c) => !isProtected(c.branch.name));
+        : stale.filter(
+            (c) => !isProtected(c.branch.name) && !isInWorktree(c.branch.name),
+          );
     // Merged first (the safest to clean), then oldest first.
     return list.sort((a, b) => {
       if (a.merged !== b.merged) return a.merged ? -1 : 1;
       return b.ageDays - a.ageDays;
     });
-  }, [stale, mode, isProtected]);
+  }, [stale, mode, isProtected, isInWorktree]);
 
   // Re-check every candidate whenever the set itself changes — opening, switching
   // mode, adjusting the window, or divergence resolving to reveal merged branches.

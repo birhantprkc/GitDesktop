@@ -429,7 +429,11 @@ already in use. The **branch switcher** knows this too: a branch that's checked 
 another worktree is badged, and choosing it offers to open that worktree instead of failing
 with a checkout error. You can also **Remove worktree…** straight from that badged branch's
 right-click menu — the branch stays, and its **Delete…** item un-disables once the worktree
-is gone.{{ai}} Worktrees that AI agent sessions use internally are hidden here.{{/ai}}`,
+is gone.
+
+A repository's local pull requests, issues, review history, and per-repo settings are shared
+across all its worktrees, so you see the same ones whichever folder you're working in.{{ai}}
+Worktrees that AI agent sessions use internally are hidden here.{{/ai}}`,
   },
   {
     id: "syncing",
