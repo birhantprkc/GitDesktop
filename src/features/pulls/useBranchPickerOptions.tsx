@@ -7,7 +7,8 @@ import { useBranches, useUserWorktrees } from "@/lib/git/queries";
 const normPath = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 
 export interface BranchPickerOptions {
-  /** Selectable branch names in git order, session branches excluded. */
+  /** Selectable branch names in git order; session + archived branches excluded
+   *  (archived ones in `keep` are retained). */
   names: string[];
   /** value → label map for `field.SelectField`. */
   items: Record<string, string>;
@@ -18,16 +19,20 @@ export interface BranchPickerOptions {
 /**
  * Branch options for the create-PR pickers: the filtered name list, the
  * value→label map, and per-branch status chips (checked out in another
- * worktree / archived) that a `SelectField` renders after each option.
+ * worktree) that a `SelectField` renders after each option.
  *
  * Agent-session branches (`gd/session/*`) are always excluded — they're
- * app-internal and submitting one would push it, the same invariant the
- * BranchSwitcher enforces. `enabled` gates the worktree fetch to while the
- * dialog is open.
+ * app-internal and submitting one would push it — and **archived** branches are
+ * hidden too, matching the BranchSwitcher (they were archived to get them out of
+ * the way). Names passed in `keep` — the picker's seeded defaults, e.g. the
+ * current or default branch — are retained even when archived, so a default
+ * value stays selectable. `enabled` gates the worktree fetch to while the dialog
+ * is open.
  */
 export function useBranchPickerOptions(
   repoPath: string,
   enabled: boolean,
+  keep?: (string | null | undefined)[],
 ): BranchPickerOptions {
   const branches = useBranches(repoPath);
   const worktrees = useUserWorktrees(repoPath, enabled);
@@ -45,9 +50,16 @@ export function useBranchPickerOptions(
     return map;
   }, [worktrees.data, activeNorm]);
 
+  // A stable primitive key for the keep-set so the memo below doesn't rerun on
+  // every render just because the caller passed a fresh array literal.
+  const keepKey = (keep ?? []).filter(Boolean).join("\n");
+
   return useMemo(() => {
+    const keepSet = new Set(keepKey ? keepKey.split("\n") : []);
     const list = (branches.data ?? []).filter(
-      (b) => !b.name.startsWith("gd/session/"),
+      (b) =>
+        !b.name.startsWith("gd/session/") &&
+        (!b.archived || keepSet.has(b.name)),
     );
     const names = list.map((b) => b.name);
     const items = Object.fromEntries(names.map((n) => [n, n]));
@@ -78,5 +90,5 @@ export function useBranchPickerOptions(
       );
     }
     return { names, items, annotations };
-  }, [branches.data, worktreeByBranch]);
+  }, [branches.data, worktreeByBranch, keepKey]);
 }

@@ -1,0 +1,475 @@
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { CheckIcon, MinusIcon } from "@phosphor-icons/react";
+import { useQueryClient } from "@tanstack/react-query";
+import * as api from "@/lib/git/api";
+import { repoKeys, useBranchDivergence } from "@/lib/git/queries";
+import type { Branch } from "@/lib/git/types";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
+import { errorMessage } from "@/lib/tauri/invoke";
+import { formatRelativeTime } from "@/lib/time";
+import { cn } from "@/lib/utils";
+
+type Mode = "archive" | "delete";
+
+/** Candidate windows offered for the "no commits in N days" staleness signal. */
+const AGE_WINDOWS = [30, 60, 90] as const;
+const DAY_MS = 86_400_000;
+
+interface Candidate {
+  branch: Branch;
+  /** Fully merged into the default branch (0 commits it doesn't have). */
+  merged: boolean;
+  /** Whole days since the branch tip's commit. */
+  ageDays: number;
+  /** Idle beyond the selected age window. */
+  old: boolean;
+}
+
+const pluralBranches = (n: number) => `${n} branch${n === 1 ? "" : "es"}`;
+
+/**
+ * Bulk "clean up branches" dialog, launched from the branch switcher. Gathers
+ * local branches that are stale — **merged into the default branch** or **idle
+ * past the selected age window** — and lets the user Archive (reversible hide via
+ * the `gitdesktopArchived` flag) or Delete (`git branch -D`) the selected set in
+ * one pass. The current branch, the default branch, and `gd/session/*` branches
+ * are never candidates; Delete additionally excludes rule-protected branches.
+ *
+ * Merged detection reuses branch divergence (`ahead === 0`) — no extra backend.
+ */
+export function CleanupBranchesDialog({
+  repoPath,
+  open,
+  onClose,
+  branches,
+  defaultBranch,
+  currentBranch,
+  isProtected,
+}: {
+  repoPath: string;
+  open: boolean;
+  onClose: () => void;
+  branches: Branch[];
+  defaultBranch: string | null;
+  currentBranch: string | null;
+  /** True when a branch is blocked from deletion by an effective branch rule. */
+  isProtected: (name: string) => boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [mode, setMode] = useState<Mode>("archive");
+  const [windowDays, setWindowDays] = useState<number>(60);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [activeName, setActiveName] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  // Batch progress + per-branch failures (kept visible so a partial run is honest).
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
+  const [failed, setFailed] = useState<Map<string, string>>(new Map());
+  const running = progress !== null;
+
+  // Merged-into-default comes straight from divergence: a branch with 0 commits
+  // the default branch lacks is fully contained in it. Fetched only while open.
+  const divergence = useBranchDivergence(repoPath, defaultBranch, open);
+  const mergedSet = useMemo(
+    () =>
+      new Set(
+        (divergence.data ?? [])
+          // ahead 0 = no commits the default branch lacks, AND behind > 0 = the
+          // default has since moved past it. Requiring behind > 0 keeps a
+          // brand-new branch still sitting on the default tip (ahead 0, behind 0)
+          // from being mislabeled "merged".
+          .filter((d) => d.ahead === 0 && d.behind > 0)
+          .map((d) => d.name),
+      ),
+    [divergence.data],
+  );
+
+  // Branches eligible for cleanup, before the per-mode exclusions. Never the
+  // current or default branch, never the app-internal session branches.
+  const stale = useMemo(() => {
+    const now = Date.now();
+    const out: Candidate[] = [];
+    for (const b of branches) {
+      if (
+        b.isCurrent ||
+        b.name === currentBranch ||
+        b.name === defaultBranch ||
+        b.name.startsWith("gd/session/")
+      )
+        continue;
+      const ts = Date.parse(b.lastCommitDate);
+      const ageDays = Number.isFinite(ts)
+        ? Math.floor((now - ts) / DAY_MS)
+        : 0;
+      const merged = mergedSet.has(b.name);
+      const old = ageDays >= windowDays;
+      if (merged || old) out.push({ branch: b, merged, ageDays, old });
+    }
+    return out;
+  }, [branches, currentBranch, defaultBranch, mergedSet, windowDays]);
+
+  // Mode-specific candidates. Archive hides — already-archived branches are a
+  // no-op, so drop them. Delete is permanent — drop rule-protected branches
+  // (they'd fail anyway), but keep archived ones (a final sweep may want them).
+  const candidates = useMemo(() => {
+    const list =
+      mode === "archive"
+        ? stale.filter((c) => !c.branch.archived)
+        : stale.filter((c) => !isProtected(c.branch.name));
+    // Merged first (the safest to clean), then oldest first.
+    return list.sort((a, b) => {
+      if (a.merged !== b.merged) return a.merged ? -1 : 1;
+      return b.ageDays - a.ageDays;
+    });
+  }, [stale, mode, isProtected]);
+
+  // Re-check every candidate whenever the set itself changes — opening, switching
+  // mode, adjusting the window, or divergence resolving to reveal merged branches.
+  const candidateNames = useMemo(
+    () => candidates.map((c) => c.branch.name),
+    [candidates],
+  );
+  // Re-seed the selection only when the SET of candidate names actually changes,
+  // keyed on their joined value rather than the array identity. A parent
+  // re-render that yields an equal-but-new `candidates` array — a fresh
+  // `isProtected` closure, a no-op branch refetch — would otherwise re-run this
+  // and silently wipe the user's deselections. Branch names can't contain
+  // newlines (git ref rules), so the join is unambiguous.
+  const candidateNamesKey = candidateNames.join("\n");
+  useEffect(() => {
+    if (running) return; // don't clobber a batch mid-flight
+    setSelected(
+      new Set(candidateNamesKey ? candidateNamesKey.split("\n") : []),
+    );
+    setActiveName(null);
+  }, [candidateNamesKey, running]);
+
+  // First load: divergence still fetching and nothing has surfaced yet. Age-based
+  // candidates already show instantly (branch data is cached), so this only gates
+  // the truly-empty first paint.
+  const checkingMerged = Boolean(defaultBranch) && divergence.isLoading;
+
+  const selectedCount = candidateNames.filter((n) => selected.has(n)).length;
+  const allChecked = candidates.length > 0 && selectedCount === candidates.length;
+  const someChecked = selectedCount > 0;
+
+  function toggle(name: string) {
+    if (running) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (running) return;
+    setSelected(allChecked ? new Set() : new Set(candidateNames));
+  }
+
+  // Switching mode or window opens a fresh context, so drop any per-branch
+  // failures left from a previous batch — otherwise a "failed" badge from a
+  // delete attempt would bleed onto the same branch in archive mode. Done in the
+  // handlers (not an effect) so the post-batch refetch keeps the just-failed rows
+  // flagged.
+  function changeMode(next: Mode) {
+    if (running) return;
+    setMode(next);
+    setFailed(new Map());
+  }
+
+  function changeWindow(next: number) {
+    if (running) return;
+    setWindowDays(next);
+    setFailed(new Map());
+  }
+
+  const activeIndex = candidates.findIndex((c) => c.branch.name === activeName);
+  const onKeyDown = listKeyboardNav({
+    items: candidates,
+    activeIndex,
+    onActivate: (c) => setActiveName(c.branch.name),
+    rowKey: (c) => c.branch.name,
+  });
+
+  async function runBatch() {
+    const names = candidateNames.filter((n) => selected.has(n));
+    if (names.length === 0) return;
+    const fails = new Map<string, string>();
+    setFailed(new Map());
+    setProgress({ done: 0, total: names.length });
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i];
+      try {
+        if (mode === "archive") {
+          await api.gitSetBranchArchived(repoPath, name, true);
+        } else {
+          await api.gitDeleteBranch(repoPath, name);
+        }
+      } catch (e) {
+        fails.set(name, errorMessage(e));
+      }
+      setProgress({ done: i + 1, total: names.length });
+    }
+    // One reconciliation for the whole batch (branch mutations aren't optimistic
+    // here) — refreshes the switcher list, divergence, and archived section.
+    await queryClient.invalidateQueries({ queryKey: repoKeys.branches(repoPath) });
+    await queryClient.invalidateQueries({ queryKey: ["repo", repoPath, "divergence"] });
+    setProgress(null);
+
+    const ok = names.length - fails.size;
+    const verb = mode === "archive" ? "Archived" : "Deleted";
+    if (fails.size === 0) {
+      toast.success(`${verb} ${pluralBranches(ok)}`);
+      onClose();
+      return;
+    }
+    setFailed(fails);
+    // The successful ones drop out of the candidate list on refetch, leaving the
+    // failures on screen with their reason; the user can retry them.
+    toast.error(`${verb} ${ok}, ${fails.size} failed`);
+  }
+
+  function onPrimary() {
+    if (mode === "delete") setConfirmDelete(true);
+    else void runBatch();
+  }
+
+  const verb = mode === "archive" ? "Archive" : "Delete";
+  const gerund = mode === "archive" ? "Archiving" : "Deleting";
+  const primaryLabel = running
+    ? `${gerund}… ${progress?.done ?? 0}/${progress?.total ?? 0}`
+    : `${verb} ${pluralBranches(selectedCount)}`;
+
+  return (
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={(o) => {
+          if (!o && !running) onClose();
+        }}
+      >
+        <DialogContent className="flex flex-col gap-4 sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Clean up branches</DialogTitle>
+            <DialogDescription>
+              Local branches merged into{" "}
+              <span className="font-mono">{defaultBranch ?? "the default branch"}</span>{" "}
+              or with no commits in a while.{" "}
+              {mode === "archive"
+                ? "Archiving hides them from the switcher — unarchive anytime."
+                : "Deleting removes them permanently, including commits only on them."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Mode + age controls */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div
+              className="inline-flex rounded-none ring-1 ring-border"
+              role="group"
+              aria-label="Cleanup action"
+            >
+              {(["archive", "delete"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  disabled={running}
+                  aria-pressed={mode === m}
+                  onClick={() => changeMode(m)}
+                  className={cn(
+                    "px-3 py-1 text-xs capitalize transition-colors first:border-r first:border-border disabled:opacity-50",
+                    mode === m
+                      ? m === "delete"
+                        ? "bg-destructive text-white"
+                        : "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>Idle for</span>
+              <div
+                className="inline-flex rounded-none ring-1 ring-border"
+                role="group"
+                aria-label="Inactivity window in days"
+              >
+                {AGE_WINDOWS.map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    disabled={running}
+                    aria-pressed={windowDays === d}
+                    onClick={() => changeWindow(d)}
+                    className={cn(
+                      "px-2 py-1 tabular-nums transition-colors not-last:border-r not-last:border-border disabled:opacity-50",
+                      windowDays === d
+                        ? "bg-primary text-primary-foreground"
+                        : "hover:text-foreground",
+                    )}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+              <span>days</span>
+            </div>
+          </div>
+
+          {/* Select-all header — a tri-state indicator (the vendored Checkbox
+              has no indeterminate visual, and components/ui/ is off-limits). */}
+          {candidates.length > 0 && (
+            <button
+              type="button"
+              disabled={running}
+              onClick={toggleAll}
+              aria-label={allChecked ? "Deselect all" : "Select all"}
+              className="flex items-center gap-2 text-xs text-muted-foreground disabled:opacity-50"
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "flex size-4 shrink-0 items-center justify-center rounded-none border border-input",
+                  (allChecked || someChecked) &&
+                    "border-primary bg-primary text-primary-foreground",
+                )}
+              >
+                {allChecked ? (
+                  <CheckIcon className="size-3.5" />
+                ) : someChecked ? (
+                  <MinusIcon className="size-3.5" />
+                ) : null}
+              </span>
+              <span>
+                {selectedCount} of {candidates.length} selected
+              </span>
+            </button>
+          )}
+
+          {/* List / skeleton / empty */}
+          {checkingMerged && candidates.length === 0 ? (
+            <div className="space-y-1 py-2" aria-busy>
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="h-7 animate-pulse rounded-none bg-muted/50"
+                />
+              ))}
+            </div>
+          ) : candidates.length === 0 ? (
+            <p className="py-6 text-center text-xs text-muted-foreground">
+              No stale branches — nothing is merged into{" "}
+              <span className="font-mono">{defaultBranch ?? "the default branch"}</span>{" "}
+              or idle for {windowDays} days. Try a shorter window.
+            </p>
+          ) : (
+            <div
+              className="-mx-1 max-h-[45vh] space-y-0.5 overflow-x-hidden overflow-y-auto px-1"
+              onKeyDown={onKeyDown}
+            >
+              {checkingMerged && (
+                <p className="px-1 py-1 text-[11px] text-muted-foreground">
+                  Checking which branches are merged…
+                </p>
+              )}
+              {candidates.map((c, idx) => {
+                const name = c.branch.name;
+                const checked = selected.has(name);
+                const err = failed.get(name);
+                const rovingTab =
+                  idx === (activeIndex === -1 ? 0 : activeIndex) ? 0 : -1;
+                return (
+                  <label
+                    key={name}
+                    className={cn(
+                      "flex cursor-pointer items-center gap-2 rounded-none px-1.5 py-1.5 text-xs transition-colors hover:bg-accent",
+                      activeName === name && "bg-accent",
+                    )}
+                  >
+                    <Checkbox
+                      data-row={name}
+                      tabIndex={rovingTab}
+                      checked={checked}
+                      disabled={running}
+                      onCheckedChange={() => toggle(name)}
+                      onFocus={() => setActiveName(name)}
+                    />
+                    <span className="min-w-0 flex-1 truncate font-mono">
+                      {name}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      {err ? (
+                        <span className="text-destructive" title={err}>
+                          failed
+                        </span>
+                      ) : c.merged ? (
+                        <span className="text-merged">merged</span>
+                      ) : null}
+                      <span className="tabular-nums text-muted-foreground">
+                        {formatRelativeTime(c.branch.lastCommitDate)}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={running}
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant={mode === "delete" ? "destructive" : "default"}
+              disabled={selectedCount === 0 || running}
+              onClick={onPrimary}
+            >
+              {primaryLabel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onCancel={() => setConfirmDelete(false)}
+        title="Delete branches?"
+        body={
+          <>
+            Permanently deletes {pluralBranches(selectedCount)}, including commits
+            that exist only on them. This can't be undone.
+          </>
+        }
+        confirmLabel={`Delete ${pluralBranches(selectedCount)}`}
+        confirmVariant="destructive"
+        onConfirm={() => {
+          setConfirmDelete(false);
+          void runBatch();
+        }}
+      />
+    </>
+  );
+}

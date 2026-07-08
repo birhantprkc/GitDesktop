@@ -333,6 +333,11 @@ The branch name in the header opens the **branch switcher** ({{kbd:show-branches
 - **Create** a branch ({{kbd:new-branch}}), **rename** ({{kbd:rename-branch}}), **delete**
   ({{kbd:delete-branch}}), or **archive** it — archiving hides a branch without deleting
   it, collapsing it into an "Archived" section.
+- **Clean up branches** — from the switcher's menu or the command palette — opens a bulk
+  sweep of stale branches: those **merged** into the default branch, or with no commits in a
+  chosen window (30/60/90 days). Review the pre-checked list, then **archive** them
+  (reversible) or **delete** them together. The current branch, the default branch, and
+  protected branches are never included.
 {{ai}}- **Generate a branch name with AI** from your working-tree changes when creating
   or renaming one.
 {{/ai}}- Switching with **uncommitted changes** prompts you to bring them along or stash

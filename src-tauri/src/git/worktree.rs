@@ -9,7 +9,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
 use crate::error::{AppError, AppResult};
-use crate::git::runner::{run_git, run_git_mutating, DEFAULT_TIMEOUT};
+use crate::git::runner::{run_git, run_git_mutating, run_git_raw, DEFAULT_TIMEOUT};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -375,6 +375,22 @@ pub async fn git_worktree_repair(
     Ok(())
 }
 
+/// True when the worktree at `path` still holds uncommitted or untracked changes
+/// worth protecting. Used to decide whether a *non-forced* removal that git
+/// refused is safe to finish ourselves: a clean worktree (ignored files like
+/// `node_modules` don't count under `--porcelain`) is safe to delete, whereas real
+/// changes must be preserved. If git can't inspect the worktree at all — its admin
+/// files were already torn down partway through a failed remove — there's nothing
+/// left to protect, so treat it as clean. A spawn failure / timeout is treated
+/// conservatively as "maybe dirty" so we never delete blindly on an unknown state.
+async fn worktree_has_uncommitted_changes(path: &str) -> bool {
+    match run_git_raw(Some(path), &["status", "--porcelain"], DEFAULT_TIMEOUT).await {
+        Ok(out) if out.code == 0 => !out.stdout_lossy().trim().is_empty(),
+        Ok(_) => false,
+        Err(_) => true,
+    }
+}
+
 /// Removes a session worktree and (when given) deletes its branch. `force` is
 /// needed to drop a worktree with uncommitted changes — i.e. a discarded
 /// session whose output was never committed.
@@ -399,7 +415,13 @@ pub async fn git_worktree_remove(
     // points as links (hardened for exactly this since Rust 1.63) where git can't — then
     // reconcile git's now-dangling admin entry with `prune`.
     if let Err(git_err) = run_git_mutating(&state, &repo_path, &args, DEFAULT_TIMEOUT).await {
-        if !force {
+        // On a NON-forced removal, git may have refused for one of two reasons: it's
+        // protecting real uncommitted work (Keep passes `force=false` precisely so a
+        // worktree with unsaved changes is never silently discarded), or its own
+        // recursive delete choked on a Windows reparse point (see above) after already
+        // passing the clean check. Only finish the delete ourselves when there's nothing
+        // to protect — otherwise surface git's error so the user keeps their changes.
+        if !force && worktree_has_uncommitted_changes(&path).await {
             return Err(git_err);
         }
         match std::fs::remove_dir_all(&path) {
@@ -893,6 +915,61 @@ prunable gitdir file points to non-existent location
             list.iter().any(|w| w.branch == "gd/session/keep"),
             "branch is checked out in a worktree again after resume"
         );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The safety gate for finishing a non-forced worktree removal ourselves:
+    /// a clean checkout (ignored `node_modules` don't count) → false so we may
+    /// delete it; real uncommitted/untracked work → true so we bail and keep it;
+    /// a path git can't read as a repo (a half-torn-down worktree) → false, since
+    /// there's nothing left to protect.
+    #[tokio::test]
+    async fn worktree_has_uncommitted_changes_gates_on_real_work() {
+        let base = std::env::temp_dir().join(format!(
+            "gd-wt-dirty-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let repo_s = repo.to_string_lossy().into_owned();
+
+        run(&repo_s, &["init", "-q"]).await;
+        run(&repo_s, &["config", "user.email", "t@t.local"]).await;
+        run(&repo_s, &["config", "user.name", "T"]).await;
+        std::fs::write(repo.join(".gitignore"), "node_modules/\n").unwrap();
+        std::fs::write(repo.join("a.txt"), "hello\n").unwrap();
+        run(&repo_s, &["add", "-A"]).await;
+        run(&repo_s, &["commit", "-qm", "seed"]).await;
+
+        // Clean checkout — nothing to protect.
+        assert!(!worktree_has_uncommitted_changes(&repo_s).await);
+
+        // Gitignored deps (the exact case that leaks on Windows) are NOT work.
+        std::fs::create_dir_all(repo.join("node_modules/pkg")).unwrap();
+        std::fs::write(repo.join("node_modules/pkg/index.js"), "x\n").unwrap();
+        assert!(
+            !worktree_has_uncommitted_changes(&repo_s).await,
+            "gitignored node_modules must not read as uncommitted work"
+        );
+
+        // An untracked, non-ignored file IS work to protect.
+        std::fs::write(repo.join("scratch.txt"), "wip\n").unwrap();
+        assert!(worktree_has_uncommitted_changes(&repo_s).await);
+        std::fs::remove_file(repo.join("scratch.txt")).unwrap();
+
+        // A modified tracked file IS work to protect.
+        std::fs::write(repo.join("a.txt"), "changed\n").unwrap();
+        assert!(worktree_has_uncommitted_changes(&repo_s).await);
+
+        // A directory git can't read as a repo → nothing to protect.
+        let non_repo = base.join("not-a-repo");
+        std::fs::create_dir_all(&non_repo).unwrap();
+        assert!(!worktree_has_uncommitted_changes(&non_repo.to_string_lossy()).await);
 
         let _ = std::fs::remove_dir_all(&base);
     }

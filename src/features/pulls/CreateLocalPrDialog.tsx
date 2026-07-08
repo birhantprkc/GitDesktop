@@ -47,9 +47,16 @@ export function CreateLocalPrDialog({
   const setRepoTab = useUiStore((s) => s.setRepoTab);
 
   const currentName = status.data?.branch?.name ?? null;
-  // Branch options + per-branch worktree/archived chips; drops the app-internal
-  // `gd/session/*` branches (a local PR must never target one).
-  const { names, items, annotations } = useBranchPickerOptions(repoPath, open);
+  // Branch options with per-branch worktree chips; drops the app-internal
+  // `gd/session/*` branches (a local PR must never target one) and archived
+  // branches, matching BranchSwitcher. `keep` retains the seeded defaults even
+  // if archived, so the head/base defaults stay selectable.
+  const { names, items, annotations } = useBranchPickerOptions(repoPath, open, [
+    currentName,
+    defaultHead,
+    defaultBase,
+    defaultBranch.data,
+  ]);
 
   const form = useAppForm({
     defaultValues: { head: "", base: "", title: "", body: "" },

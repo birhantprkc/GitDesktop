@@ -67,6 +67,7 @@ import {
   type MergeRunOptions,
   type PickerMode,
 } from "./BranchMergePickerDialog";
+import { CleanupBranchesDialog } from "./CleanupBranchesDialog";
 import { CreateBranchDialog } from "./CreateBranchDialog";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
 import { OperationHistoryDialog } from "./OperationHistoryDialog";
@@ -184,6 +185,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     "stashes",
   );
   const [opHistoryOpen, setOpHistoryOpen] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
   // The pending switch target. `remote` is set only for remote-only rows, which
   // check out via `--track <remote>/<name>` (honoring the row's promised remote
@@ -650,6 +652,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     },
     Boolean(currentName && !isDeletionBlocked(rulesConfig, currentName)),
   );
+  useHotkeyAction("cleanup-branches", () => {
+    setOpen(false);
+    setCleanupOpen(true);
+  });
   useHotkeyAction(
     "update-from-default",
     () => currentName && doUpdateFromDefault(currentName),
@@ -1086,6 +1092,14 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                     ? "Delete current branch… (protected)"
                     : "Delete current branch…"}
                 </MenuRow>
+                <MenuRow
+                  onClick={() => {
+                    setOpen(false);
+                    setCleanupOpen(true);
+                  }}
+                >
+                  Clean up branches…
+                </MenuRow>
               </div>
               <div className="border-t py-1">
                 <MenuRow
@@ -1213,6 +1227,16 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         entries={status.data?.entries ?? []}
         allBranchNames={allBranches.map((b) => b.name)}
         onOpenSettings={openSettings}
+      />
+
+      <CleanupBranchesDialog
+        repoPath={repoPath}
+        open={cleanupOpen}
+        onClose={() => setCleanupOpen(false)}
+        branches={allBranches}
+        defaultBranch={defaultName}
+        currentBranch={currentName}
+        isProtected={(name) => isDeletionBlocked(rulesConfig, name)}
       />
 
       <ConfirmDialog

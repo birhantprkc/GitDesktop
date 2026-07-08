@@ -72,10 +72,16 @@ export function CreatePrDialog({
   const aiDescriptionRef = useRef(false);
 
   const currentName = status.data?.branch?.name ?? null;
-  // Branch options + per-branch worktree/archived chips; also drops the
-  // app-internal `gd/session/*` branches (submitting one would even PUSH it),
-  // the same rule as BranchSwitcher.
-  const { names, items, annotations } = useBranchPickerOptions(repoPath, open);
+  // Branch options with per-branch worktree chips; drops the app-internal
+  // `gd/session/*` branches (submitting one would even PUSH it) and archived
+  // branches, the same rules as BranchSwitcher. `keep` retains the seeded
+  // defaults even if archived, so the head/base defaults stay selectable.
+  const { names, items, annotations } = useBranchPickerOptions(repoPath, open, [
+    currentName,
+    defaultHead,
+    defaultBase,
+    defaultBranch.data,
+  ]);
 
   const form = useAppForm({
     defaultValues: { head: "", base: "", title: "", body: "", draft: false },

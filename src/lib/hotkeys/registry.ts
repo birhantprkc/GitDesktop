@@ -357,6 +357,12 @@ export const ACTIONS = [
     defaultBinding: "mod+shift+d",
   },
   {
+    id: "cleanup-branches",
+    label: "Clean up branches",
+    category: "Branches & stash",
+    defaultBinding: null,
+  },
+  {
     id: "update-from-default",
     label: "Update from default branch",
     category: "Branches & stash",

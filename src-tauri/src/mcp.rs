@@ -647,7 +647,19 @@ async fn run_client_cli(bin: &str, args: &[&str]) -> AppResult<(String, String, 
 
     use tokio::process::Command;
 
-    let mut cmd = Command::new(bin);
+    // Resolve through the shared resolver (PATH + candidate dirs + the LIVE registry
+    // PATH on Windows, macOS login shell) rather than a bare `Command::new(bin)`, which
+    // only searches the app's *inherited* PATH — a `claude`/`copilot` installed to a
+    // registry-PATH-only dir (or added to PATH after the app launched) would otherwise
+    // read as "not found". Mirrors every other CLI runner; see the resolver gotcha in
+    // agent.rs (`resolve_named`).
+    let program = crate::agent::resolve_named(&[bin], None).await.ok_or_else(|| {
+        AppError::Command(format!(
+            "`{bin}` was not found on PATH. Install it, or copy the snippet into the config manually."
+        ))
+    })?;
+
+    let mut cmd = Command::new(&program);
     cmd.args(args)
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")
