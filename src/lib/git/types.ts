@@ -1365,7 +1365,63 @@ export interface ReviewThreadOut {
 export interface PrCheckOut {
   name: string;
   status: string;
+  /** The check's link: a CheckRun `detailsUrl` or a StatusContext `targetUrl`,
+   *  whichever GitHub supplied. Absent when neither did. */
+  detailsUrl?: string;
+  /** GitHub Actions run id, parsed from a `.../actions/runs/<runId>/…` details
+   *  URL. Kept as a string — run/job ids exceed JS's safe-integer range. Absent
+   *  for non-Actions checks (external CI, or a StatusContext). */
+  runId?: string;
+  /** GitHub Actions job id, parsed from `.../actions/runs/<runId>/job/<jobId>`.
+   *  Absent when the URL has no job segment (or isn't an Actions URL). */
+  jobId?: string;
+  /** CheckRun `startedAt`; absent for a StatusContext (it has no start). */
+  startedAt?: string;
+  /** CheckRun `completedAt`; absent for a StatusContext. */
+  completedAt?: string;
 }
+
+/** One activity-timeline event on a PR — force-pushes, label changes, review
+ *  requests, and state changes — for the Conversation tab's activity timeline.
+ *  A discriminated union keyed on `kind`, mirroring the Rust `PrTimelineEventOut`
+ *  tagged enum. Provider-neutral — the backend dispatches per provider (GitHub
+ *  reviews still render as cards, so it emits no approved/changesRequested;
+ *  GitLab/Bitbucket emit approval events here since their review lists are empty).
+ *  Events arrive oldest→newest. `actor`/`date`/oid fields are `""` when the
+ *  provider returned null (ghost/deleted actor, gone commit). */
+export type PrTimelineEvent =
+  | {
+      kind: "forcePushed";
+      before: string;
+      after: string;
+      actor: string;
+      date: string;
+    }
+  | {
+      kind: "labeled";
+      label: string;
+      color: string;
+      /** true for a LABELED_EVENT, false for an UNLABELED_EVENT. */
+      added: boolean;
+      actor: string;
+      date: string;
+    }
+  | { kind: "reviewRequested"; reviewer: string; actor: string; date: string }
+  | { kind: "readyForReview"; actor: string; date: string }
+  | { kind: "convertToDraft"; actor: string; date: string }
+  | { kind: "approved"; actor: string; date: string }
+  | { kind: "changesRequested"; actor: string; date: string }
+  | { kind: "unapproved"; actor: string; date: string }
+  | { kind: "closed"; actor: string; date: string }
+  | { kind: "reopened"; actor: string; date: string }
+  | { kind: "merged"; actor: string; commitOid?: string; date: string }
+  | {
+      kind: "renamed";
+      previous: string;
+      current: string;
+      actor: string;
+      date: string;
+    };
 
 export interface RepoLabel {
   /** GraphQL node id; empty on labels embedded in PR details. */

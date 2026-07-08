@@ -1285,8 +1285,11 @@ struct RawComment {
     viewer_did_author: bool,
 }
 
-/// statusCheckRollup is a union of CheckRun (name/conclusion) and StatusContext
-/// (context/state); accept any of the keys and normalize below.
+/// statusCheckRollup is a union of CheckRun (name/conclusion/detailsUrl) and
+/// StatusContext (context/state/targetUrl); accept any of the keys and normalize
+/// below. `details_url`/`target_url` are the two arms' link fields (whichever is
+/// present wins); `started_at`/`completed_at` are CheckRun-only timestamps that a
+/// StatusContext simply omits (they stay `None`).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawCheck {
@@ -1300,6 +1303,43 @@ struct RawCheck {
     state: String,
     #[serde(default)]
     status: String,
+    /// CheckRun link.
+    #[serde(default)]
+    details_url: Option<String>,
+    /// StatusContext link.
+    #[serde(default)]
+    target_url: Option<String>,
+    #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
+    completed_at: Option<String>,
+}
+
+/// Extract `(run_id, job_id)` from a GitHub Actions check details URL of the form
+/// `https://<host>/<owner>/<repo>/actions/runs/<runId>/job/<jobId>` (the job
+/// segment is optional). Ids are kept as **strings** — GitHub run/job ids exceed
+/// the JS safe-integer range, so they must never be parsed to a number. Any URL
+/// that isn't an Actions run URL (Vercel, Netlify, empty, absent) yields
+/// `(None, None)`.
+fn parse_actions_run_job(url: &str) -> (Option<String>, Option<String>) {
+    // Find "/actions/runs/" then read the following all-digit run id, and an
+    // optional "/job/<digits>" immediately after. Substring scan (no regex dep).
+    let Some(rest) = url.split_once("/actions/runs/").map(|(_, r)| r) else {
+        return (None, None);
+    };
+    let run_id: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if run_id.is_empty() {
+        return (None, None);
+    }
+    let after_run = &rest[run_id.len()..];
+    let job_id = after_run.strip_prefix("/job/").map(|j| {
+        j.chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+    });
+    // An empty job capture (e.g. ".../job/") is not a real id.
+    let job_id = job_id.filter(|j| !j.is_empty());
+    (Some(run_id), job_id)
 }
 
 #[derive(Deserialize)]
@@ -1416,11 +1456,30 @@ pub struct ReviewThreadOut {
     pub comments: Vec<PrThreadOut>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PrCheckOut {
     pub name: String,
     pub status: String,
+    /// The check's link: CheckRun `detailsUrl` or StatusContext `targetUrl`,
+    /// whichever is present. `None` when neither arm supplied one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details_url: Option<String>,
+    /// GitHub Actions run id, parsed from a `.../actions/runs/<runId>/…`
+    /// details URL (string — exceeds JS safe-int range). `None` for non-Actions
+    /// checks (external CI like Vercel/Netlify, or a StatusContext).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// GitHub Actions job id, parsed from `.../actions/runs/<runId>/job/<jobId>`.
+    /// `None` when the details URL has no job segment (or isn't an Actions URL).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    /// CheckRun `startedAt`; `None` for a StatusContext (it has no start).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// CheckRun `completedAt`; `None` for a StatusContext.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
 }
 
 /// One draft inline comment in a batched review submission, provider-neutral.
@@ -1657,7 +1716,25 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                     .into_iter()
                     .find(|s| !s.is_empty())
                     .unwrap_or_default();
-                PrCheckOut { name, status }
+                // CheckRun `detailsUrl` OR StatusContext `targetUrl`, whichever
+                // is present (drop an empty string so an absent link stays None).
+                let details_url = c
+                    .details_url
+                    .or(c.target_url)
+                    .filter(|u| !u.is_empty());
+                let (run_id, job_id) = details_url
+                    .as_deref()
+                    .map(parse_actions_run_job)
+                    .unwrap_or((None, None));
+                PrCheckOut {
+                    name,
+                    status,
+                    details_url,
+                    run_id,
+                    job_id,
+                    started_at: c.started_at.filter(|s| !s.is_empty()),
+                    completed_at: c.completed_at.filter(|s| !s.is_empty()),
+                }
             })
             .collect(),
         labels: raw.labels,
@@ -1713,6 +1790,187 @@ pub async fn gh_pr_reactions(repo_path: String, number: u64) -> AppResult<IssueR
     }
 
     Ok(IssueReactions { body, comments })
+}
+
+/// One activity-timeline event on a PR, serialized as a tagged union keyed on
+/// `kind` (camelCase). Feeds the Conversation tab's activity timeline
+/// (force-pushes, label changes, review requests, state changes, renames). The
+/// backend maps a GitHub `timelineItems` `__typename` onto one of these variants;
+/// any node it can't classify is skipped rather than panicking the batch. Every
+/// `actor`/`date`/oid field defaults to `""` when GitHub returns null (ghost or
+/// deleted actors, gone commits).
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PrTimelineEventOut {
+    /// `HeadRefForcePushedEvent` — the head branch was force-pushed.
+    ForcePushed {
+        before: String,
+        after: String,
+        actor: String,
+        date: String,
+    },
+    /// `LabeledEvent` (`added = true`) / `UnlabeledEvent` (`added = false`).
+    Labeled {
+        label: String,
+        color: String,
+        added: bool,
+        actor: String,
+        date: String,
+    },
+    /// `ReviewRequestedEvent` — `reviewer` is a user login OR a team slug.
+    ReviewRequested {
+        reviewer: String,
+        actor: String,
+        date: String,
+    },
+    /// `ReadyForReviewEvent` — a draft was marked ready.
+    ReadyForReview { actor: String, date: String },
+    /// `ConvertToDraftEvent` — the PR was converted back to a draft.
+    ConvertToDraft { actor: String, date: String },
+    /// `ClosedEvent` — the PR was closed (without merging).
+    Closed { actor: String, date: String },
+    /// `ReopenedEvent` — a closed PR was reopened.
+    Reopened { actor: String, date: String },
+    /// `MergedEvent` — `commit_oid` is the merge commit (may be `None`).
+    Merged {
+        actor: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        commit_oid: Option<String>,
+        date: String,
+    },
+    /// `RenamedTitleEvent` — the PR title changed.
+    Renamed {
+        previous: String,
+        current: String,
+        actor: String,
+        date: String,
+    },
+    /// An approval was given. GitHub surfaces approvals through the review flow
+    /// (they render as review cards), so its own timeline never emits this — it's
+    /// produced by the GitLab (system-note "approved") and Bitbucket (`approval`
+    /// activity) arms, whose approvals carry no reviewable body.
+    Approved { actor: String, date: String },
+    /// A "request changes" verdict without an accompanying review card. Emitted by
+    /// the GitLab (system-note "requested changes") and Bitbucket (`changes_requested`
+    /// activity) arms; GitHub renders its request-changes reviews as cards instead.
+    ChangesRequested { actor: String, date: String },
+    /// A previously-given approval was withdrawn (GitLab system-note "unapproved";
+    /// Bitbucket has no explicit unapproval activity). GitHub never emits it.
+    Unapproved { actor: String, date: String },
+}
+
+const PR_TIMELINE_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ timelineItems(last:100, itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT, LABELED_EVENT, UNLABELED_EVENT, REVIEW_REQUESTED_EVENT, READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, CLOSED_EVENT, REOPENED_EVENT, MERGED_EVENT, RENAMED_TITLE_EVENT]){ nodes{ __typename ... on HeadRefForcePushedEvent{ actor{login} createdAt beforeCommit{oid} afterCommit{oid} } ... on LabeledEvent{ actor{login} createdAt label{name color} } ... on UnlabeledEvent{ actor{login} createdAt label{name color} } ... on ReviewRequestedEvent{ actor{login} createdAt requestedReviewer{ __typename ... on User{login} ... on Team{slug} } } ... on ReadyForReviewEvent{ actor{login} createdAt } ... on ConvertToDraftEvent{ actor{login} createdAt } ... on ClosedEvent{ actor{login} createdAt } ... on ReopenedEvent{ actor{login} createdAt } ... on MergedEvent{ actor{login} createdAt commit{oid} } ... on RenamedTitleEvent{ actor{login} createdAt previousTitle currentTitle } } } } } }"#;
+
+/// Map one `timelineItems` node onto a `PrTimelineEventOut`, or `None` when the
+/// `__typename` is missing/unrecognized (guarded so a single odd node doesn't
+/// break the batch). Every string field defaults to `""` for null values — a
+/// ghost actor, a gone force-push commit, an absent title — per the module's
+/// nullability discipline (no `unwrap_or_default()` on a `from_value` result).
+fn map_timeline_node(node: &serde_json::Value) -> Option<PrTimelineEventOut> {
+    let s = |p: &str| {
+        node.pointer(p)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let actor = s("/actor/login");
+    let date = s("/createdAt");
+    match node.get("__typename").and_then(serde_json::Value::as_str)? {
+        "HeadRefForcePushedEvent" => Some(PrTimelineEventOut::ForcePushed {
+            before: s("/beforeCommit/oid"),
+            after: s("/afterCommit/oid"),
+            actor,
+            date,
+        }),
+        "LabeledEvent" | "UnlabeledEvent" => Some(PrTimelineEventOut::Labeled {
+            label: s("/label/name"),
+            color: s("/label/color"),
+            added: node.get("__typename").and_then(serde_json::Value::as_str)
+                == Some("LabeledEvent"),
+            actor,
+            date,
+        }),
+        "ReviewRequestedEvent" => {
+            // requestedReviewer is a User (login) or a Team (slug); it can also be
+            // null (the requested entity was deleted) → empty reviewer.
+            let reviewer = {
+                let user = s("/requestedReviewer/login");
+                if user.is_empty() {
+                    s("/requestedReviewer/slug")
+                } else {
+                    user
+                }
+            };
+            Some(PrTimelineEventOut::ReviewRequested {
+                reviewer,
+                actor,
+                date,
+            })
+        }
+        "ReadyForReviewEvent" => Some(PrTimelineEventOut::ReadyForReview { actor, date }),
+        "ConvertToDraftEvent" => Some(PrTimelineEventOut::ConvertToDraft { actor, date }),
+        "ClosedEvent" => Some(PrTimelineEventOut::Closed { actor, date }),
+        "ReopenedEvent" => Some(PrTimelineEventOut::Reopened { actor, date }),
+        "MergedEvent" => {
+            let commit_oid = node
+                .pointer("/commit/oid")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            Some(PrTimelineEventOut::Merged {
+                actor,
+                commit_oid,
+                date,
+            })
+        }
+        "RenamedTitleEvent" => Some(PrTimelineEventOut::Renamed {
+            previous: s("/previousTitle"),
+            current: s("/currentTitle"),
+            actor,
+            date,
+        }),
+        _ => None,
+    }
+}
+
+/// The PR's activity timeline — force-pushes, label changes, review requests, and
+/// state changes (ready/draft/close/reopen/merge/rename) — for the Conversation
+/// tab. GitHub's arm of the provider-neutral `forge_pr_timeline` dispatch (no longer
+/// a Tauri command — the dispatcher owns the `#[tauri::command]` seam). Nodes arrive
+/// oldest→newest and that order is preserved. GitHub does NOT emit the `Approved`/
+/// `ChangesRequested`/`Unapproved` kinds — its approvals/reviews already render as
+/// review cards, so `map_timeline_node` has no arms for them. Same decoupled design
+/// as `gh_pr_reactions`: it loads in parallel and leaves `gh_pr_view` untouched.
+pub async fn pr_timeline(
+    repo_path: &str,
+    number: u64,
+) -> AppResult<Vec<PrTimelineEventOut>> {
+    let (owner, name) = repo_owner_name(repo_path).await?;
+    let out = run_gh(
+        Some(repo_path),
+        &[
+            "api",
+            "graphql",
+            "-F",
+            &format!("owner={owner}"),
+            "-F",
+            &format!("name={name}"),
+            "-F",
+            &format!("number={number}"),
+            "-f",
+            &format!("query={PR_TIMELINE_QUERY}"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse pr timeline: {e}")))?;
+    let nodes = value
+        .pointer("/data/repository/pullRequest/timelineItems/nodes")
+        .and_then(serde_json::Value::as_array);
+    Ok(nodes
+        .map(|ns| ns.iter().filter_map(map_timeline_node).collect())
+        .unwrap_or_default())
 }
 
 /// The PR's full unified diff (`gh pr diff`), capped for the webview. The
@@ -2684,7 +2942,8 @@ pub async fn gh_pr_create(
 #[cfg(test)]
 mod tests {
     use super::{
-        host_from_url, is_diff_too_large, parse_auth_accounts, reconstruct_pr_diff, GhPrFile,
+        host_from_url, is_diff_too_large, map_timeline_node, parse_actions_run_job,
+        parse_auth_accounts, reconstruct_pr_diff, GhPrFile, PrTimelineEventOut,
     };
 
     fn file(status: &str, filename: &str, patch: Option<&str>) -> GhPrFile {
@@ -2837,5 +3096,138 @@ github.acme.com
         assert_eq!(accounts[0].host, "github.com");
         assert_eq!(accounts[1].host, "github.acme.com");
         assert!(accounts[0].active && accounts[1].active);
+    }
+
+    #[test]
+    fn parse_actions_run_job_extracts_both_ids() {
+        // A real GitHub Actions details URL yields both ids as strings.
+        let (run, job) = parse_actions_run_job(
+            "https://github.com/cli/cli/actions/runs/28872299305/job/85638045238",
+        );
+        assert_eq!(run.as_deref(), Some("28872299305"));
+        assert_eq!(job.as_deref(), Some("85638045238"));
+
+        // An Actions run URL with no job segment → run id only.
+        let (run, job) =
+            parse_actions_run_job("https://github.com/cli/cli/actions/runs/28872299305");
+        assert_eq!(run.as_deref(), Some("28872299305"));
+        assert_eq!(job, None);
+
+        // Enterprise host + trailing query/fragment still parses the run id and stops
+        // the job id at the first non-digit.
+        let (run, job) = parse_actions_run_job(
+            "https://ghe.example.com/o/r/actions/runs/12/job/34?check_suite_focus=true",
+        );
+        assert_eq!(run.as_deref(), Some("12"));
+        assert_eq!(job.as_deref(), Some("34"));
+    }
+
+    #[test]
+    fn parse_actions_run_job_ignores_non_actions_urls() {
+        // External CI (Vercel/Netlify), empty, and malformed URLs → neither id.
+        assert_eq!(
+            parse_actions_run_job("https://vercel.com/acme/proj/deployments/abc"),
+            (None, None)
+        );
+        assert_eq!(parse_actions_run_job(""), (None, None));
+        // The marker is present but no numeric run id follows.
+        assert_eq!(
+            parse_actions_run_job("https://github.com/o/r/actions/runs/"),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn map_timeline_node_classifies_typenames() {
+        let node = |v: serde_json::Value| map_timeline_node(&v);
+
+        // Force-push → before/after oids + actor + date.
+        match node(serde_json::json!({
+            "__typename": "HeadRefForcePushedEvent",
+            "actor": {"login": "alice"},
+            "createdAt": "2026-05-12T12:01:23Z",
+            "beforeCommit": {"oid": "aaa"},
+            "afterCommit": {"oid": "bbb"},
+        })) {
+            Some(PrTimelineEventOut::ForcePushed {
+                before,
+                after,
+                actor,
+                date,
+            }) => {
+                assert_eq!((before, after, actor), ("aaa".into(), "bbb".into(), "alice".into()));
+                assert_eq!(date, "2026-05-12T12:01:23Z");
+            }
+            other => panic!("expected ForcePushed, got {:?}", other.is_some()),
+        }
+
+        // LABELED_EVENT → added = true; UNLABELED_EVENT → added = false.
+        match node(serde_json::json!({
+            "__typename": "LabeledEvent",
+            "actor": {"login": "bot"},
+            "createdAt": "d",
+            "label": {"name": "bug", "color": "d73a4a"},
+        })) {
+            Some(PrTimelineEventOut::Labeled { label, color, added, .. }) => {
+                assert_eq!((label, color, added), ("bug".into(), "d73a4a".into(), true));
+            }
+            _ => panic!("expected Labeled"),
+        }
+        assert!(matches!(
+            node(serde_json::json!({
+                "__typename": "UnlabeledEvent",
+                "actor": {"login": "bot"}, "createdAt": "d",
+                "label": {"name": "bug", "color": "d73a4a"},
+            })),
+            Some(PrTimelineEventOut::Labeled { added: false, .. })
+        ));
+
+        // Review request: User login and Team slug both land in `reviewer`.
+        assert!(matches!(
+            node(serde_json::json!({
+                "__typename": "ReviewRequestedEvent", "actor": {"login": "a"}, "createdAt": "d",
+                "requestedReviewer": {"__typename": "User", "login": "carol"},
+            })),
+            Some(PrTimelineEventOut::ReviewRequested { reviewer, .. }) if reviewer == "carol"
+        ));
+        assert!(matches!(
+            node(serde_json::json!({
+                "__typename": "ReviewRequestedEvent", "actor": {"login": "a"}, "createdAt": "d",
+                "requestedReviewer": {"__typename": "Team", "slug": "reviewers"},
+            })),
+            Some(PrTimelineEventOut::ReviewRequested { reviewer, .. }) if reviewer == "reviewers"
+        ));
+        // A null requestedReviewer (deleted entity) → empty reviewer, still classified.
+        assert!(matches!(
+            node(serde_json::json!({
+                "__typename": "ReviewRequestedEvent", "actor": {"login": "a"}, "createdAt": "d",
+                "requestedReviewer": serde_json::Value::Null,
+            })),
+            Some(PrTimelineEventOut::ReviewRequested { reviewer, .. }) if reviewer.is_empty()
+        ));
+
+        // Merged with a commit oid; a ghost/null actor defaults to "".
+        assert!(matches!(
+            node(serde_json::json!({
+                "__typename": "MergedEvent", "actor": serde_json::Value::Null, "createdAt": "d",
+                "commit": {"oid": "deadbeef"},
+            })),
+            Some(PrTimelineEventOut::Merged { actor, commit_oid: Some(oid), .. })
+                if actor.is_empty() && oid == "deadbeef"
+        ));
+
+        // Rename carries both titles.
+        assert!(matches!(
+            node(serde_json::json!({
+                "__typename": "RenamedTitleEvent", "actor": {"login": "a"}, "createdAt": "d",
+                "previousTitle": "old", "currentTitle": "new",
+            })),
+            Some(PrTimelineEventOut::Renamed { previous, current, .. })
+                if previous == "old" && current == "new"
+        ));
+
+        // An unrecognized/missing __typename is skipped (None), not a panic.
+        assert!(node(serde_json::json!({ "__typename": "SomeOtherEvent" })).is_none());
+        assert!(node(serde_json::json!({ "actor": {"login": "a"} })).is_none());
     }
 }

@@ -1,6 +1,5 @@
 import { Popover } from "@base-ui/react/popover";
 import {
-  ArchiveIcon,
   ArrowClockwiseIcon,
   ArrowCounterClockwiseIcon,
   CaretDownIcon,
@@ -14,7 +13,6 @@ import {
   PencilSimpleIcon,
   SparkleIcon,
   TagIcon,
-  TrashIcon,
   WarningIcon,
   XIcon,
 } from "@phosphor-icons/react";
@@ -24,14 +22,6 @@ import { toast } from "sonner";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -66,17 +56,19 @@ import {
   useRepoStatus,
   useUpdateBranchFrom,
 } from "@/lib/git/queries";
-import {
-  useDeleteLocalPr,
-  useLocalPrs,
-  useUpdateLocalPr,
-} from "@/lib/pulls/queries";
+import { useLocalPrs, useUpdateLocalPr } from "@/lib/pulls/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
+import { LocalPrLifecycleRow } from "./LocalPrTimeline";
 import { PromoteLocalPrDialog } from "./PromoteLocalPrDialog";
 import { PrReviewPanel } from "./PrReviewPanel";
+import {
+  PushedCommitsRow,
+  sortTimeline,
+  type TimelineEntry,
+} from "./PrTimeline";
 import { ResolveConflictsView } from "./ResolveConflictsView";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 
@@ -92,11 +84,9 @@ export function LocalPrView({
   const prs = useLocalPrs(repoPath);
   const pr = prs.data?.find((p) => p.id === id);
   const update = useUpdateLocalPr(repoPath);
-  const del = useDeleteLocalPr(repoPath);
   const merge = useMergeLocalPr(repoPath);
   const updateBranchFrom = useUpdateBranchFrom(repoPath);
   const status = useRepoStatus(repoPath);
-  const selectPr = useUiStore((s) => s.selectPr);
   const selectedPr = useUiStore((s) => s.selectedPr);
   const pendingPrSection = useUiStore((s) => s.pendingPrSection);
   const setPendingPrSection = useUiStore((s) => s.setPendingPrSection);
@@ -141,7 +131,6 @@ export function LocalPrView({
   } = useLocalConversation(pr, (mutate) => {
     if (pr) update.mutate({ id: pr.id, mutate });
   });
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const ghStatus = useForgeStatus(repoPath);
   const edit = useEditTitleBody({
@@ -582,22 +571,128 @@ export function LocalPrView({
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-              {pr.comments.map((c) => (
-                <LocalComment
-                  key={c.id}
-                  comment={c}
-                  onQuote={() => quoteReply(c.body)}
-                  onSaveEdit={(body) => editComment(c.id, body)}
-                  onDelete={() => setDeletingCommentId(c.id)}
-                  onHide={() => setCommentHidden(c.id, true)}
-                  onUnhide={() => setCommentHidden(c.id, false)}
-                />
-              ))}
-              {pr.comments.length === 0 && (
-                <p className="text-xs text-muted-foreground">
-                  No comments yet.
-                </p>
-              )}
+              {/* The merged activity feed: the created lifecycle marker +
+                  commits + comments + a merged/closed marker, date-sorted
+                  oldest→newest (matching the remote PR timeline). Each source
+                  maps to a {date, sortKey, node} entry — comments keep every
+                  callback they had before (they're relocated, not rewritten);
+                  commits ride as bare markers that coalesce into a grouped
+                  "pushed N commits" row. There's always a created row, so the
+                  feed is never empty. */}
+              {(() => {
+                const entries: TimelineEntry[] = [];
+
+                // Created — always present (there's always a createdAt).
+                entries.push({
+                  date: pr.createdAt,
+                  sortKey: 0,
+                  node: (
+                    <LocalPrLifecycleRow
+                      key="lifecycle-created"
+                      kind="created"
+                      date={pr.createdAt}
+                    />
+                  ),
+                });
+
+                // Commits from `ahead` — carried as bare markers; adjacent runs
+                // coalesce into a single "pushed N commits" row after sorting.
+                for (const c of ahead) {
+                  entries.push({
+                    date: c.date,
+                    sortKey: 1,
+                    commit: {
+                      id: c.hash,
+                      subject: c.subject,
+                      shortSha: c.hash.slice(0, 7),
+                      author: c.author,
+                      date: c.date,
+                    },
+                  });
+                }
+
+                // Comments (existing cards, every callback preserved).
+                for (const c of pr.comments) {
+                  entries.push({
+                    date: c.createdAt,
+                    sortKey: 2,
+                    node: (
+                      <LocalComment
+                        key={c.id}
+                        comment={c}
+                        onQuote={() => quoteReply(c.body)}
+                        onSaveEdit={(body) => editComment(c.id, body)}
+                        onDelete={() => setDeletingCommentId(c.id)}
+                        onHide={() => setCommentHidden(c.id, true)}
+                        onUnhide={() => setCommentHidden(c.id, false)}
+                      />
+                    ),
+                  });
+                }
+
+                // Terminal lifecycle marker: merged, or closed (with a graceful
+                // timestamp-less marker for older records that predate closedAt).
+                if (pr.status === "merged") {
+                  entries.push({
+                    date: pr.mergedAt ?? "",
+                    sortKey: 3,
+                    node: (
+                      <LocalPrLifecycleRow
+                        key="lifecycle-merged"
+                        kind="merged"
+                        date={pr.mergedAt}
+                      />
+                    ),
+                  });
+                } else if (pr.status === "closed" && pr.closedAt) {
+                  entries.push({
+                    date: pr.closedAt,
+                    sortKey: 3,
+                    node: (
+                      <LocalPrLifecycleRow
+                        key="lifecycle-closed"
+                        kind="closed"
+                        date={pr.closedAt}
+                      />
+                    ),
+                  });
+                }
+
+                const sorted = sortTimeline(entries);
+
+                // Coalesce adjacent commit markers into grouped "pushed N" rows;
+                // everything else renders its own node.
+                const rendered: ReactNode[] = [];
+                const commitRun: NonNullable<TimelineEntry["commit"]>[] = [];
+                let runStart = 0;
+                const flush = () => {
+                  if (commitRun.length === 0) return;
+                  rendered.push(
+                    <PushedCommitsRow
+                      key={`push-${runStart}-${commitRun[0].id}`}
+                      commits={[...commitRun]}
+                      onSelectCommit={(hash) => {
+                        setSelectedCommitHash(hash);
+                        setSection("commits");
+                      }}
+                    />,
+                  );
+                  commitRun.length = 0;
+                };
+                for (let i = 0; i < sorted.length; i++) {
+                  const entry = sorted[i];
+                  if (entry.commit) {
+                    if (commitRun.length === 0) runStart = i;
+                    commitRun.push(entry.commit);
+                  } else {
+                    flush();
+                    rendered.push(entry.node);
+                  }
+                }
+                flush();
+
+                return <div className="space-y-4">{rendered}</div>;
+              })()}
             </div>
           </ScrollArea>
           {/* Shown for closed PRs too, so you can comment / quote-reply after
@@ -702,37 +797,6 @@ export function LocalPrView({
       {pr.status === "open" && renderMergeStatus()}
 
       <div className="flex items-center gap-2 border-t p-3">
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-destructive"
-          onClick={() => setConfirmDelete(true)}
-        >
-          <TrashIcon data-icon="inline-start" />
-          Delete
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            if (pr.archived) {
-              update.mutate({
-                id: pr.id,
-                mutate: (cur) => ({ ...cur, archived: false }),
-              });
-            } else {
-              update.mutate({
-                id: pr.id,
-                mutate: (cur) => ({ ...cur, archived: true }),
-              });
-              selectPr(null);
-            }
-          }}
-        >
-          <ArchiveIcon data-icon="inline-start" />
-          {pr.archived ? "Unarchive" : "Archive"}
-        </Button>
-        <span className="flex-1" />
         {pr.status === "open" && (
           <>
             {forgeFeatureReady(ghStatus.data, "mrCreate") && (
@@ -757,12 +821,17 @@ export function LocalPrView({
               onClick={() =>
                 update.mutate({
                   id: pr.id,
-                  mutate: (cur) => ({ ...cur, status: "closed" }),
+                  mutate: (cur) => ({
+                    ...cur,
+                    status: "closed",
+                    closedAt: new Date().toISOString(),
+                  }),
                 })
               }
             >
               Close
             </Button>
+            <span className="flex-1" />
             {/* GitHub-style "Update branch": only when head has fallen behind
                 base. Merges base into head (in a throwaway worktree, so it
                 doesn't touch your working tree unless head IS your current
@@ -840,19 +909,26 @@ export function LocalPrView({
           </>
         )}
         {pr.status === "closed" && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              update.mutate({
-                id: pr.id,
-                mutate: (cur) => ({ ...cur, status: "open" }),
-              })
-            }
-          >
-            <ArrowCounterClockwiseIcon data-icon="inline-start" />
-            Reopen
-          </Button>
+          <>
+            <span className="flex-1" />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                update.mutate({
+                  id: pr.id,
+                  mutate: (cur) => ({
+                    ...cur,
+                    status: "open",
+                    closedAt: undefined,
+                  }),
+                })
+              }
+            >
+              <ArrowCounterClockwiseIcon data-icon="inline-start" />
+              Reopen
+            </Button>
+          </>
         )}
       </div>
 
@@ -862,43 +938,6 @@ export function LocalPrView({
         open={promoteOpen}
         onOpenChange={setPromoteOpen}
       />
-
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete this local pull request?</DialogTitle>
-            <DialogDescription>
-              Permanently deletes "{pr.title}"
-              {pr.comments.length > 0
-                ? ` and its ${pr.comments.length} comment${
-                    pr.comments.length === 1 ? "" : "s"
-                  }`
-                : ""}
-              . The branches are not affected. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={del.isPending}
-              onClick={() =>
-                del.mutate(pr.id, {
-                  onSuccess: () => {
-                    setConfirmDelete(false);
-                    selectPr(null);
-                  },
-                  onError: toastError,
-                })
-              }
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <EditTitleBodyDialog
         form={edit.form}

@@ -224,6 +224,7 @@ pub fn run() {
             forge::forge_pr_poll,
             forge::forge_prs_for_branch,
             forge::forge_pr_view,
+            forge::forge_pr_timeline,
             forge::forge_pr_diff,
             forge::forge_pr_commit_diff,
             forge::forge_commit_comments,

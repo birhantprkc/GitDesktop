@@ -51,6 +51,10 @@ export interface LocalPr {
   comments: LocalPrComment[];
   createdAt: string;
   mergedAt?: string;
+  /** When this PR was last closed (set alongside `status: "closed"`, cleared on
+   *  reopen). Absent on PRs closed before this field existed — render a
+   *  timestamp-less "closed" marker in that case rather than crashing. */
+  closedAt?: string;
   /** Hidden from the list unless "Show archived" — a soft alternative to delete. */
   archived?: boolean;
   /** Set while a merge of this PR is paused on conflicts (resolved in an isolated

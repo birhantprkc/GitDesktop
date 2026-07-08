@@ -494,6 +494,27 @@ files with diffs, and CI checks. From there you can **comment** (with quote-repl
 **labels** and **assignees**, mark a draft **ready**, **merge** (merge commit, squash, or
 rebase, with optional branch deletion), and **close**.
 
+The Conversation tab is a single **date-sorted activity feed** — reviews, comments,
+pushed commits, and events all interleaved oldest-to-newest. A run of pushes collapses
+into one **pushed N commits** row that expands to the commits (arrow-navigable), and each
+commit's short SHA is clickable — it jumps to that commit's detail. On GitHub, events show
+up as calm one-line entries: force-pushes, label added/removed, review requested, marked
+ready for review, converted to draft, closed, reopened, merged, and renamed. An **approval
+or changes-request that predates a later push is flagged stale** (**stale · N commits
+since**), so an out-of-date verdict never reads as current. The feed works for **GitLab
+MRs**, **Bitbucket PRs**, and **local PRs** too — see their sections below for the events
+each one reports.
+
+CI checks appear as a **rollup summary** — **✓ N passed · ✕ M failed · ● K pending**,
+each count with its own icon and word so status never rides on color alone. It
+auto-expands whenever something has failed. Expanding lists the checks failures-first
+(arrow-navigable). A failing **GitHub Actions** check **peeks its job log inline**,
+without leaving the PR, with an **Open full run** link; an external check (Vercel and the
+like) links straight out to its details. **GitLab MRs** get the same rollup from the MR's
+pipeline jobs, with the same **inline log peek**; **Bitbucket PRs** get it from the PR's
+commit build statuses, but those **link out only** (name, state, and URL — Bitbucket
+exposes no fetchable job logs).
+
 Comments, replies, edits, and descriptions use a Markdown editor with **Write / Preview**
 tabs and a formatting toolbar (bold, italic, headings, quote, code, links, and bulleted
 / numbered / task lists, with {{key:mod+b}} / {{key:mod+i}} / {{key:mod+k}}). The same
@@ -595,7 +616,12 @@ merge menu also offers **auto-merge** (merge when the pipeline succeeds) — Git
 you once the pipeline passes, and an **Auto-merge enabled** indicator in the footer lets you cancel
 it in place. Its **line-anchored review comments** render too — grouped by file in the
 Conversation tab and anchored in the Files diff (see *Review comments* above) — with
-reply-in-thread, resolve/unresolve, and edit/delete of your own thread comments.
+reply-in-thread, resolve/unresolve, and edit/delete of your own thread comments. The MR's
+Conversation is the same **date-sorted activity feed** as GitHub's: pushed commits, label
+add/removed, close/reopen/merge, and approval events (approved / changes-requested /
+approval-withdrawn), all interleaved with reviews and comments — GitLab doesn't report
+force-push or draft events, so those don't appear. Its **CI checks** roll up from the MR's
+pipeline jobs, and a failing job **peeks its log inline** just like GitHub Actions.
 **Creating a merge request**
 works from the app too ({{kbd:create-pr}}, the New menu, or the Compare tab) — it pushes your
 branch and opens the MR, with the same draft checkbox and AI description as GitHub, and the
@@ -606,12 +632,28 @@ too**: sign \`glab\` in to your instance (\`glab auth login --hostname …\`) an
 recognizes repositories on that host automatically. Its issues, CI pipelines, and
 releases work too (see their sections below).
 
+## Bitbucket PRs
+
+Point the app at a **Bitbucket Cloud** repo (connect with an Atlassian API token in
+**Settings → Accounts**) and the same tab lists its **pull requests**. A Bitbucket PR's
+Conversation is the same **date-sorted activity feed**: pushed commits, merge/close, and
+verdicts (approved / changes-requested), interleaved with reviews and comments. Bitbucket
+has no labels or review-request events, so those don't appear. Its **CI checks** roll up
+from the PR head commit's build statuses — name, state, and a **link out** to each status;
+Bitbucket exposes no fetchable job logs, so these don't peek inline the way GitHub Actions
+and GitLab pipeline jobs do.
+
 ## Local PRs
 
 A **local PR** is the same review workflow against any two branches with **no remote at
 all** — describe it in Markdown, comment, label, approve, and merge locally. Local PRs
 are private to you and never written into the repo. When you're ready, **promote** a
 local PR to a real GitHub PR or GitLab MR in one click, history preserved.
+
+Its Conversation is the same **date-sorted activity feed** as the hosted PRs: it opens with
+a **created** marker, interleaves the branch's **pushed commits** (grouped, each short SHA
+clickable to that commit's detail) with your **comments**, and ends with a **merged** or
+**closed** marker once the PR reaches that state.
 
 Before you merge, the PR footer previews whether the merge will **conflict** or land
 cleanly. If a merge does hit conflicts, GitDesktop runs it in an **isolated worktree** —
@@ -620,6 +662,13 @@ you're merging into the branch you're currently on). The PR view opens a **resol
 surface** with the conflicted files and the in-app conflict editor (see *Syncing &
 conflicts*); once every conflict is resolved, **Finish merge** commits and marks the PR
 merged, or **Abort** throws the merge away.
+
+**Managing the record** lives on the PR's list row, not the merge footer (which is just
+the merge decision): **right-click** a local PR to **Archive / Unarchive** it (archiving
+hides it and deselects the detail view) or **Delete** it — Delete confirms first and
+tells you how many comments go with it; the branches themselves are never touched. Both
+are also in the command palette ({{kbd:command-palette}}) as **Archive pull request** and
+**Delete pull request**, acting on the selected local PR.
 {{ai}}
 ## AI review
 

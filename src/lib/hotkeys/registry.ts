@@ -552,6 +552,18 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "pr-archive",
+    label: "Archive pull request",
+    category: "Pull requests",
+    defaultBinding: null,
+  },
+  {
+    id: "pr-delete",
+    label: "Delete pull request",
+    category: "Pull requests",
+    defaultBinding: null,
+  },
+  {
     id: "submit-review",
     label: "Submit review…",
     category: "Pull requests",

@@ -1210,6 +1210,24 @@ export function usePrReactions(repo: string, number: number | null) {
   });
 }
 
+/** A PR's activity timeline (force-pushes, label changes, review requests, state
+ *  changes, approvals) for the Conversation tab. Provider-neutral (the backend
+ *  dispatches per provider), so the caller passes
+ *  `enabled = section === "conversation" && <a known remote provider>`; a hidden
+ *  tab must NOT fetch. Decoupled from the PR view like {@link usePrReactions}. */
+export function usePrTimeline(
+  repoPath: string,
+  number: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repo", repoPath, "pr", number, "timeline"] as const,
+    queryFn: () => api.forgePrTimeline(repoPath, number),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
 export function useIssueList(
   repo: string,
   enabled: boolean,

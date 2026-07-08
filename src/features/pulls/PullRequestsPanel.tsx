@@ -1,5 +1,6 @@
 import { GitPullRequestIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
 import { ConversationListPanel } from "@/features/conversations/ConversationListPanel";
@@ -15,10 +16,16 @@ import {
 import { providerLabel } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
-import { useLocalPrs } from "@/lib/pulls/queries";
+import {
+  useDeleteLocalPr,
+  useLocalPrs,
+  useUpdateLocalPr,
+} from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
+import { toastError } from "@/lib/toast";
 import { CreateLocalPrDialog } from "./CreateLocalPrDialog";
 import { CreatePrDialog } from "./CreatePrDialog";
+import { LocalPrContextMenu } from "./LocalPrContextMenu";
 import { useReconcileLocalPrs } from "./useReconcileLocalPrs";
 
 export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
@@ -86,6 +93,43 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   useHotkeyAction("focus-filter", () => filterRef.current?.focus());
   useHotkeyAction("create-local-pr", () => setCreateOpen(true));
   useHotkeyAction("create-pr", () => setGhCreateOpen(true), canCreateGhPr);
+
+  // Palette path for the row context menu's record-management actions: they act
+  // on the currently-selected LOCAL PR (enabled only when one is selected), so a
+  // keyboard user reaches Archive/Delete without a right-click. Delete confirms
+  // through the same dialog the row menu uses.
+  const updateLocalPr = useUpdateLocalPr(repoPath);
+  const deleteLocalPr = useDeleteLocalPr(repoPath);
+  const selectedLocalPr =
+    selectedPr?.kind === "local"
+      ? (localPrs.data ?? []).find((p) => p.id === selectedPr.id)
+      : undefined;
+  const [confirmDeleteSelected, setConfirmDeleteSelected] = useState(false);
+
+  useHotkeyAction(
+    "pr-archive",
+    () => {
+      if (!selectedLocalPr) return;
+      if (selectedLocalPr.archived) {
+        updateLocalPr.mutate({
+          id: selectedLocalPr.id,
+          mutate: (cur) => ({ ...cur, archived: false }),
+        });
+      } else {
+        updateLocalPr.mutate({
+          id: selectedLocalPr.id,
+          mutate: (cur) => ({ ...cur, archived: true }),
+        });
+        selectPr(null);
+      }
+    },
+    selectedLocalPr !== undefined,
+  );
+  useHotkeyAction(
+    "pr-delete",
+    () => setConfirmDeleteSelected(true),
+    selectedLocalPr !== undefined,
+  );
 
   // Opened from the command palette / New menu via requestCreate (any tab).
   // Re-check the gate: the requester's own gate can lag this panel's (e.g. a
@@ -177,6 +221,11 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
           </p>
         </>
       )}
+      localRowContextMenu={(pr, row) => (
+        <LocalPrContextMenu repoPath={repoPath} pr={pr}>
+          {row}
+        </LocalPrContextMenu>
+      )}
       archivedLocalCount={archivedLocalCount}
       showArchived={showArchived}
       onToggleArchived={() => setShowArchived((v) => !v)}
@@ -227,6 +276,40 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         open={ghCreateOpen}
         onOpenChange={setGhCreateOpen}
+      />
+
+      {/* Confirm for the palette "Delete pull request" action (the row menu owns
+          its own confirm). Guarded on a selected local PR still existing. */}
+      <ConfirmDialog
+        open={confirmDeleteSelected && selectedLocalPr !== undefined}
+        onCancel={() => setConfirmDeleteSelected(false)}
+        title="Delete this local pull request?"
+        body={
+          selectedLocalPr ? (
+            <>
+              Permanently deletes "{selectedLocalPr.title}"
+              {selectedLocalPr.comments.length > 0
+                ? ` and its ${selectedLocalPr.comments.length} comment${
+                    selectedLocalPr.comments.length === 1 ? "" : "s"
+                  }`
+                : ""}
+              . The branches are not affected. This cannot be undone.
+            </>
+          ) : null
+        }
+        confirmLabel="Delete"
+        confirmVariant="destructive"
+        pending={deleteLocalPr.isPending}
+        onConfirm={() => {
+          if (!selectedLocalPr) return;
+          deleteLocalPr.mutate(selectedLocalPr.id, {
+            onSuccess: () => {
+              setConfirmDeleteSelected(false);
+              selectPr(null);
+            },
+            onError: toastError,
+          });
+        }}
       />
     </ConversationListPanel>
   );

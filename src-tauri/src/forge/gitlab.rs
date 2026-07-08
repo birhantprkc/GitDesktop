@@ -21,9 +21,9 @@ use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::issue::{IssueDetails, IssueInfo, IssueReactions, Milestone, Reaction};
 use crate::github::pr::{
-    ApprovalState, CommitCommentOut, DraftCommentIn, ExternalReviewItem, PrAuthor, PrCommitOut,
-    PrDetails, PrFileOut, PrInfo, PrListLabel, PrPollInfo, PrRef, PrThreadOut, RepoLabel,
-    ReviewSubmitOut, ReviewThreadOut,
+    ApprovalState, CommitCommentOut, DraftCommentIn, ExternalReviewItem, PrAuthor, PrCheckOut,
+    PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrPollInfo, PrRef, PrThreadOut,
+    PrTimelineEventOut, RepoLabel, ReviewSubmitOut, ReviewThreadOut,
 };
 use crate::state::AppState;
 use crate::github::release::{ReleaseAsset, ReleaseDetails, ReleaseInfo};
@@ -416,6 +416,19 @@ struct GlabMrChanges {
     labels: Vec<String>,
     #[serde(default, deserialize_with = "null_to_default")]
     changes: Vec<GlabChange>,
+    /// The head commit's pipeline (`null` when the MR has no CI). Its jobs become the
+    /// PR-view check rollup. `id` addresses the jobs endpoint; the frontend routes the
+    /// per-job `job_id` back through `forge_ci_job_logs` for the inline log peek.
+    #[serde(default)]
+    head_pipeline: Option<GlabHeadPipeline>,
+}
+
+/// The `head_pipeline` object embedded in an MR payload — just the fields the check
+/// rollup needs (id for the jobs fetch; the pipeline's own web_url is unused, the
+/// per-job `web_url` links each check).
+#[derive(Deserialize)]
+struct GlabHeadPipeline {
+    id: u64,
 }
 
 /// Count added/deleted lines in a GitLab per-file diff. The input is hunk-only
@@ -680,9 +693,10 @@ async fn project_label_colors(repo_path: &str, enc: &str) -> HashMap<String, Str
     .unwrap_or_default()
 }
 
-/// Full read view of one merge request — core fields + files, commits, and
-/// comments, mapped onto `PrDetails`. Reviews and CI checks are left empty for now
-/// (GitLab approvals/pipelines arrive with later increments).
+/// Full read view of one merge request — core fields + files, commits, comments, and
+/// the head pipeline's CI checks, mapped onto `PrDetails`. Reviews stay empty (a
+/// GitLab approval carries no reviewable body — approvals surface via the timeline
+/// and the approve/unapprove control instead).
 pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     let enc = encode_project(&project_path(repo_path).await?);
 
@@ -774,6 +788,13 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     })
     .collect();
 
+    // CI checks — the head pipeline's jobs (best-effort; empty when the MR has no
+    // pipeline or the jobs fetch fails).
+    let checks = match &mr.head_pipeline {
+        Some(p) => pipeline_checks(repo_path, &enc, p.id).await,
+        None => Vec::new(),
+    };
+
     let colors = project_label_colors(repo_path, &enc).await;
     let labels: Vec<RepoLabel> = mr
         .labels
@@ -807,13 +828,185 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         files,
         reviews: Vec::new(),
         comments,
-        checks: Vec::new(),
+        checks,
         labels,
         assignees: mr.assignees.into_iter().map(|a| a.username).collect(),
         // The GitLab reviewer list isn't wired into the picker yet (mr_reviewers
         // stays false) — assignees are GitLab's control here.
         reviewers: Vec::new(),
     })
+}
+
+/// One `resource_label_events` entry: `{action:"add"|"remove", label{name,color},
+/// user{username}, created_at}`. Every field is optional-tolerant (a deleted label
+/// or ghost user leaves the string empty).
+#[derive(Deserialize)]
+struct GlabLabelEvent {
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    label: Option<GlabEventLabel>,
+    #[serde(default)]
+    user: Option<GlabMrUser>,
+    #[serde(default)]
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+struct GlabEventLabel {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    color: String,
+}
+
+/// One `resource_state_events` entry: `{state:"closed"|"reopened"|"merged", user,
+/// created_at}`.
+#[derive(Deserialize)]
+struct GlabStateEvent {
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    user: Option<GlabMrUser>,
+    #[serde(default)]
+    created_at: String,
+}
+
+/// The date field of a `PrTimelineEventOut` — the sort key. Empty dates sort first
+/// (stable), which keeps undated events at the top rather than dropping them.
+fn timeline_event_date(e: &PrTimelineEventOut) -> &str {
+    match e {
+        PrTimelineEventOut::Labeled { date, .. }
+        | PrTimelineEventOut::Closed { date, .. }
+        | PrTimelineEventOut::Reopened { date, .. }
+        | PrTimelineEventOut::Merged { date, .. }
+        | PrTimelineEventOut::Approved { date, .. }
+        | PrTimelineEventOut::ChangesRequested { date, .. }
+        | PrTimelineEventOut::Unapproved { date, .. } => date,
+        // The GitLab arm never produces these, but the union is shared — match
+        // exhaustively so a new variant can't silently sort as "".
+        PrTimelineEventOut::ForcePushed { date, .. }
+        | PrTimelineEventOut::ReviewRequested { date, .. }
+        | PrTimelineEventOut::ReadyForReview { date, .. }
+        | PrTimelineEventOut::ConvertToDraft { date, .. }
+        | PrTimelineEventOut::Renamed { date, .. } => date,
+    }
+}
+
+/// Map a GitLab MR system-note body onto an approval-flow timeline event, or `None`
+/// when it isn't one. GitLab records approvals/verdicts as system notes with fixed
+/// bodies ("approved this merge request", "unapproved this merge request",
+/// "requested changes") — the only place these carry a per-event timestamp + actor
+/// (the `/approvals` endpoint reports only the current state). Pure (unit-tested).
+fn map_approval_note(body: &str, actor: String, date: String) -> Option<PrTimelineEventOut> {
+    match body.trim() {
+        "approved this merge request" => Some(PrTimelineEventOut::Approved { actor, date }),
+        "unapproved this merge request" => Some(PrTimelineEventOut::Unapproved { actor, date }),
+        "requested changes" => Some(PrTimelineEventOut::ChangesRequested { actor, date }),
+        _ => None,
+    }
+}
+
+/// The MR's activity timeline — label add/remove, state changes (close/reopen/merge),
+/// and approval-flow events (approve/unapprove/request-changes) — mapped onto the
+/// neutral `PrTimelineEventOut` union, oldest→newest. GitLab's arm of
+/// `forge_pr_timeline`. Deliberately omits commits (the frontend interleaves
+/// `pr.commits`), force-pushes (no GitLab API), and draft/ready + review-request
+/// events. Every sub-fetch is best-effort: one endpoint failing yields no events of
+/// that class rather than failing the whole timeline. Each sub-fetch is a single
+/// `per_page=100` page (matching `view_pr`'s comments/commits convention, no
+/// pagination) — a very busy MR with >100 label/state/note events truncates the
+/// oldest of that class.
+pub async fn mr_timeline(repo_path: &str, number: u64) -> AppResult<Vec<PrTimelineEventOut>> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    let mut events: Vec<PrTimelineEventOut> = Vec::new();
+
+    // Label add/remove events.
+    let label_events: Vec<GlabLabelEvent> = run_glab(
+        Some(repo_path),
+        &[
+            "api",
+            &format!("projects/{enc}/merge_requests/{number}/resource_label_events?per_page=100"),
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    .ok()
+    .and_then(|o| serde_json::from_str(&o.stdout_lossy()).ok())
+    .unwrap_or_default();
+    for e in label_events {
+        let Some(label) = e.label else { continue };
+        events.push(PrTimelineEventOut::Labeled {
+            label: label.name,
+            // `resource_label_events` returns `color` WITH a leading `#` (e.g.
+            // "#428BCA"), but the `Labeled.color` contract is bare hex (the frontend
+            // renders `#${color}`). Strip it, matching the file's other GitLab label
+            // producers (`project_label_colors`, `repo_labels`).
+            color: label.color.trim_start_matches('#').to_string(),
+            added: e.action == "add",
+            actor: e.user.map(|u| u.username).unwrap_or_default(),
+            date: e.created_at,
+        });
+    }
+
+    // State-change events (closed / reopened / merged).
+    let state_events: Vec<GlabStateEvent> = run_glab(
+        Some(repo_path),
+        &[
+            "api",
+            &format!("projects/{enc}/merge_requests/{number}/resource_state_events?per_page=100"),
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    .ok()
+    .and_then(|o| serde_json::from_str(&o.stdout_lossy()).ok())
+    .unwrap_or_default();
+    for e in state_events {
+        let actor = e.user.map(|u| u.username).unwrap_or_default();
+        let date = e.created_at;
+        let mapped = match e.state.as_str() {
+            "closed" => PrTimelineEventOut::Closed { actor, date },
+            "reopened" => PrTimelineEventOut::Reopened { actor, date },
+            "merged" => PrTimelineEventOut::Merged {
+                actor,
+                commit_oid: None,
+                date,
+            },
+            // Unknown/new state (e.g. "locked") — skip rather than guess.
+            _ => continue,
+        };
+        events.push(mapped);
+    }
+
+    // Approval-flow events — system notes with fixed bodies carry the timestamped
+    // approve/unapprove/request-changes history (the `/approvals` endpoint has no
+    // per-event timestamps).
+    let notes: Vec<GlabNote> = run_glab(
+        Some(repo_path),
+        &[
+            "api",
+            &format!("projects/{enc}/merge_requests/{number}/notes?sort=asc&per_page=100"),
+        ],
+        GLAB_NETWORK_TIMEOUT,
+    )
+    .await
+    .ok()
+    .and_then(|o| serde_json::from_str(&o.stdout_lossy()).ok())
+    .unwrap_or_default();
+    for n in notes {
+        if !n.system {
+            continue;
+        }
+        let actor = n.author.map(|a| a.username).unwrap_or_default();
+        if let Some(ev) = map_approval_note(&n.body, actor, n.created_at) {
+            events.push(ev);
+        }
+    }
+
+    // Combine all classes and sort ascending by date (empty dates sort first).
+    events.sort_by(|a, b| timeline_event_date(a).cmp(timeline_event_date(b)));
+    Ok(events)
 }
 
 /// Fetch an MR's changed files (`…/merge_requests/{n}/changes` → `changes[]`) as the
@@ -4250,6 +4443,50 @@ fn map_ci_status(s: &str) -> (String, String) {
     (status.to_string(), conclusion.to_string())
 }
 
+/// Map a GitLab job `status` onto the check-status vocabulary the PR-view rollup
+/// keys on (`ChecksRollup.checkPresentation`, matched uppercased): only `SUCCESS`
+/// reads as passed, `FAILURE`/`CANCELLED` (+ ERROR/TIMED_OUT) as failed, and
+/// everything else — running/pending/manual/skipped/created — as the pending bucket.
+/// Pure (unit-tested).
+fn map_job_check_status(status: &str) -> String {
+    match status {
+        "success" => "SUCCESS",
+        "failed" => "FAILURE",
+        "canceled" | "cancelled" => "CANCELLED",
+        // running / pending / manual / skipped / created / preparing / scheduled /
+        // waiting_for_resource / any new state → the frontend's pending bucket.
+        _ => "PENDING",
+    }
+    .to_string()
+}
+
+/// The MR head pipeline's jobs mapped onto the PR-view check rollup. Best-effort: a
+/// missing pipeline or a failed jobs fetch yields an empty list (checks are additive
+/// to the view, never fatal). Each job carries its own `web_url` (link-out) plus the
+/// pipeline id as `run_id` and the job id as `job_id` (both stringified — GitLab ids
+/// exceed the JS safe-int range) so the frontend's inline log peek routes `job_id`
+/// through `forge_ci_job_logs`.
+async fn pipeline_checks(repo_path: &str, enc: &str, pipeline_id: u64) -> Vec<PrCheckOut> {
+    let endpoint = format!("projects/{enc}/pipelines/{pipeline_id}/jobs?per_page=100");
+    let jobs: Vec<GlabJob> = run_glab(Some(repo_path), &["api", &endpoint], GLAB_NETWORK_TIMEOUT)
+        .await
+        .ok()
+        .and_then(|o| serde_json::from_str::<Vec<GlabJob>>(&o.stdout_lossy()).ok())
+        .unwrap_or_default();
+    let run_id = pipeline_id.to_string();
+    jobs.into_iter()
+        .map(|j| PrCheckOut {
+            name: j.name,
+            status: map_job_check_status(&j.status),
+            details_url: Some(j.web_url).filter(|u| !u.is_empty()),
+            run_id: Some(run_id.clone()),
+            job_id: Some(j.id.to_string()),
+            started_at: Some(j.started_at).filter(|s| !s.is_empty()),
+            completed_at: Some(j.finished_at).filter(|s| !s.is_empty()),
+        })
+        .collect()
+}
+
 /// GitLab's pipeline `source` → a short label for the run's "workflow" slot
 /// (GitLab has no per-workflow name; the whole `.gitlab-ci.yml` is the pipeline).
 fn friendly_source(source: &str) -> String {
@@ -6533,6 +6770,87 @@ pub async fn unlink_issue(repo_path: &str, number: u64, link_id: &str) -> AppRes
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn job_status_maps_to_check_buckets() {
+        // Only "success" reads as passed.
+        assert_eq!(map_job_check_status("success"), "SUCCESS");
+        // Terminal-failure states.
+        assert_eq!(map_job_check_status("failed"), "FAILURE");
+        assert_eq!(map_job_check_status("canceled"), "CANCELLED");
+        assert_eq!(map_job_check_status("cancelled"), "CANCELLED");
+        // Everything else (in-flight, skipped, manual, unknown) → pending bucket.
+        for s in ["running", "pending", "manual", "skipped", "created", "weird_new_state"] {
+            assert_eq!(map_job_check_status(s), "PENDING", "status {s}");
+        }
+    }
+
+    #[test]
+    fn approval_notes_map_to_the_right_variant() {
+        let a = || "theBGuy".to_string();
+        let d = || "2026-07-02T05:45:40.961Z".to_string();
+        assert!(matches!(
+            map_approval_note("approved this merge request", a(), d()),
+            Some(PrTimelineEventOut::Approved { .. })
+        ));
+        assert!(matches!(
+            map_approval_note("unapproved this merge request", a(), d()),
+            Some(PrTimelineEventOut::Unapproved { .. })
+        ));
+        assert!(matches!(
+            map_approval_note("requested changes", a(), d()),
+            Some(PrTimelineEventOut::ChangesRequested { .. })
+        ));
+        // A non-approval system note (e.g. a time-tracking note) is not a timeline event.
+        assert!(map_approval_note("added 3h of time spent", a(), d()).is_none());
+        // Leading/trailing whitespace is tolerated.
+        assert!(matches!(
+            map_approval_note("  approved this merge request  ", a(), d()),
+            Some(PrTimelineEventOut::Approved { .. })
+        ));
+    }
+
+    #[test]
+    fn label_event_color_is_stripped_to_bare_hex() {
+        // `resource_label_events` returns `label.color` WITH a leading `#`; the
+        // `Labeled.color` contract is bare hex (the frontend renders `#${color}`).
+        // Deserialize a live-shaped event and run the same strip the mapper applies.
+        let e: GlabLabelEvent = serde_json::from_str(
+            r##"{"action":"add","created_at":"2026-06-30T00:35:46.215Z",
+                "user":{"username":"theBGuy"},
+                "label":{"name":"enhancement","color":"#5cb85c"}}"##,
+        )
+        .expect("label event should parse");
+        let label = e.label.expect("label present");
+        assert_eq!(label.color.trim_start_matches('#'), "5cb85c");
+        // An already-bare color is unchanged (idempotent).
+        assert_eq!("5cb85c".trim_start_matches('#'), "5cb85c");
+    }
+
+    #[test]
+    fn timeline_sorts_ascending_by_date_empties_first() {
+        let mut events = vec![
+            PrTimelineEventOut::Merged {
+                actor: String::new(),
+                commit_oid: None,
+                date: "2026-07-02T00:00:00Z".into(),
+            },
+            PrTimelineEventOut::Approved {
+                actor: String::new(),
+                date: String::new(),
+            },
+            PrTimelineEventOut::Closed {
+                actor: String::new(),
+                date: "2026-07-01T00:00:00Z".into(),
+            },
+        ];
+        events.sort_by(|a, b| timeline_event_date(a).cmp(timeline_event_date(b)));
+        let dates: Vec<&str> = events.iter().map(timeline_event_date).collect();
+        assert_eq!(
+            dates,
+            vec!["", "2026-07-01T00:00:00Z", "2026-07-02T00:00:00Z"]
+        );
+    }
 
     #[test]
     fn message_body_strips_title_and_separator() {

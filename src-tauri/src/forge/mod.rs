@@ -308,6 +308,23 @@ pub async fn forge_pr_view(
     }
 }
 
+/// The PR/MR activity timeline — state changes, label edits, approvals — behind the
+/// abstraction. Each provider maps its own event source onto the neutral
+/// `PrTimelineEventOut` union: GitHub `timelineItems`, GitLab resource/state/label
+/// events + approval system-notes, Bitbucket PR `activity`. Events sort oldest→newest;
+/// the frontend interleaves `pr.commits` itself, so no arm emits commit events.
+#[tauri::command]
+pub async fn forge_pr_timeline(
+    repo_path: String,
+    number: u64,
+) -> AppResult<Vec<crate::github::pr::PrTimelineEventOut>> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => gitlab::mr_timeline(&repo_path, number).await,
+        Some((Provider::Bitbucket, _)) => bitbucket::pr_activity(&repo_path, number).await,
+        _ => github::pr_timeline(&repo_path, number).await,
+    }
+}
+
 /// The unified diff for one merge/pull request, behind the abstraction.
 #[tauri::command]
 pub async fn forge_pr_diff(repo_path: String, number: u64) -> AppResult<String> {

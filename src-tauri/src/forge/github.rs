@@ -87,6 +87,13 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<crate::github::p
     crate::github::pr::gh_pr_view(repo_path.to_string(), number).await
 }
 
+pub async fn pr_timeline(
+    repo_path: &str,
+    number: u64,
+) -> AppResult<Vec<crate::github::pr::PrTimelineEventOut>> {
+    crate::github::pr::pr_timeline(repo_path, number).await
+}
+
 pub async fn diff_pr(repo_path: &str, number: u64) -> AppResult<String> {
     crate::github::pr::gh_pr_diff(repo_path.to_string(), number).await
 }

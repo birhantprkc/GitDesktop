@@ -1,5 +1,11 @@
 import { CaretDownIcon, PlusIcon } from "@phosphor-icons/react";
-import type { KeyboardEventHandler, ReactNode, Ref } from "react";
+import {
+  Fragment,
+  type KeyboardEventHandler,
+  type ReactElement,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -60,6 +66,11 @@ export function ConversationListPanel<L, R>(props: {
   isLocalActive: (item: L) => boolean;
   onSelectLocal: (item: L) => void;
   renderLocalRow: (item: L) => ReactNode;
+  /** Optional right-click wrapper for a local row — receives the row's `<button>`
+   *  element and returns it wrapped in a context menu. Omit (the default) to
+   *  render the row bare, unchanged. The row keeps its `data-row` key + onClick,
+   *  so selection and arrow-key nav are unaffected. */
+  localRowContextMenu?: (item: L, row: ReactElement) => ReactNode;
   archivedLocalCount: number;
   showArchived: boolean;
   onToggleArchived: () => void;
@@ -104,6 +115,7 @@ export function ConversationListPanel<L, R>(props: {
     isLocalActive,
     onSelectLocal,
     renderLocalRow,
+    localRowContextMenu,
     archivedLocalCount,
     showArchived,
     onToggleArchived,
@@ -186,17 +198,26 @@ export function ConversationListPanel<L, R>(props: {
                 : `No ${stateFilter} local ${localNoun}.`}
             </p>
           ) : (
-            visibleLocal.map((item) => (
-              <button
-                type="button"
-                key={localKey(item)}
-                data-row={`local:${localKey(item)}`}
-                className={rowClass(isLocalActive(item))}
-                onClick={() => onSelectLocal(item)}
-              >
-                {renderLocalRow(item)}
-              </button>
-            ))
+            visibleLocal.map((item) => {
+              const row = (
+                <button
+                  type="button"
+                  data-row={`local:${localKey(item)}`}
+                  className={rowClass(isLocalActive(item))}
+                  onClick={() => onSelectLocal(item)}
+                >
+                  {renderLocalRow(item)}
+                </button>
+              );
+              // The context-menu wrapper renders the same `<button>` as its
+              // trigger (no extra DOM node), so `data-row` stays intact for
+              // arrow-key nav. Bare row when no wrapper is supplied.
+              return (
+                <Fragment key={localKey(item)}>
+                  {localRowContextMenu ? localRowContextMenu(item, row) : row}
+                </Fragment>
+              );
+            })
           )}
           {archivedLocalCount > 0 && (
             <button

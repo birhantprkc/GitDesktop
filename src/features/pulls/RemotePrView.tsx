@@ -3,7 +3,6 @@ import {
   ArrowSquareOutIcon,
   CaretDownIcon,
   CheckCircleIcon,
-  CircleIcon,
   ClockCountdownIcon,
   DotsThreeIcon,
   GitBranchIcon,
@@ -35,7 +34,10 @@ import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { CommitsList } from "@/features/conversations/CommitsList";
+import {
+  type CommitRow,
+  CommitsList,
+} from "@/features/conversations/CommitsList";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import {
   EditTitleBodyDialog,
@@ -82,6 +84,7 @@ import {
   usePrDiff,
   usePrReactions,
   usePrReviewThreads,
+  usePrTimeline,
   useReadyPr,
   useReopenPr,
   useRepoStatus,
@@ -110,10 +113,18 @@ import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { ChecksRollup } from "./ChecksRollup";
 import { PendingReviewBar } from "./PendingReviewBar";
 import { PrCommitDetail } from "./PrCommitDetail";
 import { PrReviewPanel } from "./PrReviewPanel";
 import { PrTasksChip, PrTasksSection } from "./PrTasksSection";
+import {
+  PushedCommitsRow,
+  StaleReviewMarker,
+  sortTimeline,
+  type TimelineEntry,
+  TimelineEventRow,
+} from "./PrTimeline";
 import {
   MergePrDialog,
   MrTimeTracking,
@@ -139,36 +150,6 @@ const MERGE_LABEL: Record<MergeStrategy, string> = {
   rebase: "Rebase and merge",
   fast_forward: "Fast-forward",
 };
-
-/**
- * Tone + glyph for a CI check, so pass/fail isn't conveyed by color alone.
- */
-function checkPresentation(status: string): {
-  tone: string;
-  Icon: typeof CheckCircleIcon;
-  label: string;
-} {
-  const s = status.toUpperCase();
-  if (s === "SUCCESS") {
-    return {
-      tone: "text-success",
-      Icon: CheckCircleIcon,
-      label: "passed",
-    };
-  }
-  if (["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"].includes(s)) {
-    return {
-      tone: "text-destructive",
-      Icon: XCircleIcon,
-      label: "failed",
-    };
-  }
-  return {
-    tone: "text-warning",
-    Icon: CircleIcon,
-    label: "pending",
-  };
-}
 
 export function RemotePrView({
   repoPath,
@@ -276,6 +257,18 @@ export function RemotePrView({
     { target: "mr", number },
   );
   const [section, setSection] = useState<Section>("conversation");
+  // The activity-timeline events (force-pushes, labels, state changes, review
+  // requests, approvals) that interleave into the Conversation feed. Now
+  // provider-neutral — the backend's `forge_pr_timeline` dispatches per provider
+  // (GitHub/GitLab/Bitbucket). Fetch only while the Conversation tab is showing
+  // AND we resolved a remote provider — a hidden tab or an unknown provider must
+  // not fetch (the <Activity>-hidden subtree still renders, so the composite gate
+  // is load-bearing).
+  const timeline = usePrTimeline(
+    repoPath,
+    number,
+    section === "conversation" && !!provider,
+  );
   const pendingPrSection = useUiStore((s) => s.pendingPrSection);
   const setPendingPrSection = useUiStore((s) => s.setPendingPrSection);
   const selectedPr = useUiStore((s) => s.selectedPr);
@@ -854,23 +847,7 @@ export function RemotePrView({
             }}
           />
         )}
-        {pr.checks.length > 0 && (
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
-            {pr.checks.map((c) => {
-              const { tone, Icon, label } = checkPresentation(c.status);
-              return (
-                <span
-                  key={c.name}
-                  className={cn("flex items-center gap-1 truncate", tone)}
-                  title={`${c.name}: ${label}`}
-                >
-                  <Icon className="size-3 shrink-0" aria-label={label} />
-                  {c.name}
-                </span>
-              );
-            })}
-          </div>
-        )}
+        <ChecksRollup checks={pr.checks} repoPath={repoPath} />
         <div className="flex gap-1 pt-1">
           {/* The AI Review tab needs only the diff (forge-neutral) and a way to
               post the result as a comment — so it follows canComment, which
@@ -1022,17 +999,37 @@ export function RemotePrView({
                   editable={pr.state === "OPEN"}
                 />
               )}
-              {/* Events with nothing visible to say (empty body, or only an
-                  unfilled-template HTML comment) render as a bare author
-                  line — drop them. */}
-              {pr.reviews
-                .filter((r) => hasVisibleBody(r.body) || r.state)
-                .map((r) => {
-                  // A GitHub review's real findings live in its file-anchored
-                  // threads (Copilot/CodeRabbit reviews often carry an empty or
-                  // boilerplate body), so Copy-markdown appends them. Only when the
-                  // review has a node id (GitHub) AND owns matching threads; else
-                  // undefined ⇒ Thread copies the raw body, byte-identical.
+              {/* The merged activity feed: reviews + comments + commits +
+                  timeline events, date-sorted oldest→newest (matching GitHub and
+                  the prior order). Each source maps to a {date, sortKey, node}
+                  entry so the sort is provider-neutral; the review/comment cards
+                  keep every prop they had before (they're relocated, not
+                  rewritten). Adjacent commit entries coalesce into one
+                  "pushed N commits" row. */}
+              {(() => {
+                // Newest commit date drives approval staleness. gh returns
+                // oldest-first, but be defensive: max over all commit dates.
+                const newestCommitMs = pr.commits.reduce((max, c) => {
+                  const t = new Date(c.date).getTime();
+                  return Number.isNaN(t) ? max : Math.max(max, t);
+                }, 0);
+                const commitsSince = (isoDate: string) => {
+                  const t = new Date(isoDate).getTime();
+                  if (Number.isNaN(t)) return 0;
+                  return pr.commits.filter((c) => {
+                    const ct = new Date(c.date).getTime();
+                    return !Number.isNaN(ct) && ct > t;
+                  }).length;
+                };
+
+                const entries: TimelineEntry[] = [];
+
+                // Reviews (existing cards, every prop preserved byte-for-byte). A
+                // stale APPROVED/CHANGES_REQUESTED review (its date predates the
+                // newest commit) gets a warning marker right after its card.
+                for (const r of pr.reviews.filter(
+                  (r) => hasVisibleBody(r.body) || r.state,
+                )) {
                   const ownThreads =
                     r.id !== ""
                       ? (reviewThreads.data?.filter(
@@ -1048,25 +1045,159 @@ export function RemotePrView({
                           .filter(Boolean)
                           .join("\n\n---\n\n")
                       : undefined;
-                  return (
-                    <Thread
-                      // Key on author+timestamp: unique per review submission and
-                      // stable (GitHub now carries a node id, but GitLab/Bitbucket
-                      // emit no review entries and leave it "").
-                      key={`${r.author}-${r.date}`}
-                      thread={r}
-                      onQuote={
-                        canWrite && hasVisibleBody(r.body)
-                          ? () => quoteReply(r.body)
-                          : undefined
-                      }
-                      copyMarkdown={copyMarkdown}
-                    />
+                  const isVerdict =
+                    r.state === "APPROVED" || r.state === "CHANGES_REQUESTED";
+                  const reviewMs = new Date(r.date).getTime();
+                  const stale =
+                    isVerdict &&
+                    newestCommitMs > 0 &&
+                    !Number.isNaN(reviewMs) &&
+                    reviewMs < newestCommitMs;
+                  entries.push({
+                    date: r.date,
+                    sortKey: 1,
+                    node: (
+                      <div key={`review-${r.id || `${r.author}-${r.date}`}`}>
+                        <Thread
+                          thread={r}
+                          onQuote={
+                            canWrite && hasVisibleBody(r.body)
+                              ? () => quoteReply(r.body)
+                              : undefined
+                          }
+                          copyMarkdown={copyMarkdown}
+                        />
+                        {stale && (
+                          <StaleReviewMarker
+                            commitsSince={commitsSince(r.date)}
+                          />
+                        )}
+                      </div>
+                    ),
+                  });
+                }
+
+                // Conversation comments (existing cards, every prop + the
+                // data-comment-id wrapper preserved).
+                for (const c of pr.comments.filter((c) =>
+                  hasVisibleBody(c.body),
+                )) {
+                  entries.push({
+                    date: c.date,
+                    sortKey: 2,
+                    node: (
+                      <div key={`comment-${c.id}`} data-comment-id={c.id}>
+                        <Thread
+                          thread={c}
+                          onQuote={
+                            canWrite ? () => quoteReply(c.body) : undefined
+                          }
+                          onSaveEdit={
+                            canEditOwnComments && c.viewerDidAuthor
+                              ? (body) => saveCommentEdit(c.id, body)
+                              : undefined
+                          }
+                          onDelete={
+                            canEditOwnComments && c.viewerDidAuthor
+                              ? () => setDeletingCommentId(c.id)
+                              : undefined
+                          }
+                          onHide={
+                            canWrite && !c.isMinimized
+                              ? (classifier) => hideComment(c.id, classifier)
+                              : undefined
+                          }
+                          onUnhide={
+                            canWrite && c.isMinimized
+                              ? () => unhideComment(c.id)
+                              : undefined
+                          }
+                          reactions={
+                            canReact
+                              ? reactions.data?.comments[c.id]
+                              : undefined
+                          }
+                          onToggleReaction={
+                            canReact
+                              ? (content, active) =>
+                                  toggleReaction(c.id, content, active)
+                              : undefined
+                          }
+                        />
+                      </div>
+                    ),
+                  });
+                }
+
+                // Commits — carried as bare markers; adjacent runs coalesce into
+                // a single "pushed N commits" row after sorting.
+                for (const c of pr.commits) {
+                  entries.push({
+                    date: c.date,
+                    sortKey: 0,
+                    commit: {
+                      id: c.oid,
+                      subject: c.headline,
+                      shortSha: c.oid.slice(0, 7),
+                      author: c.author,
+                      date: c.date,
+                    },
+                  });
+                }
+
+                // Timeline events — provider-neutral (GitHub, GitLab, Bitbucket);
+                // empty otherwise.
+                for (const [i, ev] of (timeline.data ?? []).entries()) {
+                  entries.push({
+                    date: ev.date,
+                    sortKey: 3,
+                    node: <TimelineEventRow key={`event-${i}`} event={ev} />,
+                  });
+                }
+
+                const sorted = sortTimeline(entries);
+
+                // Coalesce adjacent commit markers into grouped "pushed N" rows;
+                // everything else renders its own node.
+                const rendered: React.ReactNode[] = [];
+                let run: CommitRow[] = [];
+                let runStart = 0;
+                const flush = () => {
+                  if (run.length === 0) return;
+                  rendered.push(
+                    <PushedCommitsRow
+                      key={`push-${runStart}-${run[0].id}`}
+                      commits={run}
+                      // Drill into the commit's detail via the existing Commits-tab
+                      // machinery (selectedCommitOid → pr.commits.find(oid) →
+                      // PrCommitDetail).
+                      onSelectCommit={(oid) => {
+                        setSelectedCommitOid(oid);
+                        setSection("commits");
+                      }}
+                    />,
                   );
-                })}
-              {/* File:line-anchored review threads, grouped by file. Renders
-                  nothing when there are none (or while loading); a quiet muted
-                  line on error. Reply/resolve gated per provider. */}
+                  run = [];
+                };
+                for (let i = 0; i < sorted.length; i++) {
+                  const entry = sorted[i];
+                  if (entry.commit) {
+                    if (run.length === 0) runStart = i;
+                    run.push(entry.commit);
+                  } else {
+                    flush();
+                    rendered.push(entry.node);
+                  }
+                }
+                flush();
+
+                if (rendered.length === 0) return null;
+                return <div className="space-y-4">{rendered}</div>;
+              })()}
+              {/* File:line-anchored review threads, grouped by file. Kept as its
+                  own block (not interleaved — it's heavily wired with
+                  reply/resolve/apply). Renders nothing when there are none (or
+                  while loading); a quiet muted line on error. */}
               <ReviewThreadsBlock
                 threads={reviewThreads.data}
                 isError={reviewThreads.isError}
@@ -1095,50 +1226,10 @@ export function RemotePrView({
                 apply={suggestionApply}
                 fileDiffLookup={fileDiffLookup}
               />
-              {pr.comments
-                .filter((c) => hasVisibleBody(c.body))
-                .map((c) => (
-                  // Annotated so a Bitbucket PR task attached to this comment can
-                  // scroll to it (`viewComment` in PrTasksSection targets
-                  // [data-comment-id]). Inert markup for GitHub/GitLab.
-                  <div key={c.id} data-comment-id={c.id}>
-                    <Thread
-                      thread={c}
-                      onQuote={canWrite ? () => quoteReply(c.body) : undefined}
-                      onSaveEdit={
-                        canEditOwnComments && c.viewerDidAuthor
-                          ? (body) => saveCommentEdit(c.id, body)
-                          : undefined
-                      }
-                      onDelete={
-                        canEditOwnComments && c.viewerDidAuthor
-                          ? () => setDeletingCommentId(c.id)
-                          : undefined
-                      }
-                      onHide={
-                        canWrite && !c.isMinimized
-                          ? (classifier) => hideComment(c.id, classifier)
-                          : undefined
-                      }
-                      onUnhide={
-                        canWrite && c.isMinimized
-                          ? () => unhideComment(c.id)
-                          : undefined
-                      }
-                      reactions={
-                        canReact ? reactions.data?.comments[c.id] : undefined
-                      }
-                      onToggleReaction={
-                        canReact
-                          ? (content, active) =>
-                              toggleReaction(c.id, content, active)
-                          : undefined
-                      }
-                    />
-                  </div>
-                ))}
               {pr.reviews.length === 0 &&
                 pr.comments.length === 0 &&
+                pr.commits.length === 0 &&
+                !timeline.data?.length &&
                 !reviewThreads.data?.length && (
                   <p className="text-xs text-muted-foreground">
                     No activity yet.

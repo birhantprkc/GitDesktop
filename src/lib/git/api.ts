@@ -88,6 +88,7 @@ import type {
   PrPollInfo,
   PrRef,
   PrTask,
+  PrTimelineEvent,
   PunchCard,
   ReleaseDetails,
   ReleaseInfo,
@@ -1115,6 +1116,12 @@ export const ghPrList = (repoPath: string, state: PrStateFilter) =>
 
 export const ghPrView = (repoPath: string, number: number) =>
   invoke<PrDetails>("gh_pr_view", { repoPath, number });
+
+/** A PR's activity timeline (force-pushes, label changes, review requests, state
+ *  changes, approvals) for the Conversation tab. Provider-neutral — the backend
+ *  dispatches per provider (GitHub `gh`, GitLab `glab`, Bitbucket HTTP). */
+export const forgePrTimeline = (repoPath: string, number: number) =>
+  invoke<PrTimelineEvent[]>("forge_pr_timeline", { repoPath, number });
 
 // Provider-neutral merge/pull request reads — the backend resolves the repo's
 // provider and dispatches (GitHub `gh`, GitLab `glab`), returning the same neutral

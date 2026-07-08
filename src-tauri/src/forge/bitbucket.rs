@@ -38,7 +38,8 @@ use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::pr::{
     ApprovalState, CommitCommentOut, DraftCommentIn, PrAuthor, PrCommitOut, PrDetails, PrFileOut,
-    PrInfo, PrListLabel, PrPollInfo, PrRef, PrThreadOut, ReviewSubmitOut, ReviewThreadOut,
+    PrInfo, PrListLabel, PrPollInfo, PrRef, PrThreadOut, PrTimelineEventOut, ReviewSubmitOut,
+    ReviewThreadOut,
 };
 
 /// Failed-step logs can run to many MB; keep the tail (failures land at the end).
@@ -813,7 +814,9 @@ struct BbParent {
     id: u64,
 }
 
-/// A commit status (`{key, name, state, url}`).
+/// A commit status (`{key, name, state, url, created_on, updated_on}`). These are
+/// external build statuses (Pipelines or a third-party CI reporting in), so they
+/// link out via `url` and carry no inline-log affordance (no run/job id).
 #[derive(Deserialize)]
 struct BbCommitStatus {
     #[serde(default)]
@@ -822,6 +825,13 @@ struct BbCommitStatus {
     name: Option<String>,
     #[serde(default)]
     state: String,
+    /// The build's web link (`SUCCESSFUL` Pipeline result page, external CI URL, …).
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    created_on: Option<String>,
+    #[serde(default)]
+    updated_on: Option<String>,
 }
 
 /// Map a Bitbucket commit-status state onto the vocabulary `RemotePrView`'s
@@ -967,23 +977,43 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     })
     .unwrap_or_default();
 
-    // Statuses → checks.
-    let checks = http::bb_get_json::<BbPage<BbCommitStatus>>(
-        &creds,
-        &format!("{base}/statuses?pagelen=100"),
-        "statuses",
-    )
-    .await
-    .map(|page| {
-        page.values
-            .into_iter()
-            .map(|s| crate::github::pr::PrCheckOut {
-                name: s.name.filter(|n| !n.is_empty()).unwrap_or(s.key),
-                status: map_bb_check_state(&s.state),
-            })
-            .collect()
-    })
-    .unwrap_or_default();
+    // Statuses → checks. Scoped to the HEAD commit's statuses (the last commit after
+    // the oldest-first reversal above), matching what the PR view shows — a plain
+    // `pullrequests/{id}/statuses` mixes in statuses for superseded commits. External
+    // build statuses link out via `url`; they carry no run/job id, so the frontend
+    // renders link-out only (no inline log peek). Best-effort: empty on any failure.
+    let head_sha = commits.last().map(|c| c.oid.clone()).unwrap_or_default();
+    let checks = if head_sha.is_empty() {
+        Vec::new()
+    } else {
+        http::bb_get_json::<BbPage<BbCommitStatus>>(
+            &creds,
+            &format!(
+                "repositories/{}/{}/commit/{}/statuses?pagelen=100",
+                encode_query_value(&ws),
+                encode_query_value(&slug),
+                encode_query_value(&head_sha),
+            ),
+            "statuses",
+        )
+        .await
+        .map(|page| {
+            page.values
+                .into_iter()
+                .map(|s| crate::github::pr::PrCheckOut {
+                    name: s.name.filter(|n| !n.is_empty()).unwrap_or(s.key),
+                    status: map_bb_check_state(&s.state),
+                    details_url: s.url.filter(|u| !u.is_empty()),
+                    // External statuses have no Actions-style run/job id (link-out only).
+                    run_id: None,
+                    job_id: None,
+                    started_at: s.created_on.filter(|t| !t.is_empty()),
+                    completed_at: s.updated_on.filter(|t| !t.is_empty()),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    };
 
     Ok(PrDetails {
         // No node ids on Bitbucket.
@@ -1023,6 +1053,140 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
             })
             .collect(),
     })
+}
+
+/// One PR `activity` entry. Each carries exactly one of `update`/`approval`/
+/// `changes_requested`/`comment` (comment activity is ignored — comments come from
+/// the comments endpoint). Unknown/other entries deserialize with all-`None`.
+#[derive(Deserialize, Default)]
+struct BbActivity {
+    #[serde(default)]
+    update: Option<BbActivityUpdate>,
+    #[serde(default)]
+    approval: Option<BbActivityApproval>,
+    #[serde(default)]
+    changes_requested: Option<BbActivityApproval>,
+}
+
+/// An `update` activity: `state` is the PR's state AT that update ("OPEN"/"MERGED"/
+/// "DECLINED"); `changes.status` is present only when the update *transitioned* the
+/// state — the two together mark a merge/decline (an OPEN update with a `draft`/
+/// `title` change is not a state event).
+#[derive(Deserialize)]
+struct BbActivityUpdate {
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    author: Option<BbUser>,
+    #[serde(default)]
+    changes: Option<BbActivityChanges>,
+}
+
+/// The `changes` object on an `update`. Only `status`'s PRESENCE matters — it appears
+/// when the update transitioned the PR state (merge/decline); its `{old, new}` values
+/// are Bitbucket-internal (open/fulfilled/rejected), so we key the event off
+/// `update.state` instead of parsing them.
+#[derive(Deserialize)]
+struct BbActivityChanges {
+    #[serde(default)]
+    status: Option<serde_json::Value>,
+}
+
+/// An `approval` or `changes_requested` activity: `{date, user}`.
+#[derive(Deserialize)]
+struct BbActivityApproval {
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    user: Option<BbUser>,
+}
+
+/// The PR's activity timeline — state changes (merge/decline) and review verdicts
+/// (approve / request-changes) — mapped onto the neutral `PrTimelineEventOut` union,
+/// oldest→newest. Bitbucket's arm of `forge_pr_timeline`. Deliberately omits
+/// `update`-commit events and `comment` activity (commits + comments come from
+/// `pr.commits`/`pr.comments` on the frontend); Bitbucket has no label/reopen/draft/
+/// review-request events. Best-effort: a failed fetch yields an empty timeline.
+pub async fn pr_activity(repo_path: &str, number: u64) -> AppResult<Vec<PrTimelineEventOut>> {
+    let creds = http::load_credentials().await?;
+    let (ws, slug) = workspace_slug(repo_path).await?;
+    // Bitbucket rejects pagelen > 50 on the activity endpoint ("Invalid pagelen").
+    let path = format!(
+        "repositories/{}/{}/pullrequests/{number}/activity?pagelen=50",
+        encode_query_value(&ws),
+        encode_query_value(&slug),
+    );
+    let page: BbPage<BbActivity> = http::bb_get_json(&creds, &path, "pull request activity")
+        .await
+        .unwrap_or_default();
+
+    let mut events: Vec<PrTimelineEventOut> = page
+        .values
+        .into_iter()
+        .filter_map(map_activity_entry)
+        .collect();
+
+    // Sort ascending by date (empty dates sort first, stably).
+    events.sort_by(|a, b| bb_timeline_date(a).cmp(bb_timeline_date(b)));
+    Ok(events)
+}
+
+/// Map one PR `activity` entry onto a timeline event, or `None` when it isn't a
+/// state-change/verdict event (a comment, a non-state `update`, or an unknown shape).
+/// Pure (unit-tested). An `update` is only an event when it carries a `changes.status`
+/// transition AND landed on a terminal state — an OPEN update editing draft/title is
+/// skipped; the `update.state` string (not the internal `status.new`) drives the kind.
+fn map_activity_entry(entry: BbActivity) -> Option<PrTimelineEventOut> {
+    if let Some(u) = entry.update {
+        let changed = u.changes.and_then(|c| c.status).is_some();
+        if !changed {
+            return None;
+        }
+        let actor = u.author.as_ref().map(user_login).unwrap_or_default();
+        let date = u.date;
+        match u.state.as_str() {
+            "MERGED" => Some(PrTimelineEventOut::Merged {
+                actor,
+                commit_oid: None,
+                date,
+            }),
+            "DECLINED" | "SUPERSEDED" => Some(PrTimelineEventOut::Closed { actor, date }),
+            _ => None,
+        }
+    } else if let Some(a) = entry.approval {
+        Some(PrTimelineEventOut::Approved {
+            actor: a.user.as_ref().map(user_login).unwrap_or_default(),
+            date: a.date,
+        })
+    } else if let Some(a) = entry.changes_requested {
+        Some(PrTimelineEventOut::ChangesRequested {
+            actor: a.user.as_ref().map(user_login).unwrap_or_default(),
+            date: a.date,
+        })
+    } else {
+        None
+    }
+}
+
+/// The date field of a `PrTimelineEventOut` produced by [`pr_activity`] — the sort
+/// key. Exhaustive over the union so a new variant can't silently sort as "".
+fn bb_timeline_date(e: &PrTimelineEventOut) -> &str {
+    match e {
+        PrTimelineEventOut::Merged { date, .. }
+        | PrTimelineEventOut::Closed { date, .. }
+        | PrTimelineEventOut::Approved { date, .. }
+        | PrTimelineEventOut::ChangesRequested { date, .. }
+        | PrTimelineEventOut::Unapproved { date, .. }
+        | PrTimelineEventOut::Labeled { date, .. }
+        | PrTimelineEventOut::Reopened { date, .. }
+        | PrTimelineEventOut::ForcePushed { date, .. }
+        | PrTimelineEventOut::ReviewRequested { date, .. }
+        | PrTimelineEventOut::ReadyForReview { date, .. }
+        | PrTimelineEventOut::ConvertToDraft { date, .. }
+        | PrTimelineEventOut::Renamed { date, .. } => date,
+    }
 }
 
 /// Map one non-deleted/non-pending comment onto a neutral thread. The body is the
@@ -4415,6 +4579,77 @@ mod tests {
 
     fn pr(json: &str) -> PrInfo {
         from_bb_pr(serde_json::from_str(json).expect("PR should parse"))
+    }
+
+    fn activity(json: &str) -> Option<PrTimelineEventOut> {
+        map_activity_entry(serde_json::from_str(json).expect("activity should parse"))
+    }
+
+    #[test]
+    fn activity_approval_maps_to_approved() {
+        // Shape from the live `approval` activity entry.
+        let ev = activity(
+            r#"{"approval":{"date":"2026-07-03T21:12:55.697902-04:00",
+                "user":{"display_name":"Evan Goldberg","uuid":"{0f39}"}}}"#,
+        )
+        .expect("approval is a timeline event");
+        match ev {
+            PrTimelineEventOut::Approved { actor, date } => {
+                assert_eq!(actor, "Evan Goldberg");
+                assert_eq!(date, "2026-07-03T21:12:55.697902-04:00");
+            }
+            _ => panic!("expected Approved"),
+        }
+    }
+
+    #[test]
+    fn activity_changes_requested_maps_to_changes_requested() {
+        let ev = activity(
+            r#"{"changes_requested":{"date":"2026-07-03T21:00:00-04:00",
+                "user":{"display_name":"Ada"}}}"#,
+        )
+        .expect("changes_requested is a timeline event");
+        assert!(matches!(ev, PrTimelineEventOut::ChangesRequested { .. }));
+    }
+
+    #[test]
+    fn activity_merge_update_maps_to_merged() {
+        // A merge update: state MERGED + a changes.status transition (live shape).
+        let ev = activity(
+            r#"{"update":{"state":"MERGED","date":"2023-03-13T09:06:16-04:00",
+                "author":{"display_name":"Ada"},
+                "changes":{"status":{"old":"open","new":"fulfilled"}}}}"#,
+        )
+        .expect("a status-changing MERGED update is an event");
+        assert!(matches!(ev, PrTimelineEventOut::Merged { .. }));
+    }
+
+    #[test]
+    fn activity_declined_update_maps_to_closed() {
+        let ev = activity(
+            r#"{"update":{"state":"DECLINED","date":"2023-03-13T09:06:16-04:00",
+                "author":{"display_name":"Ada"},
+                "changes":{"status":{"old":"open","new":"rejected"}}}}"#,
+        )
+        .expect("a status-changing DECLINED update is an event");
+        assert!(matches!(ev, PrTimelineEventOut::Closed { .. }));
+    }
+
+    #[test]
+    fn activity_non_state_update_and_comment_are_skipped() {
+        // An OPEN update editing the draft flag (no status transition) → not an event.
+        assert!(activity(
+            r#"{"update":{"state":"OPEN","date":"2026-07-03T21:19:37-04:00",
+                "author":{"display_name":"Ada"},"changes":{"draft":{"old":true,"new":false}}}}"#
+        )
+        .is_none());
+        // A state MERGED but WITHOUT a changes.status is not a merge event.
+        assert!(activity(
+            r#"{"update":{"state":"MERGED","date":"x","author":{"display_name":"Ada"}}}"#
+        )
+        .is_none());
+        // A comment activity carries neither update/approval/changes_requested.
+        assert!(activity(r#"{"comment":{"id":1}}"#).is_none());
     }
 
     #[test]
