@@ -676,7 +676,10 @@ are also in the command palette ({{kbd:command-palette}}) as **Archive pull requ
 On any PR — GitHub or a GitLab MR — run a streamed **code review** or a focused
 **security audit** of its changes
 using your chosen review model, and optionally post the result as a comment. A general
-review can build on prior reviews as soft context. With a CLI agent (Claude, Copilot, or
+review builds on **soft context** where it exists: your prior review of the PR, findings
+other AI reviewers (Copilot, CodeRabbit) left, and **GitDesktop's own earlier comments on
+the PR** — so on a re-review it treats a finding it already refuted or marked fixed as
+resolved instead of raising it cold. With a CLI agent (Claude, Copilot, or
 opencode), a **repo-aware** toggle lets the reviewer read the repo's files for deeper
 context (slower). See *AI & automations* to pick the review model.
 

@@ -6,6 +6,10 @@ import {
   type ExternalContext,
   resolveExternalContext,
 } from "@/lib/ai/external-context";
+import {
+  type OwnCommentsContext,
+  resolveOwnCommentsContext,
+} from "@/lib/ai/own-context";
 import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isLocalProvider } from "@/lib/ai/providers";
@@ -349,16 +353,28 @@ export async function startReview(
         );
     if (control.cancelled) return;
     patch({ deltaState: prior.deltaState });
-    // Third-party AI-reviewer findings on the remote PR (best-effort, remote-only,
-    // skipped when ignored). Same soft-context framing as the prior review.
-    const external: ExternalContext = await resolveExternalContext(
-      target.repoPath,
-      target.kind,
-      target.ref,
-      context.headSha,
-      ignoreExternal,
-      context.provider,
-    );
+    // Third-party AI-reviewer findings AND GitDesktop's own prior comments on the
+    // remote PR — both best-effort, remote-only soft context. Resolved
+    // concurrently (independent harvests of the PR's review activity); kept
+    // separate so the battle-tested external path is untouched — a shared-fetch
+    // dedup is a later efficiency win (forge-dispatch-dedup backlog).
+    const [external, own]: [ExternalContext, OwnCommentsContext] =
+      await Promise.all([
+        resolveExternalContext(
+          target.repoPath,
+          target.kind,
+          target.ref,
+          context.headSha,
+          ignoreExternal,
+          context.provider,
+        ),
+        resolveOwnCommentsContext(
+          target.repoPath,
+          target.kind,
+          target.ref,
+          context.provider,
+        ),
+      ]);
     if (control.cancelled) return;
     const { system, prompt } = buildReviewPrompt(
       {
@@ -375,6 +391,7 @@ export async function startReview(
         })),
         provider: context.provider,
         ...prior,
+        ...own,
         ...external,
       },
       mode,

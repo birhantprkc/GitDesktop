@@ -125,6 +125,11 @@ export interface ReviewPromptInput {
   externalReviewers?: string[];
   /** Whether any external finding may be stale (made against an older commit). */
   externalStale?: boolean;
+  /** Pre-formatted markdown of GitDesktop's OWN prior comments on this PR — past
+   *  AI reviews and agent follow-ups (refutations / "fixed in `<sha>`" replies) —
+   *  so the model resolves what it already covered instead of re-raising it.
+   *  Soft context like `priorFindings`; absent when none. */
+  ownFindings?: string;
   /** Target host — swaps the change-request noun + markdown flavor in the review
    *  system prompt. Absent/`"github"` keeps the original GitHub wording. */
   provider?: PromptProvider;

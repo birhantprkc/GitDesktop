@@ -5,6 +5,10 @@ import {
   type ExternalContext,
   resolveExternalContext,
 } from "@/lib/ai/external-context";
+import {
+  type OwnCommentsContext,
+  resolveOwnCommentsContext,
+} from "@/lib/ai/own-context";
 import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider, isLocalProvider } from "@/lib/ai/providers";
@@ -299,20 +303,30 @@ async function generateReviewText(
     .catch((): PromptProvider => "github");
   if (signal.aborted) return null;
 
-  // Third-party AI-reviewer findings (Copilot/CodeRabbit) on the remote PR, so an
-  // automated re-review weighs them too — same soft context the interactive path
-  // uses. Remote PRs only; best-effort.
-  const external: ExternalContext =
-    event.kind !== "commit" && event.target.type === "remote"
-      ? await resolveExternalContext(
+  // Third-party AI-reviewer findings (Copilot/CodeRabbit) AND GitDesktop's own
+  // prior comments on the remote PR — so an automated re-review weighs both, the
+  // same soft context the interactive path uses. Remote PRs only; best-effort;
+  // resolved concurrently (independent harvests, kept separate from the external
+  // path — a shared-fetch dedup is a later win, forge-dispatch-dedup backlog).
+  const isRemotePr = event.kind !== "commit" && event.target.type === "remote";
+  const [external, own]: [ExternalContext, OwnCommentsContext] = isRemotePr
+    ? await Promise.all([
+        resolveExternalContext(
           event.repoPath,
           "remote",
           targetRef(event),
           event.headSha,
           false,
           provider,
-        )
-      : {};
+        ),
+        resolveOwnCommentsContext(
+          event.repoPath,
+          "remote",
+          targetRef(event),
+          provider,
+        ),
+      ])
+    : [{}, {}];
   if (signal.aborted) return null;
 
   const { system, prompt } = buildReviewPrompt(
@@ -330,6 +344,7 @@ async function generateReviewText(
       })),
       provider,
       ...prior,
+      ...own,
       ...external,
     },
     mode,

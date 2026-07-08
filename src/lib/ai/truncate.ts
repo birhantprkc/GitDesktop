@@ -90,6 +90,9 @@ export const PROMPT_CHAR_BUDGET = 100_000;
 export const DELTA_DIFF_CHAR_BUDGET = 24_000;
 /** Cap for the prior review's findings (head-kept — reviews front-load blockers). */
 export const PRIOR_FINDINGS_CHAR_BUDGET = 8_000;
+/** Cap for GitDesktop's OWN prior comments on the PR (ranked above external bots
+ *  — our refutations are higher-signal than theirs — but below our prior review). */
+export const OWN_COMMENTS_CHAR_BUDGET = 6_000;
 /** Cap for third-party AI-reviewer findings (lowest priority — noisier, theirs). */
 export const EXTERNAL_FINDINGS_CHAR_BUDGET = 8_000;
 
@@ -102,6 +105,10 @@ export interface ReviewExtras {
   prior: { text: string; truncated: boolean };
   /** Prior findings dropped entirely for budget. */
   priorDropped: boolean;
+  /** Budgeted (head-truncated) GitDesktop's-own prior PR comments. */
+  own: { text: string; truncated: boolean };
+  /** Own comments dropped entirely for budget. */
+  ownDropped: boolean;
   /** Budgeted (head-truncated) third-party AI-reviewer findings. */
   external: { text: string; truncated: boolean };
   /** External findings dropped entirely for budget. */
@@ -109,17 +116,19 @@ export interface ReviewExtras {
 }
 
 /**
- * Allocates the soft context (delta + prior findings + external findings) into
- * whatever budget the authoritative full diff leaves, against one shared
- * ceiling. Order is enforced: the diff is sacrosanct, the delta gets next claim,
- * our prior findings take the remainder, third-party reviewer findings get
- * what's left — so under pressure external drops first, then prior, then the
+ * Allocates the soft context (delta + prior findings + our own PR comments +
+ * external findings) into whatever budget the authoritative full diff leaves,
+ * against one shared ceiling. Order is enforced: the diff is sacrosanct, the
+ * delta gets next claim, our prior findings take the remainder, our own PR
+ * comments take what's left, third-party reviewer findings get the rest — so
+ * under pressure external drops first, then our comments, then prior, then the
  * delta, never the diff. `diffLen` is the length of the already-budgeted main diff.
  */
 export function budgetReviewExtras(input: {
   diffLen: number;
   deltaText?: string;
   priorText?: string;
+  ownText?: string;
   externalText?: string;
 }): ReviewExtras {
   const emptyDiff: BudgetedDiff = {
@@ -156,6 +165,7 @@ export function budgetReviewExtras(input: {
   };
 
   const priorFit = fit(input.priorText, PRIOR_FINDINGS_CHAR_BUDGET);
+  const ownFit = fit(input.ownText, OWN_COMMENTS_CHAR_BUDGET);
   const externalFit = fit(input.externalText, EXTERNAL_FINDINGS_CHAR_BUDGET);
 
   return {
@@ -163,6 +173,8 @@ export function budgetReviewExtras(input: {
     deltaDropped,
     prior: priorFit.result,
     priorDropped: priorFit.dropped,
+    own: ownFit.result,
+    ownDropped: ownFit.dropped,
     external: externalFit.result,
     externalDropped: externalFit.dropped,
   };

@@ -214,8 +214,9 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   [AI configuration](#ai-configuration).
 - **AI review that doesn't quit or repeat itself** — it keeps running while you
   move between PRs, and finishes in the tray even after you close the window.
-  Re-runs remember the last round and fold in other reviewers' findings, so it
-  builds on what's already been flagged instead of re-raising it. Every AI-posted
+  Re-runs remember the last round, fold in other reviewers' findings, and read
+  GitDesktop's own earlier comments on the PR — so a finding it already refuted or
+  marked fixed is treated as settled instead of re-raised. Every AI-posted
   review is **clearly machine-authored** — a branded GitDesktop header/footer, a
   "GitDesktop" bot author with a robot avatar on local PRs, and (with a GitLab
   project/group access token in Settings → Accounts) posting as the real **GitLab
@@ -320,10 +321,12 @@ Codex agent, and never writes until you accept.
 **Pull requests** — full read + write for GitHub PRs, plus **local PRs**: the full
 PR workflow against any two branches with no remote at all. AI review + security
 audit on any PR, with an activity indicator, a cancel, and a concurrency-capped
-queue. Re-runs are iterative — they feed back the previous round and fold in other
-bots' findings as soft, re-verifiable context (the current diff is always the
-source of truth); per PR, ignore the prior review, trim a false finding, or opt out
-of the external-bot folding. **Line-anchored review comments** — from Copilot,
+queue. Re-runs are iterative — they feed back the previous round, fold in other
+bots' findings, and read GitDesktop's own earlier comments on the PR (its past
+reviews and any "fixed in `<sha>`"/refutation replies) as soft, re-verifiable
+context, so an already-addressed finding isn't re-raised cold (the current diff is
+always the source of truth); per PR, ignore the prior review, trim a false finding,
+or opt out of the external-bot folding. **Line-anchored review comments** — from Copilot,
 CodeRabbit, or humans — render right in the app: grouped by file in the
 Conversation tab and anchored at their exact line in the Files diff, with
 reply-in-thread, resolve/unresolve, and edit/delete of your own thread comments —
