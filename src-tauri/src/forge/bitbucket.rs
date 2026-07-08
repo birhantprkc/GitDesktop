@@ -675,6 +675,14 @@ fn from_bb_poll_pr(p: BbPollPr, viewer_uuid: &str, viewer_login: &str) -> PrPoll
         // The 12-char SHORT sha as-is; `sameSha` on the frontend prefix-matches it
         // against the full head sha seeded by pr-open events.
         head_sha: p.source.and_then(|s| s.commit).map(|c| c.hash).unwrap_or_default(),
+        // The new-comment / new-review / review-requested detectors are GitHub-only
+        // in v1 — Bitbucket's PR list carries none of these, so they stay empty and
+        // those notification branches never fire for Bitbucket.
+        comment_count: 0,
+        last_comment_author: String::new(),
+        review_count: 0,
+        last_review_author: String::new(),
+        review_requests: Vec::new(),
     }
 }
 

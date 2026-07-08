@@ -8,6 +8,11 @@ import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
 import type { PrPollInfo } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { useSettings } from "@/lib/settings/queries";
+import {
+  type NotificationTone,
+  pushNotification,
+  repoNameFromPath,
+} from "@/lib/stores/notifications";
 
 /**
  * Background PR poller for OS notifications: roughly once a minute (also
@@ -93,6 +98,30 @@ export function usePrNotifications(repoPath: string) {
 
     if (!before || !prefs) return;
     const login = gh.data?.login ?? null;
+    const repoName = repoNameFromPath(repoPath);
+    // Record an event in BOTH channels: the persistent inbox (always — so a
+    // focused user still gets a durable record, since notifyIfUnfocused no-ops
+    // while focused) and an OS notification (unfocused only). The same pref
+    // gates both, so turning a category off keeps it out of the inbox too.
+    const record = (
+      kind: string,
+      tone: NotificationTone,
+      title: string,
+      pr: PrPollInfo,
+      dedupeKey: string,
+    ) => {
+      pushNotification({
+        kind,
+        tone,
+        title,
+        subtitle: pr.title,
+        repoPath,
+        repoName,
+        target: { type: "pr", kind: "remote", ref: String(pr.number) },
+        dedupeKey,
+      });
+      void notifyIfUnfocused(title, pr.title);
+    };
 
     for (const pr of snapshot.values()) {
       const old = before.get(pr.number);
@@ -106,42 +135,108 @@ export function usePrNotifications(repoPath: string) {
         old.checksState !== pr.checksState &&
         (pr.checksState === "SUCCESS" || pr.checksState === "FAILURE")
       ) {
-        void notifyIfUnfocused(
-          pr.checksState === "SUCCESS"
+        const passed = pr.checksState === "SUCCESS";
+        record(
+          passed ? "checks-passed" : "checks-failed",
+          passed ? "success" : "danger",
+          passed
             ? `Checks passed on #${pr.number}`
             : `Checks failed on #${pr.number}`,
-          pr.title,
+          pr,
+          `checks:${pr.number}:${pr.checksState}`,
         );
       }
 
       if (prefs.prActivity) {
         if (!old && pr.state === "OPEN" && !mine && !pr.isDraft) {
-          void notifyIfUnfocused(
+          record(
+            "pr-opened",
+            "info",
             `New pull request #${pr.number} by ${pr.author}`,
-            pr.title,
+            pr,
+            `opened:${pr.number}`,
           );
         }
         if (old && old.state === "OPEN" && pr.state !== "OPEN") {
-          void notifyIfUnfocused(
-            `#${pr.number} was ${pr.state === "MERGED" ? "merged" : "closed"}`,
-            pr.title,
+          const merged = pr.state === "MERGED";
+          record(
+            merged ? "pr-merged" : "pr-closed",
+            merged ? "merged" : "neutral",
+            `#${pr.number} was ${merged ? "merged" : "closed"}`,
+            pr,
+            `state:${pr.number}:${pr.state}`,
           );
         }
       }
 
+      if (prefs.prReviews && mine && old) {
+        // Approve / changes-requested is a review DECISION change.
+        if (
+          old.reviewDecision !== pr.reviewDecision &&
+          (pr.reviewDecision === "APPROVED" ||
+            pr.reviewDecision === "CHANGES_REQUESTED")
+        ) {
+          const approved = pr.reviewDecision === "APPROVED";
+          record(
+            approved ? "pr-approved" : "pr-changes-requested",
+            approved ? "success" : "warning",
+            approved
+              ? `#${pr.number} was approved`
+              : `Changes requested on #${pr.number}`,
+            pr,
+            `decision:${pr.number}:${pr.reviewDecision}`,
+          );
+        } else if (
+          // A plain "commented" review: the review count rose but the decision
+          // didn't change (an approve/changes-requested is caught just above).
+          // Skip your OWN review (same `last:1` caveat noted on comments below).
+          pr.reviewCount > old.reviewCount &&
+          pr.lastReviewAuthor !== login
+        ) {
+          record(
+            "pr-review",
+            "info",
+            `New review on #${pr.number}`,
+            pr,
+            `review:${pr.number}:${pr.reviewCount}`,
+          );
+        }
+        // A new conversation comment on your PR — a SEPARATE event from the
+        // review decision above, so this is an independent `if`, NOT chained onto
+        // it: a reviewer who both decides AND leaves a standalone comment (or two
+        // people acting in the same poll) should yield both notifications, never
+        // a dropped one. Self-suppressed via `lastCommentAuthor` — which is the
+        // author of the LATEST comment only (a `last:1` poll slice), so if someone
+        // else and you both comment in the same ~60s window and yours lands last,
+        // theirs is missed. An accepted rarity, not worth a full per-comment scan.
+        if (pr.commentCount > old.commentCount && pr.lastCommentAuthor !== login) {
+          record(
+            "pr-comment",
+            "info",
+            `New comment on #${pr.number}`,
+            pr,
+            `comment:${pr.number}:${pr.commentCount}`,
+          );
+        }
+      }
+
+      // Review requested FROM you, on a PR you don't own.
       if (
         prefs.prReviews &&
-        mine &&
+        login !== null &&
         old &&
-        old.reviewDecision !== pr.reviewDecision &&
-        (pr.reviewDecision === "APPROVED" ||
-          pr.reviewDecision === "CHANGES_REQUESTED")
+        pr.reviewRequests.includes(login) &&
+        !old.reviewRequests.includes(login)
       ) {
-        void notifyIfUnfocused(
-          pr.reviewDecision === "APPROVED"
-            ? `#${pr.number} was approved`
-            : `Changes requested on #${pr.number}`,
-          pr.title,
+        record(
+          "review-requested",
+          "info",
+          `Review requested on #${pr.number}`,
+          pr,
+          // Per-viewer event — scope the dedupe to your login so a remove +
+          // re-add of a DIFFERENT reviewer can't collide, and the key reads
+          // honestly (the fire condition above is login-specific).
+          `review-req:${pr.number}:${login}`,
         );
       }
     }

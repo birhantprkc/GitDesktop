@@ -12,6 +12,7 @@ import {
 } from "@/lib/github/actions";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { useSettings } from "@/lib/settings/queries";
+import { pushNotification, repoNameFromPath } from "@/lib/stores/notifications";
 import { isFailureConclusion, statusLabel } from "./status";
 
 /**
@@ -68,10 +69,18 @@ export function useRunNotifications(repoPath: string) {
         const ok = run.conclusion === "success";
         const bad = isFailureConclusion(run.conclusion);
         if (!ok && !bad) continue; // skipped/cancelled/neutral: stay quiet
-        void notifyIfUnfocused(
-          `${run.workflowName} ${statusLabel(run.status, run.conclusion).toLowerCase()} on ${run.headBranch}`,
-          run.displayTitle,
-        );
+        const title = `${run.workflowName} ${statusLabel(run.status, run.conclusion).toLowerCase()} on ${run.headBranch}`;
+        pushNotification({
+          kind: "ci-run",
+          tone: ok ? "success" : "danger",
+          title,
+          subtitle: run.displayTitle,
+          repoPath,
+          repoName: repoNameFromPath(repoPath),
+          target: { type: "run", runId: run.id },
+          dedupeKey: `run:${run.id}:${run.conclusion}`,
+        });
+        void notifyIfUnfocused(title, run.displayTitle);
       }
     }
   });

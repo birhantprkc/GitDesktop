@@ -19,6 +19,7 @@ import {
 import { gitListTracked, readRepoInstructions } from "@/lib/git/api";
 import { notify } from "@/lib/notify";
 import { loadSettings } from "@/lib/settings/api";
+import { pushNotification, repoNameFromPath } from "@/lib/stores/notifications";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { loadPersistedPlans, savePersistedPlans } from "./persistence";
 
@@ -213,14 +214,22 @@ export const usePlanStore = create<PlanState>((set, get) => {
         return;
       const label =
         run.origin?.issueTitle?.trim() || run.origin?.goal?.trim() || "Plan";
-      void notify(
-        failed
-          ? "Plan failed"
-          : hasQuestions
-            ? "Plan ready — answer its questions"
-            : "Plan ready",
-        label,
-      );
+      const headline = failed
+        ? "Plan failed"
+        : hasQuestions
+          ? "Plan ready — answer its questions"
+          : "Plan ready";
+      void notify(headline, label);
+      pushNotification({
+        kind: "plan-done",
+        tone: failed ? "danger" : hasQuestions ? "warning" : "success",
+        title: headline,
+        subtitle: label,
+        repoPath: run.repoPath,
+        repoName: repoNameFromPath(run.repoPath),
+        target: { type: "agent" },
+        dedupeKey: `plan:${id}:${failed}:${hasQuestions}`,
+      });
     };
     try {
       await runAgentSession({

@@ -82,6 +82,29 @@ const EMPTY_COMMIT_DRAFT: CommitDraft = {
   amendingHash: null,
 };
 
+/** Selections cleared when a navigation switches to a *different* repo — the
+ *  same set openRepo / openPrReview reset, hoisted so the run/agent navigations
+ *  stay in lockstep. Staying in the same repo keeps the user's other selections. */
+const CROSS_REPO_RESET: Partial<UiState> = {
+  compareBranch: null,
+  selectedPr: null,
+  pendingPrSection: null,
+  selectedIssue: null,
+  selectedDiscussion: null,
+  pendingIssueDraft: null,
+  selectedRunId: null,
+  selectedTag: null,
+  selectedFile: null,
+  selectedCommitHash: null,
+  compareCommitHash: null,
+  commitTitle: "",
+  commitBody: "",
+  commitCoAuthors: [],
+  commitAiGenerated: false,
+  amendingHash: null,
+  activeDraftKey: null,
+};
+
 /** Key a commit draft so each repo + branch keeps its own message. A git branch
  *  name can't contain a colon, so the key stays unambiguous. */
 export function commitDraftKey(repoPath: string, branch: string): string {
@@ -109,6 +132,10 @@ interface UiState {
    *  in the store so the command palette can deep-link to it in one atomic
    *  navigation, regardless of whether the panel is mounted yet. */
   mcpBrowseOpen: boolean;
+  /** Whether the Activity & Notifications popover is open. Held in the store so
+   *  the command palette / a hotkey can toggle it regardless of which mount
+   *  (header dock or bottom strip) is currently on screen. */
+  activityOpen: boolean;
   repoPath: string | null;
   repoName: string | null;
   repoTab: RepoTab;
@@ -172,11 +199,22 @@ interface UiState {
     repoName: string;
     ref: string;
   }) => void;
+  /** Open a repo (if not already) and land on a workflow run in the Actions tab —
+   *  used by a notification's click-through. Atomic, like openPrReview. */
+  openRun: (target: {
+    repoPath: string;
+    repoName: string;
+    runId: number;
+  }) => void;
+  /** Open a repo (if not already) and land on its Agent tab. Atomic. */
+  openAgentTab: (target: { repoPath: string; repoName: string }) => void;
   openSettings: (target?: SettingsTarget) => void;
   clearSettingsTarget: () => void;
   /** Navigate to Settings → MCP servers and open the registry browser, atomically. */
   openMcpBrowse: () => void;
   setMcpBrowseOpen: (open: boolean) => void;
+  setActivityOpen: (open: boolean) => void;
+  toggleActivity: () => void;
   closeSettings: () => void;
   openHelp: () => void;
   closeHelp: () => void;
@@ -260,6 +298,7 @@ export const useUiStore = create<UiState>()((set, get) => {
     previousView: "welcome",
     settingsTarget: null,
     mcpBrowseOpen: false,
+    activityOpen: false,
     repoPath: null,
     repoName: null,
     repoTab: "changes",
@@ -375,6 +414,32 @@ export const useUiStore = create<UiState>()((set, get) => {
             : {}),
         });
       }),
+    openRun: (target) =>
+      startViewTransition(() => {
+        const switchingRepo = get().repoPath !== target.repoPath;
+        set({
+          view: "repo",
+          previousView: "repo",
+          repoPath: target.repoPath,
+          repoName: target.repoName,
+          repoTab: "actions",
+          ...(switchingRepo ? CROSS_REPO_RESET : {}),
+          // After the reset (which nulls it) so the run stays selected.
+          selectedRunId: target.runId,
+        });
+      }),
+    openAgentTab: (target) =>
+      startViewTransition(() => {
+        const switchingRepo = get().repoPath !== target.repoPath;
+        set({
+          view: "repo",
+          previousView: "repo",
+          repoPath: target.repoPath,
+          repoName: target.repoName,
+          repoTab: "agent",
+          ...(switchingRepo ? CROSS_REPO_RESET : {}),
+        });
+      }),
     setRepoTab: (tab) => set({ repoTab: tab }),
     // Changing the compared branch resets Compare's selection to the aggregate
     // diff: a commit selected from one branch's compare list may not exist in
@@ -419,6 +484,8 @@ export const useUiStore = create<UiState>()((set, get) => {
         });
       }),
     setMcpBrowseOpen: (open) => set({ mcpBrowseOpen: open }),
+    setActivityOpen: (open) => set({ activityOpen: open }),
+    toggleActivity: () => set((s) => ({ activityOpen: !s.activityOpen })),
     closeSettings: () =>
       startViewTransition(() => set({ view: get().previousView })),
     openHelp: () =>

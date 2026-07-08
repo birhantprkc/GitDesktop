@@ -24,6 +24,7 @@ import {
   mcpServerUsableBy,
   mcpSupportedFor,
 } from "@/lib/settings/mcp";
+import { pushNotification, repoNameFromPath } from "@/lib/stores/notifications";
 import { errorMessage } from "@/lib/tauri/invoke";
 import { toastError } from "@/lib/toast";
 import { bumpNavVersion } from "./navVersion";
@@ -325,7 +326,18 @@ async function runTurn(
       s.turns[0]?.prompt.trim().replace(/\s+/g, " ").slice(0, 70) ||
       "Agent session";
     const failed = sessionStatus(s).kind === "error";
-    void notify(failed ? "Agent failed" : "Agent finished", label);
+    const headline = failed ? "Agent failed" : "Agent finished";
+    void notify(headline, label);
+    pushNotification({
+      kind: "agent-done",
+      tone: failed ? "danger" : "success",
+      title: headline,
+      subtitle: label,
+      repoPath: s.repoPath,
+      repoName: repoNameFromPath(s.repoPath),
+      target: { type: "agent" },
+      dedupeKey: `agent:${id}:${i}`,
+    });
   };
 
   setSession((s) => ({ ...s, running: true }));

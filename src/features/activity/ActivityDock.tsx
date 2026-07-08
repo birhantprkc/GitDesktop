@@ -1,14 +1,20 @@
 import {
+  BellIcon,
   CaretUpIcon,
+  ChatCircleIcon,
   CheckCircleIcon,
-  ClockIcon,
-  ProhibitIcon,
+  EyeIcon,
+  GitMergeIcon,
+  GitPullRequestIcon,
+  ListChecksIcon,
+  MagnifyingGlassIcon,
   ShieldCheckIcon,
   SparkleIcon,
   WarningCircleIcon,
+  XCircleIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -16,221 +22,270 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
+import {
+  type AppNotification,
+  clearAllNotifications,
+  clearNotification,
+  markAllNotificationsRead,
+  markNotificationRead,
+  type NotificationTone,
+  useNotifications,
+  useUnreadCount,
+} from "@/lib/stores/notifications";
 import {
   cancelReview,
-  dismissReview,
-  type ReviewPhase,
   type ReviewTask,
   useReviewTasks,
 } from "@/lib/stores/reviews";
 import { useUiStore } from "@/lib/stores/ui";
-
-function summarize(tasks: ReviewTask[]) {
-  const running = tasks.filter((t) => t.phase === "running").length;
-  const queued = tasks.filter((t) => t.phase === "queued").length;
-  const failed = tasks.filter((t) => t.phase === "error").length;
-  const summary =
-    running > 0
-      ? `${running} running${queued > 0 ? ` · ${queued} queued` : ""}`
-      : queued > 0
-        ? `${queued} queued`
-        : failed > 0
-          ? `${failed} failed`
-          : `${tasks.length} ready`;
-  return { running, queued, failed, summary };
-}
+import { formatRelativeTime } from "@/lib/time";
+import { cn } from "@/lib/utils";
 
 /**
- * AI-review "running tasks" surface. The run state lives in the review store
- * (not a component), so it survives navigating away from a PR; these two
- * surfaces just render it without a noisy persistent toast. Both are invisible
- * while nothing is happening:
+ * The header **Activity & Notifications** control — one stable, always-present
+ * anchor (a bell that never vanishes, so a finished review is never a missed
+ * click). Its popover has two zones:
  *
- * - {@link ActivityDock} docks into the repo header (where most reviews are
- *   watched), so it never floats over content.
- * - {@link ActivityStrip} is a thin bottom bar for the screens with no header
- *   (welcome / settings / help), so a running review is still reachable there.
+ * - **In progress** — live review runs (running / queued) with Cancel. Ephemeral;
+ *   a run that finishes leaves this zone and lands in Notifications.
+ * - **Notifications** — a persistent, restart-surviving history of terminal
+ *   events (review done, checks, PR approvals/comments, CI runs, agent sessions).
+ *   Each row click-navigates to its source; unread rows carry a mint dot.
+ *
+ * {@link ActivityStrip} is the same control for the header-less screens (welcome
+ * / settings / help), living in a thin bottom bar so a finished run stays
+ * reachable there too.
  */
 export function ActivityDock() {
+  return <ActivityBell variant="header" />;
+}
+
+export function ActivityStrip() {
+  const view = useUiStore((s) => s.view);
+  const activityOpen = useUiStore((s) => s.activityOpen);
   const tasks = useReviewTasks();
-  const [open, setOpen] = useState(false);
+  const notifs = useNotifications();
+  // The header dock already covers the repo view; the strip only fills in for
+  // the header-less screens — when there's something to reach, OR when the
+  // palette / hotkey opened the popover (so the bell + its empty state are
+  // reachable even with an empty inbox on the welcome/settings/help screens).
+  if (view === "repo") return null;
+  const live = liveTasks(tasks);
+  if (live.length === 0 && notifs.length === 0 && !activityOpen) return null;
+  return (
+    <div className="flex h-7 shrink-0 items-center border-t bg-background px-1.5">
+      <ActivityBell variant="strip" />
+    </div>
+  );
+}
 
-  // Collapse once everything's gone, so a later run doesn't reopen the popover.
-  useEffect(() => {
-    if (tasks.length === 0 && open) setOpen(false);
-  }, [tasks.length, open]);
+function liveTasks(tasks: ReviewTask[]): ReviewTask[] {
+  return tasks.filter((t) => t.phase === "running" || t.phase === "queued");
+}
 
-  if (tasks.length === 0) return null;
+function ActivityBell({ variant }: { variant: "header" | "strip" }) {
+  const tasks = useReviewTasks();
+  const unread = useUnreadCount();
+  // Open state lives in the UI store so the command palette / a hotkey can
+  // toggle it (only one mount — header or strip — is on screen at a time).
+  const open = useUiStore((s) => s.activityOpen);
+  const setOpen = useUiStore((s) => s.setActivityOpen);
+  const live = liveTasks(tasks).length;
 
-  const { running, queued, failed, summary } = summarize(tasks);
+  const label = `Activity & notifications${
+    unread > 0 ? ` · ${unread} unread` : ""
+  }${live > 0 ? ` · ${live} in progress` : ""}`;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         className="inline-flex h-7 items-center gap-1 rounded-none px-1.5 text-xs text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50 aria-expanded:bg-muted aria-expanded:text-foreground"
-        aria-label={`AI activity: ${summary}. Open the list.`}
-        title={`AI activity: ${summary}`}
+        aria-label={`${label}. Open the list.`}
+        title={label}
       >
-        <TriggerIcon running={running} queued={queued} failed={failed} />
-        <span className="font-medium tabular-nums">{tasks.length}</span>
+        {live > 0 ? (
+          <Spinner className="size-4" />
+        ) : (
+          <BellIcon
+            className="size-4"
+            weight={unread > 0 ? "fill" : "regular"}
+          />
+        )}
+        {unread > 0 && (
+          <span className="min-w-4 rounded-full bg-primary px-1 text-center text-[10px] font-semibold text-primary-foreground leading-4 tabular-nums">
+            {unread > 99 ? "99+" : unread}
+          </span>
+        )}
+        {variant === "strip" && <CaretUpIcon className="size-3" />}
       </PopoverTrigger>
       <PopoverContent
-        side="bottom"
-        align="end"
+        side={variant === "header" ? "bottom" : "top"}
+        align={variant === "header" ? "end" : "start"}
         sideOffset={6}
         className="w-80 gap-0 p-0"
       >
-        <ActivityList tasks={tasks} onClose={() => setOpen(false)} />
+        <ActivityPanel onClose={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
   );
 }
 
-export function ActivityStrip() {
-  const view = useUiStore((s) => s.view);
+function ActivityPanel({ onClose }: { onClose: () => void }) {
   const tasks = useReviewTasks();
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (tasks.length === 0 && open) setOpen(false);
-  }, [tasks.length, open]);
-
-  // The header dock already covers the repo view; the strip only fills in for
-  // the headerless screens. Nothing to show otherwise.
-  if (view === "repo" || tasks.length === 0) return null;
-
-  const { running, queued, failed, summary } = summarize(tasks);
-
-  return (
-    <div className="flex h-7 shrink-0 items-center border-t bg-background px-1.5">
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          className="inline-flex h-6 items-center gap-1.5 rounded-none px-1.5 text-xs text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50 aria-expanded:bg-muted aria-expanded:text-foreground"
-          aria-label={`AI activity: ${summary}. Open the list.`}
-        >
-          <TriggerIcon running={running} queued={queued} failed={failed} />
-          <span className="font-medium">{summary}</span>
-          <CaretUpIcon className="size-3" />
-        </PopoverTrigger>
-        <PopoverContent
-          side="top"
-          align="start"
-          sideOffset={6}
-          className="w-80 gap-0 p-0"
-        >
-          <ActivityList tasks={tasks} onClose={() => setOpen(false)} />
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
-
-function TriggerIcon({
-  running,
-  queued,
-  failed,
-}: {
-  running: number;
-  queued: number;
-  failed: number;
-}) {
-  if (running > 0 || queued > 0) return <Spinner className="size-4" />;
-  if (failed > 0)
-    return <WarningCircleIcon className="size-4 text-warning" weight="fill" />;
-  return <CheckCircleIcon className="size-4 text-success" weight="fill" />;
-}
-
-/** The expandable task list shared by both surfaces. */
-function ActivityList({
-  tasks,
-  onClose,
-}: {
-  tasks: ReviewTask[];
-  onClose: () => void;
-}) {
+  const notifs = useNotifications();
   const repoPath = useUiStore((s) => s.repoPath);
   const openPrReview = useUiStore((s) => s.openPrReview);
-  const running = tasks.filter((t) => t.phase === "running").length;
-  const finished = tasks.filter(
-    (t) => t.phase !== "running" && t.phase !== "queued",
-  );
-  // Queue position per lane (local and cloud run independently), FIFO by seq —
-  // derived from the entries, so no module queue state is read in render.
+  const openRun = useUiStore((s) => s.openRun);
+  const openAgentTab = useUiStore((s) => s.openAgentTab);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const live = liveTasks(tasks);
+  // Queue position per lane (local + cloud run independently), FIFO by seq.
   const queuePos = new Map<string, number>();
   for (const isLocal of [true, false]) {
-    tasks
+    live
       .filter((t) => t.phase === "queued" && t.local === isLocal)
       .sort((a, b) => a.seq - b.seq)
       .forEach((t, i) => queuePos.set(t.key, i + 1));
   }
 
+  const navigate = (n: AppNotification) => {
+    markNotificationRead(n.id);
+    const t = n.target;
+    if (t?.type === "pr") {
+      openPrReview({
+        kind: t.kind,
+        repoPath: n.repoPath,
+        repoName: n.repoName,
+        ref: t.ref,
+      });
+    } else if (t?.type === "run") {
+      openRun({ repoPath: n.repoPath, repoName: n.repoName, runId: t.runId });
+    } else if (t?.type === "agent") {
+      openAgentTab({ repoPath: n.repoPath, repoName: n.repoName });
+    }
+    onClose();
+  };
+
+  // Keyboard delete: focus the neighbour that takes this row's place (next, else
+  // previous) so arrow-key flow survives a delete instead of dropping to <body>.
+  const handleDelete = (id: string) => {
+    const idx = notifs.findIndex((n) => n.id === id);
+    const nextId = notifs[idx + 1]?.id ?? notifs[idx - 1]?.id ?? null;
+    clearNotification(id);
+    setFocusedId(nextId);
+    if (nextId) {
+      requestAnimationFrame(() => {
+        listRef.current
+          ?.querySelector<HTMLElement>(`[data-row="${CSS.escape(nextId)}"]`)
+          ?.focus();
+      });
+    }
+  };
+
+  const onListKeyDown = listKeyboardNav({
+    items: notifs,
+    activeIndex: focusedId ? notifs.findIndex((n) => n.id === focusedId) : -1,
+    onActivate: (n) => setFocusedId(n.id),
+    rowKey: (n) => n.id,
+  });
+
   return (
     <>
-      <div className="flex items-center justify-between border-b px-3 py-2">
-        <span className="text-xs font-medium">Activity</span>
-        {finished.length > 0 ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={() => {
-              for (const t of finished) dismissReview(t.key);
-            }}
-          >
-            Clear finished
-          </Button>
-        ) : (
-          <span className="text-[11px] text-muted-foreground">
-            {running} running
-          </span>
+      {live.length > 0 && (
+        <div className="border-b">
+          <div className="flex items-center justify-between px-3 py-2">
+            <span className="text-xs font-medium">In progress</span>
+            <span className="text-[11px] text-muted-foreground tabular-nums">
+              {live.length}
+            </span>
+          </div>
+          <div className="max-h-44 overflow-y-auto">
+            {live.map((task) => (
+              <LiveTaskRow
+                key={task.key}
+                task={task}
+                crossRepo={task.target.repoPath !== repoPath}
+                queuePosition={
+                  task.phase === "queued" ? (queuePos.get(task.key) ?? 0) : 0
+                }
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between px-3 py-2">
+        <span className="text-xs font-medium">Notifications</span>
+        {notifs.length > 0 && (
+          <div className="-mr-1 flex items-center gap-0.5">
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => markAllNotificationsRead()}
+            >
+              Mark all read
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => clearAllNotifications()}
+            >
+              Clear all
+            </Button>
+          </div>
         )}
       </div>
-      <div className="max-h-80 overflow-y-auto">
-        {tasks.map((task) => (
-          <TaskRow
-            key={task.key}
-            task={task}
-            crossRepo={task.target.repoPath !== repoPath}
-            queuePosition={
-              task.phase === "queued" ? (queuePos.get(task.key) ?? 0) : 0
-            }
-            onView={() => {
-              openPrReview(task.target);
-              onClose();
-            }}
-          />
-        ))}
-      </div>
+
+      {notifs.length === 0 ? (
+        <div className="px-3 pt-1 pb-6 text-center">
+          <p className="text-xs font-medium">You're all caught up</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Finished reviews, PR activity, checks, and completed runs show up
+            here so you never miss one.
+          </p>
+        </div>
+      ) : (
+        <div
+          ref={listRef}
+          className="max-h-80 overflow-y-auto outline-none"
+          onKeyDown={onListKeyDown}
+        >
+          {notifs.map((n) => (
+            <NotificationRow
+              key={n.id}
+              n={n}
+              crossRepo={n.repoPath !== repoPath}
+              onNavigate={() => navigate(n)}
+              onDelete={() => handleDelete(n.id)}
+            />
+          ))}
+        </div>
+      )}
     </>
   );
 }
 
-function TaskRow({
+function LiveTaskRow({
   task,
   crossRepo,
   queuePosition,
-  onView,
 }: {
   task: ReviewTask;
   crossRepo: boolean;
-  /** 1-based place in the run queue when phase is "queued", else 0. */
+  /** 1-based place in the run queue when queued, else 0. */
   queuePosition: number;
-  onView: () => void;
 }) {
   const ModeIcon = task.mode === "security" ? ShieldCheckIcon : SparkleIcon;
   const modeName = task.mode === "security" ? "Security audit" : "Review";
-  const pending = task.phase === "running" || task.phase === "queued";
   const stateWord =
     task.phase === "queued"
       ? queuePosition <= 1
         ? "Queued · next"
         : `Queued · #${queuePosition}`
-      : task.phase === "running"
-        ? task.status.trim() || "Running…"
-        : task.phase === "error"
-          ? "Failed"
-          : task.phase === "cancelled"
-            ? "Cancelled"
-            : "Ready";
+      : task.status.trim() || "Running…";
 
   return (
     <div className="flex items-start gap-2 px-3 py-2 not-last:border-b">
@@ -239,69 +294,137 @@ function TaskRow({
         <p className="truncate text-xs font-medium" title={task.title}>
           {task.title || "Pull request"}
         </p>
-        <p
-          className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground"
-          title={task.phase === "error" ? task.error : undefined}
-        >
-          <StateGlyph phase={task.phase} />
+        <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+          <Spinner className="size-3 shrink-0" />
           <span className="truncate">
             {modeName} · {stateWord}
             {crossRepo ? ` · ${task.target.repoName}` : ""}
           </span>
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-0.5">
-        {pending ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={() => cancelReview(task.key)}
-          >
-            Cancel
-          </Button>
-        ) : (
-          <>
-            <Button variant="ghost" size="xs" onClick={onView}>
-              View
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Dismiss"
-              onClick={() => dismissReview(task.key)}
-            >
-              <XIcon />
-            </Button>
-          </>
-        )}
-      </div>
+      <Button
+        variant="ghost"
+        size="xs"
+        className="shrink-0"
+        onClick={() => cancelReview(task.key)}
+      >
+        Cancel
+      </Button>
     </div>
   );
 }
 
-/** Phase glyph for a task — shape (paired with the adjacent word) carries the
- *  meaning, so it never relies on color alone. */
-function StateGlyph({ phase }: { phase: ReviewPhase }) {
-  switch (phase) {
-    case "queued":
-      return <ClockIcon className="size-3 shrink-0" />;
-    case "running":
-      return <Spinner className="size-3 shrink-0" />;
-    case "error":
-      return (
-        <WarningCircleIcon
-          className="size-3 shrink-0 text-warning"
-          weight="fill"
-        />
-      );
-    case "cancelled":
-      return <ProhibitIcon className="size-3 shrink-0" />;
-    default:
-      return (
-        <CheckCircleIcon
-          className="size-3 shrink-0 text-success"
-          weight="fill"
-        />
-      );
-  }
+function NotificationRow({
+  n,
+  crossRepo,
+  onNavigate,
+  onDelete,
+}: {
+  n: AppNotification;
+  crossRepo: boolean;
+  onNavigate: () => void;
+  /** Keyboard delete — restores focus to a neighbour (unlike the mouse clear). */
+  onDelete: () => void;
+}) {
+  const Glyph = glyphFor(n);
+  const meta = [n.subtitle, crossRepo ? n.repoName : null]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div className="flex items-stretch not-last:border-b hover:bg-muted/60">
+      <button
+        type="button"
+        data-row={n.id}
+        onClick={onNavigate}
+        onKeyDown={(e) => {
+          if (e.key === "Delete" || e.key === "Backspace") {
+            e.preventDefault();
+            onDelete();
+          }
+        }}
+        className="flex min-w-0 flex-1 items-start gap-2 px-3 py-2 text-left outline-none focus-visible:bg-muted"
+      >
+        <span className="relative mt-0.5 shrink-0">
+          <Glyph className={cn("size-4", TONE_CLASS[n.tone])} weight="fill" />
+          {!n.read && (
+            <span
+              aria-hidden
+              className="absolute -top-1 -left-1 size-1.5 rounded-full bg-primary ring-2 ring-popover"
+            />
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span
+            className={cn(
+              "block truncate text-xs",
+              n.read ? "font-normal text-muted-foreground" : "font-medium",
+            )}
+            title={n.title}
+          >
+            {n.title}
+          </span>
+          {meta && (
+            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+              {meta}
+            </span>
+          )}
+        </span>
+        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+          {formatRelativeTime(new Date(n.ts).toISOString())}
+        </span>
+      </button>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        className="mt-0 my-1.5 mr-1 shrink-0 self-start text-muted-foreground"
+        aria-label={`Clear "${n.title}"`}
+        onClick={() => clearNotification(n.id)}
+      >
+        <XIcon />
+      </Button>
+    </div>
+  );
+}
+
+/** Tone → semantic token; paired with the descriptive title so state never
+ *  rides on color alone (WCAG AA). */
+const TONE_CLASS: Record<NotificationTone, string> = {
+  success: "text-success",
+  warning: "text-warning",
+  danger: "text-destructive",
+  info: "text-info",
+  merged: "text-merged",
+  neutral: "text-muted-foreground",
+};
+
+/** Glyph per event kind; kinds not listed fall back to a tone-appropriate mark
+ *  (e.g. `ci-run`, whose success/failure lives in the tone). */
+const KIND_GLYPH: Record<string, typeof CheckCircleIcon> = {
+  "review-ready": SparkleIcon,
+  "review-failed": SparkleIcon,
+  "checks-passed": CheckCircleIcon,
+  "checks-failed": XCircleIcon,
+  "pr-opened": GitPullRequestIcon,
+  "pr-merged": GitMergeIcon,
+  "pr-closed": GitPullRequestIcon,
+  "pr-approved": CheckCircleIcon,
+  "pr-changes-requested": WarningCircleIcon,
+  "pr-comment": ChatCircleIcon,
+  "pr-review": ChatCircleIcon,
+  "review-requested": EyeIcon,
+  "agent-done": SparkleIcon,
+  "research-done": MagnifyingGlassIcon,
+  "plan-done": ListChecksIcon,
+};
+
+function glyphFor(n: AppNotification): typeof CheckCircleIcon {
+  return (
+    KIND_GLYPH[n.kind] ??
+    (n.tone === "danger"
+      ? XCircleIcon
+      : n.tone === "warning"
+        ? WarningCircleIcon
+        : CheckCircleIcon)
+  );
 }

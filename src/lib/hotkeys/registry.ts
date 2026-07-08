@@ -63,6 +63,12 @@ export const ACTIONS = [
     category: "Application",
     defaultBinding: null,
   },
+  {
+    id: "toggle-notifications",
+    label: "Activity & notifications",
+    category: "Application",
+    defaultBinding: null,
+  },
 
   // Navigation
   {

@@ -405,6 +405,21 @@ export interface PrPollInfo {
   checksState: string;
   /** Head commit SHA — drives pr-sync detection for remote PRs. */
   headSha: string;
+  /** Conversation-comment count — a rise between polls = a new comment. GitHub
+   *  only (0 for GitLab/Bitbucket in v1). */
+  commentCount: number;
+  /** Login of the latest comment's author — used to suppress a "new comment"
+   *  notification for your own comment. GitHub only ("" elsewhere in v1). */
+  lastCommentAuthor: string;
+  /** Submitted-review count — a rise without a `reviewDecision` change =
+   *  a plain "commented" review. GitHub only (0 for GitLab/Bitbucket in v1). */
+  reviewCount: number;
+  /** Login of the latest review's author — used to suppress a "new review"
+   *  notification for your own review. GitHub only ("" elsewhere in v1). */
+  lastReviewAuthor: string;
+  /** Logins currently requested to review — you newly appearing here fires a
+   *  "review requested" notification. GitHub only (empty elsewhere in v1). */
+  reviewRequests: string[];
 }
 
 export interface GhRepo {

@@ -21,6 +21,7 @@ import {
 import { readRepoInstructions } from "@/lib/git/api";
 import { notify } from "@/lib/notify";
 import { loadSettings } from "@/lib/settings/api";
+import { pushNotification, repoNameFromPath } from "@/lib/stores/notifications";
 import { errorMessage, invoke } from "@/lib/tauri/invoke";
 import { loadPersistedResearch, savePersistedResearch } from "./persistence";
 
@@ -307,7 +308,18 @@ export const useResearchStore = create<ResearchState>((set, get) => {
       if (!run) return;
       if (isWatchingAgentSurface(get().activeResearchId, id)) return;
       const label = run.origin?.topic?.trim() || "Research";
-      void notify(failed ? "Research failed" : "Research ready", label);
+      const headline = failed ? "Research failed" : "Research ready";
+      void notify(headline, label);
+      pushNotification({
+        kind: "research-done",
+        tone: failed ? "danger" : "success",
+        title: headline,
+        subtitle: label,
+        repoPath: run.repoPath,
+        repoName: repoNameFromPath(run.repoPath),
+        target: { type: "agent" },
+        dedupeKey: `research:${id}:${failed}`,
+      });
     };
     try {
       await runAgentSession({

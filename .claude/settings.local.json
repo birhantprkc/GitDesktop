@@ -43,10 +43,15 @@
       "PowerShell(git --no-pager log:*)",
       "PowerShell(git --no-pager show:*)",
       "PowerShell(cd site && pnpm build)",
-      "Bash(git --no-pager diff *)"
+      "Bash(git --no-pager diff *)",
+      "mcp__gitdesktop__repo_status",
+      "mcp__gitdesktop__list_pull_requests"
     ]
   },
-  "enabledMcpjsonServers": ["shadcn", "Astro docs"],
+  "enabledMcpjsonServers": [
+    "shadcn",
+    "Astro docs"
+  ],
   "hooks": {
     "PostToolUse": [
       {

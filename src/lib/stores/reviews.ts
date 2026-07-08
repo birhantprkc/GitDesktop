@@ -25,6 +25,7 @@ import { notifyIfUnfocused } from "@/lib/notify";
 import { saveReview } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
+import { pushNotification } from "@/lib/stores/notifications";
 import { errorMessage } from "@/lib/tauri/invoke";
 
 export interface ReviewContext {
@@ -247,15 +248,26 @@ async function notifyReviewDone(
   title: string,
   mode: ReviewMode,
   ok: boolean,
+  target: ReviewTarget,
 ): Promise<void> {
   try {
     const { notifications } = await loadSettings();
     if (!notifications.reviews) return;
     const label = mode === "security" ? "security audit" : "review";
-    void notifyIfUnfocused(
-      ok ? `AI ${label} ready` : `AI ${label} failed`,
-      `"${title}"`,
-    );
+    const headline = ok ? `AI ${label} ready` : `AI ${label} failed`;
+    // Durable record in the inbox (regardless of focus), plus the OS ping when
+    // the window is hidden. Both ride the same `reviews` pref.
+    pushNotification({
+      kind: ok ? "review-ready" : "review-failed",
+      tone: ok ? "success" : "danger",
+      title: headline,
+      subtitle: `"${title}"`,
+      repoPath: target.repoPath,
+      repoName: target.repoName,
+      target: { type: "pr", kind: target.kind, ref: target.ref },
+      dedupeKey: `review:${target.kind}:${target.repoPath}:${target.ref}:${ok}`,
+    });
+    void notifyIfUnfocused(headline, `"${title}"`);
   } catch {
     // best-effort — a missed notification must never affect the review
   }
@@ -414,7 +426,7 @@ export async function startReview(
     });
     if (control.cancelled) return;
     patch({ phase: "done", status: "" });
-    void notifyReviewDone(title, mode, true);
+    void notifyReviewDone(title, mode, true, target);
     // Persist the finished review so the NEXT run can use it as soft context.
     // The final text is read from the store (covers both the CLI and HTTP
     // paths); a cancelled run returns above, so no mid-stream fragment is ever
@@ -460,7 +472,7 @@ export async function startReview(
         // `String(e)` would print "[object Object]" — use the shared extractor.
         error: errorMessage(e),
       });
-      void notifyReviewDone(title, mode, false);
+      void notifyReviewDone(title, mode, false, target);
     }
   } finally {
     // Release the lane slot for the next queued run (only if this run actually
@@ -508,11 +520,6 @@ export function cancelReview(key: string): void {
 
 /** Clears a finished review's text — used after posting it as a comment. */
 export function resetReview(key: string): void {
-  useReviewStore.getState().remove(key);
-}
-
-/** Removes a finished run from the activity dock. */
-export function dismissReview(key: string): void {
   useReviewStore.getState().remove(key);
 }
 

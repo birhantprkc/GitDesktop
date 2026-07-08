@@ -418,6 +418,13 @@ global defaults and per-repo overrides.
 **Integrations** — open in any editor or terminal (auto-detected, or point at any
 executable), and tunable OS notifications for PR activity, checks, and CI runs.
 
+**Activity & notifications** — a persistent bell in the header that collects terminal
+events (a finished review, checks passing/failing, a PR approved/commented/merged, a
+review requested from you, a completed CI run, or a finished agent / research / plan run) into a clickable,
+clearable history that survives a restart — so a review that finishes while you're away is
+never a missed click. Open it from the command palette; which events show follows your
+notification settings.
+
 **Environment check** — a Settings → **About** panel reports your app/OS/Tauri
 versions and the status of every CLI GitDesktop uses (git, the GitHub & GitLab
 CLIs, Claude Code, Codex): installed?, version, resolved path, and sign-in

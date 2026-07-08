@@ -1250,6 +1250,11 @@ Open **Settings** from the header gear (or {{kbd:open-settings}}). Sections:
 - **Automations** — AI actions that run on triggers.
 {{/ai}}- **Notifications** — opt into OS notifications (sent only when the window isn't
   focused) for PR activity, CI checks, reviews on your PRs, and workflow runs finishing.
+  Whatever you enable here also lands in the header's **Activity & notifications** bell — a
+  persistent, click-to-open history (it survives a restart) so a finished review or a PR
+  update is never a missed moment. Open it from the command palette
+  ({{kbd:command-palette}} → *Activity & notifications*), click an entry to jump to it,
+  arrow-key through the list, and clear items or mark all read.
 - **Keyboard** — rebind any shortcut, with live key-capture.
 - **Accounts** — your GitHub sign-in, and your **Bitbucket** connection (an Atlassian
   API token: enter your Atlassian account email + a token with the five \`read:…:bitbucket\`

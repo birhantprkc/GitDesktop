@@ -30,6 +30,7 @@ function App() {
   const openSettings = useUiStore((s) => s.openSettings);
   const openMcpBrowse = useUiStore((s) => s.openMcpBrowse);
   const openHelp = useUiStore((s) => s.openHelp);
+  const toggleActivity = useUiStore((s) => s.toggleActivity);
   const gitInstalled = useGitInstalled();
   const queryClient = useQueryClient();
   const settings = useSettings();
@@ -118,6 +119,7 @@ function App() {
   );
   useHotkeyAction("browse-mcp-registry", openMcpBrowse, !settings.data?.hideAi);
   useHotkeyAction("show-help", openHelp);
+  useHotkeyAction("toggle-notifications", toggleActivity);
   useHotkeyAction("show-shortcuts", () => setShortcutsOpen(true));
   useHotkeyAction("command-palette", () => setPaletteOpen(true));
 

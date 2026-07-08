@@ -1105,6 +1105,23 @@ pub struct PrPollInfo {
     /// Head commit SHA — lets the poll detect when a PR receives new commits
     /// (drives pr-sync auto re-review for remote PRs, incl. non-local heads).
     pub head_sha: String,
+    /// Count of conversation comments — a rise between polls signals a new
+    /// comment on the PR. GitHub only; 0 for GitLab/Bitbucket.
+    pub comment_count: u64,
+    /// Login of the most recent conversation comment's author — lets the poller
+    /// suppress a "new comment" notification for your OWN comment on your own PR
+    /// (the count alone can't tell whose it is). GitHub only; "" elsewhere.
+    pub last_comment_author: String,
+    /// Count of submitted reviews — a rise WITHOUT a `review_decision` change to
+    /// approved/changes-requested signals a plain "commented" review. GitHub
+    /// only; 0 for GitLab/Bitbucket.
+    pub review_count: u64,
+    /// Login of the most recent review's author — same self-suppression as
+    /// `last_comment_author`. GitHub only; "" elsewhere.
+    pub last_review_author: String,
+    /// Logins currently requested to review this PR — the poller notifies you
+    /// when you newly appear here. GitHub only; empty for GitLab/Bitbucket.
+    pub review_requests: Vec<String>,
 }
 
 /// Lightweight snapshot of the repo's recently-updated PRs for the
@@ -1126,7 +1143,7 @@ pub async fn gh_pr_poll(repo_path: String) -> AppResult<Vec<PrPollInfo>> {
     validate_graphql_embed(name, "repository name")?;
 
     let query = format!(
-        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ pullRequests(first:30, states:[OPEN, CLOSED, MERGED], orderBy:{{field:UPDATED_AT, direction:DESC}}){{ nodes{{ number title url state isDraft author{{login}} reviewDecision commits(last:1){{ nodes{{ commit{{ oid statusCheckRollup{{ state }} }} }} }} }} }} }} }}"#
+        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ pullRequests(first:30, states:[OPEN, CLOSED, MERGED], orderBy:{{field:UPDATED_AT, direction:DESC}}){{ nodes{{ number title url state isDraft author{{login}} reviewDecision comments(last:1){{ totalCount nodes{{ author{{ login }} }} }} reviews(last:1){{ totalCount nodes{{ author{{ login }} }} }} reviewRequests(first:20){{ nodes{{ requestedReviewer{{ ... on User{{ login }} }} }} }} commits(last:1){{ nodes{{ commit{{ oid statusCheckRollup{{ state }} }} }} }} }} }} }} }}"#
     );
     let out = run_gh(
         Some(&repo_path),
@@ -1159,6 +1176,29 @@ pub async fn gh_pr_poll(repo_path: String) -> AppResult<Vec<PrPollInfo>> {
             review_decision: str_at(n, "/reviewDecision"),
             checks_state: str_at(n, "/commits/nodes/0/commit/statusCheckRollup/state"),
             head_sha: str_at(n, "/commits/nodes/0/commit/oid"),
+            comment_count: n
+                .pointer("/comments/totalCount")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0),
+            last_comment_author: str_at(n, "/comments/nodes/0/author/login"),
+            review_count: n
+                .pointer("/reviews/totalCount")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0),
+            last_review_author: str_at(n, "/reviews/nodes/0/author/login"),
+            review_requests: n
+                .pointer("/reviewRequests/nodes")
+                .and_then(|x| x.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|rr| {
+                            rr.pointer("/requestedReviewer/login")
+                                .and_then(|l| l.as_str())
+                                .map(String::from)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
         .filter(|p| p.number > 0)
         .collect())

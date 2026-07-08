@@ -363,6 +363,14 @@ fn from_glab_poll_mr(m: GlabPollMr) -> PrPollInfo {
         review_decision: String::new(),
         checks_state: String::new(),
         head_sha: m.sha,
+        // The new-comment / new-review / review-requested detectors are GitHub-only
+        // in v1 — the MR list carries none of these, so they stay empty and those
+        // notification branches never fire for GitLab.
+        comment_count: 0,
+        last_comment_author: String::new(),
+        review_count: 0,
+        last_review_author: String::new(),
+        review_requests: Vec::new(),
     }
 }
 
