@@ -10,6 +10,7 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { LogBlock } from "@/components/LogBlock";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,7 +30,6 @@ import {
 import { useAiEnabled } from "@/lib/settings/queries";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
-import { cn } from "@/lib/utils";
 import { DebugJobDialog } from "./DebugJobDialog";
 import { isFailureConclusion, StatusIcon, statusLabel } from "./status";
 
@@ -258,9 +258,7 @@ function JobRow({
                       Logs are being archived — this can take a moment.
                     </p>
                   ) : (
-                    <pre className="max-h-80 overflow-auto border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-                      {logs.data?.trim() || "No logs available."}
-                    </pre>
+                    <LogBlock text={logs.data ?? ""} />
                   )}
                 </div>
               )}
@@ -554,14 +552,11 @@ export function RunDetailView({
                       Couldn't load logs.
                     </p>
                   ) : (
-                    <pre
-                      className={cn(
-                        "max-h-96 overflow-auto border bg-muted/40 p-3",
-                        "font-mono text-[11px] leading-relaxed whitespace-pre-wrap",
-                      )}
-                    >
-                      {logs.data?.trim() || "No failed logs available."}
-                    </pre>
+                    <LogBlock
+                      text={logs.data ?? ""}
+                      emptyLabel="No failed logs available."
+                      maxHeightClass="max-h-96"
+                    />
                   )}
                 </div>
               )}

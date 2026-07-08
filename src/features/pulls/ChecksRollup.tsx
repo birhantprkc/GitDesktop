@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { LogBlock } from "@/components/LogBlock";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PrCheckOut } from "@/lib/git/types";
 import { useJobLogs, useRunFailedLogs } from "@/lib/github/actions";
@@ -135,9 +136,11 @@ function CheckLogTail({
     );
   }
   return (
-    <pre className="mt-1.5 max-h-72 overflow-auto border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-      {logs.data?.trim() || "No logs available."}
-    </pre>
+    <LogBlock
+      text={logs.data ?? ""}
+      maxHeightClass="max-h-72"
+      className="mt-1.5"
+    />
   );
 }
 

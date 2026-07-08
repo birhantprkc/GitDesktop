@@ -509,7 +509,8 @@ CI checks appear as a **rollup summary** — **✓ N passed · ✕ M failed · �
 each count with its own icon and word so status never rides on color alone. It
 auto-expands whenever something has failed. Expanding lists the checks failures-first
 (arrow-navigable). A failing **GitHub Actions** check **peeks its job log inline**,
-without leaving the PR, with an **Open full run** link; an external check (Vercel and the
+without leaving the PR — **copy** the log with the button in its top-right corner — with
+an **Open full run** link; an external check (Vercel and the
 like) links straight out to its details. **GitLab MRs** get the same rollup from the MR's
 pipeline jobs, with the same **inline log peek**; **Bitbucket PRs** get it from the PR's
 commit build statuses, but those **link out only** (name, state, and URL — Bitbucket
@@ -800,14 +801,15 @@ Actions workflow runs (needs \`gh\` + a GitHub remote). **GitLab pipelines** sho
 - **Re-run all jobs**, **Re-run failed jobs**, or **Cancel** an in-progress run.
 - **Run workflow…** manually dispatches a workflow (one with a \`workflow_dispatch\`
   trigger) on a branch you choose, including any **input parameters** it defines.
-- For a failed job, expand **failed-step logs** inline.
+- Expand any job for its **logs** — or a failed run's **failed-step logs** — inline, and
+  **copy** them with the button in the log's top-right corner.
 
 ## GitLab pipelines
 
 Point the app at a **GitLab** repo and the same tab lists its **pipelines** — newest first,
 filterable, optionally scoped to the current branch — with the header CI badge tracking the
 latest one. Open a pipeline to see its **jobs** (status + durations); expand a job for its
-**log**. The pipeline actions work here too: **Cancel** a running pipeline, **Retry** a
+**log** (copyable from its corner). The pipeline actions work here too: **Cancel** a running pipeline, **Retry** a
 failed or canceled one (GitLab restarts its failed jobs), and **Run pipeline…** starts a
 fresh pipeline on a branch or tag, with optional **CI/CD variables**. A **manual job** —
 one that waits for a manual trigger — shows a **Run job** button that plays it.

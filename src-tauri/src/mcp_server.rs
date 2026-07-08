@@ -173,6 +173,12 @@ struct RunListArgs {
     branch: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct JobIdArg {
+    /// A CI job id, taken from a run's `jobs[].id` (see get_workflow_run).
+    job_id: u64,
+}
+
 // ---- Local-PR write tool parameters (opt-in via --allow-write) -------------
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -614,6 +620,26 @@ impl GitDesktopMcp {
         Parameters(args): Parameters<RunIdArg>,
     ) -> Result<CallToolResult, McpError> {
         let logs = crate::forge::forge_ci_run_failed_logs(self.repo.clone(), args.run_id)
+            .await
+            .map_err(app_err)?;
+        Ok(CallToolResult::success(vec![Content::text(cap_tail(
+            logs,
+            GH_TEXT_MAX_BYTES,
+        ))]))
+    }
+
+    #[tool(
+        description = "Get the FULL log of a single CI job by job id (from a run's `jobs[].id`, as \
+                       returned by get_workflow_run) — the whole job's output, not just its failed \
+                       steps. Works for GitHub Actions and GitLab CI; Bitbucket step logs aren't \
+                       addressable by numeric id (use the run's web URL instead). Large logs are \
+                       truncated to the tail."
+    )]
+    async fn workflow_job_logs(
+        &self,
+        Parameters(args): Parameters<JobIdArg>,
+    ) -> Result<CallToolResult, McpError> {
+        let logs = crate::forge::forge_ci_job_logs(self.repo.clone(), args.job_id)
             .await
             .map_err(app_err)?;
         Ok(CallToolResult::success(vec![Content::text(cap_tail(
