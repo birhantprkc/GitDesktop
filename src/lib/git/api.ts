@@ -767,6 +767,14 @@ export const gitMergePreview = (
 export const gitRebase = (repoPath: string, branch: string) =>
   invoke<void>("git_rebase", { repoPath, branch });
 
+/** Rebases the current branch onto `newBase`, replaying only the commits after
+ *  `oldBase` (`oldBase..HEAD`) — the "branched off the wrong branch" fix. */
+export const gitRebaseOnto = (
+  repoPath: string,
+  newBase: string,
+  oldBase: string,
+) => invoke<void>("git_rebase_onto", { repoPath, newBase, oldBase });
+
 export const gitBranchDivergence = (repoPath: string, base: string) =>
   invoke<BranchDivergence[]>("git_branch_divergence", { repoPath, base });
 

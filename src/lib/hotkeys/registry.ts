@@ -393,6 +393,12 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "rebase-onto-new-base",
+    label: "Change base (rebase onto a different branch)",
+    category: "Branches & stash",
+    defaultBinding: null,
+  },
+  {
     id: "stash-all",
     label: "Stash all changes",
     category: "Branches & stash",

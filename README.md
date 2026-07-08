@@ -282,7 +282,10 @@ are shareable via a committed file or importable from GitHub. Merging shows an
 **advanced merge tooling** ⭐ panel that predicts the result in memory before you
 commit to it (fast-forward / clean / which files will conflict), with `--no-ff`
 and an auto-resolve-conflicts strategy (`-X ours/theirs`, clearly cautioned) —
-which GitHub Desktop doesn't offer.
+which GitHub Desktop doesn't offer. A **Change base** action rebases a branch
+onto a different base for when it was branched off the wrong one — replaying only
+its own commits (the wrong base's are left behind), with a preview of exactly
+which commits will move.
 
 **History & advanced** — paged, filterable history with rich commit detail,
 per-file history and line blame, and an at-a-glance marker on every commit that

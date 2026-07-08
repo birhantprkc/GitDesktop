@@ -43,6 +43,7 @@ import {
   useMergeBranch,
   usePrList,
   useRebaseBranch,
+  useRebaseOnto,
   useRemoteBranches,
   useRepoStatus,
   useSetBranchArchived,
@@ -67,6 +68,7 @@ import {
   type MergeRunOptions,
   type PickerMode,
 } from "./BranchMergePickerDialog";
+import { RebaseOntoDialog } from "./RebaseOntoDialog";
 import { CleanupBranchesDialog } from "./CleanupBranchesDialog";
 import { CreateBranchDialog } from "./CreateBranchDialog";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
@@ -147,6 +149,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const stashPop = useStashPop(repoPath);
   const mergeBranch = useMergeBranch(repoPath);
   const rebaseBranch = useRebaseBranch(repoPath);
+  const rebaseOnto = useRebaseOnto(repoPath);
   const updateBranchFrom = useUpdateBranchFrom(repoPath);
   const setBranchArchived = useSetBranchArchived(repoPath);
   const openWorktree = useOpenWorktree();
@@ -187,6 +190,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const [opHistoryOpen, setOpHistoryOpen] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
+  const [rebaseOntoOpen, setRebaseOntoOpen] = useState(false);
   // The pending switch target. `remote` is set only for remote-only rows, which
   // check out via `--track <remote>/<name>` (honoring the row's promised remote
   // + dodging multi-remote DWIM ambiguity); local switches leave it null.
@@ -588,6 +592,25 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     setCreateOpen(true);
   }
 
+  function openRebaseOnto() {
+    setOpen(false);
+    setRebaseOntoOpen(true);
+  }
+
+  // The dialog collects the two branches; the switcher owns the mutation (it
+  // feeds `busy`). Conflicts leave the rebase in progress for the conflict
+  // banner, exactly like the plain rebase above.
+  function runRebaseOnto(newBase: string, oldBase: string) {
+    setRebaseOntoOpen(false);
+    rebaseOnto.mutate(
+      { newBase, oldBase },
+      {
+        onSuccess: () => toast.success(`Rebased onto ${newBase}`),
+        onError,
+      },
+    );
+  }
+
   // Pull the latest from the default branch into `target` without switching to
   // it (unless it's already current): fast-forwards when possible, otherwise
   // merges via a throwaway worktree so the working tree — and its watchers —
@@ -633,6 +656,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     checkoutRemote.isPending ||
     mergeBranch.isPending ||
     rebaseBranch.isPending ||
+    rebaseOnto.isPending ||
     updateBranchFrom.isPending;
 
   // Hotkey handlers reuse the menu's own flows, so every gate (clean tree,
@@ -683,6 +707,11 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     "rebase-current",
     () => openPicker("rebase"),
     otherBranches.length > 0 && !lockCurrent,
+  );
+  useHotkeyAction(
+    "rebase-onto-new-base",
+    openRebaseOnto,
+    Boolean(currentName) && otherBranches.length >= 2 && !lockCurrent && !busy,
   );
   useHotkeyAction("stash-all", () => setStashAllOpen(true), hasChanges);
   useHotkeyAction("pop-stash", () => setStashPopOpen(true), stashes > 0);
@@ -1193,6 +1222,17 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                 >
                   Rebase current branch…
                 </MenuRow>
+                <MenuRow
+                  disabled={
+                    !currentName ||
+                    otherBranches.length < 2 ||
+                    lockCurrent ||
+                    busy
+                  }
+                  onClick={openRebaseOnto}
+                >
+                  Change base…
+                </MenuRow>
               </div>
             </Popover.Popup>
           </Popover.Positioner>
@@ -1406,6 +1446,18 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         onRun={runPicker}
         otherBranches={otherBranches}
         currentLabel={currentLabel}
+      />
+
+      <RebaseOntoDialog
+        repoPath={repoPath}
+        open={rebaseOntoOpen}
+        onClose={() => setRebaseOntoOpen(false)}
+        onRun={runRebaseOnto}
+        otherBranches={otherBranches}
+        currentLabel={currentLabel}
+        defaultBranch={defaultName}
+        hasChanges={hasChanges}
+        isPushed={Boolean(head?.upstream)}
       />
 
       <SwitchWithChangesDialog

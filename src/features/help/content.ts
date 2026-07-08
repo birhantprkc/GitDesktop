@@ -345,6 +345,11 @@ The branch name in the header opens the **branch switcher** ({{kbd:show-branches
 - Right-click a branch to **merge**, **squash and merge**, **rebase**, or **update it
   from the default branch** ({{kbd:update-from-default}}) — the last *without* checking it
   out.
+- **Change base…** — from the switcher's menu or the command palette — rebases the current
+  branch onto a *different* branch, for the "I branched off the wrong one" case: pick the
+  branch you meant to base on and the branch you actually did, and only your branch's own
+  commits move — the wrong base's commits are left behind. A preview lists exactly which
+  commits will move before you run it, and any conflicts drop into the resolve flow below.
 - **Update a branch from its own upstream** without switching to it: when a branch is
   behind the remote it tracks, its right-click menu offers **Update from _origin/…_**. This
   is the "just merged a PR — bring the default branch current before I switch back" flow;

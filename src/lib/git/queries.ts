@@ -3015,6 +3015,15 @@ export function useRebaseBranch(repo: string) {
   return useRepoMutation(repo, (branch: string) => api.gitRebase(repo, branch));
 }
 
+/** Rebases the current branch onto `newBase`, replaying only `oldBase..HEAD`
+ *  (the "branched off the wrong branch" fix). Conflicts leave the rebase in
+ *  progress for the conflict banner, exactly like {@link useRebaseBranch}. */
+export function useRebaseOnto(repo: string) {
+  return useRepoMutation(repo, (args: { newBase: string; oldBase: string }) =>
+    api.gitRebaseOnto(repo, args.newBase, args.oldBase),
+  );
+}
+
 /**
  * Ahead/behind of every local branch vs. `base`. Gated on `enabled` so it only
  * runs while the branch menu is open (it's N rev-list calls), and keyed under

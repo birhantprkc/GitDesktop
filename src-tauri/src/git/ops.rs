@@ -1459,6 +1459,47 @@ pub async fn git_rebase(
     Ok(())
 }
 
+/// Rebases the current branch onto `new_base`, replaying **only** the commits
+/// after `old_base` (`old_base..HEAD`). This is the "I branched off the wrong
+/// branch" fix: `git rebase --onto <new_base> <old_base>` excludes `old_base`'s
+/// own commits, whereas a plain `git rebase <new_base>` would drag them along.
+/// Conflicts leave the rebase in progress — the changes panel's conflict banner
+/// (driven by `git_op_state`) takes it from there via continue/abort.
+async fn rebase_onto(
+    state: &AppState,
+    repo_path: &str,
+    new_base: &str,
+    old_base: &str,
+) -> AppResult<()> {
+    validate_branch_arg(new_base)?;
+    validate_branch_arg(old_base)?;
+    run_git_mutating(
+        state,
+        repo_path,
+        &[
+            "-c",
+            "core.editor=true",
+            "rebase",
+            "--onto",
+            new_base,
+            old_base,
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_rebase_onto(
+    state: State<'_, AppState>,
+    repo_path: String,
+    new_base: String,
+    old_base: String,
+) -> AppResult<()> {
+    rebase_onto(&state, &repo_path, &new_base, &old_base).await
+}
+
 /// The outcome of a local-PR merge attempt (`git_merge_local_pr` /
 /// `git_finish_local_pr_merge`). The frontend package consumes this verbatim, so
 /// the `#[serde(rename_all = "camelCase")]` shape is a frozen contract.
@@ -2914,6 +2955,47 @@ mod tests {
                 .join(".git/gd-rebase-edit")
                 .exists(),
             "scratch dir must not be touched when refused"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn rebase_onto_moves_only_its_own_commits() {
+        // The "branched off the wrong branch" scenario: `fix` was branched off
+        // `feature` (the wrong base), which itself branched off the default
+        // branch. Rebasing `fix` --onto default from `feature` must replay ONLY
+        // fix's own commits and drop feature's.
+        let (dir, repo) = setup_repo("rebase-onto").await;
+        let main = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .trim()
+            .to_string();
+        git(&repo, &["checkout", "-b", "feature"]).await;
+        commit_file(&repo, &dir, "f.txt", "f\n", "feature one").await;
+        git(&repo, &["checkout", "-b", "fix"]).await;
+        commit_file(&repo, &dir, "x.txt", "x\n", "fix one").await;
+        commit_file(&repo, &dir, "x.txt", "x2\n", "fix two").await;
+        // Advance the default branch so it diverges from feature.
+        git(&repo, &["checkout", &main]).await;
+        commit_file(&repo, &dir, "a.txt", "v1\n", "main advance").await;
+        let main_tip = rev(&repo, "HEAD").await;
+        git(&repo, &["checkout", "fix"]).await;
+
+        let state = AppState::default();
+        rebase_onto(&state, &repo, &main, "feature").await.unwrap();
+
+        // `fix` now carries only its own two commits, replayed onto the default
+        // branch's tip — feature's commit is excluded.
+        assert_eq!(
+            subjects(&repo).await,
+            vec!["fix two", "fix one", "main advance", "base"],
+            "only fix's own commits replay onto the new base; feature's excluded"
+        );
+        assert_eq!(
+            rev(&repo, "fix~2").await,
+            main_tip,
+            "fix's commits sit directly on the new base's tip"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
