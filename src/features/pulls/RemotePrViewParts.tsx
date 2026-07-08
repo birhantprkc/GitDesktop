@@ -288,6 +288,8 @@ export function MergePrDialog({
   strategyLabel,
   deleteBranch,
   onDeleteBranchChange,
+  headIsDefault,
+  deletionBlocked,
   pending,
   onConfirm,
   auto = false,
@@ -304,6 +306,11 @@ export function MergePrDialog({
   strategyLabel: string;
   deleteBranch: boolean;
   onDeleteBranchChange: (v: boolean) => void;
+  /** Head is the repo's default branch — every forge refuses to delete it, so
+   *  the delete-branch option is hidden entirely. */
+  headIsDefault: boolean;
+  /** A branch rule blocks deleting the head — the option shows but is disabled. */
+  deletionBlocked: boolean;
   pending: boolean;
   onConfirm: () => void;
   /** Arms merge-when-pipeline-succeeds instead of merging now (GitLab-only) —
@@ -341,18 +348,34 @@ export function MergePrDialog({
             )}
           </DialogDescription>
         </DialogHeader>
-        <label className="flex cursor-pointer items-start gap-2 text-xs text-muted-foreground">
-          <Checkbox
-            checked={deleteBranch}
-            onCheckedChange={(checked) =>
-              onDeleteBranchChange(checked === true)
-            }
-          />
-          <span className="min-w-0">
-            Delete <span className="font-mono break-all">{headRefName}</span> on
-            the remote after merging
-          </span>
-        </label>
+        {/* Deleting the head after merge is offered only when it's actually
+            possible: never for the default branch (hidden — the forge refuses),
+            and disabled with a reason when a branch rule blocks its deletion. */}
+        {!headIsDefault && (
+          <label
+            className={cn(
+              "flex items-start gap-2 text-xs text-muted-foreground",
+              deletionBlocked
+                ? "cursor-not-allowed opacity-70"
+                : "cursor-pointer",
+            )}
+          >
+            <Checkbox
+              checked={deleteBranch && !deletionBlocked}
+              disabled={deletionBlocked}
+              onCheckedChange={(checked) =>
+                onDeleteBranchChange(checked === true)
+              }
+            />
+            <span className="min-w-0">
+              Delete <span className="font-mono break-all">{headRefName}</span>{" "}
+              on the remote after merging
+              {deletionBlocked && (
+                <span className="text-warning"> — protected by a branch rule</span>
+              )}
+            </span>
+          </label>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel

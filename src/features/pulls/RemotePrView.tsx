@@ -55,7 +55,7 @@ import {
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import type { LineWidget } from "@/features/diff/DiffSurface";
 import { AssigneesPopover } from "@/features/issues/IssueMetaPickers";
-import { isMergeMethodAllowed } from "@/lib/branch-rules/match";
+import { isDeletionBlocked, isMergeMethodAllowed } from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
 import type { MergeStrategy, MinimizeReason } from "@/lib/git/api";
@@ -68,6 +68,7 @@ import {
   useCheckoutPr,
   useClosePr,
   useCommentPr,
+  useDefaultBranch,
   useDeletePrComment,
   useDeleteReviewComment,
   useEditPr,
@@ -285,6 +286,7 @@ export function RemotePrView({
   }, [pendingPrSection, setPendingPrSection, selectedPr, number]);
   const aiEnabled = useAiEnabled();
   const rulesConfig = useEffectiveBranchRules(repoPath);
+  const defaultBranch = useDefaultBranch(repoPath);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   // Commits-tab drill-in: the selected commit's oid, or null for the list. Reset
   // when the PR number changes (below, alongside the file-selection reset).
@@ -453,10 +455,13 @@ export function RemotePrView({
     // GitLab stale-view guard: the head sha the user is looking at (the same oid
     // the AI-review path uses). GitLab 409s if the head moved; GitHub ignores it.
     const sha = pr?.commits.at(-1)?.oid;
+    // The checkbox is hidden/disabled for a default or rule-protected head, but
+    // force the flag false here too so a stale `true` can't reach the forge.
+    const deleteHead = deleteBranch && !headIsDefault && !headDeletionBlocked;
     if (mergeAuto) {
       // Arm merge-when-pipeline-succeeds instead of merging now (GitLab-only).
       armAutoMerge.mutate(
-        { number, strategy: mergeStrategy, deleteBranch, sha },
+        { number, strategy: mergeStrategy, deleteBranch: deleteHead, sha },
         {
           onSuccess: () => {
             setMergeOpen(false);
@@ -476,7 +481,7 @@ export function RemotePrView({
       {
         number,
         strategy: mergeStrategy,
-        deleteBranch,
+        deleteBranch: deleteHead,
         sha,
       },
       {
@@ -493,6 +498,26 @@ export function RemotePrView({
   }
 
   const pr = details.data;
+  // Guards for the merge dialog's "delete head branch on the remote" checkbox:
+  // every forge refuses to delete the DEFAULT branch (so the option is hidden),
+  // and a local branch RULE can block deleting the head (so it's disabled with a
+  // reason, mirroring the switcher's Delete menu item). Name-keyed against this
+  // repo's default — the common same-repo case; a fork PR whose head is
+  // coincidentally named like our default is an accepted v1 over-hide.
+  const headIsDefault =
+    pr != null &&
+    defaultBranch.data != null &&
+    pr.headRefName === defaultBranch.data;
+  const headDeletionBlocked =
+    pr != null && isDeletionBlocked(rulesConfig, pr.headRefName);
+  // Branch rules load asynchronously, so `headDeletionBlocked` can flip true
+  // after the dialog is open and the user has already ticked "delete branch".
+  // Drop that choice when it does, so the state can't linger stale-true behind
+  // the now-disabled checkbox (the dialog's `checked` override already keeps the
+  // *render* correct on the same frame; this keeps the underlying state honest).
+  useEffect(() => {
+    if (headDeletionBlocked) setDeleteBranch(false);
+  }, [headDeletionBlocked]);
   const fileSections = useMemo(
     () => splitUnifiedDiff(prDiff.data ?? ""),
     [prDiff.data],
@@ -1688,6 +1713,8 @@ export function RemotePrView({
         strategyLabel={MERGE_LABEL[mergeStrategy]}
         deleteBranch={deleteBranch}
         onDeleteBranchChange={setDeleteBranch}
+        headIsDefault={headIsDefault}
+        deletionBlocked={headDeletionBlocked}
         pending={mergeAuto ? armAutoMerge.isPending : mergePr.isPending}
         onConfirm={confirmMerge}
         auto={mergeAuto}
