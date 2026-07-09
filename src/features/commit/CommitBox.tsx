@@ -118,6 +118,7 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
               repoPath,
               hash: result.hash,
               title: commitTitle,
+              branch: branchName ?? "",
             });
           }
         },

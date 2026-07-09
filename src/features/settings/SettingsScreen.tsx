@@ -97,6 +97,11 @@ export function SettingsScreen() {
   );
   const [confirmClose, setConfirmClose] = useState(false);
   const closeAfterSave = useRef(false);
+  // The Automations panel edits its own draft (saved independently of the
+  // settings form); track its dirtiness so closing Settings still guards it, and
+  // hold its imperative save so "Save and close" persists it too.
+  const [automationsDirty, setAutomationsDirty] = useState(false);
+  const saveAutomationsRef = useRef<(() => void) | null>(null);
 
   // A deep-link fired while Settings is already open (no remount) still routes
   // to the requested section; consume the target so it doesn't re-fire.
@@ -168,7 +173,15 @@ export function SettingsScreen() {
       stableStringify(s.values) !== savedStr,
   );
 
+  // Either the settings form or the Automations panel having unsaved edits
+  // should guard closing the screen.
+  const closeDirty = dirty || automationsDirty;
+
   function save(andClose: boolean) {
+    // Persist the Automations panel's own draft alongside the settings form —
+    // fire-and-forget, like the form save: the store write completes even as the
+    // screen closes. Without this, "Save and close" would silently drop it.
+    if (automationsDirty) saveAutomationsRef.current?.();
     closeAfterSave.current = andClose;
     form.handleSubmit();
   }
@@ -178,7 +191,7 @@ export function SettingsScreen() {
   }
 
   function requestClose() {
-    if (dirty) setConfirmClose(true);
+    if (closeDirty) setConfirmClose(true);
     else closeSettings();
   }
 
@@ -186,7 +199,7 @@ export function SettingsScreen() {
   // mark the event consumed, so this only fires when nothing else claimed it.
   // The listener subscribes once; a latest-ref lets it read the current dirty
   // state without re-subscribing on every render.
-  const dirtyRef = useLatestRef(dirty);
+  const dirtyRef = useLatestRef(closeDirty);
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape" && !e.defaultPrevented) {
@@ -239,7 +252,14 @@ export function SettingsScreen() {
               {activePanel === "mcp-servers" && (
                 <McpServersSection form={form} />
               )}
-              {activePanel === "automations" && <AutomationsSection />}
+              {activePanel === "automations" && (
+                <AutomationsSection
+                  onDirtyChange={setAutomationsDirty}
+                  onRegisterSave={(fn) => {
+                    saveAutomationsRef.current = fn;
+                  }}
+                />
+              )}
               {activePanel === "notifications" && (
                 <NotificationsSection form={form} />
               )}
@@ -292,7 +312,7 @@ export function SettingsScreen() {
           <DialogHeader>
             <DialogTitle>Unsaved changes</DialogTitle>
             <DialogDescription>
-              You have settings changes that haven't been saved yet.
+              You have changes that haven't been saved yet.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

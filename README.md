@@ -416,8 +416,9 @@ commit as a different author in one repo without changing your global identity.
 **Git hooks** — view, edit, enable/disable, and template `.git/hooks`, with
 husky / pre-commit / lefthook detection and install integration.
 
-**Automations** — rules like "on PR open → run AI review + security audit," with
-global defaults and per-repo overrides.
+**Automations** — a lifecycle grid (on commit / on PR opened / on new commits to a
+reviewed PR) that runs AI review or security audit automatically, with per-action
+branch conditions, Save/Discard drafts, global defaults, and per-repo overrides.
 
 **Integrations** — open in any editor or terminal (auto-detected, or point at any
 executable), and tunable OS notifications for PR activity, checks, and CI runs.

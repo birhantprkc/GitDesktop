@@ -350,6 +350,10 @@ struct GlabPollMr {
     sha: String,
     #[serde(default)]
     author: Option<GlabMrUser>,
+    #[serde(default)]
+    source_branch: String,
+    #[serde(default)]
+    target_branch: String,
 }
 
 fn from_glab_poll_mr(m: GlabPollMr) -> PrPollInfo {
@@ -374,6 +378,8 @@ fn from_glab_poll_mr(m: GlabPollMr) -> PrPollInfo {
         review_count: 0,
         last_review_author: String::new(),
         review_requests: Vec::new(),
+        head_ref_name: m.source_branch,
+        base_ref_name: m.target_branch,
     }
 }
 

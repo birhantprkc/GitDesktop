@@ -655,14 +655,19 @@ struct BbPollPr {
     #[serde(default)]
     source: Option<BbPollEndpoint>,
     #[serde(default)]
+    destination: Option<BbPollEndpoint>,
+    #[serde(default)]
     links: Option<BbHtmlLinks>,
 }
 
-/// The `source` block of a poll PR — only its head commit hash matters here.
+/// The `source`/`destination` block of a poll PR — its head commit hash and
+/// branch name matter here.
 #[derive(Deserialize, Default)]
 struct BbPollEndpoint {
     #[serde(default)]
     commit: Option<BbPollCommit>,
+    #[serde(default)]
+    branch: Option<BbBranchRef>,
 }
 
 #[derive(Deserialize, Default)]
@@ -685,6 +690,14 @@ fn from_bb_poll_pr(p: BbPollPr, viewer_uuid: &str, viewer_login: &str) -> PrPoll
         Some(a) => a.nickname.clone().unwrap_or_default(),
         None => String::new(),
     };
+    let poll_branch = |ep: &Option<BbPollEndpoint>| {
+        ep.as_ref()
+            .and_then(|e| e.branch.as_ref())
+            .map(|b| b.name.clone())
+            .unwrap_or_default()
+    };
+    let head_ref_name = poll_branch(&p.source);
+    let base_ref_name = poll_branch(&p.destination);
     PrPollInfo {
         number: p.id,
         title: p.title,
@@ -708,6 +721,8 @@ fn from_bb_poll_pr(p: BbPollPr, viewer_uuid: &str, viewer_login: &str) -> PrPoll
         review_count: 0,
         last_review_author: String::new(),
         review_requests: Vec::new(),
+        head_ref_name,
+        base_ref_name,
     }
 }
 

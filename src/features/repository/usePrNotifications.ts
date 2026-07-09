@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useRef } from "react";
 import { useAutomations } from "@/lib/automations/queries";
 import { maybeFireSync } from "@/lib/automations/sync";
-import { effectiveRules, repoEntry } from "@/lib/automations/types";
+import { effectiveActions, repoEntry } from "@/lib/automations/types";
 import { forgePrPoll } from "@/lib/git/api";
 import {
   forgeFeatureReady,
@@ -41,7 +41,7 @@ export function usePrNotifications(repoPath: string) {
   // (falls back to the raw path while identity is still resolving / for legacy keys).
   const repoId = useRepoIdentity(repoPath).data;
   const hasPrSync = automations.data
-    ? effectiveRules(
+    ? effectiveActions(
         automations.data,
         repoEntry(automations.data, repoId ?? repoPath, repoPath),
         "pr-sync",
@@ -97,8 +97,8 @@ export function usePrNotifications(repoPath: string) {
             kind: "remote",
             ref: String(pr.number),
             currentHeadSha: pr.headSha,
-            base: "",
-            head: "",
+            base: pr.baseRefName,
+            head: pr.headRefName,
             title: pr.title,
             body: "",
             commitSubjects: [],

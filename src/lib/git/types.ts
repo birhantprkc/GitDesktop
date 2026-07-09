@@ -420,6 +420,10 @@ export interface PrPollInfo {
   /** Logins currently requested to review — you newly appearing here fires a
    *  "review requested" notification. GitHub only (empty elsewhere in v1). */
   reviewRequests: string[];
+  /** Head branch name ("" when the provider can't supply it). */
+  headRefName: string;
+  /** Base/target branch name ("" when the provider can't supply it). */
+  baseRefName: string;
 }
 
 export interface GhRepo {

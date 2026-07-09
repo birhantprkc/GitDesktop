@@ -1177,9 +1177,32 @@ notes**, and **repository descriptions**.
 
 ## Automations
 
-**Automations** (Settings → Automations, with per-repo overrides in the repo ⋮ menu) run
-an AI action automatically on a trigger — for example, drafting a description when a PR is
-opened — so routine generation happens without you asking.`,
+**Automations** (Settings → Automations, and per-repo via the repo ⋮ menu → *Automations…*)
+run an AI action automatically at a point in your workflow — so a routine review happens
+without you asking. It's a **lifecycle grid**: one section per moment — *On commit*, *On pull
+request opened*, and *On new commits to a reviewed PR* — with **AI code review** and **AI
+security audit** as toggles under each. There's no "add a rule" — a given moment × action
+exists at most once, so you can't create conflicting duplicates. Reviews use the review model
+from the AI section; PR results are posted as a comment, commit results open from a
+notification.
+
+- **Branch conditions.** Each enabled action can be scoped to branches: *only these branches*
+  (include globs) and *except these* (exclude globs — an exclude always wins; an empty include
+  means all branches). For the PR moments, a **Match against** selector picks *Source branch*,
+  *Target branch*, or *Either branch*. A **Try a branch** field tells you live whether a branch
+  would run, and names the exclude that skips it. Glob syntax matches branch rules — \`*\` within
+  a path segment, \`**\` across \`/\`, \`?\` one character, \`{a,b}\` alternation.
+- **Save / Discard.** Both surfaces edit a draft behind Save / Discard (no per-toggle
+  autosave) — close with unsaved changes and the app confirms first.
+- **Per-repo overrides.** The repo dialog shows the **effective** state (global defaults merged
+  with this repo's overrides), badges each overridden cell as *Overridden*, and can enable an
+  action that's globally off. **Reset to global defaults** drops every override so the repo
+  inherits again.
+
+On new commits to a reviewed PR only re-reviews PRs you've already reviewed in that mode, and
+cancelling an auto re-review dismisses that commit so it won't run again on restart — a genuinely
+new commit still triggers. Existing rules from the older flat list are migrated automatically on
+first load; any duplicates are merged and disclosed once with a toast.`,
   },
   {
     id: "hooks",

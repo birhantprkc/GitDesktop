@@ -28,10 +28,11 @@ import { getLatestReview, saveReview } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
 import { type ReviewTarget, registerAutomationRun } from "@/lib/stores/reviews";
+import { getDismissedHead, setDismissedHead } from "./dismissals";
 import { useAutomationResults } from "./results";
 import { loadAutomations, repoAutomationsFor } from "./store";
 import { sameSha } from "./sync";
-import { effectiveRules } from "./types";
+import { branchConditionsPass, effectiveActions } from "./types";
 
 export type AutomationEvent =
   | {
@@ -39,6 +40,8 @@ export type AutomationEvent =
       repoPath: string;
       hash: string;
       title: string;
+      /** Current branch at commit time; "" when detached/unknown. */
+      branch: string;
     }
   | {
       kind: "pr-open";
@@ -150,30 +153,64 @@ export function triggerAutomations(event: AutomationEvent): void {
 async function run(event: AutomationEvent): Promise<void> {
   const config = await loadAutomations();
   const repo = await repoAutomationsFor(config, event.repoPath);
-  const rules = effectiveRules(config, repo, event.kind);
-  if (rules.length === 0) return;
+  const actions = effectiveActions(config, repo, event.kind);
+  if (actions.length === 0) return;
+
+  // The branch(es) a branch-condition is tested against. Commit events carry the
+  // committed branch; PR events carry head/base (added by the poll payload).
+  const branch = event.kind === "commit" ? event.branch : undefined;
+  const head = event.kind === "commit" ? undefined : event.head;
+  const base = event.kind === "commit" ? undefined : event.base;
 
   const settings = await loadSettings();
   const notify = settings.notifications.automations;
-  for (const rule of rules) {
+  for (const { action, conditions } of actions) {
+    // Branch scoping: skip an action whose include/exclude globs don't admit
+    // this event's branch(es). Undefined conditions always pass.
+    if (
+      !branchConditionsPass(conditions, {
+        kind: event.kind,
+        branch,
+        head,
+        base,
+      })
+    ) {
+      continue;
+    }
     // pr-sync is opt-in per PR: re-review only a PR already reviewed in this
     // mode, and only once its head has advanced past the last-reviewed commit
     // (the persisted review's headSha is the per-mode watermark). This scopes
     // auto re-review to PRs you're actively iterating on and avoids re-firing
     // for a head that mode already covered.
     if (event.kind === "pr-sync") {
+      const headSha = event.headSha ?? "";
       const prior = await getLatestReview(
         event.repoPath,
         event.target.type,
         targetRef(event),
-        rule.action,
+        action,
+      );
+      // A CANCELLED re-review persists the dismissed head (see below), so a
+      // cancelled head doesn't re-fire after an app relaunch — only a genuinely
+      // newer head does.
+      const dismissedHead = await getDismissedHead(
+        event.repoPath,
+        event.target.type,
+        targetRef(event),
+        action,
       );
       // sameSha (not `===`) so a short-vs-full sha for the SAME head (Bitbucket's
       // 12-char poll head vs a full-40 seed) counts as "already reviewed" and
       // doesn't re-fire a redundant review each poll tick.
-      if (!prior || sameSha(prior.headSha, event.headSha ?? "")) continue;
+      if (
+        !prior ||
+        sameSha(prior.headSha, headSha) ||
+        sameSha(dismissedHead ?? "", headSha)
+      ) {
+        continue;
+      }
     }
-    const label = modeLabel(rule.action);
+    const label = modeLabel(action);
     // Per-rule cancellation: HTTP providers stop via the AbortSignal; CLI
     // providers stop by killing the subprocess (`cancelAgentReview` once we know
     // its id). Both are driven by the shared reviews store: the run registers a
@@ -185,21 +222,37 @@ async function run(event: AutomationEvent): Promise<void> {
     const handle = registerAutomationRun({
       // TaskRow already prefixes the mode name, so pass the bare subject.
       title: event.kind === "commit" ? event.hash.slice(0, 7) : event.title,
-      mode: rule.action,
+      mode: action,
       // Same provider-kind signal the manual panel path uses to pick its lane.
       local: isLocalProvider(settings.reviewAi.provider),
       target: automationTarget(event),
       abort: controller,
     });
+    // On cancel, persist the dismissed PR head so a cancelled re-review doesn't
+    // re-fire after an app relaunch (cancel advances no history watermark). PR
+    // events with a headSha only; best-effort — a persistence failure must never
+    // change the cancel outcome. Not written on non-cancel failures, which stay
+    // retryable.
+    const dismissOnCancel = () => {
+      if (event.kind === "commit" || !event.headSha) return;
+      void setDismissedHead(
+        event.repoPath,
+        event.target.type,
+        targetRef(event),
+        action,
+        event.headSha,
+      ).catch(() => undefined);
+    };
     try {
       const text = await generateReviewText(
         settings.reviewAi,
-        rule.action,
+        action,
         event,
         controller.signal,
         handle.setCliId,
       );
       if (handle.isCancelled()) {
+        dismissOnCancel();
         toast.info(`AI ${label} cancelled.`, { duration: 4000 });
         continue;
       }
@@ -213,7 +266,7 @@ async function run(event: AutomationEvent): Promise<void> {
         automated: true,
         text,
       });
-      await deliver(event, rule.action, body, text, notify);
+      await deliver(event, action, body, text, notify);
       // Seed the review-history store so an automated review participates in the
       // iterative loop — the next run (manual or auto) builds on these findings,
       // and its headSha becomes the pr-sync watermark. Best-effort: a
@@ -221,13 +274,14 @@ async function run(event: AutomationEvent): Promise<void> {
       if (event.kind === "pr-open" || event.kind === "pr-sync") {
         await persistReviewHistory(
           event,
-          rule.action,
+          action,
           text,
           settings.reviewAi.model,
         ).catch(() => undefined);
       }
     } catch (e) {
       if (handle.isCancelled()) {
+        dismissOnCancel();
         toast.info(`AI ${label} cancelled.`, { duration: 4000 });
         continue;
       }
