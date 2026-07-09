@@ -17,7 +17,7 @@ import {
 import { Markdown } from "@/components/ui/markdown";
 import { copyText } from "@/lib/clipboard";
 import type { MinimizeReason } from "@/lib/git/api";
-import { useActiveGhHost } from "@/lib/git/host";
+import { useActiveForgeGhHost, useActiveGhHost } from "@/lib/git/host";
 import type { PrThreadOut, Reaction, RepoLabel } from "@/lib/git/types";
 import { formatRelativeTime } from "@/lib/time";
 import { ReactionBar } from "./ReactionBar";
@@ -53,13 +53,28 @@ export function formatReason(reason: string): string {
   return reason.toLowerCase().replace(/_/g, "-");
 }
 
-/** GitHub avatar that links to the author's profile. Avatars are served from
- *  <host>/<login>.png on the open repo's host (github.com or an Enterprise
- *  server); CSP is unrestricted so they load directly, and the Avatar primitive
- *  falls back to the initial if the image can't load. */
-export function AuthorAvatar({ login }: { login: string }) {
+/** A user's avatar that links to their profile. Prefers the provider's real
+ *  `avatarUrl` (GitLab/Bitbucket); with none, derives it from the login on the open
+ *  repo's host (`<host>/<login>.png` — correct for GitHub/Enterprise). CSP is
+ *  unrestricted so images load directly, and the Avatar primitive falls back to the
+ *  initial if the image can't load (e.g. a GitLab user with no avatar). */
+export function AuthorAvatar({
+  login,
+  avatarUrl,
+}: {
+  login: string;
+  /** The provider's real avatar URL when known (GitLab/Bitbucket). When absent,
+   *  the avatar is derived from the login on the open repo's host — correct for
+   *  GitHub, and a graceful fall-through to the initial elsewhere. */
+  avatarUrl?: string;
+}) {
   const host = useActiveGhHost();
+  const ghHost = useActiveForgeGhHost();
   if (!login) return null;
+  // Prefer the provider's real avatar; otherwise derive from the login only on
+  // GitHub (its login serves at `<host>/<login>.png`). Off GitHub with no avatarUrl,
+  // fall through to the initial rather than requesting a bogus `<glhost>/<login>.png`.
+  const src = avatarUrl || (ghHost ? `https://${ghHost}/${login}.png?size=48` : "");
   return (
     <Button
       variant="ghost"
@@ -69,7 +84,7 @@ export function AuthorAvatar({ login }: { login: string }) {
       className="shrink-0 rounded-full hover:opacity-80 cursor-pointer"
     >
       <Avatar size="sm">
-        <AvatarImage src={`https://${host}/${login}.png?size=48`} alt={login} />
+        {src && <AvatarImage src={src} alt={login} />}
         <AvatarFallback>{login.charAt(0).toUpperCase()}</AvatarFallback>
       </Avatar>
     </Button>
@@ -119,7 +134,7 @@ export function Thread({
   return (
     <div className="group space-y-1">
       <p className="flex items-center gap-2 text-xs">
-        <AuthorAvatar login={thread.author} />
+        <AuthorAvatar login={thread.author} avatarUrl={thread.authorAvatarUrl} />
         <span className="font-medium">{thread.author || "unknown"}</span>
         {thread.state && (
           <Badge variant="secondary">{thread.state.toLowerCase()}</Badge>

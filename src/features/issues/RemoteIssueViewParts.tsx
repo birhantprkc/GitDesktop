@@ -712,10 +712,10 @@ function ReadOnlyIssueSidebar({
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-muted-foreground">Assignees</p>
           <ul className="space-y-1">
-            {issue.assignees.map((login) => (
-              <li key={login} className="flex items-center gap-1.5 text-xs">
-                <AuthorAvatar login={login} />
-                <span className="truncate">{login}</span>
+            {issue.assignees.map((user) => (
+              <li key={user.id} className="flex items-center gap-1.5 text-xs">
+                <AuthorAvatar login={user.id} avatarUrl={user.avatarUrl} />
+                <span className="truncate">{user.label}</span>
               </li>
             ))}
           </ul>

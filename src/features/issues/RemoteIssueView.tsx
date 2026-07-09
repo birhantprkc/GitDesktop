@@ -511,7 +511,7 @@ export function RemoteIssueView({
                 : ""}
             </Badge>
           )}
-          <AuthorAvatar login={issue.author} />
+          <AuthorAvatar login={issue.author} avatarUrl={issue.authorAvatarUrl} />
           <span>{issue.author || "unknown"}</span>
           <span>•</span>
           <span>opened {formatRelativeTime(issue.createdAt)}</span>
@@ -523,7 +523,7 @@ export function RemoteIssueView({
             <div className="space-y-4 p-4">
               <div className="group space-y-1">
                 <p className="flex items-center gap-2 text-xs">
-                  <AuthorAvatar login={issue.author} />
+                  <AuthorAvatar login={issue.author} avatarUrl={issue.authorAvatarUrl} />
                   <span className="font-medium">
                     {issue.author || "unknown"}
                   </span>

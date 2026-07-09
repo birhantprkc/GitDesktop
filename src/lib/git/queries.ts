@@ -1138,6 +1138,8 @@ export function useCreateReviewThread(repo: string) {
         comments: [
           {
             author: login ?? "You",
+            // Optimistic: login-derived (GitHub) / initial until the refetch fills it.
+            authorAvatarUrl: "",
             state: "",
             body: args.body,
             date: new Date().toISOString(),
@@ -1359,8 +1361,12 @@ function useOptimisticIssueMutation<TArgs extends { number: number }, TData>(
 export function useSetIssueAssignees(repo: string) {
   return useOptimisticIssueMutation(
     repo,
-    (args: { number: number; assignees: string[] }) =>
-      api.forgeIssueSetAssignees(repo, args.number, args.assignees),
+    (args: { number: number; assignees: ForgeUserRef[] }) =>
+      api.forgeIssueSetAssignees(
+        repo,
+        args.number,
+        args.assignees.map((a) => a.id),
+      ),
     (issue, args) => ({ ...issue, assignees: args.assignees }),
   );
 }
@@ -3329,8 +3335,12 @@ export function useSetPrReviewers(repo: string) {
 export function useSetPrAssignees(repo: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (args: { number: number; assignees: string[] }) =>
-      api.forgeMrSetAssignees(repo, args.number, args.assignees),
+    mutationFn: (args: { number: number; assignees: ForgeUserRef[] }) =>
+      api.forgeMrSetAssignees(
+        repo,
+        args.number,
+        args.assignees.map((a) => a.id),
+      ),
     onMutate: async (args) => {
       const key = ["repo", repo, "pr", args.number] as const;
       await queryClient.cancelQueries({ queryKey: key });
@@ -3498,6 +3508,8 @@ function useOptimisticCreateCommentMutation<TData>(
       const prev = queryClient.getQueryData<PrDetails | IssueDetails>(key);
       const synthetic: PrThreadOut = {
         author: args.author,
+        // Optimistic: login-derived (GitHub) / initial until the refetch fills it.
+        authorAvatarUrl: "",
         state: "",
         body: args.body,
         date: new Date().toISOString(),

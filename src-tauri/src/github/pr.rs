@@ -1258,6 +1258,19 @@ struct RawLogin {
     login: String,
 }
 
+/// One entry of `gh pr view --json reviewRequests` — a *pending* requested
+/// reviewer (users who already submitted a review show in the reviews surface,
+/// not here). Each is either a `User` (`login`) or a `Team`; `__typename`
+/// disambiguates, and we keep only Users (teams have no `login`). Verified live:
+/// `{"__typename":"User","login":"…"}`.
+#[derive(Deserialize)]
+struct RawReviewRequest {
+    #[serde(rename = "__typename", default)]
+    typename: String,
+    #[serde(default)]
+    login: String,
+}
+
 #[derive(Deserialize)]
 struct RawCommitAuthor {
     #[serde(default)]
@@ -1423,6 +1436,8 @@ struct RawPr {
     labels: Vec<RepoLabel>,
     #[serde(default)]
     assignees: Vec<RawLogin>,
+    #[serde(default)]
+    review_requests: Vec<RawReviewRequest>,
 }
 
 #[derive(Serialize)]
@@ -1450,6 +1465,10 @@ pub struct PrFileOut {
 #[serde(rename_all = "camelCase")]
 pub struct PrThreadOut {
     pub author: String,
+    /// The comment author's avatar URL when the provider supplies one
+    /// (GitLab/Bitbucket). Empty for GitHub, where it's login-derived on the
+    /// frontend (`<host>/<login>.png`).
+    pub author_avatar_url: String,
     pub state: String,
     pub body: String,
     pub date: String,
@@ -1582,6 +1601,9 @@ pub struct PrDetails {
     pub title: String,
     pub body: String,
     pub author: String,
+    /// The author's avatar URL when the provider supplies one (GitLab/Bitbucket).
+    /// Empty for GitHub, where it's login-derived on the frontend.
+    pub author_avatar_url: String,
     pub state: String,
     pub is_draft: bool,
     pub base_ref_name: String,
@@ -1595,13 +1617,14 @@ pub struct PrDetails {
     pub comments: Vec<PrThreadOut>,
     pub checks: Vec<PrCheckOut>,
     pub labels: Vec<RepoLabel>,
-    /// Assignee usernames. GitHub and GitLab both fill this — the MR/PR-assignees
-    /// picker is wired for both (`implemented.mrAssignees`); Bitbucket PRs have no
-    /// assignee concept, so it stays empty there.
-    pub assignees: Vec<String>,
-    /// The reviewer list. Only Bitbucket fills this — the reviewers picker is
-    /// Bitbucket-only (`implemented.mrReviewers`); identity is the provider's
-    /// stable id (Bitbucket: the braced account uuid), label the display name.
+    /// Assignees. GitHub and GitLab both fill this — the MR/PR-assignees picker is
+    /// wired for both (`implemented.mrAssignees`); Bitbucket PRs have no assignee
+    /// concept, so it stays empty there. Carries each user's avatar (GitLab supplies
+    /// it; GitHub is login-derived) so chips render a photo without a candidate fetch.
+    pub assignees: Vec<crate::forge::model::ForgeUserRef>,
+    /// The reviewer list. All three providers fill this when `implemented.mr_reviewers`
+    /// is true; the id is the provider's stable handle (GitHub login, GitLab username,
+    /// Bitbucket the braced account uuid), the label the display name.
     pub reviewers: Vec<crate::forge::model::ForgeUserRef>,
 }
 
@@ -1632,7 +1655,7 @@ pub struct ApprovalState {
     pub viewer_requested_changes: bool,
 }
 
-const PR_VIEW_FIELDS: &str = "id,number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup,labels,assignees";
+const PR_VIEW_FIELDS: &str = "id,number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,url,commits,files,reviews,comments,statusCheckRollup,labels,assignees,reviewRequests";
 
 /// Full details for one PR's read view.
 #[tauri::command]
@@ -1690,6 +1713,9 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
         title: raw.title,
         body: raw.body,
         author: login(raw.author),
+        // GitHub carries no avatar URL in the API; the frontend derives it from
+        // the login, so leave it empty here.
+        author_avatar_url: String::new(),
         state: raw.state,
         is_draft: raw.is_draft,
         base_ref_name: raw.base_ref_name,
@@ -1722,6 +1748,7 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
             .into_iter()
             .map(|r| PrThreadOut {
                 author: login(r.author),
+                author_avatar_url: String::new(),
                 state: r.state,
                 body: r.body,
                 date: r.submitted_at,
@@ -1737,6 +1764,7 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
             .into_iter()
             .map(|c| PrThreadOut {
                 author: login(c.author),
+                author_avatar_url: String::new(),
                 state: String::new(),
                 body: c.body,
                 date: c.created_at,
@@ -1778,9 +1806,148 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
             })
             .collect(),
         labels: raw.labels,
-        assignees: raw.assignees.into_iter().map(|a| a.login).collect(),
-        reviewers: Vec::new(),
+        assignees: raw
+            .assignees
+            .into_iter()
+            .map(|a| crate::forge::model::ForgeUserRef {
+                id: a.login.clone(),
+                label: a.login,
+                // GitHub avatar is login-derived on the frontend.
+                avatar_url: String::new(),
+            })
+            .collect(),
+        // Pending requested USER reviewers (id = label = login). Team requests are
+        // left out of the picker's model for now (the setter preserves them) — the
+        // reviewer picker manages people; team display is a follow-up.
+        reviewers: raw
+            .review_requests
+            .into_iter()
+            .filter(|r| r.typename == "User" && !r.login.is_empty())
+            .map(|r| crate::forge::model::ForgeUserRef {
+                id: r.login.clone(),
+                label: r.login,
+                // GitHub avatar is derived from the login on the frontend.
+                avatar_url: String::new(),
+            })
+            .collect(),
     })
+}
+
+/// The PR's current PENDING requested reviewers that are USERS (logins). Teams
+/// are intentionally excluded so [`set_pr_reviewers`] can preserve them untouched.
+async fn current_requested_reviewer_logins(repo_path: &str, number: u64) -> AppResult<Vec<String>> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Wrap {
+        #[serde(default)]
+        review_requests: Vec<RawReviewRequest>,
+    }
+    let out = run_gh(
+        Some(repo_path),
+        &["pr", "view", &number.to_string(), "--json", "reviewRequests"],
+        GH_TIMEOUT,
+    )
+    .await?;
+    let wrap: Wrap = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse reviewRequests: {e}")))?;
+    Ok(wrap
+        .review_requests
+        .into_iter()
+        .filter(|r| r.typename == "User" && !r.login.is_empty())
+        .map(|r| r.login)
+        .collect())
+}
+
+/// The PR author's login (`gh pr view --json author`) — excluded from the reviewer
+/// candidates, because GitHub rejects requesting a review from the author.
+async fn pr_author_login(repo_path: &str, number: u64) -> AppResult<String> {
+    let out = run_gh(
+        Some(repo_path),
+        // `// empty` so a GraphQL-null author (deleted account / some bots) yields an
+        // empty string, not the literal "null" — otherwise the `!= author` candidate
+        // filter compares against "null" and never excludes the real author.
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--json",
+            "author",
+            "-q",
+            ".author.login // empty",
+        ],
+        GH_TIMEOUT,
+    )
+    .await?;
+    Ok(out.stdout_lossy().trim().to_string())
+}
+
+/// Replace a PR's requested USER reviewers with `desired` (logins) by diffing
+/// against the current pending user requests and running one `gh pr edit
+/// --add-reviewer … --remove-reviewer …`. **Team** requests are never touched
+/// (they're not in the diff), so managing people here can't drop a team. GitHub
+/// rejects requesting a review from the PR author, and a reviewer who already
+/// submitted needs a *re-request* — those failures surface as the gh error rather
+/// than being swallowed (`run_gh` carries the stderr).
+pub async fn set_pr_reviewers(repo_path: &str, number: u64, desired: &[String]) -> AppResult<()> {
+    use std::collections::HashSet;
+    let current = current_requested_reviewer_logins(repo_path, number).await?;
+    let desired_set: HashSet<&str> = desired.iter().map(String::as_str).collect();
+    let current_set: HashSet<&str> = current.iter().map(String::as_str).collect();
+    let add: Vec<&str> = desired
+        .iter()
+        .map(String::as_str)
+        .filter(|l| !l.is_empty() && !current_set.contains(l))
+        .collect();
+    let remove: Vec<&str> = current
+        .iter()
+        .map(String::as_str)
+        .filter(|l| !desired_set.contains(l))
+        .collect();
+    if add.is_empty() && remove.is_empty() {
+        return Ok(());
+    }
+    let num = number.to_string();
+    let add_csv = add.join(",");
+    let remove_csv = remove.join(",");
+    let mut args: Vec<&str> = vec!["pr", "edit", &num];
+    if !add.is_empty() {
+        args.push("--add-reviewer");
+        args.push(&add_csv);
+    }
+    if !remove.is_empty() {
+        args.push("--remove-reviewer");
+        args.push(&remove_csv);
+    }
+    run_gh(Some(repo_path), &args, GH_NETWORK_TIMEOUT).await?;
+    Ok(())
+}
+
+/// The reviewer picker's candidates for a GitHub PR: the repo's assignable users
+/// (a close proxy for requestable reviewers — the overlap isn't exact, so a
+/// non-requestable pick surfaces as a gh error on set), minus the user GitHub
+/// would reject as a reviewer. For an existing PR (`Some`) that's the author; at
+/// create time (`None`, no PR yet) it's the viewer. Sorted by login for a stable list.
+pub async fn reviewer_candidates(
+    repo_path: &str,
+    number: Option<u64>,
+) -> AppResult<Vec<crate::forge::model::ForgeUserRef>> {
+    let logins = crate::github::issue::gh_assignable_users(repo_path.to_string()).await?;
+    let exclude = match number {
+        Some(n) => pr_author_login(repo_path, n).await.unwrap_or_default(),
+        None => current_login(repo_path).await.unwrap_or_default(),
+    };
+    let mut out: Vec<crate::forge::model::ForgeUserRef> = logins
+        .into_iter()
+        .filter(|l| !l.is_empty() && *l != exclude)
+        .map(|l| crate::forge::model::ForgeUserRef {
+            id: l.clone(),
+            label: l,
+            // GitHub avatar is derived from the login on the frontend.
+            avatar_url: String::new(),
+        })
+        .collect();
+    out.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    Ok(out)
 }
 
 const PR_REACTIONS_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ reactionGroups{ content viewerHasReacted reactors{ totalCount } } comments(first:100){ nodes{ id reactionGroups{ content viewerHasReacted reactors{ totalCount } } } } } } }";
@@ -2754,6 +2921,7 @@ pub async fn gh_pr_review_threads(
                         arr.iter()
                             .map(|c| PrThreadOut {
                                 author: str_at(c, "/author/login"),
+                                author_avatar_url: String::new(),
                                 state: String::new(),
                                 body: str_at(c, "/body"),
                                 date: str_at(c, "/createdAt"),

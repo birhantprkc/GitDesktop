@@ -167,8 +167,7 @@ pub struct BbAccountInfo {
 
 /// A Bitbucket user (`/2.0/user`, or an embedded author object). For other users
 /// `username` is absent (privacy) — only the authenticated self carries it, so the
-/// stable cross-user identity is `uuid` (braced, present on every user object). The
-/// avatar link is deliberately not deserialized (unused by the neutral model).
+/// stable cross-user identity is `uuid` (braced, present on every user object).
 #[derive(Deserialize)]
 struct BbUser {
     /// The braced account UUID (`{…}`) — the ONE identity field present on both the
@@ -182,6 +181,23 @@ struct BbUser {
     display_name: Option<String>,
     #[serde(default)]
     nickname: Option<String>,
+    /// `links.avatar.href` — the profile image, for the reviewer picker. Present on
+    /// the unfielded single-PR GET and default-reviewers; the workspace-members read
+    /// requests it explicitly (its `fields=` filter would otherwise omit it).
+    #[serde(default)]
+    links: Option<BbUserLinks>,
+}
+
+#[derive(Deserialize)]
+struct BbUserLinks {
+    #[serde(default)]
+    avatar: Option<BbUserLink>,
+}
+
+#[derive(Deserialize)]
+struct BbUserLink {
+    #[serde(default)]
+    href: String,
 }
 
 /// Connect a Bitbucket account: validate the creds via `GET /2.0/user` BEFORE
@@ -520,6 +536,15 @@ fn user_login(u: &BbUser) -> String {
         .clone()
         .or_else(|| u.nickname.clone())
         .or_else(|| u.username.clone())
+        .unwrap_or_default()
+}
+
+/// The user's avatar URL (`links.avatar.href`), or empty when absent.
+fn user_avatar(u: &BbUser) -> String {
+    u.links
+        .as_ref()
+        .and_then(|l| l.avatar.as_ref())
+        .map(|a| a.href.clone())
         .unwrap_or_default()
 }
 
@@ -1030,6 +1055,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         title: pr.title,
         body: pr.description.unwrap_or_default(),
         author: pr.author.as_ref().map(user_login).unwrap_or_default(),
+        author_avatar_url: pr.author.as_ref().map(user_avatar).unwrap_or_default(),
         state: map_bb_pr_state(&pr.state),
         is_draft: pr.draft,
         base_ref_name: branch_name(&pr.destination),
@@ -1057,6 +1083,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
                 Some(ForgeUserRef {
                     id,
                     label: user_login(u),
+                    avatar_url: user_avatar(u),
                 })
             })
             .collect(),
@@ -1210,6 +1237,7 @@ fn from_bb_comment(c: BbComment, viewer_uuid: &str) -> PrThreadOut {
     let viewer_did_author = comment_authored_by_viewer(c.user.as_ref(), viewer_uuid);
     PrThreadOut {
         author: c.user.as_ref().map(user_login).unwrap_or_default(),
+        author_avatar_url: c.user.as_ref().map(user_avatar).unwrap_or_default(),
         state: String::new(),
         body,
         date: c.created_on,
@@ -1981,6 +2009,7 @@ fn group_bb_threads(comments: Vec<BbComment>, viewer_uuid: &str) -> Vec<ReviewTh
                 .map(|c| PrThreadOut {
                     viewer_did_author: comment_authored_by_viewer(c.user.as_ref(), viewer_uuid),
                     author: c.user.as_ref().map(user_login).unwrap_or_default(),
+                    author_avatar_url: c.user.as_ref().map(user_avatar).unwrap_or_default(),
                     state: String::new(),
                     body: c.content.as_ref().map(|r| r.raw.clone()).unwrap_or_default(),
                     date: c.created_on.clone(),
@@ -2378,6 +2407,7 @@ fn reviewer_candidates_from(members: Vec<BbUser>, author_uuid: &str) -> Vec<Forg
             Some(ForgeUserRef {
                 id,
                 label: user_login(&u),
+                avatar_url: user_avatar(&u),
             })
         })
         .collect();
@@ -2393,7 +2423,7 @@ fn reviewer_candidates_from(members: Vec<BbUser>, author_uuid: &str) -> Vec<Forg
 async fn workspace_members(creds: &BbCredentials, ws: &str) -> AppResult<Vec<BbUser>> {
     let mut members: Vec<BbUser> = Vec::new();
     let mut url = format!(
-        "workspaces/{}/members?pagelen=100&fields=values.user.uuid,values.user.display_name,values.user.nickname,next",
+        "workspaces/{}/members?pagelen=100&fields=values.user.uuid,values.user.display_name,values.user.nickname,values.user.links.avatar.href,next",
         encode_query_value(ws),
     );
     for _ in 0..5 {
@@ -3814,6 +3844,7 @@ pub async fn default_reviewers(repo_path: &str) -> AppResult<Vec<ForgeUserRef>> 
             out.push(ForgeUserRef {
                 id,
                 label: user_login(&u),
+                avatar_url: user_avatar(&u),
             });
         }
         match page.next {
@@ -4813,18 +4844,21 @@ mod tests {
             username: None,
             display_name: Some("Me".into()),
             nickname: None,
+            links: None,
         };
         let theirs = BbUser {
             uuid: Some("{other-uuid}".into()),
             username: None,
             display_name: Some("Them".into()),
             nickname: None,
+            links: None,
         };
         let no_uuid = BbUser {
             uuid: None,
             username: None,
             display_name: Some("Anon".into()),
             nickname: None,
+            links: None,
         };
         // Match → true.
         assert!(comment_authored_by_viewer(Some(&mine), "{me-uuid}"));

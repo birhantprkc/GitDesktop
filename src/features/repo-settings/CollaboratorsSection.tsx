@@ -18,6 +18,7 @@ import {
   useCollaborators,
   useInvitations,
   useRemoveCollaborator,
+  useRepoSettings,
   useUpdateInvitation,
 } from "@/lib/git/queries";
 import type { RepoRole } from "@/lib/git/types";
@@ -46,10 +47,24 @@ export function CollaboratorsSection({
 }) {
   const collaborators = useCollaborators(repoPath, open);
   const invitations = useInvitations(repoPath, open);
+  const settings = useRepoSettings(repoPath, open);
   const add = useAddCollaborator(repoPath);
   const remove = useRemoveCollaborator(repoPath);
   const updateInvite = useUpdateInvitation(repoPath);
   const cancelInvite = useCancelInvitation(repoPath);
+
+  // GitHub silently clamps triage/maintain/admin to `write` on a USER-owned repo
+  // (the PUT returns 204 but never applies them), so only Read/Write actually work
+  // there. Offer the granular roles on org repos only.
+  const isOrg = settings.data?.isOrg ?? false;
+  // Until settings resolve, show the FULL role set rather than clamping — otherwise an
+  // existing org "maintain"/"admin" collaborator whose row loads from cache first would
+  // briefly hold a Select value with no matching item. Once we KNOW it's a personal
+  // repo, filter to the two roles that actually stick.
+  const roles =
+    !settings.data || settings.data.isOrg
+      ? ROLES
+      : ROLES.filter((r) => r.value === "read" || r.value === "write");
 
   const [username, setUsername] = useState("");
   const [role, setRole] = useState<RepoRole>("read");
@@ -92,7 +107,7 @@ export function CollaboratorsSection({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {ROLES.map((r) => (
+              {roles.map((r) => (
                 <SelectItem key={r.value} value={r.value}>
                   {r.label}
                 </SelectItem>
@@ -108,6 +123,14 @@ export function CollaboratorsSection({
             Invite
           </Button>
         </div>
+        {settings.data && !isOrg && (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Personal repositories support the{" "}
+            <span className="font-medium text-foreground">Read</span> and{" "}
+            <span className="font-medium text-foreground">Write</span> roles only.
+            Triage, Maintain, and Admin apply to organization repositories.
+          </p>
+        )}
       </div>
 
       <AsyncListBody
@@ -128,6 +151,7 @@ export function CollaboratorsSection({
               avatarUrl={c.avatarUrl}
               roleValue={c.roleName}
               roleDisabled={add.isPending}
+              roles={roles}
               onRole={(r) =>
                 add.mutate(
                   { username: c.login, role: r },
@@ -174,6 +198,7 @@ export function CollaboratorsSection({
                 }
                 roleValue={inv.permission}
                 roleDisabled={updateInvite.isPending}
+                roles={roles}
                 onRole={(r) =>
                   updateInvite.mutate(
                     { id: inv.id, permission: r },
@@ -216,6 +241,7 @@ function PersonRow({
   meta,
   roleValue,
   roleDisabled,
+  roles,
   onRole,
   confirming,
   pending,
@@ -228,6 +254,7 @@ function PersonRow({
   meta?: string;
   roleValue: string;
   roleDisabled: boolean;
+  roles: { value: RepoRole; label: string }[];
   onRole: (role: RepoRole) => void;
   confirming: boolean;
   pending: boolean;
@@ -269,7 +296,7 @@ function PersonRow({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {ROLES.map((r) => (
+              {roles.map((r) => (
                 <SelectItem key={r.value} value={r.value}>
                   {r.label}
                 </SelectItem>

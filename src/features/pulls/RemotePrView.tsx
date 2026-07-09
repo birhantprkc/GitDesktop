@@ -17,6 +17,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ForgeUserAvatar } from "@/components/forge-user-avatar";
 import {
   MarkdownEditor,
   type MarkdownEditorHandle,
@@ -60,6 +61,7 @@ import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
 import type { MergeStrategy, MinimizeReason } from "@/lib/git/api";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
+import { useForgeGhHost } from "@/lib/git/host";
 import {
   PIPELINE_IN_FLIGHT,
   prDiffOptions,
@@ -202,6 +204,9 @@ export function RemotePrView({
   const prDiff = usePrDiff(repoPath, number);
   const setAssignees = useSetPrAssignees(repoPath);
   const setReviewers = useSetPrReviewers(repoPath);
+  // For the read-only assignee/reviewer chips (closed/merged PRs): GitHub avatars
+  // are login-derived, GitLab/Bitbucket carry a real avatarUrl on the ref.
+  const ghHost = useForgeGhHost(repoPath);
   const comment = useCommentPr(repoPath);
   const checkout = useCheckoutPr(repoPath);
   const repoStatus = useRepoStatus(repoPath);
@@ -754,7 +759,7 @@ export function RemotePrView({
           <Badge variant={pr.state === "OPEN" ? "default" : "secondary"}>
             {pr.isDraft ? "Draft" : pr.state.toLowerCase()}
           </Badge>
-          <AuthorAvatar login={pr.author} />
+          <AuthorAvatar login={pr.author} avatarUrl={pr.authorAvatarUrl} />
           <span>{pr.author}</span>
           <span>•</span>
           <span className="font-mono">{pr.headRefName}</span>
@@ -800,12 +805,13 @@ export function RemotePrView({
         ) : (
           pr.assignees.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
-              {pr.assignees.map((login) => (
+              {pr.assignees.map((user) => (
                 <span
-                  key={login}
-                  className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                  key={user.id}
+                  className="inline-flex items-center gap-1 border py-0.5 pr-1.5 pl-0.5 text-[11px] text-muted-foreground"
                 >
-                  @{login}
+                  <ForgeUserAvatar user={user} ghHost={ghHost} />
+                  {user.label}
                 </span>
               ))}
             </div>
@@ -836,8 +842,9 @@ export function RemotePrView({
                   <span
                     key={user.id}
                     title={hint ? `${user.label} (${hint})` : undefined}
-                    className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                    className="inline-flex items-center gap-1 border py-0.5 pr-1.5 pl-0.5 text-[11px] text-muted-foreground"
                   >
+                    <ForgeUserAvatar user={user} ghHost={ghHost} />
                     {user.label}
                     {hint && (
                       <span className="text-muted-foreground"> · {hint}</span>

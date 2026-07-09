@@ -241,6 +241,19 @@ pub async fn git_diff_contents(old: String, new: String) -> AppResult<String> {
     result
 }
 
+/// Test-only helper: the body of `git_resolve_conflict` without the Tauri
+/// `State` (the repo lock the command takes isn't needed in a single-threaded
+/// test), so the resolve path is exercised end-to-end against a real repo.
+#[cfg(test)]
+pub(crate) async fn resolve_for_test(repo: &str, path: &str, content: &str) {
+    tokio::fs::write(Path::new(repo).join(path), content)
+        .await
+        .unwrap();
+    run_git(Some(repo), &["add", "--", path], DEFAULT_TIMEOUT)
+        .await
+        .unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,17 +408,4 @@ mod tests {
         assert!(text.contains("-two"));
         assert!(text.contains("+TWO"));
     }
-}
-
-/// Test-only helper: the body of `git_resolve_conflict` without the Tauri
-/// `State` (the repo lock the command takes isn't needed in a single-threaded
-/// test), so the resolve path is exercised end-to-end against a real repo.
-#[cfg(test)]
-pub(crate) async fn resolve_for_test(repo: &str, path: &str, content: &str) {
-    tokio::fs::write(Path::new(repo).join(path), content)
-        .await
-        .unwrap();
-    run_git(Some(repo), &["add", "--", path], DEFAULT_TIMEOUT)
-        .await
-        .unwrap();
 }

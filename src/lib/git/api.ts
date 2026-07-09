@@ -1257,7 +1257,7 @@ export const forgeIssueCreate = (
   });
 
 export const forgeAssignableUsers = (repoPath: string) =>
-  invoke<string[]>("forge_assignable_users", { repoPath });
+  invoke<ForgeUserRef[]>("forge_assignable_users", { repoPath });
 
 /** Open/active milestones for the milestone picker. `number` is whatever key the
  *  provider's milestone write takes (GitHub milestone number, GitLab global id). */

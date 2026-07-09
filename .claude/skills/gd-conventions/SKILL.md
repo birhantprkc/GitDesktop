@@ -46,6 +46,13 @@ user's parallel work. Implementers fix only their own files via
 `pnpm exec biome check --write <files in scope>`; reviewers never run any
 `--write` form.
 
+⚠ **`biome check` false-fails on CRLF (this Windows worktree).** autocrlf checks
+files out CRLF, and `biome check` (formatter included) flags a CR on **unedited**
+files as an error — a red result that isn't yours. To verify YOUR change, run
+`pnpm exec biome lint <your files>` (lint only, no formatter) plus
+`git diff --numstat` (content-only edits show small, balanced counts; a whole-file
+EOL flip shows huge matched +/−). Never "fix" it by converting line endings.
+
 ## Frontend conventions
 
 **Design tokens.** Mono + dark + one mint accent; semantic state tokens in
@@ -132,7 +139,10 @@ clickables add `cursor-pointer` at the call site (vendored Button sets none).
 CLAUDE.md defines the full rule; short form for a user-facing feature: README
 *Highlights/Features* bullet → site `capabilities` (+ `FeatureRow` when it
 warrants; non-AI features in both site views) → in-app guide
-`src/features/help/content.ts` → `CHANGELOG.md` under `## [Unreleased]`.
+`src/features/help/content.ts` → a `changelog.d/<added|changed|fixed>-<slug>.md`
+fragment (its body is the finished Keep-a-Changelog bullet). **Never hand-edit
+`## [Unreleased]` in `CHANGELOG.md`** — it's *generated* from the fragments at
+release time; one file per change keeps parallel branches conflict-free.
 
 **In a delegated package the spec's `Docs-sync:` field is authoritative:**
 apply exactly what it lists (those files are thereby in scope); "orchestrator

@@ -35,9 +35,11 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 
 ## Highlights
 
-- **The whole PR lifecycle, in-app** — review, comment, label, **assign**, approve,
-  edit, and merge (merge/squash/rebase) GitHub PRs without the browser — and set
-  **labels and assignees** right when you **open** the PR/MR (GitHub and GitLab).
+- **The whole PR lifecycle, in-app** — review, comment, label, **assign**,
+  **request reviewers**, approve, edit, and merge (merge/squash/rebase) GitHub PRs
+  without the browser — and set **labels and assignees** right when you **open** the
+  PR/MR (GitHub and GitLab). Requesting reviewers works across GitHub, GitLab, and
+  Bitbucket.
   A PR's Conversation is a **date-sorted activity feed** — reviews, comments,
   **pushed commits** (grouped, each SHA clickable to that commit), and events, with an
   **approval marked stale** once later commits land — now on **GitHub, GitLab, and

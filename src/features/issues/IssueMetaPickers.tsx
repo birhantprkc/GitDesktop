@@ -6,6 +6,7 @@ import {
   UserPlusIcon,
 } from "@phosphor-icons/react";
 import { type ComponentProps, useState } from "react";
+import { ForgeUserAvatar } from "@/components/forge-user-avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -14,12 +15,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useForgeGhHost } from "@/lib/git/host";
 import {
   useAssignableUsers,
   useIssueTypes,
   useMilestones,
 } from "@/lib/git/queries";
-import type { IssueType } from "@/lib/git/types";
+import type { ForgeUserRef, IssueType } from "@/lib/git/types";
 import { cn } from "@/lib/utils";
 
 /** GitHub issue-type color NAMES → a swatch hex (matches GitHub's palette). */
@@ -53,10 +55,12 @@ function TypeDot({
 }
 
 /**
- * Assignee multi-select shared by the create dialog and the issue view.
+ * Assignee multi-select shared by the create dialog and the issue/PR view.
  * `commitOnClose` batches edits into one `onChange` when the popover closes
  * (used in the view, where each change is a network PATCH); otherwise it fires
- * per toggle (used in the create dialog, where state is local).
+ * per toggle (used in the create dialog, where state is local). Entries are
+ * `ForgeUserRef`s so rows and chips render the provider's avatar (GitLab/Bitbucket
+ * supply a real URL; GitHub is login-derived), mirroring the reviewer picker.
  */
 export function AssigneesPopover({
   repoPath,
@@ -67,50 +71,57 @@ export function AssigneesPopover({
 }: {
   repoPath: string;
   enabled: boolean;
-  value: string[];
-  onChange: (next: string[]) => void;
+  value: ForgeUserRef[];
+  onChange: (next: ForgeUserRef[]) => void;
   commitOnClose?: boolean;
 }) {
   const users = useAssignableUsers(repoPath, enabled);
+  const ghHost = useForgeGhHost(repoPath);
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<Set<string>>(new Set(value));
-  const checked = commitOnClose ? draft : new Set(value);
+  const [draft, setDraft] = useState<Map<string, ForgeUserRef>>(new Map());
+  // Per-toggle mode reads `value`; commit-on-close mode reads the local draft
+  // (seeded from `value` on open). Compare by the provider's stable id.
+  const checkedIds = commitOnClose
+    ? new Set(draft.keys())
+    : new Set(value.map((u) => u.id));
 
-  function toggle(login: string, on: boolean) {
+  function toggle(user: ForgeUserRef, on: boolean) {
     if (commitOnClose) {
       setDraft((prev) => {
-        const next = new Set(prev);
-        if (on) next.add(login);
-        else next.delete(login);
+        const next = new Map(prev);
+        if (on) next.set(user.id, user);
+        else next.delete(user.id);
         return next;
       });
       return;
     }
-    const next = new Set(value);
-    if (on) next.add(login);
-    else next.delete(login);
-    onChange([...next]);
+    const next = new Map(value.map((u) => [u.id, u]));
+    if (on) next.set(user.id, user);
+    else next.delete(user.id);
+    onChange([...next.values()]);
   }
 
   function handleOpenChange(o: boolean) {
     if (o) {
-      setDraft(new Set(value));
+      setDraft(new Map(value.map((u) => [u.id, u])));
       setOpen(true);
       return;
     }
     setOpen(false);
     // Only commit when the draft actually differs from `value` — otherwise
     // merely opening and closing the popover would fire a redundant assignees
-    // PATCH (onChange → the view's mutation). Compare membership sets.
+    // PATCH (onChange → the view's mutation). Compare id sets.
     if (commitOnClose) {
-      const current = new Set(value);
+      const valueIds = new Set(value.map((u) => u.id));
       const changed =
-        draft.size !== current.size ||
-        value.some((login) => !draft.has(login)) ||
-        [...draft].some((login) => !current.has(login));
-      if (changed) onChange([...draft]);
+        draft.size !== valueIds.size ||
+        value.some((u) => !draft.has(u.id)) ||
+        [...draft.keys()].some((id) => !valueIds.has(id));
+      if (changed) onChange([...draft.values()]);
     }
   }
+
+  const loaded = users.data ?? [];
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -131,33 +142,35 @@ export function AssigneesPopover({
           >
             <Popover.Popup className="w-60 rounded-none bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
               <p className="px-1 pb-1.5 text-xs font-medium">Assignees</p>
-              {(users.data ?? []).length === 0 && (
+              {loaded.length === 0 && (
                 <p className="px-1 py-1 text-xs text-muted-foreground">
                   {users.isPending ? "Loading…" : "No assignable users."}
                 </p>
               )}
-              {(users.data ?? []).map((login) => (
+              {loaded.map((user) => (
                 <label
-                  key={login}
+                  key={user.id}
                   className="flex cursor-pointer items-center gap-2 px-1 py-1.5 text-xs hover:bg-muted/60"
                 >
                   <Checkbox
-                    checked={checked.has(login)}
-                    onCheckedChange={(v) => toggle(login, v === true)}
+                    checked={checkedIds.has(user.id)}
+                    onCheckedChange={(v) => toggle(user, v === true)}
                   />
-                  <span className="flex-1 truncate">{login}</span>
+                  <ForgeUserAvatar user={user} ghHost={ghHost} />
+                  <span className="flex-1 truncate">{user.label}</span>
                 </label>
               ))}
             </Popover.Popup>
           </Popover.Positioner>
         </Popover.Portal>
       </Popover.Root>
-      {value.map((login) => (
+      {value.map((user) => (
         <span
-          key={login}
-          className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+          key={user.id}
+          className="inline-flex items-center gap-1 border py-0.5 pr-1.5 pl-0.5 text-[11px] text-muted-foreground"
         >
-          @{login}
+          <ForgeUserAvatar user={user} ghHost={ghHost} />
+          {user.label}
         </span>
       ))}
     </div>

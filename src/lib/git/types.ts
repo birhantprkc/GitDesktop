@@ -1099,6 +1099,10 @@ export interface RepoSettings {
   /** Forking is only changeable on an org-owned private repo; the toggle hides
    *  otherwise (and `allowForking` is sent as null so the PATCH doesn't 422). */
   canChangeForking: boolean;
+  /** Read-only, computed — whether the repo is org-owned. GitHub silently clamps
+   *  triage/maintain/admin collaborator roles to write on a user-owned repo, so
+   *  the Access UI offers only Read/Write there. */
+  isOrg: boolean;
   /** Default squash/merge commit title+message (a constrained enum pair). */
   squashMergeCommitTitle: string;
   squashMergeCommitMessage: string;
@@ -1118,6 +1122,7 @@ export type RepoSettingsInput = Omit<
   | "fullName"
   | "archived"
   | "canChangeForking"
+  | "isOrg"
   | "allowForking"
 > & {
   description: string;
@@ -1338,6 +1343,9 @@ export interface PrFileOut {
 
 export interface PrThreadOut {
   author: string;
+  /** The comment author's avatar URL when the provider supplies one
+   *  (GitLab/Bitbucket). Empty for GitHub, where it's login-derived. */
+  authorAvatarUrl: string;
   /** Review state (APPROVED/COMMENTED/CHANGES_REQUESTED); "" for comments. */
   state: string;
   body: string;
@@ -1453,6 +1461,9 @@ export interface PrDetails {
   title: string;
   body: string;
   author: string;
+  /** The author's avatar URL when the provider supplies one (GitLab/Bitbucket).
+   *  Empty for GitHub, where it's login-derived on the frontend. */
+  authorAvatarUrl: string;
   state: string;
   isDraft: boolean;
   baseRefName: string;
@@ -1466,12 +1477,13 @@ export interface PrDetails {
   comments: PrThreadOut[];
   checks: PrCheckOut[];
   labels: RepoLabel[];
-  /** Assignee usernames. Only GitLab fills this — the MR-assignees picker is
-   *  GitLab-only (`implemented.mrAssignees`); GitHub leaves it empty. */
-  assignees: string[];
-  /** The reviewer list. Only Bitbucket fills this — the reviewers picker is
-   *  Bitbucket-only (`implemented.mrReviewers`). Identity is the provider's
-   *  stable id (Bitbucket: the braced account uuid), never the display label. */
+  /** Assignees. GitHub and GitLab both fill this (the MR/PR-assignees picker is
+   *  wired for both, `implemented.mrAssignees`); Bitbucket leaves it empty. Each
+   *  carries an avatar (GitLab supplies it; GitHub is login-derived). */
+  assignees: ForgeUserRef[];
+  /** The reviewer list. All three providers fill this when `implemented.mrReviewers`
+   *  is true; the id is the provider's stable handle (GitHub login, GitLab username,
+   *  Bitbucket the braced account uuid), the label the display name, never the id. */
   reviewers: ForgeUserRef[];
 }
 
@@ -1482,6 +1494,9 @@ export interface PrDetails {
 export interface ForgeUserRef {
   id: string;
   label: string;
+  /** The user's avatar URL when the provider supplies one (GitLab/Bitbucket).
+   *  Empty for GitHub, where the picker derives it from the login. */
+  avatarUrl: string;
 }
 
 /** One review item on a PR/MR (a submitted review, an inline review comment, or a
@@ -1680,10 +1695,15 @@ export interface IssueDetails {
   title: string;
   body: string;
   author: string;
+  /** The author's avatar URL when the provider supplies one (GitLab). Empty for
+   *  GitHub, where it's login-derived on the frontend. */
+  authorAvatarUrl: string;
   state: string;
   createdAt: string;
   url: string;
-  assignees: string[];
+  /** Assignees (GitHub + GitLab). Each carries an avatar (GitLab supplies it;
+   *  GitHub is login-derived). */
+  assignees: ForgeUserRef[];
   milestone: Milestone | null;
   issueType: IssueType | null;
   isPinned: boolean;

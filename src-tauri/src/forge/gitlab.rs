@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 use crate::forge::glab::{run_glab, run_glab_ex, run_glab_raw, GLAB_NETWORK_TIMEOUT, GLAB_TIMEOUT};
 use crate::forge::model::{
-    Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, Implemented, Provider,
+    Capabilities, ForgeRepo, ForgeRepoList, ForgeStatus, ForgeUserRef, Implemented, Provider,
 };
 use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
@@ -236,6 +236,9 @@ where
 #[derive(Deserialize)]
 struct GlabMrUser {
     username: String,
+    /// Profile image; GitLab sends `null` when unset, so coerce to "".
+    #[serde(default, deserialize_with = "null_to_default")]
+    avatar_url: String,
 }
 
 /// A merge request as `glab api …/merge_requests` returns it (list shape).
@@ -420,6 +423,10 @@ struct GlabMrChanges {
     author: Option<GlabMrUser>,
     #[serde(default, deserialize_with = "null_to_default")]
     assignees: Vec<GlabMrUser>,
+    /// The MR's reviewers (inline on the detail GET), separate from assignees —
+    /// what the reviewer picker reads and edits.
+    #[serde(default, deserialize_with = "null_to_default")]
+    reviewers: Vec<GlabMrUser>,
     #[serde(default, deserialize_with = "null_to_default")]
     labels: Vec<String>,
     #[serde(default, deserialize_with = "null_to_default")]
@@ -781,10 +788,14 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     .into_iter()
     .filter(|n| !n.system && n.position.is_none())
     .map(|n| {
-        let author = n.author.map(|a| a.username).unwrap_or_default();
+        let (author, author_avatar_url) = n
+            .author
+            .map(|a| (a.username, a.avatar_url))
+            .unwrap_or_default();
         PrThreadOut {
             viewer_did_author: note_authored_by_viewer(&author, viewer.as_deref()),
             author,
+            author_avatar_url,
             state: String::new(),
             body: n.body,
             date: n.created_at,
@@ -817,6 +828,12 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         })
         .collect();
 
+    // GitLab supplies the author's avatar directly; carry it so the header shows a
+    // real photo instead of a login-derived (GitHub-only) URL.
+    let (author, author_avatar_url) = mr
+        .author
+        .map(|a| (a.username, a.avatar_url))
+        .unwrap_or_default();
     Ok(PrDetails {
         // No GraphQL node id on GitLab; the GitLab mutations key on the iid (labels
         // by name, assignees by resolved numeric id), so an empty id is fine.
@@ -824,7 +841,8 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         number: mr.iid,
         title: mr.title,
         body: mr.description.unwrap_or_default(),
-        author: mr.author.map(|a| a.username).unwrap_or_default(),
+        author,
+        author_avatar_url,
         state: map_mr_state(&mr.state),
         is_draft: mr.draft,
         base_ref_name: mr.target_branch,
@@ -838,10 +856,28 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         comments,
         checks,
         labels,
-        assignees: mr.assignees.into_iter().map(|a| a.username).collect(),
-        // The GitLab reviewer list isn't wired into the picker yet (mr_reviewers
-        // stays false) — assignees are GitLab's control here.
-        reviewers: Vec::new(),
+        assignees: mr
+            .assignees
+            .into_iter()
+            .map(|a| ForgeUserRef {
+                id: a.username.clone(),
+                label: a.username,
+                avatar_url: a.avatar_url,
+            })
+            .collect(),
+        // Reviewers, keyed by username (like assignees — the setter resolves
+        // username→id, candidates use username), so the picker's selected chips
+        // match its candidate ids.
+        reviewers: mr
+            .reviewers
+            .into_iter()
+            .filter(|u| !u.username.is_empty())
+            .map(|u| ForgeUserRef {
+                id: u.username.clone(),
+                label: u.username,
+                avatar_url: u.avatar_url,
+            })
+            .collect(),
     })
 }
 
@@ -1710,7 +1746,12 @@ struct GlabReviewer {
 async fn mr_reviewers(repo_path: &str, enc: &str, number: u64) -> AppResult<Vec<GlabReviewer>> {
     let out = run_glab(
         Some(repo_path),
-        &["api", &format!("projects/{enc}/merge_requests/{number}/reviewers")],
+        &[
+            "api",
+            // per_page=100: GitLab paginates at 20 by default, so a Premium MR with
+            // 21+ reviewers would re-read truncated and misfire the tier-clamp warning.
+            &format!("projects/{enc}/merge_requests/{number}/reviewers?per_page=100"),
+        ],
         GLAB_NETWORK_TIMEOUT,
     )
     .await?;
@@ -2368,10 +2409,14 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
     .into_iter()
     .filter(|n| !n.system)
     .map(|n| {
-        let author = n.author.map(|a| a.username).unwrap_or_default();
+        let (author, author_avatar_url) = n
+            .author
+            .map(|a| (a.username, a.avatar_url))
+            .unwrap_or_default();
         PrThreadOut {
             viewer_did_author: note_authored_by_viewer(&author, viewer.as_deref()),
             author,
+            author_avatar_url,
             state: String::new(),
             body: n.body,
             date: n.created_at,
@@ -2397,6 +2442,12 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
         })
         .collect();
 
+    // GitLab supplies the author's avatar directly; carry it so the header shows a
+    // real photo instead of a login-derived (GitHub-only) URL.
+    let (author, author_avatar_url) = issue
+        .author
+        .map(|a| (a.username, a.avatar_url))
+        .unwrap_or_default();
     Ok(IssueDetails {
         // No GraphQL node id on GitLab; the GitLab mutations key on the iid
         // (labels by name), and the empty id doubles as the reactions "body"
@@ -2406,11 +2457,20 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
         number: issue.iid,
         title: issue.title,
         body: issue.description.unwrap_or_default(),
-        author: issue.author.map(|a| a.username).unwrap_or_default(),
+        author,
+        author_avatar_url,
         state: map_issue_state(&issue.state),
         created_at: issue.created_at,
         url: issue.web_url,
-        assignees: issue.assignees.into_iter().map(|a| a.username).collect(),
+        assignees: issue
+            .assignees
+            .into_iter()
+            .map(|a| ForgeUserRef {
+                id: a.username.clone(),
+                label: a.username,
+                avatar_url: a.avatar_url,
+            })
+            .collect(),
         // `number` is GitLab's GLOBAL milestone id (see `GlabMilestone`) — the same
         // key `list_milestones` returns and `set_issue_milestone` writes, so the
         // picker's current-value lookup matches the option list.
@@ -3287,10 +3347,15 @@ pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<Revie
         let comments: Vec<PrThreadOut> = notes
             .iter()
             .map(|n| {
-                let author = n.author.as_ref().map(|a| a.username.clone()).unwrap_or_default();
+                let (author, author_avatar_url) = n
+                    .author
+                    .as_ref()
+                    .map(|a| (a.username.clone(), a.avatar_url.clone()))
+                    .unwrap_or_default();
                 PrThreadOut {
                     viewer_did_author: note_authored_by_viewer(&author, viewer.as_deref()),
                     author,
+                    author_avatar_url,
                     state: String::new(),
                     body: n.body.clone(),
                     date: n.created_at.clone(),
@@ -3785,6 +3850,9 @@ pub async fn repo_labels(repo_path: &str) -> AppResult<Vec<RepoLabel>> {
 struct GlabMember {
     id: u64,
     username: String,
+    /// Profile image; GitLab sends `null` when unset, so coerce to "".
+    #[serde(default, deserialize_with = "null_to_default")]
+    avatar_url: String,
 }
 
 /// The project's members (`members/all` = direct + inherited group members).
@@ -3827,16 +3895,78 @@ async fn resolve_assignee_ids(repo_path: &str, assignees: &[String]) -> AppResul
     Ok(ids)
 }
 
-/// The project's assignable users, as usernames (mirroring `gh_assignable_users`).
-/// `members/all` can list a user twice (direct + inherited), so dedupe by username.
-pub async fn assignable_users(repo_path: &str) -> AppResult<Vec<String>> {
+/// The project's assignable users as `ForgeUserRef`s (with avatars), mirroring the
+/// reviewer candidates. `members/all` can list a user twice (direct + inherited), so
+/// dedupe by username.
+pub async fn assignable_users(repo_path: &str) -> AppResult<Vec<ForgeUserRef>> {
     let mut seen = std::collections::HashSet::new();
     Ok(project_members(repo_path)
         .await?
         .into_iter()
         .filter(|m| seen.insert(m.username.clone()))
-        .map(|m| m.username)
+        .map(|m| ForgeUserRef {
+            id: m.username.clone(),
+            label: m.username,
+            avatar_url: m.avatar_url,
+        })
         .collect())
+}
+
+/// The reviewer picker's candidates for a GitLab MR: the project members, keyed by
+/// username (deduped) — the same id space the setter resolves and the MR-detail
+/// read fills. GitLab tolerates the author as a reviewer, so `number` is unused (no
+/// author exclusion, matching the assignee picker).
+pub async fn reviewer_candidates(
+    repo_path: &str,
+    _number: Option<u64>,
+) -> AppResult<Vec<ForgeUserRef>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<ForgeUserRef> = project_members(repo_path)
+        .await?
+        .into_iter()
+        .filter(|m| seen.insert(m.username.clone()))
+        .map(|m| ForgeUserRef {
+            id: m.username.clone(),
+            label: m.username,
+            avatar_url: m.avatar_url,
+        })
+        .collect();
+    out.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    Ok(out)
+}
+
+/// Replace an MR's reviewers with `desired` (usernames): resolve username→numeric
+/// id via the project members and PUT `reviewer_ids` (empty clears). ⚠ GitLab's
+/// Free tier keeps only the FIRST reviewer id (validated in `request_changes_mr`),
+/// so a multi-reviewer request silently drops the rest — we re-read and DISCLOSE
+/// any dropped reviewer rather than reporting a clean success (Premium keeps all).
+pub async fn set_pr_reviewers(repo_path: &str, number: u64, desired: &[String]) -> AppResult<()> {
+    let enc = encode_project(&project_path(repo_path).await?);
+    // A resolution miss errors inside the resolver (fail safe — never a partial set).
+    let ids: Vec<u64> = if desired.is_empty() {
+        Vec::new()
+    } else {
+        resolve_assignee_ids(repo_path, desired).await?
+    };
+    set_mr_reviewer_ids(repo_path, &enc, number, &ids).await?;
+    if desired.is_empty() {
+        return Ok(());
+    }
+    // Verify the write stuck (the Free single-reviewer tier drops extras).
+    let now: std::collections::HashSet<String> = mr_reviewers(repo_path, &enc, number)
+        .await?
+        .into_iter()
+        .filter_map(|r| r.user.map(|u| u.username))
+        .collect();
+    let dropped: Vec<String> = desired.iter().filter(|d| !now.contains(*d)).cloned().collect();
+    if !dropped.is_empty() {
+        return Err(AppError::Glab(format!(
+            "GitLab didn't set reviewer(s) {} — this GitLab tier may allow only one \
+             reviewer per merge request. Please verify the reviewers on GitLab.",
+            dropped.join(", ")
+        )));
+    }
+    Ok(())
 }
 
 /// Add/remove labels on an issue or MR by NAME (GitLab's `add_labels`/`remove_labels`
@@ -6837,7 +6967,7 @@ mod tests {
 
     #[test]
     fn timeline_sorts_ascending_by_date_empties_first() {
-        let mut events = vec![
+        let mut events = [
             PrTimelineEventOut::Merged {
                 actor: String::new(),
                 commit_oid: None,

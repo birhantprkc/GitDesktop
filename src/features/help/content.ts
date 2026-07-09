@@ -500,8 +500,9 @@ authenticated.)
 Browse open/closed PRs and open one in a full in-app view: description, commits, changed
 files with diffs, and CI checks. From there you can **comment** (with quote-reply),
 **review** (approve / comment / request changes), **edit** the title and body, manage
-**labels** and **assignees**, mark a draft **ready**, **merge** (merge commit, squash, or
-rebase, with optional branch deletion), and **close**.
+**labels**, **assignees**, and **reviewers** (request a review from a collaborator — the
+picker excludes the PR author, whom GitHub won't let you request), mark a draft **ready**,
+**merge** (merge commit, squash, or rebase, with optional branch deletion), and **close**.
 
 The Conversation tab is a single **date-sorted activity feed** — reviews, comments,
 pushed commits, and events all interleaved oldest-to-newest. A run of pushes collapses
@@ -617,7 +618,9 @@ highlighted **diff** (with an **Open on GitLab** link) — and the GitLab MR wri
 with the approval count shown inline), **request changes** (the blocking reviewer state —
 it adds you as a reviewer if needed, posts your drafted comment alongside, and clears when
 you approve), **react** with emoji on the description and comments,
-edit its **labels** and **assignees**, track **time** on it (a clock summary in the
+edit its **labels**, **assignees**, and **reviewers** (request a review from a project
+member; on GitLab's free tier only one reviewer sticks, and the app tells you if others
+were dropped), track **time** on it (a clock summary in the
 header opens a popover to set an estimate and log spent time), and **merge**
 it — merge or squash, optionally deleting
 the source branch, guarded so it never merges a head you didn't see (GitLab applies the project's

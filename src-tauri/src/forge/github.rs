@@ -560,8 +560,35 @@ pub async fn repo_labels(repo_path: &str) -> AppResult<Vec<crate::github::pr::Re
     crate::github::pr::gh_repo_labels(repo_path.to_string()).await
 }
 
-pub async fn assignable_users(repo_path: &str) -> AppResult<Vec<String>> {
-    crate::github::issue::gh_assignable_users(repo_path.to_string()).await
+pub async fn assignable_users(
+    repo_path: &str,
+) -> AppResult<Vec<crate::forge::model::ForgeUserRef>> {
+    // GitHub carries no avatar in the assignees endpoint; the picker derives it
+    // from the login (id), so leave `avatar_url` empty and let the frontend fill it.
+    Ok(crate::github::issue::gh_assignable_users(repo_path.to_string())
+        .await?
+        .into_iter()
+        .map(|l| crate::forge::model::ForgeUserRef {
+            id: l.clone(),
+            label: l,
+            avatar_url: String::new(),
+        })
+        .collect())
+}
+
+pub async fn set_pr_reviewers(
+    repo_path: &str,
+    number: u64,
+    reviewers: &[String],
+) -> AppResult<()> {
+    crate::github::pr::set_pr_reviewers(repo_path, number, reviewers).await
+}
+
+pub async fn reviewer_candidates(
+    repo_path: &str,
+    number: Option<u64>,
+) -> AppResult<Vec<crate::forge::model::ForgeUserRef>> {
+    crate::github::pr::reviewer_candidates(repo_path, number).await
 }
 
 pub async fn edit_labels(

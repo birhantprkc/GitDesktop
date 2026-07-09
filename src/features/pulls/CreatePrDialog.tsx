@@ -55,14 +55,20 @@ export function CreatePrDialog({
   const defaultBranch = useDefaultBranch(repoPath);
   const createPr = useCreatePr(repoPath);
   const forge = useForgeStatus(repoPath);
-  const canPickReviewers = forgeFeatureReady(forge.data, "mrReviewers");
+  // Create-TIME reviewers stay Bitbucket-only: `forge_pr_create` rejects a reviewer
+  // list for GitHub/GitLab (their create arms don't accept one yet). The
+  // `mrReviewers` capability now covers all three, but only for editing reviewers on
+  // an existing PR (the RemotePrView picker), so scope the create dialog explicitly.
+  const canPickReviewers =
+    forge.data?.provider === "bitbucket" &&
+    forgeFeatureReady(forge.data, "mrReviewers");
   // Labels + assignees are GitHub/GitLab; a repo is exactly one provider, so
-  // these and the Bitbucket-only reviewers picker are mutually exclusive.
+  // these and the Bitbucket create-time reviewers picker are mutually exclusive.
   const canPickLabels = forgeFeatureReady(forge.data, "mrLabels");
   const canPickAssignees = forgeFeatureReady(forge.data, "mrAssignees");
   const [reviewers, setReviewers] = useState<ForgeUserRef[]>([]);
   const [labels, setLabels] = useState<Set<string>>(new Set());
-  const [assignees, setAssignees] = useState<string[]>([]);
+  const [assignees, setAssignees] = useState<ForgeUserRef[]>([]);
   const repoLabels = useRepoLabels(repoPath, open);
   const isGitLab = forge.data?.provider === "gitlab";
   const remoteLabel = providerLabel(forge.data?.provider);
@@ -106,7 +112,9 @@ export function CreatePrDialog({
           // GitHub/GitLab only; omit the key (and for empty selections) so the
           // backend leaves create behavior untouched.
           ...(canPickLabels && labels.size > 0 ? { labels: [...labels] } : {}),
-          ...(canPickAssignees && assignees.length > 0 ? { assignees } : {}),
+          ...(canPickAssignees && assignees.length > 0
+            ? { assignees: assignees.map((a) => a.id) }
+            : {}),
         });
         track({
           name: "pull_request_created",

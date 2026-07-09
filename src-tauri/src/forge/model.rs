@@ -339,9 +339,10 @@ impl Implemented {
             mr_assignees: true,
             // Like `mr_approve`: GitHub requests changes via its Review menu.
             mr_request_changes: false,
-            // Like `mr_approve`: GitHub's reviewer requests live in its own
-            // review flow, which this app doesn't edit — Bitbucket-only.
-            mr_reviewers: false,
+            // Requested reviewers ARE editable (`gh pr edit --add/--remove-reviewer`).
+            // The picker manages user reviewers; any team requests are preserved
+            // (team display in the picker is a follow-up).
+            mr_reviewers: true,
             issue_edit: true,
             mr_edit: true,
             issue_milestone: true,
@@ -480,8 +481,10 @@ impl Implemented {
                 release_edit: true,
                 mr_assignees: true,
                 mr_request_changes: true,
-                // The GitLab reviewer list isn't wired here yet (assignees are).
-                mr_reviewers: false,
+                // Reviewers ARE editable (MR `reviewer_ids`), separate from
+                // assignees. ⚠ Free tier keeps only one reviewer — the setter
+                // re-reads and discloses any dropped reviewer.
+                mr_reviewers: true,
                 issue_edit: true,
                 mr_edit: true,
                 issue_milestone: true,
@@ -609,6 +612,10 @@ pub struct ForgeStatus {
 pub struct ForgeUserRef {
     pub id: String,
     pub label: String,
+    /// The user's avatar URL when the provider supplies one (GitLab/Bitbucket
+    /// return it directly). Empty for GitHub, where the picker derives the avatar
+    /// from the login (`<host>/<login>.png`), so we don't spend a field on it.
+    pub avatar_url: String,
 }
 
 /// A repository as listed for cloning — neutral across providers (the clone
@@ -695,10 +702,10 @@ mod tests {
         // CI actions and release management are shared controls too.
         assert!(i.ci_rerun && i.ci_cancel && i.ci_dispatch);
         assert!(i.release_create && i.release_edit);
-        // Request-changes and the reviewers picker mirror mr_approve: forge-only
-        // controls (GitHub's analogues live in its own Review menu / nowhere), so
-        // GitHub stays false. (MR/PR assignees ARE built for GitHub — asserted above.)
-        assert!(!i.mr_request_changes && !i.mr_reviewers);
+        // Request-changes mirrors mr_approve: a forge-only control (GitHub's
+        // analogue lives in its own Review menu), so it stays false. The reviewers
+        // picker, though, IS built for GitHub (`gh pr edit --add/--remove-reviewer`).
+        assert!(!i.mr_request_changes && i.mr_reviewers);
         // Title/body editing, issue milestones, and reactions are shared controls.
         assert!(i.issue_edit && i.mr_edit && i.issue_milestone);
         assert!(i.issue_reactions && i.mr_reactions);

@@ -194,10 +194,15 @@ pub struct IssueDetails {
     pub title: String,
     pub body: String,
     pub author: String,
+    /// The author's avatar URL when the provider supplies one (GitLab). Empty for
+    /// GitHub, where it's login-derived on the frontend.
+    pub author_avatar_url: String,
     pub state: String,
     pub created_at: String,
     pub url: String,
-    pub assignees: Vec<String>,
+    /// Assignees (GitHub + GitLab). Carries each user's avatar (GitLab supplies it;
+    /// GitHub is login-derived) so chips render a photo without a candidate fetch.
+    pub assignees: Vec<crate::forge::model::ForgeUserRef>,
     pub milestone: Option<Milestone>,
     pub issue_type: Option<IssueType>,
     pub is_pinned: bool,
@@ -248,10 +253,20 @@ pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDet
         title: raw.title,
         body: raw.body,
         author: raw.author.map(|a| a.login).unwrap_or_default(),
+        // GitHub carries no avatar URL in the API; login-derived on the frontend.
+        author_avatar_url: String::new(),
         state: raw.state,
         created_at: raw.created_at,
         url: raw.url,
-        assignees: raw.assignees.into_iter().map(|a| a.login).collect(),
+        assignees: raw
+            .assignees
+            .into_iter()
+            .map(|a| crate::forge::model::ForgeUserRef {
+                id: a.login.clone(),
+                label: a.login,
+                avatar_url: String::new(),
+            })
+            .collect(),
         milestone: raw.milestone,
         issue_type: raw.issue_type,
         is_pinned: raw.is_pinned,
@@ -264,6 +279,7 @@ pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDet
             .into_iter()
             .map(|c| PrThreadOut {
                 author: c.author.map(|a| a.login).unwrap_or_default(),
+                author_avatar_url: String::new(),
                 state: String::new(),
                 body: c.body,
                 date: c.created_at,

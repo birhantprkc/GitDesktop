@@ -92,6 +92,8 @@ function toThread(c: {
 }): PrThreadOut {
   return {
     author: c.author,
+    // Discussions are GitHub-only, so the avatar is login-derived on the frontend.
+    authorAvatarUrl: "",
     state: "",
     body: c.body,
     date: c.date,

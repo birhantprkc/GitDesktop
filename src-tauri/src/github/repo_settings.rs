@@ -456,6 +456,13 @@ pub struct RepoSettings {
     /// PATCH. The UI hides the toggle (and we omit the field) when this is false.
     #[serde(default, skip_deserializing)]
     pub can_change_forking: bool,
+    /// Computed, not from the API: whether the repo is org-owned (`owner.type ==
+    /// "Organization"`). GitHub silently clamps triage/maintain/admin collaborator
+    /// roles to `write` on a USER-owned repo (returns 204 but never applies them),
+    /// so the Access UI offers only Read/Write there — the granular roles are
+    /// org-repo-only.
+    #[serde(default, skip_deserializing)]
+    pub is_org: bool,
     /// Default squash-merge commit title/message. The two are a constrained
     /// enum pair (see `validate_merge_message_pairs`).
     #[serde(default, alias = "squash_merge_commit_title")]
@@ -534,13 +541,19 @@ fn validate_merge_message_pairs(input: &RepoSettingsInput) -> AppResult<()> {
     Ok(())
 }
 
+/// Whether the repo is org-owned (`owner.type == "Organization"`), from the raw
+/// repo JSON — a User owner means the granular collaborator roles don't apply.
+fn is_org(repo_json: &str) -> bool {
+    let v: serde_json::Value = serde_json::from_str(repo_json).unwrap_or_default();
+    v.pointer("/owner/type").and_then(|t| t.as_str()) == Some("Organization")
+}
+
 /// `allow_forking` is only mutable on an org-owned PRIVATE repo. Read that from
 /// the raw repo JSON (`private` + `owner.type`).
 fn can_change_forking(repo_json: &str) -> bool {
     let v: serde_json::Value = serde_json::from_str(repo_json).unwrap_or_default();
     let is_private = v.get("private").and_then(|p| p.as_bool()).unwrap_or(false);
-    let is_org = v.pointer("/owner/type").and_then(|t| t.as_str()) == Some("Organization");
-    is_private && is_org
+    is_private && is_org(repo_json)
 }
 
 #[tauri::command]
@@ -555,6 +568,7 @@ pub async fn gh_repo_settings_get(repo_path: String) -> AppResult<RepoSettings> 
     let mut settings: RepoSettings = serde_json::from_str(&text)
         .map_err(|e| AppError::Gh(format!("could not parse repo settings: {e}")))?;
     settings.can_change_forking = can_change_forking(&text);
+    settings.is_org = is_org(&text);
     Ok(settings)
 }
 
@@ -614,6 +628,11 @@ pub async fn gh_repo_settings_update(
     let mut settings: RepoSettings = serde_json::from_str(&text)
         .map_err(|e| AppError::Gh(format!("could not parse repo settings: {e}")))?;
     settings.can_change_forking = can_change_forking(&text);
+    // Recompute is_org from the PATCH response too (the field is skip_deserializing,
+    // so it would default to false). Without this, the update's onSuccess cache seed
+    // reports is_org=false and the org role picker collapses to Read/Write until the
+    // background GET corrects it. Mirrors the GET path + can_change_forking above.
+    settings.is_org = is_org(&text);
 
     // Topics aren't part of the repo PATCH — they have their own endpoint.
     // Lowercase + strip to GitHub's allowed alphabet so a stray character

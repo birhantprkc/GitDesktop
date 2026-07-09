@@ -197,6 +197,8 @@ export function useCommitLineAnchors(
 function toThread(c: CommitCommentOut): PrThreadOut {
   return {
     author: c.author,
+    // Commit comments are GitHub-only; the avatar is login-derived on the frontend.
+    authorAvatarUrl: "",
     state: "",
     body: c.body,
     date: c.createdAt,

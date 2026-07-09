@@ -1,8 +1,10 @@
 import { Popover } from "@base-ui/react/popover";
 import { UserCheckIcon } from "@phosphor-icons/react";
 import { useState } from "react";
+import { ForgeUserAvatar } from "@/components/forge-user-avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useForgeGhHost } from "@/lib/git/host";
 import { useReviewerCandidates } from "@/lib/git/queries";
 import type { ForgeUserRef } from "@/lib/git/types";
 
@@ -49,6 +51,10 @@ export function ReviewersPopover({
   onChange: (next: ForgeUserRef[]) => void;
 }) {
   const candidates = useReviewerCandidates(repoPath, number, enabled);
+  // GitHub reviewer ids are logins (avatars served at `<host>/<login>.png`), so the
+  // avatar is login-derived there; off GitHub it's the initial fallback unless the
+  // ref carries a real avatarUrl (GitLab/Bitbucket do).
+  const ghHost = useForgeGhHost(repoPath);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Map<string, ForgeUserRef>>(new Map());
 
@@ -127,6 +133,7 @@ export function ReviewersPopover({
                       checked={draft.has(user.id)}
                       onCheckedChange={(v) => toggle(user, v === true)}
                     />
+                    <ForgeUserAvatar user={user} ghHost={ghHost} />
                     <span className="flex-1 truncate">
                       {user.label}
                       {hint && (
@@ -146,8 +153,9 @@ export function ReviewersPopover({
           <span
             key={user.id}
             title={hint ? `${user.label} (${hint})` : undefined}
-            className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+            className="inline-flex items-center gap-1 border py-0.5 pr-1.5 pl-0.5 text-[11px] text-muted-foreground"
           >
+            <ForgeUserAvatar user={user} ghHost={ghHost} />
             {user.label}
             {hint && <span className="text-muted-foreground"> · {hint}</span>}
           </span>

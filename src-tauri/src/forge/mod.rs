@@ -803,7 +803,9 @@ pub async fn forge_pr_set_draft(repo_path: String, number: u64, draft: bool) -> 
 }
 
 /// Replace a merge/pull request's reviewer list (ids from
-/// [`forge_pr_reviewer_candidates`]). Bitbucket-only (`implemented.mr_reviewers`).
+/// [`forge_pr_reviewer_candidates`]). The setter takes the FULL desired list; each
+/// arm reconciles it to the provider's API (GitHub diffs add/remove, GitLab/BB
+/// PUT the list). Wired for all three (`implemented.mr_reviewers`).
 #[tauri::command]
 pub async fn forge_pr_set_reviewers(
     repo_path: String,
@@ -814,15 +816,18 @@ pub async fn forge_pr_set_reviewers(
         Some((Provider::Bitbucket, _)) => {
             bitbucket::set_pr_reviewers(&repo_path, number, &reviewers).await
         }
-        _ => Err(AppError::InvalidArgument(
-            "Reviewers aren't editable here for this provider.".into(),
-        )),
+        Some((Provider::GitLab, _)) => {
+            gitlab::set_pr_reviewers(&repo_path, number, &reviewers).await
+        }
+        _ => github::set_pr_reviewers(&repo_path, number, &reviewers).await,
     }
 }
 
-/// The reviewer picker's candidates for a PR — Bitbucket: workspace members minus the
-/// user the server would reject. For an existing PR (`Some(number)`) that's the PR
-/// author; at create time (`None`, no PR yet) it's the viewer.
+/// The reviewer picker's candidates for a PR — the members who can be requested,
+/// minus the user the provider would reject. For an existing PR (`Some(number)`)
+/// that's the PR author (GitHub/Bitbucket exclude them; GitLab tolerates it); at
+/// create time (`None`, no PR yet) it's the viewer. GitHub: assignable users;
+/// GitLab: project members; Bitbucket: workspace members.
 #[tauri::command]
 pub async fn forge_pr_reviewer_candidates(
     repo_path: String,
@@ -832,9 +837,8 @@ pub async fn forge_pr_reviewer_candidates(
         Some((Provider::Bitbucket, _)) => {
             bitbucket::reviewer_candidates(&repo_path, number).await
         }
-        _ => Err(AppError::InvalidArgument(
-            "Reviewers aren't editable here for this provider.".into(),
-        )),
+        Some((Provider::GitLab, _)) => gitlab::reviewer_candidates(&repo_path, number).await,
+        _ => github::reviewer_candidates(&repo_path, number).await,
     }
 }
 
@@ -1491,9 +1495,12 @@ pub async fn forge_repo_labels(
 }
 
 /// The repo's assignable users for the assignee picker, behind the abstraction.
-/// GitHub lists repo assignees; GitLab lists project members (usernames).
+/// GitHub lists repo assignees (avatar login-derived); GitLab lists project members
+/// (with their avatars). Returns `ForgeUserRef`s so the picker renders avatars.
 #[tauri::command]
-pub async fn forge_assignable_users(repo_path: String) -> AppResult<Vec<String>> {
+pub async fn forge_assignable_users(
+    repo_path: String,
+) -> AppResult<Vec<model::ForgeUserRef>> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::assignable_users(&repo_path).await,
         Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(

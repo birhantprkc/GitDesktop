@@ -22,7 +22,7 @@ import {
   useForgeStatus,
   useRepoLabels,
 } from "@/lib/git/queries";
-import type { IssueType } from "@/lib/git/types";
+import type { ForgeUserRef, IssueType } from "@/lib/git/types";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { errorMessage } from "@/lib/tauri/invoke";
@@ -64,7 +64,7 @@ export function CreateIssueDialog({
   const aiEnabled = useAiEnabled();
   const { generate, cancel, generating } = useGenerateIssueDraft(repoPath);
   const [labels, setLabels] = useState<Set<string>>(new Set());
-  const [assignees, setAssignees] = useState<string[]>([]);
+  const [assignees, setAssignees] = useState<ForgeUserRef[]>([]);
   const [milestone, setMilestone] = useState<number | null>(null);
   const [issueType, setIssueType] = useState<IssueType | null>(null);
 
@@ -80,7 +80,7 @@ export function CreateIssueDialog({
           title: value.title.trim(),
           body: value.body,
           labels: [...labels],
-          assignees,
+          assignees: assignees.map((a) => a.id),
           milestone,
           type: issueType?.name ?? null,
         });
