@@ -74,8 +74,7 @@ async fn rebase_stopped_for_edit(repo: &str) -> bool {
         return false;
     };
     done.lines()
-        .filter(|l| !l.trim().is_empty())
-        .next_back()
+        .rfind(|l| !l.trim().is_empty())
         .map(|last| {
             let cmd = last.split_whitespace().next().unwrap_or("");
             cmd == "edit" || cmd == "e"

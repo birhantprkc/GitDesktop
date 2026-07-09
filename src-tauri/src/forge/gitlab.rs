@@ -3931,7 +3931,7 @@ pub async fn reviewer_candidates(
             avatar_url: m.avatar_url,
         })
         .collect();
-    out.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    out.sort_by_key(|a| a.label.to_lowercase());
     Ok(out)
 }
 

@@ -1,0 +1,80 @@
+name: rust-tests
+
+# Cross-platform Rust CI: runs `cargo test` + `cargo clippy` on Windows, Linux,
+# and macOS for every change to the Tauri backend. This is the only place the
+# `#[cfg(unix)]` modules and other cfg-gated behavior get compiled and exercised
+# off Windows — local verification is Windows-only. Deliberately bare-bones: no
+# frontend test runner, no e2e, no release logic (that lives in release.yml).
+
+on:
+  pull_request:
+    paths:
+      - "src-tauri/**"
+      - ".github/workflows/rust-tests.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "src-tauri/**"
+      - ".github/workflows/rust-tests.yml"
+
+# One in-flight run per ref; a force-push cancels the superseded run instead of
+# stacking a second one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      # Each platform is independent signal — one leg failing shouldn't cancel
+      # the others; that cross-platform coverage is the whole point.
+      fail-fast: false
+      matrix:
+        platform:
+          - windows-latest
+          - ubuntu-22.04
+          - macos-latest
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            libssl-dev \
+            file
+
+      # `tauri.conf.json` sets `frontendDist: "../dist"` and
+      # `tauri::generate_context!` embeds that directory at COMPILE time, so
+      # `cargo test` fails on a fresh checkout without it. A stub index.html is
+      # enough — contents are irrelevant to the Rust tests, and this keeps
+      # Node/pnpm entirely out of the Rust gate.
+      - name: Stub frontend dist
+        shell: bash
+        run: |
+          mkdir -p dist && echo '<!doctype html>' > dist/index.html
+
+      - name: Run tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Run clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings

@@ -292,6 +292,11 @@ pub fn ensure(version: &str) -> AppResult<PathBuf> {
 /// and best-effort (errors swallowed: a stale copy still serves already-running
 /// sessions, and the next launch retries). Never panics, never blocks on I/O
 /// beyond the copy itself.
+///
+/// Only wired up on Windows (the `#[cfg(windows)]` setup hook in `lib.rs` —
+/// management is inactive elsewhere), so gate compilation to Windows + tests to
+/// keep non-Windows lib builds dead-code-free.
+#[cfg(any(windows, test))]
 pub fn refresh_if_present(version: &str) {
     let Ok(Resolution::Managed(dest)) = resolve() else {
         return;
@@ -310,6 +315,7 @@ pub fn refresh_if_present(version: &str) {
 /// process-global env. No-ops when `dest` is absent (lazy: never used ⇒ nothing
 /// to refresh), re-copies when stale, and swallows copy errors best-effort (a
 /// stale copy still serves already-running sessions; the next launch retries).
+#[cfg(any(windows, test))]
 fn refresh_dest_if_stale(source: &Path, dest: &Path, want: &Marker) {
     if !dest.exists() {
         return; // lazy: never used ⇒ nothing to refresh

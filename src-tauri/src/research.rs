@@ -19,7 +19,10 @@ use crate::error::{AppError, AppResult};
 /// the repo (absolute paths, a `..` component). Empty falls back to
 /// `.gitdesktop/research`.
 fn safe_subdir(dir: &str) -> AppResult<PathBuf> {
-    let trimmed = dir.trim().trim_matches(['/', '\\']);
+    // Trim only TRAILING separators ("notes/" tolerance): a LEADING separator is
+    // a root/absolute path and must survive to the RootDir rejection below —
+    // trimming it would silently coerce "/etc" into repo-relative "etc".
+    let trimmed = dir.trim().trim_end_matches(['/', '\\']);
     if trimmed.is_empty() {
         return Ok(PathBuf::from(".gitdesktop").join("research"));
     }
