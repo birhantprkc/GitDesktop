@@ -47,9 +47,9 @@ import { createAiClient } from "@/lib/ai/client";
 import { useAvailableModels } from "@/lib/ai/models";
 import {
   ALL_PROVIDER_IDS,
+  defaultModelForProvider,
   GENERATION_PROVIDER_IDS,
   isCliProvider,
-  MODEL_SUGGESTIONS,
   OPENAI_COMPATIBLE_PRESETS,
   PROVIDER_LABELS,
   PROVIDERS_REQUIRING_KEY,
@@ -115,8 +115,7 @@ function ModelPicker({
     onChange({
       ...value,
       provider,
-      model:
-        modelMemory.current[provider] ?? MODEL_SUGGESTIONS[provider][0] ?? "",
+      model: modelMemory.current[provider] ?? defaultModelForProvider(provider),
     });
   }
 
@@ -160,7 +159,7 @@ function ModelPicker({
             id={`${idPrefix}-model`}
             className="w-full"
             placeholder={
-              MODEL_SUGGESTIONS[value.provider][0] ?? "Account default"
+              defaultModelForProvider(value.provider) || "Account default"
             }
           />
           <ComboboxContent>

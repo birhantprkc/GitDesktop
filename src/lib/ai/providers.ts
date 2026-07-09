@@ -133,8 +133,12 @@ export const MODEL_SUGGESTIONS: Record<AiProviderId, string[]> = {
   "ollama-cloud": ["gpt-oss:120b", "qwen3-coder:480b", "deepseek-v3.1:671b"],
   // CLI model aliases passed straight to `claude --model`.
   "claude-cli": ["sonnet", "opus", "haiku", "fable"],
-  // Codex: blank uses the account default (proven to work); user can type one.
-  "codex-cli": [],
+  // Codex ids are plan-specific (they depend on the ChatGPT plan), so none is a
+  // safe forced default — blank stays the default-on-switch (account default,
+  // which always works) via `defaultModelForProvider`; these are pick-from hints.
+  // Verified against codex's own `~/.codex/models_cache.json` (the models it
+  // exposes with visibility:"list" + supported_in_api), not guessed.
+  "codex-cli": ["gpt-5.5", "gpt-5.4-mini"],
   // Copilot: a curated subset of the `/model` catalog (the picker still free-types
   // any id; blank = Copilot's own default). Slugs are the lowercased display names —
   // verified pattern from "Claude Haiku 4.5" → claude-haiku-4.5.
@@ -161,6 +165,23 @@ export const MODEL_SUGGESTIONS: Record<AiProviderId, string[]> = {
     "opencode/nemotron-3-ultra-free",
   ],
 };
+
+/** CLI providers whose suggested model ids are plan-specific rather than
+ *  universally valid: codex ids depend on the account's ChatGPT plan, so no
+ *  single suggestion is a safe forced default. Switching to one leaves the model
+ *  blank — the CLI's own account default, which always works — while the
+ *  suggestions stay pick-from hints. (Contrast claude-cli `sonnet` / copilot
+ *  `auto`, whose first suggestion is a universally-valid alias.) */
+const PROVIDERS_WITHOUT_DEFAULT_MODEL: readonly AiProviderId[] = ["codex-cli"];
+
+/** The model id to pre-select when switching TO a provider with no remembered
+ *  choice: its first suggestion, except providers whose suggestions are
+ *  plan-specific (→ "" = account default). Falsy result also drives the blank
+ *  model-input placeholder ("Account default"). */
+export function defaultModelForProvider(provider: AiProviderId): string {
+  if (PROVIDERS_WITHOUT_DEFAULT_MODEL.includes(provider)) return "";
+  return MODEL_SUGGESTIONS[provider][0] ?? "";
+}
 
 // All providers go through `guardedFetch` (guarded-fetch.ts) — the Tauri fetch
 // (proxied through Rust, exempt from the webview CORS most AI APIs reject) behind

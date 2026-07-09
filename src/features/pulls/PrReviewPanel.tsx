@@ -8,7 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, m } from "motion/react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,7 +34,7 @@ import { detectAgentCli, providerKind } from "@/lib/ai/agent";
 import { buildAiCommentBody } from "@/lib/ai/comment-branding";
 import { useAvailableModels } from "@/lib/ai/models";
 import {
-  MODEL_SUGGESTIONS,
+  defaultModelForProvider,
   PROVIDER_LABELS,
   PROVIDERS_REQUIRING_KEY,
 } from "@/lib/ai/providers";
@@ -153,6 +153,11 @@ export function PrReviewPanel({
   const [reviewOverride, setReviewOverride] = useState<NonNullable<
     typeof globalReviewAi
   > | null>(null);
+  // Remembers the model picked for each provider across in-panel provider
+  // switches (like Settings → AI's `modelMemory`), so flipping provider to
+  // compare and back doesn't discard a choice. A ref, so it resets on remount
+  // alongside `reviewOverride` — a one-off choice never leaks past this panel.
+  const modelMemory = useRef<Partial<Record<AiProviderId, string>>>({});
   const reviewAi = reviewOverride ?? globalReviewAi;
   const provider = reviewAi?.provider ?? "anthropic";
   const needsKey = PROVIDERS_REQUIRING_KEY.includes(provider);
@@ -227,11 +232,13 @@ export function PrReviewPanel({
           <Select
             value={provider}
             onValueChange={(v) => {
-              if (v)
-                updateReview({
-                  provider: v as AiProviderId,
-                  model: MODEL_SUGGESTIONS[v as AiProviderId][0] ?? "",
-                });
+              if (!v || !reviewAi) return;
+              const next = v as AiProviderId;
+              modelMemory.current[provider] = reviewAi.model;
+              updateReview({
+                provider: next,
+                model: modelMemory.current[next] ?? defaultModelForProvider(next),
+              });
             }}
           >
             <SelectTrigger className="w-full">
@@ -259,7 +266,7 @@ export function PrReviewPanel({
           >
             <ComboboxInput
               className="w-full"
-              placeholder={MODEL_SUGGESTIONS[provider][0] ?? "Account default"}
+              placeholder={defaultModelForProvider(provider) || "Account default"}
             />
             <ComboboxContent>
               <ComboboxEmpty>Uses the typed id as-is</ComboboxEmpty>
