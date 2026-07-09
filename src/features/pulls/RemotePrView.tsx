@@ -56,7 +56,10 @@ import {
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import type { LineWidget } from "@/features/diff/DiffSurface";
 import { AssigneesPopover } from "@/features/issues/IssueMetaPickers";
-import { isDeletionBlocked, isMergeMethodAllowed } from "@/lib/branch-rules/match";
+import {
+  isDeletionBlocked,
+  isMergeMethodAllowed,
+} from "@/lib/branch-rules/match";
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
 import type { MergeStrategy, MinimizeReason } from "@/lib/git/api";
@@ -106,6 +109,7 @@ import {
   type ApprovalState,
   type ForgeProvider,
   providerLabel,
+  type ReviewThreadOut,
 } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import {
@@ -136,6 +140,7 @@ import {
 import { ReviewComposer } from "./ReviewComposer";
 import { ReviewersPopover, userRefHint } from "./ReviewersPopover";
 import {
+  ReviewThreadList,
   ReviewThreadsBlock,
   SUBMIT_HINT,
   type SuggestionApply,
@@ -503,6 +508,32 @@ export function RemotePrView({
   }
 
   const pr = details.data;
+  // Each rendered review "claims" the line-comment threads it owns (GitHub
+  // `reviewId`; always "" on GitLab/Bitbucket, which don't model reviews).
+  // Claimed threads render inline under their review in the timeline; the rest
+  // fall to the residual block below — so on GitLab/Bitbucket, where nothing is
+  // owned, that block stays exactly as before.
+  const renderedReviews = (pr?.reviews ?? []).filter(
+    (r) => hasVisibleBody(r.body) || r.state,
+  );
+  // Group threads by the review that owns them (GitHub `reviewId`; "" on
+  // GitLab/Bitbucket, which don't model reviews) — built once, then reused for
+  // both the claimed-id set and each review's inline slice below.
+  const threadsByReview = new Map<string, ReviewThreadOut[]>();
+  for (const t of reviewThreads.data ?? []) {
+    if (!t.reviewId) continue;
+    const bucket = threadsByReview.get(t.reviewId);
+    if (bucket) bucket.push(t);
+    else threadsByReview.set(t.reviewId, [t]);
+  }
+  const claimedThreadIds = new Set(
+    renderedReviews.flatMap((r) =>
+      (threadsByReview.get(r.id) ?? []).map((t) => t.id),
+    ),
+  );
+  const residualThreads = (reviewThreads.data ?? []).filter(
+    (t) => !claimedThreadIds.has(t.id),
+  );
   // Guards for the merge dialog's "delete head branch on the remote" checkbox:
   // every forge refuses to delete the DEFAULT branch (so the option is hidden),
   // and a local branch RULE can block deleting the head (so it's disabled with a
@@ -1059,15 +1090,8 @@ export function RemotePrView({
                 // Reviews (existing cards, every prop preserved byte-for-byte). A
                 // stale APPROVED/CHANGES_REQUESTED review (its date predates the
                 // newest commit) gets a warning marker right after its card.
-                for (const r of pr.reviews.filter(
-                  (r) => hasVisibleBody(r.body) || r.state,
-                )) {
-                  const ownThreads =
-                    r.id !== ""
-                      ? (reviewThreads.data?.filter(
-                          (t) => t.reviewId === r.id,
-                        ) ?? [])
-                      : [];
+                for (const r of renderedReviews) {
+                  const ownThreads = threadsByReview.get(r.id) ?? [];
                   const copyMarkdown =
                     ownThreads.length > 0
                       ? [
@@ -1103,6 +1127,50 @@ export function RemotePrView({
                           <StaleReviewMarker
                             commitsSince={commitsSince(r.date)}
                           />
+                        )}
+                        {ownThreads.length > 0 && (
+                          // The review's own line-comment threads, nested under
+                          // it (a 1px border-l rail — the same nested-sublist
+                          // idiom as the pushed-commits row). GitLab/Bitbucket
+                          // never reach here: their threads carry no reviewId, so
+                          // nothing is claimed and they stay in the block below.
+                          <div className="mt-2 border-l pl-3">
+                            <ReviewThreadList
+                              threads={ownThreads}
+                              onQuote={quoteReply}
+                              onReply={
+                                canThreadReply
+                                  ? (threadId, body) =>
+                                      threadReply.mutateAsync({
+                                        threadId,
+                                        body,
+                                      })
+                                  : undefined
+                              }
+                              onResolve={
+                                canThreadResolve
+                                  ? (threadId, resolved) =>
+                                      threadResolve.mutateAsync({
+                                        threadId,
+                                        resolved,
+                                      })
+                                  : undefined
+                              }
+                              onEditComment={
+                                canEditOwnThreadComments
+                                  ? saveThreadCommentEdit
+                                  : undefined
+                              }
+                              onDeleteComment={
+                                canEditOwnThreadComments
+                                  ? setDeletingThreadCommentId
+                                  : undefined
+                              }
+                              provider={providerKey}
+                              apply={suggestionApply}
+                              fileDiffLookup={fileDiffLookup}
+                            />
+                          </div>
                         )}
                       </div>
                     ),
@@ -1226,12 +1294,18 @@ export function RemotePrView({
                 if (rendered.length === 0) return null;
                 return <div className="space-y-4">{rendered}</div>;
               })()}
-              {/* File:line-anchored review threads, grouped by file. Kept as its
-                  own block (not interleaved — it's heavily wired with
-                  reply/resolve/apply). Renders nothing when there are none (or
-                  while loading); a quiet muted line on error. */}
+              {/* Residual review threads — the ones NOT shown inline under a
+                  review above: all threads on GitLab/Bitbucket (no reviewId), and
+                  standalone line comments on GitHub. Grouped by file, same
+                  interactivity. Retitled when reviews claimed threads above so it
+                  doesn't read as a duplicate. Nothing when empty/loading. */}
               <ReviewThreadsBlock
-                threads={reviewThreads.data}
+                threads={residualThreads}
+                heading={
+                  claimedThreadIds.size > 0
+                    ? "Other line comments"
+                    : "Review comments"
+                }
                 isError={reviewThreads.isError}
                 onQuote={quoteReply}
                 onReply={

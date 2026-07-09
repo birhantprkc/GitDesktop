@@ -851,14 +851,16 @@ function ResolvedExpander({
 }
 
 /**
- * The grouped "Review comments" block for the Conversation tab. Renders nothing
- * when there are no threads (or while loading — the data arrives after the PR
- * body, so a spinner would only cause layout shift); a quiet muted line on
- * error. Header count is the total thread count.
+ * The grouped, keyboard-navigable list of file:line review threads — grouped by
+ * file, unresolved-open / resolved-behind-an-expander, with every per-thread
+ * affordance (reply, resolve, apply, copy, edit/delete). Rendered both inline
+ * under a review event in the Conversation timeline (that review's own threads)
+ * and inside {@link ReviewThreadsBlock} (the residual/standalone threads). Owns
+ * its own expand + arrow/Enter nav state, so each instance navigates on its own.
+ * The caller guards emptiness — this renders only with a non-empty `threads`.
  */
-export function ReviewThreadsBlock({
+export function ReviewThreadList({
   threads,
-  isError,
   onQuote,
   onReply,
   onResolve,
@@ -868,8 +870,7 @@ export function ReviewThreadsBlock({
   apply,
   fileDiffLookup,
 }: {
-  threads: ReviewThreadOut[] | undefined;
-  isError: boolean;
+  threads: ReviewThreadOut[];
   /** The forge the threads came from — disambiguates bare-fence Apply scope for
    *  suggestions (GitHub = whole range, GitLab = anchored line only), threaded to
    *  every card. Defaults to "github" so an unwired caller is byte-identical. */
@@ -893,16 +894,6 @@ export function ReviewThreadsBlock({
     () => new Set(),
   );
   const [activeIndex, setActiveIndex] = useState(-1);
-
-  if (isError) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        Couldn't load review comments.
-      </p>
-    );
-  }
-  // Nothing while loading (undefined) or when there are no threads — no noise.
-  if (!threads || threads.length === 0) return null;
 
   const isExpanded = (t: ReviewThreadOut) =>
     t.isResolved ? expandedResolved.has(t.id) : !collapsedUnresolved.has(t.id);
@@ -967,85 +958,149 @@ export function ReviewThreadsBlock({
     })(e);
   };
 
+  // Arrow/Enter nav is captured here and dispatched to the focused row button
+  // (each carries data-thread-id); the buttons are the interactive elements, so
+  // no click-without-key handler lives on this wrapper.
+  return (
+    <div className="space-y-4" onKeyDown={onKeyDown}>
+      {groups.map(([path, groupThreads]) => {
+        const unresolved = groupThreads.filter((t) => !t.isResolved);
+        const resolved = groupThreads.filter((t) => t.isResolved);
+        const resolvedOpen = openResolvedGroups.has(path);
+        return (
+          <div key={path} className="space-y-1.5">
+            <p
+              className="truncate font-mono text-xs text-muted-foreground"
+              onMouseEnter={clipTitle(path)}
+            >
+              {path}
+            </p>
+            <div className="space-y-1.5">
+              {unresolved.map((t) => (
+                <ReviewThreadCard
+                  key={t.id}
+                  thread={t}
+                  expanded={isExpanded(t)}
+                  onToggleExpand={() => toggleExpand(t)}
+                  onRowFocus={() =>
+                    setActiveIndex(navThreads.findIndex((x) => x.id === t.id))
+                  }
+                  onQuote={onQuote}
+                  onReply={onReply}
+                  onResolve={onResolve}
+                  onEditComment={onEditComment}
+                  onDeleteComment={onDeleteComment}
+                  provider={provider}
+                  apply={apply}
+                  fileDiffLookup={fileDiffLookup}
+                />
+              ))}
+              {resolved.length > 0 && (
+                <div className="space-y-1.5">
+                  <ResolvedExpander
+                    count={resolved.length}
+                    open={resolvedOpen}
+                    onToggle={() => toggleResolvedGroup(path)}
+                  />
+                  {resolvedOpen &&
+                    resolved.map((t) => (
+                      <ReviewThreadCard
+                        key={t.id}
+                        thread={t}
+                        expanded={isExpanded(t)}
+                        onToggleExpand={() => toggleExpand(t)}
+                        onRowFocus={() =>
+                          setActiveIndex(
+                            navThreads.findIndex((x) => x.id === t.id),
+                          )
+                        }
+                        onQuote={onQuote}
+                        onReply={onReply}
+                        onResolve={onResolve}
+                        onEditComment={onEditComment}
+                        onDeleteComment={onDeleteComment}
+                        provider={provider}
+                        apply={apply}
+                        fileDiffLookup={fileDiffLookup}
+                      />
+                    ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The residual "Review comments" block for the Conversation tab: the threads NOT
+ * shown inline under a review — all threads on GitLab/Bitbucket (which don't
+ * model reviews, so nothing is claimed → byte-identical to before), plus
+ * standalone line comments on GitHub. Renders nothing when there are none (or
+ * while loading — the data arrives after the PR body, so a spinner would only
+ * cause layout shift); a quiet muted line on error. `heading` lets the caller
+ * retitle it (e.g. "Other line comments") when reviews DID claim threads above.
+ */
+export function ReviewThreadsBlock({
+  threads,
+  isError,
+  heading = "Review comments",
+  onQuote,
+  onReply,
+  onResolve,
+  onEditComment,
+  onDeleteComment,
+  provider = "github",
+  apply,
+  fileDiffLookup,
+}: {
+  threads: ReviewThreadOut[] | undefined;
+  isError: boolean;
+  /** Section heading — "Review comments" by default; the caller passes e.g.
+   *  "Other line comments" when some threads render inline under reviews above,
+   *  so this residual block reads as the leftover rather than a duplicate. */
+  heading?: string;
+  /** The forge the threads came from — disambiguates bare-fence Apply scope for
+   *  suggestions (GitHub = whole range, GitLab = anchored line only), threaded to
+   *  every card. Defaults to "github" so an unwired caller is byte-identical. */
+  provider?: ForgeProvider;
+  /** Gating inputs + the write for the per-suggestion Apply affordance, threaded
+   *  straight to every card. Absent = no Apply shown. */
+  apply?: SuggestionApply;
+  /** File-section lookup for synthesizing a hunk on hunk-less providers, threaded
+   *  to every card. Absent = no synthesis (unchanged GitHub behavior). */
+  fileDiffLookup?: (path: string) => string | undefined;
+} & ThreadCallbacks) {
+  if (isError) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Couldn't load review comments.
+      </p>
+    );
+  }
+  // Nothing while loading (undefined) or when there are no threads — no noise.
+  if (!threads || threads.length === 0) return null;
+
   return (
     <div className="space-y-3">
-      {/* Total thread count — a "(0)" beside a visible resolved thread reads
+      {/* Total residual count — a "(0)" beside a visible resolved thread reads
           broken; the per-file "✓ n resolved" expander conveys resolved state. */}
       <h3 className="text-xs font-medium text-muted-foreground">
-        Review comments ({threads.length})
+        {heading} ({threads.length})
       </h3>
-      {/* Arrow/Enter nav is captured here and dispatched to the focused row
-          button (each carries data-thread-id); the buttons are the interactive
-          elements, so no click-without-key handler lives on this wrapper. */}
-      <div className="space-y-4" onKeyDown={onKeyDown}>
-        {groups.map(([path, groupThreads]) => {
-          const unresolved = groupThreads.filter((t) => !t.isResolved);
-          const resolved = groupThreads.filter((t) => t.isResolved);
-          const resolvedOpen = openResolvedGroups.has(path);
-          return (
-            <div key={path} className="space-y-1.5">
-              <p
-                className="truncate font-mono text-xs text-muted-foreground"
-                onMouseEnter={clipTitle(path)}
-              >
-                {path}
-              </p>
-              <div className="space-y-1.5">
-                {unresolved.map((t) => (
-                  <ReviewThreadCard
-                    key={t.id}
-                    thread={t}
-                    expanded={isExpanded(t)}
-                    onToggleExpand={() => toggleExpand(t)}
-                    onRowFocus={() =>
-                      setActiveIndex(navThreads.findIndex((x) => x.id === t.id))
-                    }
-                    onQuote={onQuote}
-                    onReply={onReply}
-                    onResolve={onResolve}
-                    onEditComment={onEditComment}
-                    onDeleteComment={onDeleteComment}
-                    provider={provider}
-                    apply={apply}
-                    fileDiffLookup={fileDiffLookup}
-                  />
-                ))}
-                {resolved.length > 0 && (
-                  <div className="space-y-1.5">
-                    <ResolvedExpander
-                      count={resolved.length}
-                      open={resolvedOpen}
-                      onToggle={() => toggleResolvedGroup(path)}
-                    />
-                    {resolvedOpen &&
-                      resolved.map((t) => (
-                        <ReviewThreadCard
-                          key={t.id}
-                          thread={t}
-                          expanded={isExpanded(t)}
-                          onToggleExpand={() => toggleExpand(t)}
-                          onRowFocus={() =>
-                            setActiveIndex(
-                              navThreads.findIndex((x) => x.id === t.id),
-                            )
-                          }
-                          onQuote={onQuote}
-                          onReply={onReply}
-                          onResolve={onResolve}
-                          onEditComment={onEditComment}
-                          onDeleteComment={onDeleteComment}
-                          provider={provider}
-                          apply={apply}
-                          fileDiffLookup={fileDiffLookup}
-                        />
-                      ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <ReviewThreadList
+        threads={threads}
+        onQuote={onQuote}
+        onReply={onReply}
+        onResolve={onResolve}
+        onEditComment={onEditComment}
+        onDeleteComment={onDeleteComment}
+        provider={provider}
+        apply={apply}
+        fileDiffLookup={fileDiffLookup}
+      />
     </div>
   );
 }

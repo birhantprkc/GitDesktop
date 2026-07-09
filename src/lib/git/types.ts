@@ -1354,7 +1354,9 @@ export interface PrThreadOut {
   state: string;
   body: string;
   date: string;
-  /** GraphQL node id — set for conversation comments, "" for reviews. */
+  /** GraphQL node id — a review's `PRR_…` id or a conversation comment's node id;
+   *  `""` only when the source supplies none. A review's `id` is matched against a
+   *  thread's `reviewId` to attach that review's line comments inline. */
   id: string;
   /** Permalink on GitHub ("" for reviews/local) — for "Copy link". */
   url: string;

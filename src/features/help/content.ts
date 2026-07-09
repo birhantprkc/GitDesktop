@@ -534,10 +534,15 @@ editor is everywhere you write Markdown — issues, discussions, and release not
 ## Review comments
 
 Line-anchored review comments — left by humans or bots like **Copilot** and
-**CodeRabbit** — surface in two places. In the Conversation tab, a **Review comments**
-block groups them **by file** (its heading counts *all* threads); the file-group header
-carries the path, so each thread shows just its line — **Line 43**, or **Lines 31–35**
-for a multi-line range. A thread expands to the full reply chain and carries an
+**CodeRabbit** — surface in the **Conversation** tab and the **Files** tab. On
+**GitHub**, each review's comments render **inline under that review** in the
+Conversation timeline, grouped by file — so you read them in context, right where
+the review lands. Everything left outside a review — standalone GitHub line
+comments, and *every* thread on **GitLab** and **Bitbucket** (which don't tie
+comments to a review) — collects in a **by-file block** below the timeline, headed
+*Review comments* (or *Other line comments* when some already appear inline above).
+The file-group header carries the path, so each thread shows just its line —
+**Line 43**, or **Lines 31–35** for a multi-line range. A thread expands to the full reply chain and carries an
 **Outdated** badge when its line no longer exists in the diff and a **Resolved** badge
 once closed. Resolved threads tuck behind a per-file **✓ n resolved** expander so the
 open ones stay in view. On **GitHub**, an expanded thread also shows the **anchored code
@@ -555,7 +560,7 @@ otherwise it applies unstaged and tells you why. Apply is disabled with an expla
 the thread is **outdated** or a branch other than the PR's head is checked out. In the
 **Files** tab, the same threads are anchored **under their exact line** in the diff (both
 unified and split), so you read each comment next to the code it's about; outdated or
-unanchored threads stay in the Conversation block instead. From either place you can
+unanchored threads stay in the Conversation tab instead. From either place you can
 **reply** in-thread, **resolve / unresolve** (where the provider allows it), **edit or
 delete your own** thread comments, **quote** a
 comment into the main composer, and **copy** the whole thread — path, line range, the
