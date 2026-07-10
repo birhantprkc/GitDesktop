@@ -58,14 +58,39 @@ export function RepoSwitcher() {
   useHotkeyAction("clone-repository", () => setCloneOpen(true));
   useHotkeyAction("new-repository", () => setCreateOpen(true));
 
+  const repoLabel = alias ?? repoName ?? "Repository";
+
   return (
     <>
       <Popover.Root open={open} onOpenChange={setOpen}>
         <Popover.Trigger
           render={
-            <Button variant="ghost" size="sm" className="max-w-56 gap-1.5">
-              <span className="truncate text-sm font-medium">
-                {alias ?? repoName ?? "Repository"}
+            <Button
+              variant="ghost"
+              size="sm"
+              // Deliberately NOT shrinkable (the vendored Button's shrink-0
+              // applies): the repo name holds its natural width while the
+              // branch label (shrink-20) and CI badge (shrink-4) absorb header
+              // space pressure — even a tiny flex-shrink share would swap
+              // characters for an ellipsis. max-w-56 still caps long names.
+              className="max-w-56 min-w-0 gap-1.5"
+            >
+              <span
+                className="min-w-0 truncate text-sm font-medium"
+                // Only expose the full name as a tooltip when it's actually
+                // clipped — measured just-in-time on hover, so no ref needed.
+                // Remove the attribute (not title="") when unclipped: an empty
+                // title="" is still a title in Chromium and would suppress any
+                // ancestor tooltip.
+                onMouseEnter={(e) => {
+                  const el = e.currentTarget;
+                  if (el) {
+                    if (el.scrollWidth > el.clientWidth) el.title = repoLabel;
+                    else el.removeAttribute("title");
+                  }
+                }}
+              >
+                {repoLabel}
               </span>
               <CaretDownIcon className="shrink-0 text-muted-foreground" />
             </Button>

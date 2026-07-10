@@ -690,8 +690,11 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     "update-default-from-upstream",
     () =>
       defaultBranchRow?.upstream &&
+      !defaultBranchRow.upstreamGone &&
       doUpdateFromUpstream(defaultBranchRow.name, defaultBranchRow.upstream),
-    Boolean(defaultBranchRow?.upstream) && !busy,
+    Boolean(defaultBranchRow?.upstream) &&
+      !defaultBranchRow?.upstreamGone &&
+      !busy,
   );
   useHotkeyAction(
     "merge-into-current",
@@ -1008,6 +1011,12 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             <Button
               variant="ghost"
               size="sm"
+              // Large shrink factor makes the branch label absorb essentially
+              // all header space pressure before the repo name or CI badge give
+              // way (flex removes space proportionally to factor × base size),
+              // so the header cascade collapses branch (20) → CI badge (4) →
+              // repo (1).
+              className="min-w-0 shrink-20"
               disabled={busy || amending}
               title={
                 amending
@@ -1016,9 +1025,26 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               }
             >
               <GitBranchIcon data-icon="inline-start" />
-              {currentLabel}
+              <span
+                className="min-w-0 truncate"
+                // Only expose the full label as a tooltip when it's actually
+                // clipped — measured just-in-time on hover, so no ref needed.
+                // Remove the attribute (not title="") when unclipped: an empty
+                // title="" is still a title in Chromium and would suppress the
+                // Button's own conditional (amending) title above.
+                onMouseEnter={(e) => {
+                  const el = e.currentTarget;
+                  if (el) {
+                    if (el.scrollWidth > el.clientWidth)
+                      el.title = currentLabel;
+                    else el.removeAttribute("title");
+                  }
+                }}
+              >
+                {currentLabel}
+              </span>
               {head?.detached && (
-                <Badge variant="secondary" className="ml-1">
+                <Badge variant="secondary" className="ml-1 shrink-0">
                   detached
                 </Badge>
               )}
@@ -1458,7 +1484,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         currentLabel={currentLabel}
         defaultBranch={defaultName}
         hasChanges={hasChanges}
-        isPushed={Boolean(head?.upstream)}
+        isPushed={Boolean(head?.upstream) && !head?.upstreamGone}
       />
 
       <SwitchWithChangesDialog

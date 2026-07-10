@@ -13,7 +13,17 @@ pub async fn status_core(repo_path: &str) -> AppResult<RepoStatus> {
         Some(repo_path),
         // -uall lists files inside untracked directories individually
         // instead of collapsing them to "dir/"
+        //
+        // status.aheadBehind=true is pinned defensively: stock git ignores both
+        // the config and --no-ahead-behind for porcelain v2 (verified live on
+        // 2.51.1 — `branch.ab` always emits for a live upstream), but forks that
+        // DO honor the config (large-repo setups often set it false) would
+        // otherwise drop `branch.ab` and make every live upstream read as gone.
+        // `-c` with an unknown key is ignored by any git, so this is
+        // version-safe where an --ahead-behind flag (git ≥ 2.17) is not.
         &[
+            "-c",
+            "status.aheadBehind=true",
             "status",
             "--porcelain=v2",
             "--branch",
@@ -54,8 +64,22 @@ pub fn parse_status_v2(text: &str) -> RepoStatus {
         upstream: None,
         ahead: 0,
         behind: 0,
+        upstream_gone: false,
     };
     let mut entries = Vec::new();
+    // Porcelain v2 has no `[gone]` token. When the upstream ref is gone git still
+    // emits `# branch.upstream <name>` but omits `# branch.ab` entirely; a live
+    // upstream always produces a `branch.ab` line (even `+0 -0`). So a present
+    // upstream with no `branch.ab` seen ⇒ gone.
+    //
+    // Invariants this relies on (verified live on git for Windows): porcelain v2
+    // emits `branch.ab` for a live upstream unconditionally — `status.aheadBehind
+    // = false` affects non-porcelain formats only, and `--no-ahead-behind` is
+    // ignored by porcelain v2. Porcelain v2 also has no `branch.status` header.
+    // Belt-and-braces, `status_core` additionally pins `-c status.aheadBehind=
+    // true` on its invocation so even a git fork that honors the config for
+    // porcelain output cannot suppress `branch.ab` and fake a gone upstream.
+    let mut saw_ab = false;
 
     let mut tokens = text.split('\0').peekable();
     while let Some(token) = tokens.next() {
@@ -74,6 +98,7 @@ pub fn parse_status_v2(text: &str) -> RepoStatus {
             } else if let Some(upstream) = header.strip_prefix("branch.upstream ") {
                 branch.upstream = Some(upstream.to_string());
             } else if let Some(ab) = header.strip_prefix("branch.ab ") {
+                saw_ab = true;
                 for part in ab.split(' ') {
                     if let Some(a) = part.strip_prefix('+') {
                         branch.ahead = a.parse().unwrap_or(0);
@@ -136,6 +161,8 @@ pub fn parse_status_v2(text: &str) -> RepoStatus {
         }
     }
 
+    branch.upstream_gone = branch.upstream.is_some() && !saw_ab;
+
     RepoStatus { branch, entries }
 }
 
@@ -175,7 +202,35 @@ mod tests {
         assert_eq!(s.branch.upstream.as_deref(), Some("origin/main"));
         assert_eq!(s.branch.ahead, 2);
         assert_eq!(s.branch.behind, 1);
+        // A live upstream always emits a branch.ab line, so it's not gone.
+        assert!(!s.branch.upstream_gone);
         assert!(s.entries.is_empty());
+    }
+
+    #[test]
+    fn upstream_present_without_ab_line_is_gone() {
+        // When the remote branch is deleted, git keeps the upstream header but
+        // drops the branch.ab line entirely — porcelain v2's only "gone" signal.
+        let text = z(&[
+            "# branch.oid abc123",
+            "# branch.head feature",
+            "# branch.upstream origin/feature",
+            "",
+        ]);
+        let s = parse_status_v2(&text);
+        assert_eq!(s.branch.upstream.as_deref(), Some("origin/feature"));
+        assert!(s.branch.upstream_gone);
+        assert_eq!(s.branch.ahead, 0);
+        assert_eq!(s.branch.behind, 0);
+    }
+
+    #[test]
+    fn no_upstream_is_not_gone() {
+        // A branch that never had an upstream must not read as gone.
+        let text = z(&["# branch.oid abc123", "# branch.head feature", ""]);
+        let s = parse_status_v2(&text);
+        assert_eq!(s.branch.upstream, None);
+        assert!(!s.branch.upstream_gone);
     }
 
     #[test]
