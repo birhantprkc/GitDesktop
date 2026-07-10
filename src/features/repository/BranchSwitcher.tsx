@@ -68,11 +68,12 @@ import {
   type MergeRunOptions,
   type PickerMode,
 } from "./BranchMergePickerDialog";
-import { RebaseOntoDialog } from "./RebaseOntoDialog";
 import { CleanupBranchesDialog } from "./CleanupBranchesDialog";
 import { CreateBranchDialog } from "./CreateBranchDialog";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
 import { OperationHistoryDialog } from "./OperationHistoryDialog";
+import { PromoteWorktreeDialog } from "./PromoteWorktreeDialog";
+import { RebaseOntoDialog } from "./RebaseOntoDialog";
 import { RenameBranchDialog } from "./RenameBranchDialog";
 import { StashesDialog } from "./StashesDialog";
 import { SwitchWithChangesDialog } from "./SwitchWithChangesDialog";
@@ -81,6 +82,9 @@ import { useOpenWorktree } from "./useOpenRepoByPath";
 /** Lower-cased, forward-slashed path for cross-source comparison — git emits
  *  "/", the app stores "\" on Windows. */
 const normPath = (p: string) => p.replace(/\\/g, "/").toLowerCase();
+
+/** Last path segment (folder name), tolerating either separator. */
+const baseName = (p: string) => p.split(/[/\\]/).filter(Boolean).pop() ?? p;
 
 type PrState = "open" | "draft" | "merged" | "closed";
 
@@ -203,6 +207,9 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     name: string;
     path: string;
   } | null>(null);
+  // The worktree pending a "Promote to main workspace" confirm — set by the
+  // palette action (the Worktrees dialog hosts its own promote flow).
+  const [promoteTarget, setPromoteTarget] = useState<UserWorktree | null>(null);
 
   const head = status.data?.branch;
   const currentName = head?.name ?? null;
@@ -315,6 +322,21 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     }
     return map;
   }, [userWorktrees.data, activeNorm]);
+  // Cross-worktree navigation (fetched only while open): the main workspace, the
+  // other worktrees you can jump to, and whether you're currently in a linked
+  // (non-main) worktree — where a branch checkout lands here, not in main.
+  const worktreeList = userWorktrees.data ?? [];
+  const currentWorktree = worktreeList.find(
+    (w) => normPath(w.path) === activeNorm,
+  );
+  const mainWorktree = worktreeList.find((w) => w.isMain);
+  const otherWorktrees = worktreeList.filter(
+    (w) => normPath(w.path) !== activeNorm,
+  );
+  const inLinkedWorktree = Boolean(currentWorktree && !currentWorktree.isMain);
+  const currentWorktreeName = currentWorktree
+    ? baseName(currentWorktree.path)
+    : "";
   // Default branch pinned on top, then the rest by most recently committed.
   // Memoized: the compiler won't hoist the `.sort()` copy or the filter
   // allocations, and these recompute on every filter keystroke otherwise.
@@ -376,6 +398,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     ...visibleBranches,
     ...(showArchived ? archivedBranches : []),
     ...(showRemote ? remoteOnly : []),
+    // The Worktrees section is a selectable list too — key its rows by path so
+    // arrow nav flows from the branch rows straight into it (each row carries a
+    // matching `data-row`). Paths use forward slashes, safe as a data-row value.
+    ...otherWorktrees.map((w) => ({ name: w.path })),
   ];
   const onBranchKeyDown = listKeyboardNav({
     items: navBranches,
@@ -733,6 +759,51 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   });
   useHotkeyAction("operation-history", () => setOpHistoryOpen(true));
   useHotkeyAction("discard-all", () => setDiscardAllOpen(true), hasChanges);
+  // Cross-worktree navigation (palette-only). They can fire while the popover is
+  // closed, so they can't rely on the open-gated `userWorktrees` cache — fetch
+  // the worktree list fresh, like the delete-branch off-switch does.
+  useHotkeyAction("open-main-workspace", async () => {
+    setOpen(false);
+    try {
+      const wts = await listUserWorktrees(repoPath);
+      const main = wts.find((w) => w.isMain);
+      if (!main) {
+        toast.error("Couldn't find the main workspace for this repository.");
+        return;
+      }
+      if (normPath(main.path) === normPath(repoPath)) {
+        toast.info("Already in the main workspace.");
+        return;
+      }
+      openWorktree(main.path);
+    } catch (e) {
+      toastError(e);
+    }
+  });
+  useHotkeyAction("promote-worktree-to-main", async () => {
+    setOpen(false);
+    try {
+      const wts = await listUserWorktrees(repoPath);
+      const here = wts.find((w) => normPath(w.path) === normPath(repoPath));
+      if (!here || here.isMain) {
+        toast.info(
+          "Open a linked worktree to promote its branch to the main workspace.",
+        );
+        return;
+      }
+      if (here.isDetached || !here.branch) {
+        toast.info("This worktree has no branch to promote.");
+        return;
+      }
+      if (here.isLocked) {
+        toast.info("This worktree is locked — unlock it before promoting.");
+        return;
+      }
+      setPromoteTarget(here);
+    } catch (e) {
+      toastError(e);
+    }
+  });
 
   // Shared by the visible list and the Archived section.
   const renderBranchRow = (branch: Branch) => {
@@ -1064,6 +1135,30 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               // filter input, a row, or the popup itself (Esc/Tab pass through).
               onKeyDown={onBranchKeyDown}
             >
+              {inLinkedWorktree && (
+                <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-2 text-[11px]">
+                  <TreeStructureIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 text-muted-foreground">
+                    In worktree{" "}
+                    <span className="font-medium text-foreground">
+                      {currentWorktreeName}
+                    </span>{" "}
+                    — a checkout lands here
+                  </span>
+                  {mainWorktree && (
+                    <button
+                      type="button"
+                      className="shrink-0 cursor-pointer font-medium text-primary hover:underline"
+                      onClick={() => {
+                        setOpen(false);
+                        openWorktree(mainWorktree.path);
+                      }}
+                    >
+                      Open main workspace
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="border-b p-2">
                 <Input
                   value={branchFilter}
@@ -1122,6 +1217,49 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   </>
                 )}
               </div>
+              {otherWorktrees.length > 0 && (
+                <div className="border-t py-1">
+                  <p className="px-3 py-1 text-[11px] font-medium text-muted-foreground">
+                    Worktrees
+                  </p>
+                  {otherWorktrees.map((w) => (
+                    <button
+                      key={w.path}
+                      type="button"
+                      data-row={w.path}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
+                      onClick={() => {
+                        setOpen(false);
+                        openWorktree(w.path);
+                      }}
+                    >
+                      <TreeStructureIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {w.isDetached ? "detached HEAD" : w.branch || "—"}
+                      </span>
+                      {w.isMain && (
+                        <Badge variant="secondary" className="shrink-0">
+                          Main
+                        </Badge>
+                      )}
+                      <span
+                        className="max-w-[45%] shrink-0 truncate text-[11px] text-muted-foreground"
+                        onMouseEnter={(e) => {
+                          const el = e.currentTarget;
+                          // Full path is the useful tooltip (the row already
+                          // shows the folder name). removeAttribute, not
+                          // title="", so an unclipped row leaves no empty tooltip.
+                          if (el.scrollWidth > el.clientWidth)
+                            el.title = w.path;
+                          else el.removeAttribute("title");
+                        }}
+                      >
+                        {baseName(w.path)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="border-t py-1">
                 <MenuRow onClick={openCreate}>New branch…</MenuRow>
                 <MenuRow
@@ -1497,6 +1635,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         stashPending={
           stashAll.isPending || checkout.isPending || checkoutRemote.isPending
         }
+      />
+
+      <PromoteWorktreeDialog
+        key={promoteTarget?.path ?? "no-promote"}
+        repoPath={repoPath}
+        worktree={promoteTarget}
+        onClose={() => setPromoteTarget(null)}
       />
     </>
   );
