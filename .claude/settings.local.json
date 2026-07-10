@@ -45,7 +45,8 @@
       "PowerShell(cd site && pnpm build)",
       "Bash(git --no-pager diff *)",
       "mcp__gitdesktop__repo_status",
-      "mcp__gitdesktop__list_pull_requests"
+      "mcp__gitdesktop__list_pull_requests",
+      "mcp__gitdesktop__list_pull_request_comments"
     ]
   },
   "enabledMcpjsonServers": [
