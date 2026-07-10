@@ -409,6 +409,134 @@ async fn all_objects_present(repo_path: &str, refs: &[String]) -> bool {
     true
 }
 
+/// Default cap on matching lines returned by `git_grep_at_ref`.
+const GREP_DEFAULT_MAX_HITS: u32 = 200;
+/// Hard cap on total output bytes, so a pathological line (a minified bundle the
+/// `-I` binary filter didn't catch) can't blow past the model's context.
+const GREP_MAX_BYTES: usize = 100_000;
+
+/// Search the repository at a given rev for a fixed string, returning matching
+/// `path:line:content` lines — the repo-search tool an HTTP review model calls
+/// against a PR head, with NO checkout/worktree (it greps the rev directly).
+///
+/// `git grep -I -n -F -m <max_hits> --no-color -e <pattern> <atRef>`: `-F` is
+/// fixed-string (v1 is deliberately literal, not regex — a regex mode is a later
+/// addition), `-I` skips binary files, `-n` prefixes line numbers, and `-m` caps
+/// results PER FILE so one pathological file (a minified bundle the `-I` filter
+/// didn't catch) can't dominate the captured output before we trim. The pattern
+/// is passed with `-e`, so a leading `-` in it is data, not an option (a bare
+/// `--` guard isn't needed for the pattern; `validate_ref` guards the rev the
+/// same way the rest of this module does).
+///
+/// `-m` (`--max-count`) landed in git 2.38 (Oct 2022); on an older git the switch
+/// is unknown and git grep hard-fails, so [`run_grep`] retries once without it
+/// (same output, just an uncapped capture). Because `-m` is per-file, the true
+/// total match count isn't recoverable from the output, so the truncation marker
+/// is count-less.
+///
+/// Grepping a rev makes git prefix every hit with `<atRef>:` (output is
+/// `<atRef>:path:line:content`); we strip exactly that known prefix so the model
+/// sees repo-relative `path:line:content`. Only the leading `atRef:` is removed —
+/// path- and content-embedded colons are preserved.
+#[tauri::command]
+pub async fn git_grep_at_ref(
+    repo_path: String,
+    pattern: String,
+    at_ref: String,
+    max_hits: Option<u32>,
+) -> AppResult<String> {
+    validate_ref(&at_ref)?;
+    if pattern.trim().is_empty() {
+        return Err(AppError::InvalidArgument("empty search pattern".into()));
+    }
+    let max_hits = max_hits.unwrap_or(GREP_DEFAULT_MAX_HITS) as usize;
+
+    let Some(stdout) = run_grep(&repo_path, &pattern, &at_ref, max_hits).await? else {
+        // No match (git grep's documented exit 1 with empty output).
+        return Ok(String::new());
+    };
+
+    let prefix = format!("{at_ref}:");
+    let kept: Vec<String> = stdout
+        .lines()
+        .take(max_hits)
+        // git prefixes each hit with `<atRef>:`; normalize to repo-relative.
+        .map(|l| l.strip_prefix(&prefix).unwrap_or(l).to_string())
+        .collect();
+    // With `-m` the true total is unknowable, so the marker carries no count —
+    // it only signals that more lines existed than we returned.
+    let over = stdout.lines().count() > max_hits;
+
+    let mut result = kept.join("\n");
+    if over {
+        result.push_str("\n[... additional matches truncated]");
+    }
+
+    // Byte hard-cap on top of the line cap, char-boundary safe.
+    if result.len() > GREP_MAX_BYTES {
+        let (head, _) = truncate_at_char_boundary(result, GREP_MAX_BYTES);
+        result = format!("{head}\n[... output truncated at {GREP_MAX_BYTES} bytes]");
+    }
+    Ok(result)
+}
+
+/// Runs the fixed-string `git grep` at a rev, returning `Some(stdout)` on a match,
+/// `None` for the documented no-match (exit 1, empty output). `run_git_raw` so exit
+/// 1 stays a success signal rather than an error; any OTHER non-zero is a real error.
+///
+/// Retries ONCE without `-m` when the first run fails with an unknown-option error,
+/// so a git older than 2.38 (which lacks `--max-count`) falls back to an uncapped
+/// capture instead of hard-failing. The retry shares this same match/exit handling.
+async fn run_grep(
+    repo_path: &str,
+    pattern: &str,
+    at_ref: &str,
+    max_hits: usize,
+) -> AppResult<Option<String>> {
+    let max_hits_arg = max_hits.to_string();
+    let with_m = [
+        "grep", "-I", "-n", "-F", "-m", &max_hits_arg, "--no-color", "-e", pattern, at_ref,
+    ];
+    let out = run_git_raw(Some(repo_path), &with_m, DEFAULT_TIMEOUT).await?;
+    match out.code {
+        0 => return Ok(Some(out.stdout_lossy())),
+        1 if out.stdout.is_empty() => return Ok(None),
+        _ if is_unknown_option(&out.stderr) => {} // fall through to the -m-less retry
+        _ => {
+            return Err(AppError::Git {
+                code: out.code,
+                stderr: out.stderr,
+            })
+        }
+    }
+
+    // git < 2.38: retry without `-m`. Same args minus the `-m <n>` pair — output is
+    // identical, just an uncapped capture (still trimmed by the caller's line/byte caps).
+    let without_m = [
+        "grep", "-I", "-n", "-F", "--no-color", "-e", pattern, at_ref,
+    ];
+    let out = run_git_raw(Some(repo_path), &without_m, DEFAULT_TIMEOUT).await?;
+    match out.code {
+        0 => Ok(Some(out.stdout_lossy())),
+        1 if out.stdout.is_empty() => Ok(None),
+        _ => Err(AppError::Git {
+            code: out.code,
+            stderr: out.stderr,
+        }),
+    }
+}
+
+/// Whether git's stderr indicates it rejected an unknown command-line option —
+/// the signal that this git predates `-m`/`--max-count` (2.38). Matched
+/// case-insensitively on git's phrasings ("unknown switch"/"unknown option") plus
+/// the `usage: git grep` banner it prints on an option error.
+fn is_unknown_option(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("unknown switch")
+        || lower.contains("unknown option")
+        || lower.contains("usage: git grep")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,6 +586,172 @@ mod tests {
             .await
             .expect("a failed fetch is Ok(false), not an error");
         assert!(!ok, "an absent object falls through to the (failing) fetch");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Seeds a fresh repo and returns `(base_dir, repo_path)`. Caller removes
+    /// `base_dir`.
+    async fn seed_repo(tag: &str) -> (std::path::PathBuf, String) {
+        let base = std::env::temp_dir().join(format!(
+            "gd-{tag}-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let repo_s = repo.to_string_lossy().into_owned();
+        run(&repo_s, &["init", "-q"]).await;
+        run(&repo_s, &["config", "user.email", "t@t.local"]).await;
+        run(&repo_s, &["config", "user.name", "T"]).await;
+        (base, repo_s)
+    }
+
+    /// A match at a rev is found even after the working tree (and later commits)
+    /// no longer contain the needle — grep reads the rev's tree, not the checkout.
+    #[tokio::test]
+    async fn grep_at_ref_reads_the_rev_not_the_worktree() {
+        let (base, repo) = seed_repo("grep-rev").await;
+
+        std::fs::write(
+            std::path::Path::new(&repo).join("a.txt"),
+            "the SECRET_NEEDLE lives here\nplain line\n",
+        )
+        .unwrap();
+        run(&repo, &["add", "-A"]).await;
+        run(&repo, &["commit", "-qm", "add needle"]).await;
+        let sha = run(&repo, &["rev-parse", "HEAD"]).await.trim().to_string();
+
+        // Change the working tree so the needle is gone from disk (unstaged edit).
+        std::fs::write(
+            std::path::Path::new(&repo).join("a.txt"),
+            "the needle is gone now\nplain line\n",
+        )
+        .unwrap();
+
+        // Grep at the commit → still found (reads the committed tree).
+        let hit = git_grep_at_ref(repo.clone(), "SECRET_NEEDLE".into(), sha.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            hit, "a.txt:1:the SECRET_NEEDLE lives here",
+            "match found at the rev, ref-prefix stripped to repo-relative path"
+        );
+
+        // Commit the removal, then grep at HEAD → empty (needle no longer in tree).
+        run(&repo, &["add", "-A"]).await;
+        run(&repo, &["commit", "-qm", "remove needle"]).await;
+        let gone = git_grep_at_ref(repo.clone(), "SECRET_NEEDLE".into(), "HEAD".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(gone, "", "no match at HEAD → Ok(empty), not an error");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The `<ref>:` prefix git prepends when grepping a rev is stripped, while
+    /// colons embedded in the path/content are preserved.
+    #[tokio::test]
+    async fn grep_at_ref_strips_only_the_ref_prefix() {
+        let (base, repo) = seed_repo("grep-prefix").await;
+
+        std::fs::write(
+            std::path::Path::new(&repo).join("cfg.txt"),
+            "endpoint: http://host:8080/path FINDME\n",
+        )
+        .unwrap();
+        run(&repo, &["add", "-A"]).await;
+        run(&repo, &["commit", "-qm", "seed"]).await;
+
+        let hit = git_grep_at_ref(repo.clone(), "FINDME".into(), "HEAD".into(), None)
+            .await
+            .unwrap();
+        // Only the leading `HEAD:` is gone; every content colon survives.
+        assert_eq!(hit, "cfg.txt:1:endpoint: http://host:8080/path FINDME");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// More returned lines than `max_hits` → the kept lines plus a count-less
+    /// truncation marker. The marker carries NO remainder count: `-m` caps per
+    /// file, so the true total match count is not recoverable from the output (a
+    /// count would understate). We assert the fixed lines returned and the marker
+    /// text only.
+    ///
+    /// The matches are spread across THREE files deliberately: `-m` is per-file, so
+    /// a single file with N matches would itself be capped to `max_hits` by git and
+    /// never overflow the returned-line cap. Three files × 2 matches each = 6 lines
+    /// out of git, which the caller's `take(2)` then trims — the realistic path.
+    #[tokio::test]
+    async fn grep_at_ref_caps_hits_with_marker() {
+        let (base, repo) = seed_repo("grep-cap").await;
+
+        // 2 matching lines in each of 3 files (a.txt, b.txt, c.txt).
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            std::fs::write(
+                std::path::Path::new(&repo).join(name),
+                "hit MATCHME one\nhit MATCHME two\n",
+            )
+            .unwrap();
+        }
+        run(&repo, &["add", "-A"]).await;
+        run(&repo, &["commit", "-qm", "seed"]).await;
+
+        let out = git_grep_at_ref(repo.clone(), "MATCHME".into(), "HEAD".into(), Some(2))
+            .await
+            .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3, "2 kept lines + 1 marker line");
+        // git grep orders by path, so the first two lines are a.txt's two matches.
+        assert_eq!(lines[0], "a.txt:1:hit MATCHME one");
+        assert_eq!(lines[1], "a.txt:2:hit MATCHME two");
+        assert_eq!(
+            lines[2], "[... additional matches truncated]",
+            "count-less marker: -m makes the true total unknowable"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The unknown-option matcher recognizes git's real phrasings (so a git < 2.38
+    /// lacking `-m` triggers the fallback), while leaving unrelated grep failures
+    /// (e.g. a bad rev) to surface as real errors.
+    #[test]
+    fn is_unknown_option_matches_gits_phrasings() {
+        // git 2.51's actual banner for an unknown option (captured verbatim).
+        assert!(is_unknown_option(
+            "error: unknown option `max-count'\nusage: git grep [<options>] [-e] <pattern>"
+        ));
+        // Older/alternate phrasing.
+        assert!(is_unknown_option("error: unknown switch `m'"));
+        assert!(is_unknown_option("USAGE: GIT GREP ...")); // case-insensitive
+        // A genuine grep failure must NOT be mistaken for a version issue.
+        assert!(!is_unknown_option(
+            "fatal: ambiguous argument 'nope': unknown revision or path not in the working tree"
+        ));
+    }
+
+    /// A ref that looks like an option is rejected before any git runs.
+    #[tokio::test]
+    async fn grep_at_ref_rejects_option_like_ref() {
+        let (base, repo) = seed_repo("grep-badref").await;
+
+        let err = git_grep_at_ref(repo.clone(), "x".into(), "-oops".into(), None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AppError::InvalidArgument(_)),
+            "leading-dash ref rejected as invalid argument"
+        );
+
+        // An empty/whitespace pattern is likewise rejected.
+        let err = git_grep_at_ref(repo.clone(), "   ".into(), "HEAD".into(), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
 
         let _ = std::fs::remove_dir_all(&base);
     }
