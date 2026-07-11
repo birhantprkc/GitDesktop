@@ -14,6 +14,7 @@ pub mod github;
 pub mod gitlab;
 pub mod glab;
 pub mod http;
+pub mod jira;
 pub mod model;
 
 use crate::error::{AppError, AppResult};
@@ -217,6 +218,172 @@ pub async fn forge_bb_account() -> AppResult<Option<bitbucket::BbAccountInfo>> {
 #[tauri::command]
 pub async fn forge_bb_step_logs(repo_path: String, log_ref: String) -> AppResult<String> {
     bitbucket::step_logs(&repo_path, &log_ref).await
+}
+
+// ── Jira (linked issue provider) ───────────────────────────────────────────────
+//
+// Jira is a per-repo LINKED issue provider, orthogonal to the git-host detection every
+// `forge_issue_*` command dispatches on: no repo has a Jira git remote, so Jira is
+// never detected — it's configured. The frontend stores a per-repo `{site, projectKey}`
+// link and passes `site`/`project_key` into these commands, keeping Rust stateless about
+// linkage. Phase 1 is read-only. See `docs/jira-issue-integration.md`.
+
+/// Connect a Jira account for a site: normalize + validate the site, validate the
+/// (site, email, token) triple via `GET /rest/api/3/myself` BEFORE persisting (nothing
+/// stored on failure), then keep email/token in the keyring under `forge/<site>/*`.
+/// Returns the account info; the token is never returned.
+#[tauri::command]
+pub async fn jira_set_account(
+    site: String,
+    email: String,
+    token: String,
+) -> AppResult<jira::JiraAccountInfo> {
+    jira::set_account(&site, &email, &token).await
+}
+
+/// Connect a Jira account for a site by REUSING the stored Bitbucket credentials
+/// (Bitbucket Cloud shares the Atlassian API-token mechanism). Runs Rust-side because
+/// tokens never cross IPC — the frontend can't read the Bitbucket token to pass it to
+/// `jira_set_account`. Validates via `/myself` before persisting under the site host;
+/// a 403 gets reuse-specific copy pointing at manual entry. The token is never returned.
+#[tauri::command]
+pub async fn jira_set_account_from_bitbucket(site: String) -> AppResult<jira::JiraAccountInfo> {
+    jira::set_account_from_bitbucket(&site).await
+}
+
+/// The stored Jira account for a site (email only) — a keyring existence read (no
+/// network). `None` when no token is stored.
+#[tauri::command]
+pub async fn jira_account(site: String) -> AppResult<Option<jira::JiraStoredAccount>> {
+    jira::account(&site).await
+}
+
+/// Disconnect the Jira account for a site (delete both keyring entries; a missing entry
+/// is tolerated).
+#[tauri::command]
+pub async fn jira_clear_account(site: String) -> AppResult<()> {
+    jira::clear_account(&site).await
+}
+
+/// Validate the stored Jira creds for a site by probing `/myself` — distinct errors for
+/// no-creds-stored / 401 / 403.
+#[tauri::command]
+pub async fn jira_validate(site: String) -> AppResult<jira::JiraAccountInfo> {
+    jira::validate(&site).await
+}
+
+/// Search a site's Jira projects for the link picker (`GET
+/// /rest/api/3/project/search`, single page).
+#[tauri::command]
+pub async fn jira_project_search(
+    site: String,
+    query: String,
+) -> AppResult<Vec<jira::JiraProject>> {
+    jira::project_search(&site, &query).await
+}
+
+/// A linked Jira project's issues. `state` ∈ `"open"` | `"closed"` | `"all"` (mapped
+/// through `statusCategory`). One page of `POST /rest/api/3/search/jql`.
+#[tauri::command]
+pub async fn jira_issue_list(
+    site: String,
+    project_key: String,
+    state: String,
+) -> AppResult<Vec<jira::JiraIssueInfo>> {
+    jira::issue_list(&site, &project_key, &state).await
+}
+
+/// Full details for one Jira issue's read view (ADF description + comments converted to
+/// markdown).
+#[tauri::command]
+pub async fn jira_issue_view(site: String, key: String) -> AppResult<jira::JiraIssueDetails> {
+    jira::issue_view(&site, &key).await
+}
+
+// ── Jira writes (phase 2) ──────────────────────────────────────────────────────
+
+/// Add a comment to a Jira issue. `body_md` is markdown (converted to ADF Rust-side); a
+/// whitespace-only body is rejected before any network call. Returns the created comment.
+#[tauri::command]
+pub async fn jira_issue_comment(
+    site: String,
+    key: String,
+    body_md: String,
+) -> AppResult<jira::JiraComment> {
+    jira::issue_comment(&site, &key, &body_md).await
+}
+
+/// Close or reopen a Jira issue via its workflow. `direction` ∈ `"close"` | `"reopen"`.
+/// Returns the issue's fresh status after the transition. Transition ids are per-project
+/// workflow and are never hardcoded.
+#[tauri::command]
+pub async fn jira_issue_transition(
+    site: String,
+    key: String,
+    direction: String,
+) -> AppResult<jira::JiraTransitionResult> {
+    jira::issue_transition(&site, &key, &direction).await
+}
+
+/// Create a Jira issue. Needs `project_key`, `issue_type_id`, and a non-empty `summary`;
+/// `description_md` (markdown → ADF) is optional. Returns the new issue's key + URL.
+#[tauri::command]
+pub async fn jira_issue_create(
+    site: String,
+    project_key: String,
+    issue_type_id: String,
+    summary: String,
+    description_md: Option<String>,
+) -> AppResult<jira::JiraCreatedIssue> {
+    jira::issue_create(
+        &site,
+        &project_key,
+        &issue_type_id,
+        &summary,
+        description_md.as_deref(),
+    )
+    .await
+}
+
+/// The available issue types for a project's create form (per-project `createmeta`
+/// sub-endpoint). Returns all types including subtasks; the frontend filters.
+#[tauri::command]
+pub async fn jira_issue_types(
+    site: String,
+    project_key: String,
+) -> AppResult<Vec<jira::JiraIssueType>> {
+    jira::issue_types(&site, &project_key).await
+}
+
+/// Assign (or unassign) a Jira issue. `account_id = Some(id)` assigns; `None` unassigns.
+#[tauri::command]
+pub async fn jira_issue_assign(
+    site: String,
+    key: String,
+    account_id: Option<String>,
+) -> AppResult<()> {
+    jira::issue_assign(&site, &key, account_id.as_deref()).await
+}
+
+/// Search users assignable to a Jira issue, for the assignee picker
+/// (`GET /user/assignable/search`).
+#[tauri::command]
+pub async fn jira_user_search(
+    site: String,
+    key: String,
+    query: String,
+) -> AppResult<Vec<model::ForgeUserRef>> {
+    jira::user_search(&site, &key, &query).await
+}
+
+/// The caller's per-project permissions, gating the Jira write actions
+/// (`GET /rest/api/3/mypermissions`).
+#[tauri::command]
+pub async fn jira_permissions(
+    site: String,
+    project_key: String,
+) -> AppResult<jira::JiraProjectPermissions> {
+    jira::permissions(&site, &project_key).await
 }
 
 /// The signed-in user's repositories on a provider, for the clone browser.

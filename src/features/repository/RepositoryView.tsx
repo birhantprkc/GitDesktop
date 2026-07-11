@@ -38,6 +38,7 @@ import { DiscussionView } from "@/features/discussions/DiscussionView";
 import { CommitDetailView } from "@/features/history/CommitDetailView";
 import { HistoryPanel } from "@/features/history/HistoryPanel";
 import { IssuesPanel } from "@/features/issues/IssuesPanel";
+import { JiraIssueView } from "@/features/issues/JiraIssueView";
 import { LocalIssueView } from "@/features/issues/LocalIssueView";
 import { RemoteIssueView } from "@/features/issues/RemoteIssueView";
 import { LocalPrView } from "@/features/pulls/LocalPrView";
@@ -55,6 +56,7 @@ import {
   useRepoStatus,
 } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { useJiraLink, useJiraPermissions } from "@/lib/jira/queries";
 import { useAiEnabled, useRepoAlias } from "@/lib/settings/queries";
 import { type RepoTab, useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
@@ -128,6 +130,13 @@ export function RepositoryView() {
   const canCreateIssue = forgeFeatureReady(gh.data, "issueCreate");
   const canCreatePr = forgeFeatureReady(gh.data, "mrCreate");
   const canCreateRelease = forgeFeatureReady(gh.data, "releaseCreate");
+  // Jira create is a separate axis (a linked project, not the git host); gate on
+  // a link AND the project's createIssues permission. These queries dedupe with
+  // IssuesPanel's identical keys, so registering the fallback here adds no fetch.
+  const jiraLink = useJiraLink(repoPath ?? "");
+  const jiraPerms = useJiraPermissions(repoPath ?? "", jiraLink.data);
+  const canCreateJira =
+    !!jiraLink.data && (jiraPerms.data?.createIssues ?? false);
   // Tab switches are transitions: a heavy first render of the target panel
   // never blocks the click, and hidden Activities pre-render at low priority.
   const [, startTabTransition] = useTransition();
@@ -173,6 +182,11 @@ export function RepositoryView() {
   // wins), so on-tab the panel's own handler opens directly with full context.
   useHotkeyAction("create-local-issue", () => requestCreate("local-issue"));
   useHotkeyAction("create-issue", () => requestCreate("issue"), canCreateIssue);
+  useHotkeyAction(
+    "create-jira-issue",
+    () => requestCreate("jira-issue"),
+    canCreateJira,
+  );
   useHotkeyAction("create-pr", () => requestCreate("pr"), canCreatePr);
   useHotkeyAction("create-local-pr", () => requestCreate("local-pr"));
   useHotkeyAction(
@@ -370,6 +384,8 @@ export function RepositoryView() {
               />
             ) : deferredIssue?.kind === "local" ? (
               <LocalIssueView repoPath={repoPath} id={deferredIssue.id} />
+            ) : deferredIssue?.kind === "jira" ? (
+              <JiraIssueView repoPath={repoPath} issueKey={deferredIssue.id} />
             ) : (
               <DiffPlaceholder
                 icon={CircleDashedIcon}

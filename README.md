@@ -122,8 +122,20 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   list of **deployment environments**, **webhooks**,
   and a **Danger zone** (rename — which updates your local `origin` automatically —
   visibility, transfer, delete; Bitbucket has no archive). Bitbucket has retired its
-  native issue tracker (issues live in Jira), so issues aren't shown for
-  Bitbucket repositories.
+  native issue tracker (issues live in Jira), so instead you can **link a Jira project**
+  (below) to browse its issues right here.
+- **Jira Cloud issues** — link a **Jira Cloud** site and project to any repository (the
+  repo ⋯ menu's **Link Jira project…**, or the command palette) and its Issues tab gains a
+  **Jira** section: browse and filter your project's issues (open / closed / all,
+  mapped to Jira's status categories), and open one to read its **status**, **type**,
+  **priority**, **assignee**, **labels**, Markdown **description**, and **comments**, with
+  **View in Jira** link-outs. You can also **create** an issue (summary, description, and an
+  issue-type picker), **comment** in Markdown, **close / reopen** by following the project's
+  own workflow (the confirmation names the real resulting status), and **assign / unassign** via
+  user search — actions your Jira permissions don't allow simply don't appear. Connect with
+  an **Atlassian API token** (email + token, validated before saving and kept in your OS
+  keychain), or reuse an existing Bitbucket credential. Especially handy for **Bitbucket** repos, whose native tracker Atlassian
+  retires 2026-08-20.
 - **Delegate a task to an agent** — hand a coding task to an AI agent that works
   in an isolated worktree, so your own checkout is never touched. Follow it
   **step by step** — every file it reads, edits, and command it runs — and

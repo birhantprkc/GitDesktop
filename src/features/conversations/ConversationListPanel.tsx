@@ -19,7 +19,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import { cn } from "@/lib/utils";
 
-/** The "New ▾" dropdown's two items (GitHub + local). */
+/** The "New ▾" dropdown's items (GitHub + local, plus an optional third for a
+ *  linked Jira project on the issues panel). */
 export interface NewMenuConfig {
   ghLabel: string;
   ghDisabled: boolean;
@@ -27,6 +28,10 @@ export interface NewMenuConfig {
   onGh: () => void;
   localLabel: string;
   onLocal: () => void;
+  /** Optional Jira create item — present only when a Jira project is linked AND
+   *  the user can create issues in it (permission-gated at the call site). */
+  jiraLabel?: string;
+  onJira?: () => void;
 }
 
 const ROW_CLASS = "block w-full border-b px-3 py-2 text-left";
@@ -44,7 +49,7 @@ function rowClass(active: boolean) {
  * (and thus the `data-row` keys arrow-key nav depends on) is baked in here; each
  * panel supplies only the inner row content via render props.
  */
-export function ConversationListPanel<L, R>(props: {
+export function ConversationListPanel<L, R, J = never>(props: {
   repoPath: string;
   /** ForgeNotReady's `feature` (e.g. "pull requests"). */
   feature: string;
@@ -97,6 +102,28 @@ export function ConversationListPanel<L, R>(props: {
   // empty-state nouns
   localNoun: string;
   remoteNoun: string;
+  /** Optional THIRD section, rendered after the remote section (the issue panel's
+   *  linked Jira project). All props optional — omit the whole `jira` object and
+   *  the section (and its header) don't render, so the PR panel is unaffected.
+   *  Rows carry `data-row="jira:<key>"` so the shared arrow-key nav spans them. */
+  jira?: {
+    /** Section header, e.g. "Jira · PROJ". */
+    header: ReactNode;
+    /** Right-aligned header affordance (e.g. a "View in Jira" link). */
+    headerAction?: ReactNode;
+    pending: boolean;
+    isError: boolean;
+    /** Rendered in place of the list on error (e.g. a Reconnect prompt). */
+    errorSlot?: ReactNode;
+    items: J[];
+    itemKey: (item: J) => string;
+    isActive: (item: J) => boolean;
+    onSelect: (item: J) => void;
+    renderRow: (item: J) => ReactNode;
+    skeletonRows: number;
+    /** Empty-state teaching copy when the linked project has no matching issues. */
+    emptyLabel: ReactNode;
+  };
   /** Create dialogs etc. rendered after the list. */
   children?: ReactNode;
 }) {
@@ -136,6 +163,7 @@ export function ConversationListPanel<L, R>(props: {
     remoteSkeletonRows,
     localNoun,
     remoteNoun,
+    jira,
     children,
   } = props;
 
@@ -174,6 +202,11 @@ export function ConversationListPanel<L, R>(props: {
             <DropdownMenuItem onClick={newMenu.onLocal}>
               {newMenu.localLabel}
             </DropdownMenuItem>
+            {newMenu.jiraLabel && newMenu.onJira && (
+              <DropdownMenuItem onClick={newMenu.onJira}>
+                {newMenu.jiraLabel}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         {filterSlot}
@@ -267,6 +300,46 @@ export function ConversationListPanel<L, R>(props: {
                 {renderRemoteRow(item)}
               </button>
             ))
+          )}
+
+          {jira && (
+            <>
+              <div className="flex items-center gap-1 px-3 pt-3 pb-1">
+                <p className="text-xs text-muted-foreground">{jira.header}</p>
+                {jira.headerAction && (
+                  <span className="ml-auto">{jira.headerAction}</span>
+                )}
+              </div>
+              {jira.pending ? (
+                <div className="space-y-2 p-3">
+                  {Array.from({ length: jira.skeletonRows }, (_, i) => (
+                    <Skeleton key={i} className="h-9 w-full" />
+                  ))}
+                </div>
+              ) : jira.isError ? (
+                (jira.errorSlot ?? (
+                  <p className="px-3 py-4 text-xs text-muted-foreground">
+                    Couldn't load Jira issues.
+                  </p>
+                ))
+              ) : jira.items.length === 0 ? (
+                <p className="px-3 py-4 text-xs text-muted-foreground">
+                  {jira.emptyLabel}
+                </p>
+              ) : (
+                jira.items.map((item) => (
+                  <button
+                    type="button"
+                    key={jira.itemKey(item)}
+                    data-row={`jira:${jira.itemKey(item)}`}
+                    className={rowClass(jira.isActive(item))}
+                    onClick={() => jira.onSelect(item)}
+                  >
+                    {jira.renderRow(item)}
+                  </button>
+                ))
+              )}
+            </>
           )}
         </div>
       </ScrollArea>
