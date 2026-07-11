@@ -10,8 +10,10 @@
 //!
 //! - [`read_git`]     — local-git read tools (status, log, diffs, blame, read_file, …)
 //! - [`read_forge`]   — forge/CI read tools (PRs, issues, workflow runs/logs)
+//! - [`read_jira`]    — linked-Jira issue read tools (list/get)
 //! - [`write_local`]  — local-PR write tools           (opt-in via `--allow-write`)
 //! - [`write_forge`]  — forge remote-write tools        (opt-in via `--allow-remote-write`)
+//! - [`write_jira`]   — linked-Jira issue write tools   (opt-in via `--allow-remote-write`)
 //! - [`write_git`]    — local-git write tools           (opt-in via `--allow-git-write`)
 //! - [`generate`]     — AI-generation recipe tools
 //!
@@ -26,8 +28,10 @@
 mod generate;
 mod read_forge;
 mod read_git;
+mod read_jira;
 mod write_forge;
 mod write_git;
+mod write_jira;
 mod write_local;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -174,8 +178,10 @@ impl GitDesktopMcp {
             // without touching this expression.
             tool_router: Self::read_git_router()
                 + Self::read_forge_router()
+                + Self::read_jira_router()
                 + Self::write_local_router()
                 + Self::write_forge_router()
+                + Self::write_jira_router()
                 + Self::write_git_router()
                 + Self::generate_router(),
             // The generation recipes are ALSO exposed as MCP prompts. Only one module
@@ -273,6 +279,53 @@ impl GitDesktopMcp {
         }
         Ok(identity)
     }
+
+    /// Resolve the bound repo's linked Jira project (`{siteHost, projectKey,
+    /// projectName}`) from the headless `jira-links.json` store. The `jira_*` tools
+    /// NEVER take a `site`/`projectKey` param — the stored link is the single source of
+    /// truth (an agent must not be able to point them at an arbitrary Jira site), so
+    /// every one resolves through here. A repo with no link returns an actionable error
+    /// telling the user how to create one in GitDesktop (the same call-time pattern the
+    /// Bitbucket-issue tools use — registration stays static).
+    async fn jira_link(&self) -> Result<crate::jira_links::JiraLinkEntry, McpError> {
+        crate::jira_links::get_link(&self.repo)
+            .await
+            .map_err(app_err)?
+            .ok_or_else(|| {
+                McpError::invalid_request(
+                    "This repository has no linked Jira project — link one in GitDesktop \
+                     (repo menu → Link Jira project).",
+                    None,
+                )
+            })
+    }
+}
+
+/// Reject a Jira issue `key` whose project prefix isn't the LINKED project. The link pins
+/// only the site, so without this a key-taking `jira_*` tool would reach any project on
+/// that site (e.g. `OTHER-456` under a `MYT` link) — wider than the "linked project's
+/// issues" contract. The prefix is everything before the last `-` (matching
+/// `jira::is_valid_issue_key`'s `rsplit_once('-')`), compared case-insensitively. A key
+/// with no `-` (no derivable project) is refused too. Shared by every key-taking tool in
+/// `read_jira`/`write_jira` (not `list_jira_issues`, which is JQL-scoped to the project,
+/// nor `create_jira_issue`, which creates in the linked project). Pure (unit-tested).
+fn ensure_key_in_project(
+    key: &str,
+    link: &crate::jira_links::JiraLinkEntry,
+) -> Result<(), McpError> {
+    let prefix = key.rsplit_once('-').map(|(project, _)| project);
+    let matches = prefix.is_some_and(|p| p.eq_ignore_ascii_case(&link.project_key));
+    if matches {
+        Ok(())
+    } else {
+        Err(McpError::invalid_request(
+            format!(
+                "Key {key} doesn't belong to the linked project {}.",
+                link.project_key
+            ),
+            None,
+        ))
+    }
 }
 
 // The combined per-instance router (built in `with_options`) is what the handler
@@ -297,16 +350,23 @@ impl ServerHandler for GitDesktopMcp {
              `glab` CLI, Bitbucket a stored API token). One exception: Bitbucket's native issue \
              tracker is deprecated, so the issue tools (list/get/create/comment/close/reopen) work \
              on GitHub and GitLab only and return an actionable error on a Bitbucket repo. \
+             Separately, the `jira_*` tools operate on a per-repo LINKED Jira project — a Jira \
+             link is independent of the repo's git host, so those tools work on ANY repo that has \
+             one configured in GitDesktop (GitHub, GitLab, or Bitbucket), and are the issue story \
+             for Bitbucket repos; they read the linked project (site + key) server-side and take \
+             no site/project param, erroring with a link hint when the repo has none. \
              Capabilities are opt-in in an escalating ladder — each tier is a separate flag and \
              enabling one never grants another: (0) READ tools (status, log, diffs, blame, file \
-             history, PRs, issues, CI, releases, discussions) are always available and are the \
-             default. (1) --allow-write enables GitDesktop's own app-data write tools: local PRs \
+             history, PRs, issues, CI, releases, discussions, and linked-Jira issues) are always \
+             available and are the default. (1) --allow-write enables GitDesktop's own app-data \
+             write tools: local PRs \
              AND local issues (create/comment/status and equivalents). These are review artifacts \
              stored in GitDesktop's app data — never git commits and never remote/forge writes. \
              (2) --allow-remote-write enables the full forge remote-write surface under the \
              authenticated forge identity: the PR lifecycle (create/merge/edit), reviewers, \
              labels, assignees and approvals, review threads, CI actions, releases, GitHub \
-             discussions, and issue writes (create/comment/close/reopen). These are REAL, publicly \
+             discussions, issue writes (create/comment/close/reopen), and the linked-Jira issue \
+             writes (comment/transition/create/assign). These are REAL, publicly \
              visible writes to the repository's forge and are not freely reversible. (3) \
              --allow-git-write enables RECOVERABLE local-git mutations of the bound repository \
              (stage/commit/branch/push/…). (4) --allow-destructive is additionally required (on \
@@ -735,22 +795,49 @@ mod tests {
     }
 
     /// The COMBINED router's tool count must equal the sum of the per-module router
-    /// counts, and currently == 110. Deriving each term from the module's own router
+    /// counts, and currently == 116. Deriving each term from the module's own router
     /// means a package growing a module updates both sides of the equality
     /// automatically — this test never needs editing as modules gain tools.
-    /// (The `== 110` literal is the one line a package updates, and only if it
+    /// (The `== 116` literal is the one line a package updates, and only if it
     /// intends to change the current total.)
     #[test]
     fn combined_router_tool_count_is_sum_of_modules() {
         let handler = handler(false, false, false, false);
         let per_module = GitDesktopMcp::read_git_router().list_all().len()
             + GitDesktopMcp::read_forge_router().list_all().len()
+            + GitDesktopMcp::read_jira_router().list_all().len()
             + GitDesktopMcp::write_local_router().list_all().len()
             + GitDesktopMcp::write_forge_router().list_all().len()
+            + GitDesktopMcp::write_jira_router().list_all().len()
             + GitDesktopMcp::write_git_router().list_all().len()
             + GitDesktopMcp::generate_router().list_all().len();
         assert_eq!(handler.tool_router.list_all().len(), per_module);
-        assert_eq!(per_module, 110);
+        assert_eq!(per_module, 116);
+    }
+
+    /// `ensure_key_in_project` gates a key-taking Jira tool to the linked project: the
+    /// prefix (before the last `-`) must equal `link.project_key`, case-insensitively.
+    /// A different project (same site) or a key with no `-` is refused, and the error
+    /// names both the key and the linked project.
+    #[test]
+    fn ensure_key_in_project_gates_the_prefix() {
+        let link = crate::jira_links::JiraLinkEntry {
+            site_host: "acme.atlassian.net".to_string(),
+            project_key: "MYT".to_string(),
+            project_name: "My Thing".to_string(),
+        };
+        // Exact match passes.
+        assert!(ensure_key_in_project("MYT-123", &link).is_ok());
+        // Case-insensitive match passes (a lowercased prefix still belongs).
+        assert!(ensure_key_in_project("myt-1", &link).is_ok());
+        // A different project on the same site is refused, naming both.
+        let err = ensure_key_in_project("OTHER-456", &link)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("OTHER-456"), "err: {err}");
+        assert!(err.contains("MYT"), "err: {err}");
+        // A key with no derivable project (no `-`) is refused.
+        assert!(ensure_key_in_project("NODASH", &link).is_err());
     }
 
     /// The prompt router (separate from the tool router — prompts are NOT tools, so
@@ -765,6 +852,9 @@ mod tests {
             .into_iter()
             .map(|p| p.name)
             .collect();
-        assert_eq!(names, vec!["branch-name", "commit-message", "pr-description"]);
+        assert_eq!(
+            names,
+            vec!["branch-name", "commit-message", "pr-description"]
+        );
     }
 }

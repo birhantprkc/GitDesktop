@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AmendForcePushDialog } from "@/features/commit/AmendForcePushDialog";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffSurface, type LineWidget } from "@/features/diff/DiffSurface";
+import { JiraRefRow } from "@/features/issues/JiraRefRow";
 import {
   CommitComments,
   CommitLineComposer,
@@ -296,6 +297,13 @@ export function CommitDetailView({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        <JiraRefRow
+          repoPath={repoPath}
+          sources={[
+            { label: "commit subject", text: commit.subject },
+            { label: "commit message body", text: commit.body },
+          ]}
+        />
       </header>
 
       <div className="flex min-h-0 flex-1">
