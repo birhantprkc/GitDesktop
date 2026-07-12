@@ -1,4 +1,9 @@
 ---
+import { Image } from "astro:assets";
+import appBitbucket from "../assets/app-bitbucket-pr.png";
+import appGithub from "../assets/app-github-pr.png";
+import appGitlab from "../assets/app-gitlab-mr.png";
+import appJira from "../assets/app-jira.png";
 import ForgeMark from "../components/ForgeMark.astro";
 import SiteLayout from "../layouts/SiteLayout.astro";
 
@@ -19,6 +24,8 @@ const forges = [
       "Insights: 14-day traffic, community health, and a dependencies card",
     ],
     note: "Requires gh installed and authenticated. Switch the active account per host in Settings → Accounts.",
+    image: appGithub,
+    alt: "A GitHub pull request in GitDesktop: CI checks (2 passed, 1 failed) with per-job status, an automated AI review, and the merge action",
   },
   {
     forge: "gitlab",
@@ -33,6 +40,8 @@ const forges = [
       "Project settings — General, Members, Protected branches, Webhooks (with a delivery log), CI/CD variables, and a Danger zone",
     ],
     note: "The activity feed folds in commits, approvals and close/reopen/merge, but GitLab has no force-push or draft events. Insights charts GitLab pipelines alongside your local-git analytics.",
+    image: appGitlab,
+    alt: "A GitLab merge request in GitDesktop: colored labels, a passing pipeline, an approval, a review comment, and the merge action",
   },
   {
     forge: "bitbucket",
@@ -47,6 +56,8 @@ const forges = [
       "Repo settings — General, default reviewers, branch restrictions, pipeline variables & schedules, deployment environments, webhooks, and a Danger zone",
     ],
     note: "Build statuses link out (name, state, URL — no fetchable logs). Reopening a declined PR isn't available (a Bitbucket platform limit), and Bitbucket has no native issue tracker — link a Jira project instead (below).",
+    image: appBitbucket,
+    alt: "A Bitbucket pull request in GitDesktop: a Tasks checklist, an approval, review comments, and the merge action",
   },
 ] as const;
 
@@ -101,7 +112,8 @@ const jiraFeatures = [
   {
     forges.map((f, i) => (
       <section id={f.forge} class:list={["scroll-mt-20 border-b border-line", i % 2 === 1 && "bg-surface/30"]}>
-        <div class="mx-auto grid max-w-6xl gap-x-14 gap-y-8 px-5 py-16 md:py-20 lg:grid-cols-[0.85fr_1.15fr]">
+        <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
+          <div class="grid gap-x-14 gap-y-8 lg:grid-cols-[0.85fr_1.15fr]">
           <div data-reveal class="min-w-0">
             <div class="flex items-center gap-3">
               <ForgeMark forge={f.forge} class="h-7 w-7 text-ink" />
@@ -123,6 +135,18 @@ const jiraFeatures = [
               <span class="text-ink">Good to know — </span>{f.note}
             </p>
           </div>
+          </div>
+          <figure data-reveal class="window mt-12">
+            <Image
+              src={f.image}
+              alt={f.alt}
+              widths={[720, 1080, 1440]}
+              sizes="(min-width: 1024px) 1100px, 94vw"
+              format="webp"
+              quality={82}
+              loading="lazy"
+            />
+          </figure>
         </div>
       </section>
     ))
@@ -130,7 +154,8 @@ const jiraFeatures = [
 
   <!-- Jira -->
   <section id="jira" class="scroll-mt-20 border-b border-line">
-    <div class="mx-auto grid max-w-6xl gap-x-14 gap-y-8 px-5 py-16 md:py-20 lg:grid-cols-[0.85fr_1.15fr]">
+    <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
+      <div class="grid gap-x-14 gap-y-8 lg:grid-cols-[0.85fr_1.15fr]">
       <div data-reveal class="min-w-0">
         <div class="flex items-center gap-3">
           <span class="text-2xl text-mint" aria-hidden="true">◆</span>
@@ -164,6 +189,18 @@ const jiraFeatures = [
           and (behind the remote-write opt-in) comment, create, assign, and update issues.
         </p>
       </div>
+      </div>
+      <figure data-reveal class="window mt-12">
+        <Image
+          src={appJira}
+          alt="The Issues tab in GitDesktop showing a linked Jira project: an issue list with statuses and story-point badges, and an issue detail with status, priority, assignee, story points, labels, and a comment"
+          widths={[720, 1080, 1440]}
+          sizes="(min-width: 1024px) 1100px, 94vw"
+          format="webp"
+          quality={82}
+          loading="lazy"
+        />
+      </figure>
     </div>
   </section>
 

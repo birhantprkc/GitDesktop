@@ -35,182 +35,157 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 
 ## Highlights
 
-- **The whole PR lifecycle, in-app** — review, comment, label, **assign**,
-  **request reviewers**, approve, edit, and merge (merge/squash/rebase) GitHub PRs
-  without the browser — and set **labels and assignees** right when you **open** the
-  PR/MR (GitHub and GitLab). Requesting reviewers works across GitHub, GitLab, and
-  Bitbucket.
-  A PR's Conversation is a **date-sorted activity feed** — reviews, comments,
-  **pushed commits** (grouped, each SHA clickable to that commit), and events, with an
-  **approval marked stale** once later commits land — now on **GitHub, GitLab, and
-  Bitbucket** (GitLab MRs and Bitbucket PRs fold in commits, approvals/changes-requested,
-  and close/reopen/merge; GitLab has no force-push or draft events, Bitbucket no
-  labels or review-requests). **Local PRs** get the timeline too (created → pushed
-  commits → comments → merged/closed). CI checks fold into a **pass/fail/pending rollup**
-  that **peeks a failing job's log inline** without leaving the PR — for **GitHub Actions**
-  and **GitLab pipeline** jobs alike; **Bitbucket** build statuses link out (name/state/URL,
-  no fetchable logs).
-  Plus **local PRs**: the same workflow against any two branches with no remote,
-  promotable to a real GitHub PR (comments and all) in one click. A local-PR
-  merge **pre-shows whether it will conflict**, and if it does you resolve the
-  conflicts in an **in-app editor** — in an isolated worktree that never touches
-  your branch or working tree — then **Finish** (commit + mark merged) or
-  **Abort**.
+- **The whole PR lifecycle, in-app** — review, comment, label, **assign**, **request
+  reviewers**, approve, edit, and merge (merge/squash/rebase) GitHub PRs without the
+  browser. Set **labels and assignees** right when you **open** a PR/MR (GitHub &
+  GitLab); request reviewers across GitHub, GitLab & Bitbucket.
+  - **Activity feed** — a PR's Conversation is a **date-sorted timeline** of reviews,
+    comments, grouped **pushed commits** (each SHA clickable), and events, with an
+    **approval marked stale** once later commits land — on GitHub, GitLab, Bitbucket,
+    and local PRs (GitLab has no force-push/draft events, Bitbucket no labels or
+    review-requests).
+  - **CI rollup** — checks fold into a **pass/fail/pending** summary that peeks a
+    failing **GitHub Actions** or **GitLab pipeline** job's log inline; **Bitbucket**
+    build statuses link out (name/state/URL, no fetchable logs).
+  - **Local PRs** — the same loop against any two branches with **no remote**,
+    promotable to a real GitHub PR (comments and all) in one click. A merge
+    **pre-shows conflicts** and lets you resolve them in an **in-app editor** — in an
+    isolated worktree that never touches your working tree — then **Finish** or
+    **Abort**.
 - **Issues & Discussions, in-app** — triage GitHub issues (types, sub-issues,
   dependencies, linked PRs and branches) and Discussions without the browser, plus
   private **local to-dos** that need no remote.
 - **GitHub Actions cockpit** — browse runs, drill into jobs and steps, re-run (all
   or failed), cancel, dispatch a workflow, and read failed-step logs — none of
   which GitHub Desktop does.
-- **GitLab too** — via the **GitLab CLI (`glab`)**, browse and clone your GitLab
-  projects and read **merge requests**, **issues**, **CI pipelines**, and
-  **releases** in the same panels: lists, plus detail views (MR
-  comments/commits/diff; issue conversation with a labels/assignees/milestone rail;
-  pipeline jobs with logs and a branch CI badge; release notes with asset links). And
-  GitLab **writes** — **comment** on (and **edit / delete** your own comments) and
-  **close / reopen** a GitLab issue
-  **or merge request**, **edit titles and descriptions**, **react** with emoji
-  (award emoji on descriptions and comments), edit **labels** and
-  **assignees** (issues *and* MRs), set an issue's **milestone**,
-  **approve / unapprove**, **request changes on**, and **merge** (merge/squash) an
-  MR — including **auto-merge** (merge when the pipeline succeeds, cancelable in
-  place) while a pipeline is running, **create issues and
-  merge requests** (push-and-open, drafts included, duplicate-MR detection —
-  publishing local issues/PRs to
-  GitLab works too), **lock / unlock** an issue's conversation, **move** an issue
-  to another project, **delete** an issue, set an issue's **due date** (with a
-  past-due cue) or mark it **confidential**, **track time** (estimate + spent) on
-  an issue *or* MR and **link related issues** (all GitLab-unique, right in the
-  rail), **retry / cancel / run pipelines** (with CI/CD variables) and **play a
-  manual pipeline job**, and
-  **publish / edit / delete releases** with asset uploads, **star** the project
-  ("View on GitLab" and a fork link too), and **publish a local repo to GitLab**
-  (create + push, straight from the app) — right from the app. **Project settings**
-  too: the same settings dialog manages a GitLab project's **General** settings
-  (description, topics, default branch, feature access levels, merge method and
-  squash policy), **Members**, **Protected branches** (per-rule push/merge access
-  levels and a force-push policy), **Webhooks** (with a delivery log and re-send),
-  **CI/CD variables**, and the **Danger zone** (rename, archive, visibility,
-  transfer, delete). **Self-managed GitLab** works wherever `glab` is signed in —
-  the app recognizes any host from `glab auth login`. Insights charts
-  GitLab pipelines alongside the local-git analytics. GitHub is unchanged.
-- **Bitbucket Cloud** — connect with an **Atlassian API token**
-  (Settings → Accounts), then **browse & clone** your Bitbucket repositories,
-  read **pull requests** (diffs, comments, build statuses) and watch **Pipelines**
-  (with step logs) in the same panels — and act on them: comment (and edit / delete
-  your own comments), decline,
-  merge (merge commit / squash / fast-forward, optionally deleting the source
-  branch), edit, create (drafts included, and pick **reviewers** at create time),
-  approve/unapprove, **request changes**
-  (a true toggle — revoking works on every Bitbucket plan), pick **reviewers**
-  from your workspace members, and flip **draft ↔ ready** in either direction.
-  A PR also gets a **Tasks** checklist — add, edit, resolve/unresolve, and delete
-  tasks with a progress bar and an "N open tasks" header chip that jumps to the
-  list (read-only on a closed or merged PR). Plus rerun, trigger, and stop
-  Pipelines — and on a repo with custom `pipelines.custom.*` in its
-  `bitbucket-pipelines.yml`, **pick which pipeline to run** (Default or a named
-  custom one), with variables. Reopening a declined
-  PR isn't available (a Bitbucket platform limit). **Publish a local repo to
-  Bitbucket** (pick a workspace, name it, and it creates the repo, adds `origin`,
-  and pushes the current branch). Insights charts **Bitbucket Pipeline durations**
-  alongside the local-git analytics, with a link-out to Bitbucket's
-  Commits/Branches/Pipelines/Deployments. And **repository settings** (admin-gated) manage a
-  Bitbucket repo: **General** (description, website, language, fork policy, default
-  branch), **default reviewers**, **branch restrictions** (prevent
-  pushes/force-pushes/deletion, restrict merges, require approvals/builds/tasks),
-  **pipeline variables** (secured supported) and **schedules** (cron), a read-only
-  list of **deployment environments**, **webhooks**,
-  and a **Danger zone** (rename — which updates your local `origin` automatically —
-  visibility, transfer, delete; Bitbucket has no archive). Bitbucket has retired its
-  native issue tracker (issues live in Jira), so instead you can **link a Jira project**
-  (below) to browse its issues right here.
-- **Jira Cloud issues** — link a **Jira Cloud** site and project to any repository (the
-  repo ⋯ menu's **Link Jira project…**, or the command palette) and its Issues tab gains a
-  **Jira** section: browse and filter your project's issues (open / closed / all,
-  mapped to Jira's status categories), and open one to read its **status**, **type**,
-  **priority**, **assignee**, **labels**, Markdown **description**, and **comments**, plus
-  the project's **agile fields** when it uses them — **story points** (also on the list rows),
-  **sprint**, a clickable **epic / parent**, **components**, and **fix versions**, discovered
-  automatically per site with nothing to configure — with **View in Jira** link-outs. You can also **create** an issue (summary, description, and an
-  issue-type picker), **comment** in Markdown, **close / reopen** by following the project's
-  own workflow (the confirmation names the real resulting status) — or jump to any workflow
-  status from the **status menu** on the chip — **assign / unassign** via
-  user search, set or clear a **due date**, change **priority**, edit **labels**, and
-  **edit or delete your own comments** — actions your Jira permissions don't allow simply
-  don't appear. The linked
-  project's **issue keys** (e.g. `PROJ-123`) are also spotted in the current **branch name**,
-  a commit's message, and a PR's title/description, and surfaced as a compact **referenced
-  Jira issues** row that jumps straight to the issue in the Issues tab. A **local issue** can
-  be **promoted to Jira** too (alongside GitHub / GitLab when both are available) — its
-  comments carry over and the local one closes with a back-link. Agents connected through
-  GitDesktop's **MCP server** get `jira_*` tools to list and read the linked project's issues,
-  and — behind the `--allow-remote-write` opt-in — comment, close/reopen, create, assign, and
-  update an issue's due date, priority, and labels.
-  Connect with an **Atlassian API token** (email + token, validated before saving and kept in
-  your OS keychain), or reuse an existing Bitbucket credential. Especially handy for
-  **Bitbucket** repos, whose native tracker Atlassian retires 2026-08-20.
-- **Delegate a task to an agent** — hand a coding task to an AI agent that works
-  in an isolated worktree, so your own checkout is never touched. Follow it
-  **step by step** — every file it reads, edits, and command it runs — and
-  **expand any edit to see its diff inline**; then review the full diff and keep
-  it as a branch — or open a local PR straight from it — or discard it. Run several at once, organized into
-  **Active** and **Kept** tabs, searchable, with a notification when each finishes. Uses the CLI agent you already have —
-  **Claude Code**, **Codex**, **GitHub Copilot**, or **opencode** (whose free
-  hosted models need no key at all), no extra subscription. Sandbox its writes in a
-  **Docker/Podman container**, or rely on each CLI's own worktree confinement on
-  the host — and give a repo **extra tools inside that container** (e.g. Playwright)
-  by committing a `.gitdesktop/agent.Dockerfile`, which GitDesktop builds into a
-  per-repo image after you review and confirm it. Drive each turn with **slash commands and skills** — built-in
-  starters, custom commands you define, and the selected agent's own commands and
-  **Agent Skills** (project *and* global, including the shared `.agents/skills`) —
-  plus `@file` mentions, a model/reasoning-effort picker, and terminal-style
-  prompt history.
-- **Bring your own MCP servers** — register Model Context Protocol servers (local
-  `stdio` or remote HTTP, with secrets kept in your **OS keychain**) under
-  **Settings → MCP servers**, then opt a session into the ones you want from the
-  composer's **MCP** picker — on **Claude**, **Copilot**, or **opencode** sessions
-  (host *or* container), and on **Codex** in a **container** (host Codex can't approve
-  MCP tool calls, so it needs the sandbox). A Claude session runs in strict mode —
-  *only* the servers you picked, never inheriting others on your machine — while Copilot
-  and opencode layer your picks onto their own config. In a container the servers run
-  *inside* the sandbox, with a shared npm cache so an `npx` server downloads only once.
-  Find new servers by **Browse**-ing the
-  official MCP registry in-app — with GitHub stars, weekly installs, and exactly what
-  each one runs shown so you can vet before adding — or **Import** ones you've already
-  configured. Change the selection **mid-session**, too.
+- **GitLab, first-class** — via the **GitLab CLI (`glab`)**, on gitlab.com or
+  **self-managed** (any host `glab auth login` knows). Browse and clone projects,
+  then read and act on merge requests, issues, pipelines, and releases in the same
+  panels (MR comments/commits/diff; an issue's labels/assignees/milestone rail;
+  pipeline jobs with logs and a branch CI badge; release notes with asset links):
+  - **Merge requests** — comment (edit/delete your own), close/reopen, edit title &
+    description, react with emoji (on descriptions and comments), edit labels &
+    assignees, **approve / unapprove**,
+    request changes, and **merge** (merge/squash) — including **auto-merge** when the
+    pipeline succeeds (cancelable in place) — plus **create** (push-and-open, drafts,
+    duplicate-MR detection)
+  - **Issues** — create, comment, close/reopen, edit labels & assignees, set
+    **milestone**, **due date** (past-due cue), **confidential**, and **linked related
+    issues**; lock/unlock, move to another project, or delete
+  - **Time tracking** — estimate + spent, on an issue *or* an MR
+  - **Pipelines & releases** — retry / cancel / run pipelines with CI/CD variables and
+    **play a manual job**; publish / edit / delete **releases** with asset uploads
+  - **Project settings** — **General** (description, topics, default branch, access
+    levels, merge method & squash policy), **Members**, **Protected branches**
+    (per-rule access + force-push policy), **Webhooks** (delivery log + re-send),
+    **CI/CD variables**, and a **Danger zone** (rename, archive, visibility, transfer,
+    delete)
+
+  Star a project ("View on GitLab" + a fork link), **publish a local repo** — or local
+  issues/PRs — to GitLab, and Insights charts GitLab pipelines. GitHub is unchanged.
+- **Bitbucket Cloud** — connect with an **Atlassian API token** (Settings → Accounts),
+  then browse & clone repositories and work pull requests and Pipelines (with step
+  logs) in the same panels:
+  - **Pull requests** — comment (edit/delete your own), decline, merge (merge /
+    squash / fast-forward, optionally deleting the source branch), edit, and **create**
+    (drafts, reviewers pickable at create time); **approve / unapprove**, **request
+    changes** (a true toggle that revokes on every plan), pick reviewers from your
+    workspace, and flip **draft ↔ ready** either way
+  - **Tasks checklist** — add, edit, resolve/unresolve, and delete, with a progress
+    bar and an "N open tasks" header chip (read-only on a closed/merged PR)
+  - **Pipelines** — rerun, trigger, and stop; on a repo with custom
+    `pipelines.custom.*` in `bitbucket-pipelines.yml`, **pick which pipeline to run**
+    (Default or a named custom one, with variables). Insights
+    charts Pipeline durations, with a link-out to Bitbucket's
+    Commits/Branches/Pipelines/Deployments
+  - **Repo settings** (admin) — **General** (description, website, language, fork
+    policy, default branch), **default reviewers**, **branch restrictions** (block
+    pushes/force-pushes/deletion, restrict merges, require approvals/builds/tasks),
+    **pipeline variables** (secured supported) & **schedules** (cron), read-only
+    **deployment environments**, **webhooks**, and a **Danger zone** (rename updates
+    your local `origin`; no archive)
+
+  **Publish a local repo** to Bitbucket (creates the repo, adds `origin`, pushes).
+  Reopening a declined PR isn't available (a platform limit); issues live in **Jira**
+  — link a project (below).
+- **Jira Cloud issues** — link a Jira Cloud site and project to any repo (the repo ⋯
+  menu's **Link Jira project…**, or the palette), and its Issues tab gains a **Jira**
+  section. Connect with an **Atlassian API token** (validated, kept in your OS
+  keychain) or reuse a Bitbucket credential. Especially handy for **Bitbucket**, whose
+  tracker Atlassian retires **2026-08-20**.
+  - **Browse & read** — filter issues (open / closed / all, mapped to Jira's status
+    categories) and read status, type, priority, assignee, labels, a Markdown
+    description, and comments, with **View in Jira** link-outs
+  - **Agile fields** (when the project uses them) — **story points** (also on list
+    rows), **sprint**, a clickable **epic / parent**, **components**, and **fix
+    versions** — auto-discovered per site, nothing to configure
+  - **Act** — create (summary, description, type), comment in Markdown, close/reopen
+    along the project's workflow (or jump to any status from the chip's status menu),
+    assign/unassign, set a due date, change priority, edit labels, and edit/delete your
+    own comments — actions your permissions don't allow simply don't appear
+  - **Linked in** — issue keys (e.g. `PROJ-123`) spotted in your branch name, commits,
+    and PR titles surface as a **referenced Jira issues** row that jumps to the issue;
+    a **local issue** can be promoted to Jira (comments carry over, with a back-link)
+
+  Agents reach the linked project through GitDesktop's **MCP server** — `jira_*` tools
+  to list and read, and (behind `--allow-remote-write`) comment, close/reopen, create,
+  assign, and update an issue's due date, priority, and labels.
+- **Delegate a task to an agent** — hand a coding task to a **Claude Code**, **Codex**,
+  **GitHub Copilot**, or **opencode** agent (the CLI you already have — opencode's
+  hosted models are free, no extra subscription). It works in an isolated worktree that
+  never touches your checkout.
+  - **Watch it work** — follow every file it reads and edits and command it runs,
+    expand any edit to its diff inline, then keep the result as a branch, open a local
+    PR from it, or discard it
+  - **Several at once** — organized into **Active** and **Kept** tabs, searchable, with
+    a notification when each finishes
+  - **Sandbox** — confine writes to a **Docker/Podman container** (or rely on each CLI's
+    own worktree confinement on the host), and add per-repo tools (e.g. Playwright) via
+    a committed `.gitdesktop/agent.Dockerfile` that GitDesktop builds into a per-repo
+    image after you confirm it
+  - **Drive each turn** — **slash commands and skills** (built-in starters, custom
+    commands, and the agent's own commands and **Agent Skills** — project *and* global,
+    incl. the shared `.agents/skills`), `@file` mentions, a model/effort picker, and
+    terminal-style prompt history
+- **Bring your own MCP servers** — register MCP servers (local `stdio` or remote HTTP,
+  secrets in your **OS keychain**) under Settings → MCP servers, then opt a session into
+  them from the composer's **MCP** picker; change picks mid-session.
+  - **Per agent** — Claude, Copilot, or opencode (host or container), and Codex in a
+    container (host Codex can't approve MCP calls). Claude runs **strict** (only your
+    picks); Copilot and opencode layer them on. In a container they run inside the
+    sandbox, sharing an npm cache so an `npx` server downloads once
+  - **Discover** — **Browse** the official registry in-app (with stars, weekly installs,
+    and exactly what each runs, so you can vet before adding) or **Import** existing config
 - **Use GitDesktop *as* an MCP server** — the reverse direction: expose this repo's
   **read-only-by-default** git & forge tools (status, log, diff, blame, branches, file
-  history/read, PRs, issues, CI logs) to any external MCP client — **Claude Desktop**,
-  **Cursor**, **Claude Code**. The PR/issue/CI tools work across **GitHub, GitLab &
-  Bitbucket** (routed through the forge abstraction — they dispatch by the repo's remote;
-  Bitbucket covers PRs and pipelines, but not issues). **Settings → MCP servers** shows a
-  ready-to-paste config snippet — or **writes it straight into the repo's `.mcp.json`**
-  for you (with a **Shareable** toggle for portable, teammate-committable paths), or
-  **installs it globally** for **Claude Code** or **Copilot** — per-client rows that show
-  each one's live state (installed & pointing at the current launcher, or at an older
-  install with one-click **Reinstall**) and let you **Remove** it, all into the client's
-  user config so it's available in every project — plus a
-  one-click **Add to PATH** launcher so the bare `gitdesktop-mcp` command resolves in any
-  terminal (puts the managed-copy bin dir on your user PATH on Windows, or symlinks
-  `gitdesktop-mcp` into `~/.local/bin` on macOS/Linux — reversible, no admin). The app
-  runs as a stdio server (its own binary on macOS/Linux, an update-safe `gitdesktop-mcp`
-  copy on Windows), so an agent can *understand* a repo without touching it. Writes are an
-  **escalating opt-in ladder** — each tier is a separate flag, and enabling one never grants
-  another: **`--allow-write`** lets an agent create, comment on, approve, and set the status
-  of *this repo's* local PRs and issues (GitDesktop's own app-data review artifacts — nothing
-  is pushed); **`--allow-remote-write`** unlocks *real* forge writes under your authenticated
-  identity (GitHub `gh`, GitLab `glab`, or a stored Bitbucket token) — create/merge/update
-  PRs, request reviewers, edit labels and assignees, approve or resolve review threads, rerun
-  or dispatch CI, cut releases, and file or comment on issues; **`--allow-git-write`** enables
-  recoverable local-git mutations of the repo (stage, commit, branch, push/pull/fetch, stash,
-  merge, rebase, cherry-pick, tags); and **`--allow-destructive`** is additionally required
-  for the irreversible ones (discard, reset, force-push, delete branch/tag). Every flag is off
-  by default, so read-only stays the default — and agent-session branches are refused by the
-  branch-mutating tools. The server also exposes GitDesktop's own **AI generation recipes** —
-  it hands a connected agent the fully assembled commit-message, PR-description, or
-  branch-name prompt (the same context the in-app features build) for the agent to complete
-  with its own model — offered as recipe tools *and* as native **MCP prompts**
-  (slash-command-like in clients) for the same three.
+  read/history, PRs, issues, CI logs) to any external MCP client — **Claude Desktop**,
+  **Cursor**, **Claude Code**. PR/issue/CI tools route across **GitHub, GitLab &
+  Bitbucket** by the repo's remote (Bitbucket covers PRs and pipelines, not issues). The
+  app runs as a **stdio server** (its own binary on macOS/Linux, an update-safe
+  `gitdesktop-mcp` copy on Windows), so an agent can *understand* a repo without touching it.
+  - **Set up** — Settings → MCP servers gives a ready-to-paste snippet, **writes it into
+    the repo's `.mcp.json`** (with a **Shareable** toggle for portable, committable
+    paths), or **installs it globally** for Claude Code or Copilot (into the client's
+    user config, available in every project) — per-client rows show
+    each install's live state, with one-click **Reinstall** / **Remove** — plus a
+    one-click **Add to PATH** so bare `gitdesktop-mcp` resolves in any terminal (user PATH
+    on Windows, a `~/.local/bin` symlink on macOS/Linux — reversible, no admin)
+  - **Escalating write ladder** — each a separate flag, off by default, so read-only stays
+    the default (and agent-session branches are refused by the branch-mutating tools):
+    - **`--allow-write`** — this repo's local PRs & issues (GitDesktop's own app-data
+      artifacts; nothing is pushed)
+    - **`--allow-remote-write`** — real forge writes under your identity (`gh` / `glab` /
+      Bitbucket token): create/merge/update PRs, request reviewers, edit labels &
+      assignees, approve or resolve review threads, rerun or dispatch CI, cut releases,
+      and file or comment on issues
+    - **`--allow-git-write`** — recoverable git ops (stage, commit, branch,
+      push/pull/fetch, stash, merge, rebase, cherry-pick, tags)
+    - **`--allow-destructive`** — the irreversible ones (discard, reset, force-push,
+      delete branch/tag)
+  - **Generation recipes** — hands a connected agent the fully assembled commit-message,
+    PR-description, or branch-name prompt (the same context the in-app features build) to
+    complete with its own model — as recipe tools *and* as native **MCP prompts**
+    (slash-command-like in clients)
 - **Run commands without leaving the app** — every agent session has an integrated
   terminal: a real shell in a resizable bottom dock, toggled with `Ctrl`/`⌘`+`J`. For a
   container session it runs *inside* the session's container — you pick which dev-server
@@ -251,27 +226,24 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
   review or security audit. Bring your own provider: cloud APIs, local **Ollama**,
   or a **keyless CLI agent** you already pay for — the full list is under
   [AI configuration](#ai-configuration).
-- **AI review that doesn't quit or repeat itself** — it keeps running while you
-  move between PRs, and finishes in the tray even after you close the window.
-  Re-runs remember the last round, fold in other reviewers' findings, and read
-  GitDesktop's own earlier comments on the PR — so a finding it already refuted or
-  marked fixed is treated as settled instead of re-raised. Every AI-posted
-  review is **clearly machine-authored** — a branded GitDesktop header/footer, a
-  "GitDesktop" bot author with a robot avatar on local PRs, and (with a GitLab
-  project/group access token in Settings → Accounts) posting as the real **GitLab
-  project bot** rather than your own account.
-- **Agentic review — no more "couldn't verify the truncated part"** — turn on
-  **Agentic review** and the reviewer gets read-only tools to pull the *full* PR
-  diff (past the prompt's truncation budget), read any file at any ref, search
-  the repo, and read the PR's existing comments and history — then
-  reports live what it's exploring ("Reading src/foo.rs…"). Works with **CLI
-  agent models** (Claude Code, Copilot CLI, opencode), where GitDesktop attaches
-  itself as a **read-only MCP server**, and with **HTTP/API models** (Anthropic,
-  OpenAI, OpenAI-compatible, OpenRouter, Ollama) through a native tool loop —
-  with **no review workspace to prepare, so those reviews start instantly**.
-  Everything is **read-only end to end** — no write tools, no repo mutations. When
-  a review's diff outgrows the prompt budget, the panel offers one click to
-  enable agentic review for full coverage.
+- **AI review that doesn't quit or repeat itself** — it keeps running while you move
+  between PRs, and finishes in the tray even after you close the window.
+  - **Iterative** — re-runs remember the last round, fold in other reviewers' findings,
+    and read GitDesktop's own earlier comments on the PR, so a finding it already
+    refuted or marked fixed is treated as settled instead of re-raised
+  - **Clearly machine-authored** — a branded header/footer and a robot-avatar
+    "GitDesktop" bot on local PRs; with a GitLab project/group access token, posts as
+    the real **GitLab project bot** rather than your own account
+- **Agentic review — no more "couldn't verify the truncated part"** — the reviewer
+  gets read-only tools to pull the *full* PR diff (past the prompt budget), read any
+  file at any ref, search the repo, and read the PR's comments and history, reporting
+  live what it's exploring ("Reading src/foo.rs…"). **Read-only end to end.**
+  - **CLI agent models** (Claude Code, Copilot CLI, opencode) — GitDesktop attaches
+    itself as a read-only MCP server
+  - **HTTP/API models** (Anthropic, OpenAI, OpenAI-compatible, OpenRouter, Ollama) — a
+    native tool loop with no workspace to prepare, so reviews start instantly
+
+  When a diff outgrows the prompt budget, one click enables agentic review for full coverage.
 - **Debug failed CI with AI** — turn a failed job's logs into a streamed
   root-cause + fix, ending with a ready-to-paste prompt for a coding agent.
 - **Markdown everywhere you write** — Write/Preview tabs and a formatting toolbar
@@ -289,24 +261,25 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 
 ## Features
 
-**Repositories** — clone, add local, create (README / .gitignore / license
-scaffolding), publish to GitHub, and fork. A header repo switcher groups every
-repo by owner with a Recent section and filter, and each row shows identity
-badges at a glance — the forge's logo (GitHub / GitLab / Bitbucket, a cloud for
-an unrecognized remote, a folder for local-only) and a visibility icon (lock /
-buildings / globe for private / internal / public); aliases and recycle-bin-safe
-removal. Star or unstar a repo from the menu, and (for admins) manage GitHub
-repo settings — description and topics (with AI suggestions), merge options and
-default commit messages, template & forking, **collaborators & invitations**,
-**branch rulesets** (create/edit, reversible enable/disable), **code security &
-analysis** toggles, **Actions/Dependabot/Codespaces secrets & variables** (repo
-and environment scope), the **Sponsor button** (`.github/FUNDING.yml`), webhooks
-with delivery history, **GitHub Pages** config, a **danger zone** (rename,
-archive, change visibility, transfer, delete), and deep links to the settings
-GitHub keeps browser-only — without leaving the app. **Manage files** git
-tracks or ignores beyond your pending changes: untrack a file committed by
-mistake (kept on disk), or surface every ignored file with the rule responsible
-and force-add it or remove that rule.
+**Repositories** — clone, add local, create (with README / .gitignore / license
+scaffolding), publish to GitHub, and fork.
+
+- **Repo switcher** — groups every repo by owner with a Recent section and filter; each
+  row carries identity badges (the forge's logo — GitHub / GitLab / Bitbucket, a cloud
+  for an unrecognized remote, a folder for local-only — and a visibility icon: lock /
+  buildings / globe for private / internal / public), aliases, and recycle-bin-safe
+  removal. Star or unstar from the menu.
+- **GitHub repo settings** (admin) — description & topics (with AI suggestions), merge
+  options and default commit messages, template & forking, **collaborators &
+  invitations**, **branch rulesets** (create/edit, reversible enable/disable), **code
+  security & analysis** toggles, **Actions/Dependabot/Codespaces secrets & variables**
+  (repo and environment scope), the **Sponsor button** (`.github/FUNDING.yml`), webhooks
+  with delivery history, **GitHub Pages** config, a **danger zone** (rename, archive,
+  change visibility, transfer, delete), and deep links to the settings GitHub keeps
+  browser-only.
+- **Manage files** git tracks or ignores (beyond pending changes) — untrack a file
+  committed by mistake (kept on disk), or surface every ignored file with the rule
+  responsible and force-add it or remove that rule.
 
 **Changes & commits** — unified/split diff with syntax highlighting,
 collapsible surrounding context, and image diffing; filter the changes list by
@@ -317,47 +290,52 @@ stage/unstage/discard single files or a multi-selection from the context menu;
 discarding a whole untracked file goes to the recycle bin. Commit with title + body,
 co-authors suggested from history, amend, undo, reset, and revert.
 
-**Branches** — switch (bring-changes / stash prompt), create, rename, delete,
-and **archive** (hide from the switcher without deleting), plus **Clean up
-branches** ⭐ — a bulk sweep that archives or deletes every stale branch (merged
-into the default branch, or with no commits in a chosen window) in one reviewed
-list. Per-branch ahead/behind
-vs. the default branch and a PR badge in the switcher, update a branch *without*
-checking it out — from the default branch or from its own upstream (bring the
-default current after a merged PR) — check out or delete remote-only branches
-right from the switcher's Remote section, remove a branch's worktree from its
-menu, a Compare tab
-(three-dot diff, commits ahead/behind, merge/rebase, jump to PR), and **local
-branch-protection rules** (naming, merge methods, require-PR, force-push) that
-are shareable via a committed file or importable from GitHub. Merging shows an
-**advanced merge tooling** ⭐ panel that predicts the result in memory before you
-commit to it (fast-forward / clean / which files will conflict), with `--no-ff`
-and an auto-resolve-conflicts strategy (`-X ours/theirs`, clearly cautioned) —
-which GitHub Desktop doesn't offer. A **Change base** action rebases a branch
-onto a different base for when it was branched off the wrong one — replaying only
-its own commits (the wrong base's are left behind), with a preview of exactly
-which commits will move.
+**Branches** — switch (bring-changes / stash prompt), create, rename, delete, and
+**archive** (hide from the switcher without deleting). Per-branch ahead/behind vs. the
+default branch and a PR badge show in the switcher.
+
+- **Clean up branches** ⭐ — a bulk sweep that archives or deletes every stale branch
+  (merged into the default branch, or with no commits in a chosen window) in one
+  reviewed list.
+- **No-checkout ops** — update a branch *without* checking it out (from the default
+  branch or its own upstream — bring the default current after a merged PR), check out or
+  delete remote-only branches from the switcher's Remote section, and remove a branch's
+  worktree from its menu.
+- **Compare** — a tab with a three-dot diff, commits ahead/behind, merge/rebase, and
+  jump-to-PR.
+- **Local branch-protection rules** — naming, merge methods, require-PR, force-push;
+  shareable via a committed file or importable from GitHub.
+- **Advanced merge tooling** ⭐ — predicts the result in memory before you commit
+  (fast-forward / clean / which files will conflict), with `--no-ff` and a clearly
+  cautioned auto-resolve strategy (`-X ours/theirs`) — which GitHub Desktop doesn't offer.
+- **Change base** ⭐ — rebase a branch onto a different base when it was branched off the
+  wrong one, replaying only its own commits (the wrong base's are left behind), with a
+  preview of exactly which commits will move.
 
 **History & advanced** — paged, filterable history with rich commit detail,
-commit-author avatars, per-file history and line blame, and an at-a-glance marker on every commit that
-hasn't been pushed yet; cherry-pick (onto the current or another branch) and a
-full **interactive rebase** ⭐ — an *Edit history* editor to reword / squash /
-fixup / drop / reorder unpushed commits behind an atomic replay engine (any
-conflict rolls back untouched), or **edit** a commit to pause and amend its
-contents (a real resumable rebase) — which GitHub Desktop doesn't offer; a stash
-browser with a **Recover lost work** ⭐ view that scans (via `git fsck`) for
-orphaned/dangling stashes — uncommitted work a `git stash` saved but that fell
-out of `git stash list` (dropped, or abandoned by an interrupted operation) — and
-restores any of them non-destructively to the working tree; an **operation
-journal** ⭐ that records the risky compound operations GitDesktop runs (local PR
-merges, cherry-picks, history edits, rebases) and, if one is interrupted by a
-crash or restart, surfaces a calm recovery notice naming what was interrupted and
-the exact branch + commit it started from — browsable any time via the *Operation
-history* command; tag management,
-submodule management, and a **worktree manager** (create, switch between, promote
-a worktree's branch into your main checkout, and remove linked worktrees, so you
-can work on several branches in parallel folders without stashing — with one-click
-jumps to the main workspace right from the branch switcher).
+commit-author avatars, per-file history and line blame, and an at-a-glance marker on
+every commit that hasn't been pushed yet.
+
+- **Interactive rebase** ⭐ — an *Edit history* editor to reword / squash / fixup / drop
+  / reorder unpushed commits behind an atomic replay engine (any conflict rolls back
+  untouched), or **edit** a commit to pause and amend its contents (a real resumable
+  rebase) — which GitHub Desktop doesn't offer. Cherry-pick onto the current or another
+  branch, too.
+- **Recover lost work** ⭐ — a stash browser whose scan (via `git fsck`) finds
+  orphaned/dangling stashes — uncommitted work a `git stash` saved but that fell out of
+  `git stash list` (dropped, or abandoned by an interrupted operation) — and restores any
+  of them non-destructively to the working tree.
+- **Operation journal** ⭐ — records the risky compound operations GitDesktop runs (local
+  PR merges, cherry-picks, history edits, rebases); if one is interrupted by a crash or
+  restart, it surfaces a calm recovery notice naming what was interrupted and the exact
+  branch + commit it started from (browsable any time via the *Operation history*
+  command).
+- **Worktree manager** — create, switch between, promote a worktree's branch into your
+  main checkout, and remove linked worktrees, so you can work on several branches in
+  parallel folders without stashing — with one-click jumps to the main workspace right
+  from the branch switcher.
+
+Plus tag and submodule management.
 
 **Syncing** — fetch / pull / push with ahead/behind indicators; pull is
 `--ff-only`, and divergence routes to a guarded force push with
@@ -373,55 +351,52 @@ model to merge a file, review the proposal as a diff, and accept it (per file or
 all at once). Multi-provider, runs on local Ollama or a keyless Claude Code /
 Codex agent, and never writes until you accept.
 
-**Pull requests** — full read + write for GitHub PRs, plus **local PRs**: the full
-PR workflow against any two branches with no remote at all. AI review + security
-audit on any PR, with an activity indicator, a cancel, and a concurrency-capped
-queue. Re-runs are iterative — they feed back the previous round, fold in other
-bots' findings, and read GitDesktop's own earlier comments on the PR (its past
-reviews and any "fixed in `<sha>`"/refutation replies) as soft, re-verifiable
-context, so an already-addressed finding isn't re-raised cold (the current diff is
-always the source of truth); per PR, ignore the prior review, trim a false finding,
-or opt out of the external-bot folding. **Line-anchored review comments** — from Copilot,
-CodeRabbit, or humans — render right in the app: grouped by file in the
-Conversation tab and anchored at their exact line in the Files diff, with
-reply-in-thread, resolve/unresolve, and edit/delete of your own thread comments —
-and a reviewer's suggested change can be
-**applied straight to your working tree** (verified against the file, staged when
-safe) — now on **GitLab and Bitbucket** too, not just GitHub — something even
-GitHub's API can't do. **Compose your own review** right from the diff: click a
-line number (or drag across a range — a real multi-line anchor on **GitHub and
-GitLab**; Bitbucket anchors at the last line, and the composer says so) to open an
-inline composer — clicking the "+" on any line of a drag opens the range composer —
-then post a single
-comment or **start a review** to batch drafts (persisted per-PR, surviving
-restarts) that render at their anchors with a pending-review count, then
-**Submit review…** with a verdict (Comment / Approve / Request changes,
-capability-gated per provider) — and insert a **provider-correct suggestion**
-pre-filled with the selected code. **Drill into a PR's commits** too — the
-Commits tab is arrow-navigable, and opening a commit shows its full message and
-per-file diffs with a **whole-commit thread and line-anchored comments** you can
-add, edit, and delete (line-anchored comments carry a real drag-range on GitLab;
-GitHub and Bitbucket anchor to a single line). The same **commit comments** are also
-available straight from the **History tab** — open any pushed commit to comment on
-the whole commit or anchor to lines (an unpushed commit shows a push hint instead).
-A PR's Conversation is a **date-sorted activity feed** that interleaves reviews,
-comments, **pushed commits** (grouped into "pushed N commits," each SHA clickable straight
-to its detail), and events — and marks an **approval or changes-request stale** once later
-commits land. It covers **GitHub, GitLab, and Bitbucket**: GitHub carries the full event
-set (force-push, label add/remove, review request, ready-for-review, convert-to-draft,
-close, reopen, merge, rename); **GitLab MRs** add pushed commits, label add/remove,
-close/reopen/merge, and approvals (approved / changes-requested / approval-withdrawn), but
-have no force-push or draft events; **Bitbucket PRs** add pushed commits, merge/close, and
-approved / changes-requested, with no labels or review-requests. **Local PRs** get the feed
-too — created → pushed commits (each SHA clickable to the commit detail) → comments →
-merged/closed. Its **CI checks** collapse into a **✓ passed · ✕ failed · ● pending rollup**
-(auto-expanding on any failure) whose failing **GitHub Actions** and **GitLab pipeline**
-jobs **peek their job log inline**, without leaving the PR; **Bitbucket** build statuses and
-other external checks link out (name/state/URL, no fetchable logs). **Record management** lives on the list row, not the footer:
-**right-click** a local PR to **Archive / Unarchive** or **Delete** it (Delete confirms;
-the branches are untouched), also reachable from the command palette.
-Write/Preview markdown editor
-(formatting toolbar and live preview) everywhere you author.
+**Pull requests** — full read + write for GitHub PRs, plus **local PRs** (the full PR
+workflow against any two branches with no remote at all).
+
+- **AI review + security audit** on any PR, with an activity indicator, a cancel, and a
+  concurrency-capped queue. Re-runs are **iterative** — they feed back the previous
+  round, fold in other bots' findings, and read GitDesktop's own earlier comments (past
+  reviews and any "fixed in `<sha>`" / refutation replies) as soft, re-verifiable
+  context, so an already-addressed finding isn't re-raised cold (the current diff is
+  always the source of truth). Per PR, ignore the prior review, trim a false finding, or
+  opt out of external-bot folding.
+- **Line-anchored review comments** — from Copilot, CodeRabbit, or humans — render
+  grouped by file in the Conversation and at their exact line in the Files diff, with
+  reply-in-thread, resolve/unresolve, and edit/delete of your own; a reviewer's
+  **suggested change** can be applied straight to your working tree (verified against the
+  file, staged when safe) — now on **GitLab and Bitbucket** too, something even GitHub's
+  API can't do.
+- **Compose your own review** from the diff — click a line number, or drag a range (a
+  real multi-line anchor on GitHub & GitLab; Bitbucket anchors at the last line; the "+"
+  on any line of a drag opens the range composer). Post a single comment, or **start a
+  review** to batch drafts (persisted per-PR, surviving restarts) that render at their
+  anchors with a pending-review count, then **Submit** with a verdict (Comment / Approve
+  / Request changes, capability-gated per provider), inserting a **provider-correct
+  suggestion** pre-filled with the selected code.
+- **Commit-level comments** — the Commits tab is arrow-navigable; open a commit for its
+  full message, per-file diffs, and a whole-commit thread + line-anchored comments you can
+  add, edit, and delete (a real drag-range on GitLab; a single line on GitHub &
+  Bitbucket). The same commit comments are available from the **History tab** on any
+  pushed commit (an unpushed one shows a push hint).
+- **Activity feed** — the Conversation is a **date-sorted timeline** of reviews,
+  comments, grouped pushed commits (each SHA clickable), and events, marking an approval
+  or changes-request **stale** once later commits land. GitHub carries the full event set
+  (force-push, label add/remove, review request, ready-for-review, convert-to-draft,
+  close, reopen, merge, rename); **GitLab MRs** add commits, label changes,
+  close/reopen/merge, and approvals — approved / changes-requested / approval-withdrawn
+  — but no force-push/draft events; **Bitbucket PRs** add
+  commits, merge/close, and approved / changes-requested (no labels or review-requests);
+  **local PRs** get created → commits → comments → merged/closed.
+- **CI rollup** — checks collapse into a **✓ passed · ✕ failed · ● pending** summary
+  (auto-expanding on failure); failing **GitHub Actions** and **GitLab pipeline** jobs
+  peek their log inline, while **Bitbucket** and other external checks link out
+  (name/state/URL, no fetchable logs).
+- **Record management** — right-click a local PR in the list to **Archive / Unarchive**
+  or **Delete** it (Delete confirms; the branches are untouched), also from the command
+  palette.
+
+A Write/Preview markdown editor (formatting toolbar + live preview) is everywhere you author.
 
 ![A pull request open in GitDesktop with an inline AI review summarizing the diff; the left sidebar lists both local and GitHub pull requests, and the footer offers Approve, Comment, and Publish-to-GitHub actions.](site/src/assets/app-review.png)
 

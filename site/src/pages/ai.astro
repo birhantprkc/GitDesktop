@@ -1,4 +1,7 @@
 ---
+import { Image } from "astro:assets";
+import appAgentSession from "../assets/app-agent-session.png";
+import appReview from "../assets/app-review.png";
 import McpConfig from "../components/McpConfig.astro";
 import SiteLayout from "../layouts/SiteLayout.astro";
 
@@ -130,6 +133,17 @@ const agentAbilities = [
           </p>
         </div>
       </div>
+      <figure data-reveal style="transition-delay:120ms" class="window mt-12">
+        <Image
+          src={appReview}
+          alt="An AI code review re-running on a pull request in GitDesktop — it builds on the previous round, re-verifies every earlier finding (Resolved since last review: none), and lists blocker and should-fix issues with code references"
+          widths={[720, 1080, 1296]}
+          sizes="(min-width: 1024px) 1100px, 94vw"
+          format="webp"
+          quality={82}
+          loading="lazy"
+        />
+      </figure>
     </div>
   </section>
 
@@ -153,6 +167,17 @@ const agentAbilities = [
           ))
         }
       </ul>
+      <figure data-reveal style="transition-delay:120ms" class="window mt-12">
+        <Image
+          src={appAgentSession}
+          alt="An agent session in GitDesktop reviewing its changes: a delegated task in an isolated gd/session worktree, an eight-file diff, and Open / Squash / Discard / Keep controls"
+          widths={[720, 1080, 1440]}
+          sizes="(min-width: 1024px) 1100px, 94vw"
+          format="webp"
+          quality={82}
+          loading="lazy"
+        />
+      </figure>
     </div>
   </section>
 
