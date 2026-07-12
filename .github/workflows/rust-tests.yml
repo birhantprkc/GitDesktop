@@ -5,6 +5,14 @@ name: rust-tests
 # `#[cfg(unix)]` modules and other cfg-gated behavior get compiled and exercised
 # off Windows — local verification is Windows-only. Deliberately bare-bones: no
 # frontend test runner, no e2e, no release logic (that lives in release.yml).
+#
+# A cheap `gate` job runs first and skips the (billed 2×/10× on Windows/macOS)
+# matrix whenever the exact Rust content was ALREADY proven green — see the job
+# comment below. This kills two redundancies: the post-merge `push: master`
+# re-run of a PR that just passed (the squash commit's `src-tauri` tree is
+# byte-identical to the PR head's), and a non-Rust follow-up commit on a PR
+# re-triggering the whole matrix (the `pull_request` `paths` filter matches the
+# cumulative base…head diff, so one earlier Rust commit keeps re-arming it).
 
 on:
   pull_request:
@@ -26,9 +34,83 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read # gate reads this workflow's own run history
 
 jobs:
+  # Decide whether the expensive matrix actually needs to run. The signature of
+  # what the matrix would build is the `src-tauri` tree object + this workflow
+  # file's blob; if a byte-identical signature already passed a recent run, the
+  # result is a foregone conclusion and we skip. Content-addressed via git's own
+  # tree hashes, so it's exact — an identical tree skips, a changed one runs,
+  # including any direct push to master. Fail-open by construction: any hiccup
+  # (API error, unresolved commit) leaves the decision at "run", so the worst
+  # case is a redundant run, never a silently-skipped failure.
+  gate:
+    name: gate (skip if this Rust content already passed)
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      # fetch-depth: 0 pulls all branches/tags, so every past green run's commit
+      # (PR-branch heads included — branches aren't deleted on merge) is present
+      # locally for the tree lookups below.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether the matrix must run
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_SHA: ${{ github.sha }}
+          ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          # An explicit re-run ("Re-run all jobs") means "actually run it" —
+          # toolchain drift, a flake you want reconfirmed — so never short-circuit.
+          if [ "$ATTEMPT" != "1" ]; then
+            echo "run_attempt=$ATTEMPT — explicit re-run, running the matrix."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Sign the content the matrix would build. Use HEAD SHAs on both sides
+          # (PR head for pull_request, the pushed commit for push) so the frame
+          # is consistent: a merged PR and its squash commit on master share the
+          # same src-tauri tree, which is what makes the post-merge run skippable.
+          if [ "$EVENT" = "pull_request" ]; then sha="$PR_HEAD"; else sha="$PUSH_SHA"; fi
+          cur_tree=$(git rev-parse "${sha}:src-tauri" 2>/dev/null || true)
+          cur_wf=$(git rev-parse "${sha}:.github/workflows/rust-tests.yml" 2>/dev/null || true)
+          echo "signature for ${sha:0:8}: tree=${cur_tree:-?} wf=${cur_wf:-?}"
+
+          decision=true
+          if [ -n "$cur_tree" ] && [ -n "$cur_wf" ]; then
+            # Head SHAs of recent GREEN rust-tests runs, across every branch. A
+            # matrix-skipped run also concludes "success", so its commit joins
+            # this set — sound, because tree-identity is transitive.
+            greens=$(gh run list --workflow rust-tests.yml --status success \
+                       --limit 100 --json headSha --jq '.[].headSha' 2>/dev/null || true)
+            while read -r past; do
+              [ -z "$past" ] && continue
+              pt=$(git rev-parse "${past}:src-tauri" 2>/dev/null || true)
+              pw=$(git rev-parse "${past}:.github/workflows/rust-tests.yml" 2>/dev/null || true)
+              if [ -n "$pt" ] && [ "$pt" = "$cur_tree" ] && [ "$pw" = "$cur_wf" ]; then
+                echo "Identical Rust content already passed in ${past:0:8} — skipping the matrix."
+                decision=false
+                break
+              fi
+            done <<< "$greens"
+          fi
+
+          [ "$decision" = "true" ] && echo "No prior green run for this exact content — running the matrix."
+          echo "run=$decision" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
     strategy:
       # Each platform is independent signal — one leg failing shouldn't cancel
       # the others; that cross-platform coverage is the whole point.
