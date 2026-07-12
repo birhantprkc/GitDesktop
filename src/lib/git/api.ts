@@ -1794,8 +1794,9 @@ export const forgePrSetDraft = (
   draft: boolean,
 ) => invoke<void>("forge_pr_set_draft", { repoPath, number, draft });
 
-/** Replace a PR's reviewer list (ids from `forgePrReviewerCandidates`) —
- *  Bitbucket-only (`implemented.mrReviewers`). */
+/** Replace a PR's reviewer list (ids from `forgePrReviewerCandidates`) — all
+ *  three providers (`implemented.mrReviewers`); create-time reviewers remain
+ *  Bitbucket-only. */
 export const forgePrSetReviewers = (
   repoPath: string,
   number: number,

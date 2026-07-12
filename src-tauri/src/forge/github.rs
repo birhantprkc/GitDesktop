@@ -577,6 +577,7 @@ pub async fn assignable_users(
             id: l.clone(),
             label: l,
             avatar_url: String::new(),
+            is_bot: false,
         })
         .collect())
 }

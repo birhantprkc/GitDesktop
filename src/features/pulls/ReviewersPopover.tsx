@@ -26,16 +26,18 @@ export function userRefHint(
 }
 
 /**
- * Reviewer multi-select for the PR view (Bitbucket-only —
- * `implemented.mrReviewers`). Mirrors `AssigneesPopover`, with one structural
- * difference: entries are `{id, label}` pairs, not bare login strings — Bitbucket
- * identity must travel as the account uuid (nicknames aren't unique and
- * participant objects never carry `username`), while the label stays human.
+ * Reviewer multi-select for the PR view — a shared control on all three
+ * providers (`implemented.mrReviewers`). Mirrors `AssigneesPopover`, with one
+ * structural difference: entries are `{id, label}` pairs, not bare login strings
+ * — Bitbucket identity must travel as the account uuid (nicknames aren't unique
+ * and participant objects never carry `username`), while the label stays human.
+ * The caller passes only the human reviewers as `value`; bot requests (e.g.
+ * GitHub Copilot) are display-only and never enter this managed set.
  *
  * Edits batch into one `onChange` when the popover closes (each change is a
  * network PUT, like the assignees picker in the view). Candidates load only while
  * the popover is enabled; the PR author is already filtered out server-side (the
- * backend excludes them — Bitbucket rejects an author-reviewer).
+ * backend excludes them — providers reject an author-reviewer).
  */
 export function ReviewersPopover({
   repoPath,

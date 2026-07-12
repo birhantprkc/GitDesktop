@@ -8,6 +8,7 @@ import {
   GitBranchIcon,
   GitMergeIcon,
   PencilSimpleIcon,
+  RobotIcon,
   SparkleIcon,
   XCircleIcon,
   XIcon,
@@ -109,6 +110,7 @@ import {
 import {
   type ApprovalState,
   type ForgeProvider,
+  type ForgeUserRef,
   providerLabel,
   type ReviewThreadOut,
 } from "@/lib/git/types";
@@ -141,6 +143,7 @@ import {
 import { ReviewComposer } from "./ReviewComposer";
 import { ReviewersPopover, userRefHint } from "./ReviewersPopover";
 import {
+  lineLabel,
   ReviewThreadList,
   ReviewThreadsBlock,
   SUBMIT_HINT,
@@ -275,6 +278,11 @@ export function RemotePrView({
     { target: "mr", number },
   );
   const [section, setSection] = useState<Section>("conversation");
+  // A review thread the user asked to jump to (a timeline "View thread" click on
+  // a thread-reply wrapper row). Handed to whichever ReviewThreadList owns it; it
+  // reveals the (possibly resolved/collapsed) thread and clears this via
+  // onRevealed, so the jump works even when the target card isn't mounted yet.
+  const [revealThreadId, setRevealThreadId] = useState<string | null>(null);
   // The activity-timeline events (force-pushes, labels, state changes, review
   // requests, approvals) that interleave into the Conversation feed. Now
   // provider-neutral — the backend's `forge_pr_timeline` dispatches per provider
@@ -538,6 +546,33 @@ export function RemotePrView({
       (threadsByReview.get(r.id) ?? []).map((t) => t.id),
     ),
   );
+  // Thread-reply wrapper reviews: replying to a review thread outside a batched
+  // review makes GitHub auto-wrap the reply in a new empty-body `COMMENTED`
+  // review. That wrapper passed the `renderedReviews` filter on `state` alone and
+  // rendered as a contentless "commented" card — noise, with no link to the
+  // thread it wraps. It's a wrapper iff it has no visible body, is `COMMENTED`
+  // (backend delivers GitHub's uppercase state verbatim), AND claims no threads
+  // of its own. Accepted tradeoff: a genuinely empty COMMENTED review with no
+  // fetched threads also renders as the compact row — GitHub's reply-wrapping is
+  // by far the dominant producer of such reviews. GitLab/Bitbucket emit no review
+  // rows, so none of this fires there.
+  const wrapperReviewIds = new Set(
+    renderedReviews
+      .filter(
+        (r) =>
+          !hasVisibleBody(r.body) &&
+          r.state === "COMMENTED" &&
+          (threadsByReview.get(r.id)?.length ?? 0) === 0,
+      )
+      .map((r) => r.id),
+  );
+  // The thread a wrapper review wraps: the review thread that contains a comment
+  // whose `reviewId` is this review's id. Undefined when the thread wasn't
+  // fetched (pagination edge) — the row then renders generic, without a locator.
+  const wrappedThreadFor = (reviewId: string): ReviewThreadOut | undefined =>
+    (reviewThreads.data ?? []).find((t) =>
+      t.comments.some((c) => c.reviewId === reviewId),
+    );
   const residualThreads = (reviewThreads.data ?? []).filter(
     (t) => !claimedThreadIds.has(t.id),
   );
@@ -674,6 +709,12 @@ export function RemotePrView({
   };
 
   const isOpen = pr.state === "OPEN";
+  // Split reviewers so the editable picker only ever manages humans: bot requests
+  // (e.g. GitHub Copilot) render as display-only chips and must never ride through
+  // the popover's onChange as a desired reviewer. GitLab/Bitbucket never set isBot,
+  // so botReviewers stays empty there — those PRs render exactly as before.
+  const humanReviewers = pr.reviewers.filter((r) => !r.isBot);
+  const botReviewers = pr.reviewers.filter((r) => r.isBot);
   const busy =
     comment.isPending ||
     mergePr.isPending ||
@@ -863,27 +904,35 @@ export function RemotePrView({
             </div>
           )
         )}
-        {/* Bitbucket-only reviewers picker (workspace members, minus the author);
-            a closed/merged PR falls back to read-only chips like the rows above.
-            GitHub/GitLab carry no reviewers here and show nothing, as before. */}
+        {/* Reviewers picker (GitHub + GitLab + Bitbucket; workspace/project members,
+            GitHub diffs pending user requests). A closed/merged PR falls back to
+            read-only chips like the rows above. Bot requests (e.g. GitHub Copilot)
+            are display-only chips that never enter the picker's managed set — split
+            here so the popover's onChange (which emits its `value` as the desired
+            set) can never ride a bot through. */}
         {isOpen && canEditReviewers ? (
-          <ReviewersPopover
-            repoPath={repoPath}
-            number={number}
-            enabled
-            value={pr.reviewers}
-            onChange={(next) =>
-              setReviewers.mutate(
-                { number, reviewers: next },
-                { onError: toastError },
-              )
-            }
-          />
+          <div className="flex flex-wrap items-center gap-1.5">
+            <ReviewersPopover
+              repoPath={repoPath}
+              number={number}
+              enabled
+              value={humanReviewers}
+              onChange={(next) =>
+                setReviewers.mutate(
+                  { number, reviewers: next },
+                  { onError: toastError },
+                )
+              }
+            />
+            {botReviewers.map((user) => (
+              <BotReviewerChip key={user.id} user={user} ghHost={ghHost} />
+            ))}
+          </div>
         ) : (
           pr.reviewers.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
-              {pr.reviewers.map((user) => {
-                const hint = userRefHint(user, pr.reviewers);
+              {humanReviewers.map((user) => {
+                const hint = userRefHint(user, humanReviewers);
                 return (
                   <span
                     key={user.id}
@@ -898,6 +947,9 @@ export function RemotePrView({
                   </span>
                 );
               })}
+              {botReviewers.map((user) => (
+                <BotReviewerChip key={user.id} user={user} ghHost={ghHost} />
+              ))}
             </div>
           )
         )}
@@ -1106,6 +1158,62 @@ export function RemotePrView({
                 // stale APPROVED/CHANGES_REQUESTED review (its date predates the
                 // newest commit) gets a warning marker right after its card.
                 for (const r of renderedReviews) {
+                  // A thread-reply wrapper review renders as a compact row instead
+                  // of an empty "commented" card: avatar + "replied in a review
+                  // thread", plus a jump-to-thread link when its thread was fetched.
+                  if (wrapperReviewIds.has(r.id)) {
+                    const t = wrappedThreadFor(r.id);
+                    const locator = t
+                      ? [t.path, lineLabel(t.startLine, t.line)]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : "";
+                    entries.push({
+                      date: r.date,
+                      sortKey: 1,
+                      node: (
+                        <div
+                          key={`reply-wrap-${r.id || `${r.author}-${r.date}`}`}
+                          className="flex items-start gap-2 text-xs"
+                        >
+                          <AuthorAvatar
+                            login={r.author}
+                            avatarUrl={r.authorAvatarUrl}
+                          />
+                          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 py-1 text-muted-foreground">
+                            <span className="font-medium text-foreground">
+                              {r.author}
+                            </span>
+                            <span>replied in a review thread</span>
+                            {locator && (
+                              <span className="min-w-0 truncate">
+                                · {locator}
+                              </span>
+                            )}
+                            {t && (
+                              <button
+                                type="button"
+                                className="shrink-0 text-primary underline-offset-2 hover:underline cursor-pointer"
+                                onClick={() => {
+                                  // Route through the reveal seam (not a raw DOM
+                                  // scroll): the owning ReviewThreadList opens the
+                                  // resolved-group expander + expands the card so a
+                                  // resolved/collapsed target actually appears, then
+                                  // scrolls. Set the section first so the list is
+                                  // mounted when it reads the request.
+                                  setSection("conversation");
+                                  setRevealThreadId(t.id);
+                                }}
+                              >
+                                View thread
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ),
+                    });
+                    continue;
+                  }
                   const ownThreads = threadsByReview.get(r.id) ?? [];
                   const copyMarkdown =
                     ownThreads.length > 0
@@ -1184,6 +1292,8 @@ export function RemotePrView({
                               provider={providerKey}
                               apply={suggestionApply}
                               fileDiffLookup={fileDiffLookup}
+                              revealThreadId={revealThreadId}
+                              onRevealed={() => setRevealThreadId(null)}
                             />
                           </div>
                         )}
@@ -1346,6 +1456,8 @@ export function RemotePrView({
                 provider={providerKey}
                 apply={suggestionApply}
                 fileDiffLookup={fileDiffLookup}
+                revealThreadId={revealThreadId}
+                onRevealed={() => setRevealThreadId(null)}
               />
               {pr.reviews.length === 0 &&
                 pr.comments.length === 0 &&
@@ -1960,5 +2072,33 @@ export function RemotePrView({
         }
       />
     </div>
+  );
+}
+
+/**
+ * A read-only reviewer chip for a bot requested reviewer (e.g. GitHub Copilot).
+ * Same visual idiom as the read-only human reviewer chips, plus a robot glyph so
+ * the "bot" meaning never rides on color alone. Non-interactive display: reviewing
+ * bots are managed on the forge, not from this picker, so there's no disabled-button
+ * affordance. The accessible name is on the whole chip (title + aria-label).
+ */
+function BotReviewerChip({
+  user,
+  ghHost,
+}: {
+  user: ForgeUserRef;
+  ghHost: string | null;
+}) {
+  const name = `${user.label} — review requested from a bot, managed on the forge`;
+  return (
+    <span
+      title={name}
+      aria-label={name}
+      className="inline-flex items-center gap-1 border py-0.5 pr-1.5 pl-0.5 text-[11px] text-muted-foreground"
+    >
+      <ForgeUserAvatar user={user} ghHost={ghHost} decorative />
+      {user.label}
+      <RobotIcon aria-hidden className="size-3 shrink-0" />
+    </span>
   );
 }

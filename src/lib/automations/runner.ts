@@ -21,6 +21,7 @@ import {
   gitBranchDiff,
   gitCommitDiff,
 } from "@/lib/git/api";
+import { repoIdentity } from "@/lib/git/repo-identity";
 import type { DiffStatEntry } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { listLocalPrs, updateLocalPr } from "@/lib/pulls/local";
@@ -28,6 +29,7 @@ import { getLatestReview, saveReview } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
 import { type ReviewTarget, registerAutomationRun } from "@/lib/stores/reviews";
+import { invoke } from "@/lib/tauri/invoke";
 import { getDismissedHead, setDismissedHead } from "./dismissals";
 import { useAutomationResults } from "./results";
 import { loadAutomations, repoAutomationsFor } from "./store";
@@ -210,6 +212,50 @@ async function run(event: AutomationEvent): Promise<void> {
         continue;
       }
     }
+    // Cross-instance dedup: claim this exact run atomically BEFORE any (paid) AI
+    // work, so two instances watching the same repo (a main checkout + a linked
+    // worktree share a worktree-stable identity) don't both post the same review.
+    // The claim key is (repo identity, target, head, action); commit events have no
+    // PR target and key on their commit hash as the head. Skipped when there's no
+    // meaningful head to key on (status-quo behavior). Fail-open: a claim
+    // infrastructure error must never disable automations. `won === false` means
+    // another instance already owns this run — skip it here.
+    const headSha =
+      event.kind === "commit" ? event.hash : (event.headSha ?? "");
+    const claimTarget = event.kind === "commit" ? "" : targetRef(event);
+    // The resolved worktree-stable key the claim was made under — reused verbatim for
+    // release so both target the SAME claim file (releasing under the raw path would
+    // miss it). Empty until a claim is actually taken.
+    let claimKey = "";
+    if (headSha) {
+      const repoKey = await repoIdentity(event.repoPath);
+      let won = true;
+      try {
+        won = await invoke<boolean>("claim_automation_run", {
+          repoKey,
+          target: claimTarget,
+          headSha,
+          action,
+        });
+      } catch {
+        // fail open — a claim-infrastructure error must not disable automations
+      }
+      if (!won) continue; // another instance owns this run
+      claimKey = repoKey;
+    }
+    // Release this instance's claim (best-effort) so a non-delivering terminal path
+    // (failure/cancel/no-op) doesn't permanently suppress the automation for this
+    // head across instances. A successfully DELIVERED review keeps its claim.
+    const releaseClaim = () => {
+      if (!claimKey) return;
+      void invoke("release_automation_claim", {
+        repoKey: claimKey,
+        target: claimTarget,
+        headSha,
+        action,
+      }).catch(() => undefined);
+    };
+
     const label = modeLabel(action);
     // Per-rule cancellation: HTTP providers stop via the AbortSignal; CLI
     // providers stop by killing the subprocess (`cancelAgentReview` once we know
@@ -252,11 +298,13 @@ async function run(event: AutomationEvent): Promise<void> {
         handle.setCliId,
       );
       if (handle.isCancelled()) {
+        releaseClaim();
         dismissOnCancel();
         toast.info(`AI ${label} cancelled.`, { duration: 4000 });
         continue;
       }
       if (text === null) {
+        releaseClaim();
         toast.info(`AI ${label} skipped — no changes to review.`);
         continue;
       }
@@ -280,6 +328,9 @@ async function run(event: AutomationEvent): Promise<void> {
         ).catch(() => undefined);
       }
     } catch (e) {
+      // Release the claim on every failure/cancel path so a transient error doesn't
+      // permanently suppress this automation for this head across instances.
+      releaseClaim();
       if (handle.isCancelled()) {
         dismissOnCancel();
         toast.info(`AI ${label} cancelled.`, { duration: 4000 });

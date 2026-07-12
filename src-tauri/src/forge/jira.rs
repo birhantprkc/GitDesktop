@@ -518,6 +518,7 @@ impl JiraUser {
             id: self.account_id.clone().unwrap_or_default(),
             label: self.display_name.clone().unwrap_or_default(),
             avatar_url: self.avatar_url(),
+            is_bot: false,
         }
     }
 }

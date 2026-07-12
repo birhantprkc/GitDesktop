@@ -1014,9 +1014,13 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         .and_then(|u| u.uuid)
         .unwrap_or_default();
 
-    // Comments — drop deleted + pending, AND inline (diff-anchored) comments,
-    // which now surface as `review_threads` with real file/line context instead of
-    // leaking their bodies context-free into the flat conversation list.
+    // Comments — drop deleted + pending, AND every comment belonging to an inline
+    // (diff-anchored) thread, root OR reply. Those surface as `review_threads` with
+    // real file/line context; leaving replies here would both leak them context-free
+    // into the flat list AND double them (they also nest under their thread). A reply
+    // carries `parent` but not `inline`, so an `inline.is_none()` filter alone misses
+    // it — resolve each comment's chain root instead. A reply to a plain (non-inline)
+    // comment has a non-inline root, so it stays in the flat list (unchanged).
     let comments: Vec<PrThreadOut> = http::bb_get_json::<BbPage<BbComment>>(
         &creds,
         &format!("{base}/comments?pagelen=100"),
@@ -1024,9 +1028,10 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     )
     .await
     .map(|page| {
+        let inline_ids = inline_thread_comment_ids(&page.values);
         page.values
             .into_iter()
-            .filter(|c| !c.deleted && !c.pending && c.inline.is_none())
+            .filter(|c| !c.deleted && !c.pending && !inline_ids.contains(&c.id))
             .map(|c| from_bb_comment(c, &viewer_uuid))
             .collect()
     })
@@ -1106,6 +1111,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
                     id,
                     label: user_login(u),
                     avatar_url: user_avatar(u),
+                    is_bot: false,
                 })
             })
             .collect(),
@@ -1268,6 +1274,8 @@ fn from_bb_comment(c: BbComment, viewer_uuid: &str) -> PrThreadOut {
         viewer_did_author,
         is_minimized: false,
         minimized_reason: String::new(),
+        // Bitbucket doesn't model review objects — no owning review id.
+        review_id: String::new(),
     }
 }
 
@@ -1958,6 +1966,50 @@ pub async fn delete_pr_comment(repo_path: &str, number: u64, comment_id: &str) -
 /// comments are ordered oldest-first (Bitbucket returns comments oldest-first).
 /// `viewer_uuid` is the signed-in user's braced account uuid (empty = unknown → every
 /// `viewer_did_author` false), compared per comment via [`comment_authored_by_viewer`].
+/// The set of comment ids whose parent-chain ROOT carries `inline` — i.e. every
+/// comment that belongs to an inline (diff-anchored) thread, root or reply. Used
+/// to exclude thread replies from the flat conversation list: a reply carries
+/// `parent` but not `inline` (probed), so an `inline.is_none()` filter alone
+/// leaks it into the timeline while `group_bb_threads` ALSO nests it in its
+/// thread (double render). Walks the same bounded parent chain as
+/// `group_bb_threads`/`root_for`, building the parent map from the same comment
+/// set. A reply whose chain root is a plain (non-inline) comment is NOT in the
+/// set — it stays in the flat list, unchanged.
+fn inline_thread_comment_ids(comments: &[BbComment]) -> std::collections::HashSet<u64> {
+    // Full-topology parent map (child id -> parent id) over ALL comments, so a
+    // reply can still walk THROUGH a deleted/pending intermediate up to its root.
+    let parent_of: std::collections::HashMap<u64, u64> = comments
+        .iter()
+        .filter_map(|c| c.parent.as_ref().map(|p| (c.id, p.id)))
+        .collect();
+    // Roots that anchor an inline thread — an inline comment with no parent.
+    let inline_roots: std::collections::HashSet<u64> = comments
+        .iter()
+        .filter(|c| c.inline.is_some() && c.parent.is_none())
+        .map(|c| c.id)
+        .collect();
+    let bound = comments.len().saturating_add(1);
+    comments
+        .iter()
+        .filter(|c| {
+            // Walk this comment's parent chain (bounded, cycle-safe): it belongs
+            // to an inline thread iff the chain reaches an inline root.
+            let mut id = c.id;
+            for _ in 0..bound {
+                if inline_roots.contains(&id) {
+                    return true;
+                }
+                match parent_of.get(&id) {
+                    Some(&pid) => id = pid,
+                    None => return false,
+                }
+            }
+            false
+        })
+        .map(|c| c.id)
+        .collect()
+}
+
 fn group_bb_threads(comments: Vec<BbComment>, viewer_uuid: &str) -> Vec<ReviewThreadOut> {
     // Chain topology (child id -> parent id) is built from ALL fetched comments,
     // including deleted/pending ones: they still carry id + parent, so a live reply
@@ -2039,6 +2091,8 @@ fn group_bb_threads(comments: Vec<BbComment>, viewer_uuid: &str) -> Vec<ReviewTh
                     url: html_href(&c.links),
                     is_minimized: false,
                     minimized_reason: String::new(),
+                    // Bitbucket doesn't model review objects — no owning review id.
+                    review_id: String::new(),
                 })
                 .collect();
             Some(ReviewThreadOut {
@@ -2430,6 +2484,7 @@ fn reviewer_candidates_from(members: Vec<BbUser>, author_uuid: &str) -> Vec<Forg
                 id,
                 label: user_login(&u),
                 avatar_url: user_avatar(&u),
+                is_bot: false,
             })
         })
         .collect();
@@ -3867,6 +3922,7 @@ pub async fn default_reviewers(repo_path: &str) -> AppResult<Vec<ForgeUserRef>> 
                 id,
                 label: user_login(&u),
                 avatar_url: user_avatar(&u),
+                is_bot: false,
             });
         }
         match page.next {
@@ -4833,9 +4889,10 @@ mod tests {
 
     #[test]
     fn conversation_comments_drop_deleted_pending_and_inline() {
-        // The flat conversation list keeps only non-deleted, non-pending, NON-inline
-        // comments (inline ones now surface as review threads) — verbatim bodies,
-        // no file:line prefix.
+        // The flat conversation list keeps only non-deleted, non-pending comments
+        // that don't belong to an inline thread. Inline roots AND their replies
+        // (which carry `parent` but not `inline`) both surface as review threads;
+        // a reply to a plain non-inline comment stays in the flat list.
         let page: BbPage<BbComment> = serde_json::from_str(
             r#"{"values":[
                 {"id":1,"content":{"raw":"general note"},"user":{"display_name":"Bob"},
@@ -4843,20 +4900,33 @@ mod tests {
                 {"id":2,"content":{"raw":"needs fix"},"user":{"display_name":"Sue"},
                  "created_on":"2026-01-02","inline":{"path":"src/x.rs","to":12}},
                 {"id":3,"content":{"raw":"gone"},"deleted":true,"created_on":"2026-01-03"},
-                {"id":4,"content":{"raw":"draft"},"pending":true,"created_on":"2026-01-04"}
+                {"id":4,"content":{"raw":"draft"},"pending":true,"created_on":"2026-01-04"},
+                {"id":5,"content":{"raw":"inline reply"},"user":{"display_name":"Amy"},
+                 "created_on":"2026-01-05","parent":{"id":2}},
+                {"id":6,"content":{"raw":"reply to general"},"user":{"display_name":"Cid"},
+                 "created_on":"2026-01-06","parent":{"id":1}}
             ]}"#,
         )
         .unwrap();
+        let inline_ids = inline_thread_comment_ids(&page.values);
+        // The inline root (2) and its reply (5) are both flagged; nothing else is.
+        assert!(inline_ids.contains(&2));
+        assert!(inline_ids.contains(&5));
+        assert!(!inline_ids.contains(&1));
+        assert!(!inline_ids.contains(&6));
         let threads: Vec<PrThreadOut> = page
             .values
             .into_iter()
-            .filter(|c| !c.deleted && !c.pending && c.inline.is_none())
+            .filter(|c| !c.deleted && !c.pending && !inline_ids.contains(&c.id))
             .map(|c| from_bb_comment(c, ""))
             .collect();
-        // Only the general comment survives — inline/deleted/pending are excluded.
-        assert_eq!(threads.len(), 1);
+        // Survivors: the general comment and its (non-inline) reply. The inline
+        // root + its reply, plus deleted/pending, are excluded.
+        assert_eq!(threads.len(), 2);
         assert_eq!(threads[0].body, "general note");
         assert_eq!(threads[0].author, "Bob");
+        assert_eq!(threads[1].body, "reply to general");
+        assert_eq!(threads[1].author, "Cid");
     }
 
     #[test]

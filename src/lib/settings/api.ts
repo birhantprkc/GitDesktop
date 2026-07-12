@@ -235,6 +235,12 @@ export interface AppSettings {
   mcpServers: McpServer[];
   recentRepos: RecentRepo[];
   diffViewMode: "unified" | "split";
+  /** Which conversation-list sections the user has collapsed, keyed
+   *  `"<feature>:<kind>"` — `pulls:local`, `pulls:remote`, `issues:local`,
+   *  `issues:remote`. A missing key means the section is expanded (the default).
+   *  Global (not per-repo) and feature-scoped, so the remote key collapses the
+   *  provider section across every repo regardless of its host. */
+  collapsedConversationSections: string[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -289,6 +295,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mcpServers: [],
   recentRepos: [],
   diffViewMode: "unified",
+  collapsedConversationSections: [],
 };
 
 const MAX_RECENT_REPOS = 200;

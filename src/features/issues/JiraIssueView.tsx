@@ -238,6 +238,7 @@ const UNASSIGN: ForgeUserRef = {
   id: "__gd_unassign__",
   label: "Unassign",
   avatarUrl: "",
+  isBot: false,
 };
 
 /**

@@ -213,10 +213,12 @@ pub struct Implemented {
     /// its Review menu (`gh_pr_review`), not this control, so the flag stays
     /// `false` for GitHub (see `all`).
     pub mr_request_changes: bool,
-    /// Editing a merge/pull request's reviewer list. Bitbucket-only today —
-    /// Bitbucket PRs carry reviewers (not assignees), picked from workspace
-    /// members. GitHub keeps its own review-request flow (not built here) and
-    /// the GitLab reviewer list isn't wired yet, so both stay `false`.
+    /// Editing a merge/pull request's reviewer list — now a shared control on
+    /// all three providers. GitHub diffs pending user requests and runs
+    /// `gh pr edit --add/--remove-reviewer`; GitLab PUTs `reviewer_ids`;
+    /// Bitbucket picks reviewers (not assignees) from workspace members. Each
+    /// preserves the reviewers it doesn't manage (teams / bots on GitHub) so the
+    /// picker can never drop them.
     pub mr_reviewers: bool,
     /// Editing an existing issue's title/body — a shared control (the same edit
     /// dialog; GitHub PATCHes the issue, GitLab PUTs title/description).
@@ -616,6 +618,10 @@ pub struct ForgeUserRef {
     /// return it directly). Empty for GitHub, where the picker derives the avatar
     /// from the login (`<host>/<login>.png`), so we don't spend a field on it.
     pub avatar_url: String,
+    /// True for a bot requested reviewer (e.g. GitHub Copilot). Bot reviewers are
+    /// display-only: they are never part of the editable picker's managed set and
+    /// the reviewer setters never add or remove them.
+    pub is_bot: bool,
 }
 
 /// A repository as listed for cloning — neutral across providers (the clone

@@ -1198,6 +1198,9 @@ export function useCreateReviewThread(repo: string) {
             viewerDidAuthor: false,
             isMinimized: false,
             minimizedReason: "",
+            // Optimistic reply: the owning review id (if GitHub wraps it in one)
+            // arrives with the reconciling refetch.
+            reviewId: "",
           },
         ],
       };
@@ -3394,10 +3397,11 @@ export function useReviewerCandidates(
 }
 
 /**
- * Replace an MR's reviewer list (Bitbucket-only, gated on
+ * Replace an MR's reviewer list (all three providers, gated on
  * `implemented.mrReviewers`) with an optimistic patch of the PR-details cache +
  * rollback, mirroring `useSetPrAssignees` — the picker's chips update instantly
- * instead of waiting on the PUT + refetch.
+ * instead of waiting on the PUT + refetch. The list is the picker's HUMAN set;
+ * bot/team requests never travel through it (preserved provider-side).
  */
 export function useSetPrReviewers(repo: string) {
   const queryClient = useQueryClient();
@@ -3610,6 +3614,8 @@ function useOptimisticCreateCommentMutation<TData>(
         viewerDidAuthor: false,
         isMinimized: false,
         minimizedReason: "",
+        // Synthetic conversation comment — belongs to no review.
+        reviewId: "",
       };
       return d ? { ...d, comments: [...d.comments, synthetic] } : d;
     },

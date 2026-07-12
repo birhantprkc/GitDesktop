@@ -4,6 +4,7 @@ import {
   type MouseEvent,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -63,8 +64,9 @@ interface ThreadCallbacks {
 }
 
 /** The anchor label: "Lines a–b" for a range, "Line b" for a single line, "" at
- *  0 (unknown, e.g. an outdated thread). */
-function lineLabel(startLine: number, line: number): string {
+ *  0 (unknown, e.g. an outdated thread). Exported for reuse by the timeline's
+ *  compact thread-reply row (RemotePrView). */
+export function lineLabel(startLine: number, line: number): string {
   if (line <= 0) return "";
   if (startLine > 0 && startLine !== line) return `Lines ${startLine}–${line}`;
   return `Line ${line}`;
@@ -536,6 +538,8 @@ export function ReviewThreadCard({
   provider = "github",
   apply,
   fileDiffLookup,
+  revealTarget = false,
+  onRevealed,
 }: {
   thread: ReviewThreadOut;
   expanded: boolean;
@@ -543,6 +547,14 @@ export function ReviewThreadCard({
   compact?: boolean;
   /** Fired when the header button gains focus (keeps list activeIndex in sync). */
   onRowFocus?: () => void;
+  /** True when this card is the target of a pending "reveal" request (a timeline
+   *  "View thread" jump). The card scrolls ITSELF into view the moment its root
+   *  node exists (a layout effect on its own ref) — mount-driven, not frame-timed,
+   *  so a card that only just mounted after its resolved-group expander opened
+   *  still scrolls on the first click. Then it calls `onRevealed`. */
+  revealTarget?: boolean;
+  /** Cleared by the card once it has scrolled itself into view for a reveal. */
+  onRevealed?: () => void;
   /** The fence author's forge — disambiguates bare-fence Apply scope for
    *  suggestions (GitHub = whole range, GitLab = anchored line only). Defaults to
    *  "github" so unwired callers keep byte-identical GitHub behavior. */
@@ -559,6 +571,21 @@ export function ReviewThreadCard({
   const [replyBody, setReplyBody] = useState("");
   const [replyPending, setReplyPending] = useState(false);
   const [resolvePending, setResolvePending] = useState(false);
+  // Mount-driven reveal: when this card is the reveal target, scroll its own root
+  // into view. A layout effect keyed on `revealTarget` fires synchronously after
+  // the DOM commit — so for a card that only just mounted (its resolved-group
+  // expander opened this same click), `rootRef` already points at the live node;
+  // for an already-mounted card, the effect re-runs when `revealTarget` flips
+  // true. Both paths scroll on the first click, no frame racing. Cleared via
+  // `onRevealed` only after the scroll actually runs (rootRef is set).
+  const rootRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!revealTarget) return;
+    const node = rootRef.current;
+    if (!node) return;
+    node.scrollIntoView({ block: "nearest", behavior: "auto" });
+    onRevealed?.();
+  }, [revealTarget, onRevealed]);
   // Suggestion blocks applied in THIS view, keyed `${commentId}:${blockIndex}`,
   // so the Apply button becomes a disabled "Applied ✓" and a confusing re-click
   // is prevented (the backend content-verify would reject a real re-apply anyway).
@@ -615,7 +642,7 @@ export function ReviewThreadCard({
   }
 
   return (
-    <div className={cn("border", compact ? "text-xs" : "")}>
+    <div ref={rootRef} className={cn("border", compact ? "text-xs" : "")}>
       <div
         className={cn(
           "flex items-center gap-2",
@@ -869,6 +896,8 @@ export function ReviewThreadList({
   provider = "github",
   apply,
   fileDiffLookup,
+  revealThreadId,
+  onRevealed,
 }: {
   threads: ReviewThreadOut[];
   /** The forge the threads came from — disambiguates bare-fence Apply scope for
@@ -881,6 +910,15 @@ export function ReviewThreadList({
   /** File-section lookup for synthesizing a hunk on hunk-less providers, threaded
    *  to every card. Absent = no synthesis (unchanged GitHub behavior). */
   fileDiffLookup?: (path: string) => string | undefined;
+  /** A thread id the parent wants revealed (e.g. a timeline "View thread" jump).
+   *  When it matches one of THIS list's threads, the list opens that thread's
+   *  resolved-group expander (if resolved) + expands the card, then scrolls it
+   *  into view — so a resolved/collapsed target isn't a dead click. Ignored when
+   *  the id isn't in this list (only the owning list acts). */
+  revealThreadId?: string | null;
+  /** Called once this list has acted on `revealThreadId`, so the parent can clear
+   *  the request and it never re-fires. Only the list that owns the id calls it. */
+  onRevealed?: () => void;
 } & ThreadCallbacks) {
   // Which threads are expanded (unresolved default-open, resolved default-closed).
   const [collapsedUnresolved, setCollapsedUnresolved] = useState<Set<string>>(
@@ -916,6 +954,46 @@ export function ReviewThreadList({
       else next.add(path);
       return next;
     });
+
+  // A reveal request from the parent (e.g. a timeline "View thread" jump). Only
+  // the list that owns the id acts: this effect just opens the STATE needed for
+  // the target card to mount+expand — the resolved-group expander and the card's
+  // expansion (resolved cards aren't mounted until the expander is open). It does
+  // NOT scroll or clear: the card scrolls ITSELF once mounted (its own layout
+  // effect keyed on `revealTarget`) and clears via `onRevealed`, so the scroll is
+  // mount-driven, not frame-timed — the resolved+collapsed target reveals on the
+  // first click. `threads`/`onRevealed` get fresh identities every parent render,
+  // so this effect re-runs on unrelated renders; the ref makes the state opens
+  // idempotent per distinct request id (and resets when the request clears).
+  const handledRevealRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!revealThreadId) {
+      handledRevealRef.current = null;
+      return;
+    }
+    if (handledRevealRef.current === revealThreadId) return;
+    const target = threads.find((t) => t.id === revealThreadId);
+    // Not in this list — leave the request for the sibling list that owns it.
+    if (!target) return;
+    handledRevealRef.current = revealThreadId;
+    if (target.isResolved) {
+      setOpenResolvedGroups((set) =>
+        set.has(target.path) ? set : new Set(set).add(target.path),
+      );
+      setExpandedResolved((set) =>
+        set.has(target.id) ? set : new Set(set).add(target.id),
+      );
+    } else {
+      // Unresolved cards are open by default; if the user collapsed this one,
+      // drop it from the collapsed set so it's expanded when the card scrolls.
+      setCollapsedUnresolved((set) => {
+        if (!set.has(target.id)) return set;
+        const next = new Set(set);
+        next.delete(target.id);
+        return next;
+      });
+    }
+  }, [revealThreadId, threads]);
 
   const groups = groupByPath(threads);
 
@@ -993,6 +1071,8 @@ export function ReviewThreadList({
                   provider={provider}
                   apply={apply}
                   fileDiffLookup={fileDiffLookup}
+                  revealTarget={t.id === revealThreadId}
+                  onRevealed={onRevealed}
                 />
               ))}
               {resolved.length > 0 && (
@@ -1022,6 +1102,8 @@ export function ReviewThreadList({
                         provider={provider}
                         apply={apply}
                         fileDiffLookup={fileDiffLookup}
+                        revealTarget={t.id === revealThreadId}
+                        onRevealed={onRevealed}
                       />
                     ))}
                 </div>
@@ -1055,6 +1137,8 @@ export function ReviewThreadsBlock({
   provider = "github",
   apply,
   fileDiffLookup,
+  revealThreadId,
+  onRevealed,
 }: {
   threads: ReviewThreadOut[] | undefined;
   isError: boolean;
@@ -1072,6 +1156,11 @@ export function ReviewThreadsBlock({
   /** File-section lookup for synthesizing a hunk on hunk-less providers, threaded
    *  to every card. Absent = no synthesis (unchanged GitHub behavior). */
   fileDiffLookup?: (path: string) => string | undefined;
+  /** A thread id to reveal (timeline "View thread" jump) — passed straight to the
+   *  inner list, which acts only if the id is one of these residual threads. */
+  revealThreadId?: string | null;
+  /** Cleared once the inner list reveals the thread. */
+  onRevealed?: () => void;
 } & ThreadCallbacks) {
   if (isError) {
     return (
@@ -1100,6 +1189,8 @@ export function ReviewThreadsBlock({
         provider={provider}
         apply={apply}
         fileDiffLookup={fileDiffLookup}
+        revealThreadId={revealThreadId}
+        onRevealed={onRevealed}
       />
     </div>
   );

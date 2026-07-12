@@ -61,8 +61,9 @@ export function usePrCapabilities(
   // `canWrite` is false there and `mrAssignees` is false.
   const canEditAssignees =
     canWrite || forgeFeatureReady(forgeData, "mrAssignees");
-  // The reviewers picker is Bitbucket-only the same way (GitHub's review
-  // requests live in its own flow; the GitLab reviewer list isn't wired).
+  // The reviewers picker is a shared control on all three providers now
+  // (GitHub diffs pending user requests via `gh pr edit`, GitLab PUTs
+  // `reviewer_ids`, Bitbucket picks workspace members).
   const canEditReviewers = forgeFeatureReady(forgeData, "mrReviewers");
   // Bitbucket toggles draft BOTH ways via the same edit surface (GitHub's
   // one-way Ready button below stays on `canWrite` + `gh pr ready`).

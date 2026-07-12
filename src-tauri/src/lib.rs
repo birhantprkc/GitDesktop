@@ -1,6 +1,7 @@
 mod agent;
 mod agent_sandbox;
 mod app_store;
+mod automation_claims;
 mod dependabot;
 mod error;
 mod forge;
@@ -216,6 +217,8 @@ pub fn run() {
             oplog::git_oplog_list,
             oplog::git_oplog_check,
             oplog::git_oplog_dismiss,
+            automation_claims::claim_automation_run,
+            automation_claims::release_automation_claim,
             git::ops::git_merge,
             git::ops::git_merge_preview,
             git::ops::git_rebase,

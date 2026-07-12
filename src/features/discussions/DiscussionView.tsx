@@ -102,6 +102,8 @@ function toThread(c: {
     viewerDidAuthor: c.viewerDidAuthor,
     isMinimized: c.isMinimized,
     minimizedReason: c.minimizedReason,
+    // Discussion comments belong to no review.
+    reviewId: "",
   };
 }
 

@@ -1,4 +1,4 @@
-import { CaretDownIcon, PlusIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, CaretRightIcon, PlusIcon } from "@phosphor-icons/react";
 import {
   Fragment,
   type KeyboardEventHandler,
@@ -42,6 +42,40 @@ function rowClass(active: boolean) {
   );
 }
 
+/** A collapsible section header: a caret + the label, plus a count when
+ *  collapsed so hidden content stays discoverable. Keeps the calm header
+ *  typography (text-xs text-muted-foreground); the caret + count carry the
+ *  collapsed state (never color alone). */
+function SectionHeader(props: {
+  label: ReactNode;
+  collapsed: boolean;
+  onToggle: () => void;
+  /** Shown only when collapsed and non-null (omitted while a remote section is
+   *  pending/not-ready, where the count would be wrong). */
+  count?: number;
+  className?: string;
+}) {
+  const { label, collapsed, onToggle, count, className } = props;
+  const Caret = collapsed ? CaretRightIcon : CaretDownIcon;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={!collapsed}
+      className={cn(
+        "flex w-full cursor-pointer items-center gap-1 px-3 text-xs text-muted-foreground hover:text-foreground",
+        className,
+      )}
+    >
+      <Caret className="size-3 shrink-0" />
+      <span>{label}</span>
+      {collapsed && count != null && (
+        <span className="tabular-nums">({count})</span>
+      )}
+    </button>
+  );
+}
+
 /**
  * The master-detail list scaffold shared by the PR and issue panels: a state
  * tab toolbar + New menu + filter slot, a search input, and a Local / GitHub
@@ -79,6 +113,13 @@ export function ConversationListPanel<L, R, J = never>(props: {
   archivedLocalCount: number;
   showArchived: boolean;
   onToggleArchived: () => void;
+  /** Collapse state for the two sections. When collapsed the section body
+   *  unmounts entirely — the caller MUST also drop that section's rows from its
+   *  arrow-key registry so no invisible row stays selectable. */
+  localCollapsed: boolean;
+  remoteCollapsed: boolean;
+  onToggleLocal: () => void;
+  onToggleRemote: () => void;
   // remote (provider) section
   ghPending: boolean;
   ghReady: boolean;
@@ -146,6 +187,10 @@ export function ConversationListPanel<L, R, J = never>(props: {
     archivedLocalCount,
     showArchived,
     onToggleArchived,
+    localCollapsed,
+    remoteCollapsed,
+    onToggleLocal,
+    onToggleRemote,
     ghPending,
     ghReady,
     remoteLabel = "GitHub",
@@ -223,84 +268,108 @@ export function ConversationListPanel<L, R, J = never>(props: {
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div onKeyDown={onListKeyDown}>
-          <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground">Local</p>
-          {visibleLocal.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground">
-              {stateLocal.length > 0
-                ? `No local ${localNoun} match the filter.`
-                : `No ${stateFilter} local ${localNoun}.`}
-            </p>
-          ) : (
-            visibleLocal.map((item) => {
-              const row = (
+          <SectionHeader
+            label="Local"
+            collapsed={localCollapsed}
+            onToggle={onToggleLocal}
+            count={visibleLocal.length}
+            className="pt-2 pb-1"
+          />
+          {!localCollapsed && (
+            <>
+              {visibleLocal.length === 0 ? (
+                <p className="px-3 py-2 text-xs text-muted-foreground">
+                  {stateLocal.length > 0
+                    ? `No local ${localNoun} match the filter.`
+                    : `No ${stateFilter} local ${localNoun}.`}
+                </p>
+              ) : (
+                visibleLocal.map((item) => {
+                  const row = (
+                    <button
+                      type="button"
+                      data-row={`local:${localKey(item)}`}
+                      className={rowClass(isLocalActive(item))}
+                      onClick={() => onSelectLocal(item)}
+                    >
+                      {renderLocalRow(item)}
+                    </button>
+                  );
+                  // The context-menu wrapper renders the same `<button>` as its
+                  // trigger (no extra DOM node), so `data-row` stays intact for
+                  // arrow-key nav. Bare row when no wrapper is supplied.
+                  return (
+                    <Fragment key={localKey(item)}>
+                      {localRowContextMenu
+                        ? localRowContextMenu(item, row)
+                        : row}
+                    </Fragment>
+                  );
+                })
+              )}
+              {archivedLocalCount > 0 && (
                 <button
                   type="button"
-                  data-row={`local:${localKey(item)}`}
-                  className={rowClass(isLocalActive(item))}
-                  onClick={() => onSelectLocal(item)}
+                  onClick={onToggleArchived}
+                  className="cursor-pointer px-3 py-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                 >
-                  {renderLocalRow(item)}
+                  {showArchived
+                    ? "Hide archived"
+                    : `Show archived (${archivedLocalCount})`}
                 </button>
-              );
-              // The context-menu wrapper renders the same `<button>` as its
-              // trigger (no extra DOM node), so `data-row` stays intact for
-              // arrow-key nav. Bare row when no wrapper is supplied.
-              return (
-                <Fragment key={localKey(item)}>
-                  {localRowContextMenu ? localRowContextMenu(item, row) : row}
-                </Fragment>
-              );
-            })
-          )}
-          {archivedLocalCount > 0 && (
-            <button
-              type="button"
-              onClick={onToggleArchived}
-              className="cursor-pointer px-3 py-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-            >
-              {showArchived
-                ? "Hide archived"
-                : `Show archived (${archivedLocalCount})`}
-            </button>
+              )}
+            </>
           )}
 
-          <p className="px-3 pt-3 pb-1 text-xs text-muted-foreground">
-            {remoteLabel}
-          </p>
-          {ghPending ? (
-            <div className="space-y-2 p-3">
-              <Skeleton className="h-9 w-full" />
-            </div>
-          ) : !ghReady ? (
-            (remoteNotReadySlot ?? (
-              <ForgeNotReady repoPath={repoPath} feature={feature} />
-            ))
-          ) : listPending ? (
-            <div className="space-y-2 p-3">
-              {Array.from({ length: remoteSkeletonRows }, (_, i) => (
-                <Skeleton key={i} className="h-9 w-full" />
-              ))}
-            </div>
-          ) : visibleRemote.length === 0 ? (
-            <p className="px-3 py-4 text-xs text-muted-foreground">
-              {stateRemote.length > 0
-                ? `No ${remoteNoun} match the filter.`
-                : `No ${stateFilter} ${remoteNoun}.`}
-            </p>
-          ) : (
-            visibleRemote.map((item) => (
-              <button
-                type="button"
-                key={remoteKey(item)}
-                data-row={`remote:${remoteKey(item)}`}
-                className={rowClass(isRemoteActive(item))}
-                onClick={() => onSelectRemote(item)}
-                onMouseEnter={() => onRemoteHover(item)}
-              >
-                {renderRemoteRow(item)}
-              </button>
-            ))
-          )}
+          <SectionHeader
+            label={remoteLabel}
+            collapsed={remoteCollapsed}
+            onToggle={onToggleRemote}
+            // Omit the count while the remote section is pending/not-ready — a
+            // count then would be wrong or misleading; show it only once the
+            // list is loaded.
+            count={
+              ghReady && !ghPending && !listPending
+                ? visibleRemote.length
+                : undefined
+            }
+            className="pt-3 pb-1"
+          />
+          {!remoteCollapsed &&
+            (ghPending ? (
+              <div className="space-y-2 p-3">
+                <Skeleton className="h-9 w-full" />
+              </div>
+            ) : !ghReady ? (
+              (remoteNotReadySlot ?? (
+                <ForgeNotReady repoPath={repoPath} feature={feature} />
+              ))
+            ) : listPending ? (
+              <div className="space-y-2 p-3">
+                {Array.from({ length: remoteSkeletonRows }, (_, i) => (
+                  <Skeleton key={i} className="h-9 w-full" />
+                ))}
+              </div>
+            ) : visibleRemote.length === 0 ? (
+              <p className="px-3 py-4 text-xs text-muted-foreground">
+                {stateRemote.length > 0
+                  ? `No ${remoteNoun} match the filter.`
+                  : `No ${stateFilter} ${remoteNoun}.`}
+              </p>
+            ) : (
+              visibleRemote.map((item) => (
+                <button
+                  type="button"
+                  key={remoteKey(item)}
+                  data-row={`remote:${remoteKey(item)}`}
+                  className={rowClass(isRemoteActive(item))}
+                  onClick={() => onSelectRemote(item)}
+                  onMouseEnter={() => onRemoteHover(item)}
+                >
+                  {renderRemoteRow(item)}
+                </button>
+              ))
+            ))}
 
           {jira && (
             <>

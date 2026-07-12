@@ -4,6 +4,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
 import { ConversationListPanel } from "@/features/conversations/ConversationListPanel";
+import { useCollapsedSections } from "@/features/conversations/useCollapsedSections";
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { PrStateFilter } from "@/lib/git/api";
 import {
@@ -144,13 +145,22 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
     }
   }, [pendingCreate, clearPendingCreate, canCreateGhPr]);
 
-  // Arrow keys walk the visible rows, local section first like the list.
+  const { localCollapsed, remoteCollapsed, toggleLocal, toggleRemote } =
+    useCollapsedSections("pulls");
+
+  // Arrow keys walk the visible rows, local section first like the list. A
+  // collapsed section's body is unmounted, so its rows must leave the registry
+  // too — otherwise an arrow key could select an invisible row.
   const navTargets = [
-    ...visibleLocal.map((pr) => ({ kind: "local" as const, id: pr.id })),
-    ...visibleRemote.map((pr) => ({
-      kind: "remote" as const,
-      id: String(pr.number),
-    })),
+    ...(localCollapsed
+      ? []
+      : visibleLocal.map((pr) => ({ kind: "local" as const, id: pr.id }))),
+    ...(remoteCollapsed
+      ? []
+      : visibleRemote.map((pr) => ({
+          kind: "remote" as const,
+          id: String(pr.number),
+        }))),
   ];
 
   const onListKeyDown = listKeyboardNav({
@@ -229,6 +239,10 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
       archivedLocalCount={archivedLocalCount}
       showArchived={showArchived}
       onToggleArchived={() => setShowArchived((v) => !v)}
+      localCollapsed={localCollapsed}
+      remoteCollapsed={remoteCollapsed}
+      onToggleLocal={toggleLocal}
+      onToggleRemote={toggleRemote}
       ghPending={gh.isPending}
       ghReady={ghReady}
       listPending={prList.isPending}

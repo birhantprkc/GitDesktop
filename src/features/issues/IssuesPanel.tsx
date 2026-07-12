@@ -10,6 +10,7 @@ import { ForgeUserAvatar } from "@/components/forge-user-avatar";
 import { Button } from "@/components/ui/button";
 import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
 import { ConversationListPanel } from "@/features/conversations/ConversationListPanel";
+import { useCollapsedSections } from "@/features/conversations/useCollapsedSections";
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { IssueStateFilter } from "@/lib/git/api";
 import {
@@ -190,11 +191,24 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
             i.summary.toLowerCase().includes(jiraQuery),
         );
 
+  const { localCollapsed, remoteCollapsed, toggleLocal, toggleRemote } =
+    useCollapsedSections("issues");
+
   // Arrow keys walk the visible rows: local → remote → jira, matching the render
-  // order (navTargets is flattened for the shared keyboard-nav helper).
+  // order (navTargets is flattened for the shared keyboard-nav helper). A
+  // collapsed section's rows leave the registry (its body is unmounted), so an
+  // arrow key can never land on an invisible row. The Jira section isn't
+  // collapsible, so it always contributes.
   const navTargets = [
-    ...visibleLocal.map((i) => ({ kind: "local" as const, id: i.id })),
-    ...visible.map((i) => ({ kind: "remote" as const, id: String(i.number) })),
+    ...(localCollapsed
+      ? []
+      : visibleLocal.map((i) => ({ kind: "local" as const, id: i.id }))),
+    ...(remoteCollapsed
+      ? []
+      : visible.map((i) => ({
+          kind: "remote" as const,
+          id: String(i.number),
+        }))),
     ...visibleJira.map((i) => ({ kind: "jira" as const, id: i.key })),
   ];
 
@@ -295,6 +309,10 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
       archivedLocalCount={archivedLocalCount}
       showArchived={showArchived}
       onToggleArchived={() => setShowArchived((v) => !v)}
+      localCollapsed={localCollapsed}
+      remoteCollapsed={remoteCollapsed}
+      onToggleLocal={toggleLocal}
+      onToggleRemote={toggleRemote}
       ghPending={gh.isPending}
       ghReady={ghReady}
       remoteNotReadySlot={bitbucketNotReadySlot}

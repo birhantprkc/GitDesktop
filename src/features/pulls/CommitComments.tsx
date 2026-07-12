@@ -207,6 +207,8 @@ function toThread(c: CommitCommentOut): PrThreadOut {
     viewerDidAuthor: c.viewerDidAuthor,
     isMinimized: false,
     minimizedReason: "",
+    // Commit comments belong to no review.
+    reviewId: "",
   };
 }
 

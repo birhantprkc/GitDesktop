@@ -609,9 +609,10 @@ export interface ForgeImplemented {
    *  Bitbucket (GitHub requests changes via its Review menu). Bitbucket's revoke
    *  works on every plan, so the control toggles there; GitLab is one-shot. */
   mrRequestChanges: boolean;
-  /** Editing a merge/pull request's reviewer list — Bitbucket-only (reviewers
-   *  picked from workspace members; GitHub keeps its own review-request flow and
-   *  the GitLab reviewer list isn't wired). */
+  /** Editing a merge/pull request's reviewer list — now a shared control on all
+   *  three providers (GitHub/GitLab request reviewers; Bitbucket picks from
+   *  workspace members). Each provider's setter preserves reviewer kinds it
+   *  doesn't manage (teams, bots). */
   mrReviewers: boolean;
   /** Editing an existing issue's title/body — the shared edit dialog. */
   issueEdit: boolean;
@@ -1376,6 +1377,11 @@ export interface PrThreadOut {
   /** Whether the comment is hidden (minimized), and GitHub's recorded reason. */
   isMinimized: boolean;
   minimizedReason: string;
+  /** The owning review's id when this row is a review-thread comment (GitHub
+   *  populates it today, from the comment's own `pullRequestReview`); empty for
+   *  review/conversation rows and on GitLab/Bitbucket. Lets the timeline tie
+   *  GitHub's empty reply-wrapper reviews back to the thread they wrap. */
+  reviewId: string;
 }
 
 /** One file:line-anchored review thread, provider-neutral (GitHub reviewThread /
@@ -1514,6 +1520,10 @@ export interface ForgeUserRef {
   /** The user's avatar URL when the provider supplies one (GitLab/Bitbucket).
    *  Empty for GitHub, where the picker derives it from the login. */
   avatarUrl: string;
+  /** True for a bot requested reviewer (e.g. GitHub Copilot). Bot reviewers are
+   *  display-only: they're rendered as read-only chips, never enter the editable
+   *  picker's managed set, and the reviewer setters never add or remove them. */
+  isBot: boolean;
 }
 
 /** One review item on a PR/MR (a submitted review, an inline review comment, or a

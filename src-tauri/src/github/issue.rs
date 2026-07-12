@@ -280,6 +280,7 @@ pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDet
                 id: a.login.clone(),
                 label: a.login,
                 avatar_url: String::new(),
+                is_bot: false,
             })
             .collect(),
         milestone: raw.milestone,
@@ -303,6 +304,8 @@ pub async fn gh_issue_view(repo_path: String, number: u64) -> AppResult<IssueDet
                 viewer_did_author: c.viewer_did_author,
                 is_minimized: c.is_minimized,
                 minimized_reason: c.minimized_reason,
+                // Issue comments belong to no review.
+                review_id: String::new(),
             })
             .collect(),
         labels: raw.labels,

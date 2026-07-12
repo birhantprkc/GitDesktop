@@ -816,6 +816,8 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
             url: String::new(),
             is_minimized: false,
             minimized_reason: String::new(),
+            // GitLab doesn't model review objects — no owning review id.
+            review_id: String::new(),
         }
     })
     .collect();
@@ -876,6 +878,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
                 id: a.username.clone(),
                 label: a.username,
                 avatar_url: a.avatar_url,
+                is_bot: false,
             })
             .collect(),
         // Reviewers, keyed by username (like assignees — the setter resolves
@@ -889,6 +892,7 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
                 id: u.username.clone(),
                 label: u.username,
                 avatar_url: u.avatar_url,
+                is_bot: false,
             })
             .collect(),
     })
@@ -2443,6 +2447,8 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
             url: String::new(),
             is_minimized: false,
             minimized_reason: String::new(),
+            // GitLab doesn't model review objects — no owning review id.
+            review_id: String::new(),
         }
     })
     .collect();
@@ -2488,6 +2494,7 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
                 id: a.username.clone(),
                 label: a.username,
                 avatar_url: a.avatar_url,
+                is_bot: false,
             })
             .collect(),
         // `number` is GitLab's GLOBAL milestone id (see `GlabMilestone`) — the same
@@ -3382,6 +3389,8 @@ pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<Revie
                     url: String::new(),
                     is_minimized: false,
                     minimized_reason: String::new(),
+                    // GitLab doesn't model review objects — no owning review id.
+                    review_id: String::new(),
                 }
             })
             .collect();
@@ -3927,6 +3936,7 @@ pub async fn assignable_users(repo_path: &str) -> AppResult<Vec<ForgeUserRef>> {
             id: m.username.clone(),
             label: m.username,
             avatar_url: m.avatar_url,
+            is_bot: false,
         })
         .collect())
 }
@@ -3948,6 +3958,7 @@ pub async fn reviewer_candidates(
             id: m.username.clone(),
             label: m.username,
             avatar_url: m.avatar_url,
+            is_bot: false,
         })
         .collect();
     out.sort_by_key(|a| a.label.to_lowercase());

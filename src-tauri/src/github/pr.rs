@@ -1307,9 +1307,17 @@ struct RawLogin {
 
 /// One entry of `gh pr view --json reviewRequests` — a *pending* requested
 /// reviewer (users who already submitted a review show in the reviews surface,
-/// not here). Each is either a `User` (`login`) or a `Team`; `__typename`
-/// disambiguates, and we keep only Users (teams have no `login`). Verified live:
-/// `{"__typename":"User","login":"…"}`.
+/// not here). Each is a `User` (`login`), a `Bot` (`login`, e.g. GitHub
+/// Copilot), or a `Team`; `__typename` disambiguates. We keep Users and Bots
+/// (both carry a `login`); teams have none. Verified live:
+/// `{"__typename":"User","login":"…"}` and
+/// `{"__typename":"Bot","login":"copilot-pull-request-reviewer"}`.
+///
+/// The Bot arm depends on the gh CLI version: gh's own internal GraphQL query
+/// (`prReviewRequests` in cli/cli `api/query_builder.go`) added `...on Bot` in
+/// v2.94.0 "to support Copilot as a reviewer on github.com". Older gh has no Bot
+/// arm, so a Copilot request arrives with an empty `login` — requiring a
+/// non-empty login below degrades those to today's behavior (no chip, no error).
 #[derive(Deserialize)]
 struct RawReviewRequest {
     #[serde(rename = "__typename", default)]
@@ -1530,6 +1538,12 @@ pub struct PrThreadOut {
     /// Whether the comment is hidden (minimized), and GitHub's reason for it.
     pub is_minimized: bool,
     pub minimized_reason: String,
+    /// The owning review's node id (GitHub `PRR_…`) when this row is a
+    /// review-thread comment — populated per thread-comment from its own
+    /// `pullRequestReview`. Empty for review/conversation rows and for the
+    /// providers that don't model reviews (GitLab/Bitbucket). Lets the frontend
+    /// tie GitHub's empty reply-wrapper reviews back to the thread they wrap.
+    pub review_id: String,
 }
 
 /// One file:line-anchored review thread, provider-neutral. GitHub: a GraphQL
@@ -1804,6 +1818,9 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                 viewer_did_author: false,
                 is_minimized: false,
                 minimized_reason: String::new(),
+                // A review row keeps its own id in `id`; `review_id` is for
+                // thread-comment rows to point back at their owning review.
+                review_id: String::new(),
             })
             .collect(),
         comments: raw
@@ -1820,6 +1837,8 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                 viewer_did_author: c.viewer_did_author,
                 is_minimized: c.is_minimized,
                 minimized_reason: c.minimized_reason,
+                // Conversation comments belong to no review.
+                review_id: String::new(),
             })
             .collect(),
         checks: raw
@@ -1861,27 +1880,42 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                 label: a.login,
                 // GitHub avatar is login-derived on the frontend.
                 avatar_url: String::new(),
+                is_bot: false,
             })
             .collect(),
-        // Pending requested USER reviewers (id = label = login). Team requests are
-        // left out of the picker's model for now (the setter preserves them) — the
-        // reviewer picker manages people; team display is a follow-up.
+        // Pending requested USER and BOT reviewers (id = login). User requests are
+        // editable in the picker; bot requests (e.g. Copilot) are display-only
+        // read-only chips (`is_bot`), never in the picker's managed set — mirroring
+        // how team requests are preserved untouched (the setter leaves both alone).
         reviewers: raw
             .review_requests
             .into_iter()
-            .filter(|r| r.typename == "User" && !r.login.is_empty())
-            .map(|r| crate::forge::model::ForgeUserRef {
-                id: r.login.clone(),
-                label: r.login,
-                // GitHub avatar is derived from the login on the frontend.
-                avatar_url: String::new(),
+            .filter(|r| (r.typename == "User" || r.typename == "Bot") && !r.login.is_empty())
+            .map(|r| {
+                let is_bot = r.typename == "Bot";
+                // The raw bot login is unreadable in a chip, so prettify Copilot's;
+                // `id` still carries the real login. Other bots show the login verbatim.
+                let label = if r.login == "copilot-pull-request-reviewer" {
+                    "Copilot".to_string()
+                } else {
+                    r.login.clone()
+                };
+                crate::forge::model::ForgeUserRef {
+                    id: r.login,
+                    label,
+                    // GitHub avatar is derived from the login on the frontend.
+                    avatar_url: String::new(),
+                    is_bot,
+                }
             })
             .collect(),
     })
 }
 
 /// The PR's current PENDING requested reviewers that are USERS (logins). Teams
-/// are intentionally excluded so [`set_pr_reviewers`] can preserve them untouched.
+/// and bots (e.g. Copilot) are intentionally excluded — exactly like teams — so
+/// [`set_pr_reviewers`] can preserve them untouched and never `--remove-reviewer`
+/// a bot.
 async fn current_requested_reviewer_logins(repo_path: &str, number: u64) -> AppResult<Vec<String>> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -1930,8 +1964,9 @@ async fn pr_author_login(repo_path: &str, number: u64) -> AppResult<String> {
 
 /// Replace a PR's requested USER reviewers with `desired` (logins) by diffing
 /// against the current pending user requests and running one `gh pr edit
-/// --add-reviewer … --remove-reviewer …`. **Team** requests are never touched
-/// (they're not in the diff), so managing people here can't drop a team. GitHub
+/// --add-reviewer … --remove-reviewer …`. **Team** and **bot** (e.g. Copilot)
+/// requests are never touched (they're not in the diff), so managing people here
+/// can't drop a team or a bot. GitHub
 /// rejects requesting a review from the PR author, and a reviewer who already
 /// submitted needs a *re-request* — those failures surface as the gh error rather
 /// than being swallowed (`run_gh` carries the stderr).
@@ -1991,6 +2026,7 @@ pub async fn reviewer_candidates(
             label: l,
             // GitHub avatar is derived from the login on the frontend.
             avatar_url: String::new(),
+            is_bot: false,
         })
         .collect();
     out.sort_by_key(|a| a.label.to_lowercase());
@@ -2977,6 +3013,11 @@ pub async fn gh_pr_review_threads(
                                 viewer_did_author: bool_at(c, "/viewerDidAuthor"),
                                 is_minimized: bool_at(c, "/isMinimized"),
                                 minimized_reason: str_at(c, "/minimizedReason"),
+                                // The comment's own owning review (nullable — a
+                                // reply outside a batched review still carries the
+                                // empty wrapper review GitHub auto-creates).
+                                // `str_at` maps a present-but-null value to "".
+                                review_id: str_at(c, "/pullRequestReview/id"),
                             })
                             .collect()
                     })
