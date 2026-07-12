@@ -1,0 +1,19 @@
+---
+// The `.mcp.json` snippet for using GitDesktop as an MCP server. Injected via
+// set:html so Astro doesn't trim the leading indentation on the lines that begin
+// with a highlight <span> (whitespace-only text nodes before an element get
+// collapsed in normal template rendering) — this keeps the JSON pretty-printed
+// under the terminal's `white-space: pre`. `\${…}` is an escaped literal, not an
+// interpolation. Read-only base form; the write flags live in the ladder beside it.
+const mcpConfig = `<span class="c">// .mcp.json — read-only by default; add flags from the ladder</span>
+{
+  <span class="k">"mcpServers"</span>: {
+    <span class="k">"gitdesktop"</span>: {
+      <span class="k">"command"</span>: "\${GITDESKTOP_BIN:-gitdesktop-mcp}",
+      <span class="k">"args"</span>: ["mcp", "--repo", "\${CLAUDE_PROJECT_DIR:-.}"]
+    }
+  }
+}`;
+---
+
+<div class="terminal" set:html={mcpConfig}></div>

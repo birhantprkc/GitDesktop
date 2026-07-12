@@ -8,13 +8,15 @@ import appDiscussions from "../assets/app-discussions.png";
 import appHistory from "../assets/app-history-detail.png";
 import appIssues from "../assets/app-issues.png";
 import appPrDialog from "../assets/app-pr-dialog.png";
-import appPrFiles from "../assets/app-pr-files.png";
 import appReview from "../assets/app-review.png";
 import appStaging from "../assets/app-staging.png";
 import appStagingNoai from "../assets/app-staging-noai.png";
 import appTags from "../assets/app-tags.png";
 import FeatureRow from "../components/FeatureRow.astro";
-import "../styles/global.css";
+import ForgeMark from "../components/ForgeMark.astro";
+import McpConfig from "../components/McpConfig.astro";
+import { highlightCapabilities } from "../data/capabilities";
+import SiteLayout from "../layouts/SiteLayout.astro";
 
 const repo = "https://github.com/theBGuy/GitDesktop";
 const base = import.meta.env.BASE_URL;
@@ -22,910 +24,740 @@ const base = import.meta.env.BASE_URL;
 // GitHub Releases).
 const download = `${base}download`;
 
-// A deliberately long, scannable index (not a grid of identical icon cards).
-// `ai` items drop out of the "Just Git" view, mirroring the app's hide-AI setting.
-const capabilities = [
-  { label: "Unified & split diffs, syntax-highlighted" },
-  { label: "Line, hunk & file staging" },
-  { label: "Branch compare — ahead/behind, 3-dot" },
-  { label: "Merge preview — see conflicts before you merge" },
-  { label: "GitHub PRs + private local PRs" },
-  {
-    label:
-      "Local-PR merges pre-show conflicts, then resolve in-app in an isolated worktree — Finish or Abort, your working tree untouched",
-  },
-  { label: "Set labels & assignees when you open a PR/MR (GitHub & GitLab)" },
-  { label: "Edit a PR's assignees in-app (GitHub & GitLab)" },
-  {
-    label: "Request reviewers on a PR/MR in-app (GitHub, GitLab & Bitbucket)",
-  },
-  {
-    label:
-      "Inline review comments — anchored in the diff, reply, resolve, edit/delete your own & apply suggestions locally (GitHub, GitLab & Bitbucket)",
-  },
-  {
-    label:
-      "Compose a review from the diff — click a line or drag a real multi-line range (GitHub & GitLab; Bitbucket anchors at the last line) to comment, batch drafts into a pending review (saved across restarts), suggest changes, and submit with a verdict",
-  },
-  {
-    label:
-      "Drill into a PR's commits — full message, per-file diffs & whole-commit + line-anchored comments",
-  },
-  {
-    label:
-      "PR activity feed — date-sorted reviews, comments, grouped pushed commits (click a SHA to its detail) & events, with approvals marked stale after later commits — on GitHub, GitLab & Bitbucket, plus local PRs (created → commits → comments → merged/closed)",
-  },
-  {
-    label:
-      "CI checks rollup — pass/fail/pending summary that peeks a failing GitHub Actions or GitLab pipeline job's log inline; Bitbucket build statuses link out",
-  },
-  {
-    label:
-      "Archive or delete a local PR from its list row's right-click menu or the command palette",
-  },
-  {
-    label:
-      "Comment on commits from the History tab — whole-commit or line-anchored, for any pushed commit on GitHub, GitLab & Bitbucket",
-  },
-  { label: "GitHub Enterprise — same features, via gh" },
-  { label: "Multiple accounts, switch active per host" },
-  {
-    label:
-      "Repo switcher — forge logo & visibility badge per row, grouped by owner",
-  },
-  { label: "In-app conflict editor (current / incoming / both)" },
-  {
-    label:
-      "Use GitDesktop as an MCP server for external AI clients — GitHub, GitLab & Bitbucket, read-only by default with an opt-in write ladder (local PRs/issues, forge writes, then recoverable & destructive git ops)",
-  },
-  {
-    label:
-      "Link a Jira Cloud project to any repo — browse issues (status, type, priority, assignee, description & comments, plus agile fields when the project uses them: story points, sprint, a clickable epic/parent, components & fix versions, discovered automatically per site) and create, comment on, close/reopen (following the project's workflow), assign, set a due date, change priority, edit labels, and edit or delete your own comments from the Issues tab, all gated on your Jira permissions; the project's issue keys are spotted in branch names, commits & PR titles and linked back to the Issues tab, a local issue can be promoted to Jira, and agents reach the linked project through GitDesktop's MCP server; a one-click path for Bitbucket repos after its tracker's 2026 sunset",
-  },
-  { label: "AI code & security review", ai: true },
-  { label: "Resolve merge conflicts with AI (review, then accept)", ai: true },
-  {
-    label: "Delegate tasks to a Claude, Codex, Copilot, or opencode agent",
-    ai: true,
-  },
-  {
-    label:
-      "Watch the agent work step by step, with an inline diff for each edit",
-    ai: true,
-  },
-  {
-    label:
-      "Best-of-N — run a task across different agents/models, keep the best",
-    ai: true,
-  },
-  { label: "Integrated terminal in each session (host & container)", ai: true },
-  {
-    label:
-      "Research a topic with web search on any agent — switch between Brainstorm & Deep research mid-session, cited (read-only)",
-    ai: true,
-  },
-  { label: "Plan a task into an agent-ready issue (read-only)", ai: true },
-  { label: "Hand an issue or plan to an agent to implement", ai: true },
-  { label: "Agent sessions — tabs, search & completion alerts", ai: true },
-  { label: "Slash commands & skills in the agent composer", ai: true },
-  { label: "Bring your own MCP servers, opted in per session", ai: true },
-  {
-    label: "Point AI at a custom or LAN Ollama / OpenAI-compatible server",
-    ai: true,
-  },
-  { label: "Browse the official MCP registry to add servers", ai: true },
-  {
-    label:
-      "Trigger GitDesktop's AI generation (commit message, PR description, branch name) from an external MCP client",
-    ai: true,
-  },
-  { label: "Run agents in a Docker/Podman sandbox (opt-in)", ai: true },
-  {
-    label:
-      "Add per-repo tools to the agent container (e.g. Playwright) via a custom image",
-    ai: true,
-  },
-  { label: "Reviews keep running in the background", ai: true },
-  {
-    label:
-      "Agentic review — the reviewer reads the full diff, files, search & history through read-only tools, with CLI agents (Claude, Copilot, opencode) and API models (Anthropic, OpenAI, OpenRouter, Ollama)",
-    ai: true,
-  },
-  { label: "Iterative reviews build on the last round", ai: true },
-  { label: "Builds on Copilot / CodeRabbit reviews", ai: true },
-  { label: "Factors in its own earlier comments on re-review", ai: true },
-  {
-    label:
-      "Automations — run AI review or a security audit on commit, PR open, or new commits, scoped by branch",
-    ai: true,
-  },
-  {
-    label:
-      "AI reviews are clearly branded & machine-authored — post as a GitLab project bot",
-    ai: true,
-  },
-  { label: "File history & line blame" },
-  { label: "Commit-author avatars in history" },
-  { label: "Unpushed commits flagged in history" },
-  { label: "GitHub Actions — runs, jobs & re-run" },
-  {
-    label:
-      "GitLab — clone & read merge requests, issues, pipelines & releases; create, comment (edit/delete your own comments), close/reopen & edit issues and MRs, react with emoji, edit labels & assignees, set issue milestones, lock/move/delete issues, track time & link related issues, approve, request changes, merge & auto-merge (merge when pipeline succeeds) MRs, retry/cancel/run pipelines & play manual jobs, publish & manage releases, star & publish repos, full project settings (general, members, protected branches, webhooks, CI/CD variables, danger zone) — gitlab.com or self-managed (via glab)",
-  },
-  {
-    label:
-      "Bitbucket Cloud — connect with an Atlassian API token, then browse & clone repositories, read pull requests (diffs, comments, build statuses) & Pipelines (with step logs), and act on them: comment (edit/delete your own comments), decline, merge (merge/squash/fast-forward), edit, create (drafts included, reviewers pickable at create time), approve, request changes (toggleable), pick reviewers, manage a PR Tasks checklist & flip draft ↔ ready on PRs, plus rerun, trigger (custom pipelines selectable) & stop Pipelines; publish a local repo to Bitbucket, chart Pipeline durations in Insights, and manage repo settings (general, default reviewers, branch restrictions, pipeline variables & schedules, deployment environments, webhooks, danger zone)",
-  },
-  { label: "Tags, releases & assets" },
-  { label: "Stash browser" },
-  {
-    label:
-      "Recover lost work — scan (git fsck) for orphaned stashes that fell off the list & restore them non-destructively",
-  },
-  {
-    label:
-      "Operation journal — records risky ops (merges, cherry-picks, history edits, rebases) & surfaces a recovery notice, with the exact state it started from, if one is interrupted",
-  },
-  { label: "Cherry-pick commits onto any branch" },
-  {
-    label:
-      "Update a branch from its upstream & delete remote branches — no checkout needed",
-  },
-  {
-    label:
-      "Clean up branches in bulk — archive or delete stale ones (merged into default, or idle) in one reviewed sweep",
-  },
-  { label: "Interactive rebase — reword/squash/fixup/edit/drop/reorder" },
-  {
-    label:
-      "Change base — rebase a branch onto a different base when it was branched off the wrong one, moving only its own commits",
-  },
-  { label: "Submodule status & update" },
-  { label: "Worktree manager — create, switch, promote & remove" },
-  { label: "Command palette + rebindable keys" },
-  { label: "Recoverable, recycle-bin discards" },
-  { label: "Remembers window size & position" },
-  { label: "Manage tracked & ignored files" },
-  { label: "Insights graphs, computed locally" },
-  { label: "--force-with-lease by default" },
-  { label: "Auto-fetch — quiet background sync, never auto-pulls" },
-  {
-    label:
-      "Activity & notifications inbox — never miss a finished review, check, or PR update",
-  },
-  { label: "Branch-protection rules, locally" },
-  { label: "Git hooks manager" },
-  { label: "Edit git config — identity, default branch, line endings" },
-  { label: "GitHub issues & private local to-dos" },
-  { label: "Issue types, sub-issues & dependencies" },
-  { label: "GitHub Discussions — read, post & react" },
-  { label: "Markdown editor — toolbar & live preview" },
-  { label: "Repo settings & webhooks (admin)" },
-  { label: "Collaborators & invitations (admin)" },
-  { label: "Branch rulesets — create, edit, enable/disable (admin)" },
-  { label: "Code security & analysis toggles (admin)" },
-  {
-    label:
-      "Danger zone — rename, archive, visibility, transfer, delete (admin)",
-  },
-  { label: "GitHub Pages — source, custom domain, HTTPS (admin)" },
-  { label: "Actions/Dependabot/Codespaces secrets & variables (admin)" },
-  { label: "Edit the Sponsor button (.github/FUNDING.yml)" },
-  { label: "Environment & CLI health check" },
-  { label: "Generated commits & PR descriptions", ai: true },
-  { label: "AI suggests PR labels from your repo's existing set", ai: true },
-  { label: "AI issue drafting from templates", ai: true },
-  { label: "AI repo descriptions & topics", ai: true },
-];
-const gitCapabilities = capabilities.filter((c) => !c.ai);
+// Home highlights are the "everything else" tail — capabilities that don't get
+// their own narrative section. Non-AI ones show in both views; AI ones are gated.
+const gitHighlights = highlightCapabilities.filter((c) => !c.ai);
+const aiHighlights = highlightCapabilities.filter((c) => c.ai);
+
+const forges = [
+  { forge: "github", name: "GitHub", detail: "PRs, Actions, issues, discussions, admin — via gh", cli: "gh" },
+  { forge: "gitlab", name: "GitLab", detail: "MRs, pipelines, releases, project settings — via glab", cli: "glab" },
+  { forge: "bitbucket", name: "Bitbucket", detail: "PRs, Pipelines, repo settings — Atlassian token", cli: "token" },
+] as const;
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" type="image/svg+xml" href={`${base}app-icon.svg`} />
-    <title>GitDesktop — the whole GitHub loop in one native app</title>
-    <meta
-      name="description"
-      content="A native desktop client for GitHub: staging and diffs, the full pull-request loop with code review, Actions, and issues — in one window, with optional AI you fully control, or hide entirely."
-    />
-    <meta property="og:title" content="GitDesktop — the whole GitHub loop, one native app" />
-    <meta
-      property="og:description"
-      content="GitHub Desktop fundamentals plus the full pull-request loop, code review, Actions, and issues — in one fast, native window. With AI you control, or hide entirely."
-    />
-    <meta property="og:type" content="website" />
-    <script is:inline>
-      // Set the view mode before first paint (no flash). ?ai=off or a stored
-      // preference shows the "Just Git" view; default is AI-native.
-      (function () {
-        try {
-          var ai = new URLSearchParams(location.search).get("ai");
-          var stored = localStorage.getItem("gd-view");
-          if (ai === "off" || ai === "0" || (ai == null && stored === "git")) {
-            document.documentElement.classList.add("mode-git");
-          }
-        } catch (e) {}
-      })();
-    </script>
-    <script is:inline>
-      // Reveal-on-scroll that enhances an already-visible default. With no JS,
-      // or with reduced-motion, everything stays visible.
-      (function () {
-        if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-        if (location.search.indexOf("still") !== -1) return; // screenshot hook
-        document.documentElement.classList.add("js");
-        function revealAll() {
-          document
-            .querySelectorAll("[data-reveal]")
-            .forEach(function (el) { el.classList.add("is-visible"); });
-        }
-        if (!("IntersectionObserver" in window)) { revealAll(); return; }
-        addEventListener("DOMContentLoaded", function () {
-          var io = new IntersectionObserver(
-            function (entries) {
-              entries.forEach(function (e) {
-                if (e.isIntersecting) {
-                  e.target.classList.add("is-visible");
-                  io.unobserve(e.target);
-                }
-              });
-            },
-            { rootMargin: "0px 0px -8% 0px", threshold: 0.04 }
-          );
-          document
-            .querySelectorAll("[data-reveal]")
-            .forEach(function (el) { io.observe(el); });
-          setTimeout(revealAll, 1800); // safety: never ship a blank section
-        });
-      })();
-    </script>
-  </head>
-
-  <body class="min-h-screen antialiased">
-    <!-- Nav -->
-    <header class="sticky top-0 z-30 border-b border-line bg-bg/80 backdrop-blur-md">
-      <nav class="mx-auto flex h-14 max-w-6xl items-center justify-between gap-3 px-5">
-        <a href="#top" class="flex items-center gap-2.5 font-medium text-ink">
-          <img src={`${base}app-icon.svg`} alt="" width="22" height="22" />
-          <span class="hidden sm:inline">GitDesktop</span>
-        </a>
-
-        <!-- View toggle — mirrors the app's "hide AI features" setting -->
-        <div
-          class="flex items-center rounded-full border border-line-2 bg-surface p-0.5 text-xs"
-          role="group"
-          aria-label="Choose how much to show"
+<SiteLayout
+  title="GitDesktop — one calm, AI-native client for GitHub, GitLab & Bitbucket"
+  description="A native desktop Git client for GitHub, GitLab, and Bitbucket: staging and diffs, the full pull-request loop with code review, CI, and issues — in one window, with AI you fully control, or hide entirely."
+  ogTitle="GitDesktop — the whole Git loop, one native app"
+  ogDescription="GitHub Desktop fundamentals across GitHub, GitLab & Bitbucket, plus the full pull-request loop, code review, CI, and issues — in one fast native window. With AI you control, or hide entirely."
+>
+  <!-- ============================ AI-NATIVE VIEW ======================= -->
+  <!-- Hero (AI) -->
+  <section data-view="ai" class="relative overflow-hidden border-b border-line">
+    <div class="grid-bg pointer-events-none absolute inset-0"></div>
+    <div
+      class="relative mx-auto grid max-w-6xl items-center gap-x-12 gap-y-14 px-5 py-20 md:py-28 lg:grid-cols-[1fr_1.12fr]"
+    >
+      <div class="min-w-0">
+        <p data-reveal class="mb-6 text-sm text-faint" style="transition-delay:0ms">
+          <span class="text-add">//</span> an AI-native Git client for GitHub, GitLab &amp; Bitbucket
+        </p>
+        <h1
+          data-reveal
+          style="transition-delay:60ms"
+          class="text-[clamp(2.25rem,5vw,3.5rem)] font-semibold tracking-tight"
         >
-          <button
-            type="button"
-            data-mode-btn="ai"
-            aria-pressed="true"
-            class="flex items-center gap-1 rounded-full px-3 py-1 text-muted transition-colors aria-pressed:bg-surface-2 aria-pressed:text-ink"
-          >
-            <span class="text-mint" aria-hidden="true">✦</span> AI-native
-          </button>
-          <button
-            type="button"
-            data-mode-btn="git"
-            aria-pressed="false"
-            class="rounded-full px-3 py-1 text-muted transition-colors aria-pressed:bg-surface-2 aria-pressed:text-ink"
-          >
-            Just Git
-          </button>
-        </div>
-
-        <div class="flex items-center gap-1 text-sm">
-          <a href={repo} class="hidden rounded px-3 py-1.5 text-muted transition-colors hover:text-ink sm:block">GitHub</a>
+          The whole loop,<br class="hidden sm:block" /> one window.
+        </h1>
+        <p
+          data-reveal
+          style="transition-delay:120ms"
+          class="mt-7 max-w-[58ch] text-base leading-relaxed text-body sm:text-lg"
+        >
+          Everything GitHub&nbsp;Desktop does — staging, branches, diffs, history,
+          sync — now across <span class="text-ink">GitHub, GitLab &amp; Bitbucket</span>,
+          with the full pull-request loop, CI, and issues in one window. Then AI that
+          reads your diff for commits, PR descriptions, and code review — and takes on
+          whole delegated tasks — on your own models, or hidden entirely.
+        </p>
+        <div
+          data-reveal
+          style="transition-delay:180ms"
+          class="mt-9 flex flex-wrap items-center gap-3"
+        >
           <a
             href={download}
-            class="ml-1 rounded-md bg-mint px-3.5 py-1.5 font-medium text-mint-ink transition-opacity hover:opacity-90"
-            >Download</a
+            data-dl
+            class="rounded-lg bg-mint px-5 py-2.5 font-medium text-mint-ink transition-opacity hover:opacity-90"
+            ><span data-dl-label>Download for free</span></a
+          >
+          <a
+            href={repo}
+            class="rounded-lg border border-line-2 px-5 py-2.5 font-medium text-ink transition-colors hover:bg-surface"
+            >View on GitHub</a
           >
         </div>
-      </nav>
-    </header>
-
-    <main id="top">
-      <!-- ============================ AI-NATIVE VIEW ======================= -->
-      <div data-view="ai">
-        <!-- Hero -->
-        <section class="relative overflow-hidden border-b border-line">
-          <div class="grid-bg pointer-events-none absolute inset-0"></div>
-          <div
-            class="relative mx-auto grid max-w-6xl items-center gap-x-12 gap-y-14 px-5 py-20 md:py-28 lg:grid-cols-[1fr_1.12fr]"
-          >
-            <div class="min-w-0">
-              <p data-reveal class="mb-6 text-sm text-faint" style="transition-delay:0ms">
-                <span class="text-add">//</span> an AI-native desktop client for GitHub
-              </p>
-              <h1
-                data-reveal
-                style="transition-delay:60ms"
-                class="text-[clamp(2.25rem,5vw,3.5rem)] font-semibold tracking-tight"
-              >
-                The whole loop,<br class="hidden sm:block" /> one window.
-              </h1>
-              <p
-                data-reveal
-                style="transition-delay:120ms"
-                class="mt-7 max-w-[58ch] text-base leading-relaxed text-body sm:text-lg"
-              >
-                The whole daily loop in one window: GitHub&nbsp;Desktop fundamentals,
-                the full pull-request loop, Actions, and issues — plus AI that reads
-                your diff for commits, PR descriptions, and code review, on your own
-                models. Native, fast, and built to be trusted with uncommitted work.
-              </p>
-              <div
-                data-reveal
-                style="transition-delay:180ms"
-                class="mt-9 flex flex-wrap items-center gap-3"
-              >
-                <a
-                  href={download}
-                  data-dl
-                  class="rounded-lg bg-mint px-5 py-2.5 font-medium text-mint-ink transition-opacity hover:opacity-90"
-                  ><span data-dl-label>Download for free</span></a
-                >
-                <a
-                  href={repo}
-                  class="rounded-lg border border-line-2 px-5 py-2.5 font-medium text-ink transition-colors hover:bg-surface"
-                  >View on GitHub</a
-                >
-              </div>
-              <p data-reveal style="transition-delay:240ms" class="mt-6 text-sm text-muted">
-                <span data-dl-version></span>Windows, macOS &amp; Linux · Apache-2.0 ·
-                <button type="button" data-mode-btn="git" class="text-mint underline-offset-4 hover:underline">
-                  not into AI? hide it →
-                </button>
-              </p>
-            </div>
-
-            <div data-reveal style="transition-delay:220ms" class="mint-glow relative min-w-0">
-              <figure class="window">
-                <Image
-                  src={appDiff}
-                  alt="GitDesktop staging a TypeScript diff line by line, with an AI-generated commit message in the composer"
-                  widths={[600, 900, 1296]}
-                  sizes="(min-width: 1024px) 620px, 92vw"
-                  format="webp"
-                  quality={82}
-                  loading="eager"
-                  fetchpriority="high"
-                />
-              </figure>
-            </div>
-          </div>
-        </section>
-
-        <!-- AI: generate -->
-        <section class="border-b border-line">
-          <div
-            class="mx-auto grid max-w-6xl items-center gap-x-14 gap-y-10 px-5 py-20 md:py-28 lg:grid-cols-[1.1fr_0.9fr]"
-          >
-            <div data-reveal class="order-2 min-w-0 lg:order-1">
-              <figure class="window mx-auto max-w-sm lg:mx-0">
-                <Image
-                  src={appCommit}
-                  alt="The commit composer with an AI-generated conventional-commit message describing the staged change"
-                  widths={[340, 384]}
-                  sizes="(min-width: 1024px) 360px, 80vw"
-                  format="webp"
-                  quality={84}
-                />
-              </figure>
-            </div>
-            <div data-reveal class="order-1 min-w-0 lg:order-2">
-              <h2 class="text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
-                It writes the commit.<br class="hidden sm:block" /> You keep the keys.
-              </h2>
-              <p class="mt-6 max-w-[60ch] leading-relaxed text-body">
-                One click reads your staged diff and drafts the commit message — and
-                the PR title and description — in your conventions. It streams into
-                the same fields you'd type in, so it's always editable and never
-                blocks the manual path.
-              </p>
-              <p class="mt-4 max-w-[60ch] leading-relaxed text-muted">
-                Bring your own model: Anthropic, OpenAI, any OpenAI-compatible
-                endpoint (Vercel AI Gateway, Gemini, DeepSeek, Mistral, Z.ai),
-                OpenRouter, Ollama (local, LAN, or cloud), or your
-                Claude&nbsp;/&nbsp;Codex&nbsp;/&nbsp;Copilot&nbsp;/&nbsp;opencode
-                CLI. No keys go to us — they're yours, stored in your OS keychain.
-              </p>
-            </div>
-          </div>
-        </section>
-
-        <!-- AI: review -->
-        <section class="border-b border-line bg-surface/30">
-          <div class="mx-auto max-w-6xl px-5 py-20 md:py-28">
-            <div data-reveal class="max-w-2xl">
-              <div class="rule-mint mb-6 w-16"></div>
-              <h2 class="text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
-                A reviewer that actually reads the code.
-              </h2>
-              <p class="mt-6 leading-relaxed text-body">
-                Run a general review or a security audit on any pull request — local
-                or on GitHub. It reads the changed files, flags real issues with a
-                severity, and cites the exact lines. The result stays on your machine
-                unless you choose to post it — and it keeps running while you move
-                between PRs, or even after you close the window, then pings you when
-                it's done.
-              </p>
-              <p class="mt-4 leading-relaxed text-muted">
-                Turn on <span class="text-ink">Agentic review</span> and the reviewer
-                pulls the full diff past the prompt budget, reads any file at any ref,
-                searches the repo, and runs history — read-only end to end, so
-                it can explore but never modify. It works with CLI agent models (via
-                GitDesktop's read-only MCP server) and with API models through a native
-                tool loop, which needs no review workspace and so starts instantly.
-              </p>
-            </div>
-            <figure data-reveal style="transition-delay:120ms" class="window mt-10">
-              <Image
-                src={appReview}
-                alt="An AI code review on a local pull request: should-fix and nit findings with code references and an inline severity"
-                widths={[760, 1040, 1296]}
-                sizes="(min-width: 1100px) 1000px, 94vw"
-                format="webp"
-                quality={82}
-              />
-            </figure>
-          </div>
-        </section>
-
-        <!-- Local PRs (AI framing: the dialog with AI-drafted description) -->
-        <FeatureRow
-          title="Pull requests. Without the browser — or the cloud."
-          image={appPrDialog}
-          alt="The New local pull request dialog: merge one branch into another and review it locally, with an AI-generated description"
-          side="right"
-          widths={[540, 677]}
-          sizes="(min-width: 1024px) 520px, 90vw"
-        >
-          <p>
-            Open GitHub pull requests through <code class="text-ink">gh</code>, or
-            private <span class="text-ink">local PRs</span> that never leave your
-            machine: propose a merge, draft the description, review the diff, and
-            merge with a <code class="text-ink">--no-ff</code> commit.
-          </p>
-          <p class="text-muted">
-            The whole review loop — proposal, AI review, approval, merge — offline,
-            on a repo that isn't on GitHub at all.
-          </p>
-        </FeatureRow>
-
-        <!-- Issues + Discussions (collaboration; shown in both views) -->
-        <FeatureRow
-          title="Issues and to-dos, triaged in place."
-          image={appIssues}
-          alt="An issue in GitDesktop: a bug report with labels, an assignee, a linked pull request in the Development panel, and a comment thread"
-          side="left"
-        >
-          <p>
-            Browse, open, and edit GitHub issues without the tab-switch. Labels,
-            assignees, milestones, issue type, sub-issues, dependencies, and the
-            pull requests and branches that close them all sit in one panel.
-          </p>
-          <p class="text-muted">
-            Working privately? Keep <span class="text-ink">local to-dos</span>
-            that need no remote, then publish them to GitHub when the work goes
-            public.
-          </p>
-        </FeatureRow>
-
-        <FeatureRow
-          title="Discussions, where the thread lives."
-          image={appDiscussions}
-          alt="A GitHub Discussion in GitDesktop: a roadmap thread with a category, an upvote count, reactions, and a threaded reply"
-          side="right"
-          surface={true}
-        >
-          <p>
-            Read and join your repository's GitHub Discussions in the same
-            window: categories, upvotes, reactions, and threaded replies, with
-            the Write/Preview markdown you author everywhere else.
-          </p>
-          <p class="text-muted">
-            Announcements, Q&amp;A, and roadmap threads, no browser tab required.
-          </p>
-        </FeatureRow>
-
-        <!-- Daily loop -->
-        <section class="border-b border-line">
-          <div class="mx-auto max-w-6xl px-5 py-20 md:py-28">
-            <h2 data-reveal class="max-w-2xl text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
-              And the rest of the daily loop.
-            </h2>
-            <div class="mt-14 grid items-center gap-x-14 gap-y-8 lg:grid-cols-2">
-              <div data-reveal class="min-w-0">
-                <h3 class="text-xl text-ink">Stage exactly what you mean.</h3>
-                <p class="mt-4 max-w-[52ch] leading-relaxed text-body">
-                  Stage — or discard — by file, by hunk, or by dragging across
-                  individual lines, even within a brand-new file, to split a messy
-                  working tree into clean, reviewable commits, with partial patches
-                  applied via git's own <code class="text-ink">--cached</code>.
-                </p>
-              </div>
-              <figure data-reveal style="transition-delay:80ms" class="window min-w-0">
-                <Image
-                  src={appStaging}
-                  alt="A split diff with per-hunk stage controls and a hint to drag across lines to stage just those lines"
-                  widths={[560, 860, 1296]}
-                  sizes="(min-width: 1024px) 540px, 94vw"
-                  format="webp"
-                  quality={82}
-                />
-              </figure>
-            </div>
-            <div class="mt-16 grid items-center gap-x-14 gap-y-8 lg:grid-cols-2">
-              <figure data-reveal class="window order-2 min-w-0 lg:order-1">
-                <Image
-                  src={appHistory}
-                  alt="Browsing commit history with a selected commit's changed files and a syntax-highlighted diff"
-                  widths={[560, 860, 1296]}
-                  sizes="(min-width: 1024px) 540px, 94vw"
-                  format="webp"
-                  quality={82}
-                />
-              </figure>
-              <div data-reveal style="transition-delay:80ms" class="order-1 min-w-0 lg:order-2">
-                <h3 class="text-xl text-ink">Read the whole story.</h3>
-                <p class="mt-4 max-w-[52ch] leading-relaxed text-body">
-                  Browse history, search every commit, and blame any line back to the
-                  change that introduced it — then cherry-pick, squash, reorder, or
-                  stash, without leaving the keyboard.
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Ship: tags & releases (no AI; shown in both views) -->
-        <FeatureRow
-          title="Cut a release without the dashboard."
-          image={appTags}
-          alt="The Tags panel beside a release in GitDesktop: version tags marked release or Latest, the release's changelog notes, and its attached macOS, Linux, and Windows binaries with sizes"
-          side="left"
-        >
-          <p>
-            Every tag and release in one panel. Cut a new one without the
-            browser: write the notes, mark it <span class="text-ink">latest</span>,
-            pre-release, or draft, and attach the cross-platform binaries.
-          </p>
-          <p class="text-muted">
-            Lightweight tags for a quick checkpoint; full GitHub releases when
-            you ship — push, edit, delete, or download any asset, in the app.
-          </p>
-        </FeatureRow>
-
-        <!-- Capability index (AI) -->
-        <section class="border-b border-line bg-surface/30">
-          <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
-            <h2 data-reveal class="text-sm text-faint">
-              <span class="text-add">//</span> everything else you'd reach for
-            </h2>
-            <ul
-              data-reveal
-              class="mt-7 grid grid-cols-1 gap-x-10 gap-y-3.5 text-[15px] sm:grid-cols-2 lg:grid-cols-3"
-            >
-              {
-                capabilities.map((c) => (
-                  <li class="flex items-start gap-2.5">
-                    <span class="mt-px select-none text-add" aria-hidden="true">+</span>
-                    <span class="text-body">{c.label}</span>
-                  </li>
-                ))
-              }
-            </ul>
-          </div>
-        </section>
-      </div>
-
-      <!-- ============================= JUST-GIT VIEW ======================= -->
-      <div data-view="git">
-        <!-- Hero -->
-        <section class="relative overflow-hidden border-b border-line">
-          <div class="grid-bg pointer-events-none absolute inset-0"></div>
-          <div
-            class="relative mx-auto grid max-w-6xl items-center gap-x-12 gap-y-14 px-5 py-20 md:py-28 lg:grid-cols-[1fr_1.12fr]"
-          >
-            <div class="min-w-0">
-              <p data-reveal class="mb-6 text-sm text-faint" style="transition-delay:0ms">
-                <span class="text-add">//</span> a calm, native desktop client for GitHub
-              </p>
-              <h1
-                data-reveal
-                style="transition-delay:60ms"
-                class="text-[clamp(2.25rem,5vw,3.5rem)] font-semibold tracking-tight"
-              >
-                The whole loop,<br class="hidden sm:block" /> one window.
-              </h1>
-              <p
-                data-reveal
-                style="transition-delay:120ms"
-                class="mt-7 max-w-[58ch] text-base leading-relaxed text-body sm:text-lg"
-              >
-                Everything you expect from GitHub&nbsp;Desktop — staging, branches,
-                diffs, history, sync — plus the full pull-request loop, GitHub
-                Actions, issues, and branch protection, all in one window. Native,
-                fast, and built to be trusted with uncommitted work. No AI in sight.
-              </p>
-              <div
-                data-reveal
-                style="transition-delay:180ms"
-                class="mt-9 flex flex-wrap items-center gap-3"
-              >
-                <a
-                  href={download}
-                  data-dl
-                  class="rounded-lg bg-mint px-5 py-2.5 font-medium text-mint-ink transition-opacity hover:opacity-90"
-                  ><span data-dl-label>Download for free</span></a
-                >
-                <a
-                  href={repo}
-                  class="rounded-lg border border-line-2 px-5 py-2.5 font-medium text-ink transition-colors hover:bg-surface"
-                  >View on GitHub</a
-                >
-              </div>
-              <p data-reveal style="transition-delay:240ms" class="mt-6 text-sm text-muted">
-                <span data-dl-version></span>Windows, macOS &amp; Linux · Apache-2.0 ·
-                <button type="button" data-mode-btn="ai" class="text-mint underline-offset-4 hover:underline">
-                  curious about the AI? →
-                </button>
-              </p>
-            </div>
-
-            <div data-reveal style="transition-delay:220ms" class="mint-glow relative min-w-0">
-              <figure class="window">
-                <Image
-                  src={appStagingNoai}
-                  alt="GitDesktop showing a split diff with per-hunk stage controls — staging changes line by line"
-                  widths={[600, 900, 1296]}
-                  sizes="(min-width: 1024px) 620px, 92vw"
-                  format="webp"
-                  quality={82}
-                  loading="eager"
-                />
-              </figure>
-            </div>
-          </div>
-        </section>
-
-        <FeatureRow
-          title="Pull requests, even offline."
-          image={appPrFiles}
-          alt="A private local pull request with its diff and a Merge action, entirely on-device"
-          side="left"
-        >
-          <p>
-            Open GitHub pull requests through <code class="text-ink">gh</code>, or
-            private <span class="text-ink">local PRs</span> that never touch a server:
-            propose a merge, review the files, approve, and merge with a
-            <code class="text-ink">--no-ff</code> commit.
-          </p>
-          <p class="text-muted">
-            The full review loop on a repo that isn't on GitHub at all — no browser
-            tab, no account required.
-          </p>
-        </FeatureRow>
-
-        <!-- Issues + Discussions (collaboration; shown in both views) -->
-        <FeatureRow
-          title="Issues and to-dos, triaged in place."
-          image={appIssues}
-          alt="An issue in GitDesktop: a bug report with labels, an assignee, a linked pull request in the Development panel, and a comment thread"
-          side="right"
-          surface={true}
-        >
-          <p>
-            Browse, open, and edit GitHub issues without the tab-switch. Labels,
-            assignees, milestones, issue type, sub-issues, dependencies, and the
-            pull requests and branches that close them all sit in one panel.
-          </p>
-          <p class="text-muted">
-            Working privately? Keep <span class="text-ink">local to-dos</span>
-            that need no remote, then publish them to GitHub when the work goes
-            public.
-          </p>
-        </FeatureRow>
-
-        <FeatureRow
-          title="Discussions, where the thread lives."
-          image={appDiscussions}
-          alt="A GitHub Discussion in GitDesktop: a roadmap thread with a category, an upvote count, reactions, and a threaded reply"
-          side="left"
-        >
-          <p>
-            Read and join your repository's GitHub Discussions in the same
-            window: categories, upvotes, reactions, and threaded replies, with
-            the Write/Preview markdown you author everywhere else.
-          </p>
-          <p class="text-muted">
-            Announcements, Q&amp;A, and roadmap threads, no browser tab required.
-          </p>
-        </FeatureRow>
-
-        <FeatureRow
-          title="Watch CI without a browser tab."
-          image={appActions}
-          alt="The GitHub Actions view: a workflow run with its jobs and step-by-step status, plus a re-run control"
-          side="right"
-          surface={true}
-        >
-          <p>
-            GitHub&nbsp;Actions, in the app. See workflow runs for the current branch,
-            drill into jobs and individual steps, and watch status update live.
-          </p>
-          <p class="text-muted">
-            Re-run all jobs when something's flaky, or jump straight to the run on
-            GitHub when you need the full logs.
-          </p>
-        </FeatureRow>
-
-        <FeatureRow
-          title="Compare anything."
-          image={appCompare}
-          alt="Comparing a feature branch against main: ahead/behind counts, the changed files, and a diff"
-          side="left"
-        >
-          <p>
-            Compare any branch against another — ahead/behind counts, a three-dot
-            diff, the full list of changed files, and every commit that's not on the
-            base yet.
-          </p>
-          <p class="text-muted">
-            Like what you see? Open a GitHub PR or spin a local one straight from the
-            comparison.
-          </p>
-        </FeatureRow>
-
-        <FeatureRow
-          title="Read the whole story."
-          image={appHistory}
-          alt="Browsing commit history with a selected commit's changed files and a syntax-highlighted diff"
-          side="right"
-        >
-          <p>
-            Browse history, search every commit, and blame any line back to the
-            change that introduced it.
-          </p>
-          <p class="text-muted">
-            Then cherry-pick, squash, reorder, or stash — with a command palette and
-            full keyboard control, and discards you can always undo.
-          </p>
-        </FeatureRow>
-
-        <FeatureRow
-          title="Cut a release without the dashboard."
-          image={appTags}
-          alt="The Tags panel beside a release in GitDesktop: version tags marked release or Latest, the release's changelog notes, and its attached macOS, Linux, and Windows binaries with sizes"
-          side="left"
-          surface={true}
-        >
-          <p>
-            Every tag and release in one panel. Cut a new one without the
-            browser: write the notes, mark it <span class="text-ink">latest</span>,
-            pre-release, or draft, and attach the cross-platform binaries.
-          </p>
-          <p class="text-muted">
-            Lightweight tags for a quick checkpoint; full GitHub releases when
-            you ship — push, edit, delete, or download any asset, in the app.
-          </p>
-        </FeatureRow>
-
-        <!-- Capability index (Git only) -->
-        <section class="border-b border-line bg-surface/30">
-          <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
-            <h2 data-reveal class="text-sm text-faint">
-              <span class="text-add">//</span> everything else you'd reach for
-            </h2>
-            <ul
-              data-reveal
-              class="mt-7 grid grid-cols-1 gap-x-10 gap-y-3.5 text-[15px] sm:grid-cols-2 lg:grid-cols-3"
-            >
-              {
-                gitCapabilities.map((c) => (
-                  <li class="flex items-start gap-2.5">
-                    <span class="mt-px select-none text-add" aria-hidden="true">+</span>
-                    <span class="text-body">{c.label}</span>
-                  </li>
-                ))
-              }
-            </ul>
-          </div>
-        </section>
-      </div>
-
-      <!-- Download CTA (shared) -->
-      <section class="relative overflow-hidden">
-        <div class="grid-bg pointer-events-none absolute inset-0 opacity-60"></div>
-        <div class="relative mx-auto max-w-6xl px-5 py-24 text-center md:py-32">
-          <h2 data-reveal class="text-balance text-4xl tracking-tight sm:text-5xl">
-            Keep it open all day.
-          </h2>
-          <p data-reveal style="transition-delay:80ms" class="mx-auto mt-6 max-w-[48ch] leading-relaxed text-body">
-            Free, open source, and native. Fast enough to live in, careful enough to
-            trust with your work — discards are recoverable and pushes use
-            <code class="text-ink">--force-with-lease</code>.
-          </p>
-          <div
-            data-reveal
-            style="transition-delay:140ms"
-            class="mt-10 flex flex-wrap items-center justify-center gap-3"
-          >
-            <a
-              href={download}
-              data-dl
-              class="rounded-lg bg-mint px-6 py-3 font-medium text-mint-ink transition-opacity hover:opacity-90"
-              ><span data-dl-label>Download GitDesktop</span></a
-            >
-            <a
-              href={repo}
-              class="rounded-lg border border-line-2 px-6 py-3 font-medium text-ink transition-colors hover:bg-surface"
-              >Star on GitHub</a
-            >
-          </div>
-          <p data-reveal style="transition-delay:200ms" class="mt-6 text-sm text-muted">
-            <span data-dl-version></span>Windows, macOS &amp; Linux
-          </p>
-        </div>
-      </section>
-    </main>
-
-    <footer class="border-t border-line">
-      <div
-        class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-5 py-9 text-sm text-muted sm:flex-row"
-      >
-        <p class="flex items-center gap-2.5">
-          <img src={`${base}app-icon.svg`} alt="" width="18" height="18" />
-          © 2026 theBGuy · Apache-2.0
+        <p data-reveal style="transition-delay:240ms" class="mt-6 text-sm text-muted">
+          <span data-dl-version></span>Windows, macOS &amp; Linux · Apache-2.0 ·
+          <button type="button" data-mode-btn="git" class="text-mint underline-offset-4 hover:underline">
+            not into AI? hide it →
+          </button>
         </p>
-        <div class="flex items-center gap-6">
-          <a href={repo} class="transition-colors hover:text-ink">GitHub</a>
-          <a href={`${repo}/releases`} class="transition-colors hover:text-ink">Releases</a>
-          <a href={`${base}privacy`} class="transition-colors hover:text-ink">Privacy</a>
-          <a href={`${base}terms`} class="transition-colors hover:text-ink">Terms</a>
+      </div>
+
+      <div data-reveal style="transition-delay:220ms" class="mint-glow relative min-w-0">
+        <figure class="window">
+          <Image
+            src={appDiff}
+            alt="GitDesktop staging a TypeScript diff line by line, with an AI-generated commit message in the composer"
+            widths={[600, 900, 1296]}
+            sizes="(min-width: 1024px) 620px, 92vw"
+            format="webp"
+            quality={82}
+            loading="eager"
+            fetchpriority="high"
+          />
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- Hero (Just Git) -->
+  <section data-view="git" class="relative overflow-hidden border-b border-line">
+    <div class="grid-bg pointer-events-none absolute inset-0"></div>
+    <div
+      class="relative mx-auto grid max-w-6xl items-center gap-x-12 gap-y-14 px-5 py-20 md:py-28 lg:grid-cols-[1fr_1.12fr]"
+    >
+      <div class="min-w-0">
+        <p data-reveal class="mb-6 text-sm text-faint" style="transition-delay:0ms">
+          <span class="text-add">//</span> a calm, native Git client for GitHub, GitLab &amp; Bitbucket
+        </p>
+        <h1
+          data-reveal
+          style="transition-delay:60ms"
+          class="text-[clamp(2.25rem,5vw,3.5rem)] font-semibold tracking-tight"
+        >
+          The whole loop,<br class="hidden sm:block" /> one window.
+        </h1>
+        <p
+          data-reveal
+          style="transition-delay:120ms"
+          class="mt-7 max-w-[58ch] text-base leading-relaxed text-body sm:text-lg"
+        >
+          Everything you expect from GitHub&nbsp;Desktop — staging, branches, diffs,
+          history, sync — now across <span class="text-ink">GitHub, GitLab &amp;
+          Bitbucket</span>, with the full pull-request loop, CI, issues, and branch
+          protection in one fast native window. Built to be trusted with uncommitted
+          work. No AI in sight.
+        </p>
+        <div
+          data-reveal
+          style="transition-delay:180ms"
+          class="mt-9 flex flex-wrap items-center gap-3"
+        >
+          <a
+            href={download}
+            data-dl
+            class="rounded-lg bg-mint px-5 py-2.5 font-medium text-mint-ink transition-opacity hover:opacity-90"
+            ><span data-dl-label>Download for free</span></a
+          >
+          <a
+            href={repo}
+            class="rounded-lg border border-line-2 px-5 py-2.5 font-medium text-ink transition-colors hover:bg-surface"
+            >View on GitHub</a
+          >
+        </div>
+        <p data-reveal style="transition-delay:240ms" class="mt-6 text-sm text-muted">
+          <span data-dl-version></span>Windows, macOS &amp; Linux · Apache-2.0 ·
+          <button type="button" data-mode-btn="ai" class="text-mint underline-offset-4 hover:underline">
+            curious about the AI? →
+          </button>
+        </p>
+      </div>
+
+      <div data-reveal style="transition-delay:220ms" class="mint-glow relative min-w-0">
+        <figure class="window">
+          <Image
+            src={appStagingNoai}
+            alt="GitDesktop showing a split diff with per-hunk stage controls — staging changes line by line"
+            widths={[600, 900, 1296]}
+            sizes="(min-width: 1024px) 620px, 92vw"
+            format="webp"
+            quality={82}
+            loading="eager"
+          />
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- AI: generate -->
+  <section data-view="ai" class="border-b border-line">
+    <div
+      class="mx-auto grid max-w-6xl items-center gap-x-14 gap-y-10 px-5 py-20 md:py-28 lg:grid-cols-[1.1fr_0.9fr]"
+    >
+      <div data-reveal class="order-2 min-w-0 lg:order-1">
+        <figure class="window mx-auto max-w-sm lg:mx-0">
+          <Image
+            src={appCommit}
+            alt="The commit composer with an AI-generated conventional-commit message describing the staged change"
+            widths={[340, 384]}
+            sizes="(min-width: 1024px) 360px, 80vw"
+            format="webp"
+            quality={84}
+          />
+        </figure>
+      </div>
+      <div data-reveal class="order-1 min-w-0 lg:order-2">
+        <h2 class="text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
+          It writes the commit.<br class="hidden sm:block" /> You keep the keys.
+        </h2>
+        <p class="mt-6 max-w-[60ch] leading-relaxed text-body">
+          One click reads your staged diff and drafts the commit message — and the PR
+          title and description — in your conventions. It streams into the same fields
+          you'd type in, so it's always editable and never blocks the manual path.
+        </p>
+        <p class="mt-4 max-w-[60ch] leading-relaxed text-muted">
+          Bring your own model: Anthropic, OpenAI, any OpenAI-compatible endpoint,
+          OpenRouter, Ollama (local, LAN, or cloud), or your
+          Claude&nbsp;/&nbsp;Codex&nbsp;/&nbsp;Copilot&nbsp;/&nbsp;opencode CLI. No keys
+          go to us — they're yours, in your OS keychain.
+        </p>
+        <p class="mt-6 text-sm">
+          <a href={`${base}ai`} class="text-mint underline-offset-4 hover:underline">The full AI story →</a>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- AI: agents (NEW — the "watch it work" session motif) -->
+  <section data-view="ai" class="border-b border-line bg-surface/30">
+    <div
+      class="mx-auto grid max-w-6xl items-center gap-x-14 gap-y-12 px-5 py-20 md:py-28 lg:grid-cols-2"
+    >
+      <div data-reveal class="min-w-0">
+        <div class="rule-mint mb-6 w-16"></div>
+        <h2 class="text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
+          Hand off a task. Watch every step.
+        </h2>
+        <p class="mt-6 max-w-[56ch] leading-relaxed text-body">
+          Delegate a coding task to a <span class="text-ink">Claude, Codex, Copilot,
+          or opencode</span> agent — it works in an isolated worktree, so your own
+          checkout is never touched. Follow every file it reads and edits, expand any
+          edit to its diff inline, then keep it as a branch, open a local PR from it,
+          or discard it.
+        </p>
+        <p class="mt-4 max-w-[56ch] leading-relaxed text-muted">
+          Run several at once, or fan one task across models with
+          <span class="text-ink">best-of-N</span> and keep the winner. Each session has
+          an integrated terminal, and can be sandboxed in a Docker or Podman container.
+        </p>
+        <p class="mt-6 text-sm">
+          <a href={`${base}ai`} class="text-mint underline-offset-4 hover:underline">See agents, review &amp; MCP →</a>
+        </p>
+      </div>
+
+      <figure data-reveal style="transition-delay:80ms" class="window session min-w-0">
+        <div class="session-head">
+          <span class="inline-block h-2 w-2 rounded-full bg-mint" aria-hidden="true"></span>
+          <span class="text-ink">claude</span>
+          <span class="step-kind">· agent session</span>
+          <span class="ml-auto text-faint">fix: redirect after login</span>
+        </div>
+        <div class="session-body">
+          <ol class="steps">
+            <li data-done>
+              Read <code class="text-ink">src/auth/session.ts</code>
+              <span class="step-kind"> · read</span>
+            </li>
+            <li data-done>
+              Searched <code class="text-ink">"redirectTo"</code> — 4 matches
+              <span class="step-kind"> · search</span>
+            </li>
+            <li data-active>
+              Edited <code class="text-ink">src/auth/callback.ts</code>
+              <span class="step-kind"> · edit</span>
+              <div class="diff-peek" aria-hidden="true">
+                <div class="del">- return redirect("/")</div>
+                <div class="add">+ return redirect(returnTo ?? "/")</div>
+              </div>
+            </li>
+            <li>
+              Run <code class="text-ink">pnpm test auth</code>
+              <span class="step-kind"> · terminal</span>
+            </li>
+          </ol>
+        </div>
+        <div class="session-foot">
+          <span class="text-mint">Keep as branch</span>
+          <span>Open local PR</span>
+          <span class="text-faint">Discard</span>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- AI: review -->
+  <section data-view="ai" class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-20 md:py-28">
+      <div data-reveal class="max-w-2xl">
+        <h2 class="text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
+          A reviewer that actually reads the code.
+        </h2>
+        <p class="mt-6 leading-relaxed text-body">
+          Run a general review or a security audit on any pull request — local or on
+          GitHub, GitLab, or Bitbucket. It reads the changed files, flags real issues
+          with a severity, and cites the exact lines. The result stays on your machine
+          unless you choose to post it — and it keeps running while you move between
+          PRs, or even after you close the window, then pings you when it's done.
+        </p>
+        <p class="mt-4 leading-relaxed text-muted">
+          Turn on <span class="text-ink">Agentic review</span> and the reviewer pulls
+          the full diff past the prompt budget, reads any file at any ref, searches the
+          repo, and runs history — read-only end to end, so it explores but never
+          modifies. Re-runs remember the last round and fold in Copilot's and
+          CodeRabbit's findings instead of repeating them.
+        </p>
+      </div>
+      <figure data-reveal style="transition-delay:120ms" class="window mt-10">
+        <Image
+          src={appReview}
+          alt="An AI code review on a local pull request: should-fix and nit findings with code references and an inline severity"
+          widths={[760, 1040, 1296]}
+          sizes="(min-width: 1100px) 1000px, 94vw"
+          format="webp"
+          quality={82}
+        />
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================= SHARED (both views) ================= -->
+  <!-- Multi-forge (NEW — three forges as equals) -->
+  <section class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-20 md:py-28">
+      <div data-reveal class="max-w-2xl">
+        <h2 class="text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
+          Your forge. Not just GitHub.
+        </h2>
+        <p class="mt-6 leading-relaxed text-body">
+          One calm client for all three. GitDesktop routes every pull-request and CI
+          action through a forge abstraction, so the same panels work whether your
+          remote points at GitHub, GitLab, or Bitbucket — each on its own authenticated
+          identity, none borrowing another's.
+        </p>
+      </div>
+      <ul
+        data-reveal
+        style="transition-delay:80ms"
+        class="mt-12 grid divide-y divide-line border-y border-line sm:grid-cols-3 sm:divide-x sm:divide-y-0"
+      >
+        {
+          forges.map((f) => (
+            <li class="py-6 sm:px-7 sm:first:pl-0 sm:last:pr-0">
+              <div class="flex items-center gap-3">
+                <ForgeMark forge={f.forge} class="h-7 w-7 text-ink" />
+                <span class="text-lg text-ink">{f.name}</span>
+              </div>
+              <p class="mt-3 text-sm leading-relaxed text-muted">{f.detail}</p>
+            </li>
+          ))
+        }
+      </ul>
+      <p data-reveal class="mt-8 max-w-[62ch] text-sm leading-relaxed text-muted">
+        GitHub &amp; GitLab go through their CLIs (<code class="text-ink">gh</code>,
+        <code class="text-ink">glab</code>) — including GitHub Enterprise and
+        self-managed GitLab; Bitbucket Cloud uses an Atlassian API token. A few things
+        differ by platform, and we say so where they do.
+      </p>
+      <p data-reveal class="mt-6 text-sm">
+        <a href={`${base}integrations`} class="text-mint underline-offset-4 hover:underline">Explore integrations →</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- Jira (NEW — the tracker layer; key-chip motif) -->
+  <section class="border-b border-line bg-surface/30">
+    <div
+      class="mx-auto grid max-w-6xl items-center gap-x-14 gap-y-10 px-5 py-20 md:py-28 lg:grid-cols-2"
+    >
+      <div data-reveal class="min-w-0">
+        <h2 class="text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
+          Your tracker, linked in.
+        </h2>
+        <p class="mt-6 max-w-[56ch] leading-relaxed text-body">
+          Link a <span class="text-ink">Jira Cloud</span> project to any repository and
+          the Issues tab gains a Jira section: browse and filter your issues, read
+          status, type, priority, assignee, description and comments — plus agile
+          fields like story points, sprint, and a clickable epic when the project uses
+          them. Create, comment, assign, set a due date, change priority, edit
+          labels, and close or reopen along the project's own workflow — every action
+          gated on your Jira permissions.
+        </p>
+        <p class="mt-4 max-w-[56ch] leading-relaxed text-muted">
+          Especially handy for Bitbucket, whose native tracker Atlassian retires in
+          August 2026.
+        </p>
+        <p class="mt-6 text-sm">
+          <a href={`${base}integrations`} class="text-mint underline-offset-4 hover:underline">More on Jira &amp; forges →</a>
+        </p>
+      </div>
+
+      <div data-reveal style="transition-delay:80ms" class="window min-w-0 p-6">
+        <p class="text-xs text-faint">referenced Jira issues</p>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <span class="key-chip"><span class="text-mint">◆</span> PROJ-142</span>
+          <span class="key-chip"><span class="text-mint">◆</span> PROJ-138</span>
+        </div>
+        <p class="mt-5 text-sm leading-relaxed text-muted">
+          Issue keys are spotted in your branch name, commit messages, and PR titles,
+          then linked straight back to the issue in the Issues tab.
+        </p>
+        <div class="mt-5 border-t border-line pt-5 text-sm">
+          <p class="text-ink">PROJ-142 · Redirect loops on SSO login</p>
+          <p class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+            <span>In Progress</span><span class="text-faint">·</span>
+            <span>Bug</span><span class="text-faint">·</span>
+            <span>5 points</span><span class="text-faint">·</span>
+            <span>Sprint 24</span>
+          </p>
         </div>
       </div>
-    </footer>
+    </div>
+  </section>
 
-    <script is:inline>
-      // View toggle: AI-native <-> Just Git. Persisted + reflected in ?ai=off.
-      (function () {
-        var root = document.documentElement;
-        var btns = Array.prototype.slice.call(document.querySelectorAll("[data-mode-btn]"));
-        function sync(git) {
-          btns.forEach(function (b) {
-            if (b.hasAttribute("aria-pressed")) {
-              b.setAttribute("aria-pressed", String((b.getAttribute("data-mode-btn") === "git") === git));
-            }
-          });
+  <!-- Local PRs (shared) -->
+  <FeatureRow
+    title="Pull requests. Without the browser — or the cloud."
+    image={appPrDialog}
+    alt="The New local pull request dialog: merge one branch into another and review it locally"
+    side="right"
+    widths={[540, 677]}
+    sizes="(min-width: 1024px) 520px, 90vw"
+  >
+    <p>
+      Open pull requests on GitHub, GitLab, and Bitbucket, or private
+      <span class="text-ink">local PRs</span> that never leave your machine: propose a
+      merge, review the diff, and merge with a <code class="text-ink">--no-ff</code>
+      commit — on a repo that isn't on any forge at all.
+    </p>
+    <p class="text-muted">
+      A local-PR merge pre-shows whether it will conflict, and if it does you resolve
+      it in an isolated worktree that never touches your branch — then Finish or Abort.
+      Promote a local PR to a real GitHub PR, comments and all, in one click.
+    </p>
+  </FeatureRow>
+
+  <!-- CI / Actions (shared) -->
+  <FeatureRow
+    title="Watch CI without a browser tab."
+    image={appActions}
+    alt="The GitHub Actions view: a workflow run with its jobs and step-by-step status, plus a re-run control"
+    side="left"
+    surface={true}
+  >
+    <p>
+      GitHub&nbsp;Actions, in the app — browse runs for the current branch, drill into
+      jobs and steps, dispatch a workflow, and re-run or cancel. A PR's checks collapse
+      into a pass/fail/pending rollup that peeks a failing job's log inline.
+    </p>
+    <p class="text-muted">
+      GitLab pipelines get the same inline-log treatment; Bitbucket build statuses link
+      out. Insights charts CI durations alongside your local-git analytics.
+    </p>
+  </FeatureRow>
+
+  <!-- Issues (shared) -->
+  <FeatureRow
+    title="Issues and to-dos, triaged in place."
+    image={appIssues}
+    alt="An issue in GitDesktop: a bug report with labels, an assignee, a linked pull request, and a comment thread"
+    side="right"
+  >
+    <p>
+      Browse, open, and edit GitHub issues without the tab-switch. Labels, assignees,
+      milestones, issue type, sub-issues, dependencies, and the pull requests and
+      branches that close them all sit in one panel.
+    </p>
+    <p class="text-muted">
+      Working privately? Keep <span class="text-ink">local to-dos</span> that need no
+      remote, then publish them to GitHub — or promote them to Jira — when the work
+      goes public.
+    </p>
+  </FeatureRow>
+
+  <!-- Discussions (shared) -->
+  <FeatureRow
+    title="Discussions, where the thread lives."
+    image={appDiscussions}
+    alt="A GitHub Discussion in GitDesktop: a roadmap thread with a category, an upvote count, reactions, and a threaded reply"
+    side="left"
+    surface={true}
+  >
+    <p>
+      Read and join your repository's GitHub Discussions in the same window: categories,
+      upvotes, reactions, and threaded replies, with the Write/Preview markdown you
+      author everywhere else.
+    </p>
+    <p class="text-muted">
+      Announcements, Q&amp;A, and roadmap threads, no browser tab required.
+    </p>
+  </FeatureRow>
+
+  <!-- Daily loop: stage + history (shared) -->
+  <section class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-20 md:py-28">
+      <h2 data-reveal class="max-w-2xl text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
+        And the rest of the daily loop.
+      </h2>
+      <div class="mt-14 grid items-center gap-x-14 gap-y-8 lg:grid-cols-2">
+        <div data-reveal class="min-w-0">
+          <h3 class="text-xl text-ink">Stage exactly what you mean.</h3>
+          <p class="mt-4 max-w-[52ch] leading-relaxed text-body">
+            Stage — or discard — by file, by hunk, or by dragging across individual
+            lines, even within a brand-new file, to split a messy working tree into
+            clean, reviewable commits, with partial patches applied via git's own
+            <code class="text-ink">--cached</code>.
+          </p>
+        </div>
+        <figure data-reveal style="transition-delay:80ms" class="window min-w-0">
+          <Image
+            src={appStaging}
+            alt="A split diff with per-hunk stage controls and a hint to drag across lines to stage just those lines"
+            widths={[560, 860, 1296]}
+            sizes="(min-width: 1024px) 540px, 94vw"
+            format="webp"
+            quality={82}
+          />
+        </figure>
+      </div>
+      <div class="mt-16 grid items-center gap-x-14 gap-y-8 lg:grid-cols-2">
+        <figure data-reveal class="window order-2 min-w-0 lg:order-1">
+          <Image
+            src={appHistory}
+            alt="Browsing commit history with a selected commit's changed files and a syntax-highlighted diff"
+            widths={[560, 860, 1296]}
+            sizes="(min-width: 1024px) 540px, 94vw"
+            format="webp"
+            quality={82}
+          />
+        </figure>
+        <div data-reveal style="transition-delay:80ms" class="order-1 min-w-0 lg:order-2">
+          <h3 class="text-xl text-ink">Read the whole story.</h3>
+          <p class="mt-4 max-w-[52ch] leading-relaxed text-body">
+            Browse history, search every commit, and blame any line back to the change
+            that introduced it — then cherry-pick, squash, reorder, or stash, without
+            leaving the keyboard.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Compare (shared) -->
+  <FeatureRow
+    title="Compare anything."
+    image={appCompare}
+    alt="Comparing a feature branch against main: ahead/behind counts, the changed files, and a diff"
+    side="right"
+    surface={true}
+  >
+    <p>
+      Compare any branch against another — ahead/behind counts, a three-dot diff, the
+      full list of changed files, and every commit that isn't on the base yet.
+    </p>
+    <p class="text-muted">
+      Merging shows an advanced tooling panel that predicts the result in memory —
+      fast-forward, clean, or which files will conflict — before you commit to it.
+    </p>
+  </FeatureRow>
+
+  <!-- Built to be trusted (NEW — shared) -->
+  <section class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-20 md:py-28">
+      <div data-reveal class="max-w-2xl">
+        <h2 class="text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
+          Built to be trusted with uncommitted work.
+        </h2>
+        <p class="mt-6 leading-relaxed text-body">
+          The whole point of a client you keep open all day is that it never surprises
+          you on a destructive path. GitDesktop keeps a way back from every risky move.
+        </p>
+      </div>
+      <div data-reveal style="transition-delay:80ms" class="mt-12 grid gap-x-12 gap-y-8 sm:grid-cols-2">
+        <div class="min-w-0">
+          <h3 class="text-ink">Discards you can undo.</h3>
+          <p class="mt-2 max-w-[48ch] text-sm leading-relaxed text-muted">
+            Discarded changes and deleted untracked files go to the recycle bin, not the
+            void.
+          </p>
+        </div>
+        <div class="min-w-0">
+          <h3 class="text-ink"><code class="text-ink">--force-with-lease</code> by default.</h3>
+          <p class="mt-2 max-w-[48ch] text-sm leading-relaxed text-muted">
+            Divergence routes to a guarded force push that can't clobber a teammate's
+            work; pull is <code class="text-ink">--ff-only</code>.
+          </p>
+        </div>
+        <div class="min-w-0">
+          <h3 class="text-ink">An operation journal.</h3>
+          <p class="mt-2 max-w-[48ch] text-sm leading-relaxed text-muted">
+            Risky compound ops — merges, cherry-picks, rebases, history edits — are
+            recorded, so an interrupted one surfaces a calm recovery notice with the
+            exact state it started from.
+          </p>
+        </div>
+        <div class="min-w-0">
+          <h3 class="text-ink">Recover lost work.</h3>
+          <p class="mt-2 max-w-[48ch] text-sm leading-relaxed text-muted">
+            A <code class="text-ink">git fsck</code> scan finds orphaned stashes that
+            fell off the list and restores them non-destructively.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MCP (NEW — AI-only; terminal + ladder motif) -->
+  <section data-view="ai" class="border-b border-line bg-surface/30">
+    <div
+      class="mx-auto grid max-w-6xl items-start gap-x-14 gap-y-12 px-5 py-20 md:py-28 lg:grid-cols-2"
+    >
+      <div data-reveal class="min-w-0">
+        <div class="rule-mint mb-6 w-16"></div>
+        <h2 class="text-balance text-3xl tracking-[-0.02em] sm:text-4xl">
+          Or point an agent at GitDesktop.
+        </h2>
+        <p class="mt-6 max-w-[56ch] leading-relaxed text-body">
+          The reverse direction: run GitDesktop <span class="text-ink">as an MCP
+          server</span> and any external client — Claude Desktop, Cursor, Claude Code —
+          can understand a repo through read-only git, PR &amp; CI tools, across GitHub,
+          GitLab, and Bitbucket. Settings writes the config into your repo's
+          <code class="text-ink">.mcp.json</code> or installs it globally.
+        </p>
+        <p class="mt-4 max-w-[56ch] leading-relaxed text-muted">
+          Writes are an escalating opt-in ladder — each tier a separate flag, off by
+          default, so read-only stays the default.
+        </p>
+        <p class="mt-6 text-sm">
+          <a href={`${base}ai`} class="text-mint underline-offset-4 hover:underline">How the MCP server works →</a>
+        </p>
+      </div>
+
+      <div data-reveal style="transition-delay:80ms" class="min-w-0">
+        <figure class="window">
+          <McpConfig />
+        </figure>
+        <ul class="ladder mt-4">
+          <li data-default>
+            <span class="tier">default</span>
+            <span>Read-only — status, log, diff, blame, PRs, issues, CI</span>
+          </li>
+          <li>
+            <span class="tier">--allow-write</span>
+            <span>Local PRs &amp; issues (GitDesktop's own review artifacts)</span>
+          </li>
+          <li>
+            <span class="tier">--allow-remote-write</span>
+            <span>Real forge writes under your authenticated identity</span>
+          </li>
+          <li>
+            <span class="tier">--allow-git-write</span>
+            <span>Recoverable git ops — stage, commit, branch, push</span>
+          </li>
+          <li>
+            <span class="tier">--allow-destructive</span>
+            <span>The irreversible ones — discard, reset, force-push</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tags & releases (shared) -->
+  <FeatureRow
+    title="Cut a release without the dashboard."
+    image={appTags}
+    alt="The Tags panel beside a release in GitDesktop: version tags, the release's changelog notes, and its attached macOS, Linux, and Windows binaries with sizes"
+    side="left"
+  >
+    <p>
+      Every tag and release in one panel. Cut a new one without the browser: write the
+      notes, mark it <span class="text-ink">latest</span>, pre-release, or draft, and
+      attach the cross-platform binaries.
+    </p>
+    <p class="text-muted">
+      Lightweight tags for a quick checkpoint; full releases when you ship — push, edit,
+      delete, or download any asset, in the app.
+    </p>
+  </FeatureRow>
+
+  <!-- Capability highlights → /features (shared) -->
+  <section class="border-b border-line bg-surface/30">
+    <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
+      <div data-reveal class="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+        <h2 class="text-sm text-faint">
+          <span class="text-add">//</span> everything else you'd reach for
+        </h2>
+        <a href={`${base}features`} class="text-sm text-mint underline-offset-4 hover:underline">
+          See all features →
+        </a>
+      </div>
+      <ul
+        data-reveal
+        class="mt-7 grid grid-cols-1 gap-x-10 gap-y-3.5 text-[15px] sm:grid-cols-2 lg:grid-cols-3"
+      >
+        {
+          gitHighlights.map((c) => (
+            <li class="flex items-start gap-2.5">
+              <span class="mt-px select-none text-add" aria-hidden="true">+</span>
+              <span class="text-body">{c.label}</span>
+            </li>
+          ))
         }
-        sync(root.classList.contains("mode-git"));
-        btns.forEach(function (b) {
-          b.addEventListener("click", function () {
-            var git = b.getAttribute("data-mode-btn") === "git";
-            root.classList.toggle("mode-git", git);
-            sync(git);
-            try { localStorage.setItem("gd-view", git ? "git" : "ai"); } catch (e) {}
-            var url = new URL(location.href);
-            if (git) url.searchParams.set("ai", "off");
-            else url.searchParams.delete("ai");
-            history.replaceState(null, "", url);
-            window.scrollTo({ top: 0 });
-          });
-        });
-      })();
-    </script>
+        {
+          aiHighlights.map((c) => (
+            <li data-view="ai" class="flex items-start gap-2.5">
+              <span class="mt-px select-none text-mint" aria-hidden="true">✦</span>
+              <span class="text-body">{c.label}</span>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
 
+  <!-- Download CTA (shared) -->
+  <section class="relative overflow-hidden">
+    <div class="grid-bg pointer-events-none absolute inset-0 opacity-60"></div>
+    <div class="relative mx-auto max-w-6xl px-5 py-24 text-center md:py-32">
+      <h2 data-reveal class="text-balance text-4xl tracking-tight sm:text-5xl">
+        Keep it open all day.
+      </h2>
+      <p data-reveal style="transition-delay:80ms" class="mx-auto mt-6 max-w-[48ch] leading-relaxed text-body">
+        Free, open source, and native. Fast enough to live in, careful enough to trust
+        with your work — discards are recoverable and pushes use
+        <code class="text-ink">--force-with-lease</code>.
+      </p>
+      <div
+        data-reveal
+        style="transition-delay:140ms"
+        class="mt-10 flex flex-wrap items-center justify-center gap-3"
+      >
+        <a
+          href={download}
+          data-dl
+          class="rounded-lg bg-mint px-6 py-3 font-medium text-mint-ink transition-opacity hover:opacity-90"
+          ><span data-dl-label>Download GitDesktop</span></a
+        >
+        <a
+          href={repo}
+          class="rounded-lg border border-line-2 px-6 py-3 font-medium text-ink transition-colors hover:bg-surface"
+          >Star on GitHub</a
+        >
+      </div>
+      <p data-reveal style="transition-delay:200ms" class="mt-6 text-sm text-muted">
+        <span data-dl-version></span>Windows, macOS &amp; Linux
+      </p>
+    </div>
+  </section>
+
+  <Fragment slot="scripts">
     <script is:inline>
-      // OS-aware download CTAs + current-version badge. Labels the primary
-      // buttons for the visitor's OS (Windows/Linux — the platforms we ship)
-      // and fills the version + direct asset links from the latest GitHub
-      // release. Degrades to the /download hub with no JS or no release.
+      // OS-aware download CTAs + current-version badge. Labels the primary buttons
+      // for the visitor's OS and fills the version from the latest GitHub release.
+      // Degrades to the /download hub with no JS or no release.
       (function () {
         var OWNER = "theBGuy";
         var REPO = "GitDesktop";
@@ -994,5 +826,5 @@ const gitCapabilities = capabilities.filter((c) => !c.ai);
           .catch(function () {});
       })();
     </script>
-  </body>
-</html>
+  </Fragment>
+</SiteLayout>

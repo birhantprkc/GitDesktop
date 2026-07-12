@@ -1,0 +1,283 @@
+---
+import McpConfig from "../components/McpConfig.astro";
+import SiteLayout from "../layouts/SiteLayout.astro";
+
+const base = import.meta.env.BASE_URL;
+const download = `${base}download`;
+
+const providers = [
+  { name: "Anthropic", note: "Claude, direct API" },
+  { name: "OpenAI", note: "GPT, direct API" },
+  { name: "OpenAI-compatible", note: "custom base URL — presets for Vercel AI Gateway, Gemini, DeepSeek, Mistral, Z.ai" },
+  { name: "OpenRouter", note: "one key, many models" },
+  { name: "Ollama", note: "local, LAN, or Ollama Cloud" },
+  { name: "Claude Code / Codex", note: "keyless, via your subscription" },
+  { name: "GitHub Copilot / opencode", note: "keyless — opencode's hosted models need no key" },
+];
+
+const agentAbilities = [
+  "Delegate a task to a Claude, Codex, Copilot, or opencode agent — in an isolated worktree, so your checkout is never touched",
+  "Follow every file it reads and edits; expand any edit to its diff inline",
+  "Keep the result as a branch, open a local PR from it, or discard it",
+  "Best-of-N — fan one task across 2–5 arms, each with its own agent, model & effort, and keep the winner (with an upfront cost estimate)",
+  "Sandbox writes in a Docker/Podman container, and add per-repo tools (e.g. Playwright) via a committed agent Dockerfile",
+  "An integrated terminal in every session — a real shell in the worktree or inside the container",
+  "Research (Brainstorm & Deep research, web-enabled, cited) upstream of Plan; Plan drafts an agent-ready issue; Implement hands it to a write-capable session",
+  "Sessions organized into Active & Kept tabs, searchable, with a completion alert — drive each turn with slash commands, skills, and @file mentions",
+];
+---
+
+<SiteLayout
+  active="ai"
+  title="AI you control — commits, review, agents & MCP | GitDesktop"
+  description="GitDesktop's AI: generated commits and PR descriptions, code & security review, delegated agents with best-of-N, and running GitDesktop as an MCP server. Bring your own model — keys stay in your OS keychain, and every AI surface is hideable."
+  ogTitle="GitDesktop AI — you bring the model, you keep the keys"
+  ogDescription="Generated commits and reviews, delegated agents, and an MCP server — on your own models (Anthropic, OpenAI, OpenRouter, Ollama, or a keyless CLI). Fully hideable."
+>
+  <!-- Hero -->
+  <section class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-16 md:py-24">
+      <p data-reveal class="text-sm text-faint"><span class="text-mint">✦</span> ai</p>
+      <h1 data-reveal style="transition-delay:60ms" class="mt-5 text-[clamp(2rem,5vw,3.25rem)] font-semibold tracking-tight">
+        AI you actually control.
+      </h1>
+      <p data-reveal style="transition-delay:120ms" class="mt-6 max-w-[62ch] text-base leading-relaxed text-body sm:text-lg">
+        Every AI surface is optional, editable, and attributable — and it runs on
+        <span class="text-ink">your own model</span>: a cloud API, a local Ollama, or a
+        keyless CLI you already pay for. Keys live in your OS keychain, never in app
+        files, and a single switch hides all of it. It assists the workflow; it never
+        blocks the manual path.
+      </p>
+    </div>
+  </section>
+
+  <!-- Generate -->
+  <section class="border-b border-line">
+    <div class="mx-auto grid max-w-6xl gap-x-14 gap-y-8 px-5 py-16 md:py-20 lg:grid-cols-[0.85fr_1.15fr]">
+      <div data-reveal class="min-w-0">
+        <h2 class="text-2xl tracking-[-0.02em] sm:text-3xl">It writes; you edit.</h2>
+        <p class="mt-6 max-w-[46ch] leading-relaxed text-body">
+          One click reads your staged diff and drafts the message — streaming into the
+          same field you'd type in, always editable.
+        </p>
+      </div>
+      <div data-reveal style="transition-delay:80ms" class="min-w-0">
+        <ul class="space-y-3">
+          {
+            [
+              "Commit messages, in your conventions",
+              "PR & issue titles and descriptions — with suggested labels from your repo's existing set",
+              "Branch names from a task",
+              "Repository descriptions & topics",
+              "Issue drafts from your repo's templates",
+              "Resolve merge conflicts — review the proposal as a diff, then accept",
+            ].map((x) => (
+              <li class="flex items-start gap-2.5 leading-relaxed text-body">
+                <span class="mt-px select-none text-mint" aria-hidden="true">✦</span>
+                <span>{x}</span>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Review -->
+  <section class="border-b border-line bg-surface/30">
+    <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
+      <div data-reveal class="max-w-2xl">
+        <div class="rule-mint mb-6 w-16"></div>
+        <h2 class="text-2xl tracking-[-0.02em] sm:text-3xl">A reviewer that reads the code.</h2>
+        <p class="mt-6 leading-relaxed text-body">
+          Run a general review or a security audit on any pull request — local or on
+          GitHub, GitLab, or Bitbucket. It reads the changed files, flags real issues
+          with a severity, and cites the exact lines. The result stays on your machine
+          unless you post it.
+        </p>
+      </div>
+      <div data-reveal style="transition-delay:80ms" class="mt-10 grid gap-x-12 gap-y-8 sm:grid-cols-2">
+        <div class="min-w-0">
+          <h3 class="text-ink">Agentic, and read-only.</h3>
+          <p class="mt-2 max-w-[48ch] text-sm leading-relaxed text-muted">
+            Pull the full diff past the prompt budget, read any file at any ref, search
+            the repo, and run history — end to end read-only. Works with CLI agent
+            models (over a read-only MCP server) and with API models through a native
+            tool loop that needs no workspace, so it starts instantly.
+          </p>
+        </div>
+        <div class="min-w-0">
+          <h3 class="text-ink">It doesn't quit or repeat itself.</h3>
+          <p class="mt-2 max-w-[48ch] text-sm leading-relaxed text-muted">
+            Reviews keep running while you move between PRs, and finish in the tray after
+            you close the window. Re-runs remember the last round and fold in Copilot's
+            and CodeRabbit's findings, so a settled issue isn't re-raised.
+          </p>
+        </div>
+        <div class="min-w-0">
+          <h3 class="text-ink">Clearly machine-authored.</h3>
+          <p class="mt-2 max-w-[48ch] text-sm leading-relaxed text-muted">
+            A branded header/footer and a robot avatar — and with a GitLab access token,
+            posted as the real project bot rather than your own account.
+          </p>
+        </div>
+        <div class="min-w-0">
+          <h3 class="text-ink">On a schedule, if you want.</h3>
+          <p class="mt-2 max-w-[48ch] text-sm leading-relaxed text-muted">
+            Automations run a review or security audit on commit, on PR open, or on new
+            commits to a reviewed PR — scoped by branch. And Debug-with-AI turns a failed
+            CI job's logs into a root cause and fix.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Agents -->
+  <section class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
+      <div data-reveal class="max-w-2xl">
+        <h2 class="text-2xl tracking-[-0.02em] sm:text-3xl">Hand off whole tasks.</h2>
+        <p class="mt-6 leading-relaxed text-body">
+          Beyond generation, GitDesktop drives full coding agents — the CLI you already
+          have, no extra subscription — and keeps every run inspectable and reversible.
+        </p>
+      </div>
+      <ul data-reveal style="transition-delay:80ms" class="mt-10 grid gap-x-12 gap-y-3.5 md:grid-cols-2">
+        {
+          agentAbilities.map((x) => (
+            <li class="flex items-start gap-2.5 leading-relaxed text-body">
+              <span class="mt-px select-none text-mint" aria-hidden="true">✦</span>
+              <span>{x}</span>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <!-- MCP -->
+  <section class="border-b border-line bg-surface/30">
+    <div class="mx-auto grid max-w-6xl items-start gap-x-14 gap-y-12 px-5 py-16 md:py-20 lg:grid-cols-2">
+      <div data-reveal class="min-w-0">
+        <div class="rule-mint mb-6 w-16"></div>
+        <h2 class="text-2xl tracking-[-0.02em] sm:text-3xl">GitDesktop as an MCP server.</h2>
+        <p class="mt-6 max-w-[52ch] leading-relaxed text-body">
+          The reverse direction: expose this repo's read-only git &amp; forge tools to any
+          external MCP client — Claude Desktop, Cursor, Claude Code. Settings shows a
+          ready-to-paste snippet, writes it into the repo's
+          <code class="text-ink">.mcp.json</code>, or installs it globally, with an
+          Add-to-PATH launcher so the bare <code class="text-ink">gitdesktop-mcp</code>
+          command resolves anywhere.
+        </p>
+        <p class="mt-4 max-w-[52ch] leading-relaxed text-muted">
+          It also hands a connected agent GitDesktop's own generation recipes — the fully
+          assembled commit-message, PR-description, and branch-name prompts — as tools and
+          as MCP prompts. And you can bring your own MCP servers into a session, or browse
+          the official registry to add new ones.
+        </p>
+      </div>
+
+      <div data-reveal style="transition-delay:80ms" class="min-w-0">
+        <figure class="window">
+          <McpConfig />
+        </figure>
+        <p class="mt-4 text-sm text-muted">
+          Writes are an escalating opt-in ladder — each tier a separate flag, off by
+          default:
+        </p>
+        <ul class="ladder mt-3">
+          <li data-default>
+            <span class="tier">default</span>
+            <span>Read-only — status, log, diff, blame, PRs, issues, CI</span>
+          </li>
+          <li>
+            <span class="tier">--allow-write</span>
+            <span>Local PRs &amp; issues (GitDesktop's own review artifacts)</span>
+          </li>
+          <li>
+            <span class="tier">--allow-remote-write</span>
+            <span>Real forge writes under your authenticated identity</span>
+          </li>
+          <li>
+            <span class="tier">--allow-git-write</span>
+            <span>Recoverable git ops — stage, commit, branch, push</span>
+          </li>
+          <li>
+            <span class="tier">--allow-destructive</span>
+            <span>The irreversible ones — discard, reset, force-push</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Providers -->
+  <section class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
+      <div data-reveal class="max-w-2xl">
+        <h2 class="text-2xl tracking-[-0.02em] sm:text-3xl">Bring your own model.</h2>
+        <p class="mt-6 leading-relaxed text-body">
+          Separate models for generation and review, in a searchable live picker. Point
+          Ollama or an OpenAI-compatible endpoint at a box on your LAN, not just
+          localhost — non-built-in hosts are enforced against an allow-list before every
+          request.
+        </p>
+      </div>
+      <dl data-reveal style="transition-delay:80ms" class="mt-10 border-t border-line">
+        {
+          providers.map((p) => (
+            <div class="grid gap-x-8 gap-y-1 border-b border-line py-4 sm:grid-cols-[1fr_1.7fr]">
+              <dt class="text-ink">{p.name}</dt>
+              <dd class="text-sm leading-relaxed text-muted">{p.note}</dd>
+            </div>
+          ))
+        }
+      </dl>
+      <div data-reveal class="mt-10 grid gap-x-12 gap-y-6 border-t border-line pt-8 sm:grid-cols-3">
+        <div class="min-w-0">
+          <h3 class="text-sm text-ink">Custom instructions</h3>
+          <p class="mt-2 text-sm leading-relaxed text-muted">
+            Global, or per-repo via <code class="text-ink">.gitdesktop/instructions.md</code>
+            — included in every generation.
+          </p>
+        </div>
+        <div class="min-w-0">
+          <h3 class="text-sm text-ink">AI-ignore patterns</h3>
+          <p class="mt-2 text-sm leading-relaxed text-muted">
+            Keep sensitive files out of AI context (they still commit) — global or
+            <code class="text-ink">.gitdesktop/aiignore</code>.
+          </p>
+        </div>
+        <div class="min-w-0">
+          <h3 class="text-sm text-ink">Hide it all</h3>
+          <p class="mt-2 text-sm leading-relaxed text-muted">
+            Settings → General hides every AI surface while keeping your config. It's the
+            same "Just Git" view this site has.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="relative overflow-hidden">
+    <div class="grid-bg pointer-events-none absolute inset-0 opacity-60"></div>
+    <div class="relative mx-auto max-w-6xl px-5 py-20 text-center md:py-28">
+      <h2 data-reveal class="text-balance text-3xl tracking-tight sm:text-4xl">
+        Your model. Your keys. Your call.
+      </h2>
+      <p data-reveal style="transition-delay:80ms" class="mx-auto mt-6 max-w-[48ch] leading-relaxed text-body">
+        Free, open source, and native. Turn the AI up, or hide it entirely.
+      </p>
+      <div data-reveal style="transition-delay:140ms" class="mt-9 flex flex-wrap items-center justify-center gap-3">
+        <a href={download} class="rounded-lg bg-mint px-6 py-3 font-medium text-mint-ink transition-opacity hover:opacity-90">
+          Download GitDesktop
+        </a>
+        <a href={`${base}integrations`} class="rounded-lg border border-line-2 px-6 py-3 font-medium text-ink transition-colors hover:bg-surface">
+          See integrations
+        </a>
+      </div>
+    </div>
+  </section>
+</SiteLayout>

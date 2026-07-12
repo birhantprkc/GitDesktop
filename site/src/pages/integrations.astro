@@ -1,0 +1,191 @@
+---
+import ForgeMark from "../components/ForgeMark.astro";
+import SiteLayout from "../layouts/SiteLayout.astro";
+
+const base = import.meta.env.BASE_URL;
+const download = `${base}download`;
+
+const forges = [
+  {
+    forge: "github",
+    name: "GitHub",
+    via: "via the GitHub CLI (gh)",
+    lead: "The reference implementation. The whole GitHub loop lives in the app, and GitHub Enterprise works the same once gh is signed in to your host.",
+    features: [
+      "The full PR lifecycle — review, comment, label, assign, request reviewers, approve, edit, and merge (merge / squash / rebase)",
+      "A GitHub Actions cockpit — runs, jobs and steps, re-run all or failed, cancel, dispatch a workflow, and read failed-step logs",
+      "Issues with types, sub-issues, dependencies and linked PRs — plus Discussions",
+      "Admin: repo settings, collaborators & invitations, branch rulesets, code security toggles, secrets & variables, Pages, webhooks, and a danger zone",
+      "Insights: 14-day traffic, community health, and a dependencies card",
+    ],
+    note: "Requires gh installed and authenticated. Switch the active account per host in Settings → Accounts.",
+  },
+  {
+    forge: "gitlab",
+    name: "GitLab",
+    via: "via the GitLab CLI (glab)",
+    lead: "gitlab.com or self-managed — GitDesktop recognizes any host glab is signed in to. Browse and clone your projects, then read and act on merge requests, issues, pipelines, and releases in the same panels.",
+    features: [
+      "Merge requests — comment (edit/delete your own), close/reopen, edit title & description, react, edit labels & assignees, approve/unapprove, request changes, and merge (merge/squash) — including auto-merge when the pipeline succeeds",
+      "Issues — create, comment, close/reopen, labels, assignees, milestone, due date, confidential, time tracking (estimate + spent), and linked related issues; lock, move, or delete",
+      "Pipelines — retry / cancel / run with CI/CD variables, and play a manual job",
+      "Releases — publish, edit, delete, with asset uploads; star a project and publish a local repo to GitLab",
+      "Project settings — General, Members, Protected branches, Webhooks (with a delivery log), CI/CD variables, and a Danger zone",
+    ],
+    note: "The activity feed folds in commits, approvals and close/reopen/merge, but GitLab has no force-push or draft events. Insights charts GitLab pipelines alongside your local-git analytics.",
+  },
+  {
+    forge: "bitbucket",
+    name: "Bitbucket Cloud",
+    via: "with an Atlassian API token",
+    lead: "Connect with an Atlassian API token (Settings → Accounts), then browse and clone your repositories and work pull requests and Pipelines in the same panels.",
+    features: [
+      "Pull requests — comment (edit/delete your own), decline, merge (merge / squash / fast-forward, optionally deleting the source branch), edit, and create (drafts included, reviewers pickable at create time)",
+      "Approve/unapprove, request changes (a true toggle), pick reviewers, and flip draft ↔ ready either way",
+      "A PR Tasks checklist — add, edit, resolve/unresolve, and delete, with a progress bar and an open-tasks header chip",
+      "Pipelines — rerun, trigger (pick a custom pipeline, with variables), and stop; publish a local repo to Bitbucket",
+      "Repo settings — General, default reviewers, branch restrictions, pipeline variables & schedules, deployment environments, webhooks, and a Danger zone",
+    ],
+    note: "Build statuses link out (name, state, URL — no fetchable logs). Reopening a declined PR isn't available (a Bitbucket platform limit), and Bitbucket has no native issue tracker — link a Jira project instead (below).",
+  },
+] as const;
+
+const jiraFeatures = [
+  "Browse and filter issues (open / closed / all), and read status, type, priority, assignee, labels, a Markdown description, and comments",
+  "Agile fields when the project uses them — story points, sprint, a clickable epic / parent, components, and fix versions — discovered automatically per site",
+  "Create, comment in Markdown, assign, set a due date, change priority, edit labels, and close/reopen along the project's own workflow",
+  "Edit or delete your own comments — and every action is gated on your Jira permissions, so what you can't do simply doesn't appear",
+  "Issue keys in your branch, commits, and PR titles are linked back to the Issues tab; a local issue can be promoted to Jira",
+];
+---
+
+<SiteLayout
+  active="integrations"
+  title="Integrations — GitHub, GitLab, Bitbucket & Jira | GitDesktop"
+  description="GitDesktop works with GitHub, GitLab, and Bitbucket as first-class forges — the full PR/MR loop, CI, issues, releases, and settings — plus linked Jira Cloud issues. Each on its own authenticated identity."
+  ogTitle="GitDesktop integrations — GitHub, GitLab, Bitbucket & Jira"
+  ogDescription="One calm client across GitHub, GitLab, and Bitbucket, with linked Jira Cloud issues. The full loop for each, with the honest per-platform differences."
+>
+  <!-- Hero -->
+  <section class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-16 md:py-24">
+      <p data-reveal class="text-sm text-faint"><span class="text-add">//</span> integrations</p>
+      <h1 data-reveal style="transition-delay:60ms" class="mt-5 text-[clamp(2rem,5vw,3.25rem)] font-semibold tracking-tight">
+        Works with your forge.
+      </h1>
+      <p data-reveal style="transition-delay:120ms" class="mt-6 max-w-[62ch] text-base leading-relaxed text-body sm:text-lg">
+        GitDesktop routes every pull-request and CI action through a forge
+        abstraction, so the same panels work whether your remote points at
+        <span class="text-ink">GitHub</span>, <span class="text-ink">GitLab</span>, or
+        <span class="text-ink">Bitbucket</span> — each on its own authenticated identity,
+        none borrowing another's. Issues are GitHub- and GitLab-native; on Bitbucket, link
+        a <span class="text-ink">Jira Cloud</span> project for the tracker layer instead.
+      </p>
+      <div data-reveal style="transition-delay:180ms" class="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-muted">
+        {
+          forges.map((f) => (
+            <a href={`#${f.forge}`} class="flex items-center gap-2 transition-colors hover:text-ink">
+              <ForgeMark forge={f.forge} class="h-4 w-4" />
+              {f.name}
+            </a>
+          ))
+        }
+        <a href="#jira" class="flex items-center gap-2 transition-colors hover:text-ink">
+          <span class="text-mint" aria-hidden="true">◆</span> Jira
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Forge sections -->
+  {
+    forges.map((f, i) => (
+      <section id={f.forge} class:list={["scroll-mt-20 border-b border-line", i % 2 === 1 && "bg-surface/30"]}>
+        <div class="mx-auto grid max-w-6xl gap-x-14 gap-y-8 px-5 py-16 md:py-20 lg:grid-cols-[0.85fr_1.15fr]">
+          <div data-reveal class="min-w-0">
+            <div class="flex items-center gap-3">
+              <ForgeMark forge={f.forge} class="h-7 w-7 text-ink" />
+              <h2 class="text-2xl tracking-[-0.02em] sm:text-3xl">{f.name}</h2>
+            </div>
+            <p class="mt-2 text-sm text-faint">{f.via}</p>
+            <p class="mt-6 max-w-[46ch] leading-relaxed text-body">{f.lead}</p>
+          </div>
+          <div data-reveal style="transition-delay:80ms" class="min-w-0">
+            <ul class="space-y-3">
+              {f.features.map((x) => (
+                <li class="flex items-start gap-2.5 leading-relaxed text-body">
+                  <span class="mt-px select-none text-add" aria-hidden="true">+</span>
+                  <span>{x}</span>
+                </li>
+              ))}
+            </ul>
+            <p class="mt-6 border-t border-line pt-5 text-sm leading-relaxed text-muted">
+              <span class="text-ink">Good to know — </span>{f.note}
+            </p>
+          </div>
+        </div>
+      </section>
+    ))
+  }
+
+  <!-- Jira -->
+  <section id="jira" class="scroll-mt-20 border-b border-line">
+    <div class="mx-auto grid max-w-6xl gap-x-14 gap-y-8 px-5 py-16 md:py-20 lg:grid-cols-[0.85fr_1.15fr]">
+      <div data-reveal class="min-w-0">
+        <div class="flex items-center gap-3">
+          <span class="text-2xl text-mint" aria-hidden="true">◆</span>
+          <h2 class="text-2xl tracking-[-0.02em] sm:text-3xl">Jira Cloud</h2>
+        </div>
+        <p class="mt-2 text-sm text-faint">with an Atlassian API token</p>
+        <p class="mt-6 max-w-[46ch] leading-relaxed text-body">
+          Link a Jira Cloud site and project to any repository — from the repo menu or
+          the command palette — and its Issues tab gains a Jira section. Connect with an
+          Atlassian API token, or reuse an existing Bitbucket credential.
+        </p>
+        <p class="mt-4 max-w-[46ch] text-sm leading-relaxed text-muted">
+          Especially handy for Bitbucket, whose native tracker Atlassian retires on
+          2026-08-20.
+        </p>
+      </div>
+      <div data-reveal style="transition-delay:80ms" class="min-w-0">
+        <ul class="space-y-3">
+          {
+            jiraFeatures.map((x) => (
+              <li class="flex items-start gap-2.5 leading-relaxed text-body">
+                <span class="mt-px select-none text-mint" aria-hidden="true">◆</span>
+                <span>{x}</span>
+              </li>
+            ))
+          }
+        </ul>
+        <p data-view="ai" class="mt-6 border-t border-line pt-5 text-sm leading-relaxed text-muted">
+          <span class="text-ink">And for agents — </span>a connected MCP client gets
+          <code class="text-ink">jira_*</code> tools to list and read the linked project,
+          and (behind the remote-write opt-in) comment, create, assign, and update issues.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="relative overflow-hidden">
+    <div class="grid-bg pointer-events-none absolute inset-0 opacity-60"></div>
+    <div class="relative mx-auto max-w-6xl px-5 py-20 text-center md:py-28">
+      <h2 data-reveal class="text-balance text-3xl tracking-tight sm:text-4xl">
+        Bring the forge you already use.
+      </h2>
+      <p data-reveal style="transition-delay:80ms" class="mx-auto mt-6 max-w-[48ch] leading-relaxed text-body">
+        Free, open source, and native. GitHub and GitLab go through their CLIs; Bitbucket
+        and Jira use an Atlassian token — your identity, never ours.
+      </p>
+      <div data-reveal style="transition-delay:140ms" class="mt-9 flex flex-wrap items-center justify-center gap-3">
+        <a href={download} class="rounded-lg bg-mint px-6 py-3 font-medium text-mint-ink transition-opacity hover:opacity-90">
+          Download GitDesktop
+        </a>
+        <a href={`${base}features`} class="rounded-lg border border-line-2 px-6 py-3 font-medium text-ink transition-colors hover:bg-surface">
+          See all features
+        </a>
+      </div>
+    </div>
+  </section>
+</SiteLayout>

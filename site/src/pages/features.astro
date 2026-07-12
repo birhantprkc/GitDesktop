@@ -1,0 +1,83 @@
+---
+import { capabilities, GROUP_ORDER } from "../data/capabilities";
+import SiteLayout from "../layouts/SiteLayout.astro";
+
+const base = import.meta.env.BASE_URL;
+const download = `${base}download`;
+
+const groups = GROUP_ORDER.map((group) => {
+  const items = capabilities.filter((c) => c.group === group);
+  return { group, items, ai: items.some((c) => c.ai) };
+}).filter((g) => g.items.length > 0);
+---
+
+<SiteLayout
+  active="features"
+  title="Every feature — GitDesktop"
+  description="The full GitDesktop capability catalog: diffs & staging, branching, history rewrite & recovery, pull requests & review, forges & trackers, CI, releases, admin, keyboard, and AI. Toggle Just Git to hide the AI features."
+  ogTitle="Every GitDesktop feature, in one place"
+  ogDescription="The complete capability catalog — grouped and scannable."
+>
+  <!-- Hero -->
+  <section class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-16 md:py-20">
+      <p data-reveal class="text-sm text-faint"><span class="text-add">//</span> features</p>
+      <h1 data-reveal style="transition-delay:60ms" class="mt-5 text-[clamp(2rem,5vw,3.25rem)] font-semibold tracking-tight">
+        Every feature, in one place.
+      </h1>
+      <p data-reveal style="transition-delay:120ms" class="mt-6 max-w-[60ch] text-base leading-relaxed text-body sm:text-lg">
+        The whole catalog, grouped and scannable.
+      </p>
+    </div>
+  </section>
+
+  <!-- Catalog -->
+  <section>
+    <div class="mx-auto max-w-6xl px-5 py-6 md:py-10">
+      {
+        groups.map((g) => (
+          <div
+            data-view={g.ai ? "ai" : undefined}
+            class="grid gap-x-12 gap-y-4 border-b border-line py-8 lg:grid-cols-[0.7fr_2.3fr]"
+          >
+            <h2 class="text-sm text-faint">
+              {g.ai && <span class="text-mint">✦ </span>}
+              {g.group}
+            </h2>
+            <ul class="grid gap-x-10 gap-y-2.5 text-[15px] sm:grid-cols-2">
+              {g.items.map((c) => (
+                <li class="flex items-start gap-2.5">
+                  <span class:list={["mt-px select-none", c.ai ? "text-mint" : "text-add"]} aria-hidden="true">
+                    {c.ai ? "✦" : "+"}
+                  </span>
+                  <span class="text-body">{c.label}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))
+      }
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="relative overflow-hidden border-t border-line">
+    <div class="grid-bg pointer-events-none absolute inset-0 opacity-60"></div>
+    <div class="relative mx-auto max-w-6xl px-5 py-20 text-center md:py-28">
+      <h2 data-reveal class="text-balance text-3xl tracking-tight sm:text-4xl">
+        That's a lot to keep open all day.
+      </h2>
+      <p data-reveal style="transition-delay:80ms" class="mx-auto mt-6 max-w-[48ch] leading-relaxed text-body">
+        Free, open source, and native — for GitHub, GitLab, and Bitbucket.
+      </p>
+      <div data-reveal style="transition-delay:140ms" class="mt-9 flex flex-wrap items-center justify-center gap-3">
+        <a href={download} class="rounded-lg bg-mint px-6 py-3 font-medium text-mint-ink transition-opacity hover:opacity-90">
+          Download GitDesktop
+        </a>
+        <a href={`${base}`} class="rounded-lg border border-line-2 px-6 py-3 font-medium text-ink transition-colors hover:bg-surface">
+          Back to the tour
+        </a>
+      </div>
+    </div>
+  </section>
+</SiteLayout>

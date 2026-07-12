@@ -159,6 +159,173 @@
   z-index: -1;
 }
 
+/* --- Agent "watch it work" session motif (stands in for a screenshot) -------- */
+.session {
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+.session-head,
+.session-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 1rem;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+.session-head {
+  border-bottom: 1px solid var(--color-line);
+  flex-wrap: wrap;
+}
+.session-foot {
+  border-top: 1px solid var(--color-line);
+  flex-wrap: wrap;
+  gap: 0.85rem;
+}
+.session-body {
+  padding: 1rem 1.1rem;
+}
+
+/* Vertical connected steps — each an agent action; nodes light mint as they run. */
+.steps > li {
+  position: relative;
+  padding: 0 0 0.95rem 1.6rem;
+  color: var(--color-body);
+}
+.steps > li:last-child {
+  padding-bottom: 0;
+}
+.steps > li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.36em;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  border: 1.5px solid var(--color-line-2);
+}
+.steps > li::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: calc(0.36em + 11px);
+  bottom: 0;
+  width: 1px;
+  background: var(--color-line);
+}
+.steps > li:last-child::after {
+  display: none;
+}
+.steps > li[data-done]::before {
+  background: var(--color-mint);
+  border-color: var(--color-mint);
+}
+.steps > li[data-active]::before {
+  background: var(--color-mint);
+  border-color: var(--color-mint);
+  box-shadow: 0 0 0 4px oklch(0.82 0.12 178 / 0.16);
+}
+.step-kind {
+  color: var(--color-faint);
+}
+
+/* A small inline diff — as the agent expands one of its edits. */
+.diff-peek {
+  margin-top: 0.5rem;
+  border: 1px solid var(--color-line);
+  border-radius: 7px;
+  overflow: hidden;
+  font-size: 0.76rem;
+  line-height: 1.6;
+  background: oklch(1 0 0 / 0.015);
+}
+.diff-peek > div {
+  padding: 0.02rem 0.6rem;
+  white-space: pre;
+  overflow-x: auto;
+}
+.diff-peek .add {
+  background: oklch(0.74 0.13 155 / 0.1);
+  color: var(--color-add);
+}
+.diff-peek .del {
+  background: oklch(0.7 0.16 25 / 0.1);
+  color: var(--color-del);
+}
+
+/* --- Terminal / code motif (MCP config, capability ladder) ------------------- */
+.terminal {
+  padding: 1.05rem 1.2rem;
+  font-size: 0.8rem;
+  line-height: 1.75;
+  overflow-x: auto;
+  color: var(--color-body);
+  white-space: pre;
+  tab-size: 2;
+}
+.terminal .c {
+  color: var(--color-faint);
+} /* comment */
+.terminal .k {
+  color: var(--color-mint);
+} /* flag / key */
+
+/* Escalating opt-in ladder — the default (read-only) tier reads mint. */
+.ladder > li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: var(--color-body);
+}
+/* Row layout once there's room: the flag takes a fixed 20ch track (exactly the
+   longest flag in monospace), so every description lines up. Stacks below 560px. */
+@media (min-width: 560px) {
+  .ladder > li {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 0.85rem;
+  }
+  .ladder .tier {
+    flex: none;
+    width: 20ch;
+  }
+}
+.ladder > li + li {
+  margin-top: 0.5rem;
+}
+.ladder > li[data-default] {
+  border-color: oklch(0.82 0.12 178 / 0.4);
+  background: oklch(0.82 0.12 178 / 0.06);
+}
+.ladder .tier {
+  color: var(--color-faint);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.ladder code {
+  color: var(--color-ink);
+}
+
+/* Issue-key chip — the Jira `PROJ-123` reference motif. */
+.key-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--color-line-2);
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--color-body);
+  background: var(--color-surface);
+  white-space: nowrap;
+}
+
 kbd {
   font-family: var(--font-mono);
   font-size: 0.72em;

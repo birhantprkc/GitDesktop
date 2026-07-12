@@ -1,0 +1,223 @@
+---
+// The shared marketing shell: head (title/description/OG + favicon), the
+// pre-paint view-mode script, the reveal-on-scroll enhancer, the site nav
+// (logo, spoke links, the AI-native/Just-Git toggle, GitHub, Download), and the
+// footer. Every marketing page renders inside this so the two-view toggle and
+// nav stay identical everywhere. The AI spoke link is gated with data-view=ai,
+// matching the app's hide-AI setting.
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description: string;
+  ogTitle?: string;
+  ogDescription?: string;
+  /** Highlights the matching spoke link. */
+  active?: "integrations" | "ai" | "features";
+}
+
+const {
+  title,
+  description,
+  ogTitle = title,
+  ogDescription = description,
+  active,
+} = Astro.props;
+
+const base = import.meta.env.BASE_URL;
+const repo = "https://github.com/theBGuy/GitDesktop";
+const download = `${base}download`;
+
+const spokes = [
+  { id: "integrations", label: "Integrations", href: `${base}integrations`, ai: false },
+  { id: "ai", label: "AI", href: `${base}ai`, ai: true },
+  { id: "features", label: "Features", href: `${base}features`, ai: false },
+];
+
+// The head/body scripts are injected via set:html so their `{ }` never read as
+// Astro template expressions — the strings hold no backticks or ${…}, so they're
+// safe verbatim. They must run pre-paint / at load, so they stay `is:inline`.
+
+// Set the view mode before first paint (no flash). ?ai=off or a stored preference
+// shows the "Just Git" view; default is AI-native.
+const modeScript = `
+(function () {
+  try {
+    var ai = new URLSearchParams(location.search).get("ai");
+    var stored = localStorage.getItem("gd-view");
+    if (ai === "off" || ai === "0" || (ai == null && stored === "git")) {
+      document.documentElement.classList.add("mode-git");
+    }
+  } catch (e) {}
+})();
+`;
+
+// Reveal-on-scroll that enhances an already-visible default. With no JS, or with
+// reduced-motion, everything stays visible.
+const revealScript = `
+(function () {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (location.search.indexOf("still") !== -1) return;
+  document.documentElement.classList.add("js");
+  function revealAll() {
+    document.querySelectorAll("[data-reveal]").forEach(function (el) {
+      el.classList.add("is-visible");
+    });
+  }
+  if (!("IntersectionObserver" in window)) { revealAll(); return; }
+  addEventListener("DOMContentLoaded", function () {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          e.target.classList.add("is-visible");
+          io.unobserve(e.target);
+        }
+      });
+    }, { rootMargin: "0px 0px -8% 0px", threshold: 0.04 });
+    document.querySelectorAll("[data-reveal]").forEach(function (el) { io.observe(el); });
+    setTimeout(revealAll, 1800);
+  });
+})();
+`;
+
+// View toggle: AI-native <-> Just Git. Persisted + reflected in ?ai=off. Handles
+// every [data-mode-btn] on the page (nav pill + inline links).
+const toggleScript = `
+(function () {
+  var root = document.documentElement;
+  var btns = Array.prototype.slice.call(document.querySelectorAll("[data-mode-btn]"));
+  function sync(git) {
+    btns.forEach(function (b) {
+      if (b.hasAttribute("aria-pressed")) {
+        b.setAttribute("aria-pressed", String((b.getAttribute("data-mode-btn") === "git") === git));
+      }
+    });
+  }
+  sync(root.classList.contains("mode-git"));
+  btns.forEach(function (b) {
+    b.addEventListener("click", function () {
+      var git = b.getAttribute("data-mode-btn") === "git";
+      root.classList.toggle("mode-git", git);
+      sync(git);
+      try { localStorage.setItem("gd-view", git ? "git" : "ai"); } catch (e) {}
+      var url = new URL(location.href);
+      if (git) url.searchParams.set("ai", "off");
+      else url.searchParams.delete("ai");
+      history.replaceState(null, "", url);
+      window.scrollTo({ top: 0 });
+    });
+  });
+})();
+`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href={`${base}app-icon.svg`} />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:title" content={ogTitle} />
+    <meta property="og:description" content={ogDescription} />
+    <meta property="og:type" content="website" />
+    <script is:inline set:html={modeScript}></script>
+    <script is:inline set:html={revealScript}></script>
+  </head>
+
+  <body class="min-h-screen antialiased">
+    <a
+      href="#top"
+      class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-50 focus:rounded-md focus:bg-surface-2 focus:px-3 focus:py-2 focus:text-ink"
+      >Skip to content</a
+    >
+    <header class="sticky top-0 z-30 border-b border-line bg-bg/80 backdrop-blur-md">
+      <nav class="mx-auto flex h-14 max-w-6xl items-center justify-between gap-3 px-5">
+        <div class="flex shrink-0 items-center gap-4">
+          <a href={base} class="flex items-center gap-2.5 font-medium text-ink">
+            <img src={`${base}app-icon.svg`} alt="" width="22" height="22" />
+            <span class="hidden sm:inline">GitDesktop</span>
+          </a>
+          <div class="hidden items-center gap-0.5 text-sm md:flex">
+            {
+              spokes.map((s) => (
+                <a
+                  href={s.href}
+                  data-view={s.ai ? "ai" : undefined}
+                  aria-current={active === s.id ? "page" : undefined}
+                  class={
+                    "rounded px-2.5 py-1.5 transition-colors hover:text-ink " +
+                    (active === s.id ? "text-ink" : "text-muted")
+                  }
+                >
+                  {s.label}
+                </a>
+              ))
+            }
+          </div>
+        </div>
+
+        <!-- View toggle — mirrors the app's "hide AI features" setting -->
+        <div
+          class="flex items-center rounded-full border border-line-2 bg-surface p-0.5 text-xs"
+          role="group"
+          aria-label="Choose how much to show"
+        >
+          <button
+            type="button"
+            data-mode-btn="ai"
+            aria-pressed="true"
+            class="flex items-center gap-1 rounded-full px-3 py-1 text-muted transition-colors aria-pressed:bg-surface-2 aria-pressed:text-ink"
+          >
+            <span class="text-mint" aria-hidden="true">✦</span> AI-native
+          </button>
+          <button
+            type="button"
+            data-mode-btn="git"
+            aria-pressed="false"
+            class="rounded-full px-3 py-1 text-muted transition-colors aria-pressed:bg-surface-2 aria-pressed:text-ink"
+          >
+            Just Git
+          </button>
+        </div>
+
+        <div class="flex shrink-0 items-center gap-1 text-sm">
+          <a href={repo} class="hidden rounded px-3 py-1.5 text-muted transition-colors hover:text-ink sm:block">GitHub</a>
+          <a
+            href={download}
+            class="ml-1 rounded-md bg-mint px-3.5 py-1.5 font-medium text-mint-ink transition-opacity hover:opacity-90"
+            >Download</a
+          >
+        </div>
+      </nav>
+    </header>
+
+    <main id="top">
+      <slot />
+    </main>
+
+    <footer class="border-t border-line">
+      <div
+        class="mx-auto flex max-w-6xl flex-col items-start justify-between gap-5 px-5 py-9 text-sm text-muted sm:flex-row sm:items-center"
+      >
+        <p class="flex items-center gap-2.5">
+          <img src={`${base}app-icon.svg`} alt="" width="18" height="18" />
+          © 2026 theBGuy · Apache-2.0
+        </p>
+        <div class="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <a href={`${base}integrations`} class="transition-colors hover:text-ink">Integrations</a>
+          <a data-view="ai" href={`${base}ai`} class="transition-colors hover:text-ink">AI</a>
+          <a href={`${base}features`} class="transition-colors hover:text-ink">Features</a>
+          <a href={repo} class="transition-colors hover:text-ink">GitHub</a>
+          <a href={`${repo}/releases`} class="transition-colors hover:text-ink">Releases</a>
+          <a href={`${base}privacy`} class="transition-colors hover:text-ink">Privacy</a>
+          <a href={`${base}terms`} class="transition-colors hover:text-ink">Terms</a>
+        </div>
+      </div>
+    </footer>
+
+    <script is:inline set:html={toggleScript}></script>
+    <slot name="scripts" />
+  </body>
+</html>
