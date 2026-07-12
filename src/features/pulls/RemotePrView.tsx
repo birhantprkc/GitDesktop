@@ -2,6 +2,7 @@ import {
   ArrowCounterClockwiseIcon,
   ArrowSquareOutIcon,
   CaretDownIcon,
+  ChatCircleIcon,
   CheckCircleIcon,
   ClockCountdownIcon,
   DotsThreeIcon,
@@ -111,6 +112,7 @@ import {
   type ApprovalState,
   type ForgeProvider,
   type ForgeUserRef,
+  type PrThreadOut,
   providerLabel,
   type ReviewThreadOut,
 } from "@/lib/git/types";
@@ -715,6 +717,28 @@ export function RemotePrView({
   // so botReviewers stays empty there — those PRs render exactly as before.
   const humanReviewers = pr.reviewers.filter((r) => !r.isBot);
   const botReviewers = pr.reviewers.filter((r) => r.isBot);
+  // Completed reviewers — reviewers who already submitted a verdict (they leave
+  // gh's `reviewRequests`, so they're gone from `pr.reviewers`, but their review
+  // stays in `pr.reviews`). GitHub's own sidebar keeps showing them WITH their
+  // state, so we surface each as a read-only chip carrying that state. Derived
+  // like humanReviewers/botReviewers above (plain, not a hook — this is past the
+  // component's early returns).
+  const completedReviewers = [
+    ...deriveCompletedReviewers(pr.reviews, pr.reviewers),
+    ...pr.completedReviewers.map((cr) => ({
+      login: cr.user.id,
+      label: cr.user.label,
+      isBot: cr.user.isBot,
+      avatarUrl: cr.user.avatarUrl,
+      state: cr.state.toUpperCase(),
+    })),
+  ];
+  // Logins that already render as completed chips. For GitLab/Bitbucket an acted
+  // reviewer stays in `pr.reviewers` (the full assigned set — the picker preserves
+  // them on save) AND appears in `pr.completedReviewers`, so the read-only pending
+  // list filters these out to avoid a duplicate pending+completed chip. GitHub never
+  // overlaps (its completed reviewers have already left `pr.reviewers`).
+  const completedLogins = new Set(completedReviewers.map((c) => c.login));
   const busy =
     comment.isPending ||
     mergePr.isPending ||
@@ -927,28 +951,44 @@ export function RemotePrView({
             {botReviewers.map((user) => (
               <BotReviewerChip key={user.id} user={user} ghHost={ghHost} />
             ))}
+            {completedReviewers.map((reviewer) => (
+              <CompletedReviewerChip
+                key={reviewer.login}
+                reviewer={reviewer}
+                ghHost={ghHost}
+              />
+            ))}
           </div>
         ) : (
-          pr.reviewers.length > 0 && (
+          (pr.reviewers.length > 0 || completedReviewers.length > 0) && (
             <div className="flex flex-wrap items-center gap-1.5">
-              {humanReviewers.map((user) => {
-                const hint = userRefHint(user, humanReviewers);
-                return (
-                  <span
-                    key={user.id}
-                    title={hint ? `${user.label} (${hint})` : undefined}
-                    className="inline-flex items-center gap-1 border py-0.5 pr-1.5 pl-0.5 text-[11px] text-muted-foreground"
-                  >
-                    <ForgeUserAvatar user={user} ghHost={ghHost} />
-                    {user.label}
-                    {hint && (
-                      <span className="text-muted-foreground"> · {hint}</span>
-                    )}
-                  </span>
-                );
-              })}
+              {humanReviewers
+                .filter((h) => !completedLogins.has(h.id))
+                .map((user) => {
+                  const hint = userRefHint(user, humanReviewers);
+                  return (
+                    <span
+                      key={user.id}
+                      title={hint ? `${user.label} (${hint})` : undefined}
+                      className="inline-flex items-center gap-1 border py-0.5 pr-1.5 pl-0.5 text-[11px] text-muted-foreground"
+                    >
+                      <ForgeUserAvatar user={user} ghHost={ghHost} />
+                      {user.label}
+                      {hint && (
+                        <span className="text-muted-foreground"> · {hint}</span>
+                      )}
+                    </span>
+                  );
+                })}
               {botReviewers.map((user) => (
                 <BotReviewerChip key={user.id} user={user} ghHost={ghHost} />
+              ))}
+              {completedReviewers.map((reviewer) => (
+                <CompletedReviewerChip
+                  key={reviewer.login}
+                  reviewer={reviewer}
+                  ghHost={ghHost}
+                />
               ))}
             </div>
           )
@@ -2072,6 +2112,129 @@ export function RemotePrView({
         }
       />
     </div>
+  );
+}
+
+/** GitHub's Copilot review-bot login (the same value the AI-review context maps to
+ *  a "GitHub Copilot" display name). Its reviews arrive under this login. */
+const COPILOT_LOGIN = "copilot-pull-request-reviewer";
+
+/** A reviewer who has already submitted a verdict, in display shape. */
+interface CompletedReviewer {
+  login: string;
+  label: string;
+  isBot: boolean;
+  /** The reviewer's avatar URL when the provider supplies one (GitLab/Bitbucket).
+   *  Empty for GitHub, where `ForgeUserAvatar` derives it from the login. */
+  avatarUrl: string;
+  /** Uppercased review state — APPROVED / CHANGES_REQUESTED / COMMENTED. */
+  state: string;
+}
+
+/**
+ * Derives the completed-reviewer chips from a PR's reviews. Keeps only submitted
+ * verdicts (APPROVED / CHANGES_REQUESTED / COMMENTED), the latest per author, and
+ * drops anyone still in the pending request set (they render as pending instead,
+ * so there's never a duplicate). Copilot and `[bot]` logins are flagged as bots.
+ */
+function deriveCompletedReviewers(
+  reviews: PrThreadOut[],
+  pending: ForgeUserRef[],
+): CompletedReviewer[] {
+  const pendingLogins = new Set(pending.map((r) => r.id.toLowerCase()));
+  const latestByAuthor = new Map<string, PrThreadOut>();
+  for (const review of reviews) {
+    const s = review.state.toUpperCase();
+    if (s !== "APPROVED" && s !== "CHANGES_REQUESTED" && s !== "COMMENTED") {
+      continue;
+    }
+    if (!review.author || pendingLogins.has(review.author.toLowerCase())) {
+      continue;
+    }
+    const prev = latestByAuthor.get(review.author);
+    // Latest verdict wins; a tie or unparseable date keeps the first seen.
+    if (!prev || review.date > prev.date) {
+      latestByAuthor.set(review.author, review);
+    }
+  }
+  return Array.from(latestByAuthor.values()).map((review) => {
+    const login = review.author;
+    const isCopilot = login.toLowerCase() === COPILOT_LOGIN;
+    const isBot = isCopilot || /\[bot\]$/i.test(login);
+    return {
+      login,
+      label: isCopilot ? "Copilot" : login,
+      isBot,
+      // GitHub avatars are login-derived; ForgeUserAvatar falls back when empty.
+      avatarUrl: "",
+      state: review.state.toUpperCase(),
+    };
+  });
+}
+
+/**
+ * Icon + tone + accessible word for a completed reviewer's state, so the verdict
+ * never rides on color alone (distinct icon shapes + the word in title/aria-label).
+ * Mirrors ChecksRollup's status→{Icon,tone} map; tones are token classes, never
+ * hardcoded colors. Unknown states fall back to the neutral comment presentation.
+ */
+function reviewStatePresentation(state: string): {
+  Icon: typeof CheckCircleIcon;
+  tone: string;
+  word: string;
+} {
+  if (state === "APPROVED") {
+    return { Icon: CheckCircleIcon, tone: "text-success", word: "approved" };
+  }
+  if (state === "CHANGES_REQUESTED") {
+    return {
+      Icon: XCircleIcon,
+      tone: "text-destructive",
+      word: "requested changes",
+    };
+  }
+  return { Icon: ChatCircleIcon, tone: "text-info", word: "commented" };
+}
+
+/**
+ * A read-only chip for a reviewer who already submitted a verdict. Leads with a
+ * state icon (distinct shape + semantic token tone), then the reviewer avatar
+ * (a robot glyph for bots) and label. The state word lives in the chip's title
+ * AND aria-label, so meaning never rides on color alone. Non-interactive display:
+ * completed reviews are managed on the forge, so there's no picker affordance.
+ */
+function CompletedReviewerChip({
+  reviewer,
+  ghHost,
+}: {
+  reviewer: CompletedReviewer;
+  ghHost: string | null;
+}) {
+  const { Icon, tone, word } = reviewStatePresentation(reviewer.state);
+  const name = `${reviewer.label} — ${word}`;
+  return (
+    <span
+      title={name}
+      aria-label={name}
+      className="inline-flex items-center gap-1 border py-0.5 pr-1.5 pl-0.5 text-[11px] text-muted-foreground"
+    >
+      <Icon aria-hidden className={cn("size-3 shrink-0", tone)} />
+      {reviewer.isBot ? (
+        <RobotIcon aria-hidden className="size-3 shrink-0" />
+      ) : (
+        <ForgeUserAvatar
+          user={{
+            id: reviewer.login,
+            label: reviewer.label,
+            avatarUrl: reviewer.avatarUrl,
+            isBot: false,
+          }}
+          ghHost={ghHost}
+          decorative
+        />
+      )}
+      {reviewer.label}
+    </span>
   );
 }
 
