@@ -97,7 +97,8 @@ to see every repo you've opened, grouped by GitHub owner, with a Recent section 
 filter box — jump between repos without returning to the welcome screen. Each row shows
 its **forge** as a leading logo (GitHub, GitLab, or Bitbucket; a cloud for a remote on an
 unrecognized host, a folder for a local-only repo) and, once resolved, a trailing
-**visibility** icon — a lock (private), buildings (internal), or globe (public).
+**visibility** icon — a lock (private), buildings (internal), or globe (public) — plus a
+**fork** glyph when the repo is a fork of another (hover it for the upstream repo).
 
 ## The repository menu
 

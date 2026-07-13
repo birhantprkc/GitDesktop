@@ -620,12 +620,20 @@ export const openInTerminal = (
 export const forgeRepoUrl = (repoPath: string) =>
   invoke<string>("forge_repo_url", { repoPath });
 
-/** The repo's visibility on its provider — resolves to exactly "public" |
- *  "private" | "internal" (lowercase). Rejects on any undeterminable case (no
- *  remote, no auth, API failure); callers treat a rejection as "leave the
- *  persisted value alone". */
+/** The repo's visibility probe result: the visibility (exactly "public" |
+ *  "private" | "internal", lowercase) plus fork provenance, gathered in a single
+ *  backend round-trip. `isFork` is set only on positive API evidence; `parent`
+ *  is the upstream "owner/repo" slug when the provider supplies it. Rejects on
+ *  any undeterminable visibility (no remote, no auth, API failure); callers treat
+ *  a rejection as "leave the persisted values alone". */
+export interface RepoVisibility {
+  visibility: string;
+  isFork: boolean;
+  parent: string | null;
+}
+
 export const forgeRepoVisibility = (repoPath: string) =>
-  invoke<string>("forge_repo_visibility", { repoPath });
+  invoke<RepoVisibility>("forge_repo_visibility", { repoPath });
 
 export const gitRecentCommits = (repoPath: string, limit: number) =>
   invoke<CommitSummary[]>("git_recent_commits", { repoPath, limit });

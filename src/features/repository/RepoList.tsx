@@ -2,6 +2,7 @@ import {
   BuildingsIcon,
   CloudIcon,
   FolderIcon,
+  GitForkIcon,
   GlobeSimpleIcon,
   LockSimpleIcon,
 } from "@phosphor-icons/react";
@@ -172,11 +173,15 @@ export function RepoList({
     if (stale) persistOwners.mutate(resolved);
   }, [owners.data, recents]);
 
-  // Backfill visibility for rows whose provider resolves but whose persisted
-  // `visibility` is still unknown — so their badge fills in progressively. Runs
-  // a small concurrency-capped queue, persisting each success as it lands, and
-  // records every attempted path in a module-level Set (read only here, never
-  // in render) so a failing probe is tried at most once per app session.
+  // Backfill visibility + fork provenance for rows whose provider resolves but
+  // whose persisted `visibility` OR `isFork` is still unknown — so their badges
+  // fill in progressively. The `isFork === undefined` arm also migrates records
+  // probed before fork-ness existed (they carry `visibility` but no `isFork`),
+  // which a visibility-only condition would never revisit; both fields land
+  // together from the single probe below. Runs a small concurrency-capped queue,
+  // persisting each success as it lands, and records every attempted path in a
+  // module-level Set (read only here, never in render) so a failing probe is
+  // tried at most once per app session.
   // biome-ignore lint/correctness/useExhaustiveDependencies: queryClient is stable; rerun only on the resolved rows / records
   useEffect(() => {
     if (!owners.data) return;
@@ -185,7 +190,7 @@ export function RepoList({
     const pending = recents
       .filter(
         (r) =>
-          r.visibility === undefined &&
+          (r.visibility === undefined || r.isFork === undefined) &&
           resolveProvider(r, providerByPath, hostByPath) !== null &&
           !visibilityAttempted.has(r.path),
       )
@@ -204,8 +209,11 @@ export function RepoList({
         const path = pending[cursor++];
         visibilityAttempted.add(path);
         try {
-          const visibility = await forgeRepoVisibility(path);
-          await persistRepoVisibility([{ path, visibility }]);
+          const { visibility, isFork, parent } =
+            await forgeRepoVisibility(path);
+          await persistRepoVisibility([
+            { path, visibility, isFork, forkParent: parent ?? undefined },
+          ]);
           queryClient.invalidateQueries({ queryKey: settingsKeys.settings });
         } catch {
           // Signed out / API failure — leave the persisted value alone.
@@ -446,6 +454,8 @@ function RepoRow({
   const provider = providerOf(repo);
   const host = hostOf(repo);
   const badge = visibilityBadge(repo.visibility);
+  // Name the upstream when we know it, so the glyph's meaning isn't shape-only.
+  const forkLabel = repo.forkParent ? `Fork of ${repo.forkParent}` : "Fork";
 
   return (
     <div
@@ -478,6 +488,16 @@ function RepoRow({
             {repo.path}
           </span>
         </span>
+        {repo.isFork && (
+          <span
+            className="shrink-0 text-muted-foreground"
+            role="img"
+            title={forkLabel}
+            aria-label={forkLabel}
+          >
+            <GitForkIcon className="size-3" />
+          </span>
+        )}
         {badge && (
           <span
             className="shrink-0 text-muted-foreground"

@@ -34,8 +34,14 @@ export function useRepoVisibilityProbe(repoPath: string | null) {
   useEffect(() => {
     if (!repoPath) return;
     let cancelled = false;
-    const persist = async (visibility: string | null) => {
-      await persistRepoVisibility([{ path: repoPath, visibility }]);
+    const persist = async (
+      visibility: string | null,
+      isFork?: boolean,
+      forkParent?: string,
+    ) => {
+      await persistRepoVisibility([
+        { path: repoPath, visibility, isFork, forkParent },
+      ]);
       queryClient.invalidateQueries({ queryKey: settingsKeys.settings });
     };
     (async () => {
@@ -46,8 +52,9 @@ export function useRepoVisibilityProbe(repoPath: string | null) {
           return;
         }
         if (cancelled) return;
-        const visibility = await forgeRepoVisibility(repoPath);
-        await persist(visibility);
+        const { visibility, isFork, parent } =
+          await forgeRepoVisibility(repoPath);
+        await persist(visibility, isFork, parent ?? undefined);
       } catch {
         // Ambient metadata — a failed probe leaves the persisted value alone.
       }

@@ -26,30 +26,6 @@ fn validate_ref(name: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// The `owner/repo` slug of the checked-out repo's **origin** remote, to pass
-/// explicitly as `gh -R <slug>`.
-///
-/// Every gh call here otherwise runs with only the repo path as CWD and lets gh
-/// auto-resolve the repo. On a fork with an `upstream` remote, that resolution
-/// prefers the PARENT — so the Actions tab and its run notifications would show
-/// the upstream repo's runs instead of the user's fork. Pinning the origin slug
-/// keeps the whole Actions surface on the fork. For a single-remote repo the
-/// slug equals what gh resolved before, so behavior is unchanged there.
-///
-/// Reuses the cached origin-URL lookup (no extra `git` spawn within its TTL) and
-/// the shared origin-path parser, which already strips `.git` and handles both
-/// `https://…` and scp-style `git@github.com:owner/repo` URLs. A GitHub origin
-/// path is exactly `owner/repo`; the Actions surface can't work without a GitHub
-/// origin, so no origin / an unparseable one is a clear error, matching how this
-/// module already errors (`AppError::Gh`).
-async fn gh_origin_slug(repo_path: &str) -> AppResult<String> {
-    let url =
-        crate::git::remote::git_remote_url(repo_path.to_string(), "origin".to_string()).await?;
-    crate::forge::remote_path(&url).ok_or_else(|| {
-        AppError::Gh("could not determine the GitHub repository from the origin remote".into())
-    })
-}
-
 /// One workflow run in the list view.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -190,7 +166,7 @@ pub async fn gh_run_list(
     branch: Option<String>,
 ) -> AppResult<Vec<WorkflowRun>> {
     let limit = limit.clamp(1, 100).to_string();
-    let slug = gh_origin_slug(&repo_path).await?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let mut args: Vec<&str> = vec![
         "run",
         "list",
@@ -215,7 +191,7 @@ pub async fn gh_run_list(
 #[tauri::command]
 pub async fn gh_run_view(repo_path: String, run_id: u64) -> AppResult<RunDetail> {
     let id = run_id.to_string();
-    let slug = gh_origin_slug(&repo_path).await?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
         &["run", "view", "-R", &slug, &id, "--json", RUN_VIEW_FIELDS],
@@ -230,7 +206,7 @@ pub async fn gh_run_view(repo_path: String, run_id: u64) -> AppResult<RunDetail>
 #[tauri::command]
 pub async fn gh_run_rerun(repo_path: String, run_id: u64, failed: bool) -> AppResult<()> {
     let id = run_id.to_string();
-    let slug = gh_origin_slug(&repo_path).await?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let mut args = vec!["run", "rerun", "-R", slug.as_str(), id.as_str()];
     if failed {
         args.push("--failed");
@@ -243,7 +219,7 @@ pub async fn gh_run_rerun(repo_path: String, run_id: u64, failed: bool) -> AppRe
 #[tauri::command]
 pub async fn gh_run_cancel(repo_path: String, run_id: u64) -> AppResult<()> {
     let id = run_id.to_string();
-    let slug = gh_origin_slug(&repo_path).await?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
         &["run", "cancel", "-R", &slug, &id],
@@ -258,7 +234,7 @@ pub async fn gh_run_cancel(repo_path: String, run_id: u64) -> AppResult<()> {
 #[tauri::command]
 pub async fn gh_run_failed_logs(repo_path: String, run_id: u64) -> AppResult<String> {
     let id = run_id.to_string();
-    let slug = gh_origin_slug(&repo_path).await?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh_raw(
         Some(&repo_path),
         &["run", "view", "-R", &slug, &id, "--log-failed"],
@@ -290,7 +266,7 @@ const JOB_LOG_CAP: usize = 60_000;
 #[tauri::command]
 pub async fn gh_job_logs(repo_path: String, job_id: u64) -> AppResult<String> {
     let id = job_id.to_string();
-    let slug = gh_origin_slug(&repo_path).await?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let mut out = run_gh_raw(
         Some(&repo_path),
         &["run", "view", "-R", &slug, "--job", &id, "--log-failed"],
@@ -323,7 +299,7 @@ pub async fn gh_job_logs(repo_path: String, job_id: u64) -> AppResult<String> {
 /// The repo's workflows, for the manual-dispatch picker.
 #[tauri::command]
 pub async fn gh_workflow_list(repo_path: String) -> AppResult<Vec<Workflow>> {
-    let slug = gh_origin_slug(&repo_path).await?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
         &[
@@ -357,7 +333,7 @@ pub async fn gh_workflow_run(
         )));
     }
     validate_ref(&git_ref)?;
-    let slug = gh_origin_slug(&repo_path).await?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let mut args: Vec<String> = vec![
         "workflow".into(),
         "run".into(),

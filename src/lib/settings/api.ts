@@ -25,6 +25,20 @@ export interface RecentRepo {
    *  must never read as "public"). Cleared when the provider is cleared, so a
    *  stale badge never outlives the remote it was probed from. */
   visibility?: string;
+  /** Whether the repo is a fork on its provider, resolved in the SAME probe as
+   *  `visibility` (no extra API call) and badged beside it. Tri-state so the
+   *  probe converges — after one successful probe no repo re-probes:
+   *  `undefined` = never probed (the backfill will fire); `false` = probed, not
+   *  a fork (no glyph, no re-probe); `true` = a fork (glyph). Only `true` on
+   *  positive API evidence, so the badge's absence never reads as "fork". Shares
+   *  `visibility`'s lifecycle: cleared when the provider is cleared, so a stale
+   *  badge never outlives the remote it was probed from. */
+  isFork?: boolean;
+  /** The upstream repo this fork was made from, as an "owner/repo" slug, when
+   *  the provider supplies it. Powers the "Fork of <parent>" label; absent when
+   *  `isFork` is false or the parent slug wasn't available. Cleared alongside
+   *  `isFork`/`visibility`. */
+  forkParent?: string;
 }
 
 /** What to call a repo in the UI: its alias when set, else its name. */
@@ -402,19 +416,24 @@ export function persistRepoOwners(
       const owner = resolved.owner || undefined;
       const host = resolved.host || undefined;
       const provider = resolved.provider || undefined;
-      // Visibility is probed from the provider; when the provider is being
-      // cleared (remote removed), the stored visibility can't outlive it — drop
-      // it too so a stale badge never lingers on a now-local-only repo.
+      // Visibility (and fork provenance, probed in the same round-trip) come
+      // from the provider; when the provider is being cleared (remote removed),
+      // the stored values can't outlive it — drop them too so a stale badge
+      // never lingers on a now-local-only repo.
       const visibility = provider ? r.visibility : undefined;
+      const isFork = provider ? r.isFork : undefined;
+      const forkParent = provider ? r.forkParent : undefined;
       if (
         owner === r.owner &&
         host === r.host &&
         provider === r.provider &&
-        visibility === r.visibility
+        visibility === r.visibility &&
+        isFork === r.isFork &&
+        forkParent === r.forkParent
       )
         return r;
       changed = true;
-      return { ...r, owner, host, provider, visibility };
+      return { ...r, owner, host, provider, visibility, isFork, forkParent };
     });
     if (!changed) return;
     await saveSettings({ ...settings, recentRepos });
@@ -422,15 +441,23 @@ export function persistRepoOwners(
 }
 
 /**
- * Stores resolved repo visibility ("public" | "private" | "internal") onto the
- * matching recent-repo records so the repo list shows the right visibility
- * badge synchronously next open. A null `visibility` clears the field (the
- * repo has no resolvable remote anymore). Touches only records whose stored
- * value actually changed; no-op when nothing changed, so it never loops with
- * its own settings refetch (mirrors {@link persistRepoOwners}).
+ * Stores the resolved repo visibility ("public" | "private" | "internal") plus
+ * fork provenance (`isFork` / `forkParent`, gathered in the same probe) onto the
+ * matching recent-repo records so the repo list shows the right badges
+ * synchronously next open. A null `visibility` clears all three fields (the repo
+ * has no resolvable remote anymore). Touches only records whose stored values
+ * actually changed; no-op when nothing changed, so it never loops with its own
+ * settings refetch (mirrors {@link persistRepoOwners}).
  */
 export function persistRepoVisibility(
-  entries: { path: string; visibility: string | null }[],
+  entries: {
+    path: string;
+    visibility: string | null;
+    /** Whether the repo is a fork; omitted/false when unknown or not a fork. */
+    isFork?: boolean;
+    /** Upstream "owner/repo" slug when the provider supplies it. */
+    forkParent?: string;
+  }[],
 ): Promise<void> {
   if (entries.length === 0) return Promise.resolve();
   return serializedRecentRepoWrite(async () => {
@@ -441,9 +468,22 @@ export function persistRepoVisibility(
       const resolved = byPath.get(r.path);
       if (!resolved) return r;
       const visibility = resolved.visibility || undefined;
-      if (visibility === r.visibility) return r;
+      // Fork provenance shares visibility's lifecycle: a null visibility (remote
+      // gone) clears the fork badge too, so it never outlives the probe. On a
+      // successful probe `isFork` is persisted as a REAL boolean (`false`
+      // included) so the probe converges — a non-fork stores `false` and never
+      // re-probes; only `undefined` (never probed / cleared) triggers a refetch.
+      // `forkParent` stays undefined-when-absent (a non-fork has no upstream).
+      const isFork = visibility ? (resolved.isFork ?? false) : undefined;
+      const forkParent = visibility ? resolved.forkParent || undefined : undefined;
+      if (
+        visibility === r.visibility &&
+        isFork === r.isFork &&
+        forkParent === r.forkParent
+      )
+        return r;
       changed = true;
-      return { ...r, visibility };
+      return { ...r, visibility, isFork, forkParent };
     });
     if (!changed) return;
     await saveSettings({ ...settings, recentRepos });

@@ -482,7 +482,7 @@ pub async fn repo_set_star(repo_path: &str, starred: bool) -> AppResult<()> {
     crate::github::pr::gh_repo_set_star(repo_path.to_string(), starred).await
 }
 
-pub async fn repo_visibility(repo_path: &str) -> AppResult<String> {
+pub async fn repo_visibility(repo_path: &str) -> AppResult<crate::forge::RepoVisibilityRaw> {
     crate::github::repo_settings::gh_repo_visibility(repo_path.to_string()).await
 }
 

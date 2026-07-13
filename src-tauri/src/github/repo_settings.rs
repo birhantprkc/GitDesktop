@@ -29,24 +29,76 @@ pub async fn gh_repo_admin(repo_path: String) -> AppResult<bool> {
     Ok(out.stdout_lossy().trim() == "true")
 }
 
+/// The `parent` block `gh repo view --json parent` returns for a fork — the
+/// upstream repo's owner login + name. Absent/null for a non-fork. Only the
+/// slug parts are deserialized (defensive: any missing piece → no slug).
+#[derive(Deserialize)]
+struct GhParentRepo {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    owner: Option<GhParentOwner>,
+}
+
+#[derive(Deserialize)]
+struct GhParentOwner {
+    #[serde(default)]
+    login: Option<String>,
+}
+
+/// The subset of `gh repo view --json …` the visibility probe reads: the raw
+/// visibility string plus fork provenance, all from ONE `gh` call (no second
+/// round-trip for fork-ness).
+#[derive(Deserialize)]
+struct GhRepoVisibilityJson {
+    #[serde(default)]
+    visibility: String,
+    #[serde(default, rename = "isFork")]
+    is_fork: bool,
+    #[serde(default)]
+    parent: Option<GhParentRepo>,
+}
+
 /// The repo's remote visibility as `gh` reports it — "PUBLIC" / "PRIVATE" /
-/// "INTERNAL" (uppercase). Returned raw for the forge dispatcher to normalize;
-/// a repo with no GitHub remote (or no access) surfaces gh's own error rather
-/// than a guessed value. Used by `forge_repo_visibility`'s GitHub arm.
-pub async fn gh_repo_visibility(repo_path: String) -> AppResult<String> {
+/// "INTERNAL" (uppercase) — plus whether it's a fork and, when it is, the
+/// upstream `owner/repo` slug. Gathered from a single `gh repo view --json`
+/// call; a repo with no GitHub remote (or no access) surfaces gh's own error
+/// rather than a guessed value. Used by `forge_repo_visibility`'s GitHub arm.
+pub async fn gh_repo_visibility(repo_path: String) -> AppResult<crate::forge::RepoVisibilityRaw> {
+    // Pin the origin slug: an unpinned `gh repo view` on a fork with an
+    // `upstream` remote auto-resolves to the PARENT, which reports `isFork:
+    // false` — so the badge would read the fork as a non-fork. NOTE: the `repo`
+    // command family takes the repository POSITIONALLY (`gh repo view <slug>`);
+    // it has no `-R` flag (that belongs to run/pr/issue — live-verified).
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
-        &["repo", "view", "--json", "visibility", "-q", ".visibility"],
+        &["repo", "view", &slug, "--json", "visibility,isFork,parent"],
         GH_NETWORK_TIMEOUT,
     )
     .await?;
-    let raw = out.stdout_lossy().trim().to_string();
-    if raw.is_empty() {
+    let json = out.stdout_lossy();
+    let parsed: GhRepoVisibilityJson = serde_json::from_str(json.trim()).map_err(|e| {
+        AppError::Gh(format!("could not read the repository's visibility: {e}"))
+    })?;
+    if parsed.visibility.trim().is_empty() {
         return Err(AppError::Gh(
             "could not read the repository's visibility".into(),
         ));
     }
-    Ok(raw)
+    // Only trust a parent slug when both halves are present; a fork with an
+    // unreadable parent still reports `is_fork` truthfully with `parent: None`.
+    let parent = parsed.parent.and_then(|p| match (p.owner.and_then(|o| o.login), p.name) {
+        (Some(login), Some(name)) if !login.is_empty() && !name.is_empty() => {
+            Some(format!("{login}/{name}"))
+        }
+        _ => None,
+    });
+    Ok(crate::forge::RepoVisibilityRaw {
+        visibility: parsed.visibility,
+        is_fork: parsed.is_fork,
+        parent,
+    })
 }
 
 // ── Webhooks ─────────────────────────────────────────────────────────────────

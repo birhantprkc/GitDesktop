@@ -1984,20 +1984,55 @@ fn normalize_visibility(raw: &str) -> Option<&'static str> {
     }
 }
 
-/// The repo's remote visibility (`public` / `private` / `internal`), behind the
-/// abstraction — for badging the repo list. Every arm returns a raw provider
-/// string that's canonicalized here; an undeterminable case (no remote, CLI/API
-/// failure, unrecognized payload) errors rather than guessing.
+/// A provider's raw visibility probe result: the un-normalized visibility string
+/// plus fork provenance, gathered in a SINGLE round-trip (each provider already
+/// fetches the whole repo/project record, so fork-ness rides along for free —
+/// never a second API call). `is_fork` is set only on positive API evidence; a
+/// provider that can't say (no field, error) reports `false` + `parent: None`,
+/// so the absence of a badge never lies.
+pub struct RepoVisibilityRaw {
+    pub visibility: String,
+    pub is_fork: bool,
+    /// The upstream repo as an `owner/repo` slug when the API supplies it; `None`
+    /// when it's a fork but the parent slug isn't available.
+    pub parent: Option<String>,
+}
+
+/// The normalized visibility probe result the frontend consumes — the canonical
+/// visibility string plus fork provenance (camelCase over IPC). Backfilled onto
+/// the recent-repo record alongside `visibility` and cleared with it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoVisibilityOut {
+    pub visibility: String,
+    pub is_fork: bool,
+    pub parent: Option<String>,
+}
+
+/// The repo's remote visibility (`public` / `private` / `internal`) plus whether
+/// it's a fork, behind the abstraction — for badging the repo list. Every arm
+/// returns a raw provider result whose visibility is canonicalized here; an
+/// undeterminable visibility (no remote, CLI/API failure, unrecognized payload)
+/// errors rather than guessing. Fork-ness is best-effort: a provider that can't
+/// report it yields `is_fork: false` (never a guess), so absence of the badge is
+/// always honest.
 #[tauri::command]
-pub async fn forge_repo_visibility(repo_path: String) -> AppResult<String> {
+pub async fn forge_repo_visibility(repo_path: String) -> AppResult<RepoVisibilityOut> {
     let raw = match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::repo_visibility(&repo_path).await?,
         Some((Provider::Bitbucket, _)) => bitbucket::repo_visibility(&repo_path).await?,
         _ => github::repo_visibility(&repo_path).await?,
     };
-    normalize_visibility(&raw)
+    let visibility = normalize_visibility(&raw.visibility)
         .map(str::to_string)
-        .ok_or_else(|| AppError::InvalidArgument(format!("unrecognized visibility: {raw}")))
+        .ok_or_else(|| {
+            AppError::InvalidArgument(format!("unrecognized visibility: {}", raw.visibility))
+        })?;
+    Ok(RepoVisibilityOut {
+        visibility,
+        is_fork: raw.is_fork,
+        parent: raw.parent,
+    })
 }
 
 // ── Repository settings & lifecycle ──────────────────────────────────────────

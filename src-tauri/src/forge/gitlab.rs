@@ -4250,16 +4250,27 @@ pub async fn repo_url(repo_path: &str) -> AppResult<String> {
     Ok(p.web_url)
 }
 
-/// The project's visibility only (`public` / `internal` / `private`, already
-/// lowercase from GitLab). Reuses the same `projects/{enc}` read the settings
-/// fetch uses, with a minimal shape.
+/// The project's visibility (`public` / `internal` / `private`, already
+/// lowercase from GitLab) plus fork provenance. Reuses the same `projects/{enc}`
+/// read the settings fetch uses, with a minimal shape — `forked_from_project` is
+/// the upstream project embed GitLab returns for a fork (null otherwise), so
+/// fork-ness rides the same round-trip.
 #[derive(Deserialize)]
 struct GlabProjectVisibility {
     #[serde(default)]
     visibility: String,
+    #[serde(default)]
+    forked_from_project: Option<GlabForkParent>,
 }
 
-pub async fn repo_visibility(repo_path: &str) -> AppResult<String> {
+/// The `forked_from_project` embed — only its full path is needed for the badge.
+#[derive(Deserialize)]
+struct GlabForkParent {
+    #[serde(default)]
+    path_with_namespace: Option<String>,
+}
+
+pub async fn repo_visibility(repo_path: &str) -> AppResult<crate::forge::RepoVisibilityRaw> {
     let enc = encode_project(&project_path(repo_path).await?);
     let out = run_glab(
         Some(repo_path),
@@ -4269,7 +4280,16 @@ pub async fn repo_visibility(repo_path: &str) -> AppResult<String> {
     .await?;
     let p: GlabProjectVisibility = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Glab(format!("could not parse the GitLab project: {e}")))?;
-    Ok(p.visibility)
+    let is_fork = p.forked_from_project.is_some();
+    let parent = p
+        .forked_from_project
+        .and_then(|f| f.path_with_namespace)
+        .filter(|s| !s.is_empty());
+    Ok(crate::forge::RepoVisibilityRaw {
+        visibility: p.visibility,
+        is_fork,
+        parent,
+    })
 }
 
 /// One of the viewer's starred projects (only the path is needed).

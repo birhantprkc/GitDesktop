@@ -3843,26 +3843,47 @@ pub async fn repo_settings(repo_path: &str) -> AppResult<BitbucketRepoSettings> 
     Ok(settings_from_repo(raw))
 }
 
-/// The repo's `is_private` only, mapped to the neutral visibility string.
-/// Bitbucket has no "internal" tier, so it's just private/public. Reuses the
-/// same `GET repositories/{ws}/{slug}` read the settings fetch uses. Unlike the
-/// tolerant settings struct, `is_private` is STRICT here (`Option`, no default):
-/// a missing or null value is undeterminable, and this probe must error rather
-/// than guess "public" (mirrors the GitHub arm's empty-string guard).
+/// The repo's `is_private` (mapped to the neutral visibility string) plus fork
+/// provenance. Bitbucket has no "internal" tier, so it's just private/public.
+/// Reuses the same `GET repositories/{ws}/{slug}` read the settings fetch uses.
+/// Unlike the tolerant settings struct, `is_private` is STRICT here (`Option`,
+/// no default): a missing or null value is undeterminable, and this probe must
+/// error rather than guess "public" (mirrors the GitHub arm's empty-string
+/// guard). `parent` is the upstream-repo embed Bitbucket returns for a fork
+/// (null otherwise), so fork-ness rides the same round-trip.
 #[derive(Deserialize)]
 struct BbRepoVisibility {
     #[serde(default)]
     is_private: Option<bool>,
+    #[serde(default)]
+    parent: Option<BbForkParent>,
 }
 
-pub async fn repo_visibility(repo_path: &str) -> AppResult<String> {
+/// The `parent` embed on a fork — only its `full_name` ("workspace/slug") is
+/// needed for the badge.
+#[derive(Deserialize)]
+struct BbForkParent {
+    #[serde(default)]
+    full_name: Option<String>,
+}
+
+pub async fn repo_visibility(repo_path: &str) -> AppResult<crate::forge::RepoVisibilityRaw> {
     let creds = http::load_credentials().await?;
     let base = repo_base(repo_path).await?;
     let raw: BbRepoVisibility = http::bb_get_json(&creds, &base, "repository").await?;
     let is_private = raw.is_private.ok_or_else(|| {
         AppError::Bitbucket("could not read the repository's visibility".into())
     })?;
-    Ok(if is_private { "private" } else { "public" }.to_string())
+    let is_fork = raw.parent.is_some();
+    let parent = raw
+        .parent
+        .and_then(|p| p.full_name)
+        .filter(|s| !s.is_empty());
+    Ok(crate::forge::RepoVisibilityRaw {
+        visibility: if is_private { "private" } else { "public" }.to_string(),
+        is_fork,
+        parent,
+    })
 }
 
 /// The settings the General form sends back (the managed subset). Name and
