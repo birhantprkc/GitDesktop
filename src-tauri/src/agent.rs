@@ -1438,6 +1438,48 @@ fn parse_claude_line(
     }
 }
 
+/// Kills the entire process tree of a host-mode agent child on cancel/timeout.
+///
+/// `child.start_kill()` maps to `TerminateProcess` (Windows) / `SIGKILL`
+/// (Unix), which reach only the direct child. The agent CLI is a shim
+/// (`claude`, `codex.cmd`→node, `copilot.exe`, `opencode`) that spawns node
+/// workers, MCP-server children, and tool subprocesses; killing the shim alone
+/// orphans that tree, which keeps consuming tokens, appending to the
+/// transcript, and holding worktree file handles. This traverses the tree:
+/// `taskkill /T` on Windows, a process-group kill on Unix (the child leads its
+/// own group — see the `process_group(0)` at the spawn site).
+fn kill_process_tree(child: &mut tokio::process::Child) {
+    let Some(pid) = child.id() else {
+        // Already reaped — nothing to signal.
+        let _ = child.start_kill();
+        return;
+    };
+
+    #[cfg(windows)]
+    {
+        // taskkill is always present on Windows and kills the whole tree.
+        // Fire-and-forget; CREATE_NO_WINDOW suppresses the console flash.
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .spawn();
+    }
+
+    #[cfg(unix)]
+    {
+        // Negative PID targets the process group (pgid == pid for a group
+        // leader), so `kill -KILL` reaches every descendant.
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .spawn();
+    }
+
+    // Belt-and-braces: the tree-kill can race the child exiting, and this is
+    // the last-resort direct kill on any platform.
+    let _ = child.start_kill();
+}
+
 /// Spawns an agent CLI, streams its stdout as `ReviewEvent`s until a terminal
 /// event / EOF / cancel / timeout, then emits a final `Error` if no terminal
 /// result arrived. Shared by `agent_review` (read-only) and `agent_session`
@@ -1476,6 +1518,11 @@ async fn stream_agent(
         .stderr(Stdio::piped());
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    // Put the child in its own process group so a group-kill on cancel/timeout
+    // reaches the whole tree (the CLI shim spawns node workers, MCP-server
+    // children, and tool subprocesses). See `kill_process_tree`.
+    #[cfg(unix)]
+    cmd.process_group(0);
     cmd.kill_on_drop(true);
 
     let mut child = cmd.spawn().map_err(|e| {
@@ -1525,12 +1572,12 @@ async fn stream_agent(
         tokio::select! {
             _ = &mut deadline => {
                 timed_out = true;
-                let _ = child.start_kill();
+                kill_process_tree(&mut child);
                 break;
             }
             _ = cancel.notified() => {
                 cancelled = true;
-                let _ = child.start_kill();
+                kill_process_tree(&mut child);
                 break;
             }
             line = lines.next_line() => {
