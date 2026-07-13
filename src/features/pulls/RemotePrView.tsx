@@ -1736,6 +1736,9 @@ export function RemotePrView({
             provider={providerKey}
             apply={suggestionApply}
             fileDiffLookup={fileDiffLookup}
+            // gh GraphQL returns commits oldest-first, so the head is the last —
+            // pin the file-row Blame at the PR's tip.
+            blameRev={pr.commits.at(-1)?.oid}
           />
         </div>
       )}

@@ -45,6 +45,7 @@ import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { FileRowActions } from "./FileRowActions";
 import { useAmendWithConfirm } from "./useAmendCommit";
 
 export function CommitDetailView({
@@ -314,7 +315,11 @@ export function CommitDetailView({
           {/* overflow-hidden contains the list's natural height (vendored Root is
               `relative`-only) so a long file list can't leak a window scrollbar. */}
           <ScrollArea className="min-h-0 flex-1 overflow-hidden">
-            <div onKeyDown={onFilesKeyDown}>
+            <FileRowActions
+              repoPath={repoPath}
+              blameRev={hash}
+              onKeyDown={onFilesKeyDown}
+            >
               {files.data.map((file) => (
                 <button
                   type="button"
@@ -345,7 +350,7 @@ export function CommitDetailView({
                   )}
                 </button>
               ))}
-            </div>
+            </FileRowActions>
           </ScrollArea>
         </aside>
         <main className="min-w-0 flex-1">

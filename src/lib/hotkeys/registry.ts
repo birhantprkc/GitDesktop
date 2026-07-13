@@ -259,6 +259,12 @@ export const ACTIONS = [
     defaultBinding: null,
   },
   {
+    id: "blame-file",
+    label: "Blame file…",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
     id: "automations",
     label: "Automations",
     category: "Repository",

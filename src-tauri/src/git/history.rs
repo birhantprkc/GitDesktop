@@ -125,18 +125,71 @@ pub async fn git_file_log(
     Ok(parse_commit_log(&out.stdout_lossy()))
 }
 
-/// `git blame` for a file at HEAD: each line's content + the commit that last
-/// changed it. Parses the `--porcelain` stream (commit metadata is emitted once
-/// per commit, then cached for that commit's later lines).
+/// `git blame` for a file — at the working tree by default, or as of `rev`
+/// (any SHA/branch/tag) when given. Parses the `--porcelain` stream (commit
+/// metadata is emitted once per commit, then cached for that commit's later
+/// lines).
 #[tauri::command]
-pub async fn git_blame(repo_path: String, path: String) -> AppResult<Vec<BlameLine>> {
+pub async fn git_blame(
+    repo_path: String,
+    path: String,
+    rev: Option<String>,
+) -> AppResult<Vec<BlameLine>> {
     validate_path(&path)?;
-    let out = run_git(
-        Some(&repo_path),
-        &["blame", "--porcelain", "--", &path],
-        DEFAULT_TIMEOUT,
-    )
-    .await?;
+
+    // Resolve the optional rev to a concrete 40-hex sha, or guard the unborn-HEAD
+    // case, so `git blame` never surfaces raw stderr for either.
+    let resolved_rev = match rev.as_deref().map(str::trim) {
+        None => {
+            // No rev: blame the working tree, but a zero-commit repo has no HEAD to
+            // blame — return a friendly error rather than raw git stderr (and never
+            // an empty Ok, which would masquerade as an empty file).
+            let head_exists = run_git_raw(
+                Some(&repo_path),
+                &["rev-parse", "--verify", "--quiet", "HEAD"],
+                DEFAULT_TIMEOUT,
+            )
+            .await?
+            .code
+                == 0;
+            if !head_exists {
+                return Err(crate::error::AppError::InvalidArgument(
+                    "repository has no commits yet — blame needs at least one commit".into(),
+                ));
+            }
+            None
+        }
+        Some(rev) => {
+            // A rev is passed positionally before `--`, so a leading dash would be
+            // parsed as a flag — reject it (and empties) before touching git.
+            if rev.is_empty() || rev.starts_with('-') {
+                return Err(crate::error::AppError::InvalidArgument(format!(
+                    "invalid revision: {rev}"
+                )));
+            }
+            // Resolve first: validates arbitrary revspecs (branch names from the
+            // Compare surface) and normalizes to a 40-hex sha.
+            let resolved = run_git_raw(
+                Some(&repo_path),
+                &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")],
+                DEFAULT_TIMEOUT,
+            )
+            .await?;
+            if resolved.code != 0 {
+                return Err(crate::error::AppError::InvalidArgument(format!(
+                    "unknown revision: {rev}"
+                )));
+            }
+            Some(resolved.stdout_lossy().trim().to_string())
+        }
+    };
+
+    let mut args: Vec<&str> = vec!["blame", "--porcelain"];
+    if let Some(sha) = &resolved_rev {
+        args.push(sha);
+    }
+    args.extend(["--", &path]);
+    let out = run_git(Some(&repo_path), &args, DEFAULT_TIMEOUT).await?;
     let text = out.stdout_lossy();
 
     let mut cache: std::collections::HashMap<String, (String, i64, String)> =
@@ -339,4 +392,112 @@ pub async fn git_commit_file_diff(
         is_truncated,
         text,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn temp_repo(tag: &str) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "gd-blame-test-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.to_string_lossy().into_owned()
+    }
+
+    async fn git(repo: &str, args: &[&str]) {
+        run_git(Some(repo), args, DEFAULT_TIMEOUT).await.unwrap();
+    }
+
+    /// Builds a repo where `file.txt` gets two commits: line one is written in the
+    /// first commit and a second line is appended in the second. Returns the repo
+    /// path plus the two commit shas (first, second).
+    async fn two_commit_repo(tag: &str) -> (String, String, String) {
+        let repo = temp_repo(tag);
+        git(&repo, &["init"]).await;
+        git(&repo, &["config", "user.email", "t@t"]).await;
+        git(&repo, &["config", "user.name", "t"]).await;
+        let file = Path::new(&repo).join("file.txt");
+        std::fs::write(&file, "first\n").unwrap();
+        git(&repo, &["add", "."]).await;
+        git(&repo, &["commit", "-m", "one"]).await;
+        let first = run_git(Some(&repo), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
+            .await
+            .unwrap()
+            .stdout_lossy()
+            .trim()
+            .to_string();
+        std::fs::write(&file, "first\nsecond\n").unwrap();
+        git(&repo, &["commit", "-am", "two"]).await;
+        let second = run_git(Some(&repo), &["rev-parse", "HEAD"], DEFAULT_TIMEOUT)
+            .await
+            .unwrap()
+            .stdout_lossy()
+            .trim()
+            .to_string();
+        (repo, first, second)
+    }
+
+    #[tokio::test]
+    async fn blame_at_rev_shows_that_revs_content() {
+        let (repo, first, second) = two_commit_repo("at-rev").await;
+
+        // At the first commit, the file has only one line, all attributed to `first`.
+        let at_first = git_blame(repo.clone(), "file.txt".into(), Some(first.clone()))
+            .await
+            .unwrap();
+        assert_eq!(at_first.len(), 1);
+        assert_eq!(at_first[0].content, "first");
+        assert_eq!(at_first[0].hash, first);
+
+        // Worktree blame sees both lines; the appended one belongs to `second`.
+        let at_worktree = git_blame(repo.clone(), "file.txt".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(at_worktree.len(), 2);
+        assert_eq!(at_worktree[0].hash, first);
+        assert_eq!(at_worktree[1].content, "second");
+        assert_eq!(at_worktree[1].hash, second);
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[tokio::test]
+    async fn blame_unborn_head_errors() {
+        let repo = temp_repo("unborn");
+        git(&repo, &["init"]).await;
+        git(&repo, &["config", "user.email", "t@t"]).await;
+        git(&repo, &["config", "user.name", "t"]).await;
+
+        let err = git_blame(repo.clone(), "file.txt".into(), None)
+            .await
+            .unwrap_err();
+        match err {
+            crate::error::AppError::InvalidArgument(msg) => {
+                assert!(msg.contains("no commits yet"), "unexpected message: {msg}");
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[tokio::test]
+    async fn blame_dash_prefixed_rev_rejected() {
+        let (repo, _first, _second) = two_commit_repo("dash-rev").await;
+
+        let err = git_blame(repo.clone(), "file.txt".into(), Some("-HEAD".into()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::error::AppError::InvalidArgument(_)));
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
 }

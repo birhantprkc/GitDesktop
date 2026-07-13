@@ -34,6 +34,8 @@ import { ComparePanel } from "@/features/compare/ComparePanel";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiscussionsPanel } from "@/features/discussions/DiscussionsPanel";
 import { DiscussionView } from "@/features/discussions/DiscussionView";
+import { BlameDialog } from "@/features/history/BlameDialog";
+import { BlameFilePickerDialog } from "@/features/history/BlameFilePickerDialog";
 import { CommitDetailView } from "@/features/history/CommitDetailView";
 import { HistoryPanel } from "@/features/history/HistoryPanel";
 import { IssuesPanel } from "@/features/issues/IssuesPanel";
@@ -170,6 +172,11 @@ export function RepositoryView() {
   // the agent chunk off the boot path until the user opens the Agent tab.
   const [agentSeen, setAgentSeen] = useState(false);
   if (repoTab === "agent" && !agentSeen) setAgentSeen(true);
+  // Palette "Blame file…": the picker (open state) and, once a file is picked,
+  // the path to blame (worktree blame — no rev). Kept here (always mounted) so
+  // the palette can reach it from any tab.
+  const [blamePickerOpen, setBlamePickerOpen] = useState(false);
+  const [blamePath, setBlamePath] = useState<string | null>(null);
 
   // OS notifications for PR/check and workflow-run events while this repo is open.
   usePrNotifications(repoPath ?? "");
@@ -225,6 +232,8 @@ export function RepositoryView() {
     canCreateRelease,
   );
   useHotkeyAction("create-tag", () => requestCreate("tag"));
+  // Palette-only "Blame file…": open the fuzzy tracked-file picker from any tab.
+  useHotkeyAction("blame-file", () => setBlamePickerOpen(true));
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open. No
   // cleanup here: a branch switch updates the title in one pass instead of
@@ -480,6 +489,25 @@ export function RepositoryView() {
           )}
         </main>
       </div>
+
+      {/* Palette "Blame file…": pick a tracked file, then blame its worktree
+          contents (no rev — "blame this file as it is now"). */}
+      <BlameFilePickerDialog
+        repoPath={repoPath}
+        open={blamePickerOpen}
+        onOpenChange={setBlamePickerOpen}
+        onPick={setBlamePath}
+      />
+      {blamePath && (
+        <BlameDialog
+          repoPath={repoPath}
+          path={blamePath}
+          open
+          onOpenChange={(o) => {
+            if (!o) setBlamePath(null);
+          }}
+        />
+      )}
     </div>
   );
 }

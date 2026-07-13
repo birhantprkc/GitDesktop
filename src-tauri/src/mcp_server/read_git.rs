@@ -12,7 +12,7 @@ use rmcp::{schemars, tool, tool_router, ErrorData as McpError};
 
 use super::{
     app_err, cap_head, diff_text, ensure_not_flag, json_result, resolve_commit, to_value,
-    GitDesktopMcp, PathArg, ShaArg, READ_FILE_MAX_BYTES, SESSION_BRANCH_PREFIX,
+    GitDesktopMcp, ShaArg, READ_FILE_MAX_BYTES, SESSION_BRANCH_PREFIX,
 };
 
 // ---- Local-git tool parameters --------------------------------------------
@@ -40,6 +40,16 @@ struct FileHistoryArgs {
     /// Commits to skip, for paging (default 0).
     #[serde(default)]
     skip: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct BlameArgs {
+    /// Repo-relative path of the file.
+    path: String,
+    /// Optional rev to blame the file at (branch/tag/SHA). Omit to blame the
+    /// current working tree.
+    #[serde(default)]
+    rev: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -141,12 +151,15 @@ impl GitDesktopMcp {
         json_result(&branches)
     }
 
-    #[tool(description = "Per-line authorship (git blame) for a file: each line's commit/author.")]
+    #[tool(
+        description = "Per-line authorship (git blame) for a file: each line's commit/author. \
+                       Optionally at a specific revision (SHA, branch, tag) instead of the working tree."
+    )]
     async fn blame(
         &self,
-        Parameters(args): Parameters<PathArg>,
+        Parameters(args): Parameters<BlameArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let lines = crate::git::history::git_blame(self.repo.clone(), args.path)
+        let lines = crate::git::history::git_blame(self.repo.clone(), args.path, args.rev)
             .await
             .map_err(app_err)?;
         json_result(&lines)

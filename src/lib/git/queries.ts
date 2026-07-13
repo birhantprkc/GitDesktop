@@ -471,11 +471,11 @@ export function useFileLog(repo: string, path: string | null) {
   });
 }
 
-/** `git blame` for a file at HEAD. */
-export function useBlame(repo: string, path: string | null) {
+/** `git blame` for a file — at the working tree, or as of `rev` when given. */
+export function useBlame(repo: string, path: string | null, rev?: string | null) {
   return useQuery({
-    queryKey: ["repo", repo, "blame", path ?? ""] as const,
-    queryFn: () => api.gitBlame(repo, path ?? ""),
+    queryKey: ["repo", repo, "blame", path ?? "", rev ?? ""] as const,
+    queryFn: () => api.gitBlame(repo, path ?? "", rev),
     enabled: path !== null && path !== "",
     staleTime: 60_000,
   });

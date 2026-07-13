@@ -319,6 +319,13 @@ push hint instead, and a local-only repo shows no comment pane at all.
 - **File history** — see every commit that touched a specific file.
 - **Blame** — line-by-line, which commit last changed each line.
 
+Right-click any file row to reach both: in the **Changes** list, in a commit's file
+list (in **History**, or a PR's **Commits** tab), in a PR's **Files** tab, or in a
+**Compare** / local-PR file list. On those historical surfaces **Blame** is pinned at
+that commit or branch — you see the file *as of* that revision, not your working copy.
+The **Blame file…** command (from the command palette) opens a fuzzy picker of every
+tracked file and blames the one you choose as it is now.
+
 > History-rewriting actions (reset, Edit history, squash) only ever touch **unpushed**
 > commits, and a push of rewritten history becomes a safe **force-with-lease** push (see
 > *Syncing & conflicts*).`,

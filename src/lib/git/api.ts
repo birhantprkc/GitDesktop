@@ -662,8 +662,8 @@ export const gitFileLog = (
   skip: number,
 ) => invoke<CommitSummary[]>("git_file_log", { repoPath, path, limit, skip });
 
-export const gitBlame = (repoPath: string, path: string) =>
-  invoke<BlameLine[]>("git_blame", { repoPath, path });
+export const gitBlame = (repoPath: string, path: string, rev?: string | null) =>
+  invoke<BlameLine[]>("git_blame", { repoPath, path, rev: rev ?? null });
 
 export const gitCommitFiles = (repoPath: string, hash: string) =>
   invoke<DiffStatEntry[]>("git_commit_files", { repoPath, hash });

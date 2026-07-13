@@ -317,8 +317,10 @@ default branch and a PR badge show in the switcher.
   preview of exactly which commits will move.
 
 **History & advanced** — paged, filterable history with rich commit detail,
-commit-author avatars, per-file history and line blame, and an at-a-glance marker on
-every commit that hasn't been pushed yet.
+commit-author avatars, and per-file history and line blame reachable from any file
+list (History, pull requests, Compare) or the command palette — pinned at that
+commit or branch where it applies. Plus an at-a-glance marker on every commit that
+hasn't been pushed yet.
 
 - **Interactive rebase** ⭐ — an *Edit history* editor to reword / squash / fixup / drop
   / reorder unpushed commits behind an atomic replay engine (any conflict rolls back

@@ -23,6 +23,7 @@ import {
   type DiffLineAnchor,
   type LineWidget,
 } from "@/features/diff/DiffSurfaceLazy";
+import { FileRowActions } from "@/features/history/FileRowActions";
 import { TimeTrackingControls } from "@/features/issues/RemoteIssueViewParts";
 import {
   useAddMrSpentTime,
@@ -121,6 +122,7 @@ export function PrFilesPane({
   provider,
   apply,
   fileDiffLookup,
+  blameRev,
 }: {
   files: PrFile[];
   effectivePath: string | null;
@@ -138,6 +140,8 @@ export function PrFilesPane({
   /** The inline line-comment composer, passed straight to the diff. Absent =
    *  a read-only diff (unchanged). */
   lineWidget?: LineWidget;
+  /** PR head sha — pins the file-row Blame at the PR's tip. Omit to hide Blame. */
+  blameRev?: string;
 } & DiffThreadWiring) {
   // Arrow keys walk the file list, mirroring the app's other diff lists.
   const onFilesKeyDown = listKeyboardNav({
@@ -226,37 +230,45 @@ export function PrFilesPane({
     fileDiffLookup,
   ]);
 
+  const fileRows = files.map((file) => (
+    <button
+      type="button"
+      key={file.path}
+      data-path={file.path}
+      className={cn(
+        "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
+        effectivePath === file.path
+          ? "bg-accent text-accent-foreground"
+          : "hover:bg-muted/60",
+      )}
+      onClick={() => onSelectPath(file.path)}
+      title={file.path}
+    >
+      <span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
+      <span className="shrink-0 tabular-nums">
+        <span className="text-success">+{file.additions}</span>{" "}
+        <span className="text-destructive">-{file.deletions}</span>
+      </span>
+    </button>
+  ));
+
   return (
     <div className="flex min-h-0 flex-1">
       <aside className="flex w-72 shrink-0 flex-col border-r">
         {/* overflow-hidden contains the list's natural height (vendored Root is
             `relative`-only) so a long file list can't leak a window scrollbar. */}
         <ScrollArea className="min-h-0 flex-1 overflow-hidden">
-          <div onKeyDown={onFilesKeyDown}>
-            {files.map((file) => (
-              <button
-                type="button"
-                key={file.path}
-                data-path={file.path}
-                className={cn(
-                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
-                  effectivePath === file.path
-                    ? "bg-accent text-accent-foreground"
-                    : "hover:bg-muted/60",
-                )}
-                onClick={() => onSelectPath(file.path)}
-                title={file.path}
-              >
-                <span className="min-w-0 flex-1 truncate font-mono">
-                  {file.path}
-                </span>
-                <span className="shrink-0 tabular-nums">
-                  <span className="text-success">+{file.additions}</span>{" "}
-                  <span className="text-destructive">-{file.deletions}</span>
-                </span>
-              </button>
-            ))}
-          </div>
+          {repoPath !== undefined ? (
+            <FileRowActions
+              repoPath={repoPath}
+              blameRev={blameRev}
+              onKeyDown={onFilesKeyDown}
+            >
+              {fileRows}
+            </FileRowActions>
+          ) : (
+            <div onKeyDown={onFilesKeyDown}>{fileRows}</div>
+          )}
         </ScrollArea>
       </aside>
       <main className="min-w-0 flex-1">

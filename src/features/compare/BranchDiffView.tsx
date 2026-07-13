@@ -3,6 +3,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffSurface } from "@/features/diff/DiffSurfaceLazy";
+import { FileRowActions } from "@/features/history/FileRowActions";
 import { useBranchDiffFiles, useBranchFileDiff } from "@/lib/git/queries";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { cn } from "@/lib/utils";
@@ -92,7 +93,11 @@ export function BranchDiffView({
           {/* overflow-hidden contains the list's natural height (vendored Root is
               `relative`-only) so a long list can't leak a window scrollbar. */}
           <ScrollArea className="min-h-0 flex-1 overflow-hidden">
-            <div onKeyDown={onFilesKeyDown}>
+            <FileRowActions
+              repoPath={repoPath}
+              blameRev={compare}
+              onKeyDown={onFilesKeyDown}
+            >
               {files.data.map((file) => (
                 <button
                   type="button"
@@ -120,7 +125,7 @@ export function BranchDiffView({
                   )}
                 </button>
               ))}
-            </div>
+            </FileRowActions>
           </ScrollArea>
         </aside>
         <main className="min-w-0 flex-1">

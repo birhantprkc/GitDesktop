@@ -127,12 +127,6 @@ pub struct GitDesktopMcp {
 // used by a single module lives with that module.
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub(super) struct PathArg {
-    /// Repo-relative path of the file.
-    pub(super) path: String,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub(super) struct ShaArg {
     /// Commit SHA, or any rev (branch, tag, HEAD).
     pub(super) sha: String,

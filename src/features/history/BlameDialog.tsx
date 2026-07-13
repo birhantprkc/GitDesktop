@@ -42,18 +42,26 @@ function BlameCode({
 export function BlameDialog({
   repoPath,
   path,
+  rev,
   open,
   onOpenChange,
 }: {
   repoPath: string;
   path: string;
+  rev?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const blame = useBlame(repoPath, open ? path : null);
+  const blame = useBlame(repoPath, open ? path : null, rev);
   const lines = blame.data ?? [];
   const name = path.split("/").pop() ?? path;
   const lang = diffLang(path);
+  // Abbreviate a full 40-hex sha to 7 chars; show branch/tag names verbatim.
+  const shortRev = rev
+    ? /^[0-9a-f]{40}$/i.test(rev)
+      ? rev.slice(0, 7)
+      : rev
+    : null;
   // Native scroll container held in STATE (not a ref) so attaching it
   // re-renders and the child's virtualizer re-initializes with the real node —
   // a plain ref stays null at the virtualizer's mount effect, so
@@ -66,7 +74,9 @@ export function BlameDialog({
       {/* ph-no-capture: file name, path, and full file content — block from replay. */}
       <DialogContent className="ph-no-capture flex h-[80vh] flex-col sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle className="truncate">Blame: {name}</DialogTitle>
+          <DialogTitle className="truncate">
+            {shortRev ? `Blame: ${name} @ ${shortRev}` : `Blame: ${name}`}
+          </DialogTitle>
           <DialogDescription className="truncate font-mono">
             {path}
           </DialogDescription>
@@ -83,7 +93,9 @@ export function BlameDialog({
             </div>
           ) : blame.isError ? (
             <p className="p-3 text-xs text-muted-foreground">
-              Couldn't blame this file (it may be binary or untracked).
+              {shortRev
+                ? `Couldn't blame this file at ${shortRev} — it may not exist at that revision, or the commit isn't available locally.`
+                : "Couldn't blame this file (it may be binary or untracked)."}
             </p>
           ) : lines.length === 0 ? (
             <p className="p-3 text-xs text-muted-foreground">Empty file.</p>

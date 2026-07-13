@@ -5,6 +5,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffContent, type LineWidget } from "@/features/diff/DiffSurfaceLazy";
+import { FileRowActions } from "@/features/history/FileRowActions";
 import { copyText } from "@/lib/clipboard";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import { useCommitComments, usePrCommitDiff } from "@/lib/git/queries";
@@ -201,7 +202,11 @@ export function PrCommitDetail({
             {/* overflow-hidden contains the list's natural height (vendored Root
                 is `relative`-only) so a long file list can't leak a window scrollbar. */}
             <ScrollArea className="min-h-0 flex-1 overflow-hidden">
-              <div onKeyDown={onFilesKeyDown}>
+              <FileRowActions
+                repoPath={repoPath}
+                blameRev={commit.oid}
+                onKeyDown={onFilesKeyDown}
+              >
                 {files.map((file) => (
                   <button
                     type="button"
@@ -233,7 +238,7 @@ export function PrCommitDetail({
                     )}
                   </button>
                 ))}
-              </div>
+              </FileRowActions>
             </ScrollArea>
           </aside>
           <main className="flex min-w-0 flex-1 flex-col">
