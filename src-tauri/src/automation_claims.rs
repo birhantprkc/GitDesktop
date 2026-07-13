@@ -274,7 +274,7 @@ mod tests {
         // A real worktree-identity key: an absolute Windows path (has `\` and `:`,
         // both illegal in filenames) plus target/head/action.
         let key = composite_key(
-            r"C:\Users\Evan\AppData\Roaming\project\.git\worktrees\wt",
+            r"C:\Users\me\AppData\Roaming\project\.git\worktrees\wt",
             "1234",
             "0f1e2d3c4b5a69788796a5b4c3d2e1f001122334",
             "review",

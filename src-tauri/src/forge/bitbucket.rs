@@ -828,8 +828,8 @@ struct BbPathItem {
 /// A PR comment (`{id, content:{raw}, user, created_on, deleted, pending, inline?,
 /// parent?}`).
 ///
-/// Live-probed 2026-07-05 (stars-align-app/front_end PR #38 inline, admin_panel
-/// PR #1 reply): a reply comment carries `parent: {id, links}`; only the ROOT
+/// Live-probed 2026-07-05 (a real workspace repo: one inline thread + one reply):
+/// a reply comment carries `parent: {id, links}`; only the ROOT
 /// inline comment carries the `inline` object — replies to it do NOT re-carry
 /// `inline` (they anchor via `parent` alone). NO `resolution` key was present on
 /// ANY probed comment (general, inline, or reply) across three repos, so
@@ -4766,12 +4766,12 @@ mod tests {
         // Shape from the live `approval` activity entry.
         let ev = activity(
             r#"{"approval":{"date":"2026-07-03T21:12:55.697902-04:00",
-                "user":{"display_name":"Evan Goldberg","uuid":"{0f39}"}}}"#,
+                "user":{"display_name":"Casey Approver","uuid":"{0f39}"}}}"#,
         )
         .expect("approval is a timeline event");
         match ev {
             PrTimelineEventOut::Approved { actor, date } => {
-                assert_eq!(actor, "Evan Goldberg");
+                assert_eq!(actor, "Casey Approver");
                 assert_eq!(date, "2026-07-03T21:12:55.697902-04:00");
             }
             _ => panic!("expected Approved"),

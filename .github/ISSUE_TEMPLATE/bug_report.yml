@@ -84,8 +84,11 @@ body:
         - OpenAI
         - OpenRouter
         - Ollama (local)
+        - Ollama Cloud
         - Claude Code CLI
         - Codex CLI
+        - GitHub Copilot CLI
+        - opencode CLI
     validations:
       required: false
 

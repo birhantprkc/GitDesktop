@@ -14,7 +14,7 @@ reach, and your choices. It is not legal advice.
 
 ## Who we are
 
-Evan Goldberg ("we") is the data controller for the analytics described here.
+GitDesktop's maintainer, theBGuy ("we"), is the data controller for the analytics described here.
 Contact: thebguy.github@gmail.com.
 
 ## What we collect

@@ -23,7 +23,7 @@
 //!
 //! We resolve it here with the SAME `dirs::data_dir()` the Tauri path layer uses,
 //! joined with the identifier — so the two processes always agree on the file.
-//! (Verified on this machine: `C:\Users\Evan\AppData\Roaming\com.thebguy.gitdesktop\
+//! (Verified against a real store file: `%APPDATA%\com.thebguy.gitdesktop\
 //! local-prs.json` exists with the expected `{ [repoPath]: LocalPr[] }` shape.)
 //! Always the real `local-prs.json` name — the frontend's cold-start `coldstart-`
 //! alias is a GUI-only concern the server never participates in.

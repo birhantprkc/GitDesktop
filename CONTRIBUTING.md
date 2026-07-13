@@ -66,7 +66,7 @@ more):
   GitHub Actions (`actions.rs`).
 - `src-tauri/src/{hooks,secrets,instructions}.rs` — git-hook management, OS
   keychain storage, repo instruction/rule files.
-- `src-tauri/src/agent.rs` — drives local coding-agent CLIs (Claude Code / Codex).
+- `src-tauri/src/agent.rs` — drives local coding-agent CLIs (Claude Code / Codex / GitHub Copilot / opencode).
 - `src/lib/` — invoke bindings + TanStack Query hooks (`git/`, `github/`), the AI
   layer (`ai/`), settings, and the hotkey registry.
 - `src/features/` — the screens: repository, changes/diff, commit, history,
@@ -152,7 +152,7 @@ the utmost care.
 
 ## Opening a pull request
 
-1. Branch off `main`.
+1. Branch off `master`.
 2. Keep PRs small and focused; one logical change per PR is easiest to review.
 3. Link the issue it addresses (`Closes #123`).
 4. Run `pnpm lint` and, if you touched Rust, `cargo test --manifest-path src-tauri/Cargo.toml`.
