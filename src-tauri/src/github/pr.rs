@@ -1097,14 +1097,11 @@ pub struct GhBranchProtection {
 /// non-admin viewer simply gets an empty list.
 #[tauri::command]
 pub async fn gh_branch_protections(repo_path: String) -> AppResult<Vec<GhBranchProtection>> {
-    let out = run_gh(
-        Some(&repo_path),
-        &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-        GH_TIMEOUT,
-    )
-    .await?;
-    let name_with_owner = out.stdout_lossy().trim().to_string();
-    let Some((owner, name)) = name_with_owner.split_once('/') else {
+    // Pin the origin slug: an unpinned `gh repo view` on a fork with an
+    // `upstream` remote auto-resolves to the PARENT, so it would import the
+    // upstream's branch protections. `gh_origin_slug` returns "owner/repo".
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
+    let Some((owner, name)) = slug.split_once('/') else {
         return Err(AppError::Gh("could not determine the repository owner".into()));
     };
     validate_graphql_embed(owner, "repository owner")?;

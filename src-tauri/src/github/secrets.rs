@@ -102,17 +102,15 @@ fn validate_var_name(name: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn secrets_path(seg: &str, env: Option<&str>) -> AppResult<String> {
+fn secrets_path(slug: &str, seg: &str, env: Option<&str>) -> AppResult<String> {
     match env {
         Some(env) => {
             validate_env(env)?;
             Ok(format!(
-                "repos/{{owner}}/{{repo}}/environments/{env}/secrets?per_page=100"
+                "repos/{slug}/environments/{env}/secrets?per_page=100"
             ))
         }
-        None => Ok(format!(
-            "repos/{{owner}}/{{repo}}/{seg}/secrets?per_page=100"
-        )),
+        None => Ok(format!("repos/{slug}/{seg}/secrets?per_page=100")),
     }
 }
 
@@ -124,7 +122,11 @@ pub async fn gh_secrets_list(
 ) -> AppResult<Vec<GhSecret>> {
     let seg = app_segment(&app)?;
     check_env_app(&app, env.as_deref())?;
-    let path = secrets_path(seg, env.as_deref())?;
+    // Pin the origin slug: `gh api`'s `{owner}/{repo}` placeholders auto-resolve
+    // to the PARENT on a fork with an `upstream` remote, so build a literal
+    // `repos/<slug>/…` path to list the fork's OWN secrets.
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
+    let path = secrets_path(&slug, seg, env.as_deref())?;
     let out = run_gh(Some(&repo_path), &["api", &path], GH_NETWORK_TIMEOUT).await?;
     let resp: SecretsResp = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Gh(format!("could not parse secrets: {e}")))?;
@@ -146,8 +148,21 @@ pub async fn gh_secret_set(
     if value.is_empty() {
         return Err(AppError::InvalidArgument("a secret value is required".into()));
     }
+    // Pin the origin slug: an unpinned `gh secret set` on a fork with an
+    // `upstream` remote would target the PARENT. The `secret` command family
+    // accepts `-R/--repo OWNER/REPO` (verified with --help — use the long
+    // `--repo`, since `-r/--repos` is a different org-scope flag).
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     // `gh secret set` reads the value from stdin and encrypts it locally.
-    let mut args: Vec<&str> = vec!["secret", "set", name, "--app", app.as_str()];
+    let mut args: Vec<&str> = vec![
+        "secret",
+        "set",
+        name,
+        "--repo",
+        &slug,
+        "--app",
+        app.as_str(),
+    ];
     if let Some(env) = env.as_deref() {
         validate_env(env)?;
         args.push("--env");
@@ -166,7 +181,16 @@ pub async fn gh_secret_delete(
 ) -> AppResult<()> {
     app_segment(&app)?;
     check_env_app(&app, env.as_deref())?;
-    let mut args: Vec<&str> = vec!["secret", "delete", name.as_str(), "--app", app.as_str()];
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
+    let mut args: Vec<&str> = vec![
+        "secret",
+        "delete",
+        name.as_str(),
+        "--repo",
+        &slug,
+        "--app",
+        app.as_str(),
+    ];
     if let Some(env) = env.as_deref() {
         validate_env(env)?;
         args.push("--env");
@@ -176,15 +200,15 @@ pub async fn gh_secret_delete(
     Ok(())
 }
 
-fn variables_path(env: Option<&str>) -> AppResult<String> {
+fn variables_path(slug: &str, env: Option<&str>) -> AppResult<String> {
     match env {
         Some(env) => {
             validate_env(env)?;
             Ok(format!(
-                "repos/{{owner}}/{{repo}}/environments/{env}/variables?per_page=100"
+                "repos/{slug}/environments/{env}/variables?per_page=100"
             ))
         }
-        None => Ok("repos/{owner}/{repo}/actions/variables?per_page=100".into()),
+        None => Ok(format!("repos/{slug}/actions/variables?per_page=100")),
     }
 }
 
@@ -193,7 +217,9 @@ pub async fn gh_variables_list(
     repo_path: String,
     env: Option<String>,
 ) -> AppResult<Vec<GhVariable>> {
-    let path = variables_path(env.as_deref())?;
+    // Pin the origin slug so a fork lists its OWN variables (see `gh_secrets_list`).
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
+    let path = variables_path(&slug, env.as_deref())?;
     let out = run_gh(Some(&repo_path), &["api", &path], GH_NETWORK_TIMEOUT).await?;
     let resp: VariablesResp = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Gh(format!("could not parse variables: {e}")))?;
@@ -209,8 +235,11 @@ pub async fn gh_variable_set(
 ) -> AppResult<()> {
     let name = name.trim();
     validate_var_name(name)?;
+    // Pin the origin slug so a fork's variable write can't target the PARENT
+    // (see `gh_secret_set`).
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     // `gh variable set` upserts (create or update); value from stdin.
-    let mut args: Vec<&str> = vec!["variable", "set", name];
+    let mut args: Vec<&str> = vec!["variable", "set", name, "--repo", &slug];
     if let Some(env) = env.as_deref() {
         validate_env(env)?;
         args.push("--env");
@@ -226,7 +255,8 @@ pub async fn gh_variable_delete(
     env: Option<String>,
     name: String,
 ) -> AppResult<()> {
-    let mut args: Vec<&str> = vec!["variable", "delete", name.as_str()];
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
+    let mut args: Vec<&str> = vec!["variable", "delete", name.as_str(), "--repo", &slug];
     if let Some(env) = env.as_deref() {
         validate_env(env)?;
         args.push("--env");
@@ -239,9 +269,10 @@ pub async fn gh_variable_delete(
 /// Deployment environment names, for the Actions secret/variable env picker.
 #[tauri::command]
 pub async fn gh_environments_list(repo_path: String) -> AppResult<Vec<String>> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh_raw(
         Some(&repo_path),
-        &["api", "repos/{owner}/{repo}/environments?per_page=100"],
+        &["api", &format!("repos/{slug}/environments?per_page=100")],
         GH_NETWORK_TIMEOUT,
     )
     .await?;

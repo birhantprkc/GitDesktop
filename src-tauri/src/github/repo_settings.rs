@@ -12,14 +12,19 @@ use crate::github::runner::{
 };
 
 /// Whether the signed-in user is an admin on this repo. Gates the
-/// repo-settings / webhooks UI. Reads the viewer's `permissions.admin`; a repo
-/// without a GitHub remote (or no access) simply reads as `false` rather than
-/// erroring — mirrors how `gh_branch_protections` tolerates non-admins.
+/// repo-settings / webhooks UI. Reads the viewer's `permissions.admin`; no
+/// access reads as `false` rather than erroring. A repo without a GitHub origin
+/// remote errors (the origin slug can't be resolved) — the same tradeoff every
+/// other pinned repo-admin call makes.
 #[tauri::command]
 pub async fn gh_repo_admin(repo_path: String) -> AppResult<bool> {
+    // Pin the origin slug: `gh api`'s `{owner}/{repo}` placeholders auto-resolve
+    // to the PARENT on a fork with an `upstream` remote, which would probe the
+    // upstream's admin bit instead of the user's own fork.
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh_raw(
         Some(&repo_path),
-        &["api", "repos/{owner}/{repo}", "-q", ".permissions.admin"],
+        &["api", &format!("repos/{slug}"), "-q", ".permissions.admin"],
         GH_TIMEOUT,
     )
     .await?;
@@ -209,9 +214,13 @@ fn build_hook_body(input: &WebhookInput, include_name: bool) -> serde_json::Valu
 /// All webhooks on the repo (admin only — non-admins get gh's permission error).
 #[tauri::command]
 pub async fn gh_hooks_list(repo_path: String) -> AppResult<Vec<Webhook>> {
+    // Pin the origin slug: `gh api`'s `{owner}/{repo}` placeholders auto-resolve
+    // to the PARENT on a fork with an `upstream` remote, so build the literal
+    // `repos/<slug>` path to keep webhook admin on the user's own fork.
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
-        &["api", "--paginate", "repos/{owner}/{repo}/hooks"],
+        &["api", "--paginate", &format!("repos/{slug}/hooks")],
         GH_NETWORK_TIMEOUT,
     )
     .await?;
@@ -222,6 +231,7 @@ pub async fn gh_hooks_list(repo_path: String) -> AppResult<Vec<Webhook>> {
 #[tauri::command]
 pub async fn gh_hook_create(repo_path: String, input: WebhookInput) -> AppResult<Webhook> {
     validate_hook_input(&input)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let body = build_hook_body(&input, true);
     let out = run_gh_input(
         Some(&repo_path),
@@ -229,7 +239,7 @@ pub async fn gh_hook_create(repo_path: String, input: WebhookInput) -> AppResult
             "api",
             "--method",
             "POST",
-            "repos/{owner}/{repo}/hooks",
+            &format!("repos/{slug}/hooks"),
             "--input",
             "-",
         ],
@@ -248,6 +258,7 @@ pub async fn gh_hook_update(
     input: WebhookInput,
 ) -> AppResult<Webhook> {
     validate_hook_input(&input)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let body = build_hook_body(&input, false);
     let out = run_gh_input(
         Some(&repo_path),
@@ -255,7 +266,7 @@ pub async fn gh_hook_update(
             "api",
             "--method",
             "PATCH",
-            &format!("repos/{{owner}}/{{repo}}/hooks/{id}"),
+            &format!("repos/{slug}/hooks/{id}"),
             "--input",
             "-",
         ],
@@ -269,13 +280,14 @@ pub async fn gh_hook_update(
 
 #[tauri::command]
 pub async fn gh_hook_delete(repo_path: String, id: u64) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
         &[
             "api",
             "--method",
             "DELETE",
-            &format!("repos/{{owner}}/{{repo}}/hooks/{id}"),
+            &format!("repos/{slug}/hooks/{id}"),
         ],
         GH_NETWORK_TIMEOUT,
     )
@@ -286,13 +298,14 @@ pub async fn gh_hook_delete(repo_path: String, id: u64) -> AppResult<()> {
 /// Sends a `ping` event to the webhook (GitHub's "redeliver a ping").
 #[tauri::command]
 pub async fn gh_hook_ping(repo_path: String, id: u64) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
         &[
             "api",
             "--method",
             "POST",
-            &format!("repos/{{owner}}/{{repo}}/hooks/{id}/pings"),
+            &format!("repos/{slug}/hooks/{id}/pings"),
         ],
         GH_NETWORK_TIMEOUT,
     )
@@ -303,13 +316,14 @@ pub async fn gh_hook_ping(repo_path: String, id: u64) -> AppResult<()> {
 /// Triggers a test `push` event (push-event hooks only; GitHub errors otherwise).
 #[tauri::command]
 pub async fn gh_hook_test(repo_path: String, id: u64) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
         &[
             "api",
             "--method",
             "POST",
-            &format!("repos/{{owner}}/{{repo}}/hooks/{id}/tests"),
+            &format!("repos/{slug}/hooks/{id}/tests"),
         ],
         GH_NETWORK_TIMEOUT,
     )
@@ -365,12 +379,10 @@ pub async fn gh_hook_deliveries(
     repo_path: String,
     hook_id: u64,
 ) -> AppResult<Vec<HookDelivery>> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
-        &[
-            "api",
-            &format!("repos/{{owner}}/{{repo}}/hooks/{hook_id}/deliveries"),
-        ],
+        &["api", &format!("repos/{slug}/hooks/{hook_id}/deliveries")],
         GH_NETWORK_TIMEOUT,
     )
     .await?;
@@ -395,13 +407,12 @@ pub async fn gh_hook_delivery(
     delivery_id: String,
 ) -> AppResult<HookDeliveryDetail> {
     validate_delivery_id(&delivery_id)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
         &[
             "api",
-            &format!(
-                "repos/{{owner}}/{{repo}}/hooks/{hook_id}/deliveries/{delivery_id}"
-            ),
+            &format!("repos/{slug}/hooks/{hook_id}/deliveries/{delivery_id}"),
         ],
         GH_NETWORK_TIMEOUT,
     )
@@ -428,15 +439,14 @@ pub async fn gh_hook_redeliver(
     delivery_id: String,
 ) -> AppResult<()> {
     validate_delivery_id(&delivery_id)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
         &[
             "api",
             "--method",
             "POST",
-            &format!(
-                "repos/{{owner}}/{{repo}}/hooks/{hook_id}/deliveries/{delivery_id}/attempts"
-            ),
+            &format!("repos/{slug}/hooks/{hook_id}/deliveries/{delivery_id}/attempts"),
         ],
         GH_NETWORK_TIMEOUT,
     )
@@ -610,9 +620,12 @@ fn can_change_forking(repo_json: &str) -> bool {
 
 #[tauri::command]
 pub async fn gh_repo_settings_get(repo_path: String) -> AppResult<RepoSettings> {
+    // Pin the origin slug so a fork reads its OWN settings, not the parent's
+    // (see `gh_hooks_list`).
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
-        &["api", "repos/{owner}/{repo}"],
+        &["api", &format!("repos/{slug}")],
         GH_NETWORK_TIMEOUT,
     )
     .await?;
@@ -636,6 +649,9 @@ pub async fn gh_repo_settings_update(
         ));
     }
     validate_merge_message_pairs(&input)?;
+    // Pin the origin slug once for both the settings PATCH and the topics PUT so
+    // a fork edits its OWN config, not the parent's (see `gh_hooks_list`).
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let mut body = json!({
         "description": input.description.trim(),
         "homepage": input.homepage.trim(),
@@ -668,7 +684,7 @@ pub async fn gh_repo_settings_update(
             "api",
             "--method",
             "PATCH",
-            "repos/{owner}/{repo}",
+            &format!("repos/{slug}"),
             "--input",
             "-",
         ],
@@ -707,7 +723,7 @@ pub async fn gh_repo_settings_update(
             "api",
             "--method",
             "PUT",
-            "repos/{owner}/{repo}/topics",
+            &format!("repos/{slug}/topics"),
             "--input",
             "-",
         ],

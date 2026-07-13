@@ -70,9 +70,22 @@ const LIST_FIELDS: &str =
 /// Repository releases, newest first (gh's default order).
 #[tauri::command]
 pub async fn gh_release_list(repo_path: String) -> AppResult<Vec<ReleaseInfo>> {
+    // Pin the origin slug: an unpinned `gh release` on a fork with an `upstream`
+    // remote auto-resolves to the PARENT, listing the parent's releases. The
+    // `release` command family accepts `-R OWNER/REPO` (verified with --help).
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
-        &["release", "list", "--limit", "100", "--json", LIST_FIELDS],
+        &[
+            "release",
+            "list",
+            "--repo",
+            &slug,
+            "--limit",
+            "100",
+            "--json",
+            LIST_FIELDS,
+        ],
         GH_TIMEOUT,
     )
     .await?;
@@ -133,9 +146,18 @@ pub async fn gh_release_view(
     tag: String,
 ) -> AppResult<ReleaseDetails> {
     validate_tag(&tag)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
-        &["release", "view", &tag, "--json", VIEW_FIELDS],
+        &[
+            "release",
+            "view",
+            &tag,
+            "--repo",
+            &slug,
+            "--json",
+            VIEW_FIELDS,
+        ],
         GH_TIMEOUT,
     )
     .await?;
@@ -180,10 +202,11 @@ pub async fn gh_release_create(
     latest: bool,
 ) -> AppResult<String> {
     validate_tag(&tag)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let title = title.trim();
     let notes = notes.trim();
     let target = target.trim();
-    let mut args: Vec<&str> = vec!["release", "create", &tag];
+    let mut args: Vec<&str> = vec!["release", "create", &tag, "--repo", &slug];
     if !title.is_empty() {
         args.push("--title");
         args.push(title);
@@ -221,6 +244,7 @@ pub async fn gh_release_edit(
     latest: bool,
 ) -> AppResult<()> {
     validate_tag(&tag)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     // gh's bool flags take an explicit value so they can be turned off too.
     let prerelease_flag = format!("--prerelease={prerelease}");
     let draft_flag = format!("--draft={draft}");
@@ -231,6 +255,8 @@ pub async fn gh_release_edit(
         "release",
         "edit",
         &tag,
+        "--repo",
+        &slug,
         &prerelease_flag,
         &draft_flag,
         &latest_flag,
@@ -267,6 +293,10 @@ pub async fn gh_release_generate_notes(
     previous_tag: String,
 ) -> AppResult<GeneratedNotes> {
     validate_tag(&tag)?;
+    // `gh api` has no `-R`; build the literal `repos/<slug>` path so a fork
+    // generates notes for its OWN releases, not the parent's.
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
+    let notes_path = format!("repos/{slug}/releases/generate-notes");
     let tag_arg = format!("tag_name={tag}");
     let target_arg = format!("target_commitish={}", target.trim());
     let prev_arg = format!("previous_tag_name={}", previous_tag.trim());
@@ -274,7 +304,7 @@ pub async fn gh_release_generate_notes(
         "api",
         "--method",
         "POST",
-        "repos/{owner}/{repo}/releases/generate-notes",
+        &notes_path,
         "-f",
         &tag_arg,
     ];
@@ -301,7 +331,8 @@ pub async fn gh_release_delete(
     cleanup_tag: bool,
 ) -> AppResult<()> {
     validate_tag(&tag)?;
-    let mut args: Vec<&str> = vec!["release", "delete", &tag, "--yes"];
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
+    let mut args: Vec<&str> = vec!["release", "delete", &tag, "--repo", &slug, "--yes"];
     if cleanup_tag {
         args.push("--cleanup-tag");
     }
@@ -320,9 +351,18 @@ pub async fn gh_release_upload_asset(
     if file_path.trim().is_empty() {
         return Err(AppError::InvalidArgument("a file is required".into()));
     }
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
-        &["release", "upload", &tag, &file_path, "--clobber"],
+        &[
+            "release",
+            "upload",
+            &tag,
+            &file_path,
+            "--repo",
+            &slug,
+            "--clobber",
+        ],
         GH_NETWORK_TIMEOUT,
     )
     .await?;
@@ -339,9 +379,18 @@ pub async fn gh_release_delete_asset(
     if asset_name.trim().is_empty() {
         return Err(AppError::InvalidArgument("an asset name is required".into()));
     }
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
-        &["release", "delete-asset", &tag, &asset_name, "--yes"],
+        &[
+            "release",
+            "delete-asset",
+            &tag,
+            &asset_name,
+            "--repo",
+            &slug,
+            "--yes",
+        ],
         GH_NETWORK_TIMEOUT,
     )
     .await?;
@@ -362,12 +411,15 @@ pub async fn gh_release_download_asset(
             "a download folder is required".into(),
         ));
     }
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
         &[
             "release",
             "download",
             &tag,
+            "--repo",
+            &slug,
             "--pattern",
             &asset_name,
             "--dir",

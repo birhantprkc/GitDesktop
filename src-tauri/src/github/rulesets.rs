@@ -38,9 +38,13 @@ fn validate_enforcement(e: &str) -> AppResult<()> {
 
 #[tauri::command]
 pub async fn gh_rulesets_list(repo_path: String) -> AppResult<Vec<RulesetSummary>> {
+    // Pin the origin slug: `gh api`'s `{owner}/{repo}` placeholders auto-resolve
+    // to the PARENT on a fork with an `upstream` remote, so build the literal
+    // `repos/<slug>` path to keep ruleset admin on the user's own fork.
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
-        &["api", "repos/{owner}/{repo}/rulesets?per_page=100"],
+        &["api", &format!("repos/{slug}/rulesets?per_page=100")],
         GH_NETWORK_TIMEOUT,
     )
     .await?;
@@ -51,9 +55,10 @@ pub async fn gh_rulesets_list(repo_path: String) -> AppResult<Vec<RulesetSummary
 /// The full ruleset object (raw GitHub JSON), for the editor to seed from.
 #[tauri::command]
 pub async fn gh_ruleset_get(repo_path: String, id: u64) -> AppResult<Value> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
-        &["api", &format!("repos/{{owner}}/{{repo}}/rulesets/{id}")],
+        &["api", &format!("repos/{slug}/rulesets/{id}")],
         GH_NETWORK_TIMEOUT,
     )
     .await?;
@@ -63,13 +68,14 @@ pub async fn gh_ruleset_get(repo_path: String, id: u64) -> AppResult<Value> {
 
 #[tauri::command]
 pub async fn gh_ruleset_create(repo_path: String, body: Value) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh_input(
         Some(&repo_path),
         &[
             "api",
             "--method",
             "POST",
-            "repos/{owner}/{repo}/rulesets",
+            &format!("repos/{slug}/rulesets"),
             "--input",
             "-",
         ],
@@ -82,13 +88,14 @@ pub async fn gh_ruleset_create(repo_path: String, body: Value) -> AppResult<()> 
 
 #[tauri::command]
 pub async fn gh_ruleset_update(repo_path: String, id: u64, body: Value) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh_input(
         Some(&repo_path),
         &[
             "api",
             "--method",
             "PUT",
-            &format!("repos/{{owner}}/{{repo}}/rulesets/{id}"),
+            &format!("repos/{slug}/rulesets/{id}"),
             "--input",
             "-",
         ],
@@ -101,13 +108,14 @@ pub async fn gh_ruleset_update(repo_path: String, id: u64, body: Value) -> AppRe
 
 #[tauri::command]
 pub async fn gh_ruleset_delete(repo_path: String, id: u64) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
         &[
             "api",
             "--method",
             "DELETE",
-            &format!("repos/{{owner}}/{{repo}}/rulesets/{id}"),
+            &format!("repos/{slug}/rulesets/{id}"),
         ],
         GH_NETWORK_TIMEOUT,
     )
@@ -125,9 +133,10 @@ pub async fn gh_ruleset_set_enforcement(
     enforcement: String,
 ) -> AppResult<()> {
     validate_enforcement(&enforcement)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
-        &["api", &format!("repos/{{owner}}/{{repo}}/rulesets/{id}")],
+        &["api", &format!("repos/{slug}/rulesets/{id}")],
         GH_NETWORK_TIMEOUT,
     )
     .await?;

@@ -37,10 +37,15 @@ pub struct CommunityInsights {
 pub async fn gh_community_insights(repo_path: String) -> AppResult<CommunityInsights> {
     let mut out = CommunityInsights::default();
 
+    // Pin the origin slug: `gh api`'s `{owner}/{repo}` placeholders auto-resolve
+    // to the PARENT on a fork with an `upstream` remote, so build the literal
+    // `repos/<slug>` path to read the fork's own insights.
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
+
     // Community profile: health score + which health files are present.
     let profile = run_gh_raw(
         Some(&repo_path),
-        &["api", "repos/{owner}/{repo}/community/profile"],
+        &["api", &format!("repos/{slug}/community/profile")],
         GH_TIMEOUT,
     )
     .await?;
@@ -62,7 +67,7 @@ pub async fn gh_community_insights(repo_path: String) -> AppResult<CommunityInsi
     // Repo object: social counts.
     let repo = run_gh_raw(
         Some(&repo_path),
-        &["api", "repos/{owner}/{repo}"],
+        &["api", &format!("repos/{slug}")],
         GH_TIMEOUT,
     )
     .await?;
@@ -80,10 +85,10 @@ pub async fn gh_community_insights(repo_path: String) -> AppResult<CommunityInsi
 }
 
 // ── Repo social stats by explicit owner/name (MCP registry browser) ──────────
-// Unlike `gh_community_insights` (which resolves {owner}/{repo} from a local
-// repo's remote), this takes explicit "owner/name" refs straight from the MCP
-// registry's `repository.url`, and fetches a whole page of them in ONE GraphQL
-// call. Tolerant: an unresolved/private repo returns null for its alias while
+// Unlike `gh_community_insights` (which resolves the owner/repo slug from a
+// local repo's origin remote), this takes explicit "owner/name" refs straight
+// from the MCP registry's `repository.url`, and fetches a whole page of them in
+// ONE GraphQL call. Tolerant: an unresolved/private repo returns null for its alias while
 // the rest still resolve, so a single bad ref never sinks the batch.
 
 #[derive(Debug, Serialize)]
@@ -254,10 +259,13 @@ fn parse_items(out: &GhOutput, key: &str) -> Vec<TrafficItem> {
 
 #[tauri::command]
 pub async fn gh_repo_traffic(repo_path: String) -> AppResult<RepoTraffic> {
+    // Pin the origin slug so a fork reads its OWN traffic, not the parent's
+    // (see `gh_community_insights`).
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     // Views gates the whole card: a non-zero exit here is the 403 (no push).
     let views = run_gh_raw(
         Some(&repo_path),
-        &["api", "repos/{owner}/{repo}/traffic/views"],
+        &["api", &format!("repos/{slug}/traffic/views")],
         GH_TIMEOUT,
     )
     .await?;
@@ -274,22 +282,16 @@ pub async fn gh_repo_traffic(repo_path: String) -> AppResult<RepoTraffic> {
         out.views = parse_points(&v, "views");
     }
     // The remaining three calls are independent — fan them out.
+    let clones_path = format!("repos/{slug}/traffic/clones");
+    let referrers_path = format!("repos/{slug}/traffic/popular/referrers");
+    let paths_path = format!("repos/{slug}/traffic/popular/paths");
+    let clones_args = ["api", clones_path.as_str()];
+    let referrers_args = ["api", referrers_path.as_str()];
+    let paths_args = ["api", paths_path.as_str()];
     let (clones, referrers, paths) = tokio::join!(
-        run_gh_raw(
-            Some(&repo_path),
-            &["api", "repos/{owner}/{repo}/traffic/clones"],
-            GH_TIMEOUT,
-        ),
-        run_gh_raw(
-            Some(&repo_path),
-            &["api", "repos/{owner}/{repo}/traffic/popular/referrers"],
-            GH_TIMEOUT,
-        ),
-        run_gh_raw(
-            Some(&repo_path),
-            &["api", "repos/{owner}/{repo}/traffic/popular/paths"],
-            GH_TIMEOUT,
-        ),
+        run_gh_raw(Some(&repo_path), &clones_args, GH_TIMEOUT),
+        run_gh_raw(Some(&repo_path), &referrers_args, GH_TIMEOUT),
+        run_gh_raw(Some(&repo_path), &paths_args, GH_TIMEOUT),
     );
     if let Ok(c) = clones {
         if c.code == 0 {
@@ -336,9 +338,12 @@ pub struct RepoDependencies {
 
 #[tauri::command]
 pub async fn gh_repo_dependencies(repo_path: String) -> AppResult<RepoDependencies> {
+    // Pin the origin slug so a fork reads its OWN dependency graph, not the
+    // parent's (see `gh_community_insights`).
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh_raw(
         Some(&repo_path),
-        &["api", "repos/{owner}/{repo}/dependency-graph/sbom"],
+        &["api", &format!("repos/{slug}/dependency-graph/sbom")],
         GH_TIMEOUT,
     )
     .await?;

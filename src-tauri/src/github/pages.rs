@@ -24,9 +24,13 @@ pub struct PagesInfo {
 
 #[tauri::command]
 pub async fn gh_pages_get(repo_path: String) -> AppResult<Option<PagesInfo>> {
+    // Pin the origin slug: `gh api`'s `{owner}/{repo}` placeholders auto-resolve
+    // to the PARENT on a fork with an `upstream` remote, so build the literal
+    // `repos/<slug>` path to keep every Pages call on the user's own fork.
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh_raw(
         Some(&repo_path),
-        &["api", "repos/{owner}/{repo}/pages"],
+        &["api", &format!("repos/{slug}/pages")],
         GH_NETWORK_TIMEOUT,
     )
     .await?;
@@ -64,6 +68,7 @@ pub async fn gh_pages_enable(
     branch: Option<String>,
     path: Option<String>,
 ) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let body = if build_type == "workflow" {
         json!({ "build_type": "workflow" })
     } else {
@@ -80,7 +85,7 @@ pub async fn gh_pages_enable(
             "api",
             "--method",
             "POST",
-            "repos/{owner}/{repo}/pages",
+            &format!("repos/{slug}/pages"),
             "--input",
             "-",
         ],
@@ -101,6 +106,7 @@ pub async fn gh_pages_update(
     cname: Option<String>,
     https_enforced: Option<bool>,
 ) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let mut body = serde_json::Map::new();
     if let Some(bt) = build_type {
         body.insert("build_type".into(), json!(bt));
@@ -127,7 +133,7 @@ pub async fn gh_pages_update(
             "api",
             "--method",
             "PUT",
-            "repos/{owner}/{repo}/pages",
+            &format!("repos/{slug}/pages"),
             "--input",
             "-",
         ],
@@ -140,9 +146,10 @@ pub async fn gh_pages_update(
 
 #[tauri::command]
 pub async fn gh_pages_disable(repo_path: String) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
-        &["api", "--method", "DELETE", "repos/{owner}/{repo}/pages"],
+        &["api", "--method", "DELETE", &format!("repos/{slug}/pages")],
         GH_NETWORK_TIMEOUT,
     )
     .await?;

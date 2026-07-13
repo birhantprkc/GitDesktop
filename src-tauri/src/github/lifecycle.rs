@@ -38,8 +38,13 @@ fn validate_repo_name(name: &str) -> AppResult<()> {
 }
 
 /// Archives or unarchives the repo. Archiving makes it read-only (reversible).
+///
+/// Pins the origin slug: `gh api`'s `{owner}/{repo}` placeholders auto-resolve
+/// to the PARENT on a fork with an `upstream` remote — so an unpinned call would
+/// archive the upstream repo. Build the literal `repos/<slug>` path instead.
 #[tauri::command]
 pub async fn gh_repo_set_archived(repo_path: String, archived: bool) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let body = json!({ "archived": archived });
     run_gh_input(
         Some(&repo_path),
@@ -47,7 +52,7 @@ pub async fn gh_repo_set_archived(repo_path: String, archived: bool) -> AppResul
             "api",
             "--method",
             "PATCH",
-            "repos/{owner}/{repo}",
+            &format!("repos/{slug}"),
             "--input",
             "-",
         ],
@@ -59,10 +64,14 @@ pub async fn gh_repo_set_archived(repo_path: String, archived: bool) -> AppResul
 }
 
 /// Renames the repo. GitHub auto-redirects old links/clones to the new name.
+///
+/// Pins the origin slug so a fork's rename can't retarget the upstream parent
+/// (see `gh_repo_set_archived`).
 #[tauri::command]
 pub async fn gh_repo_rename(repo_path: String, new_name: String) -> AppResult<()> {
     let new_name = new_name.trim();
     validate_repo_name(new_name)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let body = json!({ "name": new_name });
     run_gh_input(
         Some(&repo_path),
@@ -70,7 +79,7 @@ pub async fn gh_repo_rename(repo_path: String, new_name: String) -> AppResult<()
             "api",
             "--method",
             "PATCH",
-            "repos/{owner}/{repo}",
+            &format!("repos/{slug}"),
             "--input",
             "-",
         ],
@@ -83,6 +92,7 @@ pub async fn gh_repo_rename(repo_path: String, new_name: String) -> AppResult<()
 
 /// Changes repository visibility. `visibility` ∈ public | private | internal
 /// (`internal` needs the org to belong to an enterprise — gh's error explains).
+/// Pins the origin slug (see `gh_repo_set_archived`).
 #[tauri::command]
 pub async fn gh_repo_set_visibility(repo_path: String, visibility: String) -> AppResult<()> {
     if !matches!(visibility.as_str(), "public" | "private" | "internal") {
@@ -90,6 +100,7 @@ pub async fn gh_repo_set_visibility(repo_path: String, visibility: String) -> Ap
             "invalid visibility: {visibility}"
         )));
     }
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let body = json!({ "visibility": visibility });
     run_gh_input(
         Some(&repo_path),
@@ -97,7 +108,7 @@ pub async fn gh_repo_set_visibility(repo_path: String, visibility: String) -> Ap
             "api",
             "--method",
             "PATCH",
-            "repos/{owner}/{repo}",
+            &format!("repos/{slug}"),
             "--input",
             "-",
         ],
@@ -110,6 +121,9 @@ pub async fn gh_repo_set_visibility(repo_path: String, visibility: String) -> Ap
 
 /// Transfers the repo to `new_owner` (user or org). Returns 202; a transfer to a
 /// personal account is pending until the recipient accepts.
+///
+/// Pins the origin slug: without it a fork's transfer would target the upstream
+/// PARENT (see `gh_repo_set_archived`).
 #[tauri::command]
 pub async fn gh_repo_transfer(
     repo_path: String,
@@ -118,6 +132,7 @@ pub async fn gh_repo_transfer(
 ) -> AppResult<()> {
     let new_owner = new_owner.trim();
     validate_owner(new_owner)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let mut body = json!({ "new_owner": new_owner });
     if let Some(name) = new_name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         body["new_name"] = json!(name);
@@ -128,7 +143,7 @@ pub async fn gh_repo_transfer(
             "api",
             "--method",
             "POST",
-            "repos/{owner}/{repo}/transfer",
+            &format!("repos/{slug}/transfer"),
             "--input",
             "-",
         ],
@@ -141,11 +156,15 @@ pub async fn gh_repo_transfer(
 
 /// Permanently deletes the GitHub repository. Needs the `delete_repo` scope (a
 /// missing scope surfaces as gh's error). The local clone is untouched.
+///
+/// Pins the origin slug: an unpinned DELETE on a fork with an `upstream` remote
+/// would resolve to — and delete — the PARENT repo (see `gh_repo_set_archived`).
 #[tauri::command]
 pub async fn gh_repo_delete(repo_path: String) -> AppResult<()> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
-        &["api", "--method", "DELETE", "repos/{owner}/{repo}"],
+        &["api", "--method", "DELETE", &format!("repos/{slug}")],
         GH_NETWORK_TIMEOUT,
     )
     .await?;

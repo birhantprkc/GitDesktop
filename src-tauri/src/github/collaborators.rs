@@ -96,12 +96,16 @@ const INVITE_ROLES: &[&str] = &["read", "write", "triage", "maintain", "admin"];
 
 #[tauri::command]
 pub async fn gh_collaborators_list(repo_path: String) -> AppResult<Vec<Collaborator>> {
+    // Pin the origin slug: `gh api`'s `{owner}/{repo}` placeholders auto-resolve
+    // to the PARENT on a fork with an `upstream` remote, so build the literal
+    // `repos/<slug>` path to keep collaborator admin on the user's own fork.
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
         &[
             "api",
             "--paginate",
-            "repos/{owner}/{repo}/collaborators?per_page=100&affiliation=all",
+            &format!("repos/{slug}/collaborators?per_page=100&affiliation=all"),
         ],
         GH_NETWORK_TIMEOUT,
     )
@@ -122,6 +126,7 @@ pub async fn gh_collaborator_add(
     let username = username.trim();
     validate_username(username)?;
     let permission = collaborator_permission(&role)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let body = json!({ "permission": permission });
     let out = run_gh_input(
         Some(&repo_path),
@@ -129,7 +134,7 @@ pub async fn gh_collaborator_add(
             "api",
             "--method",
             "PUT",
-            &format!("repos/{{owner}}/{{repo}}/collaborators/{username}"),
+            &format!("repos/{slug}/collaborators/{username}"),
             "--input",
             "-",
         ],
@@ -145,13 +150,14 @@ pub async fn gh_collaborator_add(
 pub async fn gh_collaborator_remove(repo_path: String, username: String) -> AppResult<()> {
     let username = username.trim();
     validate_username(username)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
         &[
             "api",
             "--method",
             "DELETE",
-            &format!("repos/{{owner}}/{{repo}}/collaborators/{username}"),
+            &format!("repos/{slug}/collaborators/{username}"),
         ],
         GH_NETWORK_TIMEOUT,
     )
@@ -161,12 +167,13 @@ pub async fn gh_collaborator_remove(repo_path: String, username: String) -> AppR
 
 #[tauri::command]
 pub async fn gh_invitations_list(repo_path: String) -> AppResult<Vec<Invitation>> {
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let out = run_gh(
         Some(&repo_path),
         &[
             "api",
             "--paginate",
-            "repos/{owner}/{repo}/invitations?per_page=100",
+            &format!("repos/{slug}/invitations?per_page=100"),
         ],
         GH_NETWORK_TIMEOUT,
     )
@@ -203,6 +210,7 @@ pub async fn gh_invitation_update(
             "invalid permission: {permission}"
         )));
     }
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     let body = json!({ "permissions": permission });
     run_gh_input(
         Some(&repo_path),
@@ -210,7 +218,7 @@ pub async fn gh_invitation_update(
             "api",
             "--method",
             "PATCH",
-            &format!("repos/{{owner}}/{{repo}}/invitations/{id}"),
+            &format!("repos/{slug}/invitations/{id}"),
             "--input",
             "-",
         ],
@@ -224,13 +232,14 @@ pub async fn gh_invitation_update(
 #[tauri::command]
 pub async fn gh_invitation_cancel(repo_path: String, id: String) -> AppResult<()> {
     validate_invitation_id(&id)?;
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
     run_gh(
         Some(&repo_path),
         &[
             "api",
             "--method",
             "DELETE",
-            &format!("repos/{{owner}}/{{repo}}/invitations/{id}"),
+            &format!("repos/{slug}/invitations/{id}"),
         ],
         GH_NETWORK_TIMEOUT,
     )
