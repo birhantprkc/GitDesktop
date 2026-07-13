@@ -3083,6 +3083,11 @@ mod tests {
         // scp form keeps the nested group path.
         assert_eq!(remote_path("git@gitlab.com:group/sub/repo.git").as_deref(), Some("group/sub/repo"));
         assert_eq!(remote_path("ssh://git@gitlab.com/group/repo.git").as_deref(), Some("group/repo"));
+        // GitHub `owner/repo` slug (what `gh_origin_slug` passes to `gh -R`),
+        // in https and scp forms with and without `.git`.
+        assert_eq!(remote_path("https://github.com/theBGuy/biome.git").as_deref(), Some("theBGuy/biome"));
+        assert_eq!(remote_path("git@github.com:theBGuy/biome.git").as_deref(), Some("theBGuy/biome"));
+        assert_eq!(remote_path("https://github.com/theBGuy/biome").as_deref(), Some("theBGuy/biome"));
         // host only → no path.
         assert_eq!(remote_path("https://gitlab.com"), None);
         assert_eq!(remote_path("/local/path"), None);
