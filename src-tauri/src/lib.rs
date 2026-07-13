@@ -605,6 +605,8 @@ pub fn run() {
             path_launcher::path_launcher_install,
             path_launcher::path_launcher_remove,
             git::remote::git_fetch,
+            git::remote::git_fetch_remote,
+            git::remote::git_remote_default_branch,
             git::remote::git_pull,
             git::remote::git_push,
             git::remote::git_remotes,

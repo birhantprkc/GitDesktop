@@ -342,7 +342,10 @@ Plus tag and submodule management.
 
 **Syncing** — fetch / pull / push with ahead/behind indicators; pull is
 `--ff-only`, and divergence routes to a guarded force push with
-`--force-with-lease`. **Auto-fetch** (on by default) quietly runs a background
+`--force-with-lease`. When a repo has an `upstream` remote, the Pull menu adds
+**Update from upstream** — one click fetches upstream and brings your branch up
+to date (fast-forward when it can, a merge commit when cleanly diverged, the
+conflict editor otherwise), for keeping a fork current. **Auto-fetch** (on by default) quietly runs a background
 `git fetch` on an interval while the window is focused, so the behind-count and
 incoming commits stay current without pressing Fetch — it never pulls or merges,
 and pushing/pulling stay manual. In-progress merge/rebase/cherry-pick get a conflict banner

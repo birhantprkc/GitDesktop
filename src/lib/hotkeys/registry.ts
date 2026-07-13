@@ -173,6 +173,12 @@ export const ACTIONS = [
   },
   { id: "fetch", label: "Fetch", category: "Repository", defaultBinding: "f5" },
   {
+    id: "update-from-upstream",
+    label: "Update from upstream",
+    category: "Repository",
+    defaultBinding: null,
+  },
+  {
     id: "open-in-terminal",
     label: "Open in terminal",
     category: "Repository",

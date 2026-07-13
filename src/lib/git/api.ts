@@ -669,6 +669,18 @@ export const gitCommitFileDiff = (
 export const gitFetch = (repoPath: string) =>
   invoke<void>("git_fetch", { repoPath });
 
+/** Fetch a single named remote (`git fetch --prune <remote>`) — unlike
+ *  {@link gitFetch}, which only touches the default remote. Used to sync a
+ *  fork's `upstream`, which a bare fetch never reaches. */
+export const gitFetchRemote = (repoPath: string, remote: string) =>
+  invoke<void>("git_fetch_remote", { repoPath, remote });
+
+/** The default branch name (e.g. `"main"`) of a named remote — the branch a
+ *  fork's upstream sync targets. Resolves the local remote HEAD, doing one
+ *  network call to set it if unknown. */
+export const gitRemoteDefaultBranch = (repoPath: string, remote: string) =>
+  invoke<string>("git_remote_default_branch", { repoPath, remote });
+
 /** Pull mode: fast-forward only (default), or reconcile a diverged branch. */
 export type PullMode = "ffOnly" | "rebase" | "merge";
 

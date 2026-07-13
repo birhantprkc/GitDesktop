@@ -136,6 +136,117 @@ pub(crate) async fn git_fetch_core(state: &AppState, repo_path: String) -> AppRe
     Ok(())
 }
 
+/// Error unless `remote` is one of the repo's configured remotes. We never
+/// interpolate a caller-supplied remote name into a git invocation without
+/// confirming it exists first — `validate_remote_arg` rejects the `-flag`
+/// injection shape, but a bare unknown name would still shell out to a
+/// confusing `git fetch <typo>` error; this turns it into an honest one.
+async fn ensure_remote_exists(repo_path: &str, remote: &str) -> AppResult<()> {
+    validate_remote_arg(remote, "remote name")?;
+    let names = git_remotes(repo_path.to_string()).await?;
+    if names.iter().any(|n| n == remote) {
+        Ok(())
+    } else {
+        Err(AppError::InvalidArgument(format!(
+            "remote does not exist: {remote}"
+        )))
+    }
+}
+
+/// Fetch a single named remote (`git fetch --prune <remote>`), unlike
+/// [`git_fetch`] which fetches only the default remote. Powers "Update from
+/// upstream" for forks: `git fetch --prune` alone never touches an `upstream`
+/// remote, so a fork needs this to see upstream's new commits at all. The
+/// remote is validated to exist before use.
+#[tauri::command]
+pub async fn git_fetch_remote(
+    state: State<'_, AppState>,
+    repo_path: String,
+    remote: String,
+) -> AppResult<()> {
+    ensure_remote_exists(&repo_path, &remote).await?;
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["fetch", "--prune", &remote],
+        NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Resolve a remote's default branch name (e.g. `"master"` / `"main"`) — the
+/// branch a fork's `upstream` sync targets.
+///
+/// Phase 1 — validate the remote exists.
+/// Phase 2 — read the LOCAL `refs/remotes/<remote>/HEAD` symbolic ref
+///   (`refs/remotes/<remote>/<branch>`) and strip the prefix. This is offline
+///   and set by the initial `git clone`, so it usually answers immediately.
+/// Phase 3 — if that ref is unset (e.g. the remote was added by hand, as an
+///   `upstream` typically is), one network call `git remote set-head
+///   <remote> --auto` asks the remote for its HEAD, then we re-read the local
+///   ref. Returns just the branch name (no `<remote>/` prefix).
+#[tauri::command]
+pub async fn git_remote_default_branch(
+    state: State<'_, AppState>,
+    repo_path: String,
+    remote: String,
+) -> AppResult<String> {
+    ensure_remote_exists(&repo_path, &remote).await?;
+
+    // `refs/remotes/<remote>/HEAD` → its target `refs/remotes/<remote>/<branch>`.
+    let head_ref = format!("refs/remotes/{remote}/HEAD");
+    let ref_prefix = format!("refs/remotes/{remote}/");
+
+    if let Some(branch) = read_symbolic_ref(&repo_path, &head_ref, &ref_prefix).await? {
+        return Ok(branch);
+    }
+
+    // The local ref is unset — ask the remote for its HEAD (one network call),
+    // then re-read. `set-head --auto` writes `refs/remotes/<remote>/HEAD`.
+    run_git_mutating(
+        &state,
+        &repo_path,
+        &["remote", "set-head", &remote, "--auto"],
+        NETWORK_TIMEOUT,
+    )
+    .await?;
+
+    read_symbolic_ref(&repo_path, &head_ref, &ref_prefix)
+        .await?
+        .ok_or_else(|| {
+            AppError::InvalidArgument(format!(
+                "could not resolve default branch for remote: {remote}"
+            ))
+        })
+}
+
+/// Read a symbolic ref and strip `prefix` off its target, returning the tail
+/// (the branch name). `None` when the ref is unset — `git symbolic-ref` exits
+/// non-zero — or its target doesn't start with `prefix`.
+async fn read_symbolic_ref(
+    repo_path: &str,
+    symref: &str,
+    prefix: &str,
+) -> AppResult<Option<String>> {
+    let out = run_git(
+        Some(repo_path),
+        &["symbolic-ref", "--quiet", symref],
+        DEFAULT_TIMEOUT,
+    )
+    .await;
+    // An unset ref makes `symbolic-ref` exit non-zero; run_git surfaces that as
+    // an error, which here means "not resolved yet", not a hard failure.
+    let Ok(out) = out else {
+        return Ok(None);
+    };
+    let target = out.stdout_lossy().trim().to_string();
+    Ok(target
+        .strip_prefix(prefix)
+        .filter(|b| !b.is_empty())
+        .map(str::to_string))
+}
+
 #[tauri::command]
 pub async fn git_pull(
     state: State<'_, AppState>,

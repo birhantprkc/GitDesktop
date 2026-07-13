@@ -458,6 +458,16 @@ The header shows **Fetch / Pull / Push** with ahead/behind indicators.
 - **Push** ({{kbd:push}}) sends your commits. For a branch with no upstream yet, you'll
   see **Publish branch** instead.
 
+## Update a fork from upstream
+
+If your repo has an **\`upstream\`** remote (the source repo you forked), the Pull menu's
+caret adds **Update from upstream** — also in the command palette ({{kbd:command-palette}}).
+One click fetches upstream, resolves its default branch, and brings your current branch up to
+date: it **fast-forwards** silently when it can, creates a **merge commit** when the histories
+have cleanly diverged, and sends any conflicts to the **conflict editor** (below). It never
+pushes for you — once you're ahead, **Push** lights up on its own. (A plain **Fetch** never
+touches \`upstream\`, so this is how a fork sees the source repo's new commits.)
+
 ## Auto-fetch
 
 By default, GitDesktop quietly fetches in the background so the ahead/behind counts stay

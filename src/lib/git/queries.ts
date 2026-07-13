@@ -2871,6 +2871,48 @@ export function usePull(repo: string) {
   );
 }
 
+/** Outcome of an "Update from upstream" run, for an honest toast. `branch` is
+ *  the upstream default branch name (no `upstream/` prefix). */
+export type UpstreamUpdateOutcome =
+  | { kind: "up-to-date"; branch: string }
+  | { kind: "fast-forwarded"; branch: string }
+  | { kind: "merged"; branch: string };
+
+/**
+ * Sync the current branch with a fork's `upstream` remote: fetch upstream
+ * (a bare fetch never touches it), resolve upstream's default branch, then
+ * bring the current branch up to date by merging `upstream/<default>`.
+ *
+ * Reuses the existing merge machinery — no second pipeline. The merge
+ * fast-forwards silently when possible and creates a merge commit when
+ * cleanly diverged; a conflicting merge rejects and leaves the repo in the
+ * usual conflict state, so the conflict banner/editor takes over exactly like
+ * a branch merge. The preview short-circuits the already-current case so we
+ * report "already up to date" instead of a no-op merge. Never auto-pushes —
+ * the Push affordance lights up on its own afterward.
+ *
+ * Default (whole-repo) invalidation, matching the pull/merge flows, so
+ * branches, status, and history all refresh.
+ */
+export function useUpdateFromUpstream(repo: string) {
+  return useRepoMutation<void, UpstreamUpdateOutcome>(repo, async () => {
+    await api.gitFetchRemote(repo, "upstream");
+    const branch = await api.gitRemoteDefaultBranch(repo, "upstream");
+    const ref = `upstream/${branch}`;
+    // Strategy-free preview: only used to short-circuit the already-current
+    // case; every other status runs the real merge below.
+    const preview = await api.gitMergePreview(repo, ref, "none");
+    if (preview.status === "up-to-date") {
+      return { kind: "up-to-date", branch };
+    }
+    const fastForward = preview.status === "fast-forward";
+    // Plain merge: ff-when-possible, merge commit otherwise. A conflict makes
+    // gitMerge reject — the error propagates and the conflict UI takes over.
+    await api.gitMerge(repo, ref, false, false, "none");
+    return { kind: fastForward ? "fast-forwarded" : "merged", branch };
+  });
+}
+
 export function useSubmodules(repo: string) {
   return useQuery({
     queryKey: ["repo", repo, "submodules"] as const,

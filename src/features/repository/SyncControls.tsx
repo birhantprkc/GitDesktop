@@ -23,6 +23,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Spinner } from "@/components/ui/spinner";
@@ -38,6 +39,7 @@ import {
   usePush,
   useRemotes,
   useRepoStatus,
+  useUpdateFromUpstream,
 } from "@/lib/git/queries";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { quickTransition } from "@/lib/motion";
@@ -53,6 +55,7 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   const fetchRemote = useFetchRemote(repoPath);
   const pull = usePull(repoPath);
   const push = usePush(repoPath);
+  const updateUpstream = useUpdateFromUpstream(repoPath);
   const markFetched = useFetchStatusStore((s) => s.markFetched);
   const lastFetchedAt = useLastFetchedAt(repoPath);
   const [forceConfirmOpen, setForceConfirmOpen] = useState(false);
@@ -64,6 +67,10 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   // order.
   const noOrigin = remotes.isSuccess && !remotes.data.includes("origin");
   const hasOrigin = remotes.isSuccess && remotes.data.includes("origin");
+  // A fork carries an `upstream` remote pointing at the source repo. Only then
+  // do we offer "Update from upstream" (in the Pull menu and the palette).
+  const hasUpstreamRemote =
+    remotes.isSuccess && remotes.data.includes("upstream");
   const readyProviders = usePublishProviders(repoPath, noOrigin);
 
   const head = status.data?.branch;
@@ -75,7 +82,11 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   // amended/rewritten local history: local and remote both have commits the
   // other lacks, so neither pull --ff-only nor a normal push can succeed
   const diverged = Boolean(head && head.ahead > 0 && head.behind > 0);
-  const busy = fetchRemote.isPending || pull.isPending || push.isPending;
+  const busy =
+    fetchRemote.isPending ||
+    pull.isPending ||
+    push.isPending ||
+    updateUpstream.isPending;
   const onError = (e: unknown) => toastError(e);
 
   // One entry point for every fetch — manual (button/hotkey) and automatic —
@@ -124,6 +135,26 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
     });
   }
 
+  // Sync the current branch with the fork's upstream: fetch upstream, resolve
+  // its default branch, then fast-forward or merge. Honest terminal toast per
+  // outcome; a conflicting merge rejects and the conflict banner takes over
+  // (its error still toasts). No auto-push — Push lights up on its own.
+  function doUpdateFromUpstream() {
+    updateUpstream.mutate(undefined, {
+      onSuccess: (outcome) => {
+        const ref = `upstream/${outcome.branch}`;
+        if (outcome.kind === "up-to-date") {
+          toast.success(`Already up to date with ${ref}.`);
+        } else if (outcome.kind === "fast-forwarded") {
+          toast.success(`Fast-forwarded to ${ref}.`);
+        } else {
+          toast.success(`Merged ${ref} into your branch.`);
+        }
+      },
+      onError,
+    });
+  }
+
   function doPush(force: boolean) {
     push.mutate(
       { setUpstream: !hasUpstream, force },
@@ -151,6 +182,13 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
     "push",
     () => (diverged ? setForceConfirmOpen(true) : doPush(false)),
     !noOrigin && !busy,
+  );
+  // Palette-only (defaultBinding: null) and gated on the fork's `upstream`
+  // remote existing, so it hides itself when there's nothing to sync from.
+  useHotkeyAction(
+    "update-from-upstream",
+    doUpdateFromUpstream,
+    hasUpstreamRemote && !busy,
   );
 
   if (noOrigin) {
@@ -235,7 +273,10 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
                 variant="outline"
                 size="sm"
                 aria-label="Pull options"
-                disabled={busy || !hasUpstream}
+                // Reachable whenever there's a menu item to show: the pull
+                // reconcile options (need a tracking upstream) or "Update from
+                // upstream" (needs the fork's upstream remote).
+                disabled={busy || (!hasUpstream && !hasUpstreamRemote)}
                 className="px-1.5"
               >
                 <CaretDownIcon />
@@ -243,12 +284,25 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
             }
           />
           <DropdownMenuContent align="end" className="min-w-48">
-            <DropdownMenuItem onClick={() => doPull("rebase")}>
-              Pull with rebase
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => doPull("merge")}>
-              Pull with merge
-            </DropdownMenuItem>
+            {hasUpstream && (
+              <>
+                <DropdownMenuItem onClick={() => doPull("rebase")}>
+                  Pull with rebase
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => doPull("merge")}>
+                  Pull with merge
+                </DropdownMenuItem>
+              </>
+            )}
+            {hasUpstreamRemote && (
+              <>
+                {hasUpstream && <DropdownMenuSeparator />}
+                {/* Base UI menu items fire on onClick, NOT onSelect. */}
+                <DropdownMenuItem onClick={doUpdateFromUpstream}>
+                  Update from upstream
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         <Button
