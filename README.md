@@ -180,7 +180,8 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
     - **`--allow-remote-write`** — real forge writes under your identity (`gh` / `glab` /
       Bitbucket token): create/merge/update PRs, request reviewers, edit labels &
       assignees, approve or resolve review threads, rerun or dispatch CI, cut releases,
-      and file or comment on issues
+      and file or comment on issues (creating a PR pushes its head branch, so it also
+      needs `--allow-git-write`)
     - **`--allow-git-write`** — recoverable git ops (stage, commit, branch,
       push/pull/fetch, stash, merge, rebase, cherry-pick, tags)
     - **`--allow-destructive`** — the irreversible ones (discard, reset, force-push,

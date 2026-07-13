@@ -146,7 +146,9 @@ export function ActionsPanel({
         />
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
+      {/* overflow-hidden: contain the list's natural height (the vendored Root
+          is `relative`-only) so a long list can't leak a window scrollbar. */}
+      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
         {forge.isPending ? (
           <div className="space-y-2 p-3">
             <Skeleton className="h-10 w-full" />

@@ -105,7 +105,9 @@ export function WorktreeChangesView({ repoPath }: { repoPath: string }) {
 
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-72 shrink-0 flex-col border-r">
-          <ScrollArea className="min-h-0 flex-1">
+          {/* overflow-hidden contains the list's natural height (vendored Root is
+              `relative`-only) so a long file list can't leak a window scrollbar. */}
+          <ScrollArea className="min-h-0 flex-1 overflow-hidden">
             <div onKeyDown={onFilesKeyDown}>
               {entries.map((file) => (
                 <button

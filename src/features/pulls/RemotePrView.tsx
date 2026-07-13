@@ -1098,7 +1098,9 @@ export function RemotePrView({
 
       {section === "conversation" && (
         <>
-          <ScrollArea className="min-h-0 flex-1">
+          {/* overflow-hidden contains the thread's natural height (vendored Root is
+              `relative`-only) so a long PR can't leak a window scrollbar. */}
+          <ScrollArea className="min-h-0 flex-1 overflow-hidden">
             <div className="space-y-4 p-4">
               <div className="group space-y-1 border-b pb-3">
                 <div className="flex items-start justify-between gap-2">

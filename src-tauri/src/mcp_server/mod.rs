@@ -367,7 +367,9 @@ impl ServerHandler for GitDesktopMcp {
              labels, assignees and approvals, review threads, CI actions, releases, GitHub \
              discussions, issue writes (create/comment/close/reopen), and the linked-Jira issue \
              writes (comment/transition/create/assign). These are REAL, publicly \
-             visible writes to the repository's forge and are not freely reversible. (3) \
+             visible writes to the repository's forge and are not freely reversible. (One \
+             exception: creating a PR pushes `head` to origin first — a local-git write — so \
+             create_pull_request ALSO requires --allow-git-write, not just --allow-remote-write.) (3) \
              --allow-git-write enables RECOVERABLE local-git mutations of the bound repository \
              (stage/commit/branch/push/…). (4) --allow-destructive is additionally required (on \
              top of --allow-git-write) for IRRECOVERABLE local-git operations such as \

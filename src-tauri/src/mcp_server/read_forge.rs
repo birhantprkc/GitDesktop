@@ -447,7 +447,7 @@ impl GitDesktopMcp {
     ) -> Result<CallToolResult, McpError> {
         ensure_github(&self.repo).await?;
         let discussions =
-            crate::github::discussion::gh_discussion_list(self.repo.clone(), args.category)
+            crate::github::discussion::gh_discussion_list(self.repo.clone(), args.category, None)
                 .await
                 .map_err(app_err)?;
         json_result_untrusted(&discussions)

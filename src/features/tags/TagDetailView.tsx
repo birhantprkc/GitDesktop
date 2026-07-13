@@ -219,7 +219,9 @@ export function TagDetailView({
             )}
           </div>
         </header>
-        <ScrollArea className="min-h-0 flex-1">
+        {/* overflow-hidden contains the content's natural height (vendored Root is
+            `relative`-only) so long release notes can't leak a window scrollbar. */}
+        <ScrollArea className="min-h-0 flex-1 overflow-hidden">
           <div className="space-y-4 p-4">
             {rel.body.trim() ? (
               <Markdown>{rel.body}</Markdown>

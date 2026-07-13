@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadMoreRow, PAGE_SIZE } from "@/features/conversations/LoadMoreRow";
 import { LabelChip } from "@/features/conversations/Thread";
 import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import {
@@ -43,7 +44,10 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
   const enabled = meta.data?.hasDiscussionsEnabled ?? false;
   const listEnabled = ghReady && supportsDiscussions && enabled;
   const [categoryId, setCategoryId] = useState<string | null>(null);
-  const list = useDiscussionList(repoPath, listEnabled, categoryId);
+  // How many discussions to load; "Load more" bumps it by PAGE_SIZE. A category
+  // switch resets it so a filtered view starts from the first page again.
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const list = useDiscussionList(repoPath, listEnabled, categoryId, limit);
   const selectedDiscussion = useUiStore((s) => s.selectedDiscussion);
   const selectDiscussion = useUiStore((s) => s.selectDiscussion);
   const prefetch = usePrefetchDiscussion(repoPath);
@@ -64,9 +68,19 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
     }
   }, [pendingCreate, clearPendingCreate]);
 
+  // Switching category resets to the first page (a filtered view shouldn't
+  // inherit an inflated limit from another category).
+  const chooseCategory = (id: string | null) => {
+    setCategoryId(id);
+    setLimit(PAGE_SIZE);
+  };
+
   const categories = meta.data?.categories ?? [];
   const activeCat = categories.find((c) => c.id === categoryId);
   const discussions = list.data ?? [];
+  // More may exist server-side exactly when this page filled the requested
+  // limit; compared against the raw loaded count, not the search-filtered view.
+  const hasMore = discussions.length === limit;
   const query = filterText.trim().toLowerCase();
 
   const visible = discussions.filter(
@@ -113,7 +127,7 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="min-w-52">
             <DropdownMenuItem
-              onClick={() => setCategoryId(null)}
+              onClick={() => chooseCategory(null)}
               className={cn(
                 categoryId === null && "bg-accent text-accent-foreground",
               )}
@@ -123,7 +137,7 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
             {categories.map((c) => (
               <DropdownMenuItem
                 key={c.id}
-                onClick={() => setCategoryId(c.id)}
+                onClick={() => chooseCategory(c.id)}
                 className={cn(
                   categoryId === c.id && "bg-accent text-accent-foreground",
                 )}
@@ -160,7 +174,11 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
           autoComplete="off"
         />
       </div>
-      <ScrollArea className="min-h-0 flex-1">
+      {/* overflow-hidden: the vendored ScrollArea Root is upstream-faithful
+          (`relative` only), so without containment the list's natural height
+          leaks into the document once it exceeds the viewport (a window
+          scrollbar over a black void). The Viewport still scrolls internally. */}
+      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
         <div onKeyDown={onListKeyDown}>
           {gh.isPending ? (
             <div className="space-y-2 p-3">
@@ -265,6 +283,13 @@ export function DiscussionsPanel({ repoPath }: { repoPath: string }) {
                 </button>
               );
             })
+          )}
+          {listEnabled && !list.isPending && hasMore && (
+            <LoadMoreRow
+              count={discussions.length}
+              loading={list.isFetching}
+              onLoadMore={() => setLimit((n) => n + PAGE_SIZE)}
+            />
           )}
         </div>
       </ScrollArea>

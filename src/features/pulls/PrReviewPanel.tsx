@@ -473,8 +473,10 @@ export function PrReviewPanel({
         />
       </div>
 
-      {/* ph-no-capture: AI review output quotes the user's code — block from replay. */}
-      <ScrollArea className="ph-no-capture min-h-0 flex-1">
+      {/* ph-no-capture: AI review output quotes the user's code — block from replay.
+          overflow-hidden contains the content's natural height (vendored Root is
+          `relative`-only) so long review output can't leak a window scrollbar. */}
+      <ScrollArea className="ph-no-capture min-h-0 flex-1 overflow-hidden">
         <div className="p-4">
           {deltaState &&
             DELTA_NOTE[deltaState] &&

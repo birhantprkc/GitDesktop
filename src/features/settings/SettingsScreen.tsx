@@ -250,7 +250,9 @@ export function SettingsScreen() {
             onSelect={(id) => setPanel(id as PanelId)}
             className="w-44 border-r p-2"
           />
-          <ScrollArea className="min-h-0 flex-1">
+          {/* overflow-hidden contains the panel's natural height (vendored Root is
+              `relative`-only) so a tall settings panel can't leak a window scrollbar. */}
+          <ScrollArea className="min-h-0 flex-1 overflow-hidden">
             <main className="mx-auto w-full max-w-2xl space-y-8 p-6">
               {activePanel === "general" && <GeneralSection form={form} />}
               {activePanel === "ai" && (

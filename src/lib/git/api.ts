@@ -1166,8 +1166,11 @@ export const forgePrTimeline = (repoPath: string, number: number) =>
 // (comment/state/merge/labels/edit/reactions/…) have their own `forge*` wrappers
 // below; only the still-GitHub-only writes (the Review menu, ready-for-review,
 // comment edit/delete/hide) stay on `gh_*`.
-export const forgePrList = (repoPath: string, state: PrStateFilter) =>
-  invoke<PrInfo[]>("forge_pr_list", { repoPath, state });
+export const forgePrList = (
+  repoPath: string,
+  state: PrStateFilter,
+  limit?: number,
+) => invoke<PrInfo[]>("forge_pr_list", { repoPath, state, limit });
 
 export const forgePrView = (repoPath: string, number: number) =>
   invoke<PrDetails>("forge_pr_view", { repoPath, number });
@@ -1257,8 +1260,11 @@ export type IssueStateFilter = "open" | "closed";
 // neutral `IssueInfo`/`IssueDetails` shapes. The writes go neutral per-action as
 // each lands (comment/state/labels/assignees/create/edit/milestone/reactions); the
 // rest (pin/lock/transfer/delete, sub-issues) stay `gh_issue_*`.
-export const forgeIssueList = (repoPath: string, state: IssueStateFilter) =>
-  invoke<IssueInfo[]>("forge_issue_list", { repoPath, state });
+export const forgeIssueList = (
+  repoPath: string,
+  state: IssueStateFilter,
+  limit?: number,
+) => invoke<IssueInfo[]>("forge_issue_list", { repoPath, state, limit });
 
 export const forgeIssueView = (repoPath: string, number: number) =>
   invoke<IssueDetails>("forge_issue_view", { repoPath, number });
@@ -1481,8 +1487,11 @@ export const readIssueTemplates = (repoPath: string) =>
 export const ghDiscussionCategories = (repoPath: string) =>
   invoke<DiscussionMeta>("gh_discussion_categories", { repoPath });
 
-export const ghDiscussionList = (repoPath: string, category: string | null) =>
-  invoke<DiscussionInfo[]>("gh_discussion_list", { repoPath, category });
+export const ghDiscussionList = (
+  repoPath: string,
+  category: string | null,
+  limit?: number,
+) => invoke<DiscussionInfo[]>("gh_discussion_list", { repoPath, category, limit });
 
 export const ghDiscussionView = (repoPath: string, number: number) =>
   invoke<DiscussionDetails>("gh_discussion_view", { repoPath, number });

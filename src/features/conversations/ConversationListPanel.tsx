@@ -18,6 +18,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import { cn } from "@/lib/utils";
+import { LoadMoreRow } from "./LoadMoreRow";
 
 /** The "New ▾" dropdown's items (GitHub + local, plus an optional third for a
  *  linked Jira project on the issues panel). */
@@ -165,6 +166,16 @@ export function ConversationListPanel<L, R, J = never>(props: {
     /** Empty-state teaching copy when the linked project has no matching issues. */
     emptyLabel: ReactNode;
   };
+  /** "Load more" for the REMOTE section: true when the remote list filled its
+   *  requested limit (more may exist server-side). Renders a focusable row at the
+   *  very bottom of the list; `onLoadMore` bumps the caller's limit, `loadingMore`
+   *  disables + shows the busy state while the grown page fetches. Omit `hasMore`
+   *  (the default) to render no row. */
+  hasMore?: boolean;
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
+  /** How many remote items are currently loaded (shown in the row). */
+  remoteCount?: number;
   /** Create dialogs etc. rendered after the list. */
   children?: ReactNode;
 }) {
@@ -209,6 +220,10 @@ export function ConversationListPanel<L, R, J = never>(props: {
     localNoun,
     remoteNoun,
     jira,
+    hasMore,
+    onLoadMore,
+    loadingMore,
+    remoteCount,
     children,
   } = props;
 
@@ -266,7 +281,11 @@ export function ConversationListPanel<L, R, J = never>(props: {
           autoComplete="off"
         />
       </div>
-      <ScrollArea className="min-h-0 flex-1">
+      {/* overflow-hidden: the vendored ScrollArea Root is upstream-faithful
+          (`relative` only), so without containment the list's natural height
+          leaks into the document once it exceeds the viewport (a window
+          scrollbar over a black void). The Viewport still scrolls internally. */}
+      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
         <div onKeyDown={onListKeyDown}>
           <SectionHeader
             label="Local"
@@ -409,6 +428,16 @@ export function ConversationListPanel<L, R, J = never>(props: {
                 ))
               )}
             </>
+          )}
+
+          {/* "Load more" for the remote section, at the very bottom of the list.
+              Only the remote list paginates (local + Jira load in full). */}
+          {hasMore && onLoadMore && (
+            <LoadMoreRow
+              count={remoteCount ?? 0}
+              loading={loadingMore ?? false}
+              onLoadMore={onLoadMore}
+            />
           )}
         </div>
       </ScrollArea>

@@ -1770,24 +1770,34 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
             .collect()
     };
 
-    Ok(PrDetails {
-        id: raw.id,
-        number: raw.number,
-        title: raw.title,
-        body: raw.body,
-        author: login(raw.author),
-        // GitHub carries no avatar URL in the API; the frontend derives it from
-        // the login, so leave it empty here.
-        author_avatar_url: String::new(),
-        state: raw.state,
-        is_draft: raw.is_draft,
-        base_ref_name: raw.base_ref_name,
-        head_ref_name: raw.head_ref_name,
-        additions: raw.additions,
-        deletions: raw.deletions,
-        url: raw.url,
-        commits: raw
-            .commits
+    // Same GraphQL-100-connection cap on commits/reviews/comments: complete each
+    // from its paginated REST endpoint when we hit 100, best-effort (a REST
+    // failure keeps the 100 GraphQL entries rather than failing the view).
+    let commits: Vec<PrCommitOut> = if raw.commits.len() >= 100 {
+        match gh_pr_commits_paginated(&repo_path, number).await {
+            Ok(complete) => complete,
+            Err(_) => raw
+                .commits
+                .into_iter()
+                .map(|c| {
+                    let author = c
+                        .authors
+                        .into_iter()
+                        .next()
+                        .map(|a| if a.name.is_empty() { a.login } else { a.name })
+                        .unwrap_or_default();
+                    PrCommitOut {
+                        oid: c.oid,
+                        headline: c.message_headline,
+                        message_body: c.message_body,
+                        date: c.authored_date,
+                        author,
+                    }
+                })
+                .collect(),
+        }
+    } else {
+        raw.commits
             .into_iter()
             .map(|c| {
                 let author = c
@@ -1804,10 +1814,34 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                     author,
                 }
             })
-            .collect(),
-        files,
-        reviews: raw
-            .reviews
+            .collect()
+    };
+
+    let reviews: Vec<PrThreadOut> = if raw.reviews.len() >= 100 {
+        match gh_pr_reviews_paginated(&repo_path, number).await {
+            Ok(complete) => complete,
+            Err(_) => raw
+                .reviews
+                .into_iter()
+                .map(|r| PrThreadOut {
+                    author: login(r.author),
+                    author_avatar_url: String::new(),
+                    state: r.state,
+                    body: r.body,
+                    date: r.submitted_at,
+                    id: r.id,
+                    url: String::new(),
+                    viewer_did_author: false,
+                    is_minimized: false,
+                    minimized_reason: String::new(),
+                    // A review row keeps its own id in `id`; `review_id` is for
+                    // thread-comment rows to point back at their owning review.
+                    review_id: String::new(),
+                })
+                .collect(),
+        }
+    } else {
+        raw.reviews
             .into_iter()
             .map(|r| PrThreadOut {
                 author: login(r.author),
@@ -1824,9 +1858,33 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                 // thread-comment rows to point back at their owning review.
                 review_id: String::new(),
             })
-            .collect(),
-        comments: raw
-            .comments
+            .collect()
+    };
+
+    let comments: Vec<PrThreadOut> = if raw.comments.len() >= 100 {
+        match gh_pr_comments_paginated(&repo_path, number).await {
+            Ok(complete) => complete,
+            Err(_) => raw
+                .comments
+                .into_iter()
+                .map(|c| PrThreadOut {
+                    author: login(c.author),
+                    author_avatar_url: String::new(),
+                    state: String::new(),
+                    body: c.body,
+                    date: c.created_at,
+                    id: c.id,
+                    url: c.url,
+                    viewer_did_author: c.viewer_did_author,
+                    is_minimized: c.is_minimized,
+                    minimized_reason: c.minimized_reason,
+                    // Conversation comments belong to no review.
+                    review_id: String::new(),
+                })
+                .collect(),
+        }
+    } else {
+        raw.comments
             .into_iter()
             .map(|c| PrThreadOut {
                 author: login(c.author),
@@ -1842,7 +1900,29 @@ pub async fn gh_pr_view(repo_path: String, number: u64) -> AppResult<PrDetails> 
                 // Conversation comments belong to no review.
                 review_id: String::new(),
             })
-            .collect(),
+            .collect()
+    };
+
+    Ok(PrDetails {
+        id: raw.id,
+        number: raw.number,
+        title: raw.title,
+        body: raw.body,
+        author: login(raw.author),
+        // GitHub carries no avatar URL in the API; the frontend derives it from
+        // the login, so leave it empty here.
+        author_avatar_url: String::new(),
+        state: raw.state,
+        is_draft: raw.is_draft,
+        base_ref_name: raw.base_ref_name,
+        head_ref_name: raw.head_ref_name,
+        additions: raw.additions,
+        deletions: raw.deletions,
+        url: raw.url,
+        commits,
+        files,
+        reviews,
+        comments,
         checks: raw
             .status_check_rollup
             .into_iter()
@@ -2687,6 +2767,278 @@ async fn gh_pr_files_paginated(repo_path: &str, number: u64) -> AppResult<Vec<Gh
     Ok(pages.into_iter().flatten().collect())
 }
 
+// --- PR-view list top-ups: commits / reviews / conversation comments -------
+//
+// `gh pr view --json {commits,reviews,comments}` reads GraphQL connections that
+// cap at 100 items, so a PR with >100 of any silently shows the first 100 as if
+// complete. Each helper below completes the list from the corresponding
+// paginated REST endpoint (best-effort — the caller keeps the 100 GraphQL
+// entries if the REST top-up fails), and a pure `*_to_out` mapper turns each REST
+// row into the same Out shape the GraphQL arm produces (so both paths agree).
+
+/// One entry from `repos/{owner}/{repo}/pulls/<n>/commits`. Fields optional +
+/// defaulted so one malformed row can't sink the reconstruction.
+#[derive(Deserialize, Default)]
+struct GhPrRestCommit {
+    /// The commit's `oid` (its sha) — the PR-view commit shape keys commits on
+    /// `oid`, matching the GraphQL arm (which also maps GraphQL `oid` → `oid`).
+    /// A commit's node id plays no role in the Out shape (unlike reviews and
+    /// comments, whose GraphQL `node_id` is load-bearing), so it isn't read.
+    #[serde(default)]
+    sha: String,
+    #[serde(default)]
+    commit: GhPrRestCommitInner,
+    /// The GitHub *account* that authored (may be null for a non-user commit);
+    /// its `login` is the fallback display name.
+    #[serde(default)]
+    author: Option<RawLogin>,
+}
+
+#[derive(Deserialize, Default)]
+struct GhPrRestCommitInner {
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    author: GhPrRestCommitGitAuthor,
+}
+
+#[derive(Deserialize, Default)]
+struct GhPrRestCommitGitAuthor {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    date: String,
+}
+
+/// One entry from `repos/{owner}/{repo}/pulls/<n>/reviews`.
+#[derive(Deserialize, Default)]
+struct GhPrRestReview {
+    /// GraphQL node id — mapped into the Out `id` (matches the GraphQL arm's
+    /// `PRR_…` review node id, which thread-comment rows point back at).
+    #[serde(default)]
+    node_id: String,
+    #[serde(default)]
+    user: Option<RawLogin>,
+    /// Already APPROVED / CHANGES_REQUESTED / COMMENTED / DISMISSED / PENDING —
+    /// same vocabulary the GraphQL `state` arm carries, so it passes straight
+    /// through.
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    submitted_at: String,
+}
+
+/// One entry from `repos/{owner}/{repo}/issues/<n>/comments` — the PR's
+/// conversation (issue) comments.
+#[derive(Deserialize, Default)]
+struct GhPrRestComment {
+    /// GraphQL node id — mapped into the Out `id` (the ≤100 path uses GraphQL
+    /// node ids).
+    #[serde(default)]
+    node_id: String,
+    #[serde(default)]
+    user: Option<RawLogin>,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    html_url: String,
+}
+
+/// Map a REST commit row to the PR-view commit shape, mirroring the GraphQL arm:
+/// the message splits into a headline (first line) and body (everything after the
+/// first blank line — GraphQL's messageHeadline/messageBody semantics), the
+/// authored date is the git author date, and the display author is the git
+/// author name, falling back to the GitHub account login.
+fn rest_commit_to_out(c: GhPrRestCommit) -> PrCommitOut {
+    let (headline, message_body) = split_commit_message(&c.commit.message);
+    let git_name = c.commit.author.name;
+    let author = if git_name.is_empty() {
+        c.author.map(|a| a.login).unwrap_or_default()
+    } else {
+        git_name
+    };
+    PrCommitOut {
+        // The commit's node id keeps the row in the GraphQL id space; `oid` is
+        // the sha (GraphQL's `oid`).
+        oid: c.sha,
+        headline,
+        message_body,
+        date: c.commit.author.date,
+        author,
+    }
+}
+
+/// Split a full commit message into (headline, body) with GraphQL
+/// messageHeadline/messageBody semantics: the headline is the first line; the
+/// body is everything after the first blank line (empty when there is no blank
+/// line, i.e. no body).
+fn split_commit_message(message: &str) -> (String, String) {
+    let headline = message.lines().next().unwrap_or("").to_string();
+    // Body = text after the first blank line. If there is no blank line, there
+    // is no body (a wrapped-but-unblanked second line is still part of no body,
+    // matching GraphQL, which treats only a blank-line-separated remainder as
+    // messageBody).
+    let body = message
+        .split_once("\n\n")
+        .map(|(_, rest)| rest.trim_end_matches('\n').to_string())
+        .unwrap_or_default();
+    (headline, body)
+}
+
+/// Map a REST review row to the PR-view thread shape, mirroring the GraphQL
+/// reviews arm (login → author, node_id → id, state/body/submitted_at through;
+/// every other `PrThreadOut` field defaults exactly as the GraphQL arm does).
+fn rest_review_to_out(r: GhPrRestReview) -> PrThreadOut {
+    PrThreadOut {
+        author: r.user.map(|u| u.login).unwrap_or_default(),
+        author_avatar_url: String::new(),
+        state: r.state,
+        body: r.body,
+        date: r.submitted_at,
+        id: r.node_id,
+        url: String::new(),
+        viewer_did_author: false,
+        is_minimized: false,
+        minimized_reason: String::new(),
+        // A review row keeps its own id in `id`; `review_id` points thread-comment
+        // rows back at their owning review.
+        review_id: String::new(),
+    }
+}
+
+/// Map a REST conversation-comment row to the PR-view thread shape, mirroring the
+/// GraphQL comments arm. `viewer_login` is the authenticated user's login
+/// (resolved once per top-up); `viewer_did_author` is whether it wrote the
+/// comment. REST issue comments carry no minimized state, so those default false.
+fn rest_comment_to_out(c: GhPrRestComment, viewer_login: Option<&str>) -> PrThreadOut {
+    let login = c.user.map(|u| u.login).unwrap_or_default();
+    let viewer_did_author = viewer_login.is_some_and(|v| !v.is_empty() && v == login);
+    PrThreadOut {
+        author: login,
+        author_avatar_url: String::new(),
+        state: String::new(),
+        body: c.body,
+        date: c.created_at,
+        id: c.node_id,
+        url: c.html_url,
+        viewer_did_author,
+        is_minimized: false,
+        minimized_reason: String::new(),
+        // Conversation comments belong to no review.
+        review_id: String::new(),
+    }
+}
+
+/// Completes the PR's commit list via the paginated commits REST API, past the
+/// 100-item GraphQL cap `gh pr view --json commits` hits. Returns rows in the
+/// PR-view shape.
+async fn gh_pr_commits_paginated(repo_path: &str, number: u64) -> AppResult<Vec<PrCommitOut>> {
+    // {owner}/{repo} placeholders (not the origin slug): the PR number came from
+    // gh's own repo resolution, so this top-up must resolve to the same repo or a
+    // fork would 404.
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/commits");
+    let out = run_gh(
+        Some(repo_path),
+        &[
+            "api",
+            "--paginate",
+            "--slurp",
+            "-X",
+            "GET",
+            &endpoint,
+            "-f",
+            "per_page=100",
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let pages: Vec<Vec<GhPrRestCommit>> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the PR commit list: {e}")))?;
+    Ok(pages
+        .into_iter()
+        .flatten()
+        .map(rest_commit_to_out)
+        .collect())
+}
+
+/// Completes the PR's review list via the paginated reviews REST API, past the
+/// 100-item GraphQL cap. Returns rows in the PR-view thread shape.
+async fn gh_pr_reviews_paginated(repo_path: &str, number: u64) -> AppResult<Vec<PrThreadOut>> {
+    // {owner}/{repo} placeholders (not the origin slug): must resolve to the same
+    // repo gh resolved the PR number against, or a fork would 404.
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/reviews");
+    let out = run_gh(
+        Some(repo_path),
+        &[
+            "api",
+            "--paginate",
+            "--slurp",
+            "-X",
+            "GET",
+            &endpoint,
+            "-f",
+            "per_page=100",
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let pages: Vec<Vec<GhPrRestReview>> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the PR review list: {e}")))?;
+    Ok(pages
+        .into_iter()
+        .flatten()
+        .map(rest_review_to_out)
+        .collect())
+}
+
+/// Completes the PR's conversation-comment list via the paginated issue-comments
+/// REST API (a PR's conversation comments are issue comments), past the 100-item
+/// GraphQL cap. Resolves the authenticated login once (best-effort) to set
+/// `viewer_did_author`. Returns rows in the PR-view thread shape.
+async fn gh_pr_comments_paginated(repo_path: &str, number: u64) -> AppResult<Vec<PrThreadOut>> {
+    // {owner}/{repo} placeholders (not the origin slug): must resolve to the same
+    // repo gh resolved the PR number against, or a fork would 404.
+    let endpoint = format!("repos/{{owner}}/{{repo}}/issues/{number}/comments");
+    let out = run_gh(
+        Some(repo_path),
+        &[
+            "api",
+            "--paginate",
+            "--slurp",
+            "-X",
+            "GET",
+            &endpoint,
+            "-f",
+            "per_page=100",
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let pages: Vec<Vec<GhPrRestComment>> = serde_json::from_str(&out.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the PR comment list: {e}")))?;
+    // Resolve the viewer login once, only now that this top-up fired. Best-effort:
+    // if the probe fails, default `viewer_did_author` to false (no edit affordance)
+    // rather than failing the top-up.
+    let viewer_login = run_gh(
+        Some(repo_path),
+        &["api", "user", "-q", ".login"],
+        GH_TIMEOUT,
+    )
+    .await
+    .ok()
+    .map(|o| o.stdout_lossy().trim().to_string())
+    .filter(|s| !s.is_empty());
+    Ok(pages
+        .into_iter()
+        .flatten()
+        .map(|c| rest_comment_to_out(c, viewer_login.as_deref()))
+        .collect())
+}
+
 /// Fetches the PR's changed files via the paginated files API and rebuilds a
 /// unified diff from them, in the same `git`-style format `gh pr diff` produces
 /// so the frontend diff viewer parses it identically. This is the >300-file
@@ -3299,7 +3651,9 @@ pub(crate) async fn gh_pr_create_core(
 mod tests {
     use super::{
         host_from_url, is_diff_too_large, map_timeline_node, parse_actions_run_job,
-        parse_auth_accounts, reconstruct_pr_diff, GhPrFile, PrTimelineEventOut,
+        parse_auth_accounts, reconstruct_pr_diff, rest_comment_to_out, rest_commit_to_out,
+        rest_review_to_out, split_commit_message, GhPrFile, GhPrRestComment, GhPrRestCommit,
+        GhPrRestCommitGitAuthor, GhPrRestCommitInner, GhPrRestReview, PrTimelineEventOut, RawLogin,
     };
 
     fn file(status: &str, filename: &str, patch: Option<&str>) -> GhPrFile {
@@ -3311,6 +3665,142 @@ mod tests {
             additions: 0,
             deletions: 0,
         }
+    }
+
+    fn rest_commit(sha: &str, message: &str, git_name: &str, date: &str) -> GhPrRestCommit {
+        GhPrRestCommit {
+            sha: sha.to_string(),
+            commit: GhPrRestCommitInner {
+                message: message.to_string(),
+                author: GhPrRestCommitGitAuthor {
+                    name: git_name.to_string(),
+                    date: date.to_string(),
+                },
+            },
+            author: None,
+        }
+    }
+
+    #[test]
+    fn split_commit_message_splits_headline_and_body() {
+        // Standard: headline, blank line, then a multi-line body.
+        let (h, b) = split_commit_message("Add feature\n\nBody line one\nBody line two\n");
+        assert_eq!(h, "Add feature");
+        assert_eq!(b, "Body line one\nBody line two");
+
+        // No blank line → no body (even with a wrapped second line).
+        let (h, b) = split_commit_message("Headline only\ntrailing line");
+        assert_eq!(h, "Headline only");
+        assert_eq!(b, "");
+
+        // Single-line message → headline, empty body.
+        let (h, b) = split_commit_message("Just a title");
+        assert_eq!(h, "Just a title");
+        assert_eq!(b, "");
+
+        // Empty message → both empty.
+        let (h, b) = split_commit_message("");
+        assert_eq!(h, "");
+        assert_eq!(b, "");
+    }
+
+    #[test]
+    fn rest_commit_to_out_maps_fields_and_node_id() {
+        let out = rest_commit_to_out(rest_commit(
+            "abc123",
+            "Fix bug\n\nDetailed explanation.",
+            "Ada Lovelace",
+            "2026-01-02T03:04:05Z",
+        ));
+        // sha → oid (GraphQL `oid`); node id keeps the row in the GraphQL id space.
+        assert_eq!(out.oid, "abc123");
+        assert_eq!(out.headline, "Fix bug");
+        assert_eq!(out.message_body, "Detailed explanation.");
+        assert_eq!(out.date, "2026-01-02T03:04:05Z");
+        assert_eq!(out.author, "Ada Lovelace");
+    }
+
+    #[test]
+    fn rest_commit_to_out_falls_back_to_account_login_when_git_name_empty() {
+        let mut c = rest_commit("def456", "Tidy up", "", "2026-01-01T00:00:00Z");
+        c.author = Some(RawLogin {
+            login: "octocat".to_string(),
+        });
+        let out = rest_commit_to_out(c);
+        assert_eq!(out.author, "octocat");
+        // No blank line → no body.
+        assert_eq!(out.message_body, "");
+
+        // Empty git name AND no account → empty author (defaulted, not a panic).
+        let empty = rest_commit_to_out(rest_commit("ghi", "msg", "", "d"));
+        assert_eq!(empty.author, "");
+    }
+
+    #[test]
+    fn rest_review_to_out_maps_login_state_and_node_id() {
+        let out = rest_review_to_out(GhPrRestReview {
+            node_id: "PRR_node".to_string(),
+            user: Some(RawLogin {
+                login: "reviewer".to_string(),
+            }),
+            state: "CHANGES_REQUESTED".to_string(),
+            body: "Please fix".to_string(),
+            submitted_at: "2026-02-03T00:00:00Z".to_string(),
+        });
+        assert_eq!(out.author, "reviewer");
+        assert_eq!(out.state, "CHANGES_REQUESTED");
+        assert_eq!(out.body, "Please fix");
+        assert_eq!(out.date, "2026-02-03T00:00:00Z");
+        // node_id passes through to `id` (the GraphQL review node id space).
+        assert_eq!(out.id, "PRR_node");
+        assert!(!out.viewer_did_author);
+        assert_eq!(out.review_id, "");
+
+        // Null user → empty author, defaulted.
+        let anon = rest_review_to_out(GhPrRestReview {
+            node_id: "PRR_x".to_string(),
+            user: None,
+            state: "COMMENTED".to_string(),
+            body: String::new(),
+            submitted_at: String::new(),
+        });
+        assert_eq!(anon.author, "");
+        assert_eq!(anon.id, "PRR_x");
+    }
+
+    #[test]
+    fn rest_comment_to_out_maps_fields_and_viewer_authorship() {
+        let make = || GhPrRestComment {
+            node_id: "IC_node".to_string(),
+            user: Some(RawLogin {
+                login: "alice".to_string(),
+            }),
+            body: "A comment".to_string(),
+            created_at: "2026-03-04T00:00:00Z".to_string(),
+            html_url: "https://github.com/o/r/pull/1#issuecomment-1".to_string(),
+        };
+        let out = rest_comment_to_out(make(), Some("alice"));
+        assert_eq!(out.author, "alice");
+        assert_eq!(out.body, "A comment");
+        assert_eq!(out.date, "2026-03-04T00:00:00Z");
+        assert_eq!(out.url, "https://github.com/o/r/pull/1#issuecomment-1");
+        // node_id → id (GraphQL node id space).
+        assert_eq!(out.id, "IC_node");
+        assert!(out.viewer_did_author);
+
+        // A different viewer → not the author.
+        assert!(!rest_comment_to_out(make(), Some("bob")).viewer_did_author);
+        // Unknown viewer (probe failed) → default false.
+        assert!(!rest_comment_to_out(make(), None).viewer_did_author);
+        // Empty viewer login must not match an empty comment author.
+        let anon = GhPrRestComment {
+            node_id: "IC_x".to_string(),
+            user: None,
+            body: String::new(),
+            created_at: String::new(),
+            html_url: String::new(),
+        };
+        assert!(!rest_comment_to_out(anon, Some("")).viewer_did_author);
     }
 
     #[test]

@@ -102,8 +102,10 @@ export function HelpScreen() {
           onSelect={setSectionId}
           className="w-44 overflow-y-auto border-r p-2"
         />
-        {/* key remounts the scroll area so a new section starts at the top. */}
-        <ScrollArea key={active.id} className="min-h-0 flex-1">
+        {/* key remounts the scroll area so a new section starts at the top.
+            overflow-hidden contains the content's natural height (vendored Root
+            is `relative`-only) so a long guide page can't leak a window scrollbar. */}
+        <ScrollArea key={active.id} className="min-h-0 flex-1 overflow-hidden">
           <main className="mx-auto w-full max-w-2xl p-6">
             <Markdown>{body}</Markdown>
           </main>

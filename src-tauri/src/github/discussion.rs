@@ -155,7 +155,15 @@ pub struct DiscussionInfo {
     pub labels: Vec<RepoLabel>,
 }
 
-const LIST_QUERY: &str = "query($owner:String!,$name:String!,$category:ID){ repository(owner:$owner,name:$name){ discussions(first:50, categoryId:$category, orderBy:{field:UPDATED_AT, direction:DESC}){ nodes{ number title url createdAt isAnswered closed stateReason upvoteCount category{ name emojiHTML } author{ login } comments{ totalCount } labels(first:10){ nodes{ name color } } } } } }";
+const LIST_QUERY: &str = "query($owner:String!,$name:String!,$category:ID,$first:Int!,$after:String){ repository(owner:$owner,name:$name){ discussions(first:$first, after:$after, categoryId:$category, orderBy:{field:UPDATED_AT, direction:DESC}){ pageInfo{ hasNextPage endCursor } nodes{ number title url createdAt isAnswered closed stateReason upvoteCount category{ name emojiHTML } author{ login } comments{ totalCount } labels(first:10){ nodes{ name color } } } } } }";
+
+/// GraphQL caps `discussions(first:)` at 100 per page; larger limits paginate.
+const DISCUSSION_PAGE_MAX: u32 = 100;
+
+/// The historical single-page size, and the default when no explicit limit is
+/// given (preserves the MCP `list_discussions` ceiling and pre-pagination
+/// behavior for any caller that passes `None`).
+const DISCUSSION_DEFAULT_LIMIT: u32 = 50;
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -204,41 +212,87 @@ struct RawDiscussionNode {
 /// Discussions for the list, newest-updated first. `category` is a category
 /// node id to filter by, or empty for all categories. (Discussions have no
 /// open/closed tabs — they're filtered by category; `closed`/`stateReason`
-/// surface as a badge.)
+/// surface as a badge.) `limit` caps the total; `None` keeps the historical
+/// single page of [`DISCUSSION_DEFAULT_LIMIT`]. Larger limits page the GraphQL
+/// connection (≤[`DISCUSSION_PAGE_MAX`] per request) until the limit is met or
+/// GitHub reports no further page.
 #[tauri::command]
 pub async fn gh_discussion_list(
     repo_path: String,
     category: Option<String>,
+    limit: Option<u32>,
 ) -> AppResult<Vec<DiscussionInfo>> {
     let (owner, name) = owner_name(&repo_path).await?;
-    let mut args = vec![
-        "api".to_string(),
-        "graphql".to_string(),
-        "-F".to_string(),
-        format!("owner={owner}"),
-        "-F".to_string(),
-        format!("name={name}"),
-    ];
-    // Only pass categoryId when filtering; absent leaves the variable null.
-    if let Some(cat) = category.as_deref().filter(|c| !c.is_empty()) {
-        args.push("-F".to_string());
-        args.push(format!("category={cat}"));
+    let target = limit.unwrap_or(DISCUSSION_DEFAULT_LIMIT).max(1);
+    let mut raw_nodes: Vec<RawDiscussionNode> = Vec::new();
+    let mut cursor: Option<String> = None;
+
+    loop {
+        // Ask for only what's still needed, capped at GraphQL's per-page max.
+        let remaining = target.saturating_sub(raw_nodes.len() as u32);
+        let page = remaining.min(DISCUSSION_PAGE_MAX);
+        let mut args = vec![
+            "api".to_string(),
+            "graphql".to_string(),
+            "-F".to_string(),
+            format!("owner={owner}"),
+            "-F".to_string(),
+            format!("name={name}"),
+            "-F".to_string(),
+            format!("first={page}"),
+        ];
+        // Only pass categoryId when filtering; absent leaves the variable null.
+        if let Some(cat) = category.as_deref().filter(|c| !c.is_empty()) {
+            args.push("-F".to_string());
+            args.push(format!("category={cat}"));
+        }
+        // The `after` cursor is server-opaque text, so it travels as a String
+        // variable; omitted on the first request (a missing GraphQL variable is
+        // null → the first page).
+        if let Some(c) = &cursor {
+            args.push("-f".to_string());
+            args.push(format!("after={c}"));
+        }
+        args.push("-f".to_string());
+        args.push(format!("query={LIST_QUERY}"));
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = run_gh(Some(&repo_path), &arg_refs, GH_NETWORK_TIMEOUT).await?;
+        let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+            .map_err(|e| AppError::Gh(format!("could not parse discussions: {e}")))?;
+        let discussions = value.pointer("/data/repository/discussions");
+        // Propagate parse errors instead of silently yielding an empty list.
+        let page_nodes: Vec<RawDiscussionNode> = discussions
+            .and_then(|d| d.get("nodes"))
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| AppError::Gh(format!("could not parse discussions: {e}")))?
+            .unwrap_or_default();
+        let got_nodes = !page_nodes.is_empty();
+        raw_nodes.extend(page_nodes);
+
+        // Advance only while under the limit AND GitHub reports another page
+        // with a cursor; a page that yielded nothing also ends the loop so a
+        // stuck cursor can't spin forever.
+        let has_next = discussions
+            .and_then(|d| d.pointer("/pageInfo/hasNextPage"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let end_cursor = discussions
+            .and_then(|d| d.pointer("/pageInfo/endCursor"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if raw_nodes.len() as u32 >= target
+            || !has_next
+            || end_cursor.is_empty()
+            || !got_nodes
+        {
+            break;
+        }
+        cursor = Some(end_cursor.to_string());
     }
-    args.push("-f".to_string());
-    args.push(format!("query={LIST_QUERY}"));
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = run_gh(Some(&repo_path), &arg_refs, GH_NETWORK_TIMEOUT).await?;
-    let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
-        .map_err(|e| AppError::Gh(format!("could not parse discussions: {e}")))?;
-    // Propagate parse errors instead of silently yielding an empty list.
-    let nodes: Vec<RawDiscussionNode> = value
-        .pointer("/data/repository/discussions/nodes")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|e| AppError::Gh(format!("could not parse discussions: {e}")))?
-        .unwrap_or_default();
-    Ok(nodes
+
+    Ok(raw_nodes
         .into_iter()
         .map(|d| {
             let category = d.category.unwrap_or_default();

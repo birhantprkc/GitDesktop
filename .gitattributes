@@ -1,0 +1,3 @@
+# Vendored agent tooling — exclude from GitHub language stats and collapse in diffs
+.agents/** linguist-vendored
+.claude/** linguist-vendored

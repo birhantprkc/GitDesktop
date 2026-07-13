@@ -493,7 +493,9 @@ export function RunDetailView({
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
+      {/* overflow-hidden contains the content's natural height (vendored Root is
+          `relative`-only) so a long run can't leak a window scrollbar. */}
+      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
         <div className="p-4">
           <h3 className="mb-2 text-xs font-medium text-muted-foreground">
             Jobs ({run.jobs.length})

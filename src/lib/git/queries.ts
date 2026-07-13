@@ -793,12 +793,16 @@ export function usePrList(
   repo: string,
   enabled: boolean,
   state: api.PrStateFilter,
+  limit?: number,
 ) {
   return useQuery({
-    queryKey: ["repo", repo, "pr-list", state] as const,
-    queryFn: () => api.forgePrList(repo, state),
+    queryKey: ["repo", repo, "pr-list", state, limit ?? null] as const,
+    queryFn: () => api.forgePrList(repo, state, limit),
     enabled,
     staleTime: 30_000,
+    // Growing the limit ("Load more") keeps the current rows visible instead of
+    // flashing skeletons while the larger page loads.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -1300,12 +1304,15 @@ export function useIssueList(
   repo: string,
   enabled: boolean,
   state: api.IssueStateFilter,
+  limit?: number,
 ) {
   return useQuery({
-    queryKey: ["repo", repo, "issue-list", state] as const,
-    queryFn: () => api.forgeIssueList(repo, state),
+    queryKey: ["repo", repo, "issue-list", state, limit ?? null] as const,
+    queryFn: () => api.forgeIssueList(repo, state, limit),
     enabled,
     staleTime: 30_000,
+    // Keep current rows visible while a grown "Load more" page loads.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -1806,12 +1813,21 @@ export function useDiscussionList(
   repo: string,
   enabled: boolean,
   category: string | null,
+  limit?: number,
 ) {
   return useQuery({
-    queryKey: ["repo", repo, "discussion-list", category ?? "all"] as const,
-    queryFn: () => api.ghDiscussionList(repo, category),
+    queryKey: [
+      "repo",
+      repo,
+      "discussion-list",
+      category ?? "all",
+      limit ?? null,
+    ] as const,
+    queryFn: () => api.ghDiscussionList(repo, category, limit),
     enabled,
     staleTime: 30_000,
+    // Keep current rows visible while a grown "Load more" page loads.
+    placeholderData: keepPreviousData,
   });
 }
 

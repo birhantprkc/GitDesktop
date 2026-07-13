@@ -550,7 +550,9 @@ export function DiscussionView({
           ))}
         </div>
       </header>
-      <ScrollArea className="min-h-0 flex-1">
+      {/* overflow-hidden contains the thread's natural height (vendored Root is
+          `relative`-only) so a long discussion can't leak a window scrollbar. */}
+      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
         <div className="space-y-4 p-4">
           <div className="group space-y-1">
             <p className="flex items-center gap-2 text-xs">

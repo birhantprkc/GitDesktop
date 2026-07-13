@@ -4,6 +4,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
 import { ConversationListPanel } from "@/features/conversations/ConversationListPanel";
+import { PAGE_SIZE } from "@/features/conversations/LoadMoreRow";
 import { useCollapsedSections } from "@/features/conversations/useCollapsedSections";
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { PrStateFilter } from "@/lib/git/api";
@@ -40,7 +41,14 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   const ghReady = forgeFeatureReady(gh.data, "pullRequests");
   // "closed" matches the Closed tab: closed and merged alike.
   const [stateFilter, setStateFilter] = useState<PrStateFilter>("open");
-  const prList = usePrList(repoPath, ghReady, stateFilter);
+  // How many remote PRs to load; "Load more" bumps it. A tab switch (open/closed)
+  // resets to the first page.
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const prList = usePrList(repoPath, ghReady, stateFilter, limit);
+  const onStateFilter = (s: PrStateFilter) => {
+    setStateFilter(s);
+    setLimit(PAGE_SIZE);
+  };
   const localPrs = useLocalPrs(repoPath);
   // Mark local PRs merged when their branch was merged outside the app.
   useReconcileLocalPrs(repoPath);
@@ -178,7 +186,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
       feature={remoteNoun}
       remoteLabel={remoteLabel}
       stateFilter={stateFilter}
-      onStateFilter={setStateFilter}
+      onStateFilter={onStateFilter}
       newMenu={{
         ghLabel: isGitLab
           ? "Merge request on GitLab…"
@@ -246,6 +254,12 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
       ghPending={gh.isPending}
       ghReady={ghReady}
       listPending={prList.isPending}
+      // More may exist server-side exactly when this page filled the requested
+      // limit (compared against the raw loaded count, not the filtered view).
+      hasMore={(prList.data?.length ?? 0) === limit}
+      remoteCount={prList.data?.length ?? 0}
+      loadingMore={prList.isFetching}
+      onLoadMore={() => setLimit((n) => n + PAGE_SIZE)}
       stateRemote={stateRemote}
       visibleRemote={visibleRemote}
       remoteKey={(pr) => String(pr.number)}

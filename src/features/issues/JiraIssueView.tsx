@@ -1802,7 +1802,9 @@ export function JiraIssueView({
         )}
       </header>
 
-      <ScrollArea className="min-h-0 flex-1">
+      {/* overflow-hidden contains the content's natural height (vendored Root is
+          `relative`-only) so a long issue can't leak a window scrollbar. */}
+      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
         <div className="space-y-4 p-4">
           <div className="border-b pb-3">
             {issue.descriptionMd.trim() ? (

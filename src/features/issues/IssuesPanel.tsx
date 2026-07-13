@@ -10,6 +10,7 @@ import { ForgeUserAvatar } from "@/components/forge-user-avatar";
 import { Button } from "@/components/ui/button";
 import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
 import { ConversationListPanel } from "@/features/conversations/ConversationListPanel";
+import { PAGE_SIZE } from "@/features/conversations/LoadMoreRow";
 import { useCollapsedSections } from "@/features/conversations/useCollapsedSections";
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { IssueStateFilter } from "@/lib/git/api";
@@ -84,7 +85,13 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
   const ghReady = forgeFeatureReady(gh.data, "issues");
   const canCreateGh = forgeFeatureReady(gh.data, "issueCreate");
   const [stateFilter, setStateFilter] = useState<IssueStateFilter>("open");
-  const issueList = useIssueList(repoPath, ghReady, stateFilter);
+  // How many remote issues to load; "Load more" bumps it. A tab switch resets it.
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const issueList = useIssueList(repoPath, ghReady, stateFilter, limit);
+  const onStateFilter = (s: IssueStateFilter) => {
+    setStateFilter(s);
+    setLimit(PAGE_SIZE);
+  };
   const selectedIssue = useUiStore((s) => s.selectedIssue);
   const selectIssue = useUiStore((s) => s.selectIssue);
   const prefetchIssue = usePrefetchIssue(repoPath);
@@ -244,7 +251,7 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
       feature="issues"
       remoteLabel={remoteLabel}
       stateFilter={stateFilter}
-      onStateFilter={setStateFilter}
+      onStateFilter={onStateFilter}
       newMenu={{
         ghLabel: isBitbucket
           ? "Issue on Bitbucket…"
@@ -317,6 +324,12 @@ export function IssuesPanel({ repoPath }: { repoPath: string }) {
       ghReady={ghReady}
       remoteNotReadySlot={bitbucketNotReadySlot}
       listPending={issueList.isPending}
+      // More may exist server-side exactly when this page filled the requested
+      // limit (compared against the raw loaded count, not the filtered view).
+      hasMore={(issueList.data?.length ?? 0) === limit}
+      remoteCount={issueList.data?.length ?? 0}
+      loadingMore={issueList.isFetching}
+      onLoadMore={() => setLimit((n) => n + PAGE_SIZE)}
       stateRemote={issues}
       visibleRemote={visible}
       remoteKey={(issue) => String(issue.number)}

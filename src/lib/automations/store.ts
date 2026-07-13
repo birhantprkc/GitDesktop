@@ -28,6 +28,59 @@ function getStore(): Promise<Store> {
   return storePromise;
 }
 
+// Serialize every read-modify-write on this store through one in-process queue.
+// Without it, two overlapping saves each read the SAME pre-flush disk snapshot
+// (autoSave persists on a ~100ms debounce, so the first write isn't on disk yet)
+// and the later write drops the earlier one's change (a lost update — e.g. a
+// per-repo override save clobbering a concurrent global-lifecycles save). Running
+// them one at a time, each re-reading fresh state, guarantees each mutation sees a
+// current snapshot. Mirrors the hardening in `pulls/local.ts` and settings/api.ts.
+// This serializes IN-PROCESS writers only; cross-window races remain out of scope.
+let opChain: Promise<unknown> = Promise.resolve();
+function serialize<T>(op: () => Promise<T>): Promise<T> {
+  const run = opChain.then(op, op);
+  // Keep the queue alive whether `op` fulfilled or rejected; callers still get `run`.
+  opChain = run.catch(() => undefined);
+  return run;
+}
+
+/** Re-read `automations.json` from disk into the in-memory store, tolerating a
+ *  missing file. Asymmetry: `load()` tolerates a missing file but `reload()`
+ *  rejects with a raw io error until the first `save()` creates the file — so on
+ *  ANY reload failure we proceed with the loaded in-memory state (the next
+ *  `save()` bootstraps the file). `ignoreDefaults: true` fully matches the store
+ *  to disk so externally-deleted keys actually drop. Call inside the serialized
+ *  queue so it can't land between another mutation's set and its flush. */
+async function reloadRaw(store: Store): Promise<void> {
+  try {
+    await store.reload({ ignoreDefaults: true });
+  } catch {
+    // Missing/unreadable file — proceed with in-memory state; the next save()
+    // creates it.
+  }
+}
+
+/**
+ * Serialized read-modify-write against fresh disk state: reloads the store,
+ * reads the current normalized config, applies `mutate`, then persists. The
+ * force-save (`store.save()`) flushes past the autoSave debounce so the next
+ * queued op's reload sees a current snapshot. The read-modify-write runs
+ * atomically within the chain, so a save computed from stale pre-read state can
+ * no longer clobber a neighbor's committed write.
+ */
+function mutateConfig(
+  mutate: (current: AutomationsConfigV2) => AutomationsConfigV2,
+): Promise<void> {
+  return serialize(async () => {
+    const store = await getStore();
+    await reloadRaw(store);
+    const current = normalizeAutomations(await store.get<unknown>("config"));
+    const next = mutate(current);
+    await store.set("config", next);
+    await store.save();
+  });
+}
+
 // ── v1 shape (read-only, for migration) ─────────────────────────────────────
 // The flat pre-v2 rule list. Kept local to the migration path — the app no longer
 // works in these terms, so they aren't exported.
@@ -292,8 +345,17 @@ export async function loadAutomations(): Promise<AutomationsConfigV2> {
   const saved = await store.get<unknown>("config");
   if (isV1(saved)) {
     const { config, collapsed } = migrateV1(saved);
-    await store.set("config", config);
-    await store.save();
+    // Persist the migrated config through the serialized queue so it can't race a
+    // concurrent save. Re-check fresh RAW state inside the chain: if a neighbor
+    // already wrote a v2 value mid-migration, leave it intact rather than clobber
+    // it with a migration computed from the now-stale v1 blob.
+    await serialize(async () => {
+      await reloadRaw(store);
+      const fresh = await store.get<unknown>("config");
+      if (!isV1(fresh)) return;
+      await store.set("config", config);
+      await store.save();
+    });
     if (collapsed > 0) {
       toast.info(
         `Automations updated — ${collapsed} duplicate rule${
@@ -306,11 +368,22 @@ export async function loadAutomations(): Promise<AutomationsConfigV2> {
   return normalizeAutomations(saved);
 }
 
+/**
+ * Persists the GLOBAL lifecycle defaults from `config`. Only `config.lifecycles`
+ * is written; per-repo overrides are re-derived from fresh disk state inside the
+ * serialized queue rather than taken from the caller's (possibly stale) snapshot,
+ * so a concurrent `saveRepoAutomations` isn't clobbered. The sole caller edits
+ * only lifecycles and carries `repos` over unchanged from its last load, so this
+ * matches its intent while closing the lost-update window.
+ */
 export async function saveAutomations(
   config: AutomationsConfigV2,
 ): Promise<void> {
-  const store = await getStore();
-  await store.set("config", config);
+  return mutateConfig((current) => ({
+    ...current,
+    schemaVersion: 2,
+    lifecycles: config.lifecycles,
+  }));
 }
 
 /** A repo's per-repo overrides, keyed by its worktree-stable identity (with a
@@ -339,16 +412,21 @@ export async function saveRepoAutomations(
   repoPath: string,
   repo: RepoOverride,
 ): Promise<void> {
-  const config = await loadAutomations();
+  // Resolve the identity before entering the serialized mutator (it's async; the
+  // mutator runs synchronously over fresh state).
   const id = await repoIdentity(repoPath);
-  const repos = { ...config.repos };
-  // Fold: a differently-keyed legacy entry for the same repo is replaced by this
-  // identity-keyed write.
-  if (id !== repoPath) delete repos[repoPath];
-  if (repoHasCells(repo)) {
-    repos[id] = repo;
-  } else {
-    delete repos[id];
-  }
-  await saveAutomations({ ...config, repos });
+  return mutateConfig((current) => {
+    // Re-derive only THIS repo's slice over fresh state, so the write can't clobber
+    // a concurrent global-lifecycles or other-repo save.
+    const repos = { ...current.repos };
+    // Fold: a differently-keyed legacy entry for the same repo is replaced by this
+    // identity-keyed write.
+    if (id !== repoPath) delete repos[repoPath];
+    if (repoHasCells(repo)) {
+      repos[id] = repo;
+    } else {
+      delete repos[id];
+    }
+    return { ...current, repos };
+  });
 }

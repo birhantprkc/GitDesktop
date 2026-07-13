@@ -1184,7 +1184,9 @@ authenticated identity (GitHub \`gh\`, GitLab \`glab\`, or a stored Bitbucket to
 **request changes**, or **withdraw** either, **start**, **reply to**, and **resolve** review
 threads, add or remove **reactions**, **rerun/cancel/dispatch** CI, **create/update releases**,
 **create, comment on, close/reopen**, and set the **milestone** of issues, and — on GitHub —
-**create, comment on, answer, and close/reopen discussions**. The same flag also unlocks the
+**create, comment on, answer, and close/reopen discussions**. One caveat: **creating** a
+pull request pushes its head branch first, so it additionally needs \`--allow-git-write\`
+(below). The same flag also unlocks the
 linked Jira project's write \`jira_*\` tools — **comment**, **close/reopen**, **create**,
 **assign**, and **update** (due date, priority, labels) its issues. Issue
 writes cover GitHub and GitLab (not Bitbucket); discussions are GitHub-only; PR comments cover all three. PR comments an

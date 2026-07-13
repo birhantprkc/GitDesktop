@@ -516,7 +516,8 @@ impl GitDesktopMcp {
                        GitHub/GitLab-only; create-time reviewers are Bitbucket-only (elsewhere use \
                        request_reviewers after creation) — the forge layer rejects an unsupported \
                        combination. Returns the created PR ref (number + URL) as JSON. Requires \
-                       --allow-remote-write.",
+                       BOTH --allow-remote-write AND --allow-git-write, because it pushes `head` to \
+                       origin first.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn create_pull_request(
@@ -524,6 +525,10 @@ impl GitDesktopMcp {
         Parameters(args): Parameters<CreatePullRequestArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_remote_write()?;
+        // The intrinsic `git push -u origin <head>` every provider arm runs is an
+        // --allow-git-write-tier action, so require that tier too (a tier never
+        // grants another).
+        self.ensure_git_write()?;
         // Branch names reach a git/CLI argv position, but every provider arm already
         // rejects an empty or '-'-leading branch, so no extra guard is needed here.
         let pr_ref = crate::forge::forge_pr_create_core(
