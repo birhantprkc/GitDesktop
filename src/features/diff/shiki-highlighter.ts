@@ -241,7 +241,11 @@ export function shikiDiffHighlighter(): DiffFileHighlighter {
   return {
     name: "shiki",
     type: "style",
-    maxLineToIgnoreSyntax: 5000,
+    // Line cap on the RECONSTRUCTED file, so it decides whether a small edit
+    // deep in a big file gets highlighted at all (not the diff's own size).
+    // Placeholder-reconstructed lines tokenize cheaply (measured 61ms at 12K
+    // lines); keep in sync with the highlight.js cap set in DiffSurface.tsx.
+    maxLineToIgnoreSyntax: 15_000,
     setMaxLineToIgnoreSyntax: () => undefined,
     ignoreSyntaxHighlightList: [],
     setIgnoreSyntaxHighlightList: () => undefined,

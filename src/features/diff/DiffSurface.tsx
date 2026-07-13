@@ -4,6 +4,7 @@ import {
   DiffView,
   DiffViewWithMultiSelect,
   type DiffViewWithMultiSelectRef,
+  highlighter,
   type LineRange,
   type MultiSelectResult,
   type MultiSelectState,
@@ -222,14 +223,32 @@ export function GitDiffView({
   );
 }
 
-// Past this size, syntax highlighting (synchronous highlight.js) blocks long
-// enough to hurt; render the still-diff-colored plain view instead.
-const HIGHLIGHT_MAX_CHARS = 100_000;
-// Cap on the whole-file content read for content mode's highlight context: past
-// this many lines a file isn't read in full (the hunk-only path is used), and
-// useFileContent's budget check uses it too. Set to highlight.js's own line
-// threshold so any file small enough to read in full is also one it'll highlight.
+// Per-engine char budgets bounding the ONE-TIME synchronous tokenization the
+// hunk path runs on first paint. Measured warm cost on unique real content:
+// highlight.js ≈0.37ms/KB (~150ms at 400KB), Shiki ≈1ms/KB for rust and
+// ≈3.2ms/KB for tsx (~150ms rust / ~480ms worst-case tsx at 150KB). Shiki is
+// ~8× the per-KB cost, so it gets the tighter budget. A worker-built DiffFile
+// (backlog) is the future unbounded fix; until then these keep the blocking
+// tokenize bounded.
+const HIGHLIGHT_MAX_CHARS_HLJS = 400_000;
+const HIGHLIGHT_MAX_CHARS_SHIKI = 150_000;
+// Content mode reads and highlights BOTH whole files over IPC (≈2× the hunk
+// path's cost), so it keeps the original, tighter 100KB budget.
+const CONTENT_HIGHLIGHT_MAX_CHARS = 100_000;
+// The deliberately tighter content-mode line gate: past this many lines a file
+// isn't read in full (the hunk-only path is used), and useFileContent's budget
+// check uses it too. Kept tight (not the 15_000 renderer cap) because content
+// mode reads and highlights BOTH whole files (≈2× the hunk-path cost) over IPC.
 export const HIGHLIGHT_MAX_LINES = 2000;
+
+// Pin the highlight.js renderer's line cap. The core gates on the RECONSTRUCTED
+// file's line count (`rawLength`), so this decides whether a small edit DEEP in
+// a big file gets highlighted at all — not the diff's own size. Placeholder
+// reconstruction lines tokenize at ~5–20µs each (≤~200ms one-time at this cap),
+// while real-content cost is bounded separately by the char budgets above. The
+// default was 2000, which silently dropped highlighting for any edit past line
+// 2000. Keep in sync with the Shiki cap in shiki-highlighter.ts.
+highlighter.setMaxLineToIgnoreSyntax(15_000);
 
 /**
  * Build a parsed `DiffFile` from unified-diff text, with syntax highlighting
@@ -281,13 +300,17 @@ export function createDiffFile(
       hunks: [text],
     });
     file.initRaw();
-    // Highlighting is cheap (<10ms even here); the real cost is the DiffView
-    // render, so build the diff in a single pass — skipping highlight only for
-    // files too big in chars to be worth it. The line-count cutoff is left to the
-    // renderer's own per-engine `maxLineToIgnoreSyntax` (highlight.js 2000, our
-    // Shiki highlighter 5000): gating here on one line count would wrongly skip
-    // large Shiki-rendered files (e.g. Rust) the renderer would happily do.
-    if (lang && text.length <= HIGHLIGHT_MAX_CHARS) {
+    // The char budget bounds the one-time synchronous tokenization cost, which
+    // differs ~8× by engine (see the constants) — so gate on the budget for the
+    // engine this diff actually routes to. The line-count cutoff is a separate
+    // concern, left to the renderer's per-engine `maxLineToIgnoreSyntax` (now
+    // 15_000 for both engines), which bounds the placeholder-reconstruction cost
+    // of an edit deep in a huge file. Gating here on a line count would wrongly
+    // skip large Shiki-rendered files (e.g. Rust) the renderer would happily do.
+    const maxChars = useShiki
+      ? HIGHLIGHT_MAX_CHARS_SHIKI
+      : HIGHLIGHT_MAX_CHARS_HLJS;
+    if (lang && text.length <= maxChars) {
       if (useShiki) {
         file.initSyntax({ registerHighlighter: shikiDiffHighlighter() });
       } else {
@@ -362,7 +385,8 @@ export function useFileContent(
   const oldSettled = oldRev === undefined || !oldQ.isPending;
   const newSettled = newRev === undefined || !newQ.isPending;
   const fitsBudget = (s: string) =>
-    s.length <= HIGHLIGHT_MAX_CHARS && countLines(s) <= HIGHLIGHT_MAX_LINES;
+    s.length <= CONTENT_HIGHLIGHT_MAX_CHARS &&
+    countLines(s) <= HIGHLIGHT_MAX_LINES;
   // Content mode maps syntax onto the diff by line number, so each side's
   // read-back text must reach the highest line the diff references. A stale,
   // shorter read (e.g. `:0` cached before the staged file grew) would otherwise
