@@ -924,7 +924,14 @@ impl GitDesktopMcp {
 
         let branches = crate::git::branches::git_branches(self.repo.clone())
             .await
-            .map(|bs| bs.into_iter().map(|b| b.name).collect::<Vec<_>>())
+            .map(|bs| {
+                bs.into_iter()
+                    .map(|b| b.name)
+                    // App-internal agent-session branches don't belong in the
+                    // naming context (and could teach the model to mimic them).
+                    .filter(|n| !n.starts_with(super::SESSION_BRANCH_PREFIX))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let repo_instructions = crate::instructions::read_repo_instructions(self.repo.clone())
             .await

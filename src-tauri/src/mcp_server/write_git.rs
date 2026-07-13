@@ -23,13 +23,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
 use rmcp::{schemars, tool, tool_router, ErrorData as McpError};
 
-use super::{app_err, ensure_not_flag, json_result, GitDesktopMcp};
-
-/// The reserved prefix for GitDesktop agent-session branches. Every branch surface
-/// (GUI lists, pickers, worktree guards) filters `gd/session/*`; deleting or renaming
-/// one breaks session Resume, so the branch-mutating MCP tools refuse it too. Mirrors
-/// the `starts_with("gd/session/")` checks in `crate::git::worktree` / `crate::sessions`.
-const SESSION_BRANCH_PREFIX: &str = "gd/session/";
+use super::{app_err, ensure_not_flag, json_result, GitDesktopMcp, SESSION_BRANCH_PREFIX};
 
 /// Refuses a branch name that names a GitDesktop agent-session branch, with an
 /// actionable error. Pure string logic (no repo access) so it's unit-testable.

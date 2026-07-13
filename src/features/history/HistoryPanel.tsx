@@ -137,7 +137,12 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const onError = (e: unknown) => toastError(e);
 
   const currentBranch = status.data?.branch?.name ?? null;
-  const targetBranches = (branches.data ?? []).filter((b) => !b.isCurrent);
+  // Agent-session branches (`gd/session/*`) are app-internal — never offer them
+  // as a cherry-pick target (it would switch to and cherry-pick onto one), like
+  // ComparePanel / BranchSwitcher.
+  const targetBranches = (branches.data ?? []).filter(
+    (b) => !b.isCurrent && !b.name.startsWith("gd/session/"),
+  );
 
   const branchForm = useAppForm({
     ...createRefFromCommitFormOpts,

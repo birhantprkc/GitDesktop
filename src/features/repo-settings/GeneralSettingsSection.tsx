@@ -232,8 +232,11 @@ function GeneralForm({
     form.allowSquashMerge || form.allowMergeCommit || form.allowRebaseMerge;
   const dirty = JSON.stringify(form) !== JSON.stringify(base);
 
-  // Keep the current default selectable even if that branch isn't local.
-  const branchNames = branches.map((b) => b.name);
+  // Keep the current default selectable even if that branch isn't local; drop
+  // agent-session branches (`gd/session/*`) — they're app-internal.
+  const branchNames = branches
+    .map((b) => b.name)
+    .filter((n) => !n.startsWith("gd/session/"));
   const branchOptions = branchNames.includes(form.defaultBranch)
     ? branchNames
     : [form.defaultBranch, ...branchNames];

@@ -12,7 +12,7 @@ use rmcp::{schemars, tool, tool_router, ErrorData as McpError};
 
 use super::{
     app_err, cap_head, diff_text, ensure_not_flag, json_result, resolve_commit, to_value,
-    GitDesktopMcp, PathArg, ShaArg, READ_FILE_MAX_BYTES,
+    GitDesktopMcp, PathArg, ShaArg, READ_FILE_MAX_BYTES, SESSION_BRANCH_PREFIX,
 };
 
 // ---- Local-git tool parameters --------------------------------------------
@@ -130,9 +130,14 @@ impl GitDesktopMcp {
                        Returns JSON. (For ahead/behind counts, see repo_status.)"
     )]
     async fn list_branches(&self) -> Result<CallToolResult, McpError> {
-        let branches = crate::git::branches::git_branches(self.repo.clone())
+        let mut branches = crate::git::branches::git_branches(self.repo.clone())
             .await
             .map_err(app_err)?;
+        // Drop GitDesktop agent-session branches (`gd/session/*`) — they're app-internal,
+        // and the write-side tools refuse to touch them (see
+        // `write_git::ensure_not_session_branch`). Filtering here keeps them off this
+        // read surface too, matching every GUI branch list.
+        branches.retain(|b| !b.name.starts_with(SESSION_BRANCH_PREFIX));
         json_result(&branches)
     }
 

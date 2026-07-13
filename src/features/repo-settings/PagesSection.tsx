@@ -77,7 +77,11 @@ function PagesDisabled({ repoPath }: { repoPath: string }) {
   const [branch, setBranch] = useState("");
   const [path, setPath] = useState("/");
 
-  const branchNames = (branches.data ?? []).map((b) => b.name);
+  // Drop agent-session branches (`gd/session/*`) — they're app-internal. No source
+  // is configured yet here (the branch state starts empty), so nothing to keep.
+  const branchNames = (branches.data ?? [])
+    .map((b) => b.name)
+    .filter((n) => !n.startsWith("gd/session/"));
   const canEnable = (mode === "workflow" || !!branch) && !enable.isPending;
 
   return (
@@ -174,7 +178,17 @@ function PagesEnabled({
   const [confirmingDisable, setConfirmingDisable] = useState(false);
 
   const isWorkflow = pages.buildType === "workflow";
-  const branchNames = (branches.data ?? []).map((b) => b.name);
+  // Keep the currently-configured Pages source branch selectable even if it isn't
+  // local or matches the filter; drop agent-session branches (`gd/session/*`) —
+  // they're app-internal.
+  const branchNames = (() => {
+    const filtered = (branches.data ?? [])
+      .map((b) => b.name)
+      .filter((n) => !n.startsWith("gd/session/"));
+    return pages.sourceBranch && !filtered.includes(pages.sourceBranch)
+      ? [pages.sourceBranch, ...filtered]
+      : filtered;
+  })();
   const sourceChanged =
     branch !== pages.sourceBranch || path !== (pages.sourcePath || "/");
 
