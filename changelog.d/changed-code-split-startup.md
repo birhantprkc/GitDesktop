@@ -1,1 +1,0 @@
-- **Faster startup.** The app now boots from a much smaller core bundle — agent sessions, diff rendering, the git-hooks editor, and the AI provider SDKs each load on first use instead of on launch.

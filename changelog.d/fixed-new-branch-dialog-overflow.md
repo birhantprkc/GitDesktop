@@ -1,1 +1,0 @@
-- New branch dialog: a long base-branch name (e.g. `feature/ollama-cloud-provider-custom-endpoints`) no longer overflows the dialog — the "Branches from …" description and the base-branch selector now stay within bounds and the name wraps cleanly.

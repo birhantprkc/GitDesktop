@@ -12,6 +12,8 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-14
+
 ### Added
 
 - **Per-repo custom agent container image.** A repository can now add extra tools to its
@@ -563,6 +565,376 @@ under `changelog.d/` (see its README); those are assembled here at release time 
   the host's vocabulary — "merge request" on GitLab and Bitbucket, "pull request" on
   GitHub — and use each platform's markdown flavor, and release-notes generation no
   longer shells out to the GitHub CLI on a GitLab or Bitbucket repository.
+- **Agentic PR review.** When your review model is a CLI agent (Claude Code, Copilot CLI,
+  or opencode), turn on **Agentic review** and GitDesktop attaches itself to the run as a
+  read-only MCP server: the reviewer pulls the full PR diff (past the prompt's truncation
+  budget), reads any file at any ref, runs blame and history, and reads the PR's existing
+  comments — reporting what it explores live in the status line. It's read-only end to end
+  (no write tools, no repo changes), and after a run whose diff outgrew the prompt budget
+  the panel nudges you to enable agentic review or switch to a CLI agent model for full
+  coverage. Codex reviews explore the repo natively but can't attach the GitDesktop tools.
+- **AI reviews are clearly machine-authored.** Every AI-posted review now carries a
+  branded GitDesktop header and footer, and AI comments on a local PR show a "GitDesktop"
+  bot author with a robot avatar. On GitLab, add a project or group access token in
+  **Settings → Accounts** and AI reviews post as the real GitLab project bot instead of
+  your signed-in account.
+- **AI Generate proposes labels.** The **Generate** button in the Create pull request
+  dialog now also suggests labels alongside the title and description, chosen only from
+  the repository's existing labels and **added** to your current selection (it never
+  invents a label).
+- **Apply suggested changes locally.** Apply a reviewer's suggested change to
+  your working tree straight from the review thread on a GitHub PR — GitDesktop's
+  local answer to GitHub's *Commit suggestion*, which has no public API. The edit
+  is verified against the file first (refused if the code has drifted), keeps the
+  file's line endings and BOM, and is staged when the file had no other local
+  changes (otherwise applied unstaged, with a note). Disabled with a reason when
+  the thread is outdated or a branch other than the PR's head is checked out.
+- **Blame and file history from any file list — not just the Changes panel.** Right-click a
+  file row in a commit's file list (in History, or a PR's Commits tab), in a pull request's
+  Files tab, or in a Compare / local-PR file list, and you now get **View file history…** and
+  **Blame…** — the same actions the Changes panel already had. On those surfaces Blame is
+  pinned at that commit or branch, so you see the file *as of* that revision. A new **Blame
+  file…** command in the palette opens a fuzzy picker of every tracked file (arrow-key
+  navigable) and blames the one you choose.
+- **Clean up stale branches in bulk.** A new **Clean up branches…** action in the
+  branch switcher (and command palette) gathers stale local branches — merged into
+  the default branch, or with no commits in the last 30/60/90 days — and lets you
+  **archive** them (reversible) or **delete** them together after reviewing and
+  trimming the list. The current branch, the default branch, and protected
+  branches are never included.
+- **Collapse the Local and remote sections of the pull-request and issue lists.**
+  Click a section header to fold that section away; the header keeps a count of the
+  hidden rows so nothing gets lost, and the choice is remembered across restarts.
+- **Comment on a PR's commits.** A commit's detail view carries a whole-commit comment
+  thread plus line-anchored comments on its diff — create, edit, and delete your own,
+  applied optimistically — on GitHub, GitLab, and Bitbucket pull requests.
+- **Bitbucket PR reviewers who've acted now show as completed chips.** On a Bitbucket
+  pull request, participants who have approved or requested changes now appear as
+  read-only completed-reviewer chips carrying their verdict, and drop off the
+  pending-request list so they no longer double-render as still-pending.
+- **GitLab MR reviewers who've acted now show as completed chips.** On a GitLab merge
+  request, reviewers who have approved or requested changes now appear as read-only
+  completed-reviewer chips carrying their verdict, and drop off the pending-request list
+  so they no longer double-render as still-pending.
+- **See finished reviewers in the PR Reviewers section.** The Reviewers rail now shows
+  reviewers who've already reviewed as read-only chips carrying their verdict — a check for
+  approved, an X for changes requested, a speech bubble for commented — so a completed
+  review (including **Copilot**'s) stays visible after the reviewer drops off the
+  pending-request list. State is conveyed by icon shape plus the word, never color alone.
+- **Copy CI logs.** Job logs and failed-step logs in the **Actions** panel, and the inline
+  log peek on a pull request's **CI checks**, now carry a copy button in the log's top-right
+  corner — grab the whole log with one click to paste into an issue, a chat, or an agent.
+- **Delete a remote-only branch from the switcher.** Branches in the branch switcher's
+  **Remote** section now have a **Delete on origin…** action that deletes the branch on its
+  remote for everyone. It's a confirmed, server-side delete that can't be undone from the
+  app, and protected branch names are blocked from it.
+- **Edit and delete your own comments** on GitLab merge requests and issues, and
+  on Bitbucket pull requests — including comments inside inline review threads —
+  the same inline editor and delete confirmation that GitHub comments already had,
+  now wired to each provider's native commands.
+- **Fork repos are marked in the repository lists.** A repo that's a fork on its provider
+  now shows a fork glyph beside the public/private badge in both the repo switcher and the
+  welcome screen's Repositories list. The glyph carries a "Fork of &lt;owner/repo&gt;" label
+  (or just "Fork" when the upstream isn't known), so its meaning isn't conveyed by shape
+  alone. Like the visibility badge, it resolves in the background and clears if the remote
+  goes away.
+- **Edit GitHub PR assignees.** Assignee editing on an open pull request now works on
+  **GitHub** too, reaching parity with GitLab merge requests — pick assignees from the
+  same rail affordance in the PR view.
+- **Commit-author avatars in History.** The History log, commit detail, and
+  file-history views now show each author's avatar — derived from GitHub or
+  Gravatar, falling back to their initials.
+- **Commit comments from the History tab.** Open any pushed commit in History and
+  comment on it straight away — a whole-commit thread plus **line-anchored
+  comments** (click or drag line numbers to anchor them) — on GitHub, GitLab, and
+  Bitbucket. An unpushed commit shows a push hint, and local-only repos are
+  unchanged.
+- **Agentic review now works with API review models.** Beyond the CLI agents, turning on
+  **Agentic review** with an HTTP/API model (Anthropic, OpenAI, OpenAI-compatible,
+  OpenRouter, or Ollama) gives it a native read-only tool loop: it pulls the full PR diff
+  past the prompt budget, reads any file at any ref, searches the repo, and runs history
+  — reporting what it explores live in the status line. There's no review workspace
+  to prepare, so these reviews start instantly, and it's read-only end to end. Each tool
+  step is an extra model call (slower and pricier), and small local models that can't do
+  tool calling fail with a clear message to turn agentic off or pick another model.
+- **Inline review comments.** Line-anchored review comments — from Copilot,
+  CodeRabbit, or humans — on GitHub PRs, GitLab MRs, and Bitbucket PRs now render
+  in the app: grouped by file in the Conversation tab and anchored at their exact
+  line in the Files diff (unified or split), with reply-in-thread and
+  resolve/unresolve. GitHub threads show the anchored code excerpt they were left
+  on, reviewer suggestions render as labeled change diffs, and any thread can be
+  copied as Markdown (line range, excerpt, and every reply). Resolved threads
+  collapse behind a per-file expander, and outdated ones are flagged.
+  Previously they were invisible (GitHub) or shown as context-free flat
+  comments (GitLab/Bitbucket).
+- Jira issues now show agile fields — **story points** (in the list and the detail),
+  **sprint**, a clickable **epic / parent**, **components**, and **fix versions** —
+  discovered automatically per site, with nothing to configure.
+- **Jira issue writes.** Create, comment on, close/reopen (following the project's own
+  workflow, with the real resulting status named in the confirmation), and assign Jira issues right
+  from the Issues tab of a linked Jira Cloud project. Each action is gated on your Jira
+  permissions — anything your token and role can't do stays hidden.
+- **Linked Jira Cloud projects.** Connect a Jira site and project to any repository and
+  browse its issues (status, type, priority, assignee, labels, Markdown description, and
+  comments) from the Issues tab, with View-in-Jira link-outs. Bitbucket repos get a
+  one-click path, since Bitbucket's native issue tracker retires 2026-08-20. Read-only for
+  now; connect with an Atlassian API token (or reuse an existing Bitbucket credential).
+- **Jira issue links, promote-to-Jira, and agent access.** The linked project's issue keys
+  (e.g. `PROJ-123`) are now spotted in the current branch name, a commit's message, and a PR's
+  title/description, and surfaced as a compact "referenced Jira issues" row that jumps to the
+  issue in the Issues tab. A local issue can be promoted to Jira (alongside GitHub or GitLab
+  when both are available) — its comments carry over and the local one closes with a back-link.
+  And agents connected through GitDesktop's MCP server get `jira_*` tools to list and read the
+  linked project's issues, plus comment, close/reopen, create, and assign behind the
+  `--allow-remote-write` opt-in. The status chip in the Jira issue view is now also a menu
+  (when your permissions allow transitions) for moving an issue to any of its workflow's
+  available statuses, alongside the existing close/reopen quick action.
+- **Edit more of a Jira issue.** Set or clear a **due date**, change the **priority**, edit
+  the **labels**, and **edit or delete your own comments** — all from the Issues tab of a
+  linked Jira Cloud project, and each control gated on your Jira permissions so anything your
+  token and role can't do stays hidden. Agents reach the same edits through the MCP server's
+  new `update_jira_issue` tool (due date, priority, labels) under the `--allow-remote-write`
+  opt-in.
+- **Jira time tracking.** On a linked Jira Cloud project that has time tracking enabled, the
+  issue view now shows the original estimate, remaining, and time spent with a progress bar.
+  Log work with Jira's duration grammar (`2d 4h 30m`) and an optional note, set or clear the
+  original and remaining estimates, and edit or delete your own worklog entries — the full
+  history is a "View all in Jira" link away. Agents get a `jira_log_work` MCP tool and
+  original/remaining-estimate parameters on `update_jira_issue`, both behind
+  `--allow-remote-write`.
+- **Resolve local-PR merge conflicts without touching your working tree.** When a local
+  pull-request merge hits conflicts, GitDesktop now runs the merge in an isolated,
+  hidden worktree — your branch and working tree stay exactly as they were, so you never
+  need a clean tree (unless you're merging into the branch you're currently on). The PR
+  view opens a dedicated resolve surface with the conflicted files and the in-app conflict
+  editor (per-region accept + AI resolution), then **Finish merge** (commit + mark the PR
+  merged) or **Abort** (throw the merge away). The PR also pre-shows whether a merge will
+  conflict before you start.
+- **Local PR activity feed.** A local PR's Conversation is now a date-sorted activity feed
+  too: it opens with a **created** marker, interleaves the branch's pushed commits (grouped,
+  each short SHA clickable to that commit's detail) with your comments, and ends with a
+  **merged** or **closed** marker once the PR reaches that state.
+- **GitHub Discussions tools for GitDesktop's MCP server.** When run *as* an MCP server
+  against a GitHub repo, an agent can now browse discussions: **list categories**, **list
+  discussions**, and **read a full thread** with its nested replies (always-on reads). With
+  `--allow-remote-write` it can also **create** a discussion in a category, **comment** on
+  one, **mark/unmark a reply as the answer**, and **close or reopen** a discussion — under
+  your authenticated `gh` identity, with a **Posted by GitDesktop** footer on posted
+  comments. Discussions are a GitHub feature, so these tools return an actionable error on a
+  GitLab or Bitbucket remote.
+- **Full PR/issue forge-write surface for GitDesktop's MCP server.** The
+  `--allow-remote-write` tools now go well beyond commenting: an agent can create, merge,
+  update, and close/reopen a pull request, toggle its draft state, request reviewers, edit
+  labels, set assignees (on issues and PRs), approve or withdraw approval, reply to and
+  resolve review threads, rerun/cancel/dispatch CI, and create or update releases — all
+  under your authenticated forge identity (GitHub `gh`, GitLab `glab`, or a stored Bitbucket
+  token). New read tools round it out: list labels, milestones, and releases, get a release,
+  list assignable users, and fetch a PR's full timeline. It stays gated behind the same
+  `--allow-remote-write` opt-in, off by default.
+- **AI generation recipes over MCP.** GitDesktop's MCP server exposes three ungated
+  `generate_commit_message`, `generate_pr_description`, and `generate_branch_name` tools that
+  hand a connected agent the *same* fully assembled context and prompt the in-app AI features
+  build — the staged or branch diff with GitDesktop's low-value-file budgeting, recent commit
+  subjects as a style reference, your repo and global instructions, and `.aiignore`
+  filtering. The tools don't call a model themselves; the agent completes the returned prompt
+  with its own inference, so you can trigger GitDesktop's generation from any MCP client.
+- **Local-git write tools for GitDesktop's MCP server.** Run *as* an MCP server, GitDesktop
+  can now let a connected agent mutate the bound repo's working tree, index, and refs —
+  stage/unstage, commit (and undo the last commit), create/checkout/rename branches,
+  push/pull/fetch, stash push/pop/apply, merge, rebase, revert, cherry-pick, and tags —
+  behind a new `--allow-git-write` flag. A further `--allow-destructive` flag (required *on
+  top of* `--allow-git-write`) unlocks the irreversible operations: delete branch, discard
+  changes, reset, force-push (with lease), delete a remote branch, drop a stash, and delete a
+  tag. Two new read tools — list stashes and preview a merge's outcome — stay ungated. Both
+  flags are off by default, and agent-session branches (`gd/session/*`) are refused by the
+  branch-mutating tools so an in-flight agent session can never be broken.
+- **See and manage your global MCP install per client.** In **Settings → MCP servers →
+  Use GitDesktop as an MCP server**, the *Install globally* section now shows a live row for
+  **Claude Code** and **Copilot**: whether GitDesktop is installed in that client's user
+  config, and whether it points at the current launcher or an older install (with a
+  one-click **Reinstall** to switch it over). Each installed client gets a **Remove** button
+  that takes the entry back out via the client's own CLI.
+- **One-click global MCP install (Claude Code / Copilot).** *Use GitDesktop as an MCP
+  server* (Settings → MCP servers) can now install `gitdesktop` into a client's **global
+  user config** — available in every project, no per-repo `.mcp.json` — alongside the
+  existing project `.mcp.json` write. **Claude Code** and **Copilot** each get a one-click
+  button that runs the client's own CLI (`claude mcp add-json … -s user` /
+  `copilot mcp add …`), using a project-aware `--repo` so the single global entry follows
+  whatever repo the client opens. The read-only/local-write/remote-write toggles carry over,
+  and an existing entry is replaced only after you confirm.
+- **See which permission tier your global MCP install runs.** In **Settings → MCP servers →
+  Use GitDesktop as an MCP server**, each *Install globally* row (Claude Code / Copilot) now
+  reads out the installed entry's permission tier — e.g. *Installed (local + remote writes)*,
+  or *Installed (read-only)*. When the installed permissions no longer match the checkboxes
+  you've selected, the row switches to a warning and offers **Reinstall** to apply them, so a
+  stale global entry can't keep running old flags unnoticed.
+- **MCP: fetch a CI job's full log.** GitDesktop's built-in MCP server gains a
+  `workflow_job_logs` tool that returns a single CI job's complete log by job id (from a
+  run's `jobs[].id`) — the whole job's output, not just its failed steps — so an agent can
+  drill from a run's jobs into any one job's logs (GitHub Actions and GitLab CI).
+- **Local-issue tools for GitDesktop's MCP server.** Alongside the existing local-PR tools,
+  the `--allow-write` opt-in now also lets a connected agent create a local issue, comment on
+  one, and set its status — GitDesktop's own app-data issue records for the bound repo,
+  nothing pushed to a forge. New ungated read tools list and get local issues (and list/get
+  local PRs), so an agent can read the app's local review artifacts without any write opt-in.
+- **One-click "add `gitdesktop` to PATH."** *Use GitDesktop as an MCP server* (Settings →
+  MCP servers) now has a **Command-line launcher** with an **Add to PATH** button, so the
+  bare `gitdesktop mcp …` command resolves in any terminal without a hardcoded path or
+  `GITDESKTOP_BIN`. It appends the app to your user PATH on Windows (no admin — open a new
+  terminal afterward) or symlinks `gitdesktop` into `~/.local/bin` on macOS/Linux, shows
+  whether it's already on your PATH, and **Remove** reverses exactly what it added.
+- **AI generation recipes are now also MCP prompts.** GitDesktop's MCP server exposes its
+  commit-message, PR-description, and branch-name generation recipes as native MCP prompts
+  (`commit-message`, `pr-description`, `branch-name`) — the slash-command-like primitive many
+  clients surface — alongside the existing recipe tools. Each assembles the *same* fully
+  prepared context and prompt the in-app AI feature builds and hands it to the client's own
+  model to complete. The prompts are read-only and always available, with no opt-in flag.
+- **Cross-forge PR/issue/CI tools for GitDesktop's MCP server.** When run *as* an MCP
+  server, GitDesktop's pull-request, issue, and CI tools now work across GitHub,
+  GitLab, and Bitbucket — routed through the forge abstraction, they dispatch by the
+  repo's remote (Bitbucket covers PRs and pipelines; Bitbucket issues come later via
+  Jira). And a new set of **remote-write** tools can create and comment on issues,
+  close/reopen them, and comment on pull requests, gated behind a separate
+  `--allow-remote-write` flag. These make real writes to the repo's forge under your
+  authenticated identity (GitHub `gh`, GitLab `glab`, or a stored Bitbucket token), and
+  are kept distinct from the local-PR `--allow-write` tools: enabling one never grants
+  the other, and read-only remains the default. PR comments an agent posts carry a
+  **Posted by GitDesktop** attribution footer, and a read tool returns a pull request's
+  full comment set — the conversation, review summaries, and file:line review threads —
+  so an agent can read a review before replying to it.
+- **More forge-write tools for GitDesktop's MCP server.** The `--allow-remote-write`
+  surface now lets an agent **start a new file:line review thread** on a pull request
+  (not just reply to an existing one), **request changes** or **withdraw** a change
+  request, **edit an issue's** title/body and set its **milestone**, and **add or remove
+  reactions** on an issue or pull request (or one of its comments) — all under your
+  authenticated forge identity (GitHub `gh`, GitLab `glab`, or a stored Bitbucket token),
+  and still gated behind the same `--allow-remote-write` opt-in, off by default.
+- **Write GitDesktop's MCP config straight into `.mcp.json`.** The *Use GitDesktop
+  as an MCP server* panel now writes (and merges) its `gitdesktop` entry into your
+  repo's `.mcp.json` for you, preserving any other servers — no more copy-paste.
+  A **Shareable entry** toggle switches between machine-specific absolute paths and
+  portable `${GITDESKTOP_BIN}` / `${CLAUDE_PROJECT_DIR}` paths a teammate can commit,
+  and an **Allow write tools** toggle adds `--allow-write` so agents can create,
+  comment on, approve, and set the status of *this repo's* local PRs — kept off by
+  default, leaving the server read-only.
+- **MCP server write tiers as checkboxes.** The *Use GitDesktop as an MCP server*
+  panel now has toggles for all four write tiers — **Allow write tools**, **Allow
+  remote write**, **Allow git writes** (`--allow-git-write`, recoverable repo
+  mutations: stage/commit, branches, push/pull, stash, merge/rebase, tags), and
+  **Allow destructive git writes** (`--allow-destructive`, only enabled once git
+  writes are on: discard, reset, force-push, force deletions). Each toggle threads
+  its flag into the copyable snippet, the *Write to .mcp.json* action, and both
+  global installs, so you no longer hand-edit the config to grant a tier.
+- **Multi-line comment ranges.** Drag across a range of lines in a diff and the
+  comment now lands as a **true multi-line anchor** on **GitHub and GitLab** —
+  across one-off review comments, pending-review drafts, and GitLab commit
+  comments — and clicking the **+** on any line of the drag reopens the same
+  range. Where a provider's API is single-line only (Bitbucket comments, and
+  GitHub/Bitbucket commit comments), the composer says so and anchors at the
+  last line rather than silently collapsing the range.
+- **Activity & notifications inbox.** The header activity control is now a persistent bell:
+  alongside in-progress work (AI reviews, with Cancel) it keeps a **history of terminal
+  events** — a finished review, checks passing/failing, a PR approved / changes-requested /
+  commented / merged, a review requested from you, a completed CI run, or a finished agent,
+  research, or plan run. Each entry click-navigates to its source, unread items carry a badge, and the
+  list survives an app restart, so a review that finishes while you're away is never a
+  missed click. Open it with the command palette (**Activity & notifications**), clear items
+  or mark all read, and arrow-key through the list. Which events appear follows your
+  **Settings → Notifications** choices. (New-comment / new-review / review-requested
+  detection is GitHub-only for now.)
+- **Operation journal & interrupted-op recovery.** GitDesktop now records the risky
+  compound operations it runs — local PR merges, cherry-picks, history edits, and
+  interactive rebases — each with the exact branch and commit it started from. If one is
+  interrupted by a crash or restart, a calm recovery notice appears above the **Changes**
+  list naming what was interrupted and the state it began from; it only informs (the
+  git-native Continue/Abort stay in the conflict bar). Browse the full log any time via the
+  **Operation history** command or the branch ⋮ menu.
+- **PR activity feed.** A pull request's Conversation is now a single date-sorted activity
+  feed that interleaves reviews, comments, pushed commits, and events — on **GitHub**,
+  **GitLab MRs**, and **Bitbucket PRs** alike. A run of pushes collapses into a "pushed N
+  commits" row that expands to the commits, and each commit's short SHA is clickable — it
+  jumps to that commit's detail. GitHub shows the full event set (force-push, label
+  add/remove, review request, ready-for-review, convert-to-draft, close, reopen, merge,
+  rename); GitLab MRs add label add/remove, close/reopen/merge, and approval events
+  (approved / changes-requested / approval-withdrawn), with no force-push or draft events;
+  Bitbucket PRs add merge/close and approved / changes-requested, with no labels or
+  review-requests. An approval or changes-request that predates a later push is flagged
+  **stale · N commits since**.
+- **CI checks rollup with inline logs.** A pull request's checks now fold into a rollup
+  summary — ✓ passed · ✕ failed · ● pending, each count with its own icon and word — that
+  auto-expands whenever something failed and lists the checks failures-first. This now
+  covers **GitHub PRs**, **GitLab MRs** (from the MR's pipeline jobs), and **Bitbucket PRs**
+  (from the PR head commit's build statuses). A failing **GitHub Actions** or **GitLab
+  pipeline** job peeks its job log inline, without leaving the PR, with an "Open full run"
+  link; external checks and **Bitbucket** build statuses (which expose no fetchable logs)
+  link straight out.
+- **PR commit detail.** The Commits tab of a pull request is now navigable — arrow
+  through the rows and open any commit for its own detail view. A remote commit shows
+  its full message body and per-file diffs with a copy-SHA control; a local PR's commit
+  opens the full history commit detail. Works on GitHub, GitLab, and Bitbucket PRs.
+- **Labels & assignees when creating a PR/MR.** The Create pull request dialog now has
+  **Labels** and **Assignees** pickers for GitHub and GitLab — set them up front instead
+  of after the PR/MR is open. (Bitbucket PRs have no labels or assignees, so it still
+  shows only its reviewers picker.)
+- **AI Generate when editing a PR/MR.** The Edit dialog now offers the same **Generate**
+  button as the create flow, so you can write or regenerate an existing pull request's (or
+  merge request's) title and description with AI — including for PRs from forks, whose head
+  branch isn't checked out locally.
+- **Request reviewers on GitHub and GitLab pull/merge requests.** The reviewers picker —
+  previously Bitbucket-only — now works on GitHub and GitLab too: request a review from a
+  collaborator (GitHub) or project member (GitLab) right from the PR/MR view, and see who's
+  currently requested, each shown with their avatar. (GitLab's free tier keeps only one
+  reviewer per merge request; if it drops the rest, GitDesktop tells you rather than
+  reporting a silent success.)
+- **Promote a worktree branch to your main workspace.** From the Worktrees dialog (or the
+  command palette), bring the branch you've been working on in a linked worktree into your
+  main checkout in one step — it frees the branch, stashes any uncommitted work in the main
+  workspace so the checkout can't be blocked, and checks the branch out there. The branch
+  switcher also lets you jump straight to the main workspace (or any other worktree) instead
+  of routing through a checked-out branch, and reminds you when a checkout will land in a
+  linked worktree rather than the main one.
+- **Rebase a branch onto a different base.** A new **Change base…** action in the
+  branch switcher (and command palette) fixes the "I branched off the wrong branch"
+  case: pick the branch you meant to base on plus the one you actually based on, and
+  GitDesktop replays only your branch's own commits onto the new base — leaving the
+  wrong base's commits behind. A moving-commits preview shows exactly what will move
+  before you run it, guards against a dirty tree, warns when the branch is already
+  pushed, and routes any conflicts into the usual resolve flow.
+- **Recover lost work — restore orphaned stashes without the CLI.** A new **Recover lost
+  work…** action (in the branch ⋮ menu and the command palette) opens a **Recoverable** tab
+  in the stashes dialog that scans your repository with `git fsck` for orphaned/dangling
+  stashes — uncommitted work a `git stash` saved but that has since fallen out of `git stash
+  list` (dropped, or abandoned by an interrupted operation). Preview each one's files and
+  diff, then **Restore to working tree** re-applies it non-destructively (it applies the
+  stash, never dropping or committing), so you can recover work you thought was gone.
+- **Remove a worktree from the branch menu.** A branch that's checked out in another
+  worktree now has a **Remove worktree…** action in its right-click menu in the branch
+  switcher, so you don't have to open the worktree manager to free it. The branch stays,
+  and its **Delete…** action un-disables once the worktree is gone.
+- The Rename branch dialog can now suggest a name from your in-progress changes with AI — the same **✧ Generate from changes** action the New branch dialog has.
+- Repo switcher and welcome list rows now show identity badges at a glance: a GitHub, GitLab, or Bitbucket logo for the forge the repo lives on (a cloud icon for a remote on an unrecognized host, a folder for a local-only repo), and a trailing lock (private), buildings (internal), or globe (public) for its visibility.
+- **Compose a review, line by line.** Click a line number (or drag across a range) in a
+  pull request's Files diff to open an inline composer: post a single comment right away,
+  or **Start a review** to batch drafts — which persist to disk per PR and survive a
+  restart. Pending drafts show at their anchors with edit and delete, a bar tracks the
+  count, and **Submit review…** posts the whole batch with a verdict (Comment, Approve,
+  or Request changes — offered where the provider allows, and Request changes needs a
+  summary). The composer can also insert a provider-correct `suggestion` block pre-filled
+  with the selected code, and reviewer suggestions now **apply to your working tree on
+  GitLab and Bitbucket too**, not just GitHub.
+- **Update a branch from its own upstream without switching to it.** When a branch is
+  behind the remote it tracks, its right-click menu in the branch switcher now offers
+  **Update from origin/…** — fast-forwarding it (or merging in place if it's the current
+  branch) without leaving the branch you're on. Made for the "just merged a PR, bring the
+  default branch current before I switch back" flow: the default branch's row shows how far
+  behind its upstream it is after a fetch, and *Update default branch from its remote* is
+  available from the command palette.
+- **Update a fork from its upstream.** When a repo has an `upstream` remote, the Pull menu
+  (and the command palette) gain **Update from upstream**: it fetches upstream, resolves its
+  default branch, and brings your current branch up to date — fast-forwarding silently when it
+  can, creating a merge commit when the histories have cleanly diverged, and routing conflicts
+  to the usual conflict editor. It never pushes for you; the Push button lights up on its own
+  once you're ahead.
 
 ### Changed
 
@@ -578,6 +950,153 @@ under `changelog.d/` (see its README); those are assembled here at release time 
   (provider-aware) with a *Run workflow/pipeline* button, and its branch-scoped empty
   offers *Show all branches*; History's filtered no-match adds a *Clear filter* button;
   and the Tags, PR Tasks, and Discussions empty states got clearer, more helpful copy.
+- **Automations redesigned around a lifecycle grid.** Automations (Settings → Automations,
+  and per-repo from a repository's ⋯ menu) are now grouped by moment — *On commit*, *On pull
+  request opened*, and *On new commits to a reviewed PR* — with AI code review and security
+  audit as toggles under each, so duplicate or conflicting rules are no longer possible. Each
+  enabled action can be scoped with **branch conditions** (include/exclude globs, plus a
+  Source / Target / Either match for PR events) and a "Try a branch" preview. Both the global
+  and per-repo surfaces now edit behind **Save / Discard** rather than saving on every toggle,
+  and the per-repo dialog shows the effective settings, badges overridden cells, can enable an
+  action that's globally off, and offers "Reset to global defaults". Your existing automations
+  are migrated automatically on first launch, with any duplicate rules merged and noted once.
+- **Faster startup.** The app now boots from a much smaller core bundle — agent sessions, diff rendering, the git-hooks editor, and the AI provider SDKs each load on first use instead of on launch.
+- **Codex model suggestions.** The model picker for the **Codex (CLI)** provider —
+  in AI review, agent sessions, and plans — now suggests real model ids
+  (`gpt-5.5`, `gpt-5.4-mini`) instead of showing an empty list. Pick one, type your
+  own, or leave it blank to keep using your Codex account's default (still the
+  default when you switch to Codex, since the right model depends on your plan).
+- Collaborator and member avatars in Repository Settings now use the standard
+  avatar component, showing a letter fallback when a user has no picture instead
+  of a blank circle.
+- Copying a PR review's markdown now includes its file-anchored review threads —
+  the diff excerpt, every comment, and any suggested changes — so AI and bot
+  reviews (Copilot, CodeRabbit) paste complete instead of losing their findings.
+- **Syntax highlighting holds up in large files.** Diffs keep their syntax colors
+  much further into big files — an edit deep in a long file (past ~2,000 lines) no
+  longer silently drops all highlighting, and the size limit before a diff falls
+  back to plain text is now tuned per highlighter (400 KB for highlight.js,
+  150 KB for Shiki languages like Rust and TSX, up from a flat 100 KB).
+- **Calmer error toasts.** Long git and forge errors now show a single
+  humanized summary line with a **Details** action that opens a dialog with the
+  full, selectable text and a Copy button; short errors are unchanged and keep
+  their Copy action.
+- Forge views feel snappier. Repeated origin-remote lookups from the many forge queries a pull-request or merge-request view fires are now served from a short-lived in-memory cache instead of re-shelling out to `git` each time — noticeably fewer process spawns on Windows.
+- **Provider avatars for assignees and authors.** The assignee picker now shows each user's
+  photo (like the reviewers picker), and author avatars on pull/merge requests, issues, and
+  comments now use the person's real GitLab or Bitbucket profile photo instead of falling back
+  to their initial. (GitHub already showed avatars, derived from the username.)
+- The History tab stays smooth with thousands of loaded commits — rows now
+  render only as they scroll into view.
+- The Jira issue view now puts type, assignee, reporter, dates, agile fields, labels, and
+  time tracking in a right-hand side panel like the GitHub and GitLab issue views, so the
+  header stays compact and the description and comments get the freed space.
+- The MCP `list_pull_request_comments` tool now caps each review thread's diff
+  hunk to its last few lines, so a comment on a brand-new file no longer drags
+  the whole file into the response. Pass `include_diff_hunk: false` to drop the
+  hunks entirely when you only need the threads' structure.
+- **MCP `approve_pull_request` and `request_changes` now work on GitHub.** Both forge write
+  tools previously dead-ended on GitHub repos with a "goes through the Review menu" error;
+  they now route the GitHub arm through `gh pr review`, so approving and requesting changes on
+  a PR work across GitHub, GitLab, and Bitbucket. (GitHub's `request_changes` requires a
+  non-empty body; the error surfaces if it's omitted, and withdrawing a requested-changes
+  review stays unsupported on GitHub, as `gh` can't do it.)
+- **MCP: cap or widen PR/issue lists.** The MCP server's `list_pull_requests` and
+  `list_issues` tools take an optional `limit` — omit it for the provider's default page
+  (GitHub ~30; GitLab and Bitbucket a full page), or pass one to raise or lower how many an
+  agent pulls back in a call.
+- **MCP `create_pull_request` now requires `--allow-git-write` in addition to
+  `--allow-remote-write`.** Opening a pull request pushes the head branch to origin first — a
+  local-git write — so it now correctly demands the git-write tier as well, honoring the
+  rule that enabling one capability tier never grants another.
+- **MCP: PR/issue text is flagged as untrusted to connected agents.** The built-in MCP
+  server's read tools that return third-party prose — `list_pull_requests`,
+  `get_pull_request`, `list_pull_request_comments`, `list_issues`, and `get_issue` — now
+  prepend a note marking the titles, bodies, and comments as data to analyze, never as
+  instructions to follow, so an agent pulling a PR's comments in is less exposed to prompt
+  injection from an attacker-authored comment. Defense-in-depth: forge writes remain gated
+  behind `--allow-remote-write`.
+- Snappier UI after issue, pull-request, and Jira actions: closing, editing,
+  commenting, and changing labels/priority/due-date now refresh just the item
+  you touched instead of refetching the whole repository's data.
+- Notifications now always show which repository they're for and, for new-pull-request
+  notifications, the author with their avatar; the Activity & notifications panel is
+  slightly wider to fit.
+- Research → Plan → Implement handoffs now carry forward what the prior stage
+  already examined (files, searches, web sources), so the next agent starts from
+  that grounding instead of re-exploring from zero.
+- **Create-PR branch picker.** The branch dropdown now widens to fit the longest branch name (up to a limit) instead of clipping to the field width, and each option shows a chip when that branch is checked out in another worktree or is archived.
+- **Pull request rows now show when each PR was opened**, matching the issue list —
+  `#12 · author · 3 hours ago · head → base`. Local pull request rows show their age
+  too. Each row also gains a small CI indicator a moment after the list loads — on
+  GitHub and GitLab, and on Bitbucket wherever a PR reports build statuses: a check for
+  passing, a cross for failing, and a clock for checks still running (rows with no
+  checks show none). Each icon has a distinct shape and a hover label, so the signal
+  never relies on color alone.
+- **Archived branches no longer clutter the create-PR branch pickers.** When opening a
+  pull request (GitHub/GitLab or a local PR), the base and compare dropdowns now hide
+  branches you've archived, matching the branch switcher. A branch that's still a seeded
+  default (your current branch, say) stays selectable even when archived.
+- **Local-PR record actions moved off the footer.** A local PR's footer is now just the
+  merge decision; **Archive / Unarchive** and **Delete** moved to a right-click menu on
+  the PR's list row (Delete still confirms, and never touches the branches). Both are also
+  in the command palette as **Archive pull request** and **Delete pull request**, acting
+  on the selected local PR.
+- **AI review factors in its own prior comments.** When you re-review a pull request, the AI
+  review now reads the comments GitDesktop has already posted on it — past reviews and any
+  agent follow-ups (a refutation, or a "fixed in `<sha>`" reply) — and treats a finding it
+  already resolved or refuted as settled instead of raising it cold again, unless the current
+  diff still shows the problem. Works on GitHub PRs and GitLab MRs (remote PRs only).
+- Smoother rendering across major surfaces — the changes list, staging diff,
+  settings, sync controls, conflict view, and history editor were silently
+  opted out of React Compiler optimization; they now compile and re-render less.
+- **AI-generated repo descriptions are less terse.** The **Generate** button for a
+  repository's About description now aims for a fuller single line (roughly 200–325
+  characters) that says what the project does and what makes it stand out, instead
+  of the old ~140-character cap that often produced a thin one-liner. GitHub's About
+  field already accepts up to 350 characters, so the result still fits. Long READMEs
+  are now condensed to keep their features and highlights breadth — dropping install
+  and development boilerplate — instead of being blindly cut off at 6,000 characters,
+  so the model sees what the project actually does rather than just its opening.
+- **Repository settings: friendlier Description and Topics fields.** In *Settings →
+  General*, the **Description** is now a multi-line box so a long "About" wraps
+  instead of clipping mid-word (GitHub and GitLab; Bitbucket already did). **Topics**
+  are now removable chips with an inline add-box: type a topic and press **Enter** or
+  comma to add it. On GitHub, each token is normalized to a valid topic as you add it and
+  the chip shows exactly what will be saved — so `C++` becomes `c` and `React_Native`
+  becomes `react-native`, and pasted or space-separated text lands as clean chips instead
+  of being silently mangled on save; the field caps at 20 with a live count. On
+  GitLab, topics keep their case and spaces, so "React Native" stays one topic. Chips are
+  fully keyboard-navigable — arrow between them, remove the focused one with Enter or its
+  ✕, and Backspace in an empty add-box removes the last one.
+- "Turn into a Plan" now distills the research session into a clean plan brief (via
+  one extra turn that forks the conversation, so it never disturbs the research
+  session itself) instead of handing the plan the raw multi-turn transcript — with
+  automatic fallback to the full report if distillation fails or is cancelled.
+  Distillation is currently available for Claude; other agents fall back to the full
+  report.
+- AI code review now has to trace its data-flow claims: a statement like "X arrives as
+  parameter Y, sliced to N" must point at a real call site or be left out — fewer fabricated
+  parameter and slicing claims in review findings.
+- **AI PR reviews verify before flagging.** The review now checks the typed contract
+  before reporting a possible null/undefined issue — a field the types declare
+  non-optional (or that every code path visibly sets) is no longer flagged — and it
+  omits a finding relayed from another AI reviewer when it cannot verify that finding
+  against the diff, rather than passing it along with a "could not verify" hedge.
+- **Review comments read in context.** On a GitHub PR, each review's line comments now
+  appear **inline under that review** in the Conversation timeline (grouped by file),
+  instead of being pooled in one block at the bottom — so you follow a review right where
+  it lands. Standalone line comments, and every thread on GitLab and Bitbucket (which
+  don't tie comments to a review), still gather in a by-file block below, retitled *Other
+  line comments* when some already appear inline above. Reply, resolve, apply-suggestion,
+  and keyboard navigation work the same in both places.
+- Repo-aware AI review starts faster: the PR head is no longer pre-fetched when its objects
+  are already present locally.
+- The app starts leaner: diff syntax-highlighting grammars and the session
+  terminal now load on first use instead of at startup, and markdown code
+  blocks highlight all languages — the rarer ones load their highlighter on
+  first use.
+- Dialogs are a little wider by default, and long branch names now wrap instead of overflowing — applied once in the shared dialog component, so every dialog (create/rename branch, the merge/rebase picker, and the rest) benefits.
 
 ### Fixed
 
@@ -650,6 +1169,189 @@ under `changelog.d/` (see its README); those are assembled here at release time 
   no longer prints a raw error string, and the Actions toolbar's "Run workflow" and
   refresh buttons, when disabled, now say they need a GitHub CLI sign-in instead of
   greying out silently.
+- Stopping or timing out an agent session now terminates the CLI's entire
+  process tree, so helper processes (language workers, MCP servers, tool
+  subprocesses) can no longer keep running in the background — previously on
+  Windows only the top-level CLI was killed, leaving its children consuming
+  tokens and holding worktree file handles.
+- **A cancelled automated PR review no longer re-runs after a restart.** Cancelling an
+  automatic re-review of new commits on a pull request now remembers that commit, so it isn't
+  reviewed again when you relaunch the app. A genuinely new commit still triggers a review as
+  before.
+- Automations no longer fire twice when two app instances (for example a main
+  checkout and a linked worktree) watch the same repository — a run is now claimed
+  atomically across processes before any AI work, so only one instance posts the
+  review.
+- Concurrent automation-settings saves no longer overwrite each other — the
+  global defaults and a repository's overrides are each re-derived from fresh
+  state when saved, so two overlapping saves can't drop one another's change.
+- Review threads on busy pull requests no longer disappear: Bitbucket comment
+  pages and GitHub review-thread pages are now followed across multiple pages,
+  instead of stopping at the first 100 and silently dropping the rest.
+- Blaming a very large file no longer freezes the app — the blame view now
+  virtualizes its rows and syntax-highlights only the lines currently on
+  screen, instead of rendering and highlighting every line at once.
+- Bot authors like **dependabot**, **renovate**, and **github-actions** now show
+  their real avatars in PR, issue, and timeline surfaces and in History, instead
+  of falling back to an initial — GitHub serves no login-derived avatar for bot
+  accounts, so GitDesktop now resolves them through the GitHub API once and caches
+  the result.
+- **A branch whose remote was deleted now offers "Publish branch."** After a PR
+  merge deletes the remote branch, the sync bar no longer shows stale Push/Pull
+  against the dead ref — it shows **Publish branch**, which recreates the remote
+  branch on push. Undo-commit is available again on such a branch, and amending
+  its tip no longer wrongly demands a force-push.
+- **Cherry-picking commits onto another branch no longer risks uncommitted work.** Cherry-picking onto the branch you're currently on could, if it hit a conflict, discard your uncommitted changes during rollback — it now refuses up front on a dirty working tree with a clear "commit or stash your changes first" message. (Untracked files are still fine.)
+- Repository **Access** settings no longer offer the Triage, Maintain, or Admin
+  collaborator roles on a personal (user-owned) repository. GitHub silently keeps
+  collaborators at Write there — picking a higher role returned success but never
+  applied — so the picker now shows Read and Write only (organization repos keep the
+  full set), with a short note explaining why.
+- Switching to the Compare tab no longer clears the commit selected in History —
+  each tab now keeps its own selection.
+- **A requested Copilot review now shows in a pull request's Reviewers.** A pending GitHub Copilot (or other bot) review request is displayed as a read-only chip in the PR Reviewers section instead of being invisible. The chip is display-only — the reviewer picker never adds or removes a bot, so managing human reviewers can't drop a pending Copilot request.
+- Large file diffs no longer flash or re-render while loading. The diff now waits
+  for its syntax-highlighting inputs (the whole-file context reads and any
+  lazily-loaded language grammar) to settle and paints once, instead of showing a
+  brief hunk-only pass that restructured a moment later.
+- **On a fork, the Actions tab now shows your fork's workflow runs, not the upstream
+  repository's.** When a fork has an `upstream` remote, GitHub's CLI would resolve the
+  parent repository, so the Actions list, run details/logs, re-run/cancel, "Run workflow"
+  dispatch, and the run notifications could all target the original repo. Every Actions
+  operation is now pinned to your `origin` remote. Single-remote repositories are
+  unaffected.
+- On a fork with an `upstream` remote, repo administration now always targets
+  **your fork** (the origin remote) rather than the upstream parent. This covers
+  repo settings, webhooks, Pages, collaborators & invitations, insights, code
+  security, rulesets, secrets & variables, generated release notes, branch-
+  protection import, and — most importantly — repository rename, transfer, and
+  delete.
+- The GitLab auto-merge status poll now pauses while the Pulls tab is hidden,
+  instead of quietly polling the server every 8–30 seconds in the background.
+  Switching back to the Pulls tab refreshes it immediately.
+- **Long branch names no longer overflow the repository header.** A very long
+  current-branch name used to push the header wider than the window, adding
+  horizontal (and cascaded vertical) scrollbars and hiding the sync controls.
+  The branch name now truncates with an ellipsis — hover it to see the full
+  name — while the icons, detached badge, and Fetch/Pull/Publish controls stay
+  fully visible. The truncation order is deliberate: the branch name gives way
+  first, then the CI badge's workflow label, and the repository name last.
+- **Long repository names no longer overflow the header.** A repository name
+  or alias longer than the trigger's width used to paint past its box over
+  neighboring controls. It now truncates cleanly with an ellipsis — hover it to
+  see the full name — and at narrow window widths the repository and branch
+  triggers shrink together instead of the branch giving way alone.
+- Hidden tabs and unfocused windows no longer keep polling — Actions run and
+  workflow queries pause while their tab is hidden, and GitLab merge-state and
+  agent-session diff polling stops while the window is in the background.
+- Arrow-key navigation on the custom slash-commands list (Settings) and the
+  submodules list — move between rows with the arrow keys and act on the
+  active row (edit a command, or initialize/update a submodule) with Enter.
+- **Pull request, issue, and discussion lists no longer stop silently at 30 or 50.**
+  These lists used to cap at the underlying CLI's default page (30 pull requests and
+  issues, 50 discussions) with no indication more existed. They now load the first 100
+  and, when a full page comes back, offer a "Load 100 more" row at the bottom that pages
+  the rest in — with a "Showing first N" count so you always know where you stand.
+- **Long pull request, issue, and discussion lists no longer stretch the window with
+  empty space.** A list taller than the viewport could spill its full height into the
+  page, adding an outer window scrollbar over a large empty void. Lists (and the detail
+  panels) now contain their own scrolling, so the window stays put and only the list
+  scrolls.
+- The local pull-request dialog's branch picker no longer lists internal agent-session branches (`gd/session/*`).
+- **Installing the MCP server globally now finds `claude` / `copilot` reliably.** The
+  global install resolves the client CLI the same way the rest of the app does — checking
+  the system PATH, known install locations, and (on Windows) the live registry PATH — so
+  it no longer reports the CLI as "not found" when it lives in a directory that was added
+  to PATH after GitDesktop started.
+- **MCP server no longer blocks installs or gets killed by updates (Windows).** When you
+  use GitDesktop as an MCP server, the generated config now launches a dedicated
+  `gitdesktop-mcp` copy of the app instead of the installed executable. Running MCP
+  servers no longer lock the installer out with a "Files in Use" dialog, and are no
+  longer silently terminated mid-session by a passive auto-update. **Add to PATH** now
+  points at this launcher and migrates any older install-folder entry automatically.
+- **The merge dialog no longer offers to delete a branch it can't.** When merging a
+  pull/merge request, the "Delete _branch_ on the remote after merging" option is now
+  hidden when the head is the repository's **default branch** (which every forge refuses
+  to delete) and disabled with a reason when a **branch rule** protects it — matching the
+  branch switcher. Applies to GitHub, GitLab, and Bitbucket, including GitLab auto-merge.
+- Merge-confirm dialog: long branch names (e.g. Dependabot's) no longer overflow the delete-branch checkbox label or the dialog description — the text now wraps cleanly.
+- New branch dialog: a long base-branch name (e.g. `feature/ollama-cloud-provider-custom-endpoints`) no longer overflows the dialog — the "Branches from …" description and the base-branch selector now stay within bounds and the name wraps cleanly.
+- A UI polish sweep across the app: disabled buttons now explain why they're disabled on hover, bot authors like dependabot display properly on PR rows and headers, PR list fetch failures show an error with retry instead of looking empty, relative times no longer show "24 hours ago" next to "1 day ago", and keyboard navigation & screen-reader labels were added to several lists and icon buttons.
+- Creating a pull request with labels or assignees no longer records each one
+  **twice** on the PR's activity timeline (e.g. "added the documentation label"
+  appearing twice). Labels and assignees are now applied right after the PR is
+  created rather than during creation, which GitHub's CLI double-recorded.
+- Very large pull requests now show their full diff and complete file list
+  instead of failing or stopping at 100 files. When GitHub refuses the whole-PR
+  diff (its 300-file limit) or caps the file list at 100, both are rebuilt from
+  the paginated files API so every changed file appears in the rail and renders
+  its hunks.
+- Merging a GitHub pull request with **Delete branch** checked now removes only the
+  *remote* branch, matching GitLab and Bitbucket — your local branch and whatever you
+  have checked out are left untouched (it previously deleted the local branch too and
+  switched you to the default branch).
+- Running automation AI reviews now appear in the header's activity indicator —
+  where they can be cancelled — instead of a persistent toast that floated over
+  the pull-request action bar. Toasts now announce only the result and can be
+  dismissed with a close button.
+- **PR detail no longer truncates commits, reviews, or conversation comments at 100.**
+  A pull request with more than 100 commits, reviews, or conversation comments previously
+  showed only the first 100 as if that were the whole list (GitHub's GraphQL connections
+  cap there). The PR view now completes each list from the paginated REST API, matching how
+  the changed-files rail already worked.
+- When promoting a local PR or issue, or creating a sub-issue, a failure that happens
+  after the remote object was already created now tells you what was created (with a View
+  link) and closes the dialog, instead of showing a generic error that invited creating a
+  duplicate.
+- Removing the **currently open** repository while also moving it to the **system trash**
+  (Recycle Bin on Windows, Trash on macOS/Linux) now closes it first, so the move no longer
+  fails with a raw "Some operations were aborted" error. If the folder is still locked by
+  another program, the message now explains that an open editor, terminal, or file-explorer
+  window is likely holding it — and the repository stays listed so you can close them and retry.
+- Switching between repositories no longer briefly shows the previous repository's
+  pull requests, issues, discussions, or other lists before the new repository's load.
+  The panels now drop straight to a loading state on a repo switch, while still keeping
+  their rows in place during in-repo navigation like "Load more" and Open/Closed tab
+  switches.
+- Fixed a rare lost update in stored AI review history: when two changes to a
+  PR's reviews landed at nearly the same time — for example an automated review
+  finishing while you edit or delete another review's text — one change could
+  silently overwrite the other. Overlapping writes are now serialized so neither
+  is dropped.
+- Review-thread expand/collapse in the Files diff now toggles correctly under
+  rapid clicks, and clipped file paths in the review-comments list show the full
+  path on hover.
+- Internal agent-session branches (`gd/session/*`) no longer show up in the
+  cherry-pick target, GitHub Pages source, or default-branch pickers, nor in the
+  MCP server's `list_branches` tool or branch-name generation context.
+- GitDesktop now enforces a single running instance: launching the app again focuses the existing window — restoring it from the tray if needed — instead of opening a duplicate whose automations could double-fire (e.g. two AI reviews posted on the same PR).
+- **Review-thread replies no longer clutter the PR timeline.** Replying to a
+  review thread on a GitHub PR used to leave a bare, context-free "commented"
+  card in the conversation timeline (GitHub auto-wraps the reply in an empty
+  review); it now renders as a compact "replied in a review thread" row with the
+  file and line, plus a jump-to-thread link. On Bitbucket, thread replies no
+  longer appear twice -- once in the timeline and once inside their thread.
+- On a branch that hasn't been published yet, the History tab no longer marks
+  **every** commit as "not pushed" — it now compares against the remote and flags
+  only the commits actually made on the branch (the ones above where it forked
+  from the default branch).
+- Deleting a branch that's checked out in another worktree now explains which worktree
+  holds it instead of failing with a raw git error, and the branch-cleanup dialog leaves
+  such branches out of its delete list (they can still be archived).
+- **Kept session worktrees no longer leak their folder on Windows.** When a worktree
+  couldn't be removed because git's own recursive delete tripped over reparse-point
+  links (how `node_modules` is laid out on Windows), the folder was left behind on disk.
+  Removal now finishes the job itself once it confirms the worktree has no uncommitted
+  work — a worktree with real unsaved changes is still preserved and surfaced, never
+  silently discarded.
+- Merging a local pull request into a base branch that's checked out in another worktree
+  now fast-forwards that worktree instead of refusing, keeping its working tree in sync
+  (and failing with a clear message if that worktree has uncommitted changes).
+- Local pull requests, issues, review history, review drafts, branch rules, and
+  automation rules are now keyed by repository identity rather than checkout path, so
+  they're shared across all of a repo's worktrees — a PR created in one worktree now
+  shows up in the main checkout, and the MCP server's local-PR tools no longer report
+  "no local PRs found" when the server is bound to a worktree.
 
 ### Changed
 
@@ -1129,5 +1831,6 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/theBGuy/GitDesktop/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/theBGuy/GitDesktop/releases/tag/v0.1.0

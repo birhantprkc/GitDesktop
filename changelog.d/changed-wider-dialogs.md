@@ -1,1 +1,0 @@
-- Dialogs are a little wider by default, and long branch names now wrap instead of overflowing — applied once in the shared dialog component, so every dialog (create/rename branch, the merge/rebase picker, and the rest) benefits.

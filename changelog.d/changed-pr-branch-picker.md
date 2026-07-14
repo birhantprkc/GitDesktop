@@ -1,1 +1,0 @@
-- **Create-PR branch picker.** The branch dropdown now widens to fit the longest branch name (up to a limit) instead of clipping to the field width, and each option shows a chip when that branch is checked out in another worktree or is archived.

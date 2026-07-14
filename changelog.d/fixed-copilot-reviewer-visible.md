@@ -1,1 +1,0 @@
-- **A requested Copilot review now shows in a pull request's Reviewers.** A pending GitHub Copilot (or other bot) review request is displayed as a read-only chip in the PR Reviewers section instead of being invisible. The chip is display-only — the reviewer picker never adds or removes a bot, so managing human reviewers can't drop a pending Copilot request.

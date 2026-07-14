@@ -1,1 +1,0 @@
-- Merge-confirm dialog: long branch names (e.g. Dependabot's) no longer overflow the delete-branch checkbox label or the dialog description — the text now wraps cleanly.
