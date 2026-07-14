@@ -1,5 +1,6 @@
 import {
   keepPreviousData,
+  type QueryKey,
   useMutation,
   useQuery,
   useQueryClient,
@@ -48,6 +49,23 @@ import type {
 } from "./types";
 
 const jiraLinkKey = (repo: string) => ["jira-link", repo] as const;
+
+/**
+ * `keepPreviousData`, scoped to a single repo — the Jira-module twin of the one in
+ * `git/queries.ts` (kept local rather than cross-imported, since this module doesn't
+ * otherwise depend on `git/queries`). Panels stay mounted across repo switches, so a
+ * plain `keepPreviousData` would flash the previous repo's Jira issue while the new
+ * repo's loads. Keeps previous data only when the previous query was for the SAME
+ * repo (repo lives at query-key index 1 for the repo-keyed Jira hooks); drops to a
+ * fresh skeleton when the repo changes.
+ */
+function keepPreviousDataForRepo(repo: string, repoKeyIndex = 1) {
+  return <T,>(
+    previousData: T | undefined,
+    previousQuery: { queryKey: QueryKey } | undefined,
+  ): T | undefined =>
+    previousQuery?.queryKey?.[repoKeyIndex] === repo ? previousData : undefined;
+}
 
 /** This repo's Jira link (or `null` when unlinked). */
 export function useJiraLink(repo: string) {
@@ -173,7 +191,10 @@ export function useJiraIssue(
     queryKey: ["repo", repo, "jira-issue", link?.siteHost ?? "", key] as const,
     queryFn: () => jiraIssueView((link as JiraLink).siteHost, key as string),
     enabled: !!link && key !== null,
-    placeholderData: keepPreviousData,
+    // Repo-scoped: panels persist across repo switches, so don't flash the previous
+    // repo's issue. The other two Jira hooks below key on site/query (no repo), so
+    // they keep plain keepPreviousData.
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 

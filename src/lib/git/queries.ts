@@ -1,5 +1,4 @@
 import {
-  keepPreviousData,
   type QueryKey,
   queryOptions,
   useInfiniteQuery,
@@ -74,6 +73,26 @@ export function useRepoIdentity(repo: string) {
     enabled: repo !== "",
     staleTime: Number.POSITIVE_INFINITY,
   });
+}
+
+/**
+ * `keepPreviousData`, scoped to a single repo. Panels stay mounted across repo
+ * switches, so a plain `keepPreviousData` `placeholderData` would keep the PREVIOUS
+ * repo's rows on screen while the new repo's query loads — a visible flash of the
+ * wrong repo's PRs/issues/etc. (and, for number-keyed maps, briefly-wrong data).
+ * This keeps the previous data only when the previous query was for the SAME repo
+ * (so Load-more page growth and Open/Closed tab switches still avoid a skeleton),
+ * and drops to fresh skeletons the moment the key's repo segment changes.
+ *
+ * Pass the current `repo` and the index of the repo segment in the query key (all
+ * `repoKeys.*` and the `["repo", repo, …]` literals here put it at index 1).
+ */
+function keepPreviousDataForRepo(repo: string, repoKeyIndex = 1) {
+  return <T,>(
+    previousData: T | undefined,
+    previousQuery: { queryKey: QueryKey } | undefined,
+  ): T | undefined =>
+    previousQuery?.queryKey?.[repoKeyIndex] === repo ? previousData : undefined;
 }
 
 export const repoKeys = {
@@ -382,7 +401,7 @@ export function useCommitDetails(repo: string, hash: string | null) {
     enabled: hash !== null,
     // Keep the prior commit's content on screen while the next loads, so
     // arrowing through history doesn't flash a skeleton on every step.
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -390,7 +409,7 @@ export function useCommitFiles(repo: string, hash: string | null) {
   return useQuery({
     ...commitFilesOptions(repo, hash ?? ""),
     enabled: hash !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -402,7 +421,7 @@ export function useCommitFileDiff(
   return useQuery({
     ...commitFileDiffOptions(repo, hash ?? "", file ?? ""),
     enabled: hash !== null && file !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -704,7 +723,7 @@ export function useBranchDiffFiles(
     queryKey: repoKeys.branchDiffFiles(repo, base ?? "", compare ?? ""),
     queryFn: () => api.gitBranchDiffFiles(repo, base ?? "", compare ?? ""),
     enabled: base !== null && compare !== null && base !== compare,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -725,7 +744,7 @@ export function useBranchFileDiff(
       api.gitBranchFileDiff(repo, base ?? "", compare ?? "", file ?? ""),
     enabled:
       base !== null && compare !== null && base !== compare && file !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -804,7 +823,7 @@ export function usePrList(
     staleTime: 30_000,
     // Growing the limit ("Load more") keeps the current rows visible instead of
     // flashing skeletons while the larger page loads.
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -846,7 +865,7 @@ export function usePrListCi(
     enabled: enabled && !!prs && prs.length > 0,
     staleTime: 30_000,
     // Keep the current icons while a "Load more" grows the list, matching usePrList.
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -880,7 +899,7 @@ export function usePrDetails(repo: string, number: number | null) {
   return useQuery({
     ...prDetailsOptions(repo, number ?? 0),
     enabled: number !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -888,7 +907,7 @@ export function usePrDiff(repo: string, number: number | null) {
   return useQuery({
     ...prDiffOptions(repo, number ?? 0),
     enabled: number !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -1356,7 +1375,7 @@ export function useIssueList(
     enabled,
     staleTime: 30_000,
     // Keep current rows visible while a grown "Load more" page loads.
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -1371,7 +1390,7 @@ export function useIssueDetails(repo: string, number: number | null) {
   return useQuery({
     ...issueDetailsOptions(repo, number ?? 0),
     enabled: number !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -1871,7 +1890,7 @@ export function useDiscussionList(
     enabled,
     staleTime: 30_000,
     // Keep current rows visible while a grown "Load more" page loads.
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -1886,7 +1905,7 @@ export function useDiscussionDetails(repo: string, number: number | null) {
   return useQuery({
     ...discussionDetailsOptions(repo, number ?? 0),
     enabled: number !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -2826,7 +2845,7 @@ export function useReleaseDetails(repo: string, tag: string | null) {
   return useQuery({
     ...releaseDetailsOptions(repo, tag ?? ""),
     enabled: tag !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -3084,7 +3103,7 @@ export function useStashFiles(repo: string, index: number | null) {
     queryKey: ["repo", repo, "stash-files", index ?? -1] as const,
     queryFn: () => api.gitStashFiles(repo, index ?? 0),
     enabled: index !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -3103,7 +3122,7 @@ export function useStashFileDiff(
     ] as const,
     queryFn: () => api.gitStashFileDiff(repo, index ?? 0, filePath ?? ""),
     enabled: index !== null && filePath !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -3131,7 +3150,7 @@ export function useOrphanedStashes(repo: string, enabled = false) {
     // within a session (the Rescan button forces a fresh scan), and keep the
     // list on screen during a refetch instead of blanking to the spinner.
     staleTime: 60_000,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -3140,7 +3159,7 @@ export function useOrphanedStashFiles(repo: string, sha: string | null) {
     queryKey: ["repo", repo, "orphaned-stash-files", sha ?? ""] as const,
     queryFn: () => api.gitOrphanedStashFiles(repo, sha ?? ""),
     enabled: sha !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -3160,7 +3179,7 @@ export function useOrphanedStashFileDiff(
     queryFn: () =>
       api.gitOrphanedStashFileDiff(repo, sha ?? "", filePath ?? ""),
     enabled: sha !== null && filePath !== null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
@@ -3195,7 +3214,7 @@ export function useOplogHistory(repo: string, enabled = false) {
     queryFn: () => api.gitOplogList(repo),
     enabled,
     staleTime: 30_000,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForRepo(repo),
   });
 }
 
