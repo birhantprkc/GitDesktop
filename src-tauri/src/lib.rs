@@ -517,6 +517,7 @@ pub fn run() {
             github::discussion::gh_discussion_delete,
             github::repo_settings::gh_repo_admin,
             github::auth::gh_token_scopes,
+            github::avatar::gh_bot_avatar,
             github::collaborators::gh_collaborators_list,
             github::collaborators::gh_collaborator_add,
             github::collaborators::gh_collaborator_remove,

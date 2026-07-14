@@ -3962,6 +3962,23 @@ export function useGhScopes(host?: string) {
   });
 }
 
+/** The real avatar URL for a GitHub bot (dependabot, renovate, …), resolved via
+ *  `gh api users/<name>[bot]` since bot logins have no `<host>/<login>.png`.
+ *  Pass the bare bot name from {@link botLoginName}, or `null` for a non-bot /
+ *  off-GitHub handle (disabled — no lookup). The URL is stable, so it's cached
+ *  hard; `retry: false` keeps a 404 / offline miss from a retry storm — the
+ *  caller falls back to initials on `""`. */
+export function useBotAvatarUrl(name: string | null) {
+  return useQuery({
+    queryKey: ["bot-avatar", name] as const,
+    queryFn: () => api.ghBotAvatar(name ?? ""),
+    enabled: name !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 24 * 60 * 60 * 1000,
+    retry: false,
+  });
+}
+
 const webhooksKey = (repo: string) => ["repo", repo, "webhooks"] as const;
 
 export function useWebhooks(repo: string, enabled: boolean) {

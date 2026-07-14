@@ -2352,6 +2352,11 @@ export const forgeBbEnvironments = (repoPath: string) =>
 export const ghTokenScopes = (host?: string) =>
   invoke<GhScopes>("gh_token_scopes", { host: host ?? null });
 
+/** The real avatar URL for a GitHub bot account (dependabot, renovate, …), or
+ *  `""` when it can't be resolved — bot logins have no `<host>/<login>.png`. */
+export const ghBotAvatar = (login: string) =>
+  invoke<string>("gh_bot_avatar", { login });
+
 export const ghHooksList = (repoPath: string) =>
   invoke<Webhook[]>("gh_hooks_list", { repoPath });
 

@@ -1,4 +1,6 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { botLoginName } from "@/lib/git/bot-login";
+import { useBotAvatarUrl } from "@/lib/git/queries";
 import type { ForgeUserRef } from "@/lib/git/types";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +13,11 @@ import { cn } from "@/lib/utils";
  * active-repo hooks), which is `null` off GitHub. With neither — no URL and off
  * GitHub — the Avatar primitive falls back to the initial, keeping every provider
  * consistent. This is the single home for the user-avatar initials fallback.
+ *
+ * GitHub **bots** are the exception: the login-derived `.png` doesn't exist for
+ * bot accounts (`github.com/app/dependabot.png` 404s), so a bot handle is resolved
+ * to its real avatar via the API once and cached ({@link useBotAvatarUrl}); github.com
+ * only, so Enterprise bots keep the initials fallback.
  *
  * Callers with a full `ForgeUserRef` pass `user`; callers with a bare login (plus an
  * optional real avatar URL) pass `login`/`avatarUrl`.
@@ -42,7 +49,20 @@ export function ForgeUserAvatar({
   const handle = user?.id ?? login ?? "";
   const label = user?.label ?? login ?? "";
   const realUrl = user?.avatarUrl ?? avatarUrl ?? "";
-  const src = realUrl || (ghHost ? `https://${ghHost}/${handle}.png?size=48` : "");
+  // A bot handle only needs an API lookup when there's no real URL and we're on
+  // GitHub — the login-derived `.png` below doesn't exist for bots. Hooks can't
+  // be conditional, so `useBotAvatarUrl(null)` stays disabled (no fetch) on the
+  // common non-bot / off-GitHub path — cheap in the large picker lists this renders in.
+  const bot = realUrl || !ghHost ? null : botLoginName(handle);
+  const botAvatar = useBotAvatarUrl(bot);
+  const src = realUrl
+    ? realUrl
+    : bot !== null
+      ? // A bot: the resolved URL, or "" while loading/failed → initials fallback.
+        (botAvatar.data ?? "")
+      : ghHost
+        ? `https://${ghHost}/${handle}.png?size=48`
+        : "";
   return (
     <Avatar
       aria-hidden={decorative || undefined}
