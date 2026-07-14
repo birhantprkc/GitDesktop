@@ -90,6 +90,7 @@ const EMPTY_COMMIT_DRAFT: CommitDraft = {
  *  stay in lockstep. Staying in the same repo keeps the user's other selections. */
 const CROSS_REPO_RESET: Partial<UiState> = {
   compareBranch: null,
+  localPrCreate: null,
   selectedPr: null,
   pendingPrSection: null,
   selectedIssue: null,
@@ -166,6 +167,12 @@ interface UiState {
    *  opens its dialog when this matches its kind, then clears it. Survives the
    *  tab switch requestCreate performs. */
   pendingCreate: CreateKind | null;
+  /** The hoisted "create local PR" dialog: null = closed; an object = open, with
+   *  optional branch seeds. Lives at RepositoryView level (outside the tab
+   *  <Activity> wrappers) because its success handler navigates to the Pulls tab —
+   *  a panel-hosted instance would have its close deferred by the newly-hidden
+   *  Activity subtree and stick open. */
+  localPrCreate: { defaultHead?: string; defaultBase?: string } | null;
   /** Selected workflow run (databaseId) on the Actions tab. */
   selectedRunId: number | null;
   /** Selected tag (by name) on the Tags tab. */
@@ -233,6 +240,12 @@ interface UiState {
   /** Switch to the create's tab and flag its panel to open the dialog. */
   requestCreate: (kind: CreateKind) => void;
   clearPendingCreate: () => void;
+  /** Open the hoisted create-local-PR dialog, optionally seeding its branches. */
+  openLocalPrCreate: (seeds?: {
+    defaultHead?: string;
+    defaultBase?: string;
+  }) => void;
+  closeLocalPrCreate: () => void;
   selectRun: (id: number | null) => void;
   selectTag: (tag: { tag: string } | null) => void;
   selectFile: (file: SelectedFile | null) => void;
@@ -312,6 +325,7 @@ export const useUiStore = create<UiState>()((set, get) => {
     selectedDiscussion: null,
     pendingIssueDraft: null,
     pendingCreate: null,
+    localPrCreate: null,
     selectedRunId: null,
     selectedTag: null,
     selectedFile: null,
@@ -334,26 +348,10 @@ export const useUiStore = create<UiState>()((set, get) => {
           repoPath: info.root,
           repoName: info.name,
           repoTab: "changes",
-          compareBranch: null,
-          selectedPr: null,
-          pendingPrSection: null,
-          selectedIssue: null,
-          selectedDiscussion: null,
-          pendingIssueDraft: null,
-          selectedRunId: null,
-          selectedTag: null,
-          selectedFile: null,
-          selectedCommitHash: null,
-          compareCommitHash: null,
           // Clear the live fields; the previous repo's draft stays in
           // commitDrafts (keyed by repo+branch) and CommitBox reloads the new
           // repo's draft once its branch is known.
-          commitTitle: "",
-          commitBody: "",
-          commitCoAuthors: [],
-          commitAiGenerated: false,
-          amendingHash: null,
-          activeDraftKey: null,
+          ...CROSS_REPO_RESET,
         }),
       ),
     closeRepo: () =>
@@ -364,23 +362,7 @@ export const useUiStore = create<UiState>()((set, get) => {
           repoPath: null,
           repoName: null,
           repoTab: "changes",
-          compareBranch: null,
-          selectedPr: null,
-          pendingPrSection: null,
-          selectedIssue: null,
-          selectedDiscussion: null,
-          pendingIssueDraft: null,
-          selectedRunId: null,
-          selectedTag: null,
-          selectedFile: null,
-          selectedCommitHash: null,
-          compareCommitHash: null,
-          commitTitle: "",
-          commitBody: "",
-          commitCoAuthors: [],
-          commitAiGenerated: false,
-          amendingHash: null,
-          activeDraftKey: null,
+          ...CROSS_REPO_RESET,
         }),
       ),
     openPrReview: (target) =>
@@ -392,29 +374,12 @@ export const useUiStore = create<UiState>()((set, get) => {
           repoPath: target.repoPath,
           repoName: target.repoName,
           repoTab: "pulls",
-          selectedPr: { kind: target.kind, id: target.ref },
-          pendingPrSection: "review",
           // Switching repos clears the rest the way openRepo does; staying in
           // the same repo keeps your other selections and just retargets the PR.
-          ...(switchingRepo
-            ? {
-                compareBranch: null,
-                selectedIssue: null,
-                selectedDiscussion: null,
-                pendingIssueDraft: null,
-                selectedRunId: null,
-                selectedTag: null,
-                selectedFile: null,
-                selectedCommitHash: null,
-                compareCommitHash: null,
-                commitTitle: "",
-                commitBody: "",
-                commitCoAuthors: [],
-                commitAiGenerated: false,
-                amendingHash: null,
-                activeDraftKey: null,
-              }
-            : {}),
+          // The explicit PR keys come AFTER the spread so it can't null them.
+          ...(switchingRepo ? CROSS_REPO_RESET : {}),
+          selectedPr: { kind: target.kind, id: target.ref },
+          pendingPrSection: "review",
         });
       }),
     openRun: (target) =>
@@ -457,6 +422,8 @@ export const useUiStore = create<UiState>()((set, get) => {
     requestCreate: (kind) =>
       set({ repoTab: CREATE_TAB[kind], pendingCreate: kind }),
     clearPendingCreate: () => set({ pendingCreate: null }),
+    openLocalPrCreate: (seeds) => set({ localPrCreate: seeds ?? {} }),
+    closeLocalPrCreate: () => set({ localPrCreate: null }),
     selectRun: (id) => set({ selectedRunId: id }),
     selectTag: (tag) => set({ selectedTag: tag }),
     selectCommit: (hash) => set({ selectedCommitHash: hash }),
