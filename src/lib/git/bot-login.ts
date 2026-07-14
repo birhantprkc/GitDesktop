@@ -31,3 +31,11 @@ export function botLoginName(handle: string): string | null {
   if (name && GH_USERNAME.test(name)) return name;
   return null;
 }
+
+/** Human-facing form of a login: GitHub bot handles (`app/<name>`, `<name>[bot]`)
+ *  render as `<name>[bot]` (GitHub's own display form); anything else passes
+ *  through unchanged. */
+export function displayLogin(handle: string): string {
+  const name = botLoginName(handle);
+  return name ? `${name}[bot]` : handle;
+}

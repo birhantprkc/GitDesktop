@@ -120,27 +120,34 @@ export function ConflictBanner({
             >
               Abort
             </Button>
-            <Button
-              size="xs"
-              disabled={busy || conflictedCount > 0}
+            {/* Wrap so the disabled reason still shows on hover — a
+                native-disabled button swallows its `title` (vendored Button's
+                pointer-events-none). */}
+            <span
+              className="inline-flex"
               title={
                 conflictedCount > 0 ? "Resolve every conflict first" : undefined
               }
-              onClick={() =>
-                continueOp.mutate(op, {
-                  onSuccess: () =>
-                    toast.success(
-                      op === "merge"
-                        ? "Merge completed"
-                        : `${opVerb} continued`,
-                    ),
-                  onError,
-                })
-              }
             >
-              {continueOp.isPending && <Spinner data-icon="inline-start" />}
-              {OP_LABELS[op].cont}
-            </Button>
+              <Button
+                size="xs"
+                disabled={busy || conflictedCount > 0}
+                onClick={() =>
+                  continueOp.mutate(op, {
+                    onSuccess: () =>
+                      toast.success(
+                        op === "merge"
+                          ? "Merge completed"
+                          : `${opVerb} continued`,
+                      ),
+                    onError,
+                  })
+                }
+              >
+                {continueOp.isPending && <Spinner data-icon="inline-start" />}
+                {OP_LABELS[op].cont}
+              </Button>
+            </span>
 
             <Dialog open={confirmAbort} onOpenChange={setConfirmAbort}>
               <DialogContent>

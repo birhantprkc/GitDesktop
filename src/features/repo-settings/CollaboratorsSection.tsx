@@ -23,8 +23,10 @@ import {
   useUpdateInvitation,
 } from "@/lib/git/queries";
 import type { RepoRole } from "@/lib/git/types";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 import { AsyncListBody, InlineConfirm } from "./parts";
 
 const ROLES: { value: RepoRole; label: string }[] = [
@@ -70,8 +72,13 @@ export function CollaboratorsSection({
   const [username, setUsername] = useState("");
   const [role, setRole] = useState<RepoRole>("read");
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [activeCollab, setActiveCollab] = useState(-1);
+  const [activeInvite, setActiveInvite] = useState(-1);
 
   const canAdd = validUsername(username.trim()) && !add.isPending;
+
+  const collabRows = collaborators.data ?? [];
+  const inviteRows = invitations.data ?? [];
 
   function addCollaborator() {
     add.mutate(
@@ -128,8 +135,9 @@ export function CollaboratorsSection({
           <p className="mt-2 text-[11px] text-muted-foreground">
             Personal repositories support the{" "}
             <span className="font-medium text-foreground">Read</span> and{" "}
-            <span className="font-medium text-foreground">Write</span> roles only.
-            Triage, Maintain, and Admin apply to organization repositories.
+            <span className="font-medium text-foreground">Write</span> roles
+            only. Triage, Maintain, and Admin apply to organization
+            repositories.
           </p>
         )}
       </div>
@@ -143,80 +151,50 @@ export function CollaboratorsSection({
         errorTitle="Couldn't load collaborators."
         errorHint="Managing collaborators needs repo-admin access."
       >
-        {collaborators.data?.map((c) => {
-          const key = `collab:${c.login}`;
-          return (
-            <PersonRow
-              key={c.login}
-              login={c.login}
-              avatarUrl={c.avatarUrl}
-              roleValue={c.roleName}
-              roleDisabled={add.isPending}
-              roles={roles}
-              onRole={(r) =>
-                add.mutate(
-                  { username: c.login, role: r },
-                  {
-                    onSuccess: () => toast.success(`${c.login} is now ${r}`),
-                    onError: toastError,
-                  },
-                )
-              }
-              confirming={confirming === key}
-              pending={remove.isPending}
-              onConfirm={() => setConfirming(key)}
-              onCancel={() => setConfirming(null)}
-              onRemove={() =>
-                remove.mutate(c.login, {
-                  onSuccess: () => {
-                    toast.success(`Removed ${c.login}`);
-                    setConfirming(null);
-                  },
-                  onError: toastError,
-                })
-              }
-            />
-          );
-        })}
-      </AsyncListBody>
-
-      {invitations.data && invitations.data.length > 0 && (
-        <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">
-            Pending invitations
-          </Label>
-          {invitations.data.map((inv) => {
-            const key = `invite:${inv.id}`;
+        <div
+          role="listbox"
+          aria-label="Collaborators"
+          tabIndex={0}
+          className="space-y-2 rounded-md outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          onKeyDown={listKeyboardNav({
+            items: collabRows,
+            activeIndex: activeCollab,
+            onActivate: (_c, to) => setActiveCollab(to),
+            rowKey: (c) => c.login,
+            rowAttr: "data-collab",
+          })}
+        >
+          {collabRows.map((c, i) => {
+            const key = `collab:${c.login}`;
             return (
               <PersonRow
-                key={inv.id}
-                login={inv.login}
-                avatarUrl={inv.avatarUrl}
-                meta={
-                  inv.createdAt
-                    ? `invited ${formatRelativeTime(inv.createdAt)}`
-                    : "pending"
-                }
-                roleValue={inv.permission}
-                roleDisabled={updateInvite.isPending}
+                key={c.login}
+                login={c.login}
+                avatarUrl={c.avatarUrl}
+                dataKey={c.login}
+                dataAttr="data-collab"
+                active={i === activeCollab}
+                onFocus={() => setActiveCollab(i)}
+                roleValue={c.roleName}
+                roleDisabled={add.isPending}
                 roles={roles}
                 onRole={(r) =>
-                  updateInvite.mutate(
-                    { id: inv.id, permission: r },
+                  add.mutate(
+                    { username: c.login, role: r },
                     {
-                      onSuccess: () => toast.success("Invitation updated"),
+                      onSuccess: () => toast.success(`${c.login} is now ${r}`),
                       onError: toastError,
                     },
                   )
                 }
                 confirming={confirming === key}
-                pending={cancelInvite.isPending}
+                pending={remove.isPending}
                 onConfirm={() => setConfirming(key)}
                 onCancel={() => setConfirming(null)}
                 onRemove={() =>
-                  cancelInvite.mutate(inv.id, {
+                  remove.mutate(c.login, {
                     onSuccess: () => {
-                      toast.success("Invitation canceled");
+                      toast.success(`Removed ${c.login}`);
                       setConfirming(null);
                     },
                     onError: toastError,
@@ -225,6 +203,72 @@ export function CollaboratorsSection({
               />
             );
           })}
+        </div>
+      </AsyncListBody>
+
+      {inviteRows.length > 0 && (
+        <div className="space-y-2">
+          <Label className="text-xs text-muted-foreground">
+            Pending invitations
+          </Label>
+          <div
+            role="listbox"
+            aria-label="Pending invitations"
+            tabIndex={0}
+            className="space-y-2 rounded-md outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            onKeyDown={listKeyboardNav({
+              items: inviteRows,
+              activeIndex: activeInvite,
+              onActivate: (_inv, to) => setActiveInvite(to),
+              rowKey: (inv) => inv.id,
+              rowAttr: "data-invite",
+            })}
+          >
+            {inviteRows.map((inv, i) => {
+              const key = `invite:${inv.id}`;
+              return (
+                <PersonRow
+                  key={inv.id}
+                  login={inv.login}
+                  avatarUrl={inv.avatarUrl}
+                  dataKey={inv.id}
+                  dataAttr="data-invite"
+                  active={i === activeInvite}
+                  onFocus={() => setActiveInvite(i)}
+                  meta={
+                    inv.createdAt
+                      ? `invited ${formatRelativeTime(inv.createdAt)}`
+                      : "pending"
+                  }
+                  roleValue={inv.permission}
+                  roleDisabled={updateInvite.isPending}
+                  roles={roles}
+                  onRole={(r) =>
+                    updateInvite.mutate(
+                      { id: inv.id, permission: r },
+                      {
+                        onSuccess: () => toast.success("Invitation updated"),
+                        onError: toastError,
+                      },
+                    )
+                  }
+                  confirming={confirming === key}
+                  pending={cancelInvite.isPending}
+                  onConfirm={() => setConfirming(key)}
+                  onCancel={() => setConfirming(null)}
+                  onRemove={() =>
+                    cancelInvite.mutate(inv.id, {
+                      onSuccess: () => {
+                        toast.success("Invitation canceled");
+                        setConfirming(null);
+                      },
+                      onError: toastError,
+                    })
+                  }
+                />
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -240,6 +284,10 @@ function PersonRow({
   login,
   avatarUrl,
   meta,
+  dataKey,
+  dataAttr,
+  active,
+  onFocus,
   roleValue,
   roleDisabled,
   roles,
@@ -253,6 +301,10 @@ function PersonRow({
   login: string;
   avatarUrl: string;
   meta?: string;
+  dataKey: string;
+  dataAttr: string;
+  active: boolean;
+  onFocus: () => void;
   roleValue: string;
   roleDisabled: boolean;
   roles: { value: RepoRole; label: string }[];
@@ -264,7 +316,17 @@ function PersonRow({
   onRemove: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 rounded-md border p-2 text-xs">
+    <div
+      role="option"
+      aria-selected={active}
+      {...{ [dataAttr]: dataKey }}
+      tabIndex={-1}
+      onFocus={onFocus}
+      className={cn(
+        "flex items-center gap-2 rounded-md border p-2 text-xs outline-none",
+        active && "ring-1 ring-ring",
+      )}
+    >
       <ForgeUserAvatar login={login} avatarUrl={avatarUrl} decorative />
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium" title={login}>

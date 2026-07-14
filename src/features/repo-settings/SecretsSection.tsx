@@ -423,6 +423,7 @@ function Row({
             size="sm"
             variant="ghost"
             className="text-destructive hover:text-destructive"
+            aria-label={`Delete ${name}`}
             onClick={onConfirm}
           >
             <TrashIcon />

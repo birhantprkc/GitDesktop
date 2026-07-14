@@ -121,6 +121,13 @@ export function CreateJiraIssueDialog({
 
   const typeItems = Object.fromEntries(creatable.map((t) => [t.id, t.name]));
   const noTypes = !types.isPending && !types.isError && creatable.length === 0;
+  // Why the submit is disabled — shown via a span-wrapped title (a `title` on the
+  // Button itself never shows: disabled sets pointer-events-none).
+  const submitReason = generating
+    ? "Wait for the AI draft to finish"
+    : !issueTypeId
+      ? "Select an issue type to create the issue"
+      : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -266,9 +273,11 @@ export function CreateJiraIssueDialog({
               Cancel
             </Button>
             <form.AppForm>
-              <form.SubmitButton disabled={generating || !issueTypeId}>
-                Create issue
-              </form.SubmitButton>
+              <span title={submitReason ?? undefined}>
+                <form.SubmitButton disabled={generating || !issueTypeId}>
+                  Create issue
+                </form.SubmitButton>
+              </span>
             </form.AppForm>
           </DialogFooter>
         </form>

@@ -185,7 +185,7 @@ export function BranchRulesDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Branch rules</DialogTitle>
           <DialogDescription>
@@ -198,213 +198,223 @@ export function BranchRulesDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-1.5">
-          <div className="flex gap-1">
-            <Button
-              variant={scope === "personal" ? "secondary" : "ghost"}
-              size="xs"
-              onClick={() => setScope("personal")}
-            >
-              Personal
-            </Button>
-            <Button
-              variant={scope === "shared" ? "secondary" : "ghost"}
-              size="xs"
-              onClick={() => setScope("shared")}
-            >
-              Shared with repository
-            </Button>
+        {/* Header and footer stay pinned; the rules (many protections + merge
+            toggles) scroll so the dialog can't outgrow the viewport. */}
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+          <div className="space-y-1.5">
+            <div className="flex gap-1">
+              <Button
+                variant={scope === "personal" ? "secondary" : "ghost"}
+                size="xs"
+                onClick={() => setScope("personal")}
+              >
+                Personal
+              </Button>
+              <Button
+                variant={scope === "shared" ? "secondary" : "ghost"}
+                size="xs"
+                onClick={() => setScope("shared")}
+              >
+                Shared with repository
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {scope === "shared" ? (
+                <>
+                  Saved to{" "}
+                  <span className="font-mono">
+                    .gitdesktop/branch-rules.json
+                  </span>{" "}
+                  and committed — everyone with the repo gets them. Combines
+                  with each person's personal rules.
+                </>
+              ) : (
+                "Stored on this machine only. Your personal rules combine with the repo's shared rules."
+              )}
+            </p>
           </div>
-          <p className="text-xs text-muted-foreground">
-            {scope === "shared" ? (
-              <>
-                Saved to{" "}
-                <span className="font-mono">.gitdesktop/branch-rules.json</span>{" "}
-                and committed — everyone with the repo gets them. Combines with
-                each person's personal rules.
-              </>
-            ) : (
-              "Stored on this machine only. Your personal rules combine with the repo's shared rules."
-            )}
-          </p>
-        </div>
 
-        {active.isPending ? (
-          <Skeleton className="h-24 w-full" />
-        ) : (
-          <div className="space-y-6">
-            <section className="space-y-2">
-              <h3 className="text-xs font-medium">New branch names</h3>
-              <label className="flex cursor-pointer items-center gap-2 text-xs">
-                <Checkbox
-                  checked={draft.naming.enabled}
-                  onCheckedChange={(c) => setNaming({ enabled: c === true })}
-                />
-                Require new branches to match a pattern
-              </label>
-              {draft.naming.enabled && (
-                <div className="space-y-2 pl-6">
-                  <div className="space-y-1">
-                    <Label className="text-xs">Pattern</Label>
-                    <Input
-                      value={draft.naming.pattern}
-                      onChange={(e) => setNaming({ pattern: e.target.value })}
-                      placeholder="{feature,fix,chore}/*"
-                      className="font-mono"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">
-                      Hint (shown when rejected)
-                    </Label>
-                    <Input
-                      value={draft.naming.hint}
-                      onChange={(e) => setNaming({ hint: e.target.value })}
-                      placeholder="feature/login, fix/crash"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Try a name</Label>
-                    <div className="flex items-center gap-2">
+          {active.isPending ? (
+            <Skeleton className="h-24 w-full" />
+          ) : (
+            <div className="space-y-6">
+              <section className="space-y-2">
+                <h3 className="text-xs font-medium">New branch names</h3>
+                <label className="flex cursor-pointer items-center gap-2 text-xs">
+                  <Checkbox
+                    checked={draft.naming.enabled}
+                    onCheckedChange={(c) => setNaming({ enabled: c === true })}
+                  />
+                  Require new branches to match a pattern
+                </label>
+                {draft.naming.enabled && (
+                  <div className="space-y-2 pl-6">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Pattern</Label>
                       <Input
-                        value={testName}
-                        onChange={(e) => setTestName(e.target.value)}
-                        placeholder="feature/login"
+                        value={draft.naming.pattern}
+                        onChange={(e) => setNaming({ pattern: e.target.value })}
+                        placeholder="{feature,fix,chore}/*"
                         className="font-mono"
                       />
-                      {testName.trim() !== "" && (
-                        <span
-                          className={
-                            testMatches
-                              ? "shrink-0 text-xs text-success"
-                              : "shrink-0 text-xs text-destructive"
-                          }
-                        >
-                          {testMatches ? "matches" : "rejected"}
-                        </span>
-                      )}
                     </div>
-                  </div>
-                </div>
-              )}
-            </section>
-
-            <section className="space-y-2">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-medium">Protected branches</h3>
-                <div className="flex gap-1">
-                  {ghReady && (
-                    <Button
-                      variant="outline"
-                      size="xs"
-                      disabled={importing}
-                      onClick={importFromGitHub}
-                      title="Import GitHub's branch protection rules"
-                    >
-                      <GithubLogoIcon data-icon="inline-start" />
-                      Import from GitHub
-                    </Button>
-                  )}
-                  <Button variant="outline" size="xs" onClick={addProtection}>
-                    <PlusIcon data-icon="inline-start" />
-                    Add
-                  </Button>
-                </div>
-              </div>
-              {draft.protections.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  No protected branches. Add one to guard branches that match a
-                  pattern (e.g. <span className="font-mono">main</span> or{" "}
-                  <span className="font-mono">release/*</span>) against
-                  deletion, force-pushes, and unwanted merge types.
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  {draft.protections.map((p) => (
-                    <div
-                      key={p.id}
-                      className="space-y-2 rounded-md border p-2.5"
-                    >
+                    <div className="space-y-1">
+                      <Label className="text-xs">
+                        Hint (shown when rejected)
+                      </Label>
+                      <Input
+                        value={draft.naming.hint}
+                        onChange={(e) => setNaming({ hint: e.target.value })}
+                        placeholder="feature/login, fix/crash"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Try a name</Label>
                       <div className="flex items-center gap-2">
                         <Input
-                          value={p.pattern}
-                          onChange={(e) =>
-                            updateProtection(p.id, { pattern: e.target.value })
-                          }
-                          placeholder="main"
+                          value={testName}
+                          onChange={(e) => setTestName(e.target.value)}
+                          placeholder="feature/login"
                           className="font-mono"
                         />
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label="Remove"
-                          onClick={() => removeProtection(p.id)}
-                        >
-                          <TrashIcon />
-                        </Button>
-                      </div>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                        <label className="flex cursor-pointer items-center gap-1.5 text-xs">
-                          <Checkbox
-                            checked={p.blockDeletion}
-                            onCheckedChange={(c) =>
-                              updateProtection(p.id, {
-                                blockDeletion: c === true,
-                              })
+                        {testName.trim() !== "" && (
+                          <span
+                            className={
+                              testMatches
+                                ? "shrink-0 text-xs text-success"
+                                : "shrink-0 text-xs text-destructive"
                             }
-                          />
-                          Block deletion
-                        </label>
-                        <label className="flex cursor-pointer items-center gap-1.5 text-xs">
-                          <Checkbox
-                            checked={p.blockForcePush}
-                            onCheckedChange={(c) =>
-                              updateProtection(p.id, {
-                                blockForcePush: c === true,
-                              })
-                            }
-                          />
-                          Block force-push
-                        </label>
-                        <label className="flex cursor-pointer items-center gap-1.5 text-xs">
-                          <Checkbox
-                            checked={p.requirePr}
-                            onCheckedChange={(c) =>
-                              updateProtection(p.id, { requirePr: c === true })
-                            }
-                          />
-                          Require pull request
-                        </label>
-                      </div>
-                      <div>
-                        <span className="text-[11px] text-muted-foreground">
-                          Allowed merges into this branch
-                          {p.requirePr ? " (via pull request)" : ""}
-                        </span>
-                        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1.5">
-                          {ALL_MERGE_METHODS.map((m) => (
-                            <label
-                              key={m}
-                              className="flex cursor-pointer items-center gap-1.5 text-xs"
-                            >
-                              <Checkbox
-                                checked={p.allowedMergeMethods.includes(m)}
-                                onCheckedChange={(c) =>
-                                  toggleMergeMethod(p.id, m, c === true)
-                                }
-                              />
-                              {MERGE_METHOD_LABEL[m]}
-                            </label>
-                          ))}
-                        </div>
+                          >
+                            {testMatches ? "matches" : "rejected"}
+                          </span>
+                        )}
                       </div>
                     </div>
-                  ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-medium">Protected branches</h3>
+                  <div className="flex gap-1">
+                    {ghReady && (
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        disabled={importing}
+                        onClick={importFromGitHub}
+                        title="Import GitHub's branch protection rules"
+                      >
+                        <GithubLogoIcon data-icon="inline-start" />
+                        Import from GitHub
+                      </Button>
+                    )}
+                    <Button variant="outline" size="xs" onClick={addProtection}>
+                      <PlusIcon data-icon="inline-start" />
+                      Add
+                    </Button>
+                  </div>
                 </div>
-              )}
-            </section>
-          </div>
-        )}
+                {draft.protections.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No protected branches. Add one to guard branches that match
+                    a pattern (e.g. <span className="font-mono">main</span> or{" "}
+                    <span className="font-mono">release/*</span>) against
+                    deletion, force-pushes, and unwanted merge types.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {draft.protections.map((p) => (
+                      <div
+                        key={p.id}
+                        className="space-y-2 rounded-md border p-2.5"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={p.pattern}
+                            onChange={(e) =>
+                              updateProtection(p.id, {
+                                pattern: e.target.value,
+                              })
+                            }
+                            placeholder="main"
+                            className="font-mono"
+                          />
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label="Remove"
+                            onClick={() => removeProtection(p.id)}
+                          >
+                            <TrashIcon />
+                          </Button>
+                        </div>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                          <label className="flex cursor-pointer items-center gap-1.5 text-xs">
+                            <Checkbox
+                              checked={p.blockDeletion}
+                              onCheckedChange={(c) =>
+                                updateProtection(p.id, {
+                                  blockDeletion: c === true,
+                                })
+                              }
+                            />
+                            Block deletion
+                          </label>
+                          <label className="flex cursor-pointer items-center gap-1.5 text-xs">
+                            <Checkbox
+                              checked={p.blockForcePush}
+                              onCheckedChange={(c) =>
+                                updateProtection(p.id, {
+                                  blockForcePush: c === true,
+                                })
+                              }
+                            />
+                            Block force-push
+                          </label>
+                          <label className="flex cursor-pointer items-center gap-1.5 text-xs">
+                            <Checkbox
+                              checked={p.requirePr}
+                              onCheckedChange={(c) =>
+                                updateProtection(p.id, {
+                                  requirePr: c === true,
+                                })
+                              }
+                            />
+                            Require pull request
+                          </label>
+                        </div>
+                        <div>
+                          <span className="text-[11px] text-muted-foreground">
+                            Allowed merges into this branch
+                            {p.requirePr ? " (via pull request)" : ""}
+                          </span>
+                          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1.5">
+                            {ALL_MERGE_METHODS.map((m) => (
+                              <label
+                                key={m}
+                                className="flex cursor-pointer items-center gap-1.5 text-xs"
+                              >
+                                <Checkbox
+                                  checked={p.allowedMergeMethods.includes(m)}
+                                  onCheckedChange={(c) =>
+                                    toggleMergeMethod(p.id, m, c === true)
+                                  }
+                                />
+                                {MERGE_METHOD_LABEL[m]}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
+        </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

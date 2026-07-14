@@ -31,7 +31,7 @@ function ActionRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground"
+      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
     >
       <Icon className="size-3.5 shrink-0 text-muted-foreground" />
       {children}

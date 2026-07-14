@@ -785,9 +785,19 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
               }
             >
               {nothingMatches ? (
-                <p className="px-2 py-8 text-center text-xs text-muted-foreground">
-                  No files match the filter
-                </p>
+                <div className="px-2 py-8 text-center text-xs text-muted-foreground">
+                  <p>No files match the filter</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterText("");
+                      setActiveKinds(new Set());
+                    }}
+                    className="mt-1 cursor-pointer font-medium underline underline-offset-2 hover:no-underline"
+                  >
+                    Clear filter
+                  </button>
+                </div>
               ) : (
                 <div
                   className="relative w-full"

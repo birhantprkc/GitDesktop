@@ -89,7 +89,11 @@ export function BranchDiffView({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-72 shrink-0 flex-col border-r">
+        <aside
+          className="flex w-72 shrink-0 flex-col border-r"
+          role="listbox"
+          aria-label="Changed files"
+        >
           {/* overflow-hidden contains the list's natural height (vendored Root is
               `relative`-only) so a long list can't leak a window scrollbar. */}
           <ScrollArea className="min-h-0 flex-1 overflow-hidden">
@@ -103,6 +107,8 @@ export function BranchDiffView({
                   type="button"
                   key={file.path}
                   data-path={file.path}
+                  role="option"
+                  aria-selected={effectivePath === file.path}
                   className={cn(
                     "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
                     effectivePath === file.path

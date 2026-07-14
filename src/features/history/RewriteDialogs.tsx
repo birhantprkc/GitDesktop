@@ -177,18 +177,23 @@ export function SquashDialog({
                 Cancel
               </Button>
             ) : (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
+              // Wrap so the title still shows when the button is disabled — a
+              // native-disabled button swallows the tooltip.
+              <span
                 className="mr-auto"
-                disabled={!runHead}
-                onClick={() => runHead && ai.generate(base, runHead)}
                 title="Generate the commit message with AI"
               >
-                <SparkleIcon data-icon="inline-start" />
-                Generate
-              </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!runHead}
+                  onClick={() => runHead && ai.generate(base, runHead)}
+                >
+                  <SparkleIcon data-icon="inline-start" />
+                  Generate
+                </Button>
+              </span>
             )}
             <Button
               type="button"

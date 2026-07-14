@@ -330,20 +330,23 @@ export function EditHistoryDialog({
                           Cancel
                         </Button>
                       ) : (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="xs"
-                          disabled={ai.generating || !messages.isSuccess}
-                          title="Generate this commit's message with AI"
-                          onClick={() => {
-                            setGenHash(row.hash);
-                            ai.generate(`${row.hash}^`, row.hash);
-                          }}
-                        >
-                          <SparkleIcon data-icon="inline-start" />
-                          Generate
-                        </Button>
+                        // Wrap so the title still shows when the button is
+                        // disabled — a native-disabled button swallows it.
+                        <span title="Generate this commit's message with AI">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="xs"
+                            disabled={ai.generating || !messages.isSuccess}
+                            onClick={() => {
+                              setGenHash(row.hash);
+                              ai.generate(`${row.hash}^`, row.hash);
+                            }}
+                          >
+                            <SparkleIcon data-icon="inline-start" />
+                            Generate
+                          </Button>
+                        </span>
                       ))}
                   </div>
                 )}

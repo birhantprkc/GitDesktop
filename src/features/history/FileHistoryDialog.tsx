@@ -12,6 +12,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
 import { DiffSurface } from "@/features/diff/DiffSurfaceLazy";
 import { useCommitFileDiff, useFileLog } from "@/lib/git/queries";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +44,15 @@ export function FileHistoryDialog({
   );
   const name = path.split("/").pop() ?? path;
 
+  // Arrow keys walk the commit list (single-select), mirroring HistoryPanel.
+  const onListKeyDown = listKeyboardNav({
+    items: commits,
+    activeIndex: commits.findIndex((c) => c.hash === activeHash),
+    rowKey: (c) => c.hash,
+    rowAttr: "data-hash",
+    onActivate: (commit) => setSelected(commit.hash),
+  });
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex h-[80vh] flex-col sm:max-w-4xl">
@@ -65,11 +75,14 @@ export function FileHistoryDialog({
                   No history for this file.
                 </p>
               ) : (
-                <>
+                // Arrow-key nav lives on the focusable row buttons below; this
+                // wrapper only routes their bubbled keydown to listKeyboardNav.
+                <div onKeyDown={onListKeyDown}>
                   {commits.map((c) => (
                     <button
                       type="button"
                       key={c.hash}
+                      data-hash={c.hash}
                       onClick={() => setSelected(c.hash)}
                       className={cn(
                         "flex w-full items-start gap-2 border-b px-2.5 py-2 text-left text-xs",
@@ -94,14 +107,17 @@ export function FileHistoryDialog({
                   {fileLog.hasNextPage && (
                     <button
                       type="button"
-                      className="w-full px-2.5 py-2 text-center text-[11px] text-muted-foreground hover:bg-muted/60"
+                      className="flex w-full items-center justify-center gap-1.5 px-2.5 py-2 text-center text-[11px] text-muted-foreground hover:bg-muted/60"
                       disabled={fileLog.isFetchingNextPage}
                       onClick={() => fileLog.fetchNextPage()}
                     >
+                      {fileLog.isFetchingNextPage && (
+                        <Spinner data-icon="inline-start" />
+                      )}
                       Load more
                     </button>
                   )}
-                </>
+                </div>
               )}
             </ScrollArea>
           </div>

@@ -7,12 +7,14 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ConversationFilterPopover } from "@/features/conversations/ConversationFilterPopover";
 import { ConversationListPanel } from "@/features/conversations/ConversationListPanel";
 import { PAGE_SIZE } from "@/features/conversations/LoadMoreRow";
 import { useCollapsedSections } from "@/features/conversations/useCollapsedSections";
 import { useLocalRemoteFilter } from "@/features/conversations/useLocalRemoteFilter";
 import type { PrStateFilter } from "@/lib/git/api";
+import { displayLogin } from "@/lib/git/bot-login";
 import {
   forgeFeatureReady,
   useForgeStatus,
@@ -56,7 +58,13 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   // and are provider-neutral now — the backend routes GitHub/GitLab/Bitbucket — so
   // `ghReady` alone is the correct gate. Fires whenever the remote list is ready and
   // non-empty (the hook self-disables on an empty list).
-  const prListCi = usePrListCi(repoPath, ghReady, stateFilter, limit, prList.data);
+  const prListCi = usePrListCi(
+    repoPath,
+    ghReady,
+    stateFilter,
+    limit,
+    prList.data,
+  );
   const ciMap = prListCi.data;
   const onStateFilter = (s: PrStateFilter) => {
     setStateFilter(s);
@@ -237,7 +245,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
         <>
           <p className="flex items-center gap-1.5 text-xs font-medium">
             <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
-            <span className="truncate" title={pr.title}>
+            <span className="min-w-0 truncate" title={pr.title}>
               {pr.title}
             </span>
             {pr.status !== "open" && (
@@ -268,6 +276,20 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
       ghPending={gh.isPending}
       ghReady={ghReady}
       listPending={prList.isPending}
+      remoteError={prList.isError}
+      remoteErrorSlot={
+        <div className="space-y-2 px-3 py-4 text-xs text-muted-foreground">
+          <p>Couldn't load {remoteNoun}.</p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="cursor-pointer"
+            onClick={() => prList.refetch()}
+          >
+            Retry
+          </Button>
+        </div>
+      }
       // More may exist server-side exactly when this page filled the requested
       // limit (compared against the raw loaded count, not the filtered view).
       hasMore={(prList.data?.length ?? 0) === limit}
@@ -288,10 +310,10 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
         <>
           <p className="flex items-center gap-1.5 text-xs font-medium">
             <GitPullRequestIcon className="size-3 shrink-0 text-muted-foreground" />
-            <span className="truncate" title={pr.title}>
+            <span className="min-w-0 truncate" title={pr.title}>
               {pr.title}
             </span>
-            {pr.isDraft && <Badge variant="secondary">draft</Badge>}
+            {pr.isDraft && <Badge variant="secondary">Draft</Badge>}
             {pr.state !== "OPEN" && (
               <Badge variant="secondary" className="capitalize">
                 {pr.state.toLowerCase()}
@@ -329,7 +351,8 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
             )}
           </p>
           <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
-            #{pr.number} · {pr.author ? `${pr.author.login} · ` : ""}
+            #{pr.number} ·{" "}
+            {pr.author ? `${displayLogin(pr.author.login)} · ` : ""}
             {pr.createdAt ? `${formatRelativeTime(pr.createdAt)} · ` : ""}
             {pr.headRefName} → {pr.baseRefName}
           </p>

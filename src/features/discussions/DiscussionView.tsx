@@ -414,18 +414,22 @@ export function DiscussionView({
                 Transfer on GitHub…
               </DropdownMenuItem>
               {d.closed ? (
-                <DropdownMenuItem onClick={doReopen}>
+                <DropdownMenuItem
+                  disabled={reopenDiscussion.isPending}
+                  onClick={doReopen}
+                >
                   Reopen discussion
                 </DropdownMenuItem>
               ) : (
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
+                  <DropdownMenuSubTrigger disabled={closeDiscussion.isPending}>
                     Close discussion…
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
                     {CLOSE_REASONS.map(([label, reason]) => (
                       <DropdownMenuItem
                         key={reason}
+                        disabled={closeDiscussion.isPending}
                         onClick={() => doClose(reason)}
                       >
                         {label}
@@ -435,18 +439,22 @@ export function DiscussionView({
                 </DropdownMenuSub>
               )}
               {d.locked ? (
-                <DropdownMenuItem onClick={doUnlock}>
+                <DropdownMenuItem
+                  disabled={unlockDiscussion.isPending}
+                  onClick={doUnlock}
+                >
                   Unlock conversation
                 </DropdownMenuItem>
               ) : (
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
+                  <DropdownMenuSubTrigger disabled={lockDiscussion.isPending}>
                     Lock conversation…
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
                     {LOCK_REASONS.map(([label, reason]) => (
                       <DropdownMenuItem
                         key={reason ?? "none"}
+                        disabled={lockDiscussion.isPending}
                         onClick={() => doLock(reason)}
                       >
                         {label}
@@ -859,6 +867,9 @@ export function DiscussionView({
                 })
               }
             >
+              {deleteDiscussion.isPending && (
+                <Spinner data-icon="inline-start" />
+              )}
               Delete
             </Button>
           </DialogFooter>

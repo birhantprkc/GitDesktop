@@ -17,6 +17,7 @@ import {
 import { Markdown } from "@/components/ui/markdown";
 import { copyText } from "@/lib/clipboard";
 import type { MinimizeReason } from "@/lib/git/api";
+import { displayLogin } from "@/lib/git/bot-login";
 import { useActiveForgeGhHost, useActiveGhHost } from "@/lib/git/host";
 import type { PrThreadOut, Reaction, RepoLabel } from "@/lib/git/types";
 import { formatRelativeTime } from "@/lib/time";
@@ -77,6 +78,7 @@ export function AuthorAvatar({
       size="icon-xs"
       onClick={() => openUrl(`https://${host}/${login}`)}
       title={`@${login} on ${host}`}
+      aria-label={`@${login} on ${host}`}
       className="shrink-0 rounded-full hover:opacity-80 cursor-pointer"
     >
       <ForgeUserAvatar login={login} avatarUrl={avatarUrl} ghHost={ghHost} />
@@ -127,8 +129,13 @@ export function Thread({
   return (
     <div className="group space-y-1">
       <p className="flex items-center gap-2 text-xs">
-        <AuthorAvatar login={thread.author} avatarUrl={thread.authorAvatarUrl} />
-        <span className="font-medium">{thread.author || "unknown"}</span>
+        <AuthorAvatar
+          login={thread.author}
+          avatarUrl={thread.authorAvatarUrl}
+        />
+        <span className="font-medium">
+          {thread.author ? displayLogin(thread.author) : "unknown"}
+        </span>
         {thread.state && (
           <Badge variant="secondary">{thread.state.toLowerCase()}</Badge>
         )}

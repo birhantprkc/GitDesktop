@@ -20,7 +20,9 @@ import {
   useGlUpdateMember,
 } from "@/lib/git/queries";
 import type { GitLabMember } from "@/lib/git/types";
+import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { toastError } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 import { AsyncListBody, InlineConfirm } from "./parts";
 
 /** The roles the app offers (the classic five — Planner is newer and not
@@ -60,8 +62,11 @@ export function GitLabMembersSection({
   const [username, setUsername] = useState("");
   const [level, setLevel] = useState(30);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(-1);
 
   const canAdd = validUsername(username.trim()) && !add.isPending;
+
+  const memberRows = members.data ?? [];
 
   function addMember() {
     add.mutate(
@@ -130,38 +135,54 @@ export function GitLabMembersSection({
         errorTitle="Couldn't load members."
         errorHint="Managing members needs the Maintainer role."
       >
-        {members.data?.map((m) => (
-          <MemberRow
-            key={m.id}
-            member={m}
-            updating={update.isPending}
-            onRole={(accessLevel) =>
-              update.mutate(
-                { userId: m.id, accessLevel },
-                {
-                  onSuccess: () =>
-                    toast.success(
-                      `${m.username} is now ${roleLabel(accessLevel)}`,
-                    ),
+        <div
+          role="listbox"
+          aria-label="Members"
+          tabIndex={0}
+          className="space-y-2 rounded-md outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          onKeyDown={listKeyboardNav({
+            items: memberRows,
+            activeIndex,
+            onActivate: (_m, to) => setActiveIndex(to),
+            rowKey: (m) => m.id,
+            rowAttr: "data-member",
+          })}
+        >
+          {memberRows.map((m, i) => (
+            <MemberRow
+              key={m.id}
+              member={m}
+              active={i === activeIndex}
+              onFocus={() => setActiveIndex(i)}
+              updating={update.isPending}
+              onRole={(accessLevel) =>
+                update.mutate(
+                  { userId: m.id, accessLevel },
+                  {
+                    onSuccess: () =>
+                      toast.success(
+                        `${m.username} is now ${roleLabel(accessLevel)}`,
+                      ),
+                    onError: toastError,
+                  },
+                )
+              }
+              confirming={confirming === m.id}
+              pending={remove.isPending}
+              onConfirm={() => setConfirming(m.id)}
+              onCancel={() => setConfirming(null)}
+              onRemove={() =>
+                remove.mutate(m.id, {
+                  onSuccess: () => {
+                    toast.success(`Removed ${m.username}`);
+                    setConfirming(null);
+                  },
                   onError: toastError,
-                },
-              )
-            }
-            confirming={confirming === m.id}
-            pending={remove.isPending}
-            onConfirm={() => setConfirming(m.id)}
-            onCancel={() => setConfirming(null)}
-            onRemove={() =>
-              remove.mutate(m.id, {
-                onSuccess: () => {
-                  toast.success(`Removed ${m.username}`);
-                  setConfirming(null);
-                },
-                onError: toastError,
-              })
-            }
-          />
-        ))}
+                })
+              }
+            />
+          ))}
+        </div>
       </AsyncListBody>
 
       <p className="text-[11px] text-muted-foreground">
@@ -173,6 +194,8 @@ export function GitLabMembersSection({
 
 function MemberRow({
   member,
+  active,
+  onFocus,
   updating,
   onRole,
   confirming,
@@ -182,6 +205,8 @@ function MemberRow({
   onRemove,
 }: {
   member: GitLabMember;
+  active: boolean;
+  onFocus: () => void;
   updating: boolean;
   onRole: (level: number) => void;
   confirming: boolean;
@@ -191,7 +216,17 @@ function MemberRow({
   onRemove: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 rounded-md border p-2 text-xs">
+    <div
+      role="option"
+      aria-selected={active}
+      data-member={member.id}
+      tabIndex={-1}
+      onFocus={onFocus}
+      className={cn(
+        "flex items-center gap-2 rounded-md border p-2 text-xs outline-none",
+        active && "ring-1 ring-ring",
+      )}
+    >
       <ForgeUserAvatar
         login={member.username}
         avatarUrl={member.avatarUrl}

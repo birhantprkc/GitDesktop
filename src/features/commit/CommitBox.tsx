@@ -223,20 +223,27 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
                 transition={quickTransition}
               >
                 {aiConfigured ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={stagedCount === 0}
-                    onClick={generate}
+                  // Wrap the (possibly) disabled button so its `title` — the
+                  // reason — still shows (a native-disabled button swallows the
+                  // tooltip via the vendored Button's pointer-events-none).
+                  <span
+                    className="inline-flex"
                     title={
                       stagedCount === 0
                         ? "Stage changes to generate a commit message"
                         : "Generate commit message with AI"
                     }
                   >
-                    <SparkleIcon data-icon="inline-start" />
-                    Generate
-                  </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={stagedCount === 0}
+                      onClick={generate}
+                    >
+                      <SparkleIcon data-icon="inline-start" />
+                      Generate
+                    </Button>
+                  </span>
                 ) : (
                   // AI is on but no provider is set up yet — turn the dead-end
                   // Generate click into a one-time path to Settings → AI.
@@ -254,22 +261,39 @@ export function CommitBox({ repoPath }: { repoPath: string }) {
             )}
           </AnimatePresence>
         )}
-        <Button
-          size="sm"
-          className="min-w-0 flex-1"
-          disabled={!canCommit || generating}
-          onClick={doCommit}
-          title={formatBinding("mod+enter")}
+        {/* Wrap so the disabled reason still shows on hover — a native-disabled
+            button swallows its `title` (vendored Button's pointer-events-none).
+            When enabled, the wrapper carries the keybinding hint instead. */}
+        <span
+          className="inline-flex min-w-0 flex-1"
+          title={
+            canCommit && !generating
+              ? formatBinding("mod+enter")
+              : locked
+                ? "This branch requires changes via a pull request"
+                : title.trim().length === 0
+                  ? "Enter a commit title first"
+                  : stagedCount === 0 && !amending
+                    ? "Stage changes to commit"
+                    : formatBinding("mod+enter")
+          }
         >
-          {commit.isPending && <Spinner data-icon="inline-start" />}
-          <span className="truncate">
-            {amending
-              ? "Amend last commit"
-              : `Commit${stagedCount > 0 ? ` (${stagedCount})` : ""}${
-                  branchName ? ` to ${branchName}` : ""
-                }`}
-          </span>
-        </Button>
+          <Button
+            size="sm"
+            className="min-w-0 flex-1"
+            disabled={!canCommit || generating}
+            onClick={doCommit}
+          >
+            {commit.isPending && <Spinner data-icon="inline-start" />}
+            <span className="truncate">
+              {amending
+                ? "Amend last commit"
+                : `Commit${stagedCount > 0 ? ` (${stagedCount})` : ""}${
+                    branchName ? ` to ${branchName}` : ""
+                  }`}
+            </span>
+          </Button>
+        </span>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { ArrowSquareOutIcon, CheckCircleIcon } from "@phosphor-icons/react";
+import { CheckCircleIcon, LinkBreakIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
@@ -453,7 +453,7 @@ export function RepoJiraDialog({
               onClick={doUnlink}
               title="Remove this repository's Jira link (keeps your saved credential)"
             >
-              <ArrowSquareOutIcon data-icon="inline-start" />
+              <LinkBreakIcon data-icon="inline-start" />
               Unlink project
             </Button>
           )}

@@ -822,7 +822,7 @@ export function LocalPrView({
                 variant="outline"
                 size="sm"
                 onClick={() => setPromoteOpen(true)}
-                title={`Push the branch and open this ${ghStatus.data?.provider === "gitlab" ? "MR on GitLab" : "PR on GitHub"}`}
+                title={`Push the branch and open this ${ghStatus.data?.provider === "gitlab" ? "merge request on GitLab" : "PR on GitHub"}`}
               >
                 {ghStatus.data?.provider === "gitlab" ? (
                   <GitlabLogoIcon data-icon="inline-start" />

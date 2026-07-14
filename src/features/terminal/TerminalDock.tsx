@@ -113,6 +113,9 @@ export function TerminalDock({
           title={
             isContainer ? "Restart / reconnect the shell" : "Restart the shell"
           }
+          aria-label={
+            isContainer ? "Restart or reconnect the shell" : "Restart the shell"
+          }
         >
           <ArrowClockwiseIcon />
         </Button>

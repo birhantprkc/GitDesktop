@@ -210,8 +210,8 @@ export function CreatePrDialog({
             <DialogTitle>Create {prNoun}</DialogTitle>
             <DialogDescription>
               Pushes <span className="font-mono">{head || "…"}</span> and opens
-              a {isGitLab ? "merge request" : "PR"} into{" "}
-              <span className="font-mono">{base || "…"}</span> on {remoteLabel}.
+              a {prNoun} into <span className="font-mono">{base || "…"}</span>{" "}
+              on {remoteLabel}.
             </DialogDescription>
           </DialogHeader>
 

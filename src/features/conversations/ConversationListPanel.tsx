@@ -141,6 +141,12 @@ export function ConversationListPanel<L, R, J = never>(props: {
   renderRemoteRow: (item: R) => ReactNode;
   /** Skeleton rows while the GitHub list loads (PR=2, issue=3). */
   remoteSkeletonRows: number;
+  /** The remote list fetch failed — render `remoteErrorSlot` in place of the
+   *  empty state so a failed load doesn't read as "no items". Omit (the default)
+   *  and the remote section behaves exactly as before. */
+  remoteError?: boolean;
+  /** Rendered in place of the remote list on error (e.g. a Retry prompt). */
+  remoteErrorSlot?: ReactNode;
   // empty-state nouns
   localNoun: string;
   remoteNoun: string;
@@ -217,6 +223,8 @@ export function ConversationListPanel<L, R, J = never>(props: {
     onRemoteHover,
     renderRemoteRow,
     remoteSkeletonRows,
+    remoteError,
+    remoteErrorSlot,
     localNoun,
     remoteNoun,
     jira,
@@ -369,6 +377,12 @@ export function ConversationListPanel<L, R, J = never>(props: {
                   <Skeleton key={i} className="h-9 w-full" />
                 ))}
               </div>
+            ) : remoteError ? (
+              (remoteErrorSlot ?? (
+                <p className="px-3 py-4 text-xs text-muted-foreground">
+                  Couldn't load {remoteNoun}.
+                </p>
+              ))
             ) : visibleRemote.length === 0 ? (
               <p className="px-3 py-4 text-xs text-muted-foreground">
                 {stateRemote.length > 0

@@ -322,7 +322,25 @@ export function CloneRepoDialog({
               Cancel
             </Button>
             <form.AppForm>
-              <form.SubmitButton disabled={!canClone}>Clone</form.SubmitButton>
+              {/* Wrap so the disabled reason still shows on hover — a
+                  native-disabled button swallows its `title` (vendored Button's
+                  pointer-events-none). */}
+              <span
+                className="inline-flex"
+                title={
+                  canClone
+                    ? undefined
+                    : !values.destination.trim()
+                      ? "Choose a local path to clone into"
+                      : tab === "url"
+                        ? "Enter a repository URL to clone"
+                        : "Select a repository to clone"
+                }
+              >
+                <form.SubmitButton disabled={!canClone}>
+                  Clone
+                </form.SubmitButton>
+              </span>
             </form.AppForm>
           </DialogFooter>
         </form>

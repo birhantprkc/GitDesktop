@@ -66,6 +66,7 @@ import {
 import { useEffectiveBranchRules } from "@/lib/branch-rules/queries";
 import { copyText } from "@/lib/clipboard";
 import type { MergeStrategy, MinimizeReason } from "@/lib/git/api";
+import { displayLogin } from "@/lib/git/bot-login";
 import { splitUnifiedDiff } from "@/lib/git/diff-split";
 import { useForgeGhHost } from "@/lib/git/host";
 import {
@@ -805,15 +806,12 @@ export function RemotePrView({
           {isOpen &&
             canWrite &&
             (repoStatus.data?.branch?.name === pr.headRefName ? (
-              <Button
-                variant="outline"
-                size="xs"
-                disabled
-                title={`${pr.headRefName} is the current branch`}
-              >
-                <CheckCircleIcon data-icon="inline-start" />
-                Checked out
-              </Button>
+              <span title={`${pr.headRefName} is the current branch`}>
+                <Button variant="outline" size="xs" disabled>
+                  <CheckCircleIcon data-icon="inline-start" />
+                  Checked out
+                </Button>
+              </span>
             ) : (
               <Button
                 variant="outline"
@@ -871,7 +869,7 @@ export function RemotePrView({
             {pr.isDraft ? "Draft" : pr.state.toLowerCase()}
           </Badge>
           <AuthorAvatar login={pr.author} avatarUrl={pr.authorAvatarUrl} />
-          <span>{pr.author}</span>
+          <span>{displayLogin(pr.author)}</span>
           <span>•</span>
           <span className="font-mono">{pr.headRefName}</span>
           <span>→</span>
@@ -1224,7 +1222,7 @@ export function RemotePrView({
                           />
                           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 py-1 text-muted-foreground">
                             <span className="font-medium text-foreground">
-                              {r.author}
+                              {displayLogin(r.author)}
                             </span>
                             <span>replied in a review thread</span>
                             {locator && (

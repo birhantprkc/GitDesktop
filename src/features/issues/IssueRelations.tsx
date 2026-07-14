@@ -22,6 +22,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Spinner } from "@/components/ui/spinner";
 import {
   useAddSubIssue,
   useIssueDependencies,
@@ -44,15 +45,18 @@ export function StateIcon({ state }: { state: string }) {
   );
 }
 
-/** A clickable related-issue row with a hover remove button. */
+/** A clickable related-issue row with a hover remove button. `pending` disables
+ *  the remove button and shows a spinner so a slow unlink can't double-fire. */
 export function RelatedRow({
   issue,
   onOpen,
   onRemove,
+  pending,
 }: {
   issue: RelatedIssue;
   onOpen: (n: number) => void;
   onRemove: () => void;
+  pending?: boolean;
 }) {
   return (
     <div className="group flex items-center gap-1.5 text-xs">
@@ -70,26 +74,30 @@ export function RelatedRow({
         variant="ghost"
         size="icon-xs"
         aria-label={`Remove #${issue.number}`}
-        className="text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        disabled={pending}
+        className="text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 disabled:opacity-100"
         onClick={onRemove}
       >
-        <XIcon />
+        {pending ? <Spinner /> : <XIcon />}
       </Button>
     </div>
   );
 }
 
-/** A labelled dependency list (Blocked by / Blocking). */
+/** A labelled dependency list (Blocked by / Blocking). `isRemoving` reports which
+ *  row's unlink is in flight so its remove button can show pending + disable. */
 function RelationList({
   label,
   items,
   onOpen,
   onRemove,
+  isRemoving,
 }: {
   label: string;
   items: RelatedIssue[];
   onOpen: (n: number) => void;
   onRemove: (target: number) => void;
+  isRemoving: (target: number) => boolean;
 }) {
   return (
     <div className="space-y-1">
@@ -100,6 +108,7 @@ function RelationList({
           issue={it}
           onOpen={onOpen}
           onRemove={() => onRemove(it.number)}
+          pending={isRemoving(it.number)}
         />
       ))}
     </div>
@@ -274,6 +283,7 @@ export function IssueSubIssues({
             onRemove={() =>
               removeSub.mutate({ parentId: issueId, subId: s.id }, { onError })
             }
+            pending={removeSub.isPending && removeSub.variables?.subId === s.id}
           />
         ))}
 
@@ -388,6 +398,12 @@ export function IssueRelationships({
               { onError },
             )
           }
+          isRemoving={(t) =>
+            setDep.isPending &&
+            setDep.variables?.add === false &&
+            setDep.variables.relation === "blocked_by" &&
+            setDep.variables.target === t
+          }
         />
       )}
       {blocking.length > 0 && (
@@ -400,6 +416,12 @@ export function IssueRelationships({
               { number, relation: "blocking", target: t, add: false },
               { onError },
             )
+          }
+          isRemoving={(t) =>
+            setDep.isPending &&
+            setDep.variables?.add === false &&
+            setDep.variables.relation === "blocking" &&
+            setDep.variables.target === t
           }
         />
       )}

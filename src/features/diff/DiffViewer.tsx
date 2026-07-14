@@ -252,7 +252,10 @@ function WorkingTreeDiff({
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+        <span
+          className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
+          title={file.path}
+        >
           {file.path}
         </span>
         <span className="flex shrink-0 items-center gap-1.5">

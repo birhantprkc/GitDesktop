@@ -223,34 +223,48 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
           </Button>
         )}
         {canPr && compareBranch && !existingPr && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            disabled={ahead.length === 0}
-            onClick={() => setPrOpen(true)}
+          // Wrap so the disabled reason still shows on hover — a native-disabled
+          // button swallows its `title` (vendored Button's pointer-events-none).
+          <span
+            className="inline-flex w-full"
             title={
               ahead.length === 0
                 ? `${currentName} has no commits to propose onto ${compareBranch}`
                 : `Open a ${prNoun} into ${compareBranch}`
             }
           >
-            <GitPullRequestIcon data-icon="inline-start" />
-            Create {prNoun}…
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              disabled={ahead.length === 0}
+              onClick={() => setPrOpen(true)}
+            >
+              <GitPullRequestIcon data-icon="inline-start" />
+              Create {prNoun}…
+            </Button>
+          </span>
         )}
         {compareBranch && compareBranch !== currentName && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full"
-            disabled={ahead.length === 0}
-            onClick={() => setLocalPrOpen(true)}
-            title={`Propose merging ${currentName} into ${compareBranch} locally`}
+          <span
+            className="inline-flex w-full"
+            title={
+              ahead.length === 0
+                ? `${currentName} has no commits to propose onto ${compareBranch}`
+                : `Propose merging ${currentName} into ${compareBranch} locally`
+            }
           >
-            <GitBranchIcon data-icon="inline-start" />
-            Create local PR…
-          </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full"
+              disabled={ahead.length === 0}
+              onClick={() => setLocalPrOpen(true)}
+            >
+              <GitBranchIcon data-icon="inline-start" />
+              Create local PR…
+            </Button>
+          </span>
         )}
       </div>
 
@@ -273,10 +287,17 @@ export function ComparePanel({ repoPath }: { repoPath: string }) {
         />
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col" onKeyDown={onListKeyDown}>
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        onKeyDown={onListKeyDown}
+        role="listbox"
+        aria-label="Compare selection"
+      >
         <button
           type="button"
           data-row="all"
+          role="option"
+          aria-selected={compareCommitHash === null}
           className={cn(
             "flex w-full shrink-0 items-center gap-2 border-b px-3 py-2 text-left text-xs",
             compareCommitHash === null
@@ -353,6 +374,8 @@ function CommitSection({
           type="button"
           key={commit.hash}
           data-row={commit.hash}
+          role="option"
+          aria-selected={selectedHash === commit.hash}
           className={cn(
             "block w-full border-b px-3 py-2 text-left",
             selectedHash === commit.hash

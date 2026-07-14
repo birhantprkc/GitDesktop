@@ -923,10 +923,14 @@ function WebhookForm({
         <Button variant="outline" onClick={onDone} disabled={pending}>
           Cancel
         </Button>
-        <Button
-          disabled={pending || !urlValid || !eventsValid}
-          onClick={submit}
-          className={cn(!urlValid || !eventsValid ? "cursor-not-allowed" : "")}
+        {/* The vendored Button renders a native `disabled` (pointer-events:
+            none), so a `title` on the button itself never shows — the
+            disabled-reason hint rides a wrapping span. */}
+        <span
+          className={cn(
+            "inline-flex",
+            (!urlValid || !eventsValid) && "cursor-not-allowed",
+          )}
           title={
             !urlValid
               ? "Enter a valid http(s) URL"
@@ -935,9 +939,14 @@ function WebhookForm({
                 : undefined
           }
         >
-          {pending && <Spinner data-icon="inline-start" />}
-          {hook ? "Save changes" : "Create webhook"}
-        </Button>
+          <Button
+            disabled={pending || !urlValid || !eventsValid}
+            onClick={submit}
+          >
+            {pending && <Spinner data-icon="inline-start" />}
+            {hook ? "Save changes" : "Create webhook"}
+          </Button>
+        </span>
       </div>
     </div>
   );

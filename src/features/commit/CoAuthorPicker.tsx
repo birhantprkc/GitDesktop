@@ -100,7 +100,6 @@ export function CoAuthorPicker({
               variant="ghost"
               size="sm"
               disabled={disabled}
-              aria-label="Add co-authors"
               title="Credit co-authors on this commit"
             />
           }

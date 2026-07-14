@@ -284,7 +284,9 @@ export function RunWorkflowDialog({
                       type="button"
                       variant="ghost"
                       size="icon-xs"
-                      aria-label="Remove input"
+                      aria-label={
+                        isPipelineProvider ? "Remove variable" : "Remove input"
+                      }
                       onClick={() =>
                         setInputs((prev) => prev.filter((r) => r.id !== row.id))
                       }

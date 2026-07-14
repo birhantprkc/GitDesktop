@@ -1035,9 +1035,13 @@ export function DiffContent({
     // replay — this is user code/paths. See src/components/Redacted.tsx.
     <div className="ph-no-capture flex h-full flex-col">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-          {filePath}
-          {data.isTruncated && " (truncated — diff too large)"}
+        <span className="flex min-w-0 flex-1 items-center gap-1 font-mono text-xs text-muted-foreground">
+          <span className="min-w-0 truncate" title={filePath}>
+            {filePath}
+          </span>
+          {data.isTruncated && (
+            <span className="shrink-0">(truncated — diff too large)</span>
+          )}
         </span>
         <span className="flex shrink-0 items-center gap-1.5">
           <DiffLanguagePicker filePath={filePath} />

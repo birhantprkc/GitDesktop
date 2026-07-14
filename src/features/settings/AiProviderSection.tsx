@@ -823,7 +823,7 @@ export const AiProviderSection = withForm({
                 className="shrink-0"
                 onClick={() => {
                   navigator.clipboard.writeText(testResult.message ?? "");
-                  toast.success("Copied");
+                  toast.success("Error message copied");
                 }}
               >
                 <CopyIcon />
