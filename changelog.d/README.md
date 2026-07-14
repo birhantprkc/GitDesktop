@@ -45,6 +45,7 @@ re-wrapping, so what you write is exactly what ships.
   Unreleased heading (nothing is written).
 - `pnpm changelog` — draft starting-point bullets from the git history since the
   last tag (curate before saving as a fragment).
+- `pnpm release` — (maintainers) interactive release driver: picks the bump, previews fragments, runs `release:prepare`, syncs `Cargo.lock`, then commits, tags, and pushes (the tag pushed explicitly).
 - `pnpm release:prepare <version>` — (maintainers) assemble fragments into
   `CHANGELOG.md` as `## [<version>] - <date>`, bump `package.json` +
   `src-tauri/Cargo.toml`, and delete the consumed fragments.

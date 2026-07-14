@@ -11,7 +11,8 @@
 // version heading with a fresh empty "## [Unreleased]" left above. The emitted
 // heading matches changelog-extract.mjs, so the release workflow keeps working.
 // The script never commits or tags — review the diff, then commit + tag yourself:
-//   git commit -am "chore(release): v0.2.0" && git tag v0.2.0 && git push --follow-tags
+//   git commit -am "chore(release): v0.2.0" && git tag v0.2.0 && git push origin master v0.2.0
+// (push the tag explicitly — release tags are lightweight; --follow-tags skips them), or just run: pnpm release
 
 import { rmSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -111,7 +112,7 @@ process.stdout.write(
     `  changelog.d fragments consumed: ${total}${perCat ? ` (${perCat})` : ""}\n` +
     "  bumped: package.json, src-tauri/Cargo.toml (tauri.conf.json reads ../package.json)\n" +
     "\nReview the diff, then:\n" +
-    `  git commit -am "chore(release): v${version}" && git tag v${version} && git push --follow-tags\n`,
+    `  git commit -am "chore(release): v${version}" && git tag v${version} && git push origin master v${version}\n`,
 );
 
 // --- helpers ----------------------------------------------------------------

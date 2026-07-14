@@ -1,9 +1,12 @@
 name: release
 
-# Cut a release by pushing a version tag, e.g.:
+# Cut a release by pushing a version tag. The easiest path is the interactive driver:
+#   pnpm release                   (picks the bump, previews fragments, prepares, commits, tags, pushes)
+# Or the manual path:
 #   pnpm release:prepare 0.2.0     (assembles changelog.d/ fragments, bumps package.json + Cargo.toml)
 #   review the diff, then:
-#   git commit -am "chore(release): v0.2.0" && git tag v0.2.0 && git push --follow-tags
+#   git commit -am "chore(release): v0.2.0" && git tag v0.2.0 && git push origin master v0.2.0
+#   (push the tag explicitly — release tags are lightweight, and --follow-tags skips lightweight tags)
 # CI builds + signs each platform, creates a DRAFT GitHub Release, uploads the
 # installers, and attaches the `latest.json` the installed app polls. Publish the
 # draft once every platform leg is green — that flips the
