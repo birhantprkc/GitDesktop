@@ -1,4 +1,9 @@
-import { GitPullRequestIcon } from "@phosphor-icons/react";
+import {
+  CheckCircleIcon,
+  ClockIcon,
+  GitPullRequestIcon,
+  XCircleIcon,
+} from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +19,7 @@ import {
   useHoverPrefetch,
   usePrefetchPr,
   usePrList,
+  usePrListCi,
 } from "@/lib/git/queries";
 import { providerLabel } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
@@ -24,6 +30,7 @@ import {
   useUpdateLocalPr,
 } from "@/lib/pulls/queries";
 import { useUiStore } from "@/lib/stores/ui";
+import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { CreateLocalPrDialog } from "./CreateLocalPrDialog";
 import { CreatePrDialog } from "./CreatePrDialog";
@@ -45,6 +52,12 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
   // resets to the first page.
   const [limit, setLimit] = useState(PAGE_SIZE);
   const prList = usePrList(repoPath, ghReady, stateFilter, limit);
+  // Row CI icons hydrate separately from the list (so the list paints immediately)
+  // and are provider-neutral now — the backend routes GitHub/GitLab/Bitbucket — so
+  // `ghReady` alone is the correct gate. Fires whenever the remote list is ready and
+  // non-empty (the hook self-disables on an empty list).
+  const prListCi = usePrListCi(repoPath, ghReady, stateFilter, limit, prList.data);
+  const ciMap = prListCi.data;
   const onStateFilter = (s: PrStateFilter) => {
     setStateFilter(s);
     setLimit(PAGE_SIZE);
@@ -234,6 +247,7 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
             )}
           </p>
           <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
+            {pr.createdAt ? `${formatRelativeTime(pr.createdAt)} · ` : ""}
             {pr.head} → {pr.base}
             {pr.archived ? " · archived" : ""}
           </p>
@@ -283,9 +297,40 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
                 {pr.state.toLowerCase()}
               </Badge>
             )}
+            {ciMap?.get(pr.number) === "passing" && (
+              <span
+                className="ml-auto shrink-0 text-success"
+                role="img"
+                title="Checks passing"
+                aria-label="Checks passing"
+              >
+                <CheckCircleIcon className="size-3" />
+              </span>
+            )}
+            {ciMap?.get(pr.number) === "failing" && (
+              <span
+                className="ml-auto shrink-0 text-destructive"
+                role="img"
+                title="Checks failing"
+                aria-label="Checks failing"
+              >
+                <XCircleIcon className="size-3" />
+              </span>
+            )}
+            {ciMap?.get(pr.number) === "pending" && (
+              <span
+                className="ml-auto shrink-0 text-warning"
+                role="img"
+                title="Checks pending"
+                aria-label="Checks pending"
+              >
+                <ClockIcon className="size-3" />
+              </span>
+            )}
           </p>
           <p className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground">
             #{pr.number} · {pr.author ? `${pr.author.login} · ` : ""}
+            {pr.createdAt ? `${formatRelativeTime(pr.createdAt)} · ` : ""}
             {pr.headRefName} → {pr.baseRefName}
           </p>
         </>

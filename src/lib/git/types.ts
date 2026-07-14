@@ -1300,6 +1300,27 @@ export interface PrInfo {
   state: string;
   author: { login: string } | null;
   labels: { name: string }[];
+  /** ISO-8601 timestamp of when the PR was opened; "" when the source didn't
+   *  supply it. Populated by all three providers — drives the list row's age. */
+  createdAt: string;
+  /** The PR head commit's SHA. Bitbucket-only (its list arm reads
+   *  `source.commit.hash`); it feeds the per-commit CI-status probe, since
+   *  Bitbucket has no batch pipeline endpoint. "" for GitHub/GitLab (their CI
+   *  fetch keys on PR number / MR iid, not the SHA). */
+  headSha: string;
+}
+
+/** A PR's rolled-up CI signal for the list-row icon. "none" = no checks. */
+export type CiStatus = "passing" | "failing" | "pending" | "none";
+
+/** One PR's CI rollup keyed by number — the hydration payload for the PR-list row
+ *  icons. Provider-neutral: GitHub reads its precomputed statusCheckRollup, GitLab
+ *  the MR headPipeline status, Bitbucket a per-commit statuses probe. Fetched
+ *  separately from the list so a large repo's list never waits on (or 504s
+ *  expanding) the per-check status. */
+export interface PrCiStatus {
+  number: number;
+  ciStatus: CiStatus;
 }
 
 export interface PrCommitOut {

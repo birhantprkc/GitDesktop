@@ -288,6 +288,7 @@ pub fn run() {
             forge::forge_list_repos,
             forge::forge_clone,
             forge::forge_pr_list,
+            forge::forge_pr_list_ci,
             forge::forge_pr_poll,
             forge::forge_prs_for_branch,
             forge::forge_pr_view,

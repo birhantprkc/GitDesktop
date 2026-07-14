@@ -20,6 +20,7 @@ import type {
   BbEnvironment,
   BitbucketHookInput,
   BitbucketRepoSettingsInput,
+  CiStatus,
   CommitCommentOut,
   DiffStatEntry,
   DiscussionDetails,
@@ -38,6 +39,7 @@ import type {
   IssueRelation,
   IssueType,
   PrDetails,
+  PrInfo,
   PrThreadOut,
   Reaction,
   RepoOp,
@@ -802,6 +804,48 @@ export function usePrList(
     staleTime: 30_000,
     // Growing the limit ("Load more") keeps the current rows visible instead of
     // flashing skeletons while the larger page loads.
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** Hydrates the PR-list rows with each PR's CI rollup, keyed by number. Runs
+ *  SEPARATELY from `usePrList` so the list paints immediately and the row icons
+ *  appear a moment later — a full rollup expansion in the list query 504s on large
+ *  GitHub repos. Provider-neutral: the backend routes to GitHub/GitLab/Bitbucket, so
+ *  `enabled` only needs the list to be ready (`ghReady`); it self-disables when `prs`
+ *  is empty. The numbers digest in the key is load-bearing: the list uses
+ *  keepPreviousData, so on a tab switch this hook can fire against the PREVIOUS
+ *  tab's placeholder rows — keyed by state+limit alone that result would cache
+ *  under the new tab's key and the real rows would never get statuses. */
+export function usePrListCi(
+  repo: string,
+  enabled: boolean,
+  state: api.PrStateFilter,
+  limit: number | undefined,
+  prs: PrInfo[] | undefined,
+) {
+  return useQuery({
+    queryKey: [
+      "repo",
+      repo,
+      "pr-ci",
+      state,
+      limit ?? null,
+      prs?.map((p) => p.number).join(",") ?? "",
+    ] as const,
+    queryFn: async () => {
+      // `enabled` guarantees a non-empty list here; `prs![0]` is safe.
+      const list = prs as PrInfo[];
+      const rows = await api.forgePrListCi(
+        repo,
+        list.map((p) => ({ number: p.number, headSha: p.headSha })),
+        list[0].url,
+      );
+      return new Map<number, CiStatus>(rows.map((r) => [r.number, r.ciStatus]));
+    },
+    enabled: enabled && !!prs && prs.length > 0,
+    staleTime: 30_000,
+    // Keep the current icons while a "Load more" grows the list, matching usePrList.
     placeholderData: keepPreviousData,
   });
 }

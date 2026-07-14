@@ -83,6 +83,7 @@ import type {
   OpLogEntry,
   OrphanedStash,
   PagesInfo,
+  PrCiStatus,
   PrDetails,
   PrInfo,
   PrPollInfo,
@@ -1150,6 +1151,19 @@ export type PrStateFilter = "open" | "closed";
 
 export const ghPrList = (repoPath: string, state: PrStateFilter) =>
   invoke<PrInfo[]>("gh_pr_list", { repoPath, state });
+
+/** The CI rollup for a PR-list page, keyed by number — provider-neutral (the backend
+ *  routes to GitHub/GitLab/Bitbucket). `prs` carries each row's number plus its head
+ *  SHA (the Bitbucket arm needs the SHA; GitHub/GitLab ignore it). `sampleUrl` is any
+ *  PR html url from the same page; it fixes which repo the numbers belong to
+ *  (load-bearing for forks, where the list resolves to the parent while origin points
+ *  at the fork). Fetched separately from the list so the list paints fast and the row
+ *  icons hydrate after. */
+export const forgePrListCi = (
+  repoPath: string,
+  prs: { number: number; headSha: string }[],
+  sampleUrl: string,
+) => invoke<PrCiStatus[]>("forge_pr_list_ci", { repoPath, prs, sampleUrl });
 
 export const ghPrView = (repoPath: string, number: number) =>
   invoke<PrDetails>("gh_pr_view", { repoPath, number });

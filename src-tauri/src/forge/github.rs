@@ -89,6 +89,16 @@ pub async fn list_prs(
     crate::github::pr::gh_pr_list(repo_path.to_string(), state.to_string(), limit).await
 }
 
+pub async fn list_ci(
+    repo_path: &str,
+    prs: &[crate::github::pr::PrCiRefIn],
+    sample_url: &str,
+) -> AppResult<Vec<crate::github::pr::PrCiStatus>> {
+    // GitHub queries by PR number (its precomputed rollup); head_sha is unused here.
+    let numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
+    crate::github::pr::gh_pr_list_ci(repo_path, numbers, sample_url).await
+}
+
 pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<crate::github::pr::PrDetails> {
     crate::github::pr::gh_pr_view(repo_path.to_string(), number).await
 }

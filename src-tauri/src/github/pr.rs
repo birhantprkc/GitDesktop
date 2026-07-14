@@ -477,6 +477,17 @@ pub struct PrInfo {
     pub author: Option<PrAuthor>,
     #[serde(default)]
     pub labels: Vec<PrListLabel>,
+    /// ISO-8601 timestamp of when the PR was opened; "" when the source didn't
+    /// supply it. Populated by all three providers (GitHub `createdAt`, GitLab
+    /// `created_at`, Bitbucket `created_on`) so the list row can show its age.
+    #[serde(default)]
+    pub created_at: String,
+    /// The PR head commit's SHA. Populated ONLY by the Bitbucket list arm (from
+    /// `source.commit.hash`, short hash is fine) to feed its per-commit CI-status
+    /// probe — Bitbucket has no batch pipeline endpoint. GitHub and GitLab leave it
+    /// "" (their CI arms query by PR number / MR iid and never read this).
+    #[serde(default)]
+    pub head_sha: String,
 }
 
 /// Submits a review: `action` is "approve", "comment", or "request_changes".
@@ -939,7 +950,7 @@ pub async fn gh_pr_ready(repo_path: String, number: u64) -> AppResult<()> {
 }
 
 const PR_LIST_FIELDS: &str =
-    "number,url,title,baseRefName,headRefName,isDraft,state,author,labels";
+    "number,url,title,baseRefName,headRefName,isDraft,state,author,labels,createdAt";
 
 /// PRs for the Pull Requests list. `state` is "open" or "closed"; closed
 /// uses the search qualifier so merged PRs are included, matching the
@@ -980,6 +991,171 @@ pub async fn gh_pr_list(
     let out = run_gh(Some(&repo_path), &args, GH_TIMEOUT).await?;
     serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Gh(format!("could not parse gh pr list: {e}")))
+}
+
+/// One PR's rolled-up CI signal, keyed by number — the hydration payload for the
+/// PR-list row icons. `ci_status` is one of `"passing" | "failing" | "pending" |
+/// "none"`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrCiStatus {
+    pub number: u64,
+    pub ci_status: String,
+}
+
+/// One PR reference the frontend hands `forge_pr_list_ci` to hydrate row CI icons:
+/// the PR number plus its head SHA. The GitHub/GitLab arms need only the number
+/// (they query by number / iid); the Bitbucket arm needs `head_sha` for its
+/// per-commit statuses probe (it's "" for GitHub/GitLab list rows).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrCiRefIn {
+    pub number: u64,
+    #[serde(default)]
+    pub head_sha: String,
+}
+
+/// Map GitHub's *precomputed* single-enum `statusCheckRollup.state` to the neutral
+/// list-row CI signal. `None` = the rollup was null (no checks configured) → `"none"`;
+/// an empty state string is treated the same. Unrecognized states bias to `"pending"`
+/// (conservative — never a false green). Case-insensitive.
+fn rollup_state_to_ci(state: Option<&str>) -> String {
+    match state.map(|s| s.trim().to_ascii_uppercase()) {
+        None => "none".to_string(),
+        Some(s) if s.is_empty() => "none".to_string(),
+        Some(s) => match s.as_str() {
+            "SUCCESS" => "passing",
+            "FAILURE" | "ERROR" => "failing",
+            "PENDING" | "EXPECTED" => "pending",
+            // A new/unknown state → pending, never falsely green.
+            _ => "pending",
+        }
+        .to_string(),
+    }
+}
+
+/// Parse `(host, owner, name)` from a PR html url like
+/// `https://github.com/biomejs/biome/pull/10937`. The url is the empirical truth
+/// for which repo the PR numbers belong to — for a fork, the PR list resolves to
+/// the PARENT repo while origin points at the fork, so we must not re-derive the
+/// repo from the checkout. Strict: exactly two path segments (owner, name) each
+/// matching `[A-Za-z0-9._-]+` and NOT starting with `-` (flag-injection guard),
+/// immediately followed by `/pull/`. Anything else is an error.
+fn parse_pr_url_repo(url: &str) -> AppResult<(String, String, String)> {
+    let host = host_from_url(url)
+        .ok_or_else(|| AppError::InvalidArgument(format!("not a PR url: {url}")))?;
+    let after = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url);
+    // Drop the authority; keep the path.
+    let path = after.split_once('/').map(|(_, p)| p).unwrap_or("");
+    let mut segs = path.split('/');
+    let owner = segs.next().unwrap_or("");
+    let name = segs.next().unwrap_or("");
+    let sep = segs.next().unwrap_or("");
+    let valid_seg = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with('-')
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    if sep != "pull" || !valid_seg(owner) || !valid_seg(name) {
+        return Err(AppError::InvalidArgument(format!(
+            "could not parse owner/repo from PR url: {url}"
+        )));
+    }
+    Ok((host, owner.to_string(), name.to_string()))
+}
+
+/// The precomputed CI rollup for a set of PR numbers in ONE repo, keyed by number
+/// — the GitHub arm of `forge_pr_list_ci`. The PR list (`gh_pr_list`) intentionally
+/// fetches no rollup (a full `statusCheckRollup` expansion 504s on large repos), so
+/// the row icons hydrate separately from this cheap follow-up. `numbers` come from a
+/// single list page and `sample_url` is any PR html url from that same page (it fixes
+/// the owner/name/host — load-bearing for forks). Queries by number aliases in chunks
+/// of ≤50, each chunk one `gh api graphql` call. Tolerant: a chunk that errors or fails
+/// to parse is simply omitted (its rows show no icon) — one bad chunk never fails the
+/// whole call.
+pub async fn gh_pr_list_ci(
+    repo_path: &str,
+    numbers: Vec<u64>,
+    sample_url: &str,
+) -> AppResult<Vec<PrCiStatus>> {
+    if numbers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (host, owner, name) = parse_pr_url_repo(sample_url)?;
+    let hostname_arg = (host != "github.com").then_some(host);
+
+    let mut result: Vec<PrCiStatus> = Vec::with_capacity(numbers.len());
+    for chunk in numbers.chunks(50) {
+        // Numbers are u64 (digits only) → safe to embed directly. Owner/name are
+        // passed as GraphQL variables (validated above), never interpolated.
+        let aliases: String = chunk
+            .iter()
+            .map(|n| {
+                format!(
+                    "p{n}: pullRequest(number:{n}){{ number commits(last:1){{ nodes{{ commit{{ statusCheckRollup{{ state }} }} }} }} }} "
+                )
+            })
+            .collect();
+        let query = format!(
+            "query($owner:String!,$name:String!){{ repository(owner:$owner,name:$name){{ {aliases}}} }}"
+        );
+        let query_arg = format!("query={query}");
+        let owner_arg = format!("owner={owner}");
+        let name_arg = format!("name={name}");
+        let mut args: Vec<&str> = vec!["api", "graphql"];
+        if let Some(h) = &hostname_arg {
+            args.push("--hostname");
+            args.push(h);
+        }
+        args.push("-f");
+        args.push(&query_arg);
+        args.push("-f");
+        args.push(&owner_arg);
+        args.push("-f");
+        args.push(&name_arg);
+
+        // Per-chunk tolerance: a network error / non-zero exit / parse failure
+        // just drops this chunk's numbers (their icons stay absent).
+        let Ok(out) = run_gh_raw(Some(repo_path), &args, GH_NETWORK_TIMEOUT).await else {
+            continue;
+        };
+        if out.code != 0 {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&out.stdout_lossy()) else {
+            continue;
+        };
+        let Some(repo_obj) = value
+            .pointer("/data/repository")
+            .and_then(|v| v.as_object())
+        else {
+            continue;
+        };
+        for n in chunk {
+            // Per-node guard: a missing/null alias (e.g. a number that isn't a PR
+            // in this repo) is skipped, not defaulted to a misleading value.
+            let Some(node) = repo_obj.get(&format!("p{n}")) else {
+                continue;
+            };
+            if node.is_null() {
+                continue;
+            }
+            // `statusCheckRollup` is null when the PR has no checks → "none". The
+            // pointer walks the last-commit rollup; a null/absent state maps to "none".
+            let state = node
+                .pointer("/commits/nodes/0/commit/statusCheckRollup/state")
+                .and_then(|s| s.as_str());
+            result.push(PrCiStatus {
+                number: *n,
+                ci_status: rollup_state_to_ci(state),
+            });
+        }
+    }
+    Ok(result)
 }
 
 // NOTE: `gh pr edit` is unusable on older gh versions (its GraphQL query
@@ -3651,9 +3827,10 @@ pub(crate) async fn gh_pr_create_core(
 mod tests {
     use super::{
         host_from_url, is_diff_too_large, map_timeline_node, parse_actions_run_job,
-        parse_auth_accounts, reconstruct_pr_diff, rest_comment_to_out, rest_commit_to_out,
-        rest_review_to_out, split_commit_message, GhPrFile, GhPrRestComment, GhPrRestCommit,
-        GhPrRestCommitGitAuthor, GhPrRestCommitInner, GhPrRestReview, PrTimelineEventOut, RawLogin,
+        parse_auth_accounts, parse_pr_url_repo, reconstruct_pr_diff, rest_comment_to_out,
+        rest_commit_to_out, rest_review_to_out, rollup_state_to_ci, split_commit_message, GhPrFile,
+        GhPrRestComment, GhPrRestCommit, GhPrRestCommitGitAuthor, GhPrRestCommitInner,
+        GhPrRestReview, PrTimelineEventOut, RawLogin,
     };
 
     fn file(status: &str, filename: &str, patch: Option<&str>) -> GhPrFile {
@@ -3679,6 +3856,49 @@ mod tests {
             },
             author: None,
         }
+    }
+
+    #[test]
+    fn rollup_state_to_ci_maps_the_precomputed_states() {
+        // The precomputed single-enum rollup states GitHub returns.
+        assert_eq!(rollup_state_to_ci(Some("SUCCESS")), "passing");
+        assert_eq!(rollup_state_to_ci(Some("FAILURE")), "failing");
+        assert_eq!(rollup_state_to_ci(Some("ERROR")), "failing");
+        assert_eq!(rollup_state_to_ci(Some("PENDING")), "pending");
+        assert_eq!(rollup_state_to_ci(Some("EXPECTED")), "pending");
+        // Case-insensitive.
+        assert_eq!(rollup_state_to_ci(Some("success")), "passing");
+        // A null rollup (no checks configured) → none.
+        assert_eq!(rollup_state_to_ci(None), "none");
+        // Empty string (odd/absent state) → none, never a false green.
+        assert_eq!(rollup_state_to_ci(Some("")), "none");
+        // An unrecognized state biases to pending (conservative).
+        assert_eq!(rollup_state_to_ci(Some("SOMETHING_NEW")), "pending");
+    }
+
+    #[test]
+    fn parse_pr_url_repo_extracts_host_owner_name() {
+        // github.com PR url.
+        let (host, owner, name) =
+            parse_pr_url_repo("https://github.com/biomejs/biome/pull/10937").unwrap();
+        assert_eq!(host, "github.com");
+        assert_eq!(owner, "biomejs");
+        assert_eq!(name, "biome");
+
+        // GitHub Enterprise host, dotted/underscored/hyphened segments.
+        let (host, owner, name) =
+            parse_pr_url_repo("https://github.acme.com/my-org/my_repo.js/pull/42").unwrap();
+        assert_eq!(host, "github.acme.com");
+        assert_eq!(owner, "my-org");
+        assert_eq!(name, "my_repo.js");
+
+        // Malformed / non-PR urls → Err.
+        assert!(parse_pr_url_repo("https://github.com/biomejs/biome/issues/1").is_err());
+        assert!(parse_pr_url_repo("https://github.com/onlyowner/pull/1").is_err());
+        assert!(parse_pr_url_repo("not a url").is_err());
+        // A `-`-prefixed segment (flag-injection guard) → Err.
+        assert!(parse_pr_url_repo("https://github.com/-evil/repo/pull/1").is_err());
+        assert!(parse_pr_url_repo("https://github.com/owner/-evil/pull/1").is_err());
     }
 
     #[test]

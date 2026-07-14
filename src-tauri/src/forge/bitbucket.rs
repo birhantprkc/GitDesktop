@@ -38,9 +38,9 @@ use crate::forge::model::{
 use crate::forge::Forge;
 use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::pr::{
-    ApprovalState, CommitCommentOut, DraftCommentIn, PrAuthor, PrCommitOut, PrDetails, PrFileOut,
-    PrInfo, PrListLabel, PrPollInfo, PrRef, PrThreadOut, PrTimelineEventOut, ReviewSubmitOut,
-    ReviewThreadOut,
+    ApprovalState, CommitCommentOut, DraftCommentIn, PrAuthor, PrCiRefIn, PrCiStatus, PrCommitOut,
+    PrDetails, PrFileOut, PrInfo, PrListLabel, PrPollInfo, PrRef, PrThreadOut, PrTimelineEventOut,
+    ReviewSubmitOut, ReviewThreadOut,
 };
 
 /// Failed-step logs can run to many MB; keep the tail (failures land at the end).
@@ -486,6 +486,11 @@ fn map_bb_pr_state(state: &str) -> String {
 struct BbPrEndpoint {
     #[serde(default)]
     branch: Option<BbBranchRef>,
+    /// The endpoint's head commit — its `hash` feeds the per-commit CI-status probe
+    /// (Bitbucket has no batch pipeline endpoint). Short hash is fine for `.../statuses`.
+    /// Reuses the module's existing [`BbCommitRef`] (`{hash}`).
+    #[serde(default)]
+    commit: Option<BbCommitRef>,
 }
 
 #[derive(Deserialize, Default)]
@@ -535,6 +540,9 @@ struct BbPr {
     /// who were never formally asked to review.
     #[serde(default, deserialize_with = "null_to_default")]
     participants: Vec<BbParticipant>,
+    /// ISO-8601 open time (`created_on`); "" when absent.
+    #[serde(default)]
+    created_on: String,
 }
 
 /// Best display login for a Bitbucket user: display_name else nickname (other users
@@ -585,6 +593,14 @@ fn from_bb_pr(p: BbPr) -> PrInfo {
         }),
         // Bitbucket PRs have no labels.
         labels: Vec::<PrListLabel>::new(),
+        created_at: p.created_on,
+        // The source (head) commit's hash, for the per-commit CI-status probe.
+        head_sha: p
+            .source
+            .as_ref()
+            .and_then(|s| s.commit.as_ref())
+            .map(|c| c.hash.clone())
+            .unwrap_or_default(),
     }
 }
 
@@ -908,6 +924,61 @@ fn map_bb_check_state(state: &str) -> String {
         // INPROGRESS (and anything unknown) → the frontend's pending bucket.
         _ => "PENDING".to_string(),
     }
+}
+
+/// Reduce a commit's build-status states (Bitbucket `state`: SUCCESSFUL/FAILED/
+/// INPROGRESS/STOPPED, plus any unknown) to one neutral list-row CI signal.
+/// Precedence: any FAILED/STOPPED → failing; else any INPROGRESS or unrecognized
+/// state → pending (conservative — never a false green); else at least one
+/// SUCCESSFUL → passing; an empty status set → none (no checks reported).
+fn reduce_bb_ci(states: &[String]) -> String {
+    if states.is_empty() {
+        return "none".to_string();
+    }
+    let up: Vec<String> = states.iter().map(|s| s.trim().to_ascii_uppercase()).collect();
+    if up.iter().any(|s| s == "FAILED" || s == "STOPPED") {
+        return "failing".to_string();
+    }
+    if up.iter().any(|s| s != "SUCCESSFUL") {
+        // INPROGRESS or any value we don't recognize → still-running / unknown.
+        return "pending".to_string();
+    }
+    "passing".to_string()
+}
+
+/// The CI rollup for a set of PRs, keyed by number — the Bitbucket arm of
+/// `forge_pr_list_ci`. Bitbucket has NO batch pipeline endpoint, so this probes each
+/// PR's head commit `.../commit/{sha}/statuses` individually (reusing the same endpoint
+/// the PR-detail checks use). Best-effort decoration: refs with an empty `head_sha` are
+/// skipped, the set is capped at the FIRST 50 PRs, and any per-PR failure just omits
+/// that PR's icon. Requests run SEQUENTIALLY — the forge module has no established
+/// concurrency idiom, and a capped-at-50 best-effort probe doesn't justify inventing
+/// one; see the report's timing note.
+pub async fn pr_list_ci(repo_path: &str, prs: &[PrCiRefIn]) -> AppResult<Vec<PrCiStatus>> {
+    let creds = http::load_credentials().await?;
+    let (ws, slug) = workspace_slug(repo_path).await?;
+
+    let mut result: Vec<PrCiStatus> = Vec::new();
+    // Cap at the first 50 PRs (best-effort decoration; no N+1 blow-up on huge pages).
+    for pr in prs.iter().filter(|p| !p.head_sha.is_empty()).take(50) {
+        let path = format!(
+            "repositories/{}/{}/commit/{}/statuses?pagelen=100",
+            encode_query_value(&ws),
+            encode_query_value(&slug),
+            encode_query_value(&pr.head_sha),
+        );
+        // Per-call tolerance: a failed fetch just leaves this PR without an icon.
+        let Ok(page) = http::bb_get_json::<BbPage<BbCommitStatus>>(&creds, &path, "statuses").await
+        else {
+            continue;
+        };
+        let states: Vec<String> = page.values.into_iter().map(|s| s.state).collect();
+        result.push(PrCiStatus {
+            number: pr.number,
+            ci_status: reduce_bb_ci(&states),
+        });
+    }
+    Ok(result)
 }
 
 fn commit_headline(c: &BbCommit) -> String {
@@ -4857,9 +4928,10 @@ mod tests {
                 "state": "OPEN",
                 "draft": true,
                 "author": {"display_name": "Ada Lovelace", "nickname": "ada"},
-                "source": {"branch": {"name": "feature/x"}},
+                "source": {"branch": {"name": "feature/x"}, "commit": {"hash": "abc123def"}},
                 "destination": {"branch": {"name": "main"}},
-                "links": {"html": {"href": "https://bitbucket.org/ws/repo/pull-requests/42"}}
+                "links": {"html": {"href": "https://bitbucket.org/ws/repo/pull-requests/42"}},
+                "created_on": "2026-07-02T08:30:00.000000+00:00"
             }"#);
         assert_eq!(p.number, 42);
         assert_eq!(p.state, "OPEN");
@@ -4869,6 +4941,35 @@ mod tests {
         assert_eq!(p.author.unwrap().login, "Ada Lovelace");
         assert_eq!(p.url, "https://bitbucket.org/ws/repo/pull-requests/42");
         assert!(p.labels.is_empty());
+        // Opened-time maps through (CI status is a separate follow-up fetch).
+        assert_eq!(p.created_at, "2026-07-02T08:30:00.000000+00:00");
+        // Head SHA maps from source.commit.hash, feeding the Bitbucket CI probe.
+        assert_eq!(p.head_sha, "abc123def");
+    }
+
+    #[test]
+    fn reduce_bb_ci_reduces_the_status_set() {
+        // Empty → none.
+        assert_eq!(reduce_bb_ci(&[]), "none");
+        // All successful → passing.
+        assert_eq!(
+            reduce_bb_ci(&["SUCCESSFUL".into(), "SUCCESSFUL".into()]),
+            "passing"
+        );
+        // Any FAILED/STOPPED dominates.
+        assert_eq!(
+            reduce_bb_ci(&["SUCCESSFUL".into(), "FAILED".into()]),
+            "failing"
+        );
+        assert_eq!(reduce_bb_ci(&["STOPPED".into()]), "failing");
+        // In-progress (no failure) → pending, not passing.
+        assert_eq!(
+            reduce_bb_ci(&["SUCCESSFUL".into(), "INPROGRESS".into()]),
+            "pending"
+        );
+        // Unknown state (no failure) → pending (conservative), case-insensitive.
+        assert_eq!(reduce_bb_ci(&["successful".into()]), "passing");
+        assert_eq!(reduce_bb_ci(&["WEIRD".into()]), "pending");
     }
 
     #[test]

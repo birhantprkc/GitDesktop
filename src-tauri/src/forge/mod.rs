@@ -586,6 +586,34 @@ pub async fn forge_pr_list(
     }
 }
 
+/// The rolled-up CI signal for a PR-list page, keyed by number — hydrates the row
+/// icons SEPARATELY from `forge_pr_list` so a large repo's list never waits on (or
+/// 504s expanding) per-check status. Provider-routed: GitHub queries its precomputed
+/// `statusCheckRollup` by PR number, GitLab its MR `headPipeline.status` by iid (one
+/// batched GraphQL call each), Bitbucket falls back to a per-commit statuses probe
+/// keyed on each PR's `head_sha` (no batch endpoint). `sample_url` is any PR html url
+/// from the same page — it fixes the repo the numbers belong to (load-bearing for
+/// forks, where the list resolves to the parent while origin points at the fork).
+/// Best-effort throughout: a PR whose status can't be fetched simply gets no icon.
+#[tauri::command]
+pub async fn forge_pr_list_ci(
+    repo_path: String,
+    prs: Vec<crate::github::pr::PrCiRefIn>,
+    sample_url: String,
+) -> AppResult<Vec<crate::github::pr::PrCiStatus>> {
+    if prs.is_empty() {
+        return Ok(Vec::new());
+    }
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => {
+            let iids: Vec<u64> = prs.iter().map(|p| p.number).collect();
+            gitlab::pr_list_ci(&repo_path, iids, &sample_url).await
+        }
+        Some((Provider::Bitbucket, _)) => bitbucket::pr_list_ci(&repo_path, &prs).await,
+        _ => github::list_ci(&repo_path, &prs, &sample_url).await,
+    }
+}
+
 /// A lightweight snapshot of the repo's recently-updated PRs for the notification
 /// poller + remote pr-sync, behind the abstraction. GitHub delegates to the UNCHANGED
 /// `gh_pr_poll`; GitLab/Bitbucket map their list responses onto the same neutral

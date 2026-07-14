@@ -23,8 +23,8 @@ use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::issue::{IssueDetails, IssueInfo, IssueReactions, Milestone, Reaction};
 use crate::github::pr::{
     ApprovalState, CommitCommentOut, DraftCommentIn, ExternalReviewItem, PrAuthor, PrCheckOut,
-    PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrPollInfo, PrRef, PrThreadOut,
-    PrTimelineEventOut, RepoLabel, ReviewSubmitOut, ReviewThreadOut,
+    PrCiStatus, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrPollInfo, PrRef,
+    PrThreadOut, PrTimelineEventOut, RepoLabel, ReviewSubmitOut, ReviewThreadOut,
 };
 use crate::github::release::{ReleaseAsset, ReleaseDetails, ReleaseInfo};
 use crate::state::AppState;
@@ -261,6 +261,8 @@ struct GlabMr {
     author: Option<GlabMrUser>,
     #[serde(default, deserialize_with = "null_to_default")]
     labels: Vec<String>,
+    #[serde(default)]
+    created_at: String,
 }
 
 fn from_glab_mr(m: GlabMr) -> PrInfo {
@@ -278,6 +280,9 @@ fn from_glab_mr(m: GlabMr) -> PrInfo {
             .into_iter()
             .map(|name| PrListLabel { name })
             .collect(),
+        created_at: m.created_at,
+        // GitLab queries CI by MR iid (headPipeline), never by SHA — leave it empty.
+        head_sha: String::new(),
     }
 }
 
@@ -333,6 +338,138 @@ pub async fn prs_for_branch(repo_path: &str, head: &str) -> AppResult<Vec<PrInfo
     let mrs: Vec<GlabMr> = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Glab(format!("could not parse GitLab merge requests: {e}")))?;
     Ok(mrs.into_iter().map(from_glab_mr).collect())
+}
+
+/// Map a GitLab GraphQL `PipelineStatusEnum` (the MR head pipeline's status) onto the
+/// neutral list-row CI signal. SUCCESS → passing; the terminal-failure states →
+/// failing; SKIPPED counts as passing (nothing to run, not a failure); a null/absent
+/// pipeline → none. Everything else — CREATED/PENDING/RUNNING/PREPARING/WAITING_*/
+/// MANUAL/SCHEDULED and any value we don't recognize — is in-flight/indeterminate →
+/// pending (conservative, never a false green). Case-insensitive.
+fn pipeline_status_to_ci(status: Option<&str>) -> String {
+    match status.map(|s| s.trim().to_ascii_uppercase()) {
+        None => "none".to_string(),
+        Some(s) if s.is_empty() => "none".to_string(),
+        Some(s) => match s.as_str() {
+            "SUCCESS" | "SKIPPED" => "passing",
+            "FAILED" | "CANCELED" | "CANCELING" => "failing",
+            _ => "pending",
+        }
+        .to_string(),
+    }
+}
+
+/// Parse `(host, full_path)` from a GitLab MR web url of the shape
+/// `https://<host>/<group>[/<sub>…]/<project>/-/merge_requests/<iid>`. The full path is
+/// every segment between the host and the `/-/merge_requests/` marker — GitLab groups
+/// nest arbitrarily deep, so this is not fixed at two segments. Each segment is
+/// strict-validated (`[A-Za-z0-9._-]+`, never `-`-prefixed) so it can't inject a glab
+/// flag or break out of the GraphQL variable. Anything not matching → Err.
+fn parse_mr_url_project(url: &str) -> AppResult<(String, String)> {
+    let host = crate::forge::remote_host(url)
+        .ok_or_else(|| AppError::InvalidArgument(format!("not an MR url: {url}")))?;
+    let after = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let path = after.split_once('/').map(|(_, p)| p).unwrap_or("");
+    // The project full path is everything before the `/-/merge_requests/` marker.
+    let Some((full_path, _)) = path.split_once("/-/merge_requests/") else {
+        return Err(AppError::InvalidArgument(format!(
+            "could not parse project path from MR url: {url}"
+        )));
+    };
+    let segments: Vec<&str> = full_path.split('/').collect();
+    let valid_seg = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with('-')
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    if segments.len() < 2 || !segments.iter().all(|s| valid_seg(s)) {
+        return Err(AppError::InvalidArgument(format!(
+            "could not parse project path from MR url: {url}"
+        )));
+    }
+    Ok((host, full_path.to_string()))
+}
+
+/// The MR CI rollup for a set of iids in ONE project, keyed by number — the GitLab arm
+/// of `forge_pr_list_ci`. GitLab's GraphQL exposes each MR's `headPipeline.status`
+/// (a precomputed single enum), so one batched call per ≤50-iid chunk suffices — no
+/// N+1. `sample_url` (any MR web url from the same page) fixes the host + project full
+/// path. `fullPath` is passed as a GraphQL variable; iids are digits-only, embedded as
+/// quoted strings (GitLab's `iids` arg takes `[ID!]` strings). Per-chunk tolerance: a
+/// chunk that errors or fails to parse is omitted (its rows show no icon), never
+/// failing the whole call. Self-hosted GitLab is supported via glab's `--hostname`.
+pub async fn pr_list_ci(
+    repo_path: &str,
+    iids: Vec<u64>,
+    sample_url: &str,
+) -> AppResult<Vec<PrCiStatus>> {
+    if iids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (host, full_path) = parse_mr_url_project(sample_url)?;
+    let hostname_arg = (host != "gitlab.com").then_some(host);
+
+    let mut result: Vec<PrCiStatus> = Vec::with_capacity(iids.len());
+    for chunk in iids.chunks(50) {
+        // iids are u64 → safe to embed as quoted strings. fullPath is a GraphQL var.
+        let iid_list = chunk
+            .iter()
+            .map(|i| format!("\"{i}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let query = format!(
+            "query($path:ID!){{ project(fullPath: $path){{ mergeRequests(iids: [{iid_list}]){{ nodes{{ iid headPipeline{{ status }} }} }} }} }}"
+        );
+        let query_arg = format!("query={query}");
+        let path_arg = format!("path={full_path}");
+        let mut args: Vec<&str> = vec!["api", "graphql"];
+        if let Some(h) = &hostname_arg {
+            args.push("--hostname");
+            args.push(h);
+        }
+        args.push("-f");
+        args.push(&query_arg);
+        args.push("-f");
+        args.push(&path_arg);
+
+        // Per-chunk tolerance: network error / non-zero exit / parse failure drops
+        // just this chunk's iids (their icons stay absent).
+        let Ok(out) = run_glab_raw(Some(repo_path), &args, GLAB_NETWORK_TIMEOUT).await else {
+            continue;
+        };
+        if out.code != 0 {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&out.stdout_lossy()) else {
+            continue;
+        };
+        let Some(nodes) = value
+            .pointer("/data/project/mergeRequests/nodes")
+            .and_then(|v| v.as_array())
+        else {
+            continue;
+        };
+        for node in nodes {
+            // iid comes back as a STRING; parse it back to a number for the neutral key.
+            let Some(iid) = node
+                .pointer("/iid")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            // A null headPipeline (no pipeline for this MR) → none.
+            let status = node
+                .pointer("/headPipeline/status")
+                .and_then(|s| s.as_str());
+            result.push(PrCiStatus {
+                number: iid,
+                ci_status: pipeline_status_to_ci(status),
+            });
+        }
+    }
+    Ok(result)
 }
 
 /// Map a GitLab MR's list state onto the neutral poll state the notification poller
@@ -7545,7 +7682,8 @@ mod tests {
             "draft": false,
             "state": "merged",
             "author": { "username": "alice" },
-            "labels": ["enhancement", "ui"]
+            "labels": ["enhancement", "ui"],
+            "created_at": "2026-07-01T10:00:00Z"
         }"#;
         let p = from_glab_mr(serde_json::from_str(json).unwrap());
         assert_eq!(p.number, 7);
@@ -7554,6 +7692,53 @@ mod tests {
         assert_eq!(p.state, "MERGED");
         assert_eq!(p.author.unwrap().login, "alice");
         assert_eq!(p.labels.len(), 2);
+        // Opened-time maps through (CI status is a separate follow-up fetch).
+        assert_eq!(p.created_at, "2026-07-01T10:00:00Z");
+    }
+
+    #[test]
+    fn pipeline_status_maps_to_ci_signal() {
+        assert_eq!(pipeline_status_to_ci(Some("SUCCESS")), "passing");
+        assert_eq!(pipeline_status_to_ci(Some("SKIPPED")), "passing");
+        assert_eq!(pipeline_status_to_ci(Some("FAILED")), "failing");
+        assert_eq!(pipeline_status_to_ci(Some("CANCELED")), "failing");
+        assert_eq!(pipeline_status_to_ci(Some("CANCELING")), "failing");
+        assert_eq!(pipeline_status_to_ci(Some("RUNNING")), "pending");
+        assert_eq!(pipeline_status_to_ci(Some("PENDING")), "pending");
+        assert_eq!(pipeline_status_to_ci(Some("PREPARING")), "pending");
+        assert_eq!(pipeline_status_to_ci(Some("WAITING_FOR_RESOURCE")), "pending");
+        // Case-insensitive; unknown → pending (never a false green).
+        assert_eq!(pipeline_status_to_ci(Some("running")), "pending");
+        assert_eq!(pipeline_status_to_ci(Some("SOMETHING_NEW")), "pending");
+        // Null / empty head pipeline → none.
+        assert_eq!(pipeline_status_to_ci(None), "none");
+        assert_eq!(pipeline_status_to_ci(Some("")), "none");
+    }
+
+    #[test]
+    fn parse_mr_url_project_extracts_host_and_full_path() {
+        // gitlab.com, single-level group.
+        let (host, path) =
+            parse_mr_url_project("https://gitlab.com/gitlab-org/gitlab/-/merge_requests/245499")
+                .unwrap();
+        assert_eq!(host, "gitlab.com");
+        assert_eq!(path, "gitlab-org/gitlab");
+
+        // Multi-level (nested sub-group) path is normal for GitLab.
+        let (host, path) = parse_mr_url_project(
+            "https://gitlab.example.com/group/sub/project/-/merge_requests/3",
+        )
+        .unwrap();
+        assert_eq!(host, "gitlab.example.com");
+        assert_eq!(path, "group/sub/project");
+
+        // Malformed: not an MR url, too-shallow path, `-`-prefixed segment.
+        assert!(parse_mr_url_project("https://gitlab.com/gitlab-org/gitlab/-/issues/1").is_err());
+        assert!(parse_mr_url_project("https://gitlab.com/only/-/merge_requests/1").is_err());
+        assert!(
+            parse_mr_url_project("https://gitlab.com/-evil/project/-/merge_requests/1").is_err()
+        );
+        assert!(parse_mr_url_project("not a url").is_err());
     }
 
     #[test]
