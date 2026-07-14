@@ -15,6 +15,7 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
+import { ForgeUserAvatar } from "@/components/forge-user-avatar";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -22,6 +23,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
+import { displayLogin } from "@/lib/git/bot-login";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import {
   type AppNotification,
@@ -123,7 +125,7 @@ function ActivityBell({ variant }: { variant: "header" | "strip" }) {
         side={variant === "header" ? "bottom" : "top"}
         align={variant === "header" ? "end" : "start"}
         sideOffset={6}
-        className="w-80 gap-0 p-0"
+        className="w-96 gap-0 p-0"
       >
         <ActivityPanel onClose={() => setOpen(false)} />
       </PopoverContent>
@@ -257,7 +259,6 @@ function ActivityPanel({ onClose }: { onClose: () => void }) {
             <NotificationRow
               key={n.id}
               n={n}
-              crossRepo={n.repoPath !== repoPath}
               onNavigate={() => navigate(n)}
               onDelete={() => handleDelete(n.id)}
             />
@@ -316,20 +317,15 @@ function LiveTaskRow({
 
 function NotificationRow({
   n,
-  crossRepo,
   onNavigate,
   onDelete,
 }: {
   n: AppNotification;
-  crossRepo: boolean;
   onNavigate: () => void;
   /** Keyboard delete — restores focus to a neighbour (unlike the mouse clear). */
   onDelete: () => void;
 }) {
   const Glyph = glyphFor(n);
-  const meta = [n.subtitle, crossRepo ? n.repoName : null]
-    .filter(Boolean)
-    .join(" · ");
 
   return (
     <div className="flex items-stretch not-last:border-b hover:bg-muted/60">
@@ -364,11 +360,42 @@ function NotificationRow({
           >
             {n.title}
           </span>
-          {meta && (
+          {n.subtitle && (
             <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-              {meta}
+              {n.subtitle}
             </span>
           )}
+          {/* Meta line: repo (always) · author (when known). The inbox is global,
+              so the repo name orients rows from any repo; the author renders with a
+              small bot-aware avatar. */}
+          <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+            {/* min-w-0 defeats flex's default min-width:auto so truncate engages;
+                repoName (flex-1) shrinks first, the author name keeps a capped
+                share so both stay visible when the row is tight. `title` keeps a
+                clipped value readable on hover. */}
+            <span className="min-w-0 flex-1 truncate" title={n.repoName}>
+              {n.repoName}
+            </span>
+            {n.authorLogin && (
+              <>
+                <span aria-hidden>·</span>
+                <ForgeUserAvatar
+                  login={n.authorLogin}
+                  avatarUrl={n.authorAvatarUrl}
+                  ghHost={n.authorGhHost}
+                  size="sm"
+                  className="size-4"
+                  decorative
+                />
+                <span
+                  className="min-w-0 max-w-[45%] shrink-0 truncate"
+                  title={displayLogin(n.authorLogin)}
+                >
+                  {displayLogin(n.authorLogin)}
+                </span>
+              </>
+            )}
+          </span>
         </span>
         <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
           {formatRelativeTime(new Date(n.ts).toISOString())}

@@ -47,7 +47,7 @@ import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DiffPlaceholder } from "@/features/diff/DiffPlaceholder";
-import { DueDateRow } from "@/features/issues/RemoteIssueViewParts";
+import { JiraIssueSidebar } from "@/features/issues/JiraIssueSidebar";
 import type { ForgeUserRef } from "@/lib/git/types";
 import { formatBinding } from "@/lib/hotkeys/binding";
 import { formatHmDelta, isValidJiraDuration } from "@/lib/jira/duration";
@@ -63,7 +63,6 @@ import {
   useJiraLogWork,
   useJiraPermissions,
   useJiraPriorities,
-  useJiraSetDueDate,
   useJiraSetLabels,
   useJiraSetOriginalEstimate,
   useJiraSetPriority,
@@ -76,7 +75,6 @@ import {
 } from "@/lib/jira/queries";
 import type { JiraLink } from "@/lib/jira/store";
 import {
-  formatStoryPoints,
   type JiraComment,
   type JiraIssueDetails,
   type JiraStatusCategory,
@@ -225,7 +223,13 @@ function StatusMenu({
 /** A muted issue-type icon + name, part of the meta row. Jira serves a small
  *  square type glyph; rendered through the vendored Avatar primitives (the repo's
  *  image idiom) so it degrades to the type's initial when the glyph won't load. */
-function IssueTypeMeta({ iconUrl, name }: { iconUrl: string; name: string }) {
+export function IssueTypeMeta({
+  iconUrl,
+  name,
+}: {
+  iconUrl: string;
+  name: string;
+}) {
   if (!name) return null;
   return (
     <span className="inline-flex items-center gap-1">
@@ -258,7 +262,7 @@ const UNASSIGN: ForgeUserRef = {
  * reflects the live (optimistically-patched) assignee. Only rendered when
  * `assignIssues` is permitted.
  */
-function JiraAssigneePicker({
+export function JiraAssigneePicker({
   repoPath,
   link,
   issueKey,
@@ -366,7 +370,7 @@ function JiraAssigneePicker({
  * IssueTypeMeta). Selecting fires the optimistic set-priority mutation. Only
  * rendered when `editIssues` is permitted.
  */
-function JiraPriorityMenu({
+export function JiraPriorityMenu({
   repoPath,
   link,
   issueKey,
@@ -460,7 +464,7 @@ function JiraPriorityMenu({
  * Whitespace-containing input is rejected inline (Jira constraint) via a field
  * warning — never a dead disabled control. Only rendered when `editIssues`.
  */
-function JiraLabelsPopover({
+export function JiraLabelsPopover({
   repoPath,
   link,
   issueKey,
@@ -960,8 +964,7 @@ function JiraWorklogItem({
   // Blocked: the user cleared a note that previously existed. Jira can't remove a
   // note once set — explain rather than silently drop or 400.
   const noteRemoved = hadNote && noteChanged && noteDraft.trim().length === 0;
-  const canSaveEdit =
-    durationValid && !noteRemoved && !update.isPending;
+  const canSaveEdit = durationValid && !noteRemoved && !update.isPending;
 
   function beginEdit() {
     setDurationDraft(worklog.timeSpent);
@@ -1004,8 +1007,12 @@ function JiraWorklogItem({
   return (
     <div className="space-y-1">
       <p className="flex items-center gap-2 text-xs">
-        {worklog.author && <ForgeUserAvatar user={worklog.author} ghHost={null} />}
-        <span className="font-medium">{worklog.author?.label ?? "unknown"}</span>
+        {worklog.author && (
+          <ForgeUserAvatar user={worklog.author} ghHost={null} />
+        )}
+        <span className="font-medium">
+          {worklog.author?.label ?? "unknown"}
+        </span>
         <span className="tabular-nums text-muted-foreground">
           {worklog.timeSpent}
         </span>
@@ -1088,8 +1095,8 @@ function JiraWorklogItem({
           )}
           {noteRemoved && (
             <p className="text-[11px] text-destructive">
-              A note can't be removed once set — replace it, or delete this entry
-              and log again.
+              A note can't be removed once set — replace it, or delete this
+              entry and log again.
             </p>
           )}
           <div className="flex items-center gap-2">
@@ -1138,7 +1145,7 @@ function JiraWorklogItem({
  * worklog list. All mutations are non-optimistic; the section re-fetches on
  * settle, so a typed value may differ from the server-derived truth that lands.
  */
-function JiraTimeTrackingSection({
+export function JiraTimeTrackingSection({
   repoPath,
   link,
   issueKey,
@@ -1322,7 +1329,10 @@ function JiraTimeTrackingSection({
             hasValue={originalSeconds > 0}
             pending={setOriginal.isPending}
             onSet={(estimate) =>
-              setOriginal.mutate({ issueKey, estimate }, { onError: toastError })
+              setOriginal.mutate(
+                { issueKey, estimate },
+                { onError: toastError },
+              )
             }
           />
           <JiraEstimateInput
@@ -1332,7 +1342,10 @@ function JiraTimeTrackingSection({
             hasValue={(tracking.remainingEstimateSeconds ?? 0) > 0}
             pending={setRemaining.isPending}
             onSet={(estimate) =>
-              setRemaining.mutate({ issueKey, estimate }, { onError: toastError })
+              setRemaining.mutate(
+                { issueKey, estimate },
+                { onError: toastError },
+              )
             }
           />
         </div>
@@ -1348,7 +1361,9 @@ function JiraTimeTrackingSection({
               link={link}
               issueKey={issueKey}
               worklog={w}
-              isOwn={viewerAccountId != null && w.author?.id === viewerAccountId}
+              isOwn={
+                viewerAccountId != null && w.author?.id === viewerAccountId
+              }
               canEdit={canEditOwnWorklogs}
               canDelete={canDeleteOwnWorklogs}
             />
@@ -1492,7 +1507,6 @@ export function JiraIssueView({
   const comment = useJiraComment(repoPath, link.data);
   const transition = useJiraTransition(repoPath, link.data);
   const transitionTo = useJiraTransitionTo(repoPath, link.data);
-  const setDueDate = useJiraSetDueDate(repoPath, link.data);
   const [composeBody, setComposeBody] = useState("");
   const composerRef = useRef<MarkdownEditorHandle>(null);
 
@@ -1610,6 +1624,9 @@ export function JiraIssueView({
             Jira
           </Button>
         </div>
+        {/* Status stays in the header as a chip/dropdown next to the title
+            (like the PR view's state pill); the rest of the metadata lives in
+            the right-hand rail below. */}
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           {canTransition && link.data ? (
             <StatusMenu
@@ -1627,265 +1644,117 @@ export function JiraIssueView({
               name={issue.statusName}
             />
           )}
-          <IssueTypeMeta
-            iconUrl={issue.issueTypeIconUrl}
-            name={issue.issueTypeName}
-          />
-          {canEditIssue && link.data ? (
-            <span className="inline-flex items-center gap-1">
-              <span>·</span>
-              <JiraPriorityMenu
-                repoPath={repoPath}
-                link={link.data}
-                issueKey={issueKey}
-                priorityName={issue.priorityName}
-              />
-            </span>
-          ) : (
-            issue.priorityName && <span>· {issue.priorityName}</span>
-          )}
           <span>· opened {formatRelativeTime(issue.createdAt)}</span>
         </div>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          {canAssign && link.data ? (
-            <span className="inline-flex items-center gap-1.5">
-              <span>Assignee:</span>
-              <JiraAssigneePicker
-                repoPath={repoPath}
-                link={link.data}
-                issueKey={issueKey}
-                assignee={issue.assignee}
-              />
-            </span>
-          ) : (
-            issue.assignee && (
-              <span className="inline-flex items-center gap-1.5">
-                <ForgeUserAvatar user={issue.assignee} ghHost={null} />
-                <span>Assignee: {issue.assignee.label}</span>
-              </span>
-            )
-          )}
-          {issue.reporter && (
-            <span className="inline-flex items-center gap-1.5">
-              <ForgeUserAvatar user={issue.reporter} ghHost={null} />
-              <span>Reporter: {issue.reporter.label}</span>
-            </span>
-          )}
-          {canSchedule && link.data ? (
-            <div className="w-40">
-              <DueDateRow
-                value={issue.dueDate}
-                open={issue.statusCategory !== "done"}
-                pending={setDueDate.isPending}
-                onChange={(dueDate) =>
-                  setDueDate.mutate(
-                    { issueKey, dueDate },
-                    { onError: toastError },
-                  )
-                }
-              />
-            </div>
-          ) : (
-            issue.dueDate && <span>Due {issue.dueDate}</span>
-          )}
-          {issue.resolutionName && (
-            <span>Resolution: {issue.resolutionName}</span>
-          )}
-          {issue.storyPoints != null && (
-            <span>Story points: {formatStoryPoints(issue.storyPoints)}</span>
-          )}
-          {issue.sprintName && (
-            <span>
-              Sprint: {issue.sprintName}
-              {issue.sprintState ? ` (${issue.sprintState})` : ""}
-            </span>
-          )}
-          {issue.parent && (
-            <button
-              type="button"
-              // Navigate to the parent in-app. This view already lives inside
-              // the Issues tab, so `selectIssue` alone re-targets it — no
-              // `setRepoTab` needed (unlike JiraRefRow, which renders on OTHER
-              // tabs and must switch to Issues first).
-              // The `issue.parent &&` below is NOT dead: TS narrowing from the
-              // outer `{issue.parent && …}` doesn't extend into a callback
-              // (TS18047 without it) — it satisfies the compiler, not runtime.
-              onClick={() =>
-                issue.parent &&
-                selectIssue({ kind: "jira", id: issue.parent.key })
-              }
-              title={`${issue.parent.key} ${issue.parent.summary}`}
-              aria-label={`Open parent issue ${issue.parent.key}`}
-              className="inline-flex cursor-pointer items-center gap-1 border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent"
-            >
-              <span>Parent:</span>
-              <span className="font-mono">{issue.parent.key}</span>
-              <span className="max-w-[16rem] truncate">
-                {issue.parent.summary}
-              </span>
-            </button>
-          )}
-        </div>
-        {canEditIssue && link.data ? (
-          <JiraLabelsPopover
-            repoPath={repoPath}
-            link={link.data}
-            issueKey={issueKey}
-            labels={issue.labels}
-          />
-        ) : (
-          issue.labels.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {issue.labels.map((label) => (
-                <span
-                  key={label}
-                  className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                >
-                  {label}
-                </span>
-              ))}
-            </div>
-          )
-        )}
-        {/* Each chip group is prefixed with a muted label so the three
-            visually-identical bare-chip sets (labels / components / fix
-            versions) are never ambiguous. Rendered only when non-empty. */}
-        {issue.components.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-muted-foreground">
-              Components
-            </span>
-            {issue.components.map((component) => (
-              <span
-                key={component}
-                className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
-              >
-                {component}
-              </span>
-            ))}
-          </div>
-        )}
-        {issue.fixVersions.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-muted-foreground">
-              Fix versions
-            </span>
-            {issue.fixVersions.map((version) => (
-              <span
-                key={version}
-                className="border px-1.5 py-0.5 text-[11px] text-muted-foreground"
-              >
-                {version}
-              </span>
-            ))}
-          </div>
-        )}
-        {/* Time tracking — only when the feature is enabled on the project
-            (timeTracking !== null); disabled ⇒ no section at all. */}
-        {issue.timeTracking !== null && (
-          <JiraTimeTrackingSection
-            repoPath={repoPath}
-            // `?? null`: render read-only during the link-pending window; the
-            // write affordances are gated on `link` inside the section.
-            link={link.data ?? null}
-            issueKey={issueKey}
-            tracking={issue.timeTracking}
-            worklogs={issue.worklogs}
-            worklogsTotal={issue.worklogsTotal}
-            viewerAccountId={issue.viewerAccountId}
-            issueUrl={issue.url}
-            canLogWork={canLogWork}
-            canEditEstimates={canEditIssue}
-            canEditOwnWorklogs={canEditOwnWorklogs}
-            canDeleteOwnWorklogs={canDeleteOwnWorklogs}
-          />
-        )}
       </header>
 
-      {/* overflow-hidden contains the content's natural height (vendored Root is
-          `relative`-only) so a long issue can't leak a window scrollbar. */}
-      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
-        <div className="space-y-4 p-4">
-          <div className="border-b pb-3">
-            {issue.descriptionMd.trim() ? (
-              <Markdown>{issue.descriptionMd}</Markdown>
-            ) : (
-              <p className="text-xs text-muted-foreground italic">
-                No description provided.
-              </p>
-            )}
-          </div>
-          {issue.comments.map((c) => (
-            <JiraCommentItem
-              key={c.id}
-              repoPath={repoPath}
-              // `?? null`: render read-only even during the link-pending window
-              // (a cached detail can show before the link query settles) — the
-              // early unlinked return only fires once the link settles null.
-              link={link.data ?? null}
-              issueKey={issueKey}
-              comment={c}
-              isOwn={
-                issue.viewerAccountId != null &&
-                c.author?.id === issue.viewerAccountId
-              }
-              canEdit={canEditOwnComments}
-              canDelete={canDeleteOwnComments}
-            />
-          ))}
-          {issue.comments.length === 0 && (
-            <p className="text-xs text-muted-foreground">No comments yet.</p>
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* overflow-hidden contains the content's natural height (vendored
+              Root is `relative`-only) so a long issue can't leak a window
+              scrollbar. */}
+          <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+            <div className="space-y-4 p-4">
+              <div className="border-b pb-3">
+                {issue.descriptionMd.trim() ? (
+                  <Markdown>{issue.descriptionMd}</Markdown>
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">
+                    No description provided.
+                  </p>
+                )}
+              </div>
+              {issue.comments.map((c) => (
+                <JiraCommentItem
+                  key={c.id}
+                  repoPath={repoPath}
+                  // `?? null`: render read-only even during the link-pending
+                  // window (a cached detail can show before the link query
+                  // settles) — the early unlinked return only fires once the
+                  // link settles null.
+                  link={link.data ?? null}
+                  issueKey={issueKey}
+                  comment={c}
+                  isOwn={
+                    issue.viewerAccountId != null &&
+                    c.author?.id === issue.viewerAccountId
+                  }
+                  canEdit={canEditOwnComments}
+                  canDelete={canDeleteOwnComments}
+                />
+              ))}
+              {issue.comments.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No comments yet.
+                </p>
+              )}
+            </div>
+          </ScrollArea>
+
+          {canComment && (
+            <div className="space-y-2 border-t p-3">
+              <MarkdownEditor
+                ref={composerRef}
+                aria-label="Leave a comment"
+                placeholder="Leave a comment…"
+                value={composeBody}
+                onChange={setComposeBody}
+                onKeyDown={(e) => {
+                  if (
+                    (e.ctrlKey || e.metaKey) &&
+                    e.key === "Enter" &&
+                    composeBody.trim() &&
+                    !comment.isPending
+                  ) {
+                    e.preventDefault();
+                    submitComment();
+                  }
+                }}
+                rows={2}
+                disabled={comment.isPending}
+                textareaClassName="max-h-32 min-h-12 resize-y"
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!composeBody.trim() || comment.isPending}
+                  onClick={submitComment}
+                  title={SUBMIT_HINT}
+                >
+                  Comment
+                </Button>
+                {composeBody.trim() && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={comment.isPending}
+                    onClick={() => setComposeBody("")}
+                    title="Discard this draft"
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
           )}
         </div>
-      </ScrollArea>
 
-      {canComment && (
-        <div className="space-y-2 border-t p-3">
-          <MarkdownEditor
-            ref={composerRef}
-            aria-label="Leave a comment"
-            placeholder="Leave a comment…"
-            value={composeBody}
-            onChange={setComposeBody}
-            onKeyDown={(e) => {
-              if (
-                (e.ctrlKey || e.metaKey) &&
-                e.key === "Enter" &&
-                composeBody.trim() &&
-                !comment.isPending
-              ) {
-                e.preventDefault();
-                submitComment();
-              }
-            }}
-            rows={2}
-            disabled={comment.isPending}
-            textareaClassName="max-h-32 min-h-12 resize-y"
-          />
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!composeBody.trim() || comment.isPending}
-              onClick={submitComment}
-              title={SUBMIT_HINT}
-            >
-              Comment
-            </Button>
-            {composeBody.trim() && (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={comment.isPending}
-                onClick={() => setComposeBody("")}
-                title="Discard this draft"
-              >
-                Clear
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
+        <JiraIssueSidebar
+          repoPath={repoPath}
+          issueKey={issueKey}
+          // `?? null`: render read-only during the link-pending window; the
+          // write affordances are gated on `link` inside the rail.
+          link={link.data ?? null}
+          issue={issue}
+          canAssign={canAssign}
+          canSchedule={canSchedule}
+          canEditIssue={canEditIssue}
+          canLogWork={canLogWork}
+          canEditOwnWorklogs={canEditOwnWorklogs}
+          canDeleteOwnWorklogs={canDeleteOwnWorklogs}
+        />
+      </div>
     </div>
   );
 }

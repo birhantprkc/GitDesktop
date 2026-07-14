@@ -110,6 +110,12 @@ export function usePrNotifications(repoPath: string) {
     if (!before || !prefs) return;
     const login = gh.data?.login ?? null;
     const repoName = repoNameFromPath(repoPath);
+    // The GitHub host of THIS repo, captured now so an author avatar in the global
+    // inbox resolves against the row's own repo host, not the active repo's. Mirrors
+    // `useForgeGhHost`: the host on GitHub, `null` off it (GitLab/Bitbucket logins
+    // aren't avatar-derivable). Stored per-notification via `authorGhHost`.
+    const ghHost =
+      gh.data?.provider === "github" ? gh.data.host || "github.com" : null;
     // Record an event in BOTH channels: the persistent inbox (always — so a
     // focused user still gets a durable record, since notifyIfUnfocused no-ops
     // while focused) and an OS notification (unfocused only). The same pref
@@ -120,6 +126,11 @@ export function usePrNotifications(repoPath: string) {
       title: string,
       pr: PrPollInfo,
       dedupeKey: string,
+      // Only the events that know an author pass one (pr-opened). The poll payload
+      // carries no avatar URL, so the row resolves the avatar from the login against
+      // this repo's captured `ghHost` (login-derived photo on GitHub; bot handles via
+      // the bot-avatar API; initials off GitHub / on failure).
+      authorLogin?: string,
     ) => {
       pushNotification({
         kind,
@@ -128,6 +139,8 @@ export function usePrNotifications(repoPath: string) {
         subtitle: pr.title,
         repoPath,
         repoName,
+        authorLogin,
+        authorGhHost: authorLogin ? (ghHost ?? undefined) : undefined,
         target: { type: "pr", kind: "remote", ref: String(pr.number) },
         dedupeKey,
       });
@@ -163,9 +176,10 @@ export function usePrNotifications(repoPath: string) {
           record(
             "pr-opened",
             "info",
-            `New pull request #${pr.number} by ${pr.author}`,
+            `New pull request #${pr.number}`,
             pr,
             `opened:${pr.number}`,
+            pr.author,
           );
         }
         if (old && old.state === "OPEN" && pr.state !== "OPEN") {
@@ -220,7 +234,10 @@ export function usePrNotifications(repoPath: string) {
         // author of the LATEST comment only (a `last:1` poll slice), so if someone
         // else and you both comment in the same ~60s window and yours lands last,
         // theirs is missed. An accepted rarity, not worth a full per-comment scan.
-        if (pr.commentCount > old.commentCount && pr.lastCommentAuthor !== login) {
+        if (
+          pr.commentCount > old.commentCount &&
+          pr.lastCommentAuthor !== login
+        ) {
           record(
             "pr-comment",
             "info",

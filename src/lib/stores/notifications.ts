@@ -34,6 +34,18 @@ export interface AppNotification {
   read: boolean;
   repoPath: string;
   repoName: string;
+  /** Author login for events that know one (e.g. a newly-opened PR) — shown with
+   *  a small avatar on the row. Optional: most events have no author in scope. */
+  authorLogin?: string;
+  /** The author's real avatar URL when the emit site carries one (GitLab/Bitbucket
+   *  supply one directly). When absent the avatar resolves from the login against
+   *  {@link authorGhHost}, or falls back to initials when neither is known. */
+  authorAvatarUrl?: string;
+  /** The GitHub host of THIS notification's repo, captured at emit time (e.g.
+   *  "github.com"), so a login-derived / bot avatar resolves against the row's own
+   *  repo host — never the active repo's, since the inbox is global. Unset for
+   *  non-GitHub providers, where a login isn't avatar-derivable. */
+  authorGhHost?: string;
   target?: NotificationTarget;
   /** Collapses accidental double-fires of the same transition (a re-render or a
    *  poll seam) within a short window — NOT persisted-across-restart dedup. */
@@ -85,7 +97,13 @@ function isValidNotification(x: unknown): x is AppNotification {
     typeof n.ts === "number" &&
     typeof n.read === "boolean" &&
     typeof n.repoPath === "string" &&
-    typeof n.repoName === "string"
+    typeof n.repoName === "string" &&
+    // Optional author fields: absent entries stay valid (old files keep loading);
+    // present ones must be strings.
+    (n.authorLogin === undefined || typeof n.authorLogin === "string") &&
+    (n.authorAvatarUrl === undefined ||
+      typeof n.authorAvatarUrl === "string") &&
+    (n.authorGhHost === undefined || typeof n.authorGhHost === "string")
   );
 }
 
@@ -175,6 +193,9 @@ export function pushNotification(input: {
   subtitle?: string;
   repoPath: string;
   repoName: string;
+  authorLogin?: string;
+  authorAvatarUrl?: string;
+  authorGhHost?: string;
   target?: NotificationTarget;
   dedupeKey?: string;
 }): void {
@@ -198,6 +219,9 @@ export function pushNotification(input: {
     read: false,
     repoPath: input.repoPath,
     repoName: input.repoName,
+    authorLogin: input.authorLogin,
+    authorAvatarUrl: input.authorAvatarUrl,
+    authorGhHost: input.authorGhHost,
     target: input.target,
     dedupeKey: input.dedupeKey,
   });
