@@ -12,6 +12,67 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-15
+
+### Changed
+
+- The MCP `list_pull_request_comments` tool and the AI PR review now emit
+  leaner comment payloads, omitting always-empty default fields (avatar URL,
+  state, permalink, minimized flags, and review id) from each comment and
+  review thread — the same JSON both consumers read, so agent runs and reviews
+  spend fewer tokens on empty fields.
+- Remote (HTTP) MCP servers now surface the same allowed-hosts affordance as
+  custom AI provider URLs: the add/edit dialog shows an advisory note under a
+  URL whose host isn't on your AI allowlist, with a one-click **Allow host**,
+  and the MCP servers list flags such a server with a **host not allowed**
+  badge. It's advisory only — nothing is blocked or disabled, and existing
+  servers keep working — a reminder that the CLI connects to that host outside
+  GitDesktop's AI host allowlist.
+- Merging a pull request in the app now kicks off a background fetch (with
+  prune) right after the merge succeeds, so branches, ahead/behind counts, and
+  history reflect the merge immediately instead of staying stale until you
+  click Fetch. On a merge that deletes the head branch, the prune also drops
+  the now-stale remote-tracking ref.
+
+### Fixed
+
+- The blame view now announces as a structured list to screen readers, so each
+  line is read as an item with its position (line 12 of 340) instead of an
+  unstructured run of text.
+- History commit avatars now fall back to a GitHub author's real avatar instead
+  of their initials when their commit email isn't a GitHub no-reply and has no
+  Gravatar — resolved in a batch from the recent-commits window for GitHub repos.
+- Jira project admins can now edit and delete other people's worklogs and
+  comments from the issue view — GitDesktop previously only offered those
+  actions on your own entries, even when your Jira role held the project-wide
+  edit/delete permissions.
+- MCP servers scoped to "this repo" — and the per-repo On/Optional/Off overrides
+  of global servers — are now shared across the repo's worktrees, so a server you
+  scoped or tuned in one checkout is offered in its sibling worktrees too.
+  Existing entries keep working and migrate to the shared key the next time you
+  edit them.
+- The merge-method menu on a GitHub pull request now respects the repository's
+  own merge settings: a method disabled in the repo (allow merge commit / squash /
+  rebase) is shown greyed out as "disabled in repository settings" instead of
+  failing with a raw error only after you open the confirm dialog and click Merge.
+  When no method is enabled by both the repository settings and your branch rules,
+  the Merge button is disabled with an explanation.
+- The GitHub Pages **Enforce HTTPS** toggle is now disabled while a custom
+  domain's TLS certificate is still being issued, with a note explaining why —
+  so you no longer see a raw GitHub error when you flip it too early. It also
+  calls out when certificate provisioning has failed so you can fix the domain's
+  DNS.
+- The repository filter list (welcome screen and repo switcher) now exposes its
+  keyboard highlight to screen readers as a proper combobox/listbox, announcing
+  the focused repository as you arrow through the results.
+- Empty `gd-review-*` worktree folders no longer leak into the temp directory:
+  the review-worktree cleanup now retries the folder delete past a transient
+  Windows file-handle race, and any leftover empty husks are swept on startup.
+- The repository list's owner, provider, and visibility/fork badges are now
+  shared across a repo's worktrees: a probe from any checkout updates every
+  entry for the same underlying repository, so sibling worktrees no longer show
+  divergent grouping or badges.
+
 ## [0.2.2] - 2026-07-15
 
 ### Added
@@ -1894,7 +1955,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/theBGuy/GitDesktop/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/theBGuy/GitDesktop/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/theBGuy/GitDesktop/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/theBGuy/GitDesktop/compare/v0.1.0...v0.2.0
