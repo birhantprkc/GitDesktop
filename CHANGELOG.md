@@ -12,6 +12,23 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-15
+
+### Fixed
+
+- Auto re-review (pr-sync) automations now fire even when the repository isn't
+  the one currently open — GitDesktop keeps watching recent repositories that
+  have a re-review rule, so pushing and switching repos no longer delays the
+  review until you switch back.
+- **macOS: GitHub and Git are found when launched from Finder or the Dock.** A
+  GUI launch doesn't inherit your shell's `PATH`, so a Homebrew-installed `gh` or
+  `git` used to read as "not found" everywhere except the About screen — breaking
+  clone, pull requests, issues, and other GitHub features. GitDesktop now finds
+  these tools the same way the About screen already did.
+- Creating a local PR from an agent session or the Compare tab no longer leaves
+  the dialog stuck open (and impossible to close) after the PR is created — the
+  app now switches to the new PR with the dialog closed, as intended.
+
 ## [0.2.0] - 2026-07-14
 
 ### Added
@@ -1831,6 +1848,7 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/theBGuy/GitDesktop/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/theBGuy/GitDesktop/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/theBGuy/GitDesktop/releases/tag/v0.1.0
