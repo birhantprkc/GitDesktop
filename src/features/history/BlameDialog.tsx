@@ -101,7 +101,19 @@ export function BlameDialog({
             virtualizer's getScrollElement gets the real scrollable node — see
             docs/list-virtualization.md. Fixed-height flex child so getTotalSize
             resolves (max-h would leave it unbounded → 0). */}
-        <div ref={setScrollEl} className="min-h-0 flex-1 overflow-auto border">
+        <div
+          ref={setScrollEl}
+          // List semantics only while listitem rows are actually rendered — the
+          // pending/error/empty branches would otherwise sit as non-listitem
+          // children of a role="list" (an invalid a11y tree).
+          role={
+            !blame.isPending && !blame.isError && lines.length > 0
+              ? "list"
+              : undefined
+          }
+          aria-label={`Blame for ${name}`}
+          className="min-h-0 flex-1 overflow-auto border"
+        >
           {blame.isPending ? (
             <div className="flex justify-center p-4">
               <Spinner />
@@ -162,6 +174,10 @@ function BlameLines({
 
   return (
     <div
+      // Presentation wrapper so the virtualizer's positioning div doesn't sit
+      // between the role="list" scroll container and its listitem rows in the
+      // a11y tree (same reasoning as CloneRepoDialog.tsx:474-476).
+      role="presentation"
       className="relative w-full font-mono text-[11px] leading-relaxed"
       style={{ height: `${virtualizer.getTotalSize()}px` }}
     >
@@ -191,6 +207,9 @@ function BlameLines({
             key={vi.key}
             data-index={vi.index}
             ref={virtualizer.measureElement}
+            role="listitem"
+            aria-setsize={lines.length}
+            aria-posinset={vi.index + 1}
             className="absolute top-0 left-0 flex w-full items-start hover:bg-muted/40"
             style={{ transform: `translateY(${vi.start}px)` }}
           >
