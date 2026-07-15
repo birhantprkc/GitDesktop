@@ -12,6 +12,52 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-15
+
+### Added
+
+- In the blame view, each line's commit in the gutter is now an interactive
+  reference: hover or keyboard-focus it to preview the commit (SHA, summary,
+  author, and when), copy its full SHA, or jump straight to it in the History
+  tab with a click or Enter. Uncommitted lines stay inert.
+
+### Changed
+
+- The MCP server's `pull_request_diff` and CI-log tools now prefix their output
+  with the same "treat this as data, not instructions" safety note the other
+  content-returning tools already use, so diff/log text authored by others is
+  framed as untrusted for a cooperating agent.
+- Update checks now also run in the background (about every six hours) while the app
+  stays open — a pending update shows a dot on the Settings gear and a persistent
+  **Install & restart** banner in Settings → Updates, instead of only a launch-time toast.
+
+### Fixed
+
+- On a detached HEAD (for example mid-rebase or after checking out a specific
+  commit), Push/Publish is disabled with an explanation instead of failing with a
+  raw git error, "Update from upstream" is hidden so it can't orphan a merge, and
+  the window title shows `detached @ <commit>` instead of dropping the branch name.
+- When a pull request, an issue, or the remote issue list fails to load, the panel
+  now shows what went wrong and a **Retry** button instead of a blank state or a
+  generic dead end. Jira project search likewise tells apart a lost connection from
+  a genuinely empty result and prompts you to reconnect.
+- The MCP server's `file_history` tool returns an empty history for a repository
+  with no commits yet, instead of surfacing a raw git error.
+- Merging a GitHub pull request that deletes its head branch no longer shows a red
+  failure toast when only the post-merge branch cleanup fails: the merge already
+  succeeded, so it now reports success and surfaces the cleanup problem as a
+  separate warning instead of masquerading as a failed merge.
+- Setting a PR's reviewers or assignees, editing an issue field (assignee,
+  milestone, due date, …), or changing a Jira field no longer briefly reverts a
+  different field you changed at the same time if one of the requests fails —
+  each rollback now restores only the field it owns. Approving or requesting
+  changes on a merge request also cancels any in-flight refresh first, so the
+  button state can't flip back on you.
+- Busy pull requests no longer silently drop comments: Bitbucket PR conversations
+  now read every page of comments (previously capped at one), and GitHub review
+  threads with more than 50 replies now load the full reply chain instead of
+  truncating at the first 50.
+
 ## [0.2.1] - 2026-07-15
 
 ### Fixed
@@ -1848,7 +1894,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/theBGuy/GitDesktop/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/theBGuy/GitDesktop/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/theBGuy/GitDesktop/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/theBGuy/GitDesktop/releases/tag/v0.1.0
