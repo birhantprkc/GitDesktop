@@ -82,6 +82,12 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   // amended/rewritten local history: local and remote both have commits the
   // other lacks, so neither pull --ff-only nor a normal push can succeed
   const diverged = Boolean(head && head.ahead > 0 && head.behind > 0);
+  // A detached HEAD (mid-rebase, or `git checkout <sha>`) has no branch to push
+  // or publish, and merging upstream INTO it would orphan the merge commit. A
+  // push would otherwise hit the raw "refs/heads/HEAD" git error; gate both.
+  // The BranchSwitcher alongside already surfaces the detached state.
+  const detached = Boolean(head?.detached);
+  const canUpdateUpstream = hasUpstreamRemote && !detached;
   const busy =
     fetchRemote.isPending ||
     pull.isPending ||
@@ -173,6 +179,10 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
 
   // Hotkeys mirror the buttons' disabled states exactly.
   useHotkeyAction("fetch", () => doFetch(false), !noOrigin && !busy);
+  // Pull needs no explicit `!detached` term: `hasUpstream` is already false on a
+  // detached HEAD (the backend leaves `head.upstream` null, mirroring git's "no
+  // upstream for a detached HEAD"), so this hotkey and the Pull button below are
+  // disabled there for free — unlike Push, which has no upstream precondition.
   useHotkeyAction(
     "pull",
     () => doPull("ffOnly"),
@@ -181,14 +191,15 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
   useHotkeyAction(
     "push",
     () => (diverged ? setForceConfirmOpen(true) : doPush(false)),
-    !noOrigin && !busy,
+    !noOrigin && !busy && !detached,
   );
   // Palette-only (defaultBinding: null) and gated on the fork's `upstream`
-  // remote existing, so it hides itself when there's nothing to sync from.
+  // remote existing (and not detached), so it hides itself when there's nothing
+  // to sync from or nowhere to merge into.
   useHotkeyAction(
     "update-from-upstream",
     doUpdateFromUpstream,
-    hasUpstreamRemote && !busy,
+    canUpdateUpstream && !busy,
   );
 
   if (noOrigin) {
@@ -276,7 +287,7 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
                 // Reachable whenever there's a menu item to show: the pull
                 // reconcile options (need a tracking upstream) or "Update from
                 // upstream" (needs the fork's upstream remote).
-                disabled={busy || (!hasUpstream && !hasUpstreamRemote)}
+                disabled={busy || (!hasUpstream && !canUpdateUpstream)}
                 className="px-1.5"
               >
                 <CaretDownIcon />
@@ -294,7 +305,7 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
                 </DropdownMenuItem>
               </>
             )}
-            {hasUpstreamRemote && (
+            {canUpdateUpstream && (
               <>
                 {hasUpstream && <DropdownMenuSeparator />}
                 {/* Base UI menu items fire on onClick, NOT onSelect. */}
@@ -305,27 +316,38 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
             )}
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          onClick={() => {
-            if (diverged) {
-              setForceConfirmOpen(true);
-            } else {
-              doPush(false);
-            }
-          }}
+        {/* Wrap so the detached-HEAD explanation still shows on hover — a
+            natively disabled button swallows its own `title` tooltip. */}
+        <span
+          className="inline-flex"
+          title={
+            detached
+              ? "You're on a detached HEAD — check out a branch to push"
+              : undefined
+          }
         >
-          {push.isPending ? (
-            <Spinner data-icon="inline-start" />
-          ) : diverged ? (
-            <WarningIcon data-icon="inline-start" />
-          ) : (
-            <ArrowUpIcon data-icon="inline-start" />
-          )}
-          {diverged ? "Force push" : hasUpstream ? "Push" : "Publish branch"}
-        </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || detached}
+            onClick={() => {
+              if (diverged) {
+                setForceConfirmOpen(true);
+              } else {
+                doPush(false);
+              }
+            }}
+          >
+            {push.isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : diverged ? (
+              <WarningIcon data-icon="inline-start" />
+            ) : (
+              <ArrowUpIcon data-icon="inline-start" />
+            )}
+            {diverged ? "Force push" : hasUpstream ? "Push" : "Publish branch"}
+          </Button>
+        </span>
       </ButtonGroup>
 
       <Dialog open={forceConfirmOpen} onOpenChange={setForceConfirmOpen}>

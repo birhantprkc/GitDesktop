@@ -60,7 +60,7 @@ const jiraLinkKey = (repo: string) => ["jira-link", repo] as const;
  * fresh skeleton when the repo changes.
  */
 function keepPreviousDataForRepo(repo: string, repoKeyIndex = 1) {
-  return <T,>(
+  return <T>(
     previousData: T | undefined,
     previousQuery: { queryKey: QueryKey } | undefined,
   ): T | undefined =>
@@ -573,41 +573,20 @@ export function useJiraAssign(repo: string, link: JiraLink | null | undefined) {
         args.assignee?.id ?? null,
       ),
     onMutate: async (args) => {
-      if (!link) return { detailKey: null, prevDetail: undefined, lists: [] };
-      const detailKey = jiraIssueDetailKey(repo, link.siteHost, args.issueKey);
-      await queryClient.cancelQueries({ queryKey: detailKey });
-      const prevDetail = queryClient.getQueryData<JiraIssueDetails>(detailKey);
-      if (prevDetail) {
-        queryClient.setQueryData<JiraIssueDetails>(detailKey, {
-          ...prevDetail,
-          assignee: args.assignee,
-        });
-      }
-      const lists = queryClient.getQueriesData<JiraIssueInfo[]>({
-        predicate: (q) =>
-          q.queryKey[0] === "repo" &&
-          q.queryKey[1] === repo &&
-          q.queryKey[2] === "jira-issues",
-      });
-      for (const [listKey, list] of lists) {
-        if (!list) continue;
-        queryClient.setQueryData<JiraIssueInfo[]>(
-          listKey,
-          list.map((i) =>
-            i.key === args.issueKey ? { ...i, assignee: args.assignee } : i,
-          ),
-        );
-      }
-      return { detailKey, prevDetail, lists };
+      if (!link) return undefined;
+      // Assignee shows on both the detail and every list row; the shared helper
+      // gives field-scoped rollback (restores only `assignee`, never a
+      // concurrent field edit on the same issue).
+      return applyOptimisticField(
+        queryClient,
+        repo,
+        link,
+        args.issueKey,
+        { assignee: args.assignee },
+        { assignee: args.assignee },
+      );
     },
-    onError: (_e, _args, ctx) => {
-      if (ctx?.detailKey && ctx.prevDetail !== undefined) {
-        queryClient.setQueryData(ctx.detailKey, ctx.prevDetail);
-      }
-      for (const [listKey, list] of ctx?.lists ?? []) {
-        queryClient.setQueryData(listKey, list);
-      }
-    },
+    onError: (_e, _args, ctx) => rollbackOptimisticField(queryClient, ctx),
     onSettled: () => invalidateJiraForRepo(queryClient, repo),
   });
 }
@@ -617,8 +596,16 @@ export function useJiraAssign(repo: string, link: JiraLink | null | undefined) {
  *  Mirrors `useJiraAssign`'s context. */
 type FieldPatchCtx = {
   detailKey: readonly unknown[] | null;
-  prevDetail: JiraIssueDetails | undefined;
-  lists: [readonly unknown[], JiraIssueInfo[] | undefined][];
+  /** Only the detail fields this patch changed (not the whole snapshot), so a
+   *  rollback restores exactly those and leaves a concurrent field edit intact. */
+  prevFields: Partial<JiraIssueDetails> | undefined;
+  /** The patched issue's key — used to find its row when rolling back the lists. */
+  issueKey: string;
+  /** Per jira-issues list cache, the affected row's PRIOR values for just the
+   *  patched fields (or `undefined` when the row wasn't present). Field-scoped
+   *  like the detail snapshot, so a list rollback restores only the row fields
+   *  this patch changed — never a concurrent sibling mutation's row update. */
+  listPrev: [readonly unknown[], Partial<JiraIssueInfo> | undefined][];
 };
 
 /** Optimistically patch a set of detail fields, and (for the subset of fields the
@@ -637,45 +624,75 @@ async function applyOptimisticField(
   const detailKey = jiraIssueDetailKey(repo, link.siteHost, issueKey);
   await queryClient.cancelQueries({ queryKey: detailKey });
   const prevDetail = queryClient.getQueryData<JiraIssueDetails>(detailKey);
+  // Snapshot ONLY the fields this patch touches (the keys of detailPatch), not
+  // the whole detail, so rollback restores exactly those onto the current cache
+  // and never reverts a concurrent field edit on the same issue.
+  let prevFields: Partial<JiraIssueDetails> | undefined;
   if (prevDetail) {
+    prevFields = {};
+    for (const k of Object.keys(detailPatch) as (keyof JiraIssueDetails)[]) {
+      (prevFields as Record<string, unknown>)[k as string] = prevDetail[k];
+    }
     queryClient.setQueryData<JiraIssueDetails>(detailKey, {
       ...prevDetail,
       ...detailPatch,
     });
   }
-  // Only snapshot (and patch) the list caches when there's a list patch to
-  // apply. A detail-only field (due date) leaves `lists` empty, so rollback
-  // restores exactly what onMutate touched — never clobbering an unrelated list
-  // update that landed while the mutation was in flight.
-  let lists: [readonly unknown[], JiraIssueInfo[] | undefined][] = [];
+  // Patch the matching row in every jira-issues list cache, snapshotting ONLY
+  // that row's prior values for the patched fields (field-scoped, like the detail
+  // above) so a rollback never reverts a concurrent sibling mutation's row update.
+  // A detail-only field (due date) has no listPatch, so listPrev stays empty.
+  const listPrev: [readonly unknown[], Partial<JiraIssueInfo> | undefined][] =
+    [];
   if (listPatch) {
-    lists = queryClient.getQueriesData<JiraIssueInfo[]>({
+    const lists = queryClient.getQueriesData<JiraIssueInfo[]>({
       predicate: (q) =>
         q.queryKey[0] === "repo" &&
         q.queryKey[1] === repo &&
         q.queryKey[2] === "jira-issues",
     });
+    const patchKeys = Object.keys(listPatch) as (keyof JiraIssueInfo)[];
     for (const [listKey, list] of lists) {
       if (!list) continue;
+      const row = list.find((i) => i.key === issueKey);
+      let prevRow: Partial<JiraIssueInfo> | undefined;
+      if (row) {
+        prevRow = {};
+        for (const k of patchKeys) {
+          (prevRow as Record<string, unknown>)[k as string] = row[k];
+        }
+      }
+      listPrev.push([listKey, prevRow]);
       queryClient.setQueryData<JiraIssueInfo[]>(
         listKey,
         list.map((i) => (i.key === issueKey ? { ...i, ...listPatch } : i)),
       );
     }
   }
-  return { detailKey, prevDetail, lists };
+  return { detailKey, prevFields, issueKey, listPrev };
 }
 
-/** Restore the detail + list caches from a FieldPatchCtx (rollback on error). */
+/** Restore the detail + list caches from a FieldPatchCtx (rollback on error).
+ *  Both restores are field-scoped (only the patched keys) and merged onto the
+ *  CURRENT cache, so a concurrent field edit on the same issue — in the detail
+ *  OR in a list row — survives the rollback. */
 function rollbackOptimisticField(
   queryClient: ReturnType<typeof useQueryClient>,
   ctx: FieldPatchCtx | undefined,
 ) {
-  if (ctx?.detailKey && ctx.prevDetail !== undefined) {
-    queryClient.setQueryData(ctx.detailKey, ctx.prevDetail);
+  if (ctx?.detailKey && ctx.prevFields) {
+    queryClient.setQueryData<JiraIssueDetails>(ctx.detailKey, (cur) =>
+      cur ? { ...cur, ...ctx.prevFields } : cur,
+    );
   }
-  for (const [listKey, list] of ctx?.lists ?? []) {
-    queryClient.setQueryData(listKey, list);
+  const issueKey = ctx?.issueKey;
+  for (const [listKey, prevRow] of ctx?.listPrev ?? []) {
+    if (!prevRow || issueKey === undefined) continue;
+    queryClient.setQueryData<JiraIssueInfo[]>(listKey, (cur) =>
+      cur
+        ? cur.map((i) => (i.key === issueKey ? { ...i, ...prevRow } : i))
+        : cur,
+    );
   }
 }
 
