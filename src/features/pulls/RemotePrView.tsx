@@ -521,8 +521,14 @@ export function RemotePrView({
         sha,
       },
       {
-        onSuccess: () => {
+        onSuccess: (outcome) => {
           toast.success(`Merged #${number}`);
+          // The PR merged; a cleanupWarning means only the post-merge remote
+          // head-branch deletion failed. Surface it as a (non-error) warning so
+          // the successful merge isn't dressed up as a failure.
+          if (outcome.cleanupWarning) {
+            toast.warning(outcome.cleanupWarning, { duration: 10000 });
+          }
           setMergeOpen(false);
         },
         onError: (e) => {

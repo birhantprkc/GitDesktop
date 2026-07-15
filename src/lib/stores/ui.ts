@@ -218,6 +218,13 @@ interface UiState {
   }) => void;
   /** Open a repo (if not already) and land on its Agent tab. Atomic. */
   openAgentTab: (target: { repoPath: string; repoName: string }) => void;
+  /** Jump to a commit in the History tab (from e.g. the blame gutter). ONE
+   *  atomic set of `repoTab` + `selectedCommitHash` — sequential sets get
+   *  clobbered by the deferred transition sets elsewhere, so this must stay a
+   *  single `set()`, mirroring `requestCreate`. Pass the full 40-char hash;
+   *  CommitDetailView fetches by hash independently, so any reachable commit
+   *  resolves even if the history list hasn't paged that far. */
+  openCommit: (hash: string) => void;
   openSettings: (target?: SettingsTarget) => void;
   clearSettingsTarget: () => void;
   /** Navigate to Settings → MCP servers and open the registry browser, atomically. */
@@ -409,6 +416,9 @@ export const useUiStore = create<UiState>()((set, get) => {
         });
       }),
     setRepoTab: (tab) => set({ repoTab: tab }),
+    // ONE atomic set (like requestCreate) — a follow-up set() for the selection
+    // would be clobbered by a deferred transition set scheduled elsewhere.
+    openCommit: (hash) => set({ repoTab: "history", selectedCommitHash: hash }),
     // Changing the compared branch resets Compare's selection to the aggregate
     // diff: a commit selected from one branch's compare list may not exist in
     // another's. Same atomic set — a follow-up set() would be clobbered.

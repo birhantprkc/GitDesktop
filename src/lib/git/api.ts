@@ -1938,6 +1938,15 @@ export const ghPrMinimizeComment = (
 export const ghPrUnminimizeComment = (repoPath: string, commentId: string) =>
   invoke<void>("gh_pr_unminimize_comment", { repoPath, commentId });
 
+/** Outcome of a successful forge merge. The PR merged; `cleanupWarning` is a
+ *  human-readable caveat when the post-merge remote head-branch deletion failed
+ *  (GitHub-only by construction — GitLab and Bitbucket fold branch deletion into
+ *  the atomic server-side merge, so they never warn). A merge *failure* rejects
+ *  the invoke instead. `null` means merged and cleaned up cleanly. */
+export interface PrMergeOutcome {
+  cleanupWarning: string | null;
+}
+
 // MR merge is provider-neutral (GitHub via `gh pr merge`, GitLab via `glab`). `sha`
 // is GitLab's optional stale-view guard (it 409s if the head moved since the user
 // loaded the MR); GitHub has no analogue and ignores it.
@@ -1948,7 +1957,7 @@ export const forgePrMerge = (
   deleteBranch: boolean,
   sha?: string,
 ) =>
-  invoke<void>("forge_pr_merge", {
+  invoke<PrMergeOutcome>("forge_pr_merge", {
     repoPath,
     number,
     strategy,

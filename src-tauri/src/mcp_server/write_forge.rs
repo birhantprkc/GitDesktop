@@ -562,7 +562,7 @@ impl GitDesktopMcp {
     ) -> Result<CallToolResult, McpError> {
         self.ensure_remote_write()?;
         let strategy = args.strategy.unwrap_or_else(|| "merge".to_string());
-        crate::forge::forge_pr_merge(
+        let outcome = crate::forge::forge_pr_merge(
             self.repo.clone(),
             args.number,
             strategy.clone(),
@@ -571,12 +571,19 @@ impl GitDesktopMcp {
         )
         .await
         .map_err(app_err)?;
-        json_result(&serde_json::json!({
+        let mut result = serde_json::json!({
             "pull_request": args.number,
             "action": "merged",
             "strategy": strategy,
             "deleted_branch": args.delete_branch,
-        }))
+        });
+        // The PR merged; a cleanup_warning means only the post-merge head-branch
+        // deletion failed. Surface it as a caveat on the success result rather
+        // than as a tool error (the merge is not reversible from here anyway).
+        if let Some(warning) = outcome.cleanup_warning {
+            result["cleanup_warning"] = serde_json::Value::String(warning);
+        }
+        json_result(&result)
     }
 
     #[tool(

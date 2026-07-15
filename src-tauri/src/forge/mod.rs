@@ -1261,6 +1261,13 @@ pub async fn forge_pr_unapprove(repo_path: String, number: u64) -> AppResult<()>
 /// merges via `glab` — `merge`/`squash` only (no per-MR rebase) with an optional
 /// head-`sha` stale-view guard. `strategy` is `merge`/`squash`/`rebase` (rebase is
 /// GitHub-only; the GitLab arm rejects it).
+///
+/// Returns a [`PrMergeOutcome`](crate::github::pr::PrMergeOutcome). Its
+/// `cleanup_warning` means the PR merged fine but the post-merge head-branch
+/// cleanup failed — GitHub-only by construction: GitLab and Bitbucket fold
+/// branch deletion into the atomic server-side merge, so their arms always
+/// return a clean outcome (`cleanup_warning: None`). A merge *failure* is still
+/// an `Err`.
 #[tauri::command]
 pub async fn forge_pr_merge(
     repo_path: String,
@@ -1268,15 +1275,21 @@ pub async fn forge_pr_merge(
     strategy: String,
     delete_branch: bool,
     sha: Option<String>,
-) -> AppResult<()> {
+) -> AppResult<crate::github::pr::PrMergeOutcome> {
     match detect_non_github(&repo_path).await {
-        Some((Provider::GitLab, _)) => {
-            gitlab::merge_mr(&repo_path, number, &strategy, delete_branch, sha.as_deref()).await
-        }
+        Some((Provider::GitLab, _)) => gitlab::merge_mr(
+            &repo_path,
+            number,
+            &strategy,
+            delete_branch,
+            sha.as_deref(),
+        )
+        .await
+        .map(|()| crate::github::pr::PrMergeOutcome::default()),
         // Bitbucket has no expected-hash guard, so `sha` is dropped.
-        Some((Provider::Bitbucket, _)) => {
-            bitbucket::merge_pr(&repo_path, number, &strategy, delete_branch).await
-        }
+        Some((Provider::Bitbucket, _)) => bitbucket::merge_pr(&repo_path, number, &strategy, delete_branch)
+            .await
+            .map(|()| crate::github::pr::PrMergeOutcome::default()),
         _ => crate::github::pr::gh_pr_merge(repo_path, number, strategy, delete_branch).await,
     }
 }

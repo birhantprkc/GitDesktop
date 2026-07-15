@@ -317,7 +317,9 @@ push hint instead, and a local-only repo shows no comment pane at all.
 ## Exploring a file's past
 
 - **File history** — see every commit that touched a specific file.
-- **Blame** — line-by-line, which commit last changed each line.
+- **Blame** — line-by-line, which commit last changed each line. Hover (or
+  keyboard-focus) a line's commit in the gutter to preview it; click or press
+  Enter to jump straight to that commit in **History**.
 
 Right-click any file row to reach both: in the **Changes** list, in a commit's file
 list (in **History**, or a PR's **Commits** tab), in a PR's **Files** tab, or in a

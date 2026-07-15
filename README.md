@@ -320,8 +320,9 @@ default branch and a PR badge show in the switcher.
 **History & advanced** — paged, filterable history with rich commit detail,
 commit-author avatars, and per-file history and line blame reachable from any file
 list (History, pull requests, Compare) or the command palette — pinned at that
-commit or branch where it applies. Plus an at-a-glance marker on every commit that
-hasn't been pushed yet.
+commit or branch where it applies, with a hover-card preview on each blame line's
+commit and a click to jump to it in History. Plus an at-a-glance marker on every
+commit that hasn't been pushed yet.
 
 - **Interactive rebase** ⭐ — an *Edit history* editor to reword / squash / fixup / drop
   / reorder unpushed commits behind an atomic replay engine (any conflict rolls back

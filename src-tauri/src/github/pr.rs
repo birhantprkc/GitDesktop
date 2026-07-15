@@ -536,6 +536,19 @@ pub async fn gh_pr_comment(repo_path: String, number: u64, body: String) -> AppR
     Ok(())
 }
 
+/// The outcome of a successful merge. The PR *did* merge; `cleanup_warning`
+/// carries a human-readable caveat when the post-merge remote head-branch
+/// cleanup failed (GitHub-only by construction — GitLab and Bitbucket fold
+/// deletion into the atomic merge server-side, so they never produce one). A
+/// merge *failure* is still an `Err`, never an outcome with a warning.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrMergeOutcome {
+    /// `Some(msg)` — merged fine, but head-branch cleanup failed; `msg` always
+    /// states the merge succeeded. `None` — merged and cleaned up cleanly.
+    pub cleanup_warning: Option<String>,
+}
+
 /// Merges the PR with the given strategy ("merge"/"squash"/"rebase"). When
 /// `delete_branch` is set, only the *remote* head branch is removed afterwards —
 /// the local branch and HEAD are left untouched.
@@ -546,13 +559,18 @@ pub async fn gh_pr_comment(repo_path: String, number: u64, body: String) -> AppR
 /// `should_remove_source_branch` and Bitbucket's `close_source_branch` are
 /// server-side, so they only ever touch the remote). Instead we merge, then
 /// delete just the remote ref via the API — remote-only, like the others.
+///
+/// The merge itself is hard: a failure returns `Err`. Head-branch cleanup is
+/// best-effort: once the merge has landed, a cleanup failure is folded into a
+/// successful [`PrMergeOutcome`] as a `cleanup_warning` rather than surfacing as
+/// a red merge error for a PR that already merged.
 #[tauri::command]
 pub async fn gh_pr_merge(
     repo_path: String,
     number: u64,
     strategy: String,
     delete_branch: bool,
-) -> AppResult<()> {
+) -> AppResult<PrMergeOutcome> {
     let n = number.to_string();
     let method = match strategy.as_str() {
         "merge" => "--merge",
@@ -570,10 +588,18 @@ pub async fn gh_pr_merge(
         GH_NETWORK_TIMEOUT,
     )
     .await?;
-    if delete_branch {
-        gh_delete_remote_head_branch(&repo_path, number).await?;
-    }
-    Ok(())
+    // The merge has landed. From here, any cleanup failure is disclosed as a
+    // warning on a successful outcome — never an error — so the UI can't show a
+    // red "merge failed" toast for a PR that already merged.
+    let cleanup_warning = if delete_branch {
+        gh_delete_remote_head_branch(&repo_path, number)
+            .await
+            .err()
+            .map(|e| e.to_string())
+    } else {
+        None
+    };
+    Ok(PrMergeOutcome { cleanup_warning })
 }
 
 /// The slice of `gh pr view` needed to delete only the remote head branch after
@@ -600,10 +626,11 @@ struct RawRepoName {
 }
 
 /// Deletes only the *remote* head branch of a just-merged PR (see `gh_pr_merge`).
-/// Best-effort and disclosing: the merge already succeeded, so a delete failure
-/// is surfaced as a caveat rather than a merge failure, and a branch that is
-/// already gone (e.g. a repo that auto-deletes head branches on merge) counts as
-/// success.
+/// Best-effort and disclosing: the merge already succeeded, so every error path
+/// here (head lookup, parse, or the DELETE itself) produces a "Merged #N, but …"
+/// message that `gh_pr_merge` folds into a successful outcome's `cleanup_warning`
+/// rather than a merge failure. A branch that is already gone (e.g. a repo that
+/// auto-deletes head branches on merge) counts as success.
 async fn gh_delete_remote_head_branch(repo_path: &str, number: u64) -> AppResult<()> {
     let out = run_gh(
         Some(repo_path),
@@ -616,9 +643,17 @@ async fn gh_delete_remote_head_branch(repo_path: &str, number: u64) -> AppResult
         ],
         GH_NETWORK_TIMEOUT,
     )
-    .await?;
-    let head: RawMergeHead = serde_json::from_str(&out.stdout_lossy())
-        .map_err(|e| AppError::Gh(format!("could not read the PR's head branch: {e}")))?;
+    .await
+    .map_err(|e| {
+        AppError::Gh(format!(
+            "Merged #{number}, but couldn't clean up the remote head branch: {e}"
+        ))
+    })?;
+    let head: RawMergeHead = serde_json::from_str(&out.stdout_lossy()).map_err(|e| {
+        AppError::Gh(format!(
+            "Merged #{number}, but couldn't clean up the remote head branch: {e}"
+        ))
+    })?;
 
     let branch = head.head_ref_name.trim().to_string();
     if branch.is_empty() {
@@ -3477,12 +3512,76 @@ pub async fn gh_pr_external_reviews(
     Ok(items)
 }
 
+/// Fetches the remaining replies of a single review thread whose inner
+/// `comments(first:50)` connection had more than 50 (`hasNextPage`). Keyed on the
+/// thread's GraphQL node id, resuming from `after` (the inner `endCursor`). Both
+/// the node id and the cursor are server-opaque, so they travel as GraphQL
+/// VARIABLES (`-f`), never `format!`-embedded — the injection-safe idiom the rest
+/// of this file uses. Bounded at 5 extra pages (500 more replies, the repo's
+/// 500-cap idiom): past that the tail is truncated rather than looping. `map` is
+/// the same per-comment mapper the main query uses, so shapes agree. Best-effort:
+/// callers keep the first 50 on any error rather than failing the threads read.
+async fn gh_thread_comment_replies_topup(
+    repo_path: &str,
+    thread_id: &str,
+    after: &str,
+    map: impl Fn(&serde_json::Value) -> PrThreadOut,
+) -> AppResult<Vec<PrThreadOut>> {
+    // Same comment field set the main `reviewThreads` query selects, so a topped-up
+    // reply maps identically to a first-page one.
+    const QUERY: &str = "query($id: ID!, $cursor: String){ node(id: $id){ ... on PullRequestReviewThread { comments(first: 100, after: $cursor){ pageInfo{ hasNextPage endCursor } nodes{ id author{ login } body createdAt url viewerDidAuthor isMinimized minimizedReason diffHunk pullRequestReview{ id } } } } } }";
+    let mut extra: Vec<PrThreadOut> = Vec::new();
+    let mut cursor = after.to_string();
+    for _ in 0..5 {
+        let out = run_gh(
+            Some(repo_path),
+            &[
+                "api",
+                "graphql",
+                "-f",
+                &format!("query={QUERY}"),
+                "-f",
+                &format!("id={thread_id}"),
+                "-f",
+                &format!("cursor={cursor}"),
+            ],
+            GH_NETWORK_TIMEOUT,
+        )
+        .await?;
+        let value: serde_json::Value = serde_json::from_str(&out.stdout_lossy())
+            .map_err(|e| AppError::Gh(format!("could not parse the review-thread replies: {e}")))?;
+        let comments = value.pointer("/data/node/comments");
+        if let Some(nodes) = comments
+            .and_then(|c| c.pointer("/nodes"))
+            .and_then(|v| v.as_array())
+        {
+            extra.extend(nodes.iter().map(&map));
+        }
+        let has_next = comments
+            .and_then(|c| c.pointer("/pageInfo/hasNextPage"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let end_cursor = comments
+            .and_then(|c| c.pointer("/pageInfo/endCursor"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !has_next || end_cursor.is_empty() {
+            break;
+        }
+        cursor = end_cursor.to_string();
+    }
+    Ok(extra)
+}
+
 /// File:line-anchored review threads on a PR — GitHub's `reviewThreads` mapped
 /// onto the neutral `ReviewThreadOut`. Each thread carries its full reply chain
 /// (oldest first). Empty-comment threads are skipped. Line falls back to the
 /// original line, then 0 (an outdated thread whose anchor moved has a null line).
 /// Follows the `reviewThreads` cursor up to 5 pages (500 threads) so a PR with
 /// many threads isn't silently truncated — parity with the Bitbucket comments read.
+/// A thread with more than 50 replies is topped up per-thread via
+/// [`gh_thread_comment_replies_topup`] (only when its inner `hasNextPage`, so the
+/// common case adds no extra requests).
 #[tauri::command]
 pub async fn gh_pr_review_threads(
     repo_path: String,
@@ -3496,7 +3595,7 @@ pub async fn gh_pr_review_threads(
     // only), so all three are safe to embed. The pagination `cursor` is server-opaque
     // text, so it travels as a GraphQL VARIABLE (never format!-embedded).
     let query = format!(
-        r#"query($cursor: String){{ repository(owner:"{owner}", name:"{name}"){{ pullRequest(number:{number}){{ reviewThreads(first:100, after:$cursor){{ pageInfo{{ endCursor hasNextPage }} nodes{{ id isResolved isOutdated diffSide line originalLine startLine originalStartLine path comments(first:50){{ nodes{{ id author{{ login }} body createdAt url viewerDidAuthor isMinimized minimizedReason diffHunk pullRequestReview{{ id }} }} }} }} }} }} }} }}"#
+        r#"query($cursor: String){{ repository(owner:"{owner}", name:"{name}"){{ pullRequest(number:{number}){{ reviewThreads(first:100, after:$cursor){{ pageInfo{{ endCursor hasNextPage }} nodes{{ id isResolved isOutdated diffSide line originalLine startLine originalStartLine path comments(first:50){{ pageInfo{{ hasNextPage endCursor }} nodes{{ id author{{ login }} body createdAt url viewerDidAuthor isMinimized minimizedReason diffHunk pullRequestReview{{ id }} }} }} }} }} }} }} }}"#
     );
 
     let str_at = |v: &serde_json::Value, p: &str| {
@@ -3504,6 +3603,25 @@ pub async fn gh_pr_review_threads(
     };
     let bool_at = |v: &serde_json::Value, p: &str| {
         v.pointer(p).and_then(|x| x.as_bool()).unwrap_or(false)
+    };
+    // One review-thread comment JSON node → the neutral `PrThreadOut`. Shared by
+    // the main query and the >50-reply top-up so both map identically (the same
+    // field set the inner `comments{nodes{…}}` selection above requests).
+    let map_comment = |c: &serde_json::Value| PrThreadOut {
+        author: str_at(c, "/author/login"),
+        author_avatar_url: String::new(),
+        state: String::new(),
+        body: str_at(c, "/body"),
+        date: str_at(c, "/createdAt"),
+        id: str_at(c, "/id"),
+        url: str_at(c, "/url"),
+        viewer_did_author: bool_at(c, "/viewerDidAuthor"),
+        is_minimized: bool_at(c, "/isMinimized"),
+        minimized_reason: str_at(c, "/minimizedReason"),
+        // The comment's own owning review (nullable — a reply outside a batched
+        // review still carries the empty wrapper review GitHub auto-creates).
+        // `str_at` maps a present-but-null value to "".
+        review_id: str_at(c, "/pullRequestReview/id"),
     };
 
     let mut threads: Vec<ReviewThreadOut> = Vec::new();
@@ -3529,34 +3647,34 @@ pub async fn gh_pr_review_threads(
             .and_then(|v| v.as_array())
         {
             for t in nodes {
-                let comments: Vec<PrThreadOut> = t
+                let mut comments: Vec<PrThreadOut> = t
                     .pointer("/comments/nodes")
                     .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .map(|c| PrThreadOut {
-                                author: str_at(c, "/author/login"),
-                                author_avatar_url: String::new(),
-                                state: String::new(),
-                                body: str_at(c, "/body"),
-                                date: str_at(c, "/createdAt"),
-                                id: str_at(c, "/id"),
-                                url: str_at(c, "/url"),
-                                viewer_did_author: bool_at(c, "/viewerDidAuthor"),
-                                is_minimized: bool_at(c, "/isMinimized"),
-                                minimized_reason: str_at(c, "/minimizedReason"),
-                                // The comment's own owning review (nullable — a
-                                // reply outside a batched review still carries the
-                                // empty wrapper review GitHub auto-creates).
-                                // `str_at` maps a present-but-null value to "".
-                                review_id: str_at(c, "/pullRequestReview/id"),
-                            })
-                            .collect()
-                    })
+                    .map(|arr| arr.iter().map(&map_comment).collect())
                     .unwrap_or_default();
                 // A thread with no comments carries no content to anchor — skip it.
                 if comments.is_empty() {
                     continue;
+                }
+                // >50-reply thread: the inner `comments(first:50)` connection didn't
+                // fetch the tail. Top it up with a follow-up query keyed on the
+                // thread's node id (both id and cursor are server-opaque → GraphQL
+                // VARIABLES, never format!-embedded). Rare, so this adds ZERO extra
+                // requests for the common ≤50-reply case. Best-effort per the top-up
+                // policy: on any failure keep the first 50 rather than failing the
+                // whole threads read.
+                let inner_has_next = bool_at(t, "/comments/pageInfo/hasNextPage");
+                let inner_cursor = str_at(t, "/comments/pageInfo/endCursor");
+                if inner_has_next && !inner_cursor.is_empty() {
+                    let thread_id = str_at(t, "/id");
+                    if !thread_id.is_empty() {
+                        if let Ok(extra) =
+                            gh_thread_comment_replies_topup(&repo_path, &thread_id, &inner_cursor, &map_comment)
+                                .await
+                        {
+                            comments.extend(extra);
+                        }
+                    }
                 }
                 // NOTE: for OUTDATED threads GitHub returns the key present but JSON
                 // null (`"line": null`), and `serde_json`'s `pointer` returns

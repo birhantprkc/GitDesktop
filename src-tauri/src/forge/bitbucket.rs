@@ -1102,21 +1102,25 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     // carries `parent` but not `inline`, so an `inline.is_none()` filter alone misses
     // it — resolve each comment's chain root instead. A reply to a plain (non-inline)
     // comment has a non-inline root, so it stays in the flat list (unchanged).
-    let comments: Vec<PrThreadOut> = http::bb_get_json::<BbPage<BbComment>>(
-        &creds,
-        &format!("{base}/comments?pagelen=100"),
-        "comments",
-    )
-    .await
-    .map(|page| {
-        let inline_ids = inline_thread_comment_ids(&page.values);
-        page.values
-            .into_iter()
-            .filter(|c| !c.deleted && !c.pending && !inline_ids.contains(&c.id))
-            .map(|c| from_bb_comment(c, &viewer_uuid))
-            .collect()
-    })
-    .unwrap_or_default();
+    //
+    // Reads ALL comment pages (up to 500) via `fetch_all_pr_comments`, best-effort
+    // (empty on any failure — comments must not fail the view). `base` already
+    // carries the `/pullrequests/{number}` suffix here, so the endpoint is just
+    // `{base}/comments`. Resolving `inline_thread_comment_ids` over the FULL set
+    // also closes a latent hole: previously a reply on page 2 whose inline root
+    // sat on page 1 escaped the root-resolution (which only saw one page) and
+    // leaked context-free into this flat list.
+    let comments: Vec<PrThreadOut> = fetch_all_pr_comments(&creds, &format!("{base}/comments"))
+        .await
+        .map(|values| {
+            let inline_ids = inline_thread_comment_ids(&values);
+            values
+                .into_iter()
+                .filter(|c| !c.deleted && !c.pending && !inline_ids.contains(&c.id))
+                .map(|c| from_bb_comment(c, &viewer_uuid))
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Statuses → checks. Scoped to the HEAD commit's statuses (the last commit after
     // the oldest-first reversal above), matching what the PR view shows — a plain
@@ -2211,7 +2215,7 @@ fn group_bb_threads(comments: Vec<BbComment>, viewer_uuid: &str) -> Vec<ReviewTh
 }
 
 /// One `…/comments` page — `values` plus the absolute `next` link (the generic
-/// `BbPage` drops `next`, so review-thread pagination needs its own struct).
+/// `BbPage` drops `next`, so comment pagination needs its own struct).
 #[derive(Deserialize, Default)]
 struct BbCommentsPage {
     #[serde(default)]
@@ -2220,12 +2224,38 @@ struct BbCommentsPage {
     next: Option<String>,
 }
 
+/// Fetch a PR's comments, following `next` up to 5 pages (500 comments at
+/// `pagelen=100`, the `workspace_members`/`pr_tasks` idiom). `comments_path` is
+/// the `…/comments` endpoint WITHOUT a query string — the caller supplies it,
+/// because `view_pr`'s base already carries the `/pullrequests/{n}` suffix while
+/// `review_threads`' `repo_base` does not, so a shared base+number signature
+/// would make one call site untruthful. Shared by both readers: `review_threads`
+/// groups parent chains across ALL comments and `view_pr` resolves each comment's
+/// inline-thread root across ALL comments — either truncated at one page would
+/// silently orphan reply chains (or, for `view_pr`, leak a page-2 reply whose
+/// inline root sat on page 1) and drop whole threads on busy PRs.
+async fn fetch_all_pr_comments(
+    creds: &http::BbCredentials,
+    comments_path: &str,
+) -> AppResult<Vec<BbComment>> {
+    let mut url = format!("{comments_path}?pagelen=100");
+    let mut comments: Vec<BbComment> = Vec::new();
+    for _ in 0..5 {
+        let page: BbCommentsPage = http::bb_get_json(creds, &url, "comments").await?;
+        comments.extend(page.values);
+        match page.next {
+            Some(next) if !next.is_empty() => url = next,
+            _ => break,
+        }
+    }
+    Ok(comments)
+}
+
 /// File:line-anchored review threads on a PR — Bitbucket inline comments grouped
 /// with their reply chains. Own fetch (kept separate from `view_pr`'s conversation
-/// read). Follows `next` up to 5 pages (500 comments at `pagelen=100`, the
-/// `workspace_members`/`pr_tasks` idiom) because `group_bb_threads` walks parent
-/// chains across ALL comments — truncating at one page would silently orphan reply
-/// chains and drop whole threads on busy PRs.
+/// read). Reads all comment pages via `fetch_all_pr_comments` (up to 500) because
+/// `group_bb_threads` walks parent chains across ALL comments — truncating at one
+/// page would silently orphan reply chains and drop whole threads on busy PRs.
 pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<ReviewThreadOut>> {
     let creds = http::load_credentials().await?;
     let base = repo_base(repo_path).await?;
@@ -2239,16 +2269,9 @@ pub async fn review_threads(repo_path: &str, number: u64) -> AppResult<Vec<Revie
         .and_then(|u| u.uuid)
         .unwrap_or_default();
 
-    let mut url = format!("{base}/pullrequests/{number}/comments?pagelen=100");
-    let mut comments: Vec<BbComment> = Vec::new();
-    for _ in 0..5 {
-        let page: BbCommentsPage = http::bb_get_json(&creds, &url, "comments").await?;
-        comments.extend(page.values);
-        match page.next {
-            Some(next) if !next.is_empty() => url = next,
-            _ => break,
-        }
-    }
+    // `repo_base` has no `/pullrequests/{n}` suffix, so add it for the endpoint.
+    let comments =
+        fetch_all_pr_comments(&creds, &format!("{base}/pullrequests/{number}/comments")).await?;
     Ok(group_bb_threads(comments, &viewer_uuid))
 }
 

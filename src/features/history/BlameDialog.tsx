@@ -1,6 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import hljs from "highlight.js/lib/common";
 import { useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -8,12 +10,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { Spinner } from "@/components/ui/spinner";
 import { diffLang } from "@/features/diff/diff-lang";
 import { useBlame } from "@/lib/git/queries";
 import type { BlameLine } from "@/lib/git/types";
+import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
 import "@/features/diff/code-highlight.css";
+
+/** `git blame --porcelain` reports uncommitted lines with an all-zero sha
+ *  (author "Not Committed Yet"). Those rows aren't navigable commits, so the
+ *  gutter stays a plain, inert label for them. */
+function isRealCommit(hash: string): boolean {
+  return !/^0+$/.test(hash);
+}
 
 /** One code line, syntax-highlighted when the language is recognized. */
 function BlameCode({
@@ -106,7 +121,12 @@ export function BlameDialog({
             // virtualizer only mounts once there are lines, dodging the
             // variable-height first-row measureElement race
             // (docs/list-virtualization.md).
-            <BlameLines scrollEl={scrollEl} lines={lines} language={lang} />
+            <BlameLines
+              scrollEl={scrollEl}
+              lines={lines}
+              language={lang}
+              onOpenChange={onOpenChange}
+            />
           )}
         </div>
       </DialogContent>
@@ -122,11 +142,14 @@ function BlameLines({
   scrollEl,
   lines,
   language,
+  onOpenChange,
 }: {
   scrollEl: HTMLDivElement | null;
   lines: BlameLine[];
   language: string | undefined;
+  onOpenChange: (open: boolean) => void;
 }) {
+  const openCommit = useUiStore((s) => s.openCommit);
   const virtualizer = useVirtualizer({
     count: lines.length,
     getScrollElement: () => scrollEl,
@@ -152,6 +175,17 @@ function BlameLines({
         const when = line.time
           ? formatRelativeTime(new Date(line.time * 1000).toISOString())
           : "";
+        const short = line.hash.slice(0, 7);
+        // Only real commits get the interactive commit reference; uncommitted
+        // (all-zero sha) rows and continuation rows keep the plain gutter cell.
+        const interactive = newCommit && isRealCommit(line.hash);
+        // Close the dialog AND navigate in the SAME synchronous handler: from
+        // the ChangesPanel host, landing on History hides this subtree, so a
+        // deferred close would stick the dialog open (the <Activity> gotcha).
+        const goToCommit = () => {
+          onOpenChange(false);
+          openCommit(line.hash);
+        };
         return (
           <div
             key={vi.key}
@@ -160,16 +194,57 @@ function BlameLines({
             className="absolute top-0 left-0 flex w-full items-start hover:bg-muted/40"
             style={{ transform: `translateY(${vi.start}px)` }}
           >
-            <span
-              className="w-40 shrink-0 truncate border-r px-2 text-muted-foreground"
-              title={
-                newCommit
-                  ? `${line.hash.slice(0, 7)} · ${line.author} · ${when}\n${line.summary}`
-                  : undefined
-              }
-            >
-              {newCommit ? `${line.hash.slice(0, 7)} ${line.author}` : ""}
-            </span>
+            {interactive ? (
+              <HoverCard>
+                <HoverCardTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={`View commit ${short}: ${line.summary}`}
+                    />
+                  }
+                  onClick={goToCommit}
+                  className="w-40 shrink-0 cursor-pointer truncate border-r px-2 text-left text-muted-foreground hover:text-foreground hover:underline focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  {`${short} ${line.author}`}
+                </HoverCardTrigger>
+                <HoverCardContent className="w-72">
+                  <div className="flex flex-col gap-1.5">
+                    <p className="font-mono text-muted-foreground">{short}</p>
+                    <p className="line-clamp-2 font-medium break-words">
+                      {line.summary}
+                    </p>
+                    <p className="text-muted-foreground">
+                      {line.author}
+                      {when ? ` · ${when}` : ""}
+                    </p>
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="xs" onClick={goToCommit}>
+                        View commit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(line.hash);
+                            toast.success("Commit SHA copied");
+                          } catch {
+                            toast.error("Could not copy to clipboard");
+                          }
+                        }}
+                      >
+                        Copy SHA
+                      </Button>
+                    </div>
+                  </div>
+                </HoverCardContent>
+              </HoverCard>
+            ) : (
+              <span className="w-40 shrink-0 truncate border-r px-2 text-muted-foreground">
+                {newCommit ? `${short} ${line.author}` : ""}
+              </span>
+            )}
             <span className="w-10 shrink-0 select-none px-1 text-right text-muted-foreground/70">
               {line.lineNo}
             </span>
