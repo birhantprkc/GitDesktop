@@ -481,8 +481,9 @@ touches \`upstream\`, so this is how a fork sees the source repo's new commits.)
 ## Auto-fetch
 
 By default, GitDesktop quietly fetches in the background so the ahead/behind counts stay
-current without pressing **Fetch**. It runs on an interval while the window is focused, and
-once more when you return to the app or open a repo. It only updates your view of the remote
+current without pressing **Fetch**. It runs on an interval while the window is focused, once
+more when you return to the app or open a repo, and again right after you **merge a pull
+request** so the merge shows up locally without a manual Fetch. It only updates your view of the remote
 — it **never pulls, merges, or changes your files**, so pulling and pushing stay deliberate.
 There are no toasts; the **Fetch** button simply spins while it works, and hovering it shows
 when the repo was last fetched. Turn it off, or change the interval, under

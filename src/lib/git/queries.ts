@@ -3641,22 +3641,45 @@ export function useSetPrAssignees(repo: string) {
 }
 
 export function useMergePr(repo: string) {
+  const queryClient = useQueryClient();
   return useRepoMutation(
     repo,
-    (args: {
+    async (args: {
       number: number;
       strategy: api.MergeStrategy;
       deleteBranch: boolean;
       /** GitLab stale-view guard (the MR head sha); GitHub ignores it. */
       sha?: string;
-    }) =>
-      api.forgePrMerge(
+    }) => {
+      const outcome = await api.forgePrMerge(
         repo,
         args.number,
         args.strategy,
         args.deleteBranch,
         args.sha,
-      ),
+      );
+      // The remote just advanced (and, on a deleteBranch merge, dropped the
+      // head branch), but the local repo is now stale — ahead/behind, history,
+      // and remote-tracking refs won't reflect the merge until the next fetch.
+      // Kick off a background fetch so they catch up automatically instead of
+      // waiting on a manual header-Fetch click. NOT awaited: the "Merged #N"
+      // toast in RemotePrView must fire the moment the merge resolves, not stall
+      // behind a network round-trip. Silent best-effort: the merge already
+      // succeeded, so a red/warning toast for a transient fetch failure would
+      // misreport it (same false-failure class as the cleanup_warning fix), and
+      // the header Fetch button stays the manual fallback. `git_fetch` runs
+      // `git fetch --prune`, so a deleteBranch merge also drops the now-stale
+      // remote-tracking ref. The extra invalidation surfaces the git-side
+      // changes; the mutation's own default invalidation (which fires
+      // immediately) refreshes the forge-side PR state.
+      void api
+        .gitFetch(repo)
+        .then(() =>
+          queryClient.invalidateQueries({ queryKey: repoKeys.all(repo) }),
+        )
+        .catch(() => undefined);
+      return outcome;
+    },
   );
 }
 
