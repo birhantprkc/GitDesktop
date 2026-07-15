@@ -4,6 +4,7 @@ import { Separator } from "@/components/ui/separator";
 import { BranchCiBadge } from "@/features/actions/BranchCiBadge";
 import { BranchJiraBadge } from "@/features/actions/BranchJiraBadge";
 import { ActivityDock } from "@/features/activity/ActivityDock";
+import { useUpdateCheck } from "@/features/updates/useUpdateCheck";
 import { useUiStore } from "@/lib/stores/ui";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { RepoSwitcher } from "./RepoSwitcher";
@@ -14,6 +15,7 @@ export function RepoHeader({ repoPath }: { repoPath: string }) {
   const closeRepo = useUiStore((s) => s.closeRepo);
   const openSettings = useUiStore((s) => s.openSettings);
   const openHelp = useUiStore((s) => s.openHelp);
+  const updateAvailable = Boolean(useUpdateCheck().data);
 
   return (
     <header className="flex items-center gap-2 border-b px-3 py-2">
@@ -47,11 +49,20 @@ export function RepoHeader({ repoPath }: { repoPath: string }) {
       <Button
         variant="ghost"
         size="icon-sm"
-        aria-label="Settings"
-        title="Settings"
+        className="relative"
+        aria-label={
+          updateAvailable ? "Settings — update available" : "Settings"
+        }
+        title={updateAvailable ? "Settings — update available" : "Settings"}
         onClick={() => openSettings()}
       >
         <GearIcon />
+        {updateAvailable && (
+          <span
+            aria-hidden
+            className="absolute top-1 right-1 size-1.5 rounded-full bg-primary ring-2 ring-background animate-in fade-in motion-reduce:animate-none"
+          />
+        )}
       </Button>
     </header>
   );

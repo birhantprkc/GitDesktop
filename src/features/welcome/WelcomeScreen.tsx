@@ -10,6 +10,7 @@ import { useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { Button } from "@/components/ui/button";
 import { usePickAndOpenRepo } from "@/features/repository/useOpenRepoByPath";
+import { useUpdateCheck } from "@/features/updates/useUpdateCheck";
 import { formatBinding } from "@/lib/hotkeys/binding";
 import { useEffectiveBindings, useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import type { ActionId } from "@/lib/hotkeys/registry";
@@ -31,6 +32,7 @@ export function WelcomeScreen() {
   const saveSettings = useSaveSettings();
   const aiEnabled = useAiEnabled();
   const bindings = useEffectiveBindings();
+  const updateAvailable = Boolean(useUpdateCheck().data);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -100,11 +102,20 @@ export function WelcomeScreen() {
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="Settings"
-            title="Settings"
+            className="relative"
+            aria-label={
+              updateAvailable ? "Settings — update available" : "Settings"
+            }
+            title={updateAvailable ? "Settings — update available" : "Settings"}
             onClick={() => openSettings()}
           >
             <GearIcon />
+            {updateAvailable && (
+              <span
+                aria-hidden
+                className="absolute top-1 right-1 size-1.5 rounded-full bg-primary ring-2 ring-background animate-in fade-in motion-reduce:animate-none"
+              />
+            )}
           </Button>
         </div>
       </header>

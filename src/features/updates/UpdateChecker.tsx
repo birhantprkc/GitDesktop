@@ -1,40 +1,34 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { useSettings } from "@/lib/settings/queries";
-import { checkForUpdate } from "@/lib/updater";
 import { installUpdateWithToast } from "./install";
+import { useUpdateCheck } from "./useUpdateCheck";
 
 /**
- * Silent update check on launch (opt-out via Settings → Updates). When a newer
- * release exists it raises a persistent toast offering to install on consent —
- * never auto-installs. Runs once per app start; any failure (offline, no
- * release yet, endpoint not configured) is swallowed so it can't disrupt boot.
+ * Surfaces a pending update as a persistent, install-on-consent toast. Reads the
+ * shared background-polled update query (see {@link useUpdateCheck}), which checks
+ * on launch and roughly every six hours while the app stays open, so a release
+ * published mid-session is noticed without a restart. The toast fires at most once
+ * per newly discovered version: a re-poll finding the same pending version does not
+ * re-nag, but a newer version published on top of it toasts again. Failures
+ * (offline, no release yet, endpoint not configured) stay quiet — the query does
+ * not retry and raises no error UI. Never auto-installs. Mount once at app root.
  */
 export function UpdateChecker() {
-  const settings = useSettings();
-  const auto = settings.data?.autoCheckUpdates ?? true;
-  const ranRef = useRef(false);
+  const update = useUpdateCheck().data;
+  const notifiedVersion = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!settings.data || ranRef.current) return;
-    ranRef.current = true;
-    if (!auto) return;
-    checkForUpdate()
-      .then((update) => {
-        if (!update) return;
-        toast(`Update available: v${update.version}`, {
-          description: "A new version of GitDesktop is ready to install.",
-          duration: Number.POSITIVE_INFINITY,
-          action: {
-            label: "Install & restart",
-            onClick: () => void installUpdateWithToast(update),
-          },
-        });
-      })
-      .catch(() => {
-        // Offline / no published release / endpoint not set up — stay quiet.
-      });
-  }, [settings.data, auto]);
+    if (!update || notifiedVersion.current === update.version) return;
+    notifiedVersion.current = update.version;
+    toast(`Update available: v${update.version}`, {
+      description: "A new version of GitDesktop is ready to install.",
+      duration: Number.POSITIVE_INFINITY,
+      action: {
+        label: "Install & restart",
+        onClick: () => void installUpdateWithToast(update),
+      },
+    });
+  }, [update]);
 
   return null;
 }

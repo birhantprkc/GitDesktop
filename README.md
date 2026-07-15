@@ -260,8 +260,9 @@ themselves up to date (see [Updates](#updates)). Prefer to build from source? Se
 - **Keyboard-first** — rebindable shortcuts with GitHub-Desktop-compatible
   defaults, a generated cheat sheet (Ctrl+/), a command palette (Ctrl+K), and
   arrow-key navigation everywhere.
-- **Self-updating** — signed, verified auto-updates from GitHub Releases, always on
-  your consent.
+- **Self-updating** — signed, verified auto-updates from GitHub Releases, checked at
+  launch and periodically in the background, with a persistent in-app indicator when
+  one is ready — always installed on your consent.
 
 ## Features
 
@@ -498,10 +499,12 @@ display can't strand it off-screen.
 
 ## Updates
 
-GitDesktop checks GitHub Releases on launch (opt-out in Settings → Updates) and
-installs **only on your consent**. Updates are cryptographically signed and
-verified by the app — separate from OS code signing. Maintainer release steps:
-[docs/deployment-updates.md](docs/deployment-updates.md).
+GitDesktop checks GitHub Releases on launch and about every six hours in the
+background while the app stays open (opt-out in Settings → Updates). A pending
+update shows a dot on the Settings gear and an **Install & restart** banner in
+Settings → Updates, and installs **only on your consent**. Updates are
+cryptographically signed and verified by the app — separate from OS code signing.
+Maintainer release steps: [docs/deployment-updates.md](docs/deployment-updates.md).
 
 ## Requirements
 

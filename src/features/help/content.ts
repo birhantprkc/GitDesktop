@@ -1467,9 +1467,12 @@ Open **Settings** from the header gear (or {{kbd:open-settings}}). Sections:
 
 ## Staying up to date
 
-GitDesktop updates itself from GitHub Releases. On launch it checks for a newer version
-(you can turn this off in **Settings → Updates**) and, when one exists, offers to
-**install on your consent** — it never updates silently. Updates are cryptographically
-signed and verified by the app. You can also check anytime with **Check for updates now**.`,
+GitDesktop updates itself from GitHub Releases. It checks for a newer version on launch
+and roughly every six hours in the background while the app stays open (you can turn these
+automatic checks off in **Settings → Updates**). When an update is waiting it shows a
+toast, a dot on the **Settings** gear, and an **Install & restart** banner in
+**Settings → Updates** — but it only ever installs **on your consent**, never silently.
+Updates are cryptographically signed and verified by the app. You can also check anytime
+with **Check for updates now**.`,
   },
 ];
