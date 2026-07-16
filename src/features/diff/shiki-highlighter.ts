@@ -2,7 +2,7 @@ import {
   type DiffAST,
   type DiffFileHighlighter,
   processAST,
-} from "@git-diff-view/react";
+} from "@git-diff-view/core";
 import { createHighlighterCoreSync, type HighlighterCore } from "@shikijs/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 // `json` stays a static import: it's small, and it backs the synchronous
@@ -201,8 +201,14 @@ function styleFor(color: string | undefined, fontStyle: number | undefined) {
  * `createDiffFile` runs `initSyntax` — and the view's later dark re-sync uses
  * the *default* highlighter, not ours, so a stale light tokenization would
  * stick (light token colors on the dark diff background = unreadable).
+ *
+ * `typeof document` guards the DOM sniff so this module is importable in a Web
+ * Worker (no `document`) — the worker highlight path always threads an explicit
+ * `isDarkOverride`, so the sniff is never actually reached there.
  */
-function isDarkMode(): boolean {
+function isDarkMode(override?: boolean): boolean {
+  if (override !== undefined) return override;
+  if (typeof document === "undefined") return false;
   return document.documentElement.classList.contains("dark");
 }
 
@@ -212,10 +218,14 @@ const EMPTY_AST: DiffAST = { type: "root", children: [] };
 
 // Flat hast (the same shape highlight.js produces): token spans separated by
 // "\n" text nodes. The renderer applies each span's `properties.style` directly.
-function buildHast(raw: string, lang: string): DiffAST {
+function buildHast(
+  raw: string,
+  lang: string,
+  isDarkOverride?: boolean,
+): DiffAST {
   const lines = getCore().codeToTokensBase(raw, {
     lang,
-    theme: isDarkMode() ? "gd-diff-dark" : "gd-diff-light",
+    theme: isDarkMode(isDarkOverride) ? "gd-diff-dark" : "gd-diff-light",
   });
   const children: DiffAST["children"] = [];
   lines.forEach((line, i) => {
@@ -233,26 +243,37 @@ function buildHast(raw: string, lang: string): DiffAST {
 }
 
 /**
+ * Line cap on the RECONSTRUCTED file, deciding whether a small edit deep in a
+ * big file gets highlighted at all (not the diff's own size). Placeholder-
+ * reconstructed lines tokenize cheaply (measured 61ms at 12K lines). The ONE
+ * shared cap for every highlighter the diff uses — the Shiki object below, the
+ * highlight.js singleton pin, and the worker-AST precomputed highlighter (both
+ * in DiffSurface.tsx) — so they can't silently diverge.
+ */
+export const SYNTAX_LINE_CAP = 15_000;
+
+/**
  * A @git-diff-view DiffFileHighlighter that tokenizes with Shiki and emits
  * style-based spans (the renderer applies `properties.style` directly). AST
  * post-processing is reused from the default highlighter's exported `processAST`.
  */
-export function shikiDiffHighlighter(): DiffFileHighlighter {
+export function shikiDiffHighlighter(
+  // When set, forces the token theme instead of sniffing the `.dark` class —
+  // required off the main thread (the highlight worker has no `document`), and
+  // used there to render against the app's current theme.
+  isDarkOverride?: boolean,
+): DiffFileHighlighter {
   return {
     name: "shiki",
     type: "style",
-    // Line cap on the RECONSTRUCTED file, so it decides whether a small edit
-    // deep in a big file gets highlighted at all (not the diff's own size).
-    // Placeholder-reconstructed lines tokenize cheaply (measured 61ms at 12K
-    // lines); keep in sync with the highlight.js cap set in DiffSurface.tsx.
-    maxLineToIgnoreSyntax: 15_000,
+    maxLineToIgnoreSyntax: SYNTAX_LINE_CAP,
     setMaxLineToIgnoreSyntax: () => undefined,
     ignoreSyntaxHighlightList: [],
     setIgnoreSyntaxHighlightList: () => undefined,
     getAST: (raw, _fileName, lang) => {
       if (!lang || !loaded.has(lang)) return EMPTY_AST;
       try {
-        return buildHast(raw, lang);
+        return buildHast(raw, lang, isDarkOverride);
       } catch {
         return EMPTY_AST;
       }
