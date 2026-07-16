@@ -70,10 +70,12 @@ export interface PrPromptInput {
   headBranch: string;
   repoInstructions: string | null;
   globalInstructions: string;
-  /** The repo's existing label names. When non-empty, the model is asked to end
-   *  its output with a `Labels:` line choosing ONLY from these; the parser drops
-   *  anything not in this set (no invented labels). Empty ⇒ no label line. */
-  availableLabels: string[];
+  /** The repo's existing labels, each with its stated purpose (description) when
+   *  it has one. When non-empty, the model is asked to end its output with a
+   *  `Labels:` line choosing ONLY from these; the parser drops anything not in
+   *  this set (no invented labels). The description is shown so the model judges a
+   *  label by what it's for, not a name-plausible match. Empty ⇒ no label line. */
+  availableLabels: { name: string; description?: string | null }[];
   /** Target host — swaps the change-request noun + markdown flavor in the prompt.
    *  Absent/`"github"` keeps the original GitHub wording byte-for-byte. */
   provider?: PromptProvider;

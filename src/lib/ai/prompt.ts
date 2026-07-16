@@ -188,6 +188,16 @@ function prSystemFor(provider: PromptProvider | undefined): string {
     .replace("GitHub-flavored Markdown", markdownFlavor);
 }
 
+/** Render one label as a bullet line for the prompt's `## Labels` section:
+ *  `- name — description`, with the ` — description` part omitted when the
+ *  description is empty/whitespace. The description is trimmed and capped at 140
+ *  chars. KEEP IN SYNC: `render_label_line` in src-tauri/src/mcp_server/generate.rs. */
+function renderLabelLine(name: string, description?: string | null): string {
+  const desc = (description ?? "").trim();
+  if (!desc) return `- ${name}`;
+  return `- ${name} — ${[...desc].slice(0, 140).join("")}`;
+}
+
 // KEEP IN SYNC: src-tauri/src/mcp_server/generate.rs mirrors this for the MCP recipe tools.
 export function buildPrPrompt(input: PrPromptInput): {
   system: string;
@@ -235,18 +245,23 @@ export function buildPrPrompt(input: PrPromptInput): {
 
   // Label proposal — only when the repo actually has labels to choose from. The
   // model must pick ONLY from this set (the parser drops anything not in it, so an
-  // invented label is silently discarded rather than applied). Listed here in the
-  // prompt body and reinforced in the system prompt.
-  const labels = input.availableLabels.filter((l) => l.trim());
+  // invented label is silently discarded rather than applied). Each label is
+  // rendered with its stated purpose (description) so the model judges fit by
+  // purpose, not a name-plausible match. Listed here in the prompt body and
+  // reinforced in the system prompt.
+  const labels = input.availableLabels.filter((l) => l.name.trim());
   if (labels.length > 0) {
+    const labelLines = labels
+      .map((l) => renderLabelLine(l.name.trim(), l.description))
+      .join("\n");
     systemParts.push(
-      `## Labels\nThe repository has these labels: ${labels.join(", ")}.\nAfter the description, if one or more of these labels fit this ${prNoun}, add a final line exactly like \`Labels: name1, name2\` listing ONLY labels from that list, copied verbatim. Choose only labels that genuinely apply — never invent a label that isn't in the list, and omit the line entirely when none apply.`,
+      `## Labels\n${labelLines}\nLabels are optional metadata: for most changes the right outcome is one label or none — never force one. Suggest a label ONLY when the change as a whole is what that label is for, judged by its stated purpose above (or by an unambiguous name when it has no description). Some labels belong to automation or maintainer workflows rather than to authors: dependency-bot ecosystem labels (a language or tooling name described like "Pull requests that update … code", which bots apply to dependency bumps), changelog or release controls, and triage states. Never suggest those for ordinary code changes — only when the change is precisely that case (for example, a PR that does nothing but bump dependencies).\nAfter the description, if any label qualifies, add a final line exactly like \`Labels: name1, name2\` listing ONLY label names from the list above, copied verbatim. Omit the line entirely when none qualify — never invent a label.`,
     );
   }
 
   let closing = `Write the ${prNoun} title and description. Lead with a summary of the goal, then group related changes by theme under \`###\` headings when the diff touches several areas, citing the files involved.`;
   if (labels.length > 0) {
-    closing += ` Then, if any of the repository's labels apply, end with a single \`Labels:\` line as instructed.`;
+    closing += ` Then, if any of the repository's labels qualify, end with a single \`Labels:\` line as instructed.`;
   }
   promptParts.push(closing);
 

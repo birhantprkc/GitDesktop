@@ -1327,6 +1327,11 @@ pub struct RepoLabel {
     /// Hex without the leading '#', as GitHub returns it.
     #[serde(default)]
     pub color: String,
+    /// The label's description (its stated purpose), when the source carries one.
+    /// Threaded into the AI PR-description prompt so the model can judge a label
+    /// by what it's for, not just its name.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// GraphQL node ids and owner/repo names are embedded into query strings;
@@ -1358,7 +1363,7 @@ pub async fn gh_repo_labels(repo_path: String, lens: Option<String>) -> AppResul
     validate_graphql_embed(name, "repository name")?;
 
     let query = format!(
-        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ labels(first:100){{ nodes{{ id name color }} }} }} }}"#
+        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ labels(first:100){{ nodes{{ id name color description }} }} }} }}"#
     );
     let out = run_gh(
         Some(&repo_path),

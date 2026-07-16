@@ -15,6 +15,13 @@ interface SuppliedDiff {
   files: { path: string; added: number; deleted: number; isBinary: boolean }[];
 }
 
+/** A repo label the model may propose from — name plus its stated purpose. The
+ *  description is threaded into the prompt; the parser validates on name only. */
+interface AvailableLabel {
+  name: string;
+  description?: string | null;
+}
+
 /**
  * Streams an AI-written PR title + body from the branch diff and the commits
  * the PR would introduce. `onUpdate` fires with the parsed draft on each chunk.
@@ -37,7 +44,7 @@ export function useGeneratePrDescription(repoPath: string) {
         body: string;
         labels: string[];
       }) => void,
-      availableLabels: string[],
+      availableLabels: AvailableLabel[],
       provider?: PromptProvider,
     ) => {
       await run(
@@ -65,7 +72,12 @@ export function useGeneratePrDescription(repoPath: string) {
         },
         {
           onChunk: (buffer) =>
-            onUpdate(extractPrDraft(buffer, availableLabels)),
+            onUpdate(
+              extractPrDraft(
+                buffer,
+                availableLabels.map((l) => l.name),
+              ),
+            ),
         },
       );
     },
@@ -87,9 +99,10 @@ export function useGeneratePrDescription(repoPath: string) {
       /** Target host — swaps the change-request noun + markdown flavor in the
        *  prompt. Omit (local PRs) to keep the base GitHub wording. */
       provider?: PromptProvider,
-      /** The repo's existing label names to propose from. Empty ⇒ no labels
-       *  proposed. Invented labels the model returns are dropped by the parser. */
-      availableLabels: string[] = [],
+      /** The repo's existing labels (name + description) to propose from. Empty ⇒
+       *  no labels proposed. Invented labels the model returns are dropped by the
+       *  parser (which validates on name only). */
+      availableLabels: AvailableLabel[] = [],
     ) =>
       runFromDiff(
         () => gitBranchDiff(repoPath, base, head, RAW_DIFF_MAX_BYTES),
@@ -118,9 +131,10 @@ export function useGeneratePrDescription(repoPath: string) {
         labels: string[];
       }) => void,
       provider?: PromptProvider,
-      /** The repo's existing label names to propose from. Empty ⇒ no labels
-       *  proposed. Invented labels the model returns are dropped by the parser. */
-      availableLabels: string[] = [],
+      /** The repo's existing labels (name + description) to propose from. Empty ⇒
+       *  no labels proposed. Invented labels the model returns are dropped by the
+       *  parser (which validates on name only). */
+      availableLabels: AvailableLabel[] = [],
     ) =>
       runFromDiff(
         getDiff,

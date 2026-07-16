@@ -1527,6 +1527,9 @@ export interface RepoLabel {
   name: string;
   /** Hex without the leading '#', as GitHub returns it. */
   color: string;
+  /** The label's stated purpose, when the source carries one. Optional so
+   *  existing cached/serialized shapes without it stay valid. */
+  description?: string | null;
 }
 
 export interface PrDetails {

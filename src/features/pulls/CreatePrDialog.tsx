@@ -726,9 +726,12 @@ export function CreatePrDialog({
                             // Provider-aware prompt copy (MR/merge-request noun,
                             // markdown flavor); null host → base GitHub wording.
                             forge.data?.provider ?? undefined,
-                            // Existing repo label names the model may propose from;
-                            // empty ⇒ no labels proposed.
-                            repoLabels.data?.map((l) => l.name) ?? [],
+                            // Existing repo labels (name + stated purpose) the
+                            // model may propose from; empty ⇒ no labels proposed.
+                            repoLabels.data?.map((l) => ({
+                              name: l.name,
+                              description: l.description,
+                            })) ?? [],
                           );
                         }}
                         title="Generate the title and description with AI"

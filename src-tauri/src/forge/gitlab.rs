@@ -845,6 +845,10 @@ struct GlabLabel {
     name: String,
     #[serde(default)]
     color: String,
+    /// The label's description; the GitLab labels API already returns it in the
+    /// same response, so threading it into `RepoLabel` costs no extra call.
+    #[serde(default)]
+    description: Option<String>,
 }
 
 /// A name→hex-color map of the project's labels (color without the leading `#`,
@@ -994,6 +998,9 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
                 id: String::new(),
                 name,
                 color,
+                // Detail-view labels come from the MR/issue payload (name + color
+                // only), with no description in hand.
+                description: None,
             }
         })
         .collect();
@@ -2706,6 +2713,9 @@ pub async fn view_issue(repo_path: &str, number: u64) -> AppResult<IssueDetails>
                 id: String::new(),
                 name,
                 color,
+                // Detail-view labels come from the MR/issue payload (name + color
+                // only), with no description in hand.
+                description: None,
             }
         })
         .collect();
@@ -4128,6 +4138,7 @@ pub async fn repo_labels(repo_path: &str) -> AppResult<Vec<RepoLabel>> {
             id: String::new(),
             name: l.name,
             color: l.color.trim_start_matches('#').to_string(),
+            description: l.description,
         })
         .collect())
 }

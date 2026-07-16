@@ -568,12 +568,29 @@ struct PrPieces {
     commit_subjects: Vec<String>,
     base_branch: String,
     head_branch: String,
-    available_labels: Vec<String>,
+    /// The repo's labels as `(name, description)` pairs. The description (the
+    /// label's stated purpose) is threaded into the prompt so the model weighs a
+    /// label by what it's for, not just a name-plausible match.
+    available_labels: Vec<(String, Option<String>)>,
     repo_instructions: Option<String>,
     global_instructions: String,
     /// Frontend provider tag: `"github"` / `"gitlab"` / `"bitbucket"`, or None
     /// (GitHub wording, byte-for-byte).
     provider: Option<String>,
+}
+
+/// Render one label as a bullet line for the prompt's `## Labels` section:
+/// `- name — description`, with the ` — description` part omitted when the
+/// description is empty/whitespace. The description is trimmed and capped at 140
+/// chars. Mirrors the TS `renderLabelLine` (src/lib/ai/prompt.ts) — KEEP IN SYNC.
+fn render_label_line(name: &str, description: &str) -> String {
+    let desc = description.trim();
+    if desc.is_empty() {
+        format!("- {name}")
+    } else {
+        let capped: String = desc.chars().take(140).collect();
+        format!("- {name} — {capped}")
+    }
 }
 
 /// Assemble the PR/MR-description recipe. Mirrors `buildPrPrompt`
@@ -637,18 +654,23 @@ fn assemble_pr_recipe(p: PrPieces) -> Recipe {
 
     // Label proposal — only when the repo actually has labels (mirrors the TS
     // `labels.length > 0` gate). Framed in the system prompt and reinforced by the
-    // closing line. The parser drops invented labels, so an off-list label is
-    // silently discarded rather than applied.
-    let labels: Vec<&str> = p
+    // closing line. Each label is rendered with its stated purpose (description) so
+    // the model can judge fit by purpose, not a name-plausible match. The parser
+    // drops invented labels, so an off-list label is silently discarded.
+    let labels: Vec<(&str, &str)> = p
         .available_labels
         .iter()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
+        .map(|(name, desc)| (name.trim(), desc.as_deref().unwrap_or("").trim()))
+        .filter(|(name, _)| !name.is_empty())
         .collect();
     if !labels.is_empty() {
+        let label_lines = labels
+            .iter()
+            .map(|(name, desc)| render_label_line(name, desc))
+            .collect::<Vec<_>>()
+            .join("\n");
         system_parts.push(format!(
-            "## Labels\nThe repository has these labels: {}.\nAfter the description, if one or more of these labels fit this {pr_noun}, add a final line exactly like `Labels: name1, name2` listing ONLY labels from that list, copied verbatim. Choose only labels that genuinely apply — never invent a label that isn't in the list, and omit the line entirely when none apply.",
-            labels.join(", ")
+            "## Labels\n{label_lines}\nLabels are optional metadata: for most changes the right outcome is one label or none — never force one. Suggest a label ONLY when the change as a whole is what that label is for, judged by its stated purpose above (or by an unambiguous name when it has no description). Some labels belong to automation or maintainer workflows rather than to authors: dependency-bot ecosystem labels (a language or tooling name described like \"Pull requests that update … code\", which bots apply to dependency bumps), changelog or release controls, and triage states. Never suggest those for ordinary code changes — only when the change is precisely that case (for example, a PR that does nothing but bump dependencies).\nAfter the description, if any label qualifies, add a final line exactly like `Labels: name1, name2` listing ONLY label names from the list above, copied verbatim. Omit the line entirely when none qualify — never invent a label."
         ));
     }
 
@@ -659,7 +681,7 @@ fn assemble_pr_recipe(p: PrPieces) -> Recipe {
     );
     if !labels.is_empty() {
         closing.push_str(
-            " Then, if any of the repository's labels apply, end with a single `Labels:` line as \
+            " Then, if any of the repository's labels qualify, end with a single `Labels:` line as \
              instructed.",
         );
     }
@@ -864,7 +886,12 @@ impl GitDesktopMcp {
         // than failing the tool (mirrors the spec's best-effort contract).
         let available_labels = crate::forge::forge_repo_labels(self.repo.clone(), None)
             .await
-            .map(|labels| labels.into_iter().map(|l| l.name).collect::<Vec<_>>())
+            .map(|labels| {
+                labels
+                    .into_iter()
+                    .map(|l| (l.name, l.description))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         let provider = provider_tag(&self.repo).await;
@@ -1195,6 +1222,7 @@ mod tests {
         assert!(recipe
             .system
             .starts_with("You write GitHub pull request descriptions"));
+        // No labels section when the repo has none (asserted again below).
         assert!(recipe
             .prompt
             .contains("This pull request merges `feature/x` into `main`."));
@@ -1214,7 +1242,10 @@ mod tests {
             commit_subjects: vec![],
             base_branch: "main".to_string(),
             head_branch: "topic".to_string(),
-            available_labels: vec!["bug".to_string(), "  ".to_string()],
+            available_labels: vec![
+                ("bug".to_string(), None),
+                ("  ".to_string(), None),
+            ],
             repo_instructions: None,
             global_instructions: String::new(),
             provider: Some("gitlab".to_string()),
@@ -1224,11 +1255,63 @@ mod tests {
         assert!(recipe
             .prompt
             .contains("This merge request merges `topic` into `main`."));
-        // Labels present (blank entry filtered out).
+        // Labels present (blank entry filtered out), rendered one per line.
         assert!(recipe.system.contains("## Labels"));
-        assert!(recipe.system.contains("these labels: bug."));
+        assert!(recipe.system.contains("\n- bug\n"));
+        // The blank-name entry must not produce a dangling bullet.
+        assert!(!recipe.system.contains("- \n"));
+        // The conservative policy copy is present.
+        assert!(recipe
+            .system
+            .contains("for most changes the right outcome is one label or none"));
         // Note restates MR wording.
         assert!(recipe.note.contains("merge request title"));
+    }
+
+    #[test]
+    fn pr_recipe_label_with_description_renders_name_and_purpose() {
+        let recipe = assemble_pr_recipe(PrPieces {
+            diff_text: String::new(),
+            diff_truncated: false,
+            files: vec![],
+            commit_subjects: vec![],
+            base_branch: "main".to_string(),
+            head_branch: "topic".to_string(),
+            available_labels: vec![(
+                "no-changelog".to_string(),
+                Some("Skip the changelog check".to_string()),
+            )],
+            repo_instructions: None,
+            global_instructions: String::new(),
+            provider: Some("github".to_string()),
+        });
+        assert!(recipe
+            .system
+            .contains("- no-changelog — Skip the changelog check"));
+    }
+
+    #[test]
+    fn pr_recipe_label_without_description_renders_bare_name() {
+        // An empty/whitespace description must not leave a dangling ` — `.
+        let recipe = assemble_pr_recipe(PrPieces {
+            diff_text: String::new(),
+            diff_truncated: false,
+            files: vec![],
+            commit_subjects: vec![],
+            base_branch: "main".to_string(),
+            head_branch: "topic".to_string(),
+            available_labels: vec![
+                ("enhancement".to_string(), None),
+                ("chore".to_string(), Some("   ".to_string())),
+            ],
+            repo_instructions: None,
+            global_instructions: String::new(),
+            provider: Some("github".to_string()),
+        });
+        assert!(recipe.system.contains("\n- enhancement\n"));
+        assert!(recipe.system.contains("- chore"));
+        assert!(!recipe.system.contains("- enhancement —"));
+        assert!(!recipe.system.contains("- chore —"));
     }
 
     // ---- budget_diff (mirror of truncate.ts budgetDiff) --------------------
