@@ -238,6 +238,10 @@ export async function streamAi({
     system,
     prompt,
     abortSignal: abort.signal,
+    // Only reached for HTTP providers — CLI providers returned early above.
+    // Passing repoPath regardless keeps every stream call carrying it, so the
+    // invariant stays grep-clean.
+    repoPath,
   })) {
     buffer += chunk;
     setText(buffer);
