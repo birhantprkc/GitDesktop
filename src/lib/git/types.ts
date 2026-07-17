@@ -456,6 +456,10 @@ export interface PrPollInfo {
   headRefName: string;
   /** Base/target branch name ("" when the provider can't supply it). */
   baseRefName: string;
+  /** ISO-8601 timestamp of when the PR was opened; "" when the provider didn't
+   *  supply it. Drives the missed-open catch-up's recency window (an empty or
+   *  unparsable value fails closed — the PR isn't caught up). */
+  createdAt: string;
 }
 
 export interface GhRepo {

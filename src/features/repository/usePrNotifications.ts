@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useRef } from "react";
 import { useAutomations } from "@/lib/automations/queries";
-import { maybeFireSync } from "@/lib/automations/sync";
+import { maybeCatchUpMissedOpen, maybeFireSync } from "@/lib/automations/sync";
 import { effectiveActions, repoEntry } from "@/lib/automations/types";
 import { forgePrPoll } from "@/lib/git/api";
 import {
@@ -47,6 +47,17 @@ export function usePrNotifications(repoPath: string) {
         "pr-sync",
       ).length > 0
     : false;
+  // A pr-open rule also needs this poll — it's how we catch up PRs opened OUTSIDE
+  // the app (gh/web/bots), whose in-app pr-open event never fired. Without this,
+  // a user with ONLY a pr-open rule (no notifications, no pr-sync) would never
+  // poll and the catch-up would be dead.
+  const hasPrOpen = automations.data
+    ? effectiveActions(
+        automations.data,
+        repoEntry(automations.data, repoId ?? repoPath, repoPath),
+        "pr-open",
+      ).length > 0
+    : false;
   // The head-OID poll (and pr-sync) run through the provider-neutral `forge_pr_poll`,
   // so the poller works for any ready hosted repo (GitHub/GitLab/Bitbucket). For
   // GitLab/Bitbucket the check-rollup and review-decision fields come back empty, so
@@ -55,7 +66,7 @@ export function usePrNotifications(repoPath: string) {
   const enabled =
     repoPath !== "" &&
     forgeFeatureReady(gh.data, "pullRequests") &&
-    (anyNotif || hasPrSync);
+    (anyNotif || hasPrSync || hasPrOpen);
 
   const poll = useQuery({
     queryKey: ["repo", repoPath, "pr-poll"] as const,
@@ -105,6 +116,26 @@ export function usePrNotifications(repoPath: string) {
           });
         }
       }
+    }
+
+    // pr-open catch-up: give your own PRs opened outside the app (gh/web/bots)
+    // their missed initial review. Built from the same open+headSha snapshot,
+    // carrying author/createdAt/isDraft; the function itself does the recency /
+    // ownership / draft / already-reviewed gating and fires at most one per tick.
+    if (hasPrOpen) {
+      const candidates = [...snapshot.values()]
+        .filter((pr) => pr.state === "OPEN" && pr.headSha)
+        .map((pr) => ({
+          ref: String(pr.number),
+          currentHeadSha: pr.headSha,
+          base: pr.baseRefName,
+          head: pr.headRefName,
+          title: pr.title,
+          author: pr.author,
+          createdAt: pr.createdAt,
+          isDraft: pr.isDraft,
+        }));
+      maybeCatchUpMissedOpen(repoPath, candidates, gh.data?.login ?? null);
     }
 
     if (!before || !prefs) return;

@@ -1464,6 +1464,11 @@ pub struct PrPollInfo {
     /// Base/target branch name — same per-action branch matching.
     /// "" when the provider can't supply it.
     pub base_ref_name: String,
+    /// ISO-8601 timestamp of when the PR was opened — drives the missed-open
+    /// catch-up's recency window on the frontend. Populated by all three
+    /// providers (GitHub `createdAt`, GitLab `created_at`, Bitbucket
+    /// `created_on`); "" when the source didn't supply it (frontend fails closed).
+    pub created_at: String,
 }
 
 /// Lightweight snapshot of the repo's recently-updated PRs for the
@@ -1482,7 +1487,7 @@ pub async fn gh_pr_poll(repo_path: String) -> AppResult<Vec<PrPollInfo>> {
     validate_graphql_embed(name, "repository name")?;
 
     let query = format!(
-        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ pullRequests(first:30, states:[OPEN, CLOSED, MERGED], orderBy:{{field:UPDATED_AT, direction:DESC}}){{ nodes{{ number title url state isDraft headRefName baseRefName author{{login}} reviewDecision comments(last:1){{ totalCount nodes{{ author{{ login }} }} }} reviews(last:1){{ totalCount nodes{{ author{{ login }} }} }} reviewRequests(first:20){{ nodes{{ requestedReviewer{{ ... on User{{ login }} }} }} }} commits(last:1){{ nodes{{ commit{{ oid statusCheckRollup{{ state }} }} }} }} }} }} }} }}"#
+        r#"query{{ repository(owner:"{owner}", name:"{name}"){{ pullRequests(first:30, states:[OPEN, CLOSED, MERGED], orderBy:{{field:UPDATED_AT, direction:DESC}}){{ nodes{{ number title url state isDraft createdAt headRefName baseRefName author{{login}} reviewDecision comments(last:1){{ totalCount nodes{{ author{{ login }} }} }} reviews(last:1){{ totalCount nodes{{ author{{ login }} }} }} reviewRequests(first:20){{ nodes{{ requestedReviewer{{ ... on User{{ login }} }} }} }} commits(last:1){{ nodes{{ commit{{ oid statusCheckRollup{{ state }} }} }} }} }} }} }} }}"#
     );
     let out = run_gh(
         Some(&repo_path),
@@ -1540,6 +1545,7 @@ pub async fn gh_pr_poll(repo_path: String) -> AppResult<Vec<PrPollInfo>> {
                 .unwrap_or_default(),
             head_ref_name: str_at(n, "/headRefName"),
             base_ref_name: str_at(n, "/baseRefName"),
+            created_at: str_at(n, "/createdAt"),
         })
         .filter(|p| p.number > 0)
         .collect())

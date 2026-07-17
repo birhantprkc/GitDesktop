@@ -1455,7 +1455,9 @@ notification.
 
 On new commits to a reviewed PR only re-reviews PRs you've already reviewed in that mode, and
 cancelling an auto re-review dismisses that commit so it won't run again on restart — a genuinely
-new commit still triggers. Existing rules from the older flat list are migrated automatically on
+new commit still triggers. On pull request opened also catches up your own PRs opened outside the
+app (via the CLI, the web, or a bot) that never got their initial review — a non-draft PR of yours
+opened in the last two weeks and not yet reviewed gets one automatically on the next poll. Existing rules from the older flat list are migrated automatically on
 first load; any duplicates are merged and disclosed once with a toast.`,
   },
   {

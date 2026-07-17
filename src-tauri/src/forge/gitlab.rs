@@ -503,6 +503,8 @@ struct GlabPollMr {
     source_branch: String,
     #[serde(default)]
     target_branch: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    created_at: String,
 }
 
 fn from_glab_poll_mr(m: GlabPollMr) -> PrPollInfo {
@@ -529,6 +531,8 @@ fn from_glab_poll_mr(m: GlabPollMr) -> PrPollInfo {
         review_requests: Vec::new(),
         head_ref_name: m.source_branch,
         base_ref_name: m.target_branch,
+        // MR open time — the missed-open catch-up's recency anchor.
+        created_at: m.created_at,
     }
 }
 
@@ -8294,7 +8298,8 @@ mod tests {
             "state": "opened",
             "draft": true,
             "sha": "0123456789abcdef0123456789abcdef01234567",
-            "author": { "username": "theBGuy" }
+            "author": { "username": "theBGuy" },
+            "created_at": "2026-01-02T03:04:05Z"
         }"#;
         let info = from_glab_poll_mr(serde_json::from_str(json).unwrap());
         assert_eq!(info.number, 42);
@@ -8307,6 +8312,8 @@ mod tests {
         // The list carries neither an approval decision nor a check rollup (v1 limit).
         assert_eq!(info.review_decision, "");
         assert_eq!(info.checks_state, "");
+        // Open time rides through for the missed-open catch-up's recency window.
+        assert_eq!(info.created_at, "2026-01-02T03:04:05Z");
     }
 
     #[test]
@@ -8325,6 +8332,8 @@ mod tests {
         assert!(!info.is_draft);
         assert_eq!(info.author, "");
         assert_eq!(info.head_sha, "");
+        // Absent `created_at` defaults to "" (the frontend fails closed on it).
+        assert_eq!(info.created_at, "");
     }
 
     #[test]

@@ -689,6 +689,8 @@ struct BbPollPr {
     destination: Option<BbPollEndpoint>,
     #[serde(default)]
     links: Option<BbHtmlLinks>,
+    #[serde(default)]
+    created_on: String,
 }
 
 /// The `source`/`destination` block of a poll PR — its head commit hash and
@@ -754,6 +756,8 @@ fn from_bb_poll_pr(p: BbPollPr, viewer_uuid: &str, viewer_login: &str) -> PrPoll
         review_requests: Vec::new(),
         head_ref_name,
         base_ref_name,
+        // PR open time — the missed-open catch-up's recency anchor.
+        created_at: p.created_on,
     }
 }
 
@@ -5663,7 +5667,8 @@ mod tests {
             "draft": false,
             "author": {"uuid": "{me}", "nickname": "me-nick"},
             "source": {"commit": {"hash": "abc123def456"}},
-            "links": {"html": {"href": "https://bitbucket.org/w/r/pull-requests/12"}}
+            "links": {"html": {"href": "https://bitbucket.org/w/r/pull-requests/12"}},
+            "created_on": "2026-01-02T03:04:05.000000+00:00"
         }"#;
         let info = from_bb_poll_pr(serde_json::from_str(json).unwrap(), "{me}", "me-login");
         assert_eq!(info.number, 12);
@@ -5675,6 +5680,8 @@ mod tests {
         assert_eq!(info.head_sha, "abc123def456");
         assert_eq!(info.review_decision, "");
         assert_eq!(info.checks_state, "");
+        // `created_on` rides through as `created_at` for the missed-open catch-up.
+        assert_eq!(info.created_at, "2026-01-02T03:04:05.000000+00:00");
     }
 
     #[test]
@@ -5705,6 +5712,8 @@ mod tests {
         assert_eq!(info.state, "MERGED");
         assert_eq!(info.author, "");
         assert_eq!(info.head_sha, "");
+        // Absent `created_on` defaults to "" (the frontend fails closed on it).
+        assert_eq!(info.created_at, "");
     }
 
     #[test]

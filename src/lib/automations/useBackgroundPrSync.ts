@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { loadAutomations, repoAutomationsFor } from "@/lib/automations/store";
-import { maybeFireSync } from "@/lib/automations/sync";
+import { maybeCatchUpMissedOpen, maybeFireSync } from "@/lib/automations/sync";
 import { effectiveActions } from "@/lib/automations/types";
 import { forgePrPoll, forgeStatus } from "@/lib/git/api";
 import { forgeFeatureReady } from "@/lib/git/queries";
@@ -67,9 +67,15 @@ export function useBackgroundPrSync(): void {
         if (path === activeRepo) continue;
         try {
           // Identity-resolved override lookup (with legacy-path fallback), then
-          // the pr-sync gate: only rule-bearing repos are worth a forge poll.
+          // the rule gate: only repos carrying a pr-sync OR a pr-open rule are
+          // worth a forge poll (pr-open earns the poll for the missed-open
+          // catch-up, exactly as it does in usePrNotifications).
           const entry = await repoAutomationsFor(config, path);
-          if (effectiveActions(config, entry, "pr-sync").length === 0) continue;
+          const hasPrSync =
+            effectiveActions(config, entry, "pr-sync").length > 0;
+          const hasPrOpen =
+            effectiveActions(config, entry, "pr-open").length > 0;
+          if (!hasPrSync && !hasPrOpen) continue;
           // Skip a worktree/alias of the active repo: same identity, different
           // path (usePrNotifications already polls that identity). After the rule
           // gate so only rule-bearing repos pay it — and repoAutomationsFor above
@@ -84,20 +90,39 @@ export function useBackgroundPrSync(): void {
 
           const prs = await forgePrPoll(path);
           polled++;
-          for (const pr of prs) {
-            if (pr.state === "OPEN" && pr.headSha) {
-              maybeFireSync({
-                repoPath: path,
-                kind: "remote",
+          if (hasPrSync) {
+            for (const pr of prs) {
+              if (pr.state === "OPEN" && pr.headSha) {
+                maybeFireSync({
+                  repoPath: path,
+                  kind: "remote",
+                  ref: String(pr.number),
+                  currentHeadSha: pr.headSha,
+                  base: pr.baseRefName,
+                  head: pr.headRefName,
+                  title: pr.title,
+                  body: "",
+                  commitSubjects: [],
+                });
+              }
+            }
+          }
+          // pr-open catch-up for PRs opened outside the app — the viewer login
+          // comes from the forge status already fetched above.
+          if (hasPrOpen) {
+            const candidates = prs
+              .filter((pr) => pr.state === "OPEN" && pr.headSha)
+              .map((pr) => ({
                 ref: String(pr.number),
                 currentHeadSha: pr.headSha,
                 base: pr.baseRefName,
                 head: pr.headRefName,
                 title: pr.title,
-                body: "",
-                commitSubjects: [],
-              });
-            }
+                author: pr.author,
+                createdAt: pr.createdAt,
+                isDraft: pr.isDraft,
+              }));
+            maybeCatchUpMissedOpen(path, candidates, status.login ?? null);
           }
         } catch {
           // One bad repo (deleted/moved path, transient forge error) must not
