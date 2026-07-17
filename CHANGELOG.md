@@ -12,6 +12,28 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-17
+
+### Added
+
+- **In-app forge sign-in, reconnect & session health.** Sign in to GitHub (`gh`'s
+  device-code flow) and GitLab (`glab --web`) without leaving the app — from the
+  not-signed-in panels, **Settings → Accounts**, or the command palette; a terminal
+  stays a fallback. GitDesktop now distinguishes an **expired or revoked session** from
+  never-signed-in and passing network blips, badges the affected account with one-click
+  **Reconnect**, and **warns before a token expires** — GitLab and GitHub personal
+  access tokens, plus an optional Bitbucket token **expiry date** you supply. GitLab
+  sign-in recommends the browser (OAuth) option, whose sessions renew themselves instead
+  of forcing periodic re-login.
+
+### Changed
+
+- Refreshed frontend dependencies: security fixes in the HTML sanitizer (DOMPurify)
+  and Markdown renderer (marked), a fix for streamed AI tool calls that could execute
+  with incomplete arguments, smoother dialog exit animations, and a diff-view fix so
+  inline widgets (like AI review comments) no longer have their text color forced by
+  the library.
+
 ## [0.3.0] - 2026-07-16
 
 ### Added
@@ -2027,7 +2049,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/theBGuy/GitDesktop/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/theBGuy/GitDesktop/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/theBGuy/GitDesktop/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/theBGuy/GitDesktop/compare/v0.2.1...v0.2.2
