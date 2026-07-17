@@ -156,7 +156,10 @@ function selectSections(text: string): string {
   }
   flush();
 
-  return out.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+  return out
+    .join("\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /** The section body up to (but excluding) its first blank line. */
@@ -227,7 +230,10 @@ function compressBlocks(text: string): string {
   }
   flushPara();
 
-  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return out
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /** A top-level (indent-0) unordered or ordered list item. */

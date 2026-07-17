@@ -91,7 +91,11 @@ export function RebaseOntoDialog({
   const moving = comparison.data?.ahead ?? [];
   const movingCount = moving.length;
   const canRun =
-    !hasChanges && Boolean(newBase) && Boolean(oldBase) && !sameBranch && movingCount > 0;
+    !hasChanges &&
+    Boolean(newBase) &&
+    Boolean(oldBase) &&
+    !sameBranch &&
+    movingCount > 0;
 
   function run() {
     if (!canRun) return;
@@ -223,8 +227,8 @@ export function RebaseOntoDialog({
           {canRun && (
             <div className="space-y-2">
               <p className="text-xs text-foreground/80">
-                {movingCount} commit{movingCount === 1 ? "" : "s"} will move onto{" "}
-                <span className="font-mono">{newBase}</span>:
+                {movingCount} commit{movingCount === 1 ? "" : "s"} will move
+                onto <span className="font-mono">{newBase}</span>:
               </p>
               <ul className="max-h-40 space-y-1 overflow-y-auto rounded-md border bg-muted/30 p-2">
                 {moving.slice(0, PREVIEW_CAP).map((c) => (

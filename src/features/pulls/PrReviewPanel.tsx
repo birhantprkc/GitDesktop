@@ -238,7 +238,8 @@ export function PrReviewPanel({
               modelMemory.current[provider] = reviewAi.model;
               updateReview({
                 provider: next,
-                model: modelMemory.current[next] ?? defaultModelForProvider(next),
+                model:
+                  modelMemory.current[next] ?? defaultModelForProvider(next),
               });
             }}
           >
@@ -267,7 +268,9 @@ export function PrReviewPanel({
           >
             <ComboboxInput
               className="w-full"
-              placeholder={defaultModelForProvider(provider) || "Account default"}
+              placeholder={
+                defaultModelForProvider(provider) || "Account default"
+              }
             />
             <ComboboxContent>
               <ComboboxEmpty>Uses the typed id as-is</ComboboxEmpty>

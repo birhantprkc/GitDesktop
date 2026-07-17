@@ -43,8 +43,8 @@ import {
   ensureShikiGrammars,
   isBuiltinShikiLang,
   isShikiLang,
-  shikiDiffHighlighter,
   SYNTAX_LINE_CAP,
+  shikiDiffHighlighter,
 } from "./shiki-highlighter";
 import { ensureCustomLanguages } from "./syntax";
 import { useWorkerHighlight, type WorkerAsts } from "./use-worker-highlight";

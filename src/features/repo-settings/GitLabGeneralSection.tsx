@@ -230,8 +230,7 @@ function GitLabGeneralForm({
                   repoName,
                   onResult: ({ description, topics }) => {
                     if (description) set("description", description);
-                    if (topics.length)
-                      set("topics", normalizeGlTopics(topics));
+                    if (topics.length) set("topics", normalizeGlTopics(topics));
                   },
                 })
               }

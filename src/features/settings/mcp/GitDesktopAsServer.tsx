@@ -342,7 +342,8 @@ export function GitDesktopAsServer({ repoPath }: { repoPath: string | null }) {
     const removeReason = rowLoadingReason ?? busyReason;
     // Install/Reinstall embed the absolute launcher path, so they additionally
     // gate on the launcher being ready.
-    const installReason = rowLoadingReason ?? busyReason ?? launcherDisabledReason;
+    const installReason =
+      rowLoadingReason ?? busyReason ?? launcherDisabledReason;
     // The known `--allow-*` flags actually installed (order-normalized via the
     // ladder map; every other arg is ignored). `args` is null for an older
     // install predating this probe — then we can't read the tier and omit it.
@@ -591,9 +592,7 @@ export function GitDesktopAsServer({ repoPath }: { repoPath: string | null }) {
             {/* Destructive requires git-write. A title on a natively-disabled
                 control never surfaces, so wrap the row when it's disabled. */}
             <span
-              title={
-                allowGitWrite ? undefined : "Requires Allow git writes."
-              }
+              title={allowGitWrite ? undefined : "Requires Allow git writes."}
             >
               <label className="flex cursor-pointer items-center gap-2 text-xs">
                 <Checkbox
@@ -694,8 +693,8 @@ export function GitDesktopAsServer({ repoPath }: { repoPath: string | null }) {
             {globalRow("claude")}
             {globalRow("copilot")}
             <p className="text-xs text-muted-foreground">
-              Adds gitdesktop to the client's user config via its CLI, so it's in
-              every project — no per-repo{" "}
+              Adds gitdesktop to the client's user config via its CLI, so it's
+              in every project — no per-repo{" "}
               <code className="font-mono">.mcp.json</code>. The write toggles
               above carry over.
             </p>
@@ -757,9 +756,9 @@ export function GitDesktopAsServer({ repoPath }: { repoPath: string | null }) {
                 </p>
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  Make <code className="font-mono">gitdesktop-mcp</code> runnable
-                  from any terminal, so the command above works without a full
-                  path.
+                  Make <code className="font-mono">gitdesktop-mcp</code>{" "}
+                  runnable from any terminal, so the command above works without
+                  a full path.
                 </p>
               ))}
             {launcher?.warning && (

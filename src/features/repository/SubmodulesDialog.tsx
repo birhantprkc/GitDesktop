@@ -41,8 +41,7 @@ export function SubmodulesDialog({
 
   // Refetching may shrink `list` while `activeIndex` lingers, so clamp the
   // stale value (keeping -1 = "nothing active yet") to keep a row focusable.
-  const safeActive =
-    activeIndex >= list.length ? list.length - 1 : activeIndex;
+  const safeActive = activeIndex >= list.length ? list.length - 1 : activeIndex;
 
   const onKeyDown = listKeyboardNav<(typeof list)[number]>({
     items: list,
@@ -73,10 +72,7 @@ export function SubmodulesDialog({
 
         {/* A roving-focus list — arrow keys move between rows, Enter runs the
             row's Initialize/Update action. */}
-        <div
-          className="max-h-96 overflow-y-auto border"
-          onKeyDown={onKeyDown}
-        >
+        <div className="max-h-96 overflow-y-auto border" onKeyDown={onKeyDown}>
           {subs.isPending ? (
             <div className="flex justify-center p-4">
               <Spinner />

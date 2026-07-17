@@ -101,9 +101,7 @@ export function presentError(e: unknown): ErrorPresentation {
     const stderr = e.stderr?.trim() ?? "";
     // Append stderr only when it adds something the message doesn't already carry.
     const fullText =
-      stderr && !message.includes(stderr)
-        ? `${message}\n\n${stderr}`
-        : message;
+      stderr && !message.includes(stderr) ? `${message}\n\n${stderr}` : message;
 
     const combined = `${message}\n${stderr}`;
     const combinedLower = combined.toLowerCase();
@@ -115,9 +113,7 @@ export function presentError(e: unknown): ErrorPresentation {
 
     const distinctStderr = stderr !== "" && !message.includes(stderr);
     const long =
-      nonEmptyLineCount(message) > 1 ||
-      distinctStderr ||
-      fullText.length > 140;
+      nonEmptyLineCount(message) > 1 || distinctStderr || fullText.length > 140;
 
     return { label, summary, fullText, long };
   }
