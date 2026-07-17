@@ -54,6 +54,10 @@ pnpm changelog:preview  # preview pending changelog.d/ fragments
   fix at the feature/call-site level.
 - **Keyboard-first, WCAG AA** — wire arrow-key nav for any new selectable list in the
   same change; never convey meaning by color alone; keep destructive paths confirmed.
+- **React best practices** — before writing or refactoring any React component or hook,
+  load the `vercel-react-best-practices` skill and apply it as you write (it doesn't
+  auto-load — pull it in yourself). Vercel's 70-rule playbook: waterfalls, bundle size,
+  data fetching, re-renders, memoization.
 - **macOS Edit menu** — we rely on Tauri's `Menu::default()` (it ships the Edit submenu
   that powers undo/redo/cut/copy/paste in inputs on macOS). If you add a custom app menu,
   derive it from `Menu::default()` or include the Edit `PredefinedMenuItem`s, or macOS

@@ -55,6 +55,11 @@ EOL flip shows huge matched +/−). Never "fix" it by converting line endings.
 
 ## Frontend conventions
 
+**React best practices.** Before writing or refactoring any React component or
+hook, invoke the `vercel-react-best-practices` skill (Vercel's 70-rule
+performance + correctness playbook) and apply it as you write — it does not
+auto-load, so pull it in yourself; don't defer it to an after-the-fact review pass.
+
 **Design tokens.** Mono + dark + one mint accent; semantic state tokens in
 `src/App.css`: `--success`, `--warning`, `--info`, `--merged`; danger is
 `--destructive`. No hardcoded green/amber/red classes in new code (a few
