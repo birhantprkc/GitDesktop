@@ -763,7 +763,12 @@ export function extractBranchName(raw: string): string {
   const candidates = raw
     .replace(/```[a-z]*/gi, "")
     .split("\n")
-    .map((l) => l.trim().replace(/^[`'"]+|[`'"]+$/g, "").trim())
+    .map((l) =>
+      l
+        .trim()
+        .replace(/^[`'"]+|[`'"]+$/g, "")
+        .trim(),
+    )
     .filter((l) => l.length > 0);
   return candidates.find((l) => !/\s/.test(l)) ?? candidates[0] ?? "";
 }

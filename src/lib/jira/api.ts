@@ -211,16 +211,14 @@ export const jiraIssueSetOriginalEstimate = (
   site: string,
   key: string,
   estimate: string | null,
-) =>
-  invoke<void>("jira_issue_set_original_estimate", { site, key, estimate });
+) => invoke<void>("jira_issue_set_original_estimate", { site, key, estimate });
 
 /** Set (`"1d"`) or clear (`null`) the issue's remaining estimate. */
 export const jiraIssueSetRemainingEstimate = (
   site: string,
   key: string,
   estimate: string | null,
-) =>
-  invoke<void>("jira_issue_set_remaining_estimate", { site, key, estimate });
+) => invoke<void>("jira_issue_set_remaining_estimate", { site, key, estimate });
 
 /** Log work against the issue; returns the created worklog. `commentMd` optional
  *  (a note); omit/empty leaves the entry noteless. Jira decrements the remaining
@@ -230,7 +228,8 @@ export const jiraWorklogAdd = (
   key: string,
   timeSpent: string,
   commentMd?: string,
-) => invoke<JiraWorklog>("jira_worklog_add", { site, key, timeSpent, commentMd });
+) =>
+  invoke<JiraWorklog>("jira_worklog_add", { site, key, timeSpent, commentMd });
 
 /** Update one of the viewer's own worklogs; returns the updated worklog.
  *  `commentMd` semantics: `null`/`undefined` leaves the note UNCHANGED; a

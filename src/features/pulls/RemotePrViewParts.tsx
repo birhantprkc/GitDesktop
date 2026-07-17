@@ -385,7 +385,10 @@ export function MergePrDialog({
               Delete <span className="font-mono break-all">{headRefName}</span>{" "}
               on the remote after merging
               {deletionBlocked && (
-                <span className="text-warning"> — protected by a branch rule</span>
+                <span className="text-warning">
+                  {" "}
+                  — protected by a branch rule
+                </span>
               )}
             </span>
           </label>

@@ -415,7 +415,14 @@ export function RemotePrView({
     const action = approved ? unapprovePr : approvePr;
     // Must mirror usePrApprovals' key exactly — GitLab-only, so the lens segment
     // is the literal "origin" there; a mismatch makes this optimistic flip a no-op.
-    const key = ["repo", repoPath, "pr", "origin", number, "approvals"] as const;
+    const key = [
+      "repo",
+      repoPath,
+      "pr",
+      "origin",
+      number,
+      "approvals",
+    ] as const;
     // Cancel any in-flight approvals refetch first — otherwise it can resolve
     // AFTER this optimistic flip and silently revert the click (the approval
     // state lives in a separate query, so nothing else guards it).
@@ -460,7 +467,14 @@ export function RemotePrView({
     // undo path. Bitbucket falls through to the revoke below.
     if (requested && !canUnrequestChanges) return;
     // Same as toggleApproval: mirror usePrApprovals' literal "origin" lens segment.
-    const key = ["repo", repoPath, "pr", "origin", number, "approvals"] as const;
+    const key = [
+      "repo",
+      repoPath,
+      "pr",
+      "origin",
+      number,
+      "approvals",
+    ] as const;
     // Same guard as toggleApproval: cancel an in-flight approvals refetch so it
     // can't land after the optimistic flip and revert it.
     await queryClient.cancelQueries({ queryKey: key });

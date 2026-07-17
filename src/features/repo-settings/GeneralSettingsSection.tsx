@@ -282,8 +282,7 @@ function GeneralForm({
                   repoName,
                   onResult: ({ description, topics }) => {
                     if (description) set("description", description);
-                    if (topics.length)
-                      set("topics", normalizeTopics(topics));
+                    if (topics.length) set("topics", normalizeTopics(topics));
                   },
                 })
               }

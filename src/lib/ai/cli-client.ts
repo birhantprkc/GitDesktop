@@ -113,7 +113,10 @@ export function createCliClient(settings: AiSettings): AiClient {
           // catches are gated on `abortSignal.aborted` and resolve null, so a
           // cancelled run never hands a partial buffer to the result parsers.
           if (aborted || req.abortSignal?.aborted) {
-            throw new DOMException("The generation was cancelled.", "AbortError");
+            throw new DOMException(
+              "The generation was cancelled.",
+              "AbortError",
+            );
           }
           if (queue.length === 0) {
             // Nothing buffered: if the backend already returned without a terminal

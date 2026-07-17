@@ -1,3 +1,5 @@
+import { CheckIcon, MinusIcon } from "@phosphor-icons/react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -11,8 +13,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CheckIcon, MinusIcon } from "@phosphor-icons/react";
-import { useQueryClient } from "@tanstack/react-query";
 import * as api from "@/lib/git/api";
 import { repoKeys, useBranchDivergence } from "@/lib/git/queries";
 import type { Branch } from "@/lib/git/types";
@@ -78,9 +78,10 @@ export function CleanupBranchesDialog({
   const [activeName, setActiveName] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Batch progress + per-branch failures (kept visible so a partial run is honest).
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(
-    null,
-  );
+  const [progress, setProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [failed, setFailed] = useState<Map<string, string>>(new Map());
   const running = progress !== null;
 
@@ -115,9 +116,7 @@ export function CleanupBranchesDialog({
       )
         continue;
       const ts = Date.parse(b.lastCommitDate);
-      const ageDays = Number.isFinite(ts)
-        ? Math.floor((now - ts) / DAY_MS)
-        : 0;
+      const ageDays = Number.isFinite(ts) ? Math.floor((now - ts) / DAY_MS) : 0;
       const merged = mergedSet.has(b.name);
       const old = ageDays >= windowDays;
       if (merged || old) out.push({ branch: b, merged, ageDays, old });
@@ -169,7 +168,8 @@ export function CleanupBranchesDialog({
   const checkingMerged = Boolean(defaultBranch) && divergence.isLoading;
 
   const selectedCount = candidateNames.filter((n) => selected.has(n)).length;
-  const allChecked = candidates.length > 0 && selectedCount === candidates.length;
+  const allChecked =
+    candidates.length > 0 && selectedCount === candidates.length;
   const someChecked = selectedCount > 0;
 
   function toggle(name: string) {
@@ -233,8 +233,12 @@ export function CleanupBranchesDialog({
     }
     // One reconciliation for the whole batch (branch mutations aren't optimistic
     // here) — refreshes the switcher list, divergence, and archived section.
-    await queryClient.invalidateQueries({ queryKey: repoKeys.branches(repoPath) });
-    await queryClient.invalidateQueries({ queryKey: ["repo", repoPath, "divergence"] });
+    await queryClient.invalidateQueries({
+      queryKey: repoKeys.branches(repoPath),
+    });
+    await queryClient.invalidateQueries({
+      queryKey: ["repo", repoPath, "divergence"],
+    });
     setProgress(null);
 
     const ok = names.length - fails.size;
@@ -274,7 +278,9 @@ export function CleanupBranchesDialog({
             <DialogTitle>Clean up branches</DialogTitle>
             <DialogDescription>
               Local branches merged into{" "}
-              <span className="font-mono">{defaultBranch ?? "the default branch"}</span>{" "}
+              <span className="font-mono">
+                {defaultBranch ?? "the default branch"}
+              </span>{" "}
               or with no commits in a while.{" "}
               {mode === "archive"
                 ? "Archiving hides them from the switcher — unarchive anytime."
@@ -382,7 +388,9 @@ export function CleanupBranchesDialog({
           ) : candidates.length === 0 ? (
             <p className="py-6 text-center text-xs text-muted-foreground">
               No stale branches — nothing is merged into{" "}
-              <span className="font-mono">{defaultBranch ?? "the default branch"}</span>{" "}
+              <span className="font-mono">
+                {defaultBranch ?? "the default branch"}
+              </span>{" "}
               or idle for {windowDays} days. Try a shorter window.
             </p>
           ) : (
@@ -465,8 +473,8 @@ export function CleanupBranchesDialog({
         title="Delete branches?"
         body={
           <>
-            Permanently deletes {pluralBranches(selectedCount)}, including commits
-            that exist only on them. This can't be undone.
+            Permanently deletes {pluralBranches(selectedCount)}, including
+            commits that exist only on them. This can't be undone.
           </>
         }
         confirmLabel={`Delete ${pluralBranches(selectedCount)}`}
