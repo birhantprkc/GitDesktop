@@ -55,6 +55,7 @@ import { TagDetailView } from "@/features/tags/TagDetailView";
 import { TagsPanel } from "@/features/tags/TagsPanel";
 import {
   forgeFeatureReady,
+  useForgeSessionHealth,
   useForgeStatus,
   useRepoStatus,
 } from "@/lib/git/queries";
@@ -265,6 +266,43 @@ export function RepositoryView() {
     "repo-lens-upstream",
     () => setRepoLens("upstream"),
     lensGate,
+  );
+
+  // Palette "Reconnect forge session": github/gitlab open the reconnect dialog
+  // (mode from health — a signed-out host needs a fresh login, since `gh auth
+  // refresh` errors when no account exists; anything else refreshes); bitbucket
+  // has no in-app flow, so it deep-links to Settings → Accounts. Gated on a
+  // known provider (nothing to reconnect otherwise).
+  const openReconnect = useUiStore((s) => s.openReconnect);
+  const openSettings = useUiStore((s) => s.openSettings);
+  const sessionHealth = useForgeSessionHealth(repoPath ?? "");
+  const forgeProvider = gh.data?.provider ?? null;
+  useHotkeyAction(
+    "reconnect-forge-session",
+    () => {
+      if (forgeProvider === "github" || forgeProvider === "gitlab") {
+        openReconnect({
+          provider: forgeProvider,
+          host:
+            gh.data?.host ??
+            sessionHealth.data?.host ??
+            (forgeProvider === "gitlab" ? "gitlab.com" : "github.com"),
+          mode:
+            sessionHealth.data?.state === "notConnected" ? "login" : "refresh",
+        });
+      } else if (forgeProvider === "bitbucket") {
+        openSettings("accounts");
+      }
+    },
+    // Gate on health having RESOLVED for github/gitlab: the mode below is derived from
+    // `sessionHealth.data`, and while it's undefined the derivation would default to
+    // "refresh" — wrong for a never-signed-in host. Defaulting to "login" instead was
+    // rejected because `gh auth login` re-requests the DEFAULT scope set (silently
+    // narrowing extra granted scopes like `workflow`), while `refresh` preserves them —
+    // so the mode decision must never be made blind. Bitbucket needs no health probe (it
+    // deep-links to Settings), so it stays enabled on a known provider alone.
+    forgeProvider === "bitbucket" ||
+      (forgeProvider !== null && sessionHealth.data !== undefined),
   );
 
   // "repo • branch" in the OS title bar (and Alt-Tab) while a repo is open. No
