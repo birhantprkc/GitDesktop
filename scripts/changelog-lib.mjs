@@ -68,6 +68,63 @@ export function readFragments(dir) {
 }
 
 /**
+ * Validate every changelog.d entry without assembling. Returns a list of
+ * `{ file, problem }` — empty when everything is consumable. Unlike
+ * readFragments (which throws on the FIRST bad body, at assembly time), this
+ * collects every problem so CI and the release driver can report them all at
+ * once — and it also catches the one failure readFragments can never see: a
+ * misnamed `.md` file that FRAGMENT_RE doesn't match (e.g. `add-foo.md`),
+ * which the assembler would silently ignore forever.
+ */
+export function validateFragments(dir) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const problems = [];
+  for (const name of names.sort((a, b) => a.localeCompare(b))) {
+    if (name === "README.md" || !name.endsWith(".md")) continue;
+    if (!FRAGMENT_RE.test(name)) {
+      problems.push({
+        file: name,
+        problem:
+          "filename will never be picked up by the assembler — name it <added|changed|fixed>-<slug>.md",
+      });
+      continue;
+    }
+    const body = readLF(join(dir, name)).replace(/\n+$/, "");
+    if (!body.trim()) {
+      problems.push({ file: name, problem: "fragment is empty" });
+      continue;
+    }
+    if (!body.startsWith("- ")) {
+      problems.push({
+        file: name,
+        problem: `must start with "- " (a finished Markdown bullet). Got: ${JSON.stringify(
+          body.slice(0, 60),
+        )}`,
+      });
+      continue;
+    }
+    const lines = body.split("\n");
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (line === "" || line.startsWith("- ") || line.startsWith("  ")) continue;
+      problems.push({
+        file: name,
+        problem: `line ${i + 1} is a wrapped continuation but isn't indented 2 spaces (the assembler concatenates verbatim): ${JSON.stringify(
+          line.slice(0, 40),
+        )}`,
+      });
+      break;
+    }
+  }
+  return problems;
+}
+
+/**
  * Render the `### Category` blocks for the non-empty groups (no version heading),
  * as an array of lines. Each block is `### Cat`, blank, its bullets, blank.
  */

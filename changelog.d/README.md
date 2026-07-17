@@ -43,6 +43,9 @@ re-wrapping, so what you write is exactly what ships.
 
 - `pnpm changelog:preview` — show the pending fragments assembled under an
   Unreleased heading (nothing is written).
+- `pnpm changelog:check` — validate every pending fragment (filename + bullet
+  format) and report all problems; the `changelog` PR workflow runs this, so a
+  malformed fragment fails the PR instead of the release.
 - `pnpm changelog` — draft starting-point bullets from the git history since the
   last tag (curate before saving as a fragment).
 - `pnpm release` — (maintainers) interactive release driver: picks the bump, previews fragments, runs `release:prepare`, syncs `Cargo.lock`, then commits, tags, and pushes (the tag pushed explicitly).

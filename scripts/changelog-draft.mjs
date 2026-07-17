@@ -6,7 +6,34 @@
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { countEntries, readFragments, renderSectionLines } from "./changelog-lib.mjs";
+import {
+  countEntries,
+  readFragments,
+  renderSectionLines,
+  validateFragments,
+} from "./changelog-lib.mjs";
+
+// `--check` mode: validate every pending fragment (filename + bullet format)
+// without assembling anything, reporting ALL problems at once. Emits GitHub
+// Actions ::error annotations so the changelog workflow fails red on the exact
+// file BEFORE merge, instead of the release driver tripping over it later.
+// Run locally with: pnpm changelog:check
+if (process.argv.includes("--check")) {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "changelog.d");
+  const problems = validateFragments(dir);
+  if (problems.length > 0) {
+    for (const p of problems) {
+      process.stderr.write(`::error file=changelog.d/${p.file}::${p.problem}\n`);
+    }
+    process.stderr.write(
+      `\n${problems.length} invalid changelog fragment(s) — see changelog.d/README.md for the format.\n`,
+    );
+    process.exit(1);
+  }
+  const { files } = readFragments(dir);
+  process.stdout.write(`${files.length} pending fragment(s), all valid.\n`);
+  process.exit(0);
+}
 
 // `--preview` mode: show the pending changelog.d/ fragments assembled under an
 // Unreleased heading, without touching any file. (Plain `pnpm changelog`, below,

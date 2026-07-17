@@ -19,6 +19,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      # Validate the FORMAT of every pending fragment (finished "- " bullet,
+      # 2-space wrapped-line indent, consumable filename), not just presence —
+      # a malformed fragment otherwise only surfaces when `pnpm release` trips
+      # over it at release time. Uses only node built-ins, no install needed.
+      - name: Validate changelog.d fragment format
+        run: node scripts/changelog-draft.mjs --check
       - name: Require a changelog.d/ fragment for code changes
         shell: bash
         env:
