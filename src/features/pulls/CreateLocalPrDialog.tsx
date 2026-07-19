@@ -18,12 +18,18 @@ import {
   useDefaultBranch,
   useRepoStatus,
 } from "@/lib/git/queries";
+import { eventToBinding, formatBinding } from "@/lib/hotkeys/binding";
+import { useEffectiveBindings } from "@/lib/hotkeys/hotkeys";
 import { useCreateLocalPr } from "@/lib/pulls/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
 import { useBranchPickerOptions } from "./useBranchPickerOptions";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
+
+/** Platform-correct submit hint (Cmd+Enter on macOS, Ctrl+Enter else) — never a
+ *  literal modifier (house platform-mod-key rule). */
+const SUBMIT_HINT = formatBinding("mod+enter");
 
 // Rendered exactly ONCE, hoisted in RepositoryView — never render it inside a tab
 // panel. Its success handler's `setRepoTab("pulls")` would hide a panel host's
@@ -127,9 +133,68 @@ export function CreateLocalPrDialog({
   const ahead = comparison.data?.ahead ?? [];
   const sameBranch = base === head;
 
+  // AI title+description generation — shared by the Generate button's onClick and
+  // the dialog-local generate chord below. Verbatim the button's prior body.
+  function runGenerate() {
+    generate(
+      base,
+      head,
+      ahead.map((c) => c.subject),
+      (d) => {
+        form.setFieldValue("title", d.title);
+        form.setFieldValue("body", d.body);
+      },
+    );
+  }
+  // Context-sensitive reuse of the `generate-commit-message` binding (mod+g by
+  // default) while this dialog is open — never a hardcoded chord, so a
+  // Settings → Keyboard rebinding drives it. null = explicitly unbound.
+  const generateBinding =
+    useEffectiveBindings().get("generate-commit-message") ?? null;
+  const generateHint = generateBinding
+    ? ` (${formatBinding(generateBinding)})`
+    : "";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
+      <DialogContent
+        className="flex max-h-[85vh] flex-col sm:max-w-2xl"
+        // mod+enter submits from anywhere in the dialog. It's captured on
+        // DialogContent (the Popup), not the <form>: this dialog is hoisted in
+        // RepositoryView and can sit open over the Changes tab, where the global
+        // `commit` action (also mod+enter) has a live handler, and the X close
+        // button renders as a SIBLING of the form inside the Popup — a chord
+        // pressed with focus on the X would otherwise bypass a form-level
+        // handler and commit behind the dialog. Capturing on the Popup covers
+        // the X and every field, so the UNCONDITIONAL preventDefault here is
+        // what actually contains the chord. Submit only when the SubmitButton
+        // would be enabled (handleSubmit still enforces the field validators).
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            if (!generating) form.handleSubmit();
+            return;
+          }
+          // The generate-commit-message chord (mod+g by default) runs this
+          // dialog's own Generate while it's open. Only when AI is on (no
+          // Generate surface otherwise) and the chord is bound. ALWAYS swallow
+          // it: this dialog is hoisted over the Changes tab, where the global
+          // generate-commit-message action has a live handler — without this the
+          // chord would generate a COMMIT MESSAGE behind the dialog. Run Generate
+          // only when its button would be enabled; while generating we swallow
+          // but DON'T cancel (an accidental repeat must not abort a running one).
+          if (
+            aiEnabled &&
+            generateBinding !== null &&
+            eventToBinding(e) === generateBinding
+          ) {
+            e.preventDefault();
+            if (!generating && !(sameBranch || ahead.length === 0)) {
+              runGenerate();
+            }
+          }
+        }}
+      >
         <form
           className="flex min-h-0 min-w-0 flex-col gap-4"
           onSubmit={(e) => {
@@ -228,18 +293,8 @@ export function CreateLocalPrDialog({
                         variant="outline"
                         size="xs"
                         disabled={sameBranch || ahead.length === 0}
-                        onClick={() =>
-                          generate(
-                            base,
-                            head,
-                            ahead.map((c) => c.subject),
-                            (d) => {
-                              form.setFieldValue("title", d.title);
-                              form.setFieldValue("body", d.body);
-                            },
-                          )
-                        }
-                        title="Generate the title and description with AI"
+                        onClick={runGenerate}
+                        title={`Generate the title and description with AI${generateHint}`}
                       >
                         <SparkleIcon data-icon="inline-start" />
                         Generate
@@ -260,7 +315,7 @@ export function CreateLocalPrDialog({
               Cancel
             </Button>
             <form.AppForm>
-              <form.SubmitButton disabled={generating}>
+              <form.SubmitButton disabled={generating} title={SUBMIT_HINT}>
                 Create local PR
               </form.SubmitButton>
             </form.AppForm>

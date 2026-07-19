@@ -43,6 +43,8 @@ import {
   providerLabel,
   type RemoteLens,
 } from "@/lib/git/types";
+import { eventToBinding, formatBinding } from "@/lib/hotkeys/binding";
+import { useEffectiveBindings } from "@/lib/hotkeys/hotkeys";
 import {
   useLensGate,
   useRemoteSlug,
@@ -53,6 +55,10 @@ import { toastError } from "@/lib/toast";
 import { ReviewersPopover } from "./ReviewersPopover";
 import { useBranchPickerOptions } from "./useBranchPickerOptions";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
+
+/** Platform-correct submit hint (Cmd+Enter on macOS, Ctrl+Enter else) — never a
+ *  literal modifier (house platform-mod-key rule). */
+const SUBMIT_HINT = formatBinding("mod+enter");
 
 export function CreatePrDialog({
   repoPath,
@@ -421,9 +427,85 @@ export function CreatePrDialog({
     labels.has(l.name),
   );
 
+  // AI title+description generation — shared by the Generate button's onClick and
+  // the dialog-local generate chord below. Verbatim the button's prior body.
+  function runGenerate() {
+    aiDescriptionRef.current = true;
+    generate(
+      base,
+      head,
+      ahead.map((c) => c.subject),
+      (d) => {
+        form.setFieldValue("title", d.title);
+        form.setFieldValue("body", d.body);
+        // Additive: union the model's (already repo-validated) labels with the
+        // user's manual picks, never replace.
+        setLabels((prev) => new Set([...prev, ...d.labels]));
+      },
+      // Provider-aware prompt copy (MR/merge-request noun, markdown flavor);
+      // null host → base GitHub wording.
+      forge.data?.provider ?? undefined,
+      // Existing repo labels (name + stated purpose) the model may propose from;
+      // empty ⇒ no labels proposed.
+      repoLabels.data?.map((l) => ({
+        name: l.name,
+        description: l.description,
+      })) ?? [],
+    );
+  }
+  // Context-sensitive reuse of the `generate-commit-message` binding (mod+g by
+  // default) while this dialog is open — never a hardcoded chord, so a
+  // Settings → Keyboard rebinding drives it. null = explicitly unbound.
+  const generateBinding =
+    useEffectiveBindings().get("generate-commit-message") ?? null;
+  const generateHint = generateBinding
+    ? ` (${formatBinding(generateBinding)})`
+    : "";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
+      <DialogContent
+        className="flex max-h-[85vh] flex-col sm:max-w-2xl"
+        // mod+enter submits from anywhere in the dialog. It's captured on
+        // DialogContent (the Popup), not the <form>, because the X close button
+        // renders as a SIBLING of the form inside the Popup — a chord pressed
+        // with focus on the X would otherwise bypass a form-level handler and
+        // reach the global mod+enter action. ALWAYS swallow the chord here; only
+        // submit when the same gates as the SubmitButton allow (handleSubmit
+        // then enforces the field validators — title, same-branch — so an
+        // invalid form stays inert).
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            if (
+              !(
+                generating ||
+                nothingToMerge ||
+                baseLoading ||
+                Boolean(existingPr)
+              )
+            ) {
+              form.handleSubmit();
+            }
+            return;
+          }
+          // The generate-commit-message chord (mod+g by default) runs this
+          // dialog's own Generate while it's open. Only when AI is on (no
+          // Generate surface otherwise) and the chord is bound. ALWAYS swallow
+          // it so it can't reach the global listener and generate a commit
+          // message behind the dialog; run Generate only when its button would
+          // be enabled. While generating we swallow but DON'T cancel — an
+          // accidental repeat must never abort an in-flight generation.
+          if (
+            aiEnabled &&
+            generateBinding !== null &&
+            eventToBinding(e) === generateBinding
+          ) {
+            e.preventDefault();
+            if (!generating && !nothingToMerge) runGenerate();
+          }
+        }}
+      >
         <form
           className="flex min-h-0 min-w-0 flex-col gap-4"
           onSubmit={(e) => {
@@ -726,33 +808,8 @@ export function CreatePrDialog({
                         variant="outline"
                         size="xs"
                         disabled={nothingToMerge}
-                        onClick={() => {
-                          aiDescriptionRef.current = true;
-                          generate(
-                            base,
-                            head,
-                            ahead.map((c) => c.subject),
-                            (d) => {
-                              form.setFieldValue("title", d.title);
-                              form.setFieldValue("body", d.body);
-                              // Additive: union the model's (already repo-validated)
-                              // labels with the user's manual picks, never replace.
-                              setLabels(
-                                (prev) => new Set([...prev, ...d.labels]),
-                              );
-                            },
-                            // Provider-aware prompt copy (MR/merge-request noun,
-                            // markdown flavor); null host → base GitHub wording.
-                            forge.data?.provider ?? undefined,
-                            // Existing repo labels (name + stated purpose) the
-                            // model may propose from; empty ⇒ no labels proposed.
-                            repoLabels.data?.map((l) => ({
-                              name: l.name,
-                              description: l.description,
-                            })) ?? [],
-                          );
-                        }}
-                        title="Generate the title and description with AI"
+                        onClick={runGenerate}
+                        title={`Generate the title and description with AI${generateHint}`}
                       >
                         <SparkleIcon data-icon="inline-start" />
                         Generate
@@ -790,6 +847,7 @@ export function CreatePrDialog({
                       baseLoading ||
                       Boolean(existingPr)
                     }
+                    title={SUBMIT_HINT}
                   >
                     {draft ? "Create draft" : `Create ${prNoun}`}
                   </form.SubmitButton>

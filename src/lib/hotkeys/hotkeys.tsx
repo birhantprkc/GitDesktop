@@ -138,7 +138,20 @@ export function useHotkeysListener() {
     if (!binding) return;
     if (isEditableTarget(e.target) && !firesInEditable(binding)) return;
     const id = byBinding.get(binding);
-    if (id && dispatchAction(id)) e.preventDefault();
+    // Registered-vs-unregistered rule. A chord OWNED by an on-screen surface —
+    // an action with at least one live handler, even a disabled one — must
+    // never leak to the webview's browser accelerators (Ctrl+P → print,
+    // F5/Ctrl+R → reload) —
+    // so we preventDefault whenever the action is registered, dispatching only
+    // if an enabled handler exists. But a chord that NOTHING on screen owns
+    // (the action exists in the registry but no component registered it — e.g.
+    // Ctrl+W / Ctrl+F on the repositories list, where RepositoryView is
+    // unmounted) keeps its native meaning: we leave it alone. (The
+    // editable-target guard above already exits for typing contexts.)
+    if (id && (liveHandlers.get(id)?.length ?? 0) > 0) {
+      dispatchAction(id);
+      e.preventDefault();
+    }
   });
 
   useEffect(() => {
