@@ -159,7 +159,11 @@ export function TagDetailView({
                           notes: "",
                           prerelease: rel.isPrerelease,
                           draft: false,
-                          latest: isLatest,
+                          // Omit --latest so GitHub applies its default (a newly
+                          // published stable release becomes Latest, like the web UI).
+                          // A draft's isLatest is structurally false — sending it here
+                          // was the bug that stripped Latest on publish.
+                          latest: undefined,
                         },
                         {
                           onSuccess: () => toast.success("Published"),
@@ -359,7 +363,10 @@ export function TagDetailView({
                     notes: editNotes,
                     prerelease: editPrerelease,
                     draft: rel.isDraft,
-                    latest: editLatest,
+                    // Only round-trip Latest for published releases (real user intent
+                    // on an eligible release). A draft can't be Latest, so omit the flag
+                    // and let GitHub decide on publish.
+                    latest: rel.isDraft ? undefined : editLatest,
                   },
                   {
                     onSuccess: () => {
@@ -402,13 +409,31 @@ export function TagDetailView({
                       />
                       Pre-release
                     </label>
-                    <label className="flex cursor-pointer items-center gap-2 text-xs">
-                      <Switch
-                        checked={editLatest}
-                        onCheckedChange={setEditLatest}
-                      />
-                      Latest release
-                    </label>
+                    {/* Latest applies only to published releases — GitHub sets it on
+                        publish and ignores it on a draft. Disable + explain in visible
+                        helper text (a title on a disabled control never shows). */}
+                    <div className="flex flex-col gap-1">
+                      <label
+                        className={`flex items-center gap-2 text-xs ${
+                          rel.isDraft
+                            ? "cursor-not-allowed opacity-60"
+                            : "cursor-pointer"
+                        }`}
+                      >
+                        <Switch
+                          checked={rel.isDraft ? false : editLatest}
+                          onCheckedChange={setEditLatest}
+                          disabled={rel.isDraft}
+                        />
+                        Latest release
+                      </label>
+                      {rel.isDraft && (
+                        <p className="text-muted-foreground text-[11px]">
+                          GitHub sets Latest when the release is published —
+                          this release will become Latest by default on publish.
+                        </p>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

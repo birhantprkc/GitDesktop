@@ -1684,7 +1684,7 @@ pub async fn forge_release_edit(
     notes: String,
     prerelease: bool,
     draft: bool,
-    latest: bool,
+    latest: Option<bool>,
 ) -> AppResult<()> {
     match detect_non_github(&repo_path).await {
         Some((Provider::GitLab, _)) => gitlab::edit_release(&repo_path, &tag, &title, &notes).await,

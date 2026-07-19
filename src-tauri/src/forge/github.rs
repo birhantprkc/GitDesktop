@@ -410,7 +410,7 @@ pub async fn edit_release(
     notes: &str,
     prerelease: bool,
     draft: bool,
-    latest: bool,
+    latest: Option<bool>,
 ) -> AppResult<()> {
     crate::github::release::gh_release_edit(
         repo_path.to_string(),

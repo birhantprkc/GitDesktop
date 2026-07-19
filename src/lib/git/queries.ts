@@ -3195,7 +3195,7 @@ export function useEditRelease(repo: string) {
       notes: string;
       prerelease: boolean;
       draft: boolean;
-      latest: boolean;
+      latest: boolean | undefined;
     }) =>
       api.forgeReleaseEdit(
         repo,

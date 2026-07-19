@@ -530,7 +530,9 @@ export const forgeReleaseEdit = (
   notes: string,
   prerelease: boolean,
   draft: boolean,
-  latest: boolean,
+  // Tri-state: `undefined` omits `--latest` so GitHub keeps/decides Latest natively
+  // (a draft's Latest is structurally false — sending it strips Latest on publish).
+  latest: boolean | undefined,
 ) =>
   invoke<void>("forge_release_edit", {
     repoPath,

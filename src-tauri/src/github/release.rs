@@ -241,14 +241,22 @@ pub async fn gh_release_edit(
     notes: String,
     prerelease: bool,
     draft: bool,
-    latest: bool,
+    latest: Option<bool>,
 ) -> AppResult<()> {
     validate_tag(&tag)?;
     let slug = crate::github::gh_origin_slug(&repo_path).await?;
-    // gh's bool flags take an explicit value so they can be turned off too.
+    // `--prerelease`/`--draft` take an explicit value so they can be turned off too;
+    // both are draft-legal, so the explicit form is always correct for them.
+    //
+    // `--latest` is tri-state: only send it when we have a real intent (`Some`), and
+    // omit it entirely on `None`. A draft's Latest is structurally false (GitHub only
+    // computes Latest among published stable releases), so forcing `--latest=false`
+    // when publishing would override GitHub's own default of marking a newly published
+    // stable release Latest — the v0.4.0 bug where publishing a draft stripped Latest.
+    // Omitting the flag = gh sends nothing, so GitHub keeps/decides Latest natively.
     let prerelease_flag = format!("--prerelease={prerelease}");
     let draft_flag = format!("--draft={draft}");
-    let latest_flag = format!("--latest={latest}");
+    let latest_flag = latest.map(|l| format!("--latest={l}"));
     let title = title.trim();
     let notes = notes.trim();
     let mut args: Vec<&str> = vec![
@@ -259,8 +267,10 @@ pub async fn gh_release_edit(
         &slug,
         &prerelease_flag,
         &draft_flag,
-        &latest_flag,
     ];
+    if let Some(latest_flag) = latest_flag.as_ref() {
+        args.push(latest_flag);
+    }
     if !title.is_empty() {
         args.push("--title");
         args.push(title);

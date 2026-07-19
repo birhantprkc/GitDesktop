@@ -1038,11 +1038,12 @@ impl GitDesktopMcp {
         Parameters(args): Parameters<UpdateReleaseArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_remote_write()?;
-        // forge_release_edit sends title/notes AND applies prerelease/draft/latest
-        // explicitly (gh's `--flag=<bool>` form), so an omitted flag would otherwise be
-        // forced to its param default. Read the current release to preserve whatever the
-        // caller didn't set. `is_latest` isn't in the detail view, so derive it from the
-        // list view (default false if the release isn't found there).
+        // forge_release_edit sends title/notes AND applies prerelease/draft explicitly
+        // (gh's `--flag=<bool>` form), so an omitted flag would otherwise be forced to its
+        // param default. Read the current release to preserve whatever the caller didn't
+        // set. `latest` is tri-state and we always pass `None` here: omitting `--latest`
+        // lets GitHub keep/decide Latest natively (a draft's Latest is structurally false,
+        // so round-tripping it would strip Latest when the update publishes the release).
         let needs_current = args.title.is_none()
             || args.notes.is_none()
             || args.draft.is_none()
@@ -1072,17 +1073,6 @@ impl GitDesktopMcp {
             .prerelease
             .or_else(|| current.as_ref().map(|r| r.is_prerelease))
             .unwrap_or(false);
-        // Preserve the current "latest" flag: find this tag in the list view.
-        let latest = {
-            let releases = crate::forge::forge_release_list(self.repo.clone())
-                .await
-                .map_err(app_err)?;
-            releases
-                .iter()
-                .find(|r| r.tag_name == args.tag)
-                .map(|r| r.is_latest)
-                .unwrap_or(false)
-        };
         crate::forge::forge_release_edit(
             self.repo.clone(),
             args.tag.clone(),
@@ -1090,7 +1080,7 @@ impl GitDesktopMcp {
             notes,
             prerelease,
             draft,
-            latest,
+            None,
         )
         .await
         .map_err(app_err)?;
