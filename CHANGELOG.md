@@ -12,6 +12,130 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-19
+
+### Added
+
+- **Exclude files from AI in flow.** Right-click a changed file to keep it out of
+  AI context — new **Exclude from AI** actions (the file, its folder, or its file
+  type, plus a bulk action for multi-selections) append to the repo's
+  `.gitdesktop/aiignore`, creating the file (and the `.gitdesktop` folder) if
+  needed.
+- **Start a new branch from any base.** The new-branch dialog's **Base it on** picker is
+  now a searchable list grouped into **Local** and **Remote** branches, so you can base a
+  branch on any of them instead of only the current or default branch. Basing on a remote
+  branch (e.g. `origin/epic/big-feature`) starts from the remote tip and leaves the new
+  branch untracked, so its first push publishes it under its own name. Agents get the same
+  option via the MCP `create_branch` tool's `noTrack` flag.
+- **Keyboard shortcuts in the PR and issue dialogs.** Press **Ctrl/Cmd+Enter** from any
+  field in the **Create pull request**, **Create local PR**, or **Edit title/description**
+  dialog (for pull requests and issues alike) to submit it, matching the shortcut already
+  used to send comments. When AI features are on, the **generate commit message** shortcut
+  (Ctrl/Cmd+G by default) runs **Generate** for the title and description while a create or
+  edit PR dialog is open.
+- **Type-to-filter the author/label filter.** The pull-request and issue
+  author/label filter now has a search box — start typing to narrow both the
+  Author and Label sections, just like the branch switcher.
+- **Detach from a fork.** The repository settings Danger zone now offers two ways
+  to break a fork's ties: **Remove upstream remote** detaches your clone from the
+  parent locally (the Fork/Upstream switcher and "Update from upstream" disappear;
+  reversible by re-adding the remote), and **Leave fork network** detaches the
+  repository from its fork network. On GitLab this happens right in the app
+  (Owner-only — open merge requests to the parent are closed), while GitHub and
+  Bitbucket link out to the provider's detach page. A **Re-check fork status**
+  button refreshes the fork badge in place once you've done it.
+- A **GitHub Actions** check that's still running in the pull-request view now shows
+  its **current step** inline in the checks rollup, and a **live step checklist** when
+  you expand it — real progress as the run advances, instead of an empty log skeleton.
+- **PR timeline timestamps.** Every entry in a pull request's activity feed now
+  shows when it happened — review-thread replies and pushed-commit groups (both the
+  group header and each commit) gained relative timestamps that were previously
+  missing — and hovering any timeline time reveals the exact local date and time.
+- **Push a branch without switching to it.** From a branch's right-click menu in the
+  branch switcher, push a branch that's ahead of its origin remote (**Push to
+  _origin/…_**) or publish an unpushed one (**Publish branch**) — without checking it
+  out. Works even when the branch is checked out in another worktree, since a push
+  touches refs, never a working tree.
+- New rebindable **Push to origin** shortcut (default **Ctrl+Alt+P** / **Cmd+Option+P**)
+  pushes or publishes a branch to **origin** — the current branch, or, with the branches
+  list open, the highlighted one. When there's nothing to push (diverged, up to date, or
+  tracking a different remote), it says so instead.
+- **New Settings → AI "Review context" size.** Auto fits the review prompt
+  budget to the reviewing model's context window (probing Ollama models live), or
+  pick Compact/Standard/Expanded manually.
+
+### Changed
+
+- Branch menu rows now show a branch's own push/pull state (↑ to push, ↓ to pull, plus
+  markers for never-published and upstream-deleted branches) separately from its divergence
+  vs. the default branch, which now reads `+N −M` with the default branch named — previously
+  both rendered as identical ↑/↓ arrows, so being ahead of the default looked like unpushed
+  work. Rows now span two lines — the branch name on its own line, the details below it —
+  giving long branch names more room.
+- The **Compare** tab's base-branch picker is now a searchable combobox: type to filter,
+  archived branches are hidden, and each branch shows whether it's checked out in another
+  worktree and — when it has diverged — how far it's ahead of and behind your current
+  branch.
+- The **Compare** tab now lives in the header's **More ▾** menu instead of the primary
+  tab rail, keeping the rail focused on **Changes**, **History**, and **Pull Requests**.
+  Its keyboard shortcut is unchanged.
+- **Push a branch to any remote, not just origin.** Pushing a branch from the branch
+  switcher now targets the branch's OWN remote — a branch tracking a fork's `upstream`
+  is pushed there, not to origin. On a repo with several remotes, **Publish** offers a
+  per-remote choice (one item per remote). The MCP `push` tool gains an optional
+  `remote` parameter, and a bare `push {branch}` for a branch tracking a non-origin
+  remote now correctly targets that remote instead of pushing to origin under the
+  branch's own name.
+- The header sync buttons are ordered **Fetch / Pull / Push** — mirroring the natural
+  fetch → pull → push flow — and the ahead/behind counts appear directly on the **Push**
+  and **Pull** buttons — making it clear which button acts on them — instead of in separate
+  arrow badges.
+
+### Fixed
+
+- AI re-reviews now actually see the follow-up replies and triage decisions
+  GitDesktop itself posted: review-thread replies GitDesktop posted (triage
+  dispositions made through GitDesktop's agent/MCP tools) are harvested into the
+  review context, the newest of GitDesktop's own PR comments win the context
+  budget instead of the oldest, and when rounds accumulate past the budget the
+  prior discussion is distilled into a compact decision ledger instead of being
+  cut off.
+- Repo-aware AI reviews and sessions run with the Claude CLI can now actually
+  call the attached GitDesktop MCP tools. Previously the tools were exposed but
+  never granted permission, so every call was denied in headless mode and the
+  reviewer silently fell back to files on disk (losing full-diff, PR-metadata,
+  and blame lookups); the read-only server's tools are now granted explicitly.
+- Push, pull, fetch, and clone to private repos no longer fail with "Repository not
+  found" when a stale credential in the system keychain (macOS Keychain, Windows
+  Credential Manager) shadows your `gh`/`glab` sign-in — Git is now told to use exactly
+  the signed-in CLI's identity for that host. Tag pushes, remote branch deletion, and
+  fork PR pushes now authenticate the same way.
+- The pull-request and issue **author/label filter** popup no longer overflows
+  the window on repos with many authors — it now caps its height and scrolls
+  internally instead of forcing the whole window to scroll.
+- **Screen readers now announce every form field by name.** Labels across the app's
+  dialogs and settings are programmatically associated with their controls (`Base it on`,
+  select fields, the compare picker, and a dozen more), so assistive tech announces the
+  field name instead of just its value — and clicking a label focuses or opens its control.
+- Keyboard shortcuts owned by a visible surface no longer fall through to the underlying
+  webview when that action is momentarily disabled — so Ctrl+P won't open a print dialog
+  (nor F5 reload the app) when there's nothing to push or fetch. Shortcuts for surfaces
+  that aren't on screen keep their native behavior. The Fetch, Pull, and Push buttons'
+  tooltips now show their shortcuts, and expose them to screen readers.
+- Pull requests you open **outside** GitDesktop — with the `gh`/`glab` CLI, on the
+  web, or via a bot — now get their initial automated AI review too. Previously the
+  *On pull request opened* automation fired only for PRs created through the app's own
+  dialog, so externally-opened PRs got no first pass. The poller now catches up your
+  own non-draft, recently-opened, unreviewed PRs and runs the review automatically.
+- AI reviews no longer prepend the agent's streamed working narration ("I'll examine
+  the code… let me check the call sites…") to the review body — the review is now the
+  agent's final answer, and the narration is preserved under a collapsible **Thought
+  process** disclosure. This applies to CLI and agentic HTTP reviews, automation-posted
+  comments, and research report synthesis.
+- Skipped CI checks (and neutral or stale ones) in a pull request's checks rollup
+  now show as their own muted **skipped** segment instead of masquerading as
+  amber **pending** — on GitHub and for GitLab's skipped pipeline jobs alike.
+
 ## [0.3.1] - 2026-07-17
 
 ### Added
@@ -2049,7 +2173,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/theBGuy/GitDesktop/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/theBGuy/GitDesktop/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/theBGuy/GitDesktop/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/theBGuy/GitDesktop/compare/v0.2.2...v0.2.3
