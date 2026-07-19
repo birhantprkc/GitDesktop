@@ -5,6 +5,8 @@ import {
   CaretDownIcon,
   CheckIcon,
   CloudArrowDownIcon,
+  CloudSlashIcon,
+  CloudXIcon,
   GitBranchIcon,
   GitPullRequestIcon,
   TreeStructureIcon,
@@ -879,111 +881,224 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
             <button
               type="button"
               data-row={branch.name}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
+              className="flex w-full flex-col gap-y-0.5 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
               onClick={() => {
                 if (!branch.isCurrent) switchTo(branch.name);
               }}
             >
-              <span
-                className="min-w-0 flex-1 truncate"
-                // Only expose the full name as a tooltip when it's actually
-                // clipped — measured just-in-time on hover, so no per-row refs.
-                onMouseEnter={(e) => {
-                  const el = e.currentTarget;
-                  el.title = el.scrollWidth > el.clientWidth ? branch.name : "";
-                }}
-              >
-                {branch.name}
-                {branch.name === defaultName && (
-                  <span className="ml-1.5 text-[10px] text-muted-foreground">
-                    default
+              {/* Line 1: branch name (+ default tag) with the current-branch
+                  check pinned to the right edge. */}
+              <span className="flex w-full items-center gap-2">
+                <span
+                  className="min-w-0 flex-1 truncate"
+                  // Only expose the full name as a tooltip when it's actually
+                  // clipped — measured just-in-time on hover, so no per-row refs.
+                  onMouseEnter={(e) => {
+                    const el = e.currentTarget;
+                    el.title =
+                      el.scrollWidth > el.clientWidth ? branch.name : "";
+                  }}
+                >
+                  {branch.name}
+                  {branch.name === defaultName && (
+                    <span className="ml-1.5 text-[10px] text-muted-foreground">
+                      default
+                    </span>
+                  )}
+                </span>
+                {branch.isCurrent && (
+                  <CheckIcon className="size-3.5 shrink-0" />
+                )}
+              </span>
+              {/* Line 2: PR badge · worktree · sync · divergence, then the
+                  relative time pushed to the far right. Always renders (the
+                  time is always present). */}
+              <span className="flex w-full items-center gap-2">
+                {(() => {
+                  const pr = prByBranch.get(branch.name);
+                  if (!pr) return null;
+                  const isLocal = pr.select.kind === "local";
+                  return (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      title={
+                        isLocal
+                          ? `${PR_STATE_LABEL[pr.state]} local pull request — open in Pull Requests`
+                          : `${PR_STATE_LABEL[pr.state]} pull request ${pr.label} — open in Pull Requests`
+                      }
+                      className={cn(
+                        "flex shrink-0 cursor-pointer items-center gap-0.5 text-[11px] tabular-nums hover:underline",
+                        PR_TONE[pr.state],
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openPr(pr.select);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          openPr(pr.select);
+                        }
+                      }}
+                    >
+                      <GitPullRequestIcon className="size-3" weight="bold" />
+                      {pr.label}
+                    </span>
+                  );
+                })()}
+                {inWorktree && (
+                  <span
+                    className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground"
+                    title={`Checked out in another worktree (${worktreeByBranch.get(
+                      branch.name,
+                    )}) — open it instead of switching`}
+                  >
+                    <TreeStructureIcon className="size-3" weight="bold" />
+                    worktree
+                  </span>
+                )}
+                {/* Two distinct indicators per row: (1) the sync indicator
+                    below shows the branch's OWN upstream push/pull state in the
+                    arrow vocabulary (matching the header's Push/Pull badges), so
+                    "Update from {upstream}" / "Push to {upstream}" stay
+                    discoverable on every branch; (2) the divergence indicator
+                    further down shows how far the branch has drifted from the
+                    DEFAULT branch, rendered as `+N −M {default}` text so it can't
+                    be mistaken for unpushed work. Sync is skipped entirely on a
+                    remoteless repo (there's no push story). */}
+                {remoteNames.length > 0 &&
+                  (() => {
+                    // A branch tracking a remote that's since been removed (while
+                    // other remotes remain) offers neither Push nor Publish in the
+                    // context menu — arrows here would imply a push/pull action the
+                    // menu can't honor, so render the muted local-only marker with a
+                    // NO-action title. `upstreamRemote` is null for a branch tracking
+                    // a LOCAL upstream (git's `%(upstream:remotename)` is empty →
+                    // None on the Rust side); the `branch.upstreamRemote &&` conjunct
+                    // keeps such a branch OUT of this case so its truthful vs-local
+                    // arrows still show below.
+                    if (
+                      branch.upstream &&
+                      !branch.upstreamGone &&
+                      branch.upstreamRemote &&
+                      !remoteNames.includes(branch.upstreamRemote)
+                    ) {
+                      const label = `Tracks ${branch.upstream}, but that remote is no longer configured.`;
+                      return (
+                        <span
+                          role="img"
+                          aria-label={label}
+                          className="flex shrink-0 items-center text-muted-foreground"
+                          title={label}
+                        >
+                          <CloudSlashIcon className="size-3" />
+                        </span>
+                      );
+                    }
+                    if (branch.upstream && !branch.upstreamGone) {
+                      if (
+                        branch.upstreamAhead === 0 &&
+                        branch.upstreamBehind === 0
+                      ) {
+                        // In sync with the upstream — silence means synced.
+                        return null;
+                      }
+                      const parts: string[] = [];
+                      if (branch.upstreamAhead > 0)
+                        parts.push(`${branch.upstreamAhead} to push`);
+                      if (branch.upstreamBehind > 0)
+                        parts.push(`${branch.upstreamBehind} to pull`);
+                      const label = `${parts.join(", ")} — vs ${branch.upstream}`;
+                      return (
+                        <span
+                          // No text color: inherits the row foreground (a step
+                          // stronger than the muted divergence) and follows the
+                          // hover accent-foreground automatically. The arrow SVGs are
+                          // aria-hidden, so the span carries the name for readers —
+                          // role="img" because aria-label is not valid (nor reliably
+                          // announced) on a generic span.
+                          role="img"
+                          aria-label={label}
+                          className="flex shrink-0 items-center gap-1 text-[11px] tabular-nums"
+                          title={label}
+                        >
+                          {branch.upstreamAhead > 0 && (
+                            <span className="flex items-center gap-0.5">
+                              <ArrowUpIcon className="size-3" weight="bold" />
+                              {branch.upstreamAhead}
+                            </span>
+                          )}
+                          {branch.upstreamBehind > 0 && (
+                            <span className="flex items-center gap-0.5">
+                              <ArrowDownIcon className="size-3" weight="bold" />
+                              {branch.upstreamBehind}
+                            </span>
+                          )}
+                        </span>
+                      );
+                    }
+                    if (branch.upstreamGone) {
+                      const label = `Upstream ${branch.upstream} was deleted on the remote — likely merged. Right-click to publish again or delete.`;
+                      return (
+                        <span
+                          role="img"
+                          aria-label={label}
+                          className="flex shrink-0 items-center text-muted-foreground"
+                          title={label}
+                        >
+                          <CloudXIcon className="size-3" />
+                        </span>
+                      );
+                    }
+                    // !branch.upstream
+                    return (
+                      <span
+                        role="img"
+                        aria-label="Local only — never published. Right-click to publish."
+                        className="flex shrink-0 items-center text-muted-foreground"
+                        title="Local only — never published. Right-click to publish."
+                      >
+                        <CloudSlashIcon className="size-3" />
+                      </span>
+                    );
+                  })()}
+                {div &&
+                  (div.ahead > 0 || div.behind > 0) &&
+                  (() => {
+                    const parts: string[] = [];
+                    if (div.ahead > 0)
+                      parts.push(
+                        `${div.ahead} commit${div.ahead === 1 ? "" : "s"} ahead of ${defaultName}`,
+                      );
+                    if (div.behind > 0)
+                      // Behind-only must still name the base: role="img" hides the
+                      // visible {defaultName} child from AT, so the label is all
+                      // a reader gets. Skipped when the ahead part named it already.
+                      parts.push(
+                        `${div.behind} commit${div.behind === 1 ? "" : "s"} behind${div.ahead > 0 ? "" : ` ${defaultName}`}`,
+                      );
+                    const label = parts.join(", ");
+                    return (
+                      <span
+                        role="img"
+                        aria-label={label}
+                        className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground tabular-nums"
+                        title={label}
+                      >
+                        {div.ahead > 0 && <span>+{div.ahead}</span>}
+                        {div.behind > 0 && <span>{`−${div.behind}`}</span>}
+                        <span>{defaultName}</span>
+                      </span>
+                    );
+                  })()}
+                {branch.lastCommitDate && (
+                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                    {formatRelativeTime(branch.lastCommitDate)}
                   </span>
                 )}
               </span>
-              {(() => {
-                const pr = prByBranch.get(branch.name);
-                if (!pr) return null;
-                const isLocal = pr.select.kind === "local";
-                return (
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    title={
-                      isLocal
-                        ? `${PR_STATE_LABEL[pr.state]} local pull request — open in Pull Requests`
-                        : `${PR_STATE_LABEL[pr.state]} pull request ${pr.label} — open in Pull Requests`
-                    }
-                    className={cn(
-                      "flex shrink-0 cursor-pointer items-center gap-0.5 text-[11px] tabular-nums hover:underline",
-                      PR_TONE[pr.state],
-                    )}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openPr(pr.select);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        openPr(pr.select);
-                      }
-                    }}
-                  >
-                    <GitPullRequestIcon className="size-3" weight="bold" />
-                    {pr.label}
-                  </span>
-                );
-              })()}
-              {inWorktree && (
-                <span
-                  className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground"
-                  title={`Checked out in another worktree (${worktreeByBranch.get(
-                    branch.name,
-                  )}) — open it instead of switching`}
-                >
-                  <TreeStructureIcon className="size-3" weight="bold" />
-                  worktree
-                </span>
-              )}
-              {div && (div.ahead > 0 || div.behind > 0) && (
-                <span
-                  className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground tabular-nums"
-                  title={`${div.ahead} ahead, ${div.behind} behind ${defaultName}`}
-                >
-                  {div.ahead > 0 && (
-                    <span className="flex items-center gap-0.5">
-                      <ArrowUpIcon className="size-3" weight="bold" />
-                      {div.ahead}
-                    </span>
-                  )}
-                  {div.behind > 0 && (
-                    <span className="flex items-center gap-0.5">
-                      <ArrowDownIcon className="size-3" weight="bold" />
-                      {div.behind}
-                    </span>
-                  )}
-                </span>
-              )}
-              {/* The vs-default arrows are vacuous on the default branch's own
-                  row; surface how far it's behind its OWN upstream instead, so
-                  the "Update from {upstream}" action is discoverable after a Fetch. */}
-              {branch.name === defaultName &&
-                branch.upstream &&
-                branch.upstreamBehind > 0 && (
-                  <span
-                    className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground tabular-nums"
-                    title={`${branch.upstreamBehind} behind ${branch.upstream}`}
-                  >
-                    <ArrowDownIcon className="size-3" weight="bold" />
-                    {branch.upstreamBehind}
-                  </span>
-                )}
-              {branch.lastCommitDate && (
-                <span className="shrink-0 text-[11px] text-muted-foreground">
-                  {formatRelativeTime(branch.lastCommitDate)}
-                </span>
-              )}
-              {branch.isCurrent && <CheckIcon className="size-3.5 shrink-0" />}
             </button>
           }
         />
