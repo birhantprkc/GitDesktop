@@ -65,8 +65,8 @@ const forges = [
           style="transition-delay:120ms"
           class="mt-7 max-w-[58ch] text-base leading-relaxed text-body sm:text-lg"
         >
-          Everything GitHub&nbsp;Desktop does — staging, branches, diffs, history,
-          sync — now across <span class="text-ink">GitHub, GitLab &amp; Bitbucket</span>,
+          Everything GitHub&nbsp;Desktop does (staging, branches, diffs, history,
+          sync), now across <span class="text-ink">GitHub, GitLab &amp; Bitbucket</span>,
           with the full pull-request loop, CI, and issues in one window. Then AI that
           reads your diff for commits, PR descriptions, and code review — and takes on
           whole delegated tasks — on your own models, or hidden entirely.
@@ -335,7 +335,9 @@ const forges = [
           One calm client for all three. GitDesktop routes every pull-request and CI
           action through a forge abstraction, so the same panels work whether your
           remote points at GitHub, GitLab, or Bitbucket — each on its own authenticated
-          identity, none borrowing another's.
+          identity, none borrowing another's. Sign in and reconnect to GitHub and GitLab
+          without leaving the app; GitDesktop spots an expired session, badges the
+          account, and warns before a token lapses.
         </p>
       </div>
       <ul
@@ -355,6 +357,12 @@ const forges = [
           ))
         }
       </ul>
+      <p data-reveal class="mt-8 max-w-[62ch] text-sm leading-relaxed text-muted">
+        On a GitHub fork, a <span class="text-ink">Fork | Upstream</span> switch aims the
+        whole Pull Requests and Issues surface at either your fork or the parent
+        repository, remembered per repo, so you work your own PRs or the upstream's
+        without re-cloning.
+      </p>
       <p data-reveal class="mt-8 max-w-[62ch] text-sm leading-relaxed text-muted">
         GitHub &amp; GitLab go through their CLIs (<code class="text-ink">gh</code>,
         <code class="text-ink">glab</code>) — including GitHub Enterprise and
@@ -467,14 +475,20 @@ const forges = [
     side="right"
   >
     <p>
-      Browse, open, and edit GitHub issues without the tab-switch. Labels, assignees,
-      milestones, issue type, sub-issues, dependencies, and the pull requests and
-      branches that close them all sit in one panel.
+      Browse, open, and edit GitHub and GitLab issues without the tab-switch. Labels,
+      assignees, milestones, issue type, sub-issues, dependencies, and the pull requests
+      and branches that close them all sit in one panel.
     </p>
     <p class="text-muted">
-      Working privately? Keep <span class="text-ink">local to-dos</span> that need no
-      remote, then publish them to GitHub — or promote them to Jira — when the work
-      goes public.
+      A <span class="text-ink">Code TODOs</span> tab scans your working tree for
+      <code class="text-ink">TODO</code>, <code class="text-ink">FIXME</code>, and
+      <code class="text-ink">HACK</code> comments, blames each to the commit that
+      introduced it, and turns any one into a local issue.
+    </p>
+    <p class="text-muted">
+      Working privately? Keep plain <span class="text-ink">local to-dos</span> that need
+      no remote, then publish them to GitHub or promote them to Jira when the work goes
+      public.
     </p>
   </FeatureRow>
 
