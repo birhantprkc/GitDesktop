@@ -11,11 +11,17 @@ const download = `${base}download`;
 const providers = [
   { name: "Anthropic", note: "Claude, direct API" },
   { name: "OpenAI", note: "GPT, direct API" },
-  { name: "OpenAI-compatible", note: "custom base URL — presets for Vercel AI Gateway, Gemini, DeepSeek, Mistral, Z.ai" },
+  {
+    name: "OpenAI-compatible",
+    note: "custom base URL — presets for Vercel AI Gateway, Gemini, DeepSeek, Mistral, Z.ai",
+  },
   { name: "OpenRouter", note: "one key, many models" },
   { name: "Ollama", note: "local, LAN, or Ollama Cloud" },
   { name: "Claude Code / Codex", note: "keyless, via your subscription" },
-  { name: "GitHub Copilot / opencode", note: "keyless — opencode's hosted models need no key" },
+  {
+    name: "GitHub Copilot / opencode",
+    note: "keyless — opencode's hosted models need no key",
+  },
 ];
 
 const agentAbilities = [

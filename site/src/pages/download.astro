@@ -9,7 +9,11 @@ const releases = `${repo}/releases`;
 // stay correct across versions without rebuilding the site.
 const builds = [
   { id: "dl-win", os: "Windows", detail: "Installer .exe · x64" },
-  { id: "dl-mac", os: "macOS", detail: ".dmg · Apple Silicon & Intel (universal)" },
+  {
+    id: "dl-mac",
+    os: "macOS",
+    detail: ".dmg · Apple Silicon & Intel (universal)",
+  },
   { id: "dl-linux-appimage", os: "Linux", detail: "AppImage · x64 · portable" },
   { id: "dl-linux-deb", os: "Linux", detail: "Debian .deb · x64 · apt-based" },
   { id: "dl-linux-rpm", os: "Linux", detail: "Fedora .rpm · x64 · dnf-based" },

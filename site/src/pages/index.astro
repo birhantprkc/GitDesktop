@@ -30,9 +30,24 @@ const gitHighlights = highlightCapabilities.filter((c) => !c.ai);
 const aiHighlights = highlightCapabilities.filter((c) => c.ai);
 
 const forges = [
-  { forge: "github", name: "GitHub", detail: "PRs, Actions, issues, discussions, admin — via gh", cli: "gh" },
-  { forge: "gitlab", name: "GitLab", detail: "MRs, pipelines, releases, project settings — via glab", cli: "glab" },
-  { forge: "bitbucket", name: "Bitbucket", detail: "PRs, Pipelines, repo settings — Atlassian token", cli: "token" },
+  {
+    forge: "github",
+    name: "GitHub",
+    detail: "PRs, Actions, issues, discussions, admin — via gh",
+    cli: "gh",
+  },
+  {
+    forge: "gitlab",
+    name: "GitLab",
+    detail: "MRs, pipelines, releases, project settings — via glab",
+    cli: "glab",
+  },
+  {
+    forge: "bitbucket",
+    name: "Bitbucket",
+    detail: "PRs, Pipelines, repo settings — Atlassian token",
+    cli: "token",
+  },
 ] as const;
 ---
 
