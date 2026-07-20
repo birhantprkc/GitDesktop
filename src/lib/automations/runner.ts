@@ -30,9 +30,18 @@ import { listLocalPrs, updateLocalPr } from "@/lib/pulls/local";
 import { getLatestReview, saveReview } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
 import { loadSettings } from "@/lib/settings/api";
-import { type ReviewTarget, registerAutomationRun } from "@/lib/stores/reviews";
-import { invoke } from "@/lib/tauri/invoke";
-import { getDismissedHead, setDismissedHead } from "./dismissals";
+import { pushNotification } from "@/lib/stores/notifications";
+import {
+  type ReviewTarget,
+  registerAutomationRun,
+  resetReview,
+} from "@/lib/stores/reviews";
+import { errorMessage, invoke } from "@/lib/tauri/invoke";
+import {
+  clearDismissedHead,
+  getDismissedHead,
+  setDismissedHead,
+} from "./dismissals";
 import { useAutomationResults } from "./results";
 import { loadAutomations, repoAutomationsFor } from "./store";
 import { sameSha } from "./sync";
@@ -159,11 +168,41 @@ export function triggerAutomations(event: AutomationEvent): void {
   void run(event).catch(() => undefined);
 }
 
-async function run(event: AutomationEvent): Promise<void> {
+/** What a {@link run} pass did, so a re-run can tell the outcomes apart:
+ *  - `matched`: rules that exist AND apply to this event (past the `only` +
+ *    branch-condition gates). 0 means the rule genuinely no longer applies
+ *    (e.g. disabled since) — the honest "turned off" case.
+ *  - `attempted`: runs actually started (past every gate incl. sync watermark +
+ *    cross-instance claim). `matched > 0 && attempted === 0` means a rule applies
+ *    but a claim/watermark blocked it — a retryable "already covered" case. */
+interface RunOutcome {
+  matched: number;
+  attempted: number;
+}
+
+/**
+ * Runs the automation rules matching `event`. When `only` is set (a re-run of a
+ * single stopped row), every rule whose mode differs is skipped, so exactly that
+ * one mode re-fires. `replacesKey` is the stopped row a re-run replaces — removed
+ * the instant its replacement run registers (see below), so the stopped row never
+ * lingers next to its fresh Running row and is kept when nothing registers.
+ * Returns a {@link RunOutcome} so a re-run can distinguish "rule gone" from
+ * "blocked but retryable" from "started".
+ */
+async function run(
+  event: AutomationEvent,
+  only?: ReviewMode,
+  replacesKey?: string,
+): Promise<RunOutcome> {
   const config = await loadAutomations();
   const repo = await repoAutomationsFor(config, event.repoPath);
   const actions = effectiveActions(config, repo, event.kind);
-  if (actions.length === 0) return;
+  if (actions.length === 0) return { matched: 0, attempted: 0 };
+  let matched = 0;
+  let attempted = 0;
+  // Cleared once consumed so a second registering action can't double-remove
+  // (harmless — resetReview no-ops on a missing key — but keeps intent explicit).
+  let staleKey = replacesKey;
 
   // The branch(es) a branch-condition is tested against. Commit events carry the
   // committed branch; PR events carry head/base (added by the poll payload).
@@ -174,6 +213,10 @@ async function run(event: AutomationEvent): Promise<void> {
   const settings = await loadSettings();
   const notify = settings.notifications.automations;
   for (const { action, conditions } of actions) {
+    // Re-run scoping: a stopped-row Re-run targets exactly one mode, so skip every
+    // other rule this event would otherwise fire. Normal triggers pass `only`
+    // undefined and run every matching rule.
+    if (only && action !== only) continue;
     // Branch scoping: skip an action whose include/exclude globs don't admit
     // this event's branch(es). Undefined conditions always pass.
     if (
@@ -186,6 +229,10 @@ async function run(event: AutomationEvent): Promise<void> {
     ) {
       continue;
     }
+    // Past the mode + branch gates — this rule exists AND applies. Counted so a
+    // re-run can tell "rule genuinely gone" (matched 0) from "rule applies but a
+    // claim/watermark blocked it" (matched > 0, attempted 0 → retryable).
+    matched++;
     // pr-sync is opt-in per PR: re-review only a PR already reviewed in this
     // mode, and only once its head has advanced past the last-reviewed commit
     // (the persisted review's headSha is the per-mode watermark). This scopes
@@ -271,7 +318,14 @@ async function run(event: AutomationEvent): Promise<void> {
     // `cancelReview`, which aborts THIS controller and kills the CLI subprocess —
     // no floating persistent toast. `handle.isCancelled()` stays readable after a
     // dock Cancel, so the guards below skip delivery + the failure toast.
+    // Past every skip gate — this run is actually attempted (counted so a
+    // Re-run that matches nothing can toast instead of dying silently).
+    attempted++;
     const controller = new AbortController();
+    // Let-box so the rerun closure carries THIS run's own key (assigned right
+    // after registration): a re-run of the fresh row must replace the fresh row,
+    // not the stale one it grew from.
+    let selfKey = "";
     const handle = registerAutomationRun({
       // TaskRow already prefixes the mode name, so pass the bare subject.
       title: event.kind === "commit" ? event.hash.slice(0, 7) : event.title,
@@ -280,7 +334,21 @@ async function run(event: AutomationEvent): Promise<void> {
       local: isLocalProvider(settings.reviewAi.provider),
       target: automationTarget(event),
       abort: controller,
+      // Re-fires THIS event + mode (closes over this iteration's action) when the
+      // run's stopped row's Re-run is clicked, passing its own row key so the
+      // fresh run removes THIS row when it registers.
+      rerun: () => rerunAutomation(event, action, selfKey),
     });
+    selfKey = handle.key;
+    // The replacement run has now registered its fresh Running row — remove the
+    // stopped row it replaces (a re-run only). Done here (not at the Re-run click)
+    // so the old row is kept whenever nothing registers (rule gone / blocked),
+    // giving the user a retry target. Cleared so a second registering action in
+    // the same pass can't re-trigger the removal.
+    if (staleKey) {
+      resetReview(staleKey);
+      staleKey = undefined;
+    }
     // On cancel, persist the dismissed PR head so a cancelled re-review doesn't
     // re-fire after an app relaunch (cancel advances no history watermark). PR
     // events with a headSha only; best-effort — a persistence failure must never
@@ -305,6 +373,9 @@ async function run(event: AutomationEvent): Promise<void> {
         handle.setCliId,
       );
       if (handle.isCancelled()) {
+        // The dock's Cancel already patched the row to "cancelled" (keeping its
+        // Re-run) and deleted the control — do NOT settle/remove it here. Keep
+        // the claim release + dismissed-head persist + toast exactly as before.
         releaseClaim();
         dismissOnCancel();
         toast.info(`AI ${label} cancelled.`, { duration: 4000 });
@@ -313,6 +384,7 @@ async function run(event: AutomationEvent): Promise<void> {
       if (result === null) {
         releaseClaim();
         toast.info(`AI ${label} skipped — no changes to review.`);
+        handle.settle(); // no-op run: remove the row as before
         continue;
       }
       const { text, thoughts } = result;
@@ -339,25 +411,114 @@ async function run(event: AutomationEvent): Promise<void> {
           thoughts,
         ).catch(() => undefined);
       }
+      // Success: remove the dock row — a delivered review lands in Notifications.
+      handle.settle();
     } catch (e) {
       // Release the claim on every failure/cancel path so a transient error doesn't
       // permanently suppress this automation for this head across instances.
       releaseClaim();
       if (handle.isCancelled()) {
+        // Cancelled mid-stream: same as the post-generate cancel arm — the dock
+        // already owns the "cancelled" row, so leave it (do not settle).
         dismissOnCancel();
         toast.info(`AI ${label} cancelled.`, { duration: 4000 });
         continue;
       }
-      toast.error(`AI ${label} failed: ${e instanceof Error ? e.message : e}`);
+      // errorMessage unwraps AppError/Error shapes — a raw interpolation renders
+      // Tauri invoke rejections as "[object Object]" (observed live).
+      const message = errorMessage(e);
+      toast.error(`AI ${label} failed: ${message}`);
+      // Inbox parity with manual runs (which land a review-failed inbox row via
+      // reviews.ts's notifyReviewDone): a genuine automation failure records one
+      // too, gated on the same automations pref. Commit events have no PR target;
+      // PR events carry a navigable one.
       if (notify) {
+        pushNotification({
+          kind: "review-failed",
+          tone: "danger",
+          title: `AI ${label} failed`,
+          subtitle:
+            event.kind === "commit"
+              ? `"${event.hash.slice(0, 7)}"`
+              : `"${event.title}"`,
+          repoPath: event.repoPath,
+          repoName: event.repoPath.split(/[/\\]/).pop() ?? event.repoPath,
+          ...(event.kind === "commit"
+            ? {}
+            : {
+                target: {
+                  type: "pr",
+                  kind: event.target.type,
+                  ref: targetRef(event),
+                },
+              }),
+          dedupeKey: `automation-failed:${event.repoPath}:${event.kind}:${
+            event.kind === "commit" ? event.hash : targetRef(event)
+          }:${action}`,
+        });
         void notifyIfUnfocused(`AI ${label} failed`, `"${event.title}"`);
       }
-    } finally {
-      // Every terminal path (success, skip, error, cancelled, thrown) removes the
-      // dock row — automation runs never linger in a finished state.
-      handle.settle();
+      // Persist a "Failed" stopped row (keeping its Re-run) instead of removing it.
+      handle.fail(message);
     }
   }
+  return { matched, attempted };
+}
+
+/**
+ * Re-fires a stopped (cancelled/failed) automation run for exactly one mode —
+ * invoked by a stopped row's Re-run button. Fire-and-forget, like
+ * {@link triggerAutomations}.
+ *
+ * For PR events it first clears the dismissed-head watermark for this (target,
+ * mode): a cancelled run wrote one, and without clearing it the re-run would
+ * silently no-op at the runner's `sameSha(dismissedHead, headSha)` pr-sync gate.
+ * The run then flows through the normal pipeline scoped to `only`, so it
+ * re-claims (canceled/failed runs released their claim) and re-reviews just that
+ * mode. If the rule was disabled since the run stopped, nothing matches and we
+ * surface an informative toast rather than a silent dead button.
+ */
+export function rerunAutomation(
+  event: AutomationEvent,
+  only: ReviewMode,
+  staleKey: string,
+): void {
+  const label = modeLabel(only);
+  const noun = event.kind === "commit" ? "commit" : "pull request";
+  void (async () => {
+    try {
+      // Best-effort ONLY here: a cleared-dismissal failure must not block the
+      // re-run (it just means the pr-sync gate might skip; we then toast retryable).
+      if (event.kind !== "commit") {
+        await clearDismissedHead(
+          event.repoPath,
+          event.target.type,
+          targetRef(event),
+          only,
+        ).catch(() => undefined);
+      }
+      // The stopped row is removed inside run() the instant its replacement
+      // registers — so every non-registering outcome below keeps it as a retry
+      // target.
+      const { matched, attempted } = await run(event, only, staleKey);
+      if (matched === 0) {
+        // The rule genuinely no longer applies (disabled / conditions changed).
+        toast.info(`Automated ${label} for this ${noun} is turned off.`);
+      } else if (attempted === 0) {
+        // A rule applies, but a still-held claim or a sync watermark blocked the
+        // run (a canceled sibling still unwinding, or another instance covering
+        // this head). The stopped row is kept — retry once that clears.
+        toast.info(
+          `Couldn't re-run the ${label} — another run already covers this head (still finishing or ran elsewhere). The row is kept; try again in a moment.`,
+        );
+      }
+      // attempted > 0: the fresh Running row is the feedback — no toast.
+    } catch (e) {
+      // A throw anywhere (loadAutomations / store I/O before the loop, etc.) used
+      // to be swallowed, leaving no feedback. Surface it; the stopped row stays.
+      toast.error(`Couldn't re-run the ${label}: ${errorMessage(e)}`);
+    }
+  })();
 }
 
 /** A completed automated review: the final answer `text` plus any agentic
@@ -397,7 +558,30 @@ async function generateReviewText(
       "origin",
     );
     diff = { text, truncated: false, files: filesFromDiff(text) };
+  } else if (event.target.type === "remote") {
+    // Remote pr-open: prefer the local branch diff (it carries numstat), but the
+    // head branch isn't guaranteed local — catch-up and ready-flip events cover
+    // PRs opened elsewhere (teammate / web), which reach this machine via the
+    // poller before any fetch lands the ref (observed live: `git diff` fails on
+    // an unfetched head). Fall back to the provider's authoritative PR diff,
+    // the same source the remote pr-sync arm above uses unconditionally.
+    try {
+      diff = await gitBranchDiff(
+        event.repoPath,
+        event.base,
+        event.head,
+        DIFF_MAX_BYTES,
+      );
+    } catch {
+      const text = await forgePrDiff(
+        event.repoPath,
+        event.target.number,
+        "origin",
+      );
+      diff = { text, truncated: false, files: filesFromDiff(text) };
+    }
   } else {
+    // Local PR targets: both branches are inherently local.
     diff = await gitBranchDiff(
       event.repoPath,
       event.base,
