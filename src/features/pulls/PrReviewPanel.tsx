@@ -10,6 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, m } from "motion/react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ElapsedTime } from "@/components/elapsed-time";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -51,7 +52,7 @@ import {
   useReviewRun,
 } from "@/lib/stores/reviews";
 import { useUiStore } from "@/lib/stores/ui";
-import { formatRelativeTime } from "@/lib/time";
+import { formatDuration, formatRelativeTime } from "@/lib/time";
 import { ReviewHistory } from "./ReviewHistory";
 import { ThoughtsDisclosure } from "./ThoughtsDisclosure";
 
@@ -113,6 +114,8 @@ export function PrReviewPanel({
     phase,
     error,
     thoughts,
+    startedAt,
+    endedAt,
   } = useReviewRun(target);
 
   // Prior reviews for this PR, used for the per-mode context banner. Read-only —
@@ -149,6 +152,10 @@ export function PrReviewPanel({
   const [ignoreExternal, setIgnoreExternal] = useState(false);
 
   const globalReviewAi = settings.data?.reviewAi;
+  // Optional dedicated config for security audits (Settings → AI). When set and
+  // no in-panel override is active, the Security-audit button runs it; the
+  // general Review button always uses `globalReviewAi`.
+  const securityReviewAi = settings.data?.securityReviewAi;
   // The provider/model picked in this panel is a per-run OVERRIDE — it changes
   // the model used for THIS review without rewriting the global default (set in
   // Settings → AI). Resets to the default when the panel remounts (e.g. a
@@ -183,15 +190,63 @@ export function PrReviewPanel({
   );
   const models = available.data?.models ?? [];
 
+  // Readiness signaling for the DEDICATED security model. The Security-audit
+  // button routes to `securityReviewAi` exactly when there's no in-panel override
+  // and one is configured (`securityPathActive` — the same condition that shows
+  // the "Security audits use …" hint) — so when that config needs a key / CLI the
+  // user hasn't set up, warn about IT specifically instead of letting the audit
+  // die into the generic error state. Two distinct trigger cases:
+  //  • `providerDiffers` — the security provider differs from the picker's active
+  //    one, so it may need its OWN key or CLI (all three warnings apply).
+  //  • `cliPathDiffers` — SAME provider (a CLI one) but a different `cliPath`, so
+  //    the audit could point at a missing/unauthed binary the picker's warnings
+  //    (keyed off the picker's path) never see (only the CLI warnings apply — a
+  //    shared provider shares its key, so no key warning here).
+  // When neither holds, the picker's own warnings above already cover the case, so
+  // nothing extra renders. Hooks run every render (React rules); the render gates +
+  // query `enabled` keep them cheap when the security path doesn't apply.
+  const securityPathActive = !reviewOverride && Boolean(securityReviewAi);
+  const secProvider = securityReviewAi?.provider ?? "anthropic";
+  const secCliKind = providerKind(secProvider);
+  const providerDiffers =
+    securityPathActive && securityReviewAi?.provider !== provider;
+  const cliPathDiffers =
+    securityPathActive &&
+    !providerDiffers &&
+    Boolean(secCliKind) &&
+    (securityReviewAi?.cliPath ?? "") !== (reviewAi?.cliPath ?? "");
+  const secNeedsKey = PROVIDERS_REQUIRING_KEY.includes(secProvider);
+  // Dedupes to the picker's own useSecretPreview(provider) at :174 when the
+  // security path doesn't apply or shares the provider (same provider-keyed cache
+  // entry, zero extra fetch); read only under `providerDiffers`, where the
+  // argument is `secProvider`.
+  const secKeyPreview = useSecretPreview(
+    providerDiffers ? secProvider : provider,
+  );
+  const secCliDetect = useQuery({
+    queryKey: ["agent-detect", secProvider, securityReviewAi?.cliPath ?? ""],
+    queryFn: () => detectAgentCli(secCliKind!, securityReviewAi?.cliPath),
+    enabled: Boolean(secCliKind) && (providerDiffers || cliPathDiffers),
+    staleTime: 60_000,
+  });
+
   function updateReview(patch: Partial<NonNullable<typeof reviewAi>>) {
     if (!reviewAi) return;
     setReviewOverride({ ...reviewAi, ...patch });
   }
 
   function run(mode: ReviewMode) {
-    if (!reviewAi) return;
-    generate(reviewAi, mode, context, ignoredModes.has(mode), ignoreExternal);
-    const model = reviewAi.model.toLowerCase();
+    // An explicit in-panel pick wins for BOTH buttons; untouched, a security
+    // audit uses the dedicated `securityReviewAi` when configured, and every
+    // other mode uses the global review model.
+    const effective =
+      reviewOverride ??
+      (mode === "security" && securityReviewAi
+        ? securityReviewAi
+        : globalReviewAi);
+    if (!effective) return;
+    generate(effective, mode, context, ignoredModes.has(mode), ignoreExternal);
+    const model = effective.model.toLowerCase();
     const model_tier =
       model.includes("haiku") ||
       model.includes("mini") ||
@@ -201,12 +256,12 @@ export function PrReviewPanel({
             model.includes("gpt-4o") ||
             model.includes("sonnet-4")
           ? "powerful"
-          : reviewAi.provider === "ollama"
+          : effective.provider === "ollama"
             ? "local"
             : "balanced";
     track({
       name: "ai_review_triggered",
-      properties: { provider: reviewAi.provider, model_tier },
+      properties: { provider: effective.provider, model_tier },
     });
   }
 
@@ -291,6 +346,17 @@ export function PrReviewPanel({
             Model set for this review only — the default lives in Settings → AI.
           </p>
         )}
+        {!reviewOverride &&
+          securityReviewAi &&
+          globalReviewAi &&
+          (securityReviewAi.provider !== globalReviewAi.provider ||
+            securityReviewAi.model !== globalReviewAi.model) && (
+            <p className="text-xs text-muted-foreground">
+              Security audits use {PROVIDER_LABELS[securityReviewAi.provider]} ·{" "}
+              {securityReviewAi.model || "default model"} — set in Settings →
+              AI.
+            </p>
+          )}
         {needsKey && !keyPreview.data && (
           <p className="text-xs text-warning">
             No {PROVIDER_LABELS[provider]} API key saved — add one in Settings
@@ -320,11 +386,46 @@ export function PrReviewPanel({
               in a terminal.
             </p>
           )}
+        {providerDiffers && secNeedsKey && !secKeyPreview.data && (
+          <p className="text-xs text-warning">
+            No {PROVIDER_LABELS[secProvider]} API key saved — add one in
+            Settings to run a security audit.
+          </p>
+        )}
+        {(providerDiffers || cliPathDiffers) &&
+          secCliKind &&
+          secCliDetect.data &&
+          !secCliDetect.data.found && (
+            <p className="text-xs text-warning">
+              {PROVIDER_LABELS[secProvider]} not found — install it or set its
+              path in Settings; security audits use it.
+            </p>
+          )}
+        {(providerDiffers || cliPathDiffers) &&
+          secCliKind &&
+          secCliDetect.data?.found &&
+          secCliDetect.data.authed === "notAuthed" && (
+            <p className="text-xs text-warning">
+              {PROVIDER_LABELS[secProvider]} is installed but not signed in —
+              run{" "}
+              <code className="font-mono">
+                {secCliKind === "copilot"
+                  ? "copilot login"
+                  : secCliKind === "codex"
+                    ? "codex login"
+                    : secCliKind === "opencode"
+                      ? "opencode auth login"
+                      : "claude login"}
+              </code>{" "}
+              in a terminal to run a security audit.
+            </p>
+          )}
         <div className="flex flex-wrap items-center gap-2">
           <AnimatePresence mode="wait" initial={false}>
             {generating ? (
               <m.div
                 key="cancel"
+                className="flex items-center gap-2"
                 initial={{ opacity: 0, scale: 0.96 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.96 }}
@@ -334,6 +435,14 @@ export function PrReviewPanel({
                   <XIcon data-icon="inline-start" />
                   Cancel
                 </Button>
+                {/* Queued runs have no startedAt yet — Cancel shows alone until
+                    the run is actually running. */}
+                {startedAt != null && (
+                  <ElapsedTime
+                    since={startedAt}
+                    className="text-xs text-muted-foreground"
+                  />
+                )}
               </m.div>
             ) : (
               <m.div
@@ -375,6 +484,16 @@ export function PrReviewPanel({
               Post as comment
             </Button>
           )}
+          {phase === "done" &&
+            text.trim() &&
+            !generating &&
+            startedAt != null &&
+            endedAt != null &&
+            endedAt > startedAt && (
+              <span className="text-xs text-muted-foreground">
+                took {formatDuration(endedAt - startedAt)}
+              </span>
+            )}
         </div>
         {(["general", "security"] as ReviewMode[]).map((m) => {
           const prior = latestByMode[m];
