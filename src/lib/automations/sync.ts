@@ -125,15 +125,18 @@ export interface CatchUpCandidate {
  * through the untouched runner (claim dedup → review → post → record → toast).
  * Do NOT "simplify" this away: without it, externally-opened PRs get zero signal.
  *
- * Scope is deliberately narrow (user-locked): the viewer's OWN, non-draft, open,
- * recent PRs with no prior review (any mode) and no dismissed head. At most ONE
- * PR is caught up per call (the oldest), bounding burst token spend — the next
- * tick takes the next one.
+ * Scope is deliberately narrow (user-locked): the viewer's OWN, open, recent
+ * PRs with no prior review (any mode) and no dismissed head. Drafts are included
+ * only when `reviewDrafts` is set (the `reviewDraftPrs` setting); off (the
+ * default) they're skipped until marked ready for review. At most ONE PR is
+ * caught up per call (the oldest), bounding burst token spend — the next tick
+ * takes the next one.
  */
 export function maybeCatchUpMissedOpen(
   repoPath: string,
   candidates: CatchUpCandidate[],
   viewerLogin: string | null,
+  reviewDrafts: boolean,
 ): void {
   // A null login means we can't tell which PRs are the viewer's — never guess.
   if (!viewerLogin) return;
@@ -146,7 +149,9 @@ export function maybeCatchUpMissedOpen(
     .filter((c) => {
       if (!c.currentHeadSha) return false;
       if (c.author !== viewerLogin) return false;
-      if (c.isDraft) return false;
+      // Drafts are caught up only when the reviewDraftPrs setting is on;
+      // otherwise they wait until marked ready for review.
+      if (c.isDraft && !reviewDrafts) return false;
       const opened = Date.parse(c.createdAt);
       if (Number.isNaN(opened)) return false;
       if (now - opened > CATCH_UP_WINDOW_MS) return false;
@@ -182,32 +187,45 @@ export function maybeCatchUpMissedOpen(
 }
 
 /**
- * Async eligibility for a catch-up: true only when NO review record exists for
- * this PR in EITHER mode (a manual OR automated review in general or security
- * counts as "the user knows this PR" and suppresses catch-up), and no dismissed
- * head matches the current head in either mode. Errors swallow to `false` — a
- * store hiccup must never fire a redundant review. Runs after the synchronous
+ * Async eligibility to fire a first `pr-open` review for a remote PR: true only
+ * when NO review record exists for it in EITHER mode (a manual OR automated
+ * review in general or security counts as "the user knows this PR" and
+ * suppresses it), and no dismissed head matches the current head in either mode.
+ * Errors swallow to `false` (fail-closed) — a store hiccup must never fire a
+ * redundant review.
+ *
+ * Shared by the catch-up poller (via {@link catchUpEligible}) and the in-app
+ * Mark-ready trigger (RemotePrView), so both ready paths stay behaviorally
+ * identical. It's the ONLY guard that covers a manual panel review: those save
+ * via `saveReview` without taking an automation claim, so the runner's
+ * per-headSha claim dedup can't see them — this prior-review check can.
+ */
+export async function prOpenEligible(
+  repoPath: string,
+  ref: string,
+  currentHeadSha: string,
+): Promise<boolean> {
+  try {
+    const modes = ["general", "security"] as const;
+    for (const mode of modes) {
+      const prior = await getLatestReview(repoPath, "remote", ref, mode);
+      if (prior) return false;
+      const dismissed = await getDismissedHead(repoPath, "remote", ref, mode);
+      if (dismissed && sameSha(dismissed, currentHeadSha)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Catch-up wrapper over {@link prOpenEligible}. Runs after the synchronous
  * attempt-mark, so a failure here won't re-enter the same PR this session.
  */
 async function catchUpEligible(
   repoPath: string,
   pick: CatchUpCandidate,
 ): Promise<boolean> {
-  try {
-    const modes = ["general", "security"] as const;
-    for (const mode of modes) {
-      const prior = await getLatestReview(repoPath, "remote", pick.ref, mode);
-      if (prior) return false;
-      const dismissed = await getDismissedHead(
-        repoPath,
-        "remote",
-        pick.ref,
-        mode,
-      );
-      if (dismissed && sameSha(dismissed, pick.currentHeadSha)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  return prOpenEligible(repoPath, pick.ref, pick.currentHeadSha);
 }
