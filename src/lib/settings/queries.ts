@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { PROVIDERS_REQUIRING_KEY } from "@/lib/ai/providers";
 import type { AiProviderId } from "@/lib/ai/types";
 import { getSecret } from "@/lib/git/api";
 import { repoIdentity } from "@/lib/git/repo-identity";
+import { commitTheme, type ThemeSetting } from "@/lib/theme";
 import {
   type AppSettings,
   addRecentRepo,
@@ -102,6 +103,41 @@ export function useSaveSettings() {
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: settingsKeys.settings }),
   });
+}
+
+/**
+ * Apply a theme change from any entry point — the Appearance picker and the
+ * `cycle-theme` command both go through this, so the two paths can't drift. It
+ * optimistically patches the settings cache (so a bound `<Select>` reflects the
+ * choice immediately, not a refetch later), persists it, applies the DOM class,
+ * and rolls all three back if the store write throws. `useSaveSettings`'s
+ * success-invalidate reconciles the cache on the happy path.
+ */
+export function useApplyTheme() {
+  const queryClient = useQueryClient();
+  const saveSettings = useSaveSettings();
+  return useCallback(
+    (current: AppSettings, next: ThemeSetting) => {
+      if (next === current.theme) return;
+      const updated = { ...current, theme: next };
+      queryClient.setQueryData(settingsKeys.settings, updated);
+      commitTheme(next);
+      saveSettings.mutate(updated, {
+        onError: () => {
+          // Only roll back if this call's change is still the latest: otherwise a
+          // late-failing earlier write would stomp a newer successful one (two
+          // fast cycles where the first write rejects after the second lands).
+          const latest = queryClient.getQueryData<AppSettings>(
+            settingsKeys.settings,
+          );
+          if (latest?.theme !== next) return;
+          queryClient.setQueryData(settingsKeys.settings, current);
+          commitTheme(current.theme);
+        },
+      });
+    },
+    [queryClient, saveSettings],
+  );
 }
 
 export function useAddRecentRepo() {
