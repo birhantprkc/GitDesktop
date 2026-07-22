@@ -12,6 +12,104 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-22
+
+### Added
+
+- **Re-run a stopped automated review.** When an automation-triggered AI review or
+  security audit is cancelled or fails, it now stays in the Activity popover under a
+  **Stopped** group with **Re-run** and **Dismiss**, so you can retry exactly that run
+  (and mode) without hunting for the commit or PR again. A failed automated run also
+  lands a *review failed* notification in the inbox — matching manual runs — when
+  automation notifications are on.
+- **Create pull requests as drafts by default.** A new Settings → General toggle,
+  **Create pull requests as drafts** (off by default), pre-checks the Create pull request
+  dialog's *Create as draft* box so you can open PRs as drafts without remembering to tick
+  it each time — still overridable per PR. Paired with *Review draft PRs when created*, a
+  draft's automated first review then waits until you mark it ready.
+- **See how long reviews take.** The Activity & notifications popover now shows a live
+  elapsed timer on a running AI review, notes how long a stopped (cancelled or failed)
+  automated run ran before it stopped, and the **Previous reviews** list shows each
+  finished review's total run duration. The PR review panel also ticks a live elapsed
+  timer beside Cancel while a review runs, and shows the total time it took once it's done.
+- **Notes for reviewers.** Hand review context to the AI reviewer: an agent (or any
+  MCP client with write access) deposits per-branch notes via the GitDesktop MCP, and
+  the Create pull request dialog shows an optional **Notes for reviewers** field that
+  pre-fills from that deposit for the head branch. On create the notes are posted as the
+  PR's first comment and fed to the automated review as first-class context, so
+  deliberate, documented decisions stop getting re-flagged. A new *Review draft PRs when
+  created* automation setting (off by default) holds a draft PR's first review until it's
+  marked ready for review.
+- **Dedicated security-audit model.** Give AI security audits their own provider and model,
+  separate from the general review model — e.g. a stronger model for audits and a faster one
+  for everyday reviews. Toggle **Use a different model for security audits** under the review
+  model in Settings → AI; left off, audits keep using the review model exactly as before. The
+  choice applies to both automated audits and the **Security audit** button on a PR (an
+  in-panel model pick still overrides both for that one run).
+- **Tasks — save scripts and run them in-app.** A new **Tasks** tab (and a
+  command-palette **Run a task…**) lets you register your own scripts — a release or
+  build flow, say — and run them without dropping to a terminal. Point a task at an
+  **existing script in the repo** (it runs the live file, so edits take effect on the next
+  run) or write one **inline**; with an AI provider connected, **Generate** writes an
+  inline script from a plain description, and **Analyze with AI** reads a script and fills
+  in its name, description, and the arguments it accepts. Each task carries a description
+  and default arguments (quoted values kept intact), documents its arguments
+  `--help`-style, and a confirm-gated run lets you adjust the arguments per run. Runs
+  happen in an **interactive** terminal in the repository's folder, so scripts that prompt
+  you (a version to release, a yes/no) work and keep their colour; **Stop** kills the run
+  and its child processes, **Rerun** starts a fresh one. Choose the interpreter — PowerShell,
+  cmd, Git Bash, bash/sh/zsh, Node, Deno, Bun, Python, or Ruby, with the editor showing which
+  it detected on your machine. Task definitions live in your app data
+  and are never read from repository content, running is off until you enable it, and each
+  task can ask for confirmation before it runs.
+- **Themes.** Choose how GitDesktop looks in **Settings → Appearance**: **System**
+  (follow your OS), **Light**, **Dark**, or a softer **Slate** — a cool, lifted
+  blue-gray that eases eye strain on long sessions. Cycle themes from the command
+  palette too.
+
+### Changed
+
+- CI run and job log lookups now thread ids as strings end-to-end, so they stay
+  precise even above JavaScript's safe-integer limit (2^53). The MCP workflow
+  tools accept a run/job id as either a number or a numeric string, so existing
+  callers keep working.
+- **Toggle a PR between draft and ready on every provider.** The pull-request footer's
+  **Ready for review** / **Convert to draft** pair now works both ways on **GitHub**,
+  **GitLab**, and **Bitbucket** — not just Bitbucket, and no longer one-directional. Both
+  actions are also in the command palette, and the GitDesktop MCP `set_pull_request_draft`
+  tool now covers all three providers too.
+
+### Fixed
+
+- Ignore and AI-exclude toasts now report how many patterns were actually
+  added, rather than the size of the selection — so a fully-covered selection
+  says everything was already ignored instead of claiming entries were added.
+- **Publishing a draft release no longer clears its Latest status.** Publishing
+  a draft from the app now follows GitHub's default and becomes the **Latest**
+  release on publish, instead of being forced non-latest. The Edit dialog explains
+  that Latest applies only to published releases rather than offering a toggle
+  GitHub would silently ignore on a draft. The MCP `update_release` tool had the
+  same issue and is fixed too.
+- Fixed AI features failing when their input text contained an emoji near a size
+  limit. When a prompt was truncated to fit its budget, the cut could split an
+  emoji (a UTF-16 surrogate pair) and leave an invalid Unicode fragment that the
+  model provider rejected ("unexpected end of hex escape" / "Invalid body") — most
+  visibly breaking AI PR reviews when a bot review or prior comment contained an
+  emoji, but the same flaw affected PR-description and commit generation, issue
+  drafting, merge-conflict resolution, and repo/discussion prompts. Prompt
+  truncation now respects character boundaries everywhere, so emoji are never split.
+- User-facing copy no longer hardcodes "right-click": on macOS the in-app guide
+  and branch-status tooltips now say **Control-click**, matching how context
+  menus actually open on trackpads and swapped-button mice. References to "its
+  right-click menu" are now the platform-neutral "context menu" — across the
+  in-app guide, README, and marketing site.
+- Terminal and editor auto-detection now works on macOS and Linux, not just
+  Windows. Settings → Terminal / External editor populate with the terminals and
+  editors you actually have installed (Terminal, iTerm, Warp, Ghostty, VS Code,
+  Cursor, Sublime Text, Zed, Xcode, JetBrains IDEs, and more), and "Open in
+  terminal" / "Open in editor" now honor the one you pick instead of always
+  falling back to the system default.
+
 ## [0.4.0] - 2026-07-19
 
 ### Added
@@ -2173,7 +2271,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/theBGuy/GitDesktop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/theBGuy/GitDesktop/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/theBGuy/GitDesktop/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/theBGuy/GitDesktop/compare/v0.2.3...v0.3.0
