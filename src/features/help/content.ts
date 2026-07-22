@@ -1551,6 +1551,43 @@ the small programs Git runs at points like *before commit* or *before push*.
   for you.`,
   },
   {
+    id: "tasks",
+    label: "Tasks",
+    body: `# Tasks
+
+Save your own scripts — a release or build flow, say — and run them from inside
+GitDesktop, without dropping to a terminal. Open the **Tasks** tab from the **More ▾**
+tab menu, or from the command palette ({{kbd:command-palette}}).
+
+- **Turn it on first.** Running scripts is off until you enable it — the Tasks tab has an
+  **Enable task running** button. Your saved tasks live in GitDesktop's own data on this
+  machine and are **never read from a repository**, so opening or cloning a repo can never
+  add or run one.
+- **Add a task.** Give it a name, an optional one-line description, and pick an
+  interpreter — **PowerShell**, **cmd**, **Git Bash**, **bash / sh / zsh**, **Node**,
+  **Deno**, **Bun**, **Python**, or **Ruby** (the editor shows which it detected on your
+  machine, and where). Then
+  either **point it at an existing script** in the repo (it runs the live file, so edits
+  take effect on the next run) or write one **inline** — the script's contents, written
+  in your chosen interpreter's language (shell for PowerShell or bash, JavaScript for
+  Node, and so on).{{ai}} With an AI
+  provider connected, **Generate** writes an inline script from a short description, and
+  **Analyze with AI** reads the script and fills in the name, description, and the
+  arguments it accepts.{{/ai}} Either way it runs in the open repository's folder.
+- **Arguments.** A task carries default **arguments** (e.g. \`--preview\`; quote values with
+  spaces), and you can **document the arguments** the script accepts — each with a short
+  description, like a CLI's \`--help\` — shown as a reference wherever you set arguments.
+- **Run it.** Click a task, or use **Run a task…** from the command palette. A
+  confirm-gated run shows the arguments prefilled and lets you **adjust them for that run**
+  (the saved task is untouched) — press Enter to run. Runs happen in an **interactive**
+  terminal, so a script that prompts you — the next version to release, a yes/no — works,
+  and output keeps its colour. **Stop** ends a run and the processes it started; **Rerun**
+  starts a fresh one with the same arguments.
+- **Confirm before running.** Each task can ask for confirmation first (on by default) —
+  turn it off per task once you trust it (it then always runs its saved arguments).
+  Starting a task while another is still running asks before it replaces it.`,
+  },
+  {
     id: "keyboard",
     label: "Keyboard & navigation",
     body: `# Keyboard & navigation
