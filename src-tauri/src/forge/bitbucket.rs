@@ -14,13 +14,17 @@
 //! app passwords are dead — with the token stored in the OS keyring under
 //! `forge/bitbucket.org/*`. git-over-HTTPS is the exception: it authenticates with the
 //! literal `x-bitbucket-api-token-auth` sentinel username (NOT the account email) plus
-//! the same token (see `publish_repo`).
+//! the same token, seeded into git's credential store on STDIN by
+//! [`seed_git_credential`] (shared by clone, fetch/pull/push, `create_pr`, and
+//! `publish_repo`).
 //!
 //! Pagination policy matches GitLab: a single page at the endpoint's max `pagelen`,
 //! no `next`-following loops (documented per call). The PR-list endpoint caps at 50;
 //! repos/pipelines allow 100. The bounded exceptions that DO follow `next` (up to 5
 //! pages) are workspace members, PR tasks, and PR comments — each documented at its
 //! call site.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tauri_plugin_http::reqwest;
@@ -42,6 +46,17 @@ use crate::github::pr::{
     PrDetails, PrFileOut, PrInfo, PrListLabel, PrPollInfo, PrRef, PrThreadOut, PrTimelineEventOut,
     ReviewSubmitOut, ReviewThreadOut,
 };
+
+/// Whether this process has SUCCESSFULLY seeded git's credential store this session
+/// (the seed persists in the OS store, so re-seeding every op is wasteful). Set only
+/// AFTER `git credential approve` exits 0 — a failed attempt leaves it false so a
+/// later op retries. Re-armed by `reset_credential_seed` when the stored token
+/// changes. See [`seed_git_credential`].
+static CREDENTIAL_SEEDED: AtomicBool = AtomicBool::new(false);
+/// Serializes concurrent seed attempts so the first ops of a session (e.g. fetches
+/// on two repos at once) don't race: losers WAIT here until the winner's seed lands,
+/// instead of proceeding unauthenticated into their git op.
+static CREDENTIAL_SEED_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Failed-step logs can run to many MB; keep the tail (failures land at the end).
 const CI_RUN_LOG_CAP: usize = 200_000;
@@ -252,6 +267,18 @@ pub async fn set_account(email: &str, token: &str) -> AppResult<BbAccountInfo> {
     .await
     .map_err(|e| AppError::Bitbucket(format!("keyring task failed: {e}")))??;
 
+    // The stored token changed — drop the cached credential and re-arm the seed
+    // latch so the next load reads the new token and the next git op re-seeds.
+    // Taken UNDER the seed lock: once we hold it, no seed is in flight, so an
+    // old-token seed that raced this connect has fully finished — our reset then
+    // guarantees the next op re-seeds (upserting the store entry with the NEW
+    // token) instead of fast-pathing on the stale latch.
+    {
+        let _seed_guard = CREDENTIAL_SEED_LOCK.lock().await;
+        http::invalidate_credential_cache();
+        reset_credential_seed();
+    }
+
     Ok(BbAccountInfo {
         email,
         username,
@@ -270,7 +297,20 @@ pub async fn clear_account() -> AppResult<()> {
         Ok::<_, AppError>(())
     })
     .await
-    .map_err(|e| AppError::Bitbucket(format!("keyring task failed: {e}")))?
+    .map_err(|e| AppError::Bitbucket(format!("keyring task failed: {e}")))??;
+    // Drop the cached credential, re-arm the seed latch, and evict the seeded
+    // entry from git's OS credential store — git's store is separate from our
+    // keyring, so without the eviction a disconnected account would keep
+    // authenticating git ops until the token expired. All UNDER the seed lock:
+    // once we hold it, no seed is in flight, so an in-flight first-op seed that
+    // raced this disconnect has fully finished (its entry written, its latch
+    // stored) — the reset + evict below then clear exactly that state, instead of
+    // being silently undone by the seed completing after us.
+    let _seed_guard = CREDENTIAL_SEED_LOCK.lock().await;
+    http::invalidate_credential_cache();
+    reset_credential_seed();
+    evict_git_credential().await;
+    Ok(())
 }
 
 /// The stored account (keyring existence read ONLY — no network). `None` when no
@@ -2716,6 +2756,154 @@ fn duplicate_pr_number(open_prs: &[PrInfo], base: &str) -> Option<u64> {
         .map(|p| p.number)
 }
 
+/// Seed git's credential store with the Bitbucket API token so a subsequent HTTPS
+/// clone / fetch / pull / push authenticates non-interactively — the same mechanism
+/// `publish_repo`'s post-create push has always used, lifted out so clone, the
+/// fetch/pull/push funnel, and `create_pr` can share it. Best-effort: no stored
+/// token, a missing credential helper, or a non-zero exit are all tolerated (the
+/// git op itself surfaces any real auth failure); it only ever ADDS a credential.
+/// Seeds at most ONCE per process (the seed persists in the OS store), re-armed
+/// when the stored token changes — otherwise every op would re-run `git credential
+/// approve` (a subprocess) redundantly. (The keyring READ is separately cached in
+/// `http::load_credentials`, so neither this nor the REST layer re-pops the macOS
+/// "gitdesktop wants to use your confidential information" prompt after the first.)
+///
+/// Runs `git credential approve` OUTSIDE any repo (`run_git_input(None, …)`) and
+/// takes NO repo lock — deliberately, so it stays safe to call from ANY context,
+/// including a future caller that already holds the per-repo mutating lock. (Today's
+/// callers compute the credential config BEFORE the op takes its lock, so there is
+/// no present-day deadlock; the non-locking runner is defensive, not load-bearing.)
+/// Do NOT switch this to a locking runner.
+///
+/// SECURITY: the token is fed on STDIN ONLY — never argv / env / git config —
+/// matching the discipline the rest of the Bitbucket git path holds. NOTE:
+/// git-over-HTTPS REQUIRES the `x-bitbucket-api-token-auth` sentinel username; the
+/// account email authenticates the REST API but NOT git (probe-validated:
+/// `git ls-remote` succeeds with the sentinel and fails with the email). Do not
+/// change the username to the email; it will fail auth.
+///
+/// Returns whether a credential is (now) in the store — `true` when this or an
+/// earlier successful seed landed, `false` when no token is stored or the seed
+/// failed. Callers use it to gate credential-dependent `-c` entries (e.g.
+/// `credential.interactive=false`) so an unconfigured user keeps git's ambient —
+/// possibly interactive — behavior, fail-open.
+pub async fn seed_git_credential() -> bool {
+    // Fast path: a prior seed this session already succeeded (latch is set only
+    // AFTER `approve` exits 0, so `true` means the credential is really stored).
+    if CREDENTIAL_SEEDED.load(Ordering::Acquire) {
+        return true;
+    }
+    // Serialize attempts: concurrent first ops WAIT here for the in-flight seed
+    // (which may be blocked on the first macOS keychain prompt) instead of racing
+    // ahead unauthenticated; each waiter re-checks once it holds the lock.
+    let _guard = CREDENTIAL_SEED_LOCK.lock().await;
+    if CREDENTIAL_SEEDED.load(Ordering::Acquire) {
+        return true;
+    }
+    let Ok(creds) = http::load_credentials().await else {
+        return false; // no stored token → nothing to seed; ambient auth unchanged
+    };
+    let approve_input = format!(
+        "protocol=https\nhost={BB_HOST}\nusername=x-bitbucket-api-token-auth\npassword={}\n\n",
+        creds.token
+    );
+    let seeded = crate::git::runner::run_git_input(
+        None,
+        &["credential", "approve"],
+        Some(&approve_input),
+        crate::git::runner::DEFAULT_TIMEOUT,
+    )
+    .await
+    .is_ok();
+    if seeded {
+        // Latch ONLY on success — a transient helper failure must not stop a later
+        // op from retrying the seed.
+        CREDENTIAL_SEEDED.store(true, Ordering::Release);
+    }
+    seeded
+}
+
+/// Re-arm the once-per-process seed latch so the next Bitbucket git op re-seeds git's
+/// credential store — called whenever the stored token changes (connect / disconnect),
+/// so a re-authenticated token replaces the persisted git credential.
+pub(crate) fn reset_credential_seed() {
+    CREDENTIAL_SEEDED.store(false, Ordering::Release);
+}
+
+/// Evict the seeded entry from git's OS credential store (`git credential reject`,
+/// same protocol/host/username shape the seed wrote, no password — helpers match on
+/// those fields, so ONLY our sentinel-account entry is erased; a user's own ambient
+/// Bitbucket credential under a different username is untouched). Called on
+/// disconnect: git's store is SEPARATE from GitDesktop's keyring, so without this a
+/// disconnected account would keep authenticating git ops until the token expired.
+/// Best-effort — a missing helper or non-zero exit is tolerated.
+async fn evict_git_credential() {
+    let reject_input =
+        format!("protocol=https\nhost={BB_HOST}\nusername=x-bitbucket-api-token-auth\n\n");
+    let _ = crate::git::runner::run_git_input(
+        None,
+        &["credential", "reject"],
+        Some(&reject_input),
+        crate::git::runner::DEFAULT_TIMEOUT,
+    )
+    .await;
+}
+
+/// Strip an embedded `user@` from an `https://` URL's authority so git's credential
+/// lookup keys on the host alone and finds the seeded `x-bitbucket-api-token-auth`
+/// entry. Bitbucket's API/web clone links embed the account username
+/// (`https://<user>@bitbucket.org/…`); git SCOPES its credential lookup by the URL
+/// username when present, so a `user@` URL asks the helper for account=`user` and
+/// misses the sentinel-account seed — re-prompting. This is git's protocol behavior,
+/// so it bites BOTH macOS osxkeychain and Windows GCM, not just macOS. Non-`https`
+/// URLs and URLs without userinfo pass through unchanged.
+pub(crate) fn strip_https_userinfo(url: &str) -> String {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return url.to_string();
+    };
+    let (authority, path) = match rest.split_once('/') {
+        Some((a, p)) => (a, Some(p)),
+        None => (rest, None),
+    };
+    let Some((_userinfo, hostport)) = authority.rsplit_once('@') else {
+        return url.to_string(); // no userinfo → unchanged
+    };
+    match path {
+        Some(p) => format!("https://{hostport}/{p}"),
+        None => format!("https://{hostport}"),
+    }
+}
+
+/// The one-shot `-c` entries for a SEEDED Bitbucket network op (the funnel's
+/// Bitbucket analogue of `github_credential_entries`). Pure/format-only:
+///
+///  - `credential.interactive=false` — the seeded credential answers the fill, so an
+///    interactive helper GUI (e.g. GCM's dialog) must not pop on a stale/rejected
+///    token; matches `publish_repo`'s push. Callers only apply these entries when
+///    the seed SUCCEEDED, so an unconfigured user keeps ambient interactive auth.
+///  - When the remote URL embeds userinfo (`https://user@bitbucket.org/…`, the form
+///    Bitbucket's web UI hands out): a one-shot `url.<stripped>.insteadOf=<url>`
+///    rewrite, so git resolves the remote to the bare host and its credential
+///    lookup finds the host-keyed sentinel seed (see [`strip_https_userinfo`]).
+///    Transient — the repo's stored remote is never mutated, no lock is needed, and
+///    the entry rides the same `-c` prefix mechanism as the GitHub/GitLab helpers.
+///    (Safe as a `-c` key: Bitbucket remote URLs contain no `=`, so the key can't
+///    be mis-split.)
+pub(crate) fn bitbucket_credential_entries(url: &str) -> Vec<String> {
+    let mut entries = vec![CREDENTIAL_NONINTERACTIVE.to_string()];
+    let stripped = strip_https_userinfo(url);
+    if stripped != url {
+        entries.push(format!("url.{stripped}.insteadOf={url}"));
+    }
+    entries
+}
+
+/// The one-shot `-c` entry suppressing interactive credential-helper GUIs (e.g.
+/// GCM's dialog — `GIT_TERMINAL_PROMPT=0` doesn't block those). Shared by
+/// [`bitbucket_credential_entries`] and `forge_clone`'s Bitbucket arm so the
+/// literal lives in one place.
+pub(crate) const CREDENTIAL_NONINTERACTIVE: &str = "credential.interactive=false";
+
 /// Push `head` to origin, then open a pull request from `head` into `base`. Mirrors
 /// `gitlab::create_mr`, with two Bitbucket-specific differences:
 ///
@@ -2725,11 +2913,12 @@ fn duplicate_pr_number(open_prs: &[PrInfo], base: &str) -> Option<u64> {
 ///    ""). So BEFORE any mutation we read the open PRs from `head` (via the same query
 ///    `prs_for_branch` uses) and, if one already targets `base`, error out naming its
 ///    number — nothing is pushed or changed.
-///  - **No credential config on the push.** Unlike glab (whose token isn't in git's
-///    store, so it injects a one-shot helper), Bitbucket repos in this app are
-///    cloned/pushed with the user's ambient git credentials (GCM), so a plain
-///    `git push origin <head>` works. The keyring token is NEVER put on argv / env /
-///    git config of the push process.
+///  - **Funnel credentials on the push.** The push routes through the same
+///    `credential_config_for_remote` funnel as every other network op: on a
+///    Bitbucket HTTPS origin the token is seeded into git's credential store on
+///    STDIN (`seed_git_credential`) and the one-shot `-c` pair (interactive
+///    suppression + `insteadOf` rewrite for `user@` origins) rides the push. The
+///    keyring token is NEVER put on argv / env / git config of the push process.
 ///
 /// Order: duplicate pre-check (read-only) → validate → push → POST create. If the POST
 /// fails after a successful push, the error discloses the partial state (the branch was
@@ -2765,13 +2954,22 @@ pub async fn create_pr(
         )));
     }
 
-    // A PR needs the branch on the remote first. Bitbucket uses the user's ambient git
-    // credentials (GCM) — no token-derived credential helper, so the keyring token
-    // never reaches the git process.
+    // A PR needs the branch on the remote first. Route the push's credentials
+    // through the SAME funnel every other network op uses
+    // (`credential_config_for_remote`): on a Bitbucket HTTPS origin it seeds the
+    // token into git's credential store (STDIN only) and returns the one-shot `-c`
+    // pair — interactive-helper suppression + the `insteadOf` host rewrite a
+    // `user@`-form origin needs for git's credential lookup to find the sentinel
+    // seed. An unconfigured user (or an SSH origin) gets no entries, keeping git's
+    // ambient, possibly interactive, behavior — fail-open, funnel-identical.
+    let cred = crate::forge::credential_config_for_remote(repo_path, "origin").await?;
+    let push_args =
+        crate::git::remote::with_credentials(&cred, &["push", "-u", "origin", head]);
+    let push_refs: Vec<&str> = push_args.iter().map(String::as_str).collect();
     crate::git::runner::run_git_mutating(
         state,
         repo_path,
-        &["push", "-u", "origin", head],
+        &push_refs,
         crate::git::runner::NETWORK_TIMEOUT,
     )
     .await?;
@@ -4825,26 +5023,11 @@ pub async fn publish_repo(
     let created_hint =
         format!("The Bitbucket repository was created at {html_url}, but ");
 
-    // ── Seed git's credential store so the push authenticates non-interactively.
-    //    The token is fed on STDIN ONLY — never argv / env / git config. A missing
-    //    helper / non-zero exit is tolerated (the push surfaces any auth failure).
-    //    NOTE: git-over-HTTPS REQUIRES the `x-bitbucket-api-token-auth` sentinel as
-    //    the username — the Atlassian account email does NOT authenticate here
-    //    (probe-validated: `git ls-remote` succeeds with the sentinel, fails with the
-    //    email). The email:token Basic pair is the REST-API contract only; do not
-    //    "fix" this username to `creds.email`, it will break the push. ──
-    let approve_input = format!(
-        "protocol=https\nhost=bitbucket.org\nusername=x-bitbucket-api-token-auth\npassword={}\n\n",
-        creds.token
-    );
-    let _ = crate::git::runner::run_git_mutating_input(
-        state,
-        repo_path,
-        &["credential", "approve"],
-        Some(&approve_input),
-        crate::git::runner::DEFAULT_TIMEOUT,
-    )
-    .await;
+    // ── Seed git's credential store so the push authenticates non-interactively —
+    //    the shared sentinel-username STDIN seed (see `seed_git_credential`, which
+    //    carries the probe-validated do-not-use-the-email warning). Best-effort: a
+    //    failed seed is tolerated (the push surfaces any auth failure). ──
+    let _ = seed_git_credential().await;
 
     // ── Add origin, then push the current branch. ──
     let remote_url = format!("https://bitbucket.org/{workspace}/{created_slug}.git");
@@ -4876,6 +5059,48 @@ pub async fn publish_repo(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_entries_suppress_interactive_and_rewrite_userinfo_urls() {
+        // user@ remote → interactive suppression + the transient insteadOf rewrite.
+        assert_eq!(
+            bitbucket_credential_entries("https://alice@bitbucket.org/ws/repo.git"),
+            vec![
+                "credential.interactive=false".to_string(),
+                "url.https://bitbucket.org/ws/repo.git.insteadOf=https://alice@bitbucket.org/ws/repo.git"
+                    .to_string(),
+            ]
+        );
+        // Bare-host remote → suppression only, no rewrite entry.
+        assert_eq!(
+            bitbucket_credential_entries("https://bitbucket.org/ws/repo.git"),
+            vec!["credential.interactive=false".to_string()]
+        );
+    }
+
+    #[test]
+    fn strip_https_userinfo_removes_embedded_username() {
+        // Bitbucket's API clone link embeds the account username.
+        assert_eq!(
+            strip_https_userinfo("https://alice-admin@bitbucket.org/ws/repo.git"),
+            "https://bitbucket.org/ws/repo.git"
+        );
+        // No userinfo → unchanged.
+        assert_eq!(
+            strip_https_userinfo("https://bitbucket.org/ws/repo.git"),
+            "https://bitbucket.org/ws/repo.git"
+        );
+        // Authority only, no path → unchanged host.
+        assert_eq!(
+            strip_https_userinfo("https://bob@bitbucket.org"),
+            "https://bitbucket.org"
+        );
+        // Non-https (scp-style SSH) → untouched.
+        assert_eq!(
+            strip_https_userinfo("git@bitbucket.org:ws/repo.git"),
+            "git@bitbucket.org:ws/repo.git"
+        );
+    }
 
     fn pr(json: &str) -> PrInfo {
         from_bb_pr(serde_json::from_str(json).expect("PR should parse"))
