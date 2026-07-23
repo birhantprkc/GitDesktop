@@ -12,6 +12,29 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-23
+
+### Fixed
+
+- The Settings **API key** field is now properly associated with its label, so
+  screen readers announce the input and clicking the label text focuses it.
+- Opening the diff of a generated or minified file (a `tsconfig.tsbuildinfo`,
+  minified bundle, or source map that is one enormous line) no longer freezes
+  the app: such files show a *generated or minified* notice with one-click
+  **Show diff anyway**, and extremely long lines are shortened for display in
+  every diff view.
+- The fork badge, provider label, and **Leave fork network** row now appear on
+  the first open after cloning a fork. Previously they could take a second open
+  (or a visit to the repo list) to show up, and a repo's stored forge metadata
+  briefly reset on every open.
+- A failed AI review notification is no longer a dead end: the **Activity &
+  notifications** inbox row now says why the run failed, and an automated
+  failure offers a one-click **Re-run** right from the row.
+- **Stash selected files** now captures only the files you selected.
+  Previously any other *staged* changes were silently saved into the stash
+  entry too (a `git stash push -- <paths>` limitation); your unselected staged
+  and unstaged changes are now left exactly as they were.
+
 ## [0.5.1] - 2026-07-23
 
 ### Fixed
@@ -2290,7 +2313,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/theBGuy/GitDesktop/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/theBGuy/GitDesktop/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/theBGuy/GitDesktop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/theBGuy/GitDesktop/compare/v0.3.1...v0.4.0
