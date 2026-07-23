@@ -31,7 +31,14 @@ import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { useEffectiveSyntax } from "@/lib/syntax/queries";
 import { useIsDark } from "@/lib/use-is-dark";
-import { capDiffText, DIFF_LINE_CAP } from "./cap-diff";
+import {
+  capDiffText,
+  DIFF_LINE_CAP,
+  DIFF_MAX_LINE_CHARS,
+  DIFF_MEGA_LINE_CHARS,
+  longestLineLength,
+  shortenLongLines,
+} from "./cap-diff";
 import { DiffErrorBoundary } from "./DiffErrorBoundary";
 import { DiffLanguagePicker } from "./DiffLanguagePicker";
 import { DiffPlaceholder } from "./DiffPlaceholder";
@@ -511,6 +518,10 @@ function RenderedDiff({
   // "Show full diff" opts into the whole thing. Reset when the file changes so
   // a previously-expanded file doesn't carry over to the next one.
   const [showFull, setShowFull] = useState(false);
+  // A generated/minified file (one enormous line) shows a placeholder rather
+  // than freezing the un-virtualized renderer; "Show diff anyway" opts in.
+  // (Reset lives below, keyed on the DEFERRED path — see the comment there.)
+  const [showAnyway, setShowAnyway] = useState(false);
   const [prevPath, setPrevPath] = useState(filePath);
   if (prevPath !== filePath) {
     setPrevPath(filePath);
@@ -523,6 +534,32 @@ function RenderedDiff({
   const deferredText = useDeferredValue(text);
   const deferredPath = useDeferredValue(filePath);
 
+  // Reset the "Show diff anyway" opt-in when the file actually changes on the
+  // DEFERRED timeline — not the urgent `filePath` — because `blocked` derives
+  // from `deferredText`. Resetting on the urgent change would re-block the
+  // OUTGOING mega file for the transition frame(s) before the new file's
+  // deferred text lands, flashing the placeholder over its opted-in shortened
+  // render (spec-review finding). Keyed on deferredPath, it rides the same
+  // values `blocked` reads, so the outgoing file keeps its render through the
+  // transition — matching how every deferred transition holds the previous
+  // content on screen.
+  const [prevDeferredPath, setPrevDeferredPath] = useState(deferredPath);
+  if (prevDeferredPath !== deferredPath) {
+    setPrevDeferredPath(deferredPath);
+    if (showAnyway) setShowAnyway(false);
+  }
+
+  // The longest single line drives both guards below. The renderer mounts the
+  // longest line synchronously on the main thread, so a mega-line (minified
+  // bundle, source map, `.tsbuildinfo`) freezes the app — that file gets a
+  // placeholder; any rendered diff also hard-shortens over-long lines.
+  const longestLine = useMemo(
+    () => longestLineLength(deferredText),
+    [deferredText],
+  );
+  const isMegaLine = longestLine > DIFF_MEGA_LINE_CHARS;
+  const blocked = isMegaLine && !showAnyway;
+
   // Whole-file highlight context + collapsible expand for small diffs; `content`
   // is null when it shouldn't apply (big file / unreadable / truncated → capped
   // hunk-only). `contentPending` is true while content mode wants to apply but
@@ -533,18 +570,45 @@ function RenderedDiff({
     repoPath,
     deferredPath,
     deferredText,
-    contentRevs,
+    // Shortened hunk text (long lines cut) would no longer line up with the
+    // whole-file reads content mode maps syntax onto, and the two whole-file
+    // IPC reads are pure waste when we're going to hunk-only anyway — skip
+    // content mode entirely once any line is over the shorten cap.
+    longestLine > DIFF_MAX_LINE_CHARS ? undefined : contentRevs,
   );
 
-  const { shown, hidden } = useMemo(() => {
+  const { shown, hidden, shortened } = useMemo(() => {
+    // On a blocked mega file we show a placeholder, not a diff — do no cap or
+    // shorten work on the (potentially ~1MB single-line) text.
+    if (blocked) return { shown: "", hidden: 0, shortened: 0 };
     // Content mode renders the full diff (the renderer collapses non-hunk
     // context into expandable gaps), so the cap doesn't apply there.
-    if (content) return { shown: deferredText, hidden: 0 };
-    const r = showFull
+    const capped = content
       ? { text: deferredText, hidden: 0 }
-      : capDiffText(deferredText, DIFF_LINE_CAP);
-    return { shown: r.text, hidden: r.hidden };
-  }, [deferredText, showFull, content]);
+      : showFull
+        ? { text: deferredText, hidden: 0 }
+        : capDiffText(deferredText, DIFF_LINE_CAP);
+    // Hard-shorten over-long lines UNCONDITIONALLY on whatever is about to
+    // render: "Show full diff" reveals hidden lines but long lines stay
+    // shortened (the safety invariant — no rendered diff can ever freeze). In
+    // content mode `longestLine <= DIFF_MAX_LINE_CHARS` by construction (the
+    // gate above), so this hits the fast-path with shortened=0.
+    //
+    // `longestLine` is measured on the FULL deferredText, so ≤ cap on the full
+    // text implies ≤ cap on any subset (capped / showFull / content text) —
+    // skipping the shorten pass is always safe there and avoids its re-scan.
+    // When > cap we still call shortenLongLines, whose own fast-path also
+    // returns shortened=0 for the case where capDiffText cut the long line out.
+    const short =
+      longestLine <= DIFF_MAX_LINE_CHARS
+        ? { text: capped.text, shortened: 0 }
+        : shortenLongLines(capped.text, DIFF_MAX_LINE_CHARS);
+    return {
+      shown: short.text,
+      hidden: capped.hidden,
+      shortened: short.shortened,
+    };
+  }, [deferredText, showFull, content, blocked, longestLine]);
 
   // Syntax prefs follow the active repo (repo-scoped custom languages); the
   // active repo owns every surface that supplies content, so this matches.
@@ -568,6 +632,9 @@ function RenderedDiff({
   useEffect(() => {
     if (
       !lang ||
+      // A blocked mega file shows a placeholder, not a diff — don't fetch a
+      // grammar it will never render.
+      blocked ||
       !isBuiltinShikiLang(lang) ||
       isShikiLang(lang) ||
       grammarState[lang] !== undefined ||
@@ -586,7 +653,7 @@ function RenderedDiff({
     return () => {
       cancelled = true;
     };
-  }, [lang, grammarState, shown.length]);
+  }, [lang, grammarState, shown.length, blocked]);
 
   // A built-in Shiki grammar this diff needs is still loading (never seen a
   // "ready"/"failed" result for it): hold the paint. `isShikiLang(lang)` already
@@ -650,7 +717,7 @@ function RenderedDiff({
   // biome-ignore lint/correctness/useExhaustiveDependencies: grammarState is an intentional rebuild trigger, read via module state not directly
   const diffFile = useMemo(
     () =>
-      contentPending || holdForGrammar
+      blocked || contentPending || holdForGrammar
         ? null
         : createDiffFile(
             deferredPath,
@@ -665,6 +732,7 @@ function RenderedDiff({
       syntaxMap,
       customLanguages,
       content,
+      blocked,
       contentPending,
       holdForGrammar,
       grammarState,
@@ -996,6 +1064,25 @@ function RenderedDiff({
   // for a grammar only the worker needs — the interim is the view clone's own
   // hljs pass (≤15K lines; plain past it), and correct Shiki swaps in when the
   // worker ASTs land.
+  // A generated/minified file (one enormous line) would freeze the renderer:
+  // show a placeholder with a one-click opt-in instead. Placed FIRST so a
+  // blocked mega file never flashes null while an irrelevant grammar loads.
+  if (blocked) {
+    return (
+      <DiffPlaceholder
+        message="Looks like a generated or minified file"
+        action={
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => setShowAnyway(true)}
+          >
+            Show diff anyway
+          </Button>
+        }
+      />
+    );
+  }
   if (contentPending || holdForGrammar) return null;
   if (!diffFile) return <DiffPlaceholder message="No changes to show" />;
   return (
@@ -1049,15 +1136,30 @@ function RenderedDiff({
           renderExtendLine={renderExtendLine}
         />
       )}
-      {hidden > 0 && (
+      {(hidden > 0 || shortened > 0) && (
         <div className="flex items-center justify-center gap-3 border-t bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-          <span>
-            {hidden.toLocaleString()} more {hidden === 1 ? "line" : "lines"}{" "}
-            hidden for performance
-          </span>
-          <Button size="xs" variant="outline" onClick={() => setShowFull(true)}>
-            Show full diff
-          </Button>
+          {hidden > 0 && (
+            <span>
+              {hidden.toLocaleString()} more {hidden === 1 ? "line" : "lines"}{" "}
+              hidden for performance
+            </span>
+          )}
+          {shortened > 0 && (
+            <span>
+              {shortened.toLocaleString()} long{" "}
+              {shortened === 1 ? "line" : "lines"} shortened
+              {hidden > 0 ? "" : " for performance"}
+            </span>
+          )}
+          {hidden > 0 && (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => setShowFull(true)}
+            >
+              Show full diff
+            </Button>
+          )}
         </div>
       )}
     </>

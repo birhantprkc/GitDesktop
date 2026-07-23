@@ -45,6 +45,12 @@ import { useEffectiveSyntax } from "@/lib/syntax/queries";
 import { toastError } from "@/lib/toast";
 import { useIsDark } from "@/lib/use-is-dark";
 import { useLatestRef } from "@/lib/use-latest-ref";
+import {
+  DIFF_MAX_LINE_CHARS,
+  DIFF_MEGA_LINE_CHARS,
+  longestLineLength,
+  shortenLongLines,
+} from "./cap-diff";
 import { DiffLanguagePicker } from "./DiffLanguagePicker";
 import { DiffPlaceholder } from "./DiffPlaceholder";
 import {
@@ -121,8 +127,9 @@ export function DiffViewer({ repoPath }: { repoPath: string }) {
 /**
  * The working-tree variant of the diff pane: hunks render as individual cards
  * with whole-hunk stage/unstage/discard actions, plus drag-to-select for
- * staging an individual subset of lines. Untracked, binary, and truncated
- * diffs fall back to the plain whole-file surface.
+ * staging an individual subset of lines. Untracked, binary, truncated, and
+ * generated/minified (one enormous line) diffs fall back to the plain
+ * whole-file surface (which shows the generated/minified placeholder).
  */
 function WorkingTreeDiff({
   repoPath,
@@ -163,7 +170,16 @@ function WorkingTreeDiff({
 
   const parsed: ParsedDiff | null = useMemo(() => {
     const data = diff.data;
-    if (!data || data.isBinary || data.isTruncated) return null;
+    // A generated/minified file (one enormous line) would freeze the
+    // un-virtualized staging renderer — route it down the whole-file
+    // DiffSurface fallback, which shows the generated/minified placeholder.
+    if (
+      !data ||
+      data.isBinary ||
+      data.isTruncated ||
+      longestLineLength(data.text) > DIFF_MEGA_LINE_CHARS
+    )
+      return null;
     return parseHunks(data.text);
   }, [diff.data]);
 
@@ -572,6 +588,27 @@ function StagingDiffView({
   const { syntaxMap, customLanguages } = useEffectiveSyntax(activeRepo);
   const deferredText = useDeferredValue(diffText);
   const deferredPath = useDeferredValue(filePath);
+  // Hard-shorten over-long lines before rendering so a file with lines in the
+  // 4K–20K band (past the mega threshold it falls back to the whole-file
+  // surface entirely) can't freeze the un-virtualized renderer here either.
+  // DISPLAY-ONLY: shortening preserves line COUNT and numbers, so the drag
+  // manager, paint helpers, hunk anchors, and every mutation path (which all
+  // work off the ORIGINAL text/parsed hunks in WorkingTreeDiff) stay correct.
+  // One scan: measure the longest line once, and only shorten when it overflows
+  // — normal files then fast-path to the SAME string reference (shortened=0),
+  // keeping createDiffFile's inputs — and thus behavior — byte-identical.
+  const { longestLine, displayText, shortened } = useMemo(() => {
+    const longest = longestLineLength(deferredText);
+    if (longest <= DIFF_MAX_LINE_CHARS) {
+      return { longestLine: longest, displayText: deferredText, shortened: 0 };
+    }
+    const short = shortenLongLines(deferredText, DIFF_MAX_LINE_CHARS);
+    return {
+      longestLine: longest,
+      displayText: short.text,
+      shortened: short.shortened,
+    };
+  }, [deferredText]);
   // Whole-file highlight context + expand. The staging view renders every hunk
   // regardless, so let content mode engage for big diffs too — bounded by the
   // file highlight budget, not the read-only surface's 200-line render cap.
@@ -583,25 +620,30 @@ function StagingDiffView({
     repoPath,
     deferredPath,
     deferredText,
-    contentRevs,
+    // Shortened hunk text (long lines cut) no longer lines up with the
+    // whole-file reads content mode maps syntax onto, and the reads are wasted
+    // IPC there — skip content mode once any line is over the shorten cap.
+    longestLine > DIFF_MAX_LINE_CHARS ? undefined : contentRevs,
     HIGHLIGHT_MAX_LINES,
   );
   // The whole-file diff (every hunk) — never capped, so all hunks stay stageable.
-  // Null while content reads are pending: don't build an intermediate diff the
-  // arriving reads would immediately restructure.
+  // Built from the shortened DISPLAY text; the original text still backs every
+  // stage/unstage/discard patch (see WorkingTreeDiff). Null while content reads
+  // are pending: don't build an intermediate diff the arriving reads would
+  // immediately restructure.
   const diffFile = useMemo(
     () =>
       contentPending
         ? null
         : createDiffFile(
             deferredPath,
-            deferredText,
+            displayText,
             { syntaxMap, customLanguages },
             content ?? undefined,
           ),
     [
       deferredPath,
-      deferredText,
+      displayText,
       syntaxMap,
       customLanguages,
       content,
@@ -780,6 +822,14 @@ function StagingDiffView({
             />
           </div>
         ) : null,
+      )}
+      {shortened > 0 && (
+        <div className="flex items-center justify-center gap-3 border-t bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          <span>
+            {shortened.toLocaleString()} long{" "}
+            {shortened === 1 ? "line" : "lines"} shortened for performance
+          </span>
+        </div>
       )}
     </div>
   );
