@@ -12,6 +12,25 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-23
+
+### Fixed
+
+- Fixed cloning, fetching, pulling, and pushing **private Bitbucket** repositories
+  over HTTPS failing with `could not read Password for '…@bitbucket.org': terminal
+  prompts disabled` on macOS and Linux. GitDesktop now hands your stored Bitbucket
+  API token to git's credential store over STDIN (never placed on the command line),
+  so operations authenticate without a prompt wherever git has a credential helper —
+  the system keychain on macOS, Git Credential Manager on Windows, or a configured
+  helper on Linux. Cloning over SSH was unaffected.
+- The task editor no longer warns that an interpreter "wasn't detected" when it's
+  actually installed. Interpreters installed through a version manager (nvm/fnm for
+  Node, and anything else that lives only on your shell's PATH) weren't found by the
+  editor's quick check when GitDesktop was launched from the Dock or Finder on macOS
+  — even though the task ran fine. The editor now confirms the selected interpreter
+  the same way a run resolves it (via your login shell), so it shows the real path
+  instead of a false "not detected" warning.
+
 ## [0.5.0] - 2026-07-22
 
 ### Added
@@ -2271,7 +2290,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/theBGuy/GitDesktop/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/theBGuy/GitDesktop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/theBGuy/GitDesktop/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/theBGuy/GitDesktop/compare/v0.3.0...v0.3.1
