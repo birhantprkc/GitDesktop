@@ -22,7 +22,10 @@ use crate::error::{AppError, AppResult};
 use crate::forge::bitbucket::BitbucketForge;
 use crate::forge::github::GitHubForge;
 use crate::forge::gitlab::GitLabForge;
-use crate::forge::model::{ForgeRepoList, ForgeStatus, Provider};
+use crate::forge::model::{
+    Capabilities, ForgeForkResult, ForgeRepoList, ForgeSearchList, ForgeStatus, Implemented,
+    Provider, ProviderFeatures,
+};
 
 /// A hosted-git provider GitDesktop can talk to. One method per hosted capability;
 /// the trait grows a method per phase (Phase 0 = `status` only). Called via static
@@ -92,6 +95,114 @@ pub(crate) fn encode_query_value(s: &str) -> String {
         }
     }
     out
+}
+
+/// Whether a single repo/owner path *segment* is safe to interpolate into a CLI
+/// arg or URL path. The character set is alphanumerics, dots, underscores, and
+/// hyphens; the FIRST char may be an alphanumeric, a dot, or an underscore (so
+/// legitimate config repos like `.github` / `.gitlab` and `_name` are allowed),
+/// but NEVER a hyphen — a `-`-leading value would be read as a flag by gh/glab.
+/// The two pure-traversal segments `.` and `..` are rejected outright, as is the
+/// empty string. A `/` never appears in a segment (the caller splits on it).
+fn is_valid_path_segment(seg: &str) -> bool {
+    // Reject empty and the two path-traversal segments explicitly.
+    if seg.is_empty() || seg == "." || seg == ".." {
+        return false;
+    }
+    let mut chars = seg.chars();
+    match chars.next() {
+        // Leading `.` and `_` are allowed (`.github`, `_name`); a leading `-` is not
+        // (argv-flag injection).
+        Some(c) if c.is_ascii_alphanumeric() || c == '.' || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
+
+/// Validate a repository `name` against the safe grammar, returning it on success
+/// or an [`AppError::InvalidArgument`] otherwise. A name is a single segment (no
+/// slashes) — used before interpolating into a `gh`/`glab` arg or an API URL path.
+pub(crate) fn validate_repo_name(name: &str) -> AppResult<()> {
+    if is_valid_path_segment(name) {
+        Ok(())
+    } else {
+        Err(AppError::InvalidArgument(format!(
+            "invalid repository name: {name}"
+        )))
+    }
+}
+
+/// Validate an `owner` against the safe grammar. A GitHub/Bitbucket owner is a
+/// single segment; a GitLab owner may be a nested group path (`group/subgroup`),
+/// so each `/`-separated segment is validated independently. An empty owner or any
+/// segment that fails the grammar is rejected.
+pub(crate) fn validate_owner(owner: &str) -> AppResult<()> {
+    if !owner.is_empty() && owner.split('/').all(is_valid_path_segment) {
+        Ok(())
+    } else {
+        Err(AppError::InvalidArgument(format!("invalid owner: {owner}")))
+    }
+}
+
+/// The maximum README size returned to the frontend (~300 KB). A README larger than
+/// this is truncated on a `char` boundary so the returned string is never split mid
+/// code-point. Shared by all three providers' README reads.
+const README_CAP: usize = 300 * 1024;
+
+/// Cap a README body at [`README_CAP`] bytes, truncating on a UTF-8 `char` boundary
+/// (never mid code-point). Returns the input unchanged when it's already within the
+/// cap. Pure, so it's unit-testable.
+pub(crate) fn cap_readme(body: &str) -> String {
+    if body.len() <= README_CAP {
+        return body.to_string();
+    }
+    // Walk back from the cap to the nearest char boundary so we never split a
+    // multibyte code point.
+    let mut end = README_CAP;
+    while end > 0 && !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    body[..end].to_string()
+}
+
+/// Drive a set of futures CONCURRENTLY and collect their results in input order — a
+/// tiny local `join_all` so we don't pull in the `futures` crate. All futures share
+/// this task (no spawn), so they may borrow non-`'static` data; each poll advances
+/// every not-yet-ready future. Shared by the forge providers (GitLab health probes,
+/// Bitbucket per-workspace search).
+pub(crate) async fn futures_join_all<F, T>(futures: impl IntoIterator<Item = F>) -> Vec<T>
+where
+    F: std::future::Future<Output = T>,
+{
+    use std::future::poll_fn;
+    use std::pin::Pin;
+    use std::task::Poll;
+
+    let mut pinned: Vec<Pin<Box<F>>> = futures.into_iter().map(Box::pin).collect();
+    let mut results: Vec<Option<T>> = (0..pinned.len()).map(|_| None).collect();
+
+    poll_fn(|cx| {
+        let mut all_done = true;
+        for (i, fut) in pinned.iter_mut().enumerate() {
+            if results[i].is_none() {
+                match fut.as_mut().poll(cx) {
+                    Poll::Ready(v) => results[i] = Some(v),
+                    Poll::Pending => all_done = false,
+                }
+            }
+        }
+        if all_done {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
+
+    results
+        .into_iter()
+        .map(|r| r.expect("all futures ready"))
+        .collect()
 }
 
 /// Route a remote host to a **non-GitHub** provider, but only when it's
@@ -656,8 +767,8 @@ pub async fn jira_worklog_delete(
 }
 
 /// The signed-in user's repositories on a provider, for the clone browser.
-/// Dispatches by provider — GitHub via `gh`, GitLab via `glab`; Bitbucket isn't
-/// implemented yet. Account-scoped (no repo path), unlike `forge_status`.
+/// Dispatches by provider — GitHub via `gh`, GitLab via `glab`, Bitbucket via
+/// direct HTTP. Account-scoped (no repo path), unlike `forge_status`.
 #[tauri::command]
 pub async fn forge_list_repos(provider: Provider) -> AppResult<ForgeRepoList> {
     match provider {
@@ -665,6 +776,118 @@ pub async fn forge_list_repos(provider: Provider) -> AppResult<ForgeRepoList> {
         Provider::GitLab => gitlab::list_repos().await,
         Provider::Bitbucket => bitbucket::list_repos().await,
     }
+}
+
+// ── Explore: repo search / fork-by-name / star / README / provider features ────
+//
+// The Explore view's backend. Each command dispatches on the explicit `provider`
+// argument (account-scoped, no repo path — Explore browses arbitrary repos across a
+// provider). Per-provider impls live in github.rs / gitlab.rs / bitbucket.rs. The
+// frontend mirrors these signatures exactly.
+
+/// Search a provider's repositories for the Explore view. `sort` is exactly
+/// `"best" | "stars" | "updated"` (anything else → `InvalidArgument`); `page` is
+/// 1-based. An empty `query` means the Popular/Discover feed on GitHub and GitLab;
+/// Bitbucket rejects it (its search is workspace-scoped and needs a term — the
+/// frontend never sends it).
+#[tauri::command]
+pub async fn forge_search_repos(
+    provider: Provider,
+    query: String,
+    sort: String,
+    page: u32,
+) -> AppResult<ForgeSearchList> {
+    if !matches!(sort.as_str(), "best" | "stars" | "updated") {
+        return Err(AppError::InvalidArgument(format!("invalid sort: {sort}")));
+    }
+    // `page` is 1-based; page 0 is a client bug (every provider would treat it
+    // inconsistently — GitHub 422s, GitLab clamps to 1), so reject it explicitly.
+    if page == 0 {
+        return Err(AppError::InvalidArgument(
+            "page is 1-based; page 0 is invalid".into(),
+        ));
+    }
+    match provider {
+        Provider::GitHub => github::search_repos(&query, &sort, page).await,
+        Provider::GitLab => gitlab::search_repos(&query, &sort, page).await,
+        Provider::Bitbucket => {
+            if query.trim().is_empty() {
+                return Err(AppError::InvalidArgument(
+                    "A search term is required on Bitbucket.".into(),
+                ));
+            }
+            bitbucket::search_repos(&query, &sort, page).await
+        }
+    }
+}
+
+/// Fork a repo by its `owner/name` on a provider (Explore's Fork action). Returns
+/// the fork's identity plus a best-effort readiness flag.
+#[tauri::command]
+pub async fn forge_fork_repo(
+    provider: Provider,
+    owner: String,
+    name: String,
+) -> AppResult<ForgeForkResult> {
+    match provider {
+        Provider::GitHub => github::fork_repo(&owner, &name).await,
+        Provider::GitLab => gitlab::fork_repo(&owner, &name).await,
+        Provider::Bitbucket => bitbucket::fork_repo(&owner, &name).await,
+    }
+}
+
+/// Star (`star = true`) or unstar a repo by `owner/name`. Bitbucket Cloud has no
+/// stars (`repo_star` false), so its arm errors — the frontend never calls it there.
+#[tauri::command]
+pub async fn forge_star_repo(
+    provider: Provider,
+    owner: String,
+    name: String,
+    star: bool,
+) -> AppResult<()> {
+    match provider {
+        Provider::GitHub => github::star_repo(&owner, &name, star).await,
+        Provider::GitLab => gitlab::star_repo(&owner, &name, star).await,
+        Provider::Bitbucket => bitbucket::star_repo(&owner, &name, star).await,
+    }
+}
+
+/// Whether the signed-in user has starred `owner/name`. Bitbucket always returns
+/// `false` (no stars).
+#[tauri::command]
+pub async fn forge_starred(provider: Provider, owner: String, name: String) -> AppResult<bool> {
+    match provider {
+        Provider::GitHub => github::starred(&owner, &name).await,
+        Provider::GitLab => gitlab::starred(&owner, &name).await,
+        Provider::Bitbucket => bitbucket::starred(&owner, &name).await,
+    }
+}
+
+/// A repo's raw README markdown for the Explore preview, or `None` when it has none
+/// (absence is not an error). `default_branch` scopes GitLab/Bitbucket's file read
+/// (GitHub resolves the default branch itself).
+#[tauri::command]
+pub async fn forge_repo_readme(
+    provider: Provider,
+    owner: String,
+    name: String,
+    default_branch: Option<String>,
+) -> AppResult<Option<String>> {
+    match provider {
+        Provider::GitHub => github::repo_readme(&owner, &name).await,
+        Provider::GitLab => gitlab::repo_readme(&owner, &name, default_branch.as_deref()).await,
+        Provider::Bitbucket => bitbucket::repo_readme(&owner, &name).await,
+    }
+}
+
+/// A provider's static feature profile (capabilities + implemented) — pure, no I/O.
+/// Lets the Explore view gate its controls per provider without a repo in hand.
+#[tauri::command]
+pub async fn forge_provider_features(provider: Provider) -> AppResult<ProviderFeatures> {
+    Ok(ProviderFeatures {
+        capabilities: Capabilities::for_provider(provider),
+        implemented: Implemented::for_provider(provider),
+    })
 }
 
 /// Clone a repo, supplying provider auth that plain `git clone` lacks. A private
@@ -3483,5 +3706,75 @@ mod tests {
         // Anything else → None so the caller errors rather than guessing.
         assert_eq!(normalize_visibility("garbage"), None);
         assert_eq!(normalize_visibility(""), None);
+    }
+
+    #[test]
+    fn repo_name_grammar_accepts_safe_names_and_rejects_injection() {
+        // Ordinary and punctuated names.
+        assert!(validate_repo_name("rust-lang").is_ok());
+        assert!(validate_repo_name("a.b_c-d").is_ok());
+        assert!(validate_repo_name("Repo123").is_ok());
+        // Legitimate dot/underscore-leading config repos (`.github`, `.gitlab`) and
+        // underscore-leading names are accepted.
+        assert!(validate_repo_name(".github").is_ok());
+        assert!(validate_repo_name(".gitlab").is_ok());
+        assert!(validate_repo_name("_name").is_ok());
+        // Leading `-` would be read as a flag by gh/glab.
+        assert!(validate_repo_name("-evil").is_err());
+        // A `;` (or any shell/query metachar) is rejected.
+        assert!(validate_repo_name("foo;bar").is_err());
+        // The two pure-traversal segments and empties are rejected.
+        assert!(validate_repo_name(".").is_err());
+        assert!(validate_repo_name("..").is_err());
+        assert!(validate_repo_name("").is_err());
+        // A name is a single segment — a slash is never allowed.
+        assert!(validate_repo_name("owner/name").is_err());
+    }
+
+    #[test]
+    fn owner_grammar_allows_nested_groups_but_validates_each_segment() {
+        // Single owner and a GitLab nested group path.
+        assert!(validate_owner("rust-lang").is_ok());
+        assert!(validate_owner("group/subgroup").is_ok());
+        assert!(validate_owner("a/b/c").is_ok());
+        // A bad segment anywhere in the path fails the whole owner.
+        assert!(validate_owner("group/-evil").is_err());
+        assert!(validate_owner("-evil/group").is_err());
+        assert!(validate_owner("group/..").is_err());
+        // Empty owner and empty segments (leading/trailing/double slash) are rejected.
+        assert!(validate_owner("").is_err());
+        assert!(validate_owner("/group").is_err());
+        assert!(validate_owner("group/").is_err());
+        assert!(validate_owner("a//b").is_err());
+    }
+
+    #[tokio::test]
+    async fn search_rejects_bad_sort_and_zero_page_before_dispatch() {
+        // Both guards fire before any provider dispatch (no CLI / network needed).
+        let bad_sort =
+            forge_search_repos(Provider::GitHub, "rust".into(), "nonsense".into(), 1).await;
+        assert!(matches!(bad_sort, Err(AppError::InvalidArgument(_))));
+        // page is 1-based; 0 is rejected.
+        let zero_page =
+            forge_search_repos(Provider::GitHub, "rust".into(), "best".into(), 0).await;
+        assert!(matches!(zero_page, Err(AppError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn cap_readme_leaves_small_bodies_and_truncates_on_char_boundary() {
+        // A short body is returned unchanged.
+        assert_eq!(cap_readme("hello"), "hello");
+        // Build a body whose byte length crosses the cap right in the middle of a
+        // 4-byte emoji, so a naive byte slice would split the code point. Pad with
+        // ASCII so the cap lands two bytes into the trailing emoji.
+        let pad_len = README_CAP - 2;
+        let mut body = "a".repeat(pad_len);
+        body.push('😀'); // 4 bytes; the cap at README_CAP falls inside it
+        let capped = cap_readme(&body);
+        // Never longer than the cap, and always valid UTF-8 ending on a boundary
+        // (the partial emoji is dropped, so the result is all the `a`s).
+        assert!(capped.len() <= README_CAP);
+        assert_eq!(capped.len(), pad_len);
+        assert!(capped.chars().all(|c| c == 'a'));
     }
 }
