@@ -46,6 +46,7 @@ import {
 } from "@/lib/git/types";
 import { eventToBinding, formatBinding } from "@/lib/hotkeys/binding";
 import { useEffectiveBindings } from "@/lib/hotkeys/hotkeys";
+import { useJiraLink } from "@/lib/jira/queries";
 import {
   useLensGate,
   useRemoteSlug,
@@ -54,10 +55,17 @@ import {
 import { deleteReviewNote } from "@/lib/review-notes/store";
 import { useAiEnabled, useSettings } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
+import { LinkedIssuesField } from "./LinkedIssuesField";
 import { ReviewerNotesField } from "./ReviewerNotesField";
 import { ReviewersPopover } from "./ReviewersPopover";
 import { useBranchPickerOptions } from "./useBranchPickerOptions";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
+import {
+  composeBodyWithJiraRefs,
+  composeBodyWithRefs,
+  useJiraMentionChips,
+  useLinkedIssueChips,
+} from "./useLinkedIssueChips";
 
 /** Platform-correct submit hint (Cmd+Enter on macOS, Ctrl+Enter else) — never a
  *  literal modifier (house platform-mod-key rule). */
@@ -158,6 +166,20 @@ export function CreatePrDialog({
   const [reviewers, setReviewers] = useState<ForgeUserRef[]>([]);
   const [labels, setLabels] = useState<Set<string>>(new Set());
   const [assignees, setAssignees] = useState<ForgeUserRef[]>([]);
+
+  // Linked issues: real repo issues to reference on create (extraction-seeded,
+  // AI-proposed, or manually added). These become `Closes #N`/`Relates to #N`
+  // lines appended to the body — body text, not create-mutation params — so
+  // unlike labels they work on the PARENT path too, with the parent's issues.
+  // Gated only on the forge having a usable issue tracker (not on `aiEnabled`:
+  // the cluster is a non-AI surface — Hide-AI still shows it, minus AI chips).
+  const canLinkIssues = !!forge.data && forgeFeatureReady(forge.data, "issues");
+  // Bitbucket repos have no native tracker (`canLinkIssues` is false), so a
+  // LINKED Jira project drives a mention-only cluster instead. Mutually exclusive
+  // with the native cluster — only ever one in the dialog.
+  const jiraLink = useJiraLink(repoPath);
+  const canJiraMention =
+    !canLinkIssues && forge.data?.provider === "bitbucket" && !!jiraLink.data;
   // Group-label ids: these fields wrap trigger-style widgets (segmented buttons
   // and popover triggers) that carry their own aria-label, so the visible field
   // label names the surrounding group via aria-labelledby rather than htmlFor.
@@ -251,6 +273,16 @@ export function CreatePrDialog({
     },
     onSubmit: async ({ value }) => {
       try {
+        // Append the linked-issue chips as their exact keyword lines via the
+        // shared composer (the single ref-block composition used by every
+        // create/edit save path). The forge does the real linking/auto-closing on
+        // merge; here we only compose body text. On a Bitbucket repo with a Jira
+        // link, the Jira mention chips compose `Relates to KEY` lines instead (the
+        // two clusters are mutually exclusive).
+        const finalBody =
+          canJiraMention && jiraChips.length > 0
+            ? composeBodyWithJiraRefs(value.body, jiraChips)
+            : composeBodyWithRefs(value.body, linkedIssues);
         const { number, url } = await createPr.mutateAsync({
           base: value.base,
           // Head stays a bare LOCAL branch name either way: the backend pushes it
@@ -261,7 +293,7 @@ export function CreatePrDialog({
           // toastError below.
           head: value.head,
           title: value.title.trim(),
-          body: value.body,
+          body: finalBody,
           draft: value.draft,
           // Targets the fork ("origin") or its parent ("upstream"); the parent
           // path rejects reviewers/labels/assignees backend-side (their pickers
@@ -352,7 +384,7 @@ export function CreatePrDialog({
             // `ahead` (git log) is newest-first, so the head is the first entry.
             headSha: ahead[0]?.hash,
             title: value.title.trim(),
-            body: value.body,
+            body: finalBody,
             commitSubjects: ahead.map((c) => c.subject),
             target: { type: "remote", number },
             reviewNotes: notes || undefined,
@@ -373,6 +405,12 @@ export function CreatePrDialog({
     setReviewers([]);
     setLabels(new Set());
     setAssignees([]);
+    // Reset the linked-issue chips (and their dismissed/probed refs) to empty —
+    // the create dialog opens with no seeded body refs; extraction/AI seeding
+    // then repopulates from the head branch + commits.
+    resetLinkedIssues([]);
+    // Same for the Jira mention cluster (Bitbucket + linked project).
+    resetJiraChips([]);
     // Reset the target to the default (parent) every open, so a prior fork/parent
     // choice doesn't leak into the next PR.
     setTarget("upstream");
@@ -481,6 +519,45 @@ export function CreatePrDialog({
   const branchPrs = usePrsForBranch(repoPath, head || null, open, createLens);
   const existingPr = (branchPrs.data ?? []).find((p) => p.baseRefName === base);
 
+  // Linked-issue chip cluster — extraction seeding, AI union, candidate ranking,
+  // and the chip mutations all live in the shared hook (also used by the edit and
+  // local-create paths). Gated on the tracker being usable AND the dialog open;
+  // reset from empty in seedOnOpen. The parent target reads the parent's issues
+  // (createLens). Chips compose into the body as `Closes #N`/`Relates to #N`.
+  const {
+    chips: linkedIssues,
+    resetWith: resetLinkedIssues,
+    toggleKeyword: toggleIssueKeyword,
+    remove: removeIssue,
+    pick: pickIssue,
+    buildCandidates: buildIssueCandidates,
+    upsertFromDraft: upsertAiIssues,
+  } = useLinkedIssueChips({
+    repoPath,
+    lens: createLens,
+    enabled: open && canLinkIssues,
+    headBranch: head || null,
+    commitSubjects: ahead.map((c) => c.subject),
+  });
+
+  // Jira mention chips — the Bitbucket-only sibling cluster. Enabled on
+  // `open && canJiraMention`; reset from empty in seedOnOpen. Chips compose into
+  // the body as `Relates to KEY` lines; there's no keyword toggle.
+  const {
+    chips: jiraChips,
+    resetWith: resetJiraChips,
+    remove: removeJiraChip,
+    pick: pickJiraChip,
+    buildCandidates: buildJiraCandidates,
+    upsertFromDraft: upsertAiJira,
+  } = useJiraMentionChips({
+    repoPath,
+    enabled: open && canJiraMention,
+    headBranch: head || null,
+    commitSubjects: ahead.map((c) => c.subject),
+    link: jiraLink.data ?? null,
+  });
+
   function toggleLabel(name: string, on: boolean) {
     setLabels((prev) => {
       const next = new Set(prev);
@@ -498,6 +575,13 @@ export function CreatePrDialog({
   // the dialog-local generate chord below. Verbatim the button's prior body.
   function runGenerate() {
     aiDescriptionRef.current = true;
+    // Grounded issue candidates the model may link: current chips pinned first,
+    // then the highest-scoring OPEN issues, capped at 8 (the hook records the set
+    // it fed so `upsertAiIssues` can resolve an AI-proposed number's title/state).
+    const issueCandidates = buildIssueCandidates();
+    // Grounded Jira mention candidates (Bitbucket + linked project). Empty unless
+    // the Jira cluster is active; mutually exclusive with `issueCandidates`.
+    const jiraCandidates = canJiraMention ? buildJiraCandidates() : undefined;
     generate(
       base,
       head,
@@ -508,6 +592,14 @@ export function CreatePrDialog({
         // Additive: union the model's (already repo-validated) labels with the
         // user's manual picks, never replace.
         setLabels((prev) => new Set([...prev, ...d.labels]));
+        // Union the model's proposed issue links into the chip cluster. A `closes`
+        // proposal marks `aiSuggestedClose` (sorts first, hint tooltip); both land
+        // as `relates` chips (the safe default the user can toggle up). Skip
+        // dismissed numbers; never downgrade an existing chip — only OR-in the
+        // `aiSuggestedClose` flag.
+        upsertAiIssues({ closes: d.closes, relates: d.relates });
+        // Union the model's proposed Jira mentions into the mention cluster.
+        upsertAiJira({ jiraMentions: d.jiraMentions });
       },
       // Provider-aware prompt copy (MR/merge-request noun, markdown flavor);
       // null host → base GitHub wording.
@@ -520,6 +612,10 @@ export function CreatePrDialog({
       })) ?? [],
       // Author's reviewer notes — reflected into the generated description.
       notes.trim() || undefined,
+      // Grounded issue candidates — empty ⇒ prompt's issue-reference ban intact.
+      issueCandidates,
+      // Grounded Jira mention candidates — empty/undefined ⇒ no Jira variant.
+      jiraCandidates,
     );
   }
   // Context-sensitive reuse of the `generate-commit-message` binding (mod+g by
@@ -888,6 +984,34 @@ export function CreatePrDialog({
                 />
               )}
             </form.AppField>
+
+            {/* Linked issues: real repo issues referenced on create. Non-AI
+                surface (shown under Hide-AI too), gated on the tracker being
+                usable. Chips stay interactive while generating — the stream union
+                only adds/annotates, never fights a user edit. On a Bitbucket repo
+                with a linked Jira project the mention-only variant renders in the
+                SAME slot instead (the two clusters are mutually exclusive). */}
+            {canLinkIssues ? (
+              <LinkedIssuesField
+                repoPath={repoPath}
+                lens={createLens}
+                chips={linkedIssues}
+                onToggleKeyword={toggleIssueKeyword}
+                onRemove={removeIssue}
+                onPick={pickIssue}
+                disabled={generating}
+              />
+            ) : canJiraMention ? (
+              <LinkedIssuesField
+                variant="jira"
+                repoPath={repoPath}
+                link={jiraLink.data ?? null}
+                jiraChips={jiraChips}
+                onRemove={removeJiraChip}
+                onPick={pickJiraChip}
+                disabled={generating}
+              />
+            ) : null}
 
             {/* Collapsed "Notes for reviewers": deposit-seeded author context,
                 posted as the PR's first comment and fed to the AI review. AI-only. */}

@@ -203,6 +203,32 @@ function renderLabelLine(name: string, description?: string | null): string {
   return `- ${name} — ${[...desc].slice(0, 140).join("")}`;
 }
 
+/** Render one candidate issue as a bullet for the `## Related issues` section:
+ *  `- #123 — title`, ` (closed)` suffixed on the number (before ` — title`) when
+ *  the issue is closed, the ` — title` part omitted when the title is empty. Title
+ *  code-point-capped at 140. KEEP IN SYNC: `render_issue_line` in
+ *  src-tauri/src/mcp_server/generate.rs (number-adjacent suffix placement). */
+function renderIssueLine(number: number, title: string, state: string): string {
+  const suffix = state.toUpperCase() === "CLOSED" ? " (closed)" : "";
+  const t = [...title.trim()].slice(0, 140).join("");
+  return t ? `- #${number}${suffix} — ${t}` : `- #${number}${suffix}`;
+}
+
+/** Render one Jira candidate as a bullet for the `## Related issues` section:
+ *  `- KEY — summary`, ` (done)` suffixed on the key when `statusCategory` is
+ *  "done", bare `- KEY` when the summary is empty. Summary trimmed + 140-char
+ *  cap. Mention-only — there is no closed/close notion. KEEP IN SYNC:
+ *  `render_jira_line` in src-tauri/src/mcp_server/generate.rs. */
+function renderJiraLine(
+  key: string,
+  summary: string,
+  statusCategory: string,
+): string {
+  const suffix = statusCategory.toLowerCase() === "done" ? " (done)" : "";
+  const s = [...summary.trim()].slice(0, 140).join("");
+  return s ? `- ${key}${suffix} — ${s}` : `- ${key}${suffix}`;
+}
+
 // KEEP IN SYNC: src-tauri/src/mcp_server/generate.rs mirrors this for the MCP recipe tools.
 export function buildPrPrompt(input: PrPromptInput): {
   system: string;
@@ -211,6 +237,36 @@ export function buildPrPrompt(input: PrPromptInput): {
   const { prNoun } = platformCopy(input.provider);
   const abbrev = prNoun === "merge request" ? "MR" : "PR";
   const systemParts = [prSystemFor(input.provider)];
+
+  // Grounded issue-linking: real, validated candidate issues the model MAY link
+  // (defensive cap 8 — mirrored Rust-side). When present, the system prompt's
+  // fabrication ban is swapped for a grounded rule and a `## Related issues`
+  // section is added; the parser drops any number not in this set.
+  const candidates = (input.issueCandidates ?? [])
+    .filter((c) => Number.isInteger(c.number) && c.number > 0)
+    .slice(0, 8);
+  // Mention-only Jira candidates (Bitbucket repos with a linked project). Native
+  // `candidates` win — the Jira variant fires ONLY when there are no native
+  // candidates (the Bitbucket-only gather makes both-non-empty impossible, but the
+  // precedence is encoded here defensively). Filter empty keys, then cap at 8.
+  const jira =
+    candidates.length > 0
+      ? []
+      : (input.jiraCandidates ?? []).filter((c) => c.key.trim()).slice(0, 8);
+  if (candidates.length > 0) {
+    // Both strings built with the in-scope `abbrev`; swap the first occurrence.
+    const ban = `- NEVER reference issue or ${abbrev} numbers, tickets, milestones, or external links (e.g. "Closes #123", "part of #60", "fixes JIRA-4"). You have no access to the issue tracker, so any such reference is fabricated — leave them out entirely.`;
+    const relaxed = `- Do not put issue or ${abbrev} numbers, tickets, milestones, or external links in the description body — the ONLY issue references you may make are the final Closes:/Relates: lines defined in the "Related issues" section, chosen from its list. Any other reference is fabricated — leave it out.`;
+    systemParts[0] = systemParts[0].replace(ban, relaxed);
+  } else if (jira.length > 0) {
+    // Jira mention-only variant: swap the ban for a RELAXED line that permits only
+    // the final `Relates:` line (no `Closes:` — Jira tickets aren't closed from PR
+    // text). `abbrev` is "PR" on Bitbucket. KEEP IN SYNC with generate.rs.
+    const ban = `- NEVER reference issue or ${abbrev} numbers, tickets, milestones, or external links (e.g. "Closes #123", "part of #60", "fixes JIRA-4"). You have no access to the issue tracker, so any such reference is fabricated — leave them out entirely.`;
+    const relaxed = `- Do not put issue or ${abbrev} numbers, tickets, milestones, or external links in the description body — the ONLY ticket references you may make are the final Relates: line defined in the "Related issues" section, chosen from its list. Any other reference is fabricated — leave it out.`;
+    systemParts[0] = systemParts[0].replace(ban, relaxed);
+  }
+
   if (input.repoInstructions) {
     systemParts.push(`## Project instructions\n${input.repoInstructions}`);
   }
@@ -273,9 +329,36 @@ export function buildPrPrompt(input: PrPromptInput): {
     );
   }
 
+  // Related-issue proposal — only when the caller fed validated candidates. The
+  // model chooses ONLY from this list (the parser drops anything not in it), so a
+  // fabricated number is silently discarded rather than surfaced.
+  if (candidates.length > 0) {
+    const issueLines = candidates
+      .map((c) => renderIssueLine(c.number, c.title, c.state))
+      .join("\n");
+    systemParts.push(
+      `## Related issues\n${issueLines}\nThese are real, open-or-closed issues from this repository's tracker that MAY be related to this change — judge each by its title against what the diff actually does. Most changes genuinely address at most one or two, often none; never force a link. After the description (and after the Labels line when present), report qualifying issues on up to two final lines, exactly like:\nCloses: 123, 456\nRelates: 789\nUse Closes ONLY for an issue this change fully resolves — merging will close it automatically, so prefer Relates when unsure. Use Relates for an issue this change advances or clearly connects to without resolving it. List ONLY numbers from the list above, never any other number; omit either line (or both) when no issue qualifies.`,
+    );
+  } else if (jira.length > 0) {
+    // Jira mention-only variant of the Related-issues section (Bitbucket + linked
+    // project). Only a `Relates:` line is offered — Jira tickets aren't closed from
+    // PR text. KEEP IN SYNC with generate.rs.
+    const issueLines = jira
+      .map((c) => renderJiraLine(c.key, c.summary, c.statusCategory))
+      .join("\n");
+    systemParts.push(
+      `## Related issues\n${issueLines}\nThese are real issues from this repository's linked Jira project that MAY be related to this change — judge each by its title against what the diff actually does. Most changes genuinely address at most one or two, often none; never force a link. After the description (and after the Labels line when present), report qualifying issues on ONE final line, exactly like:\nRelates: MYT-123, MYT-456\nNever use a Closes line for these — Jira tickets are not closed from pull-request text. List ONLY keys from the list above, never any other key; omit the line when no issue qualifies.`,
+    );
+  }
+
   let closing = `Write the ${prNoun} title and description. Lead with a summary of the goal, then group related changes by theme under \`###\` headings when the diff touches several areas, citing the files involved.`;
   if (labels.length > 0) {
     closing += ` Then, if any of the repository's labels qualify, end with a single \`Labels:\` line as instructed.`;
+  }
+  if (candidates.length > 0) {
+    closing += ` Then, if any of the listed related issues qualify, end with the \`Closes:\` / \`Relates:\` line(s) as instructed.`;
+  } else if (jira.length > 0) {
+    closing += ` Then, if any of the listed related issues qualify, end with the \`Relates:\` line as instructed.`;
   }
   promptParts.push(closing);
 
@@ -722,71 +805,161 @@ export function splitCommitMessage(raw: string): {
 }
 
 /**
- * Splits a (possibly still streaming) PR/MR response into title, body, and a
- * validated set of label NAMES. Reuses {@link splitCommitMessage} for the
- * title/body split, then:
- * - Strips a trailing `Labels: …` line from the body so it never shows in the
- *   description. This runs on EVERY chunk, so a partial `Labels:` line that
- *   appears mid-stream (e.g. `Labels` or `Labels: bu`) is peeled off too and
- *   never flickers into the rendered body.
- * - Parses the comma-separated names and validates each (case-insensitively)
- *   against `availableLabels`, returning the canonical repo casing and DROPPING
- *   anything not in the set — the model can only surface labels that truly exist.
- * `labels` is `[]` when `availableLabels` is empty (nothing to match against).
+ * Splits a (possibly still streaming) PR/MR response into title, body, a
+ * validated set of label NAMES, and validated `closes` / `relates` issue
+ * numbers. Reuses {@link splitCommitMessage} for the title/body split, then
+ * PEELS any combination of trailing `Labels:` / `Closes:` / `Relates:` lines
+ * (in any order, one per kind) off the end of the body:
+ * - The peel is iterative from the end: it examines the last non-empty line and,
+ *   while it matches one of the three kinds (or is a nascent bare prefix still
+ *   streaming — `Labels` / `Closes` / `Relates` with no colon yet), records it
+ *   (first-from-end wins per kind; a second occurrence of an already-seen kind
+ *   STOPS the loop) and keeps peeling. It stops at the first non-matching
+ *   non-empty line. This runs on EVERY chunk, so a partial trailing line never
+ *   flickers into the rendered body. Body = everything above the peeled block.
+ * - `Labels:` names are validated (case-insensitively) against `availableLabels`,
+ *   returning the canonical repo casing and DROPPING anything not in the set.
+ *   `labels` is `[]` when `availableLabels` is empty.
+ * - `Closes:` / `Relates:` numbers are comma-split, `#`-stripped, digit-required,
+ *   validated against `candidateIssueNumbers`, and deduped. A number appearing in
+ *   BOTH lines lands in `relates` only (the safe default). Both are `[]` when
+ *   `candidateIssueNumbers` is empty (the lines are STILL peeled from the body).
+ * - `Relates:` KEY-shaped tokens (e.g. `MYT-123`) are validated (case-insensitively)
+ *   against `candidateJiraKeys` → `jiraMentions` (canonical uppercase, deduped);
+ *   `jiraMentions` is `[]` when `candidateJiraKeys` is empty. A key-shaped token on
+ *   a `Closes:` line is DROPPED always — Jira tickets are never closed from PR text.
+ *
+ * Note: the trailing `Labels:` / `Closes:` / `Relates:` lines are peeled off the
+ * body even when NO candidates were fed (mirroring the pre-existing `Labels:`
+ * behavior) — the peel is unconditional so a partial directive line never flickers
+ * into the rendered body mid-stream. A genuine prose final line that happens to
+ * start with one of those tokens is intentionally sacrificed to that flicker-free
+ * guarantee.
  */
 export function extractPrDraft(
   raw: string,
   availableLabels: string[],
-): { title: string; body: string; labels: string[] } {
+  candidateIssueNumbers: number[] = [],
+  candidateJiraKeys: string[] = [],
+): {
+  title: string;
+  body: string;
+  labels: string[];
+  closes: number[];
+  relates: number[];
+  jiraMentions: string[];
+} {
   const { title, body: fullBody } = splitCommitMessage(raw);
 
-  // Peel a trailing line that begins with `Labels:` (or a partial `Labels`
-  // prefix still streaming in) off the end of the body. Only the LAST
-  // non-empty line is a candidate, so a legitimate "Labels:" mention earlier
-  // in the description is untouched.
   const lines = fullBody.split("\n");
-  let lastIdx = lines.length - 1;
-  while (lastIdx >= 0 && lines[lastIdx].trim() === "") lastIdx--;
-  const lastLine = lastIdx >= 0 ? lines[lastIdx].trim() : "";
-  // Require the colon so a normal sentence that merely starts with "Labels"
-  // (e.g. "Labels are applied by CI.") is NOT mistaken for the label line and
-  // dropped from the body; the nascent pre-colon case is handled just below.
-  const labelLineMatch = lastLine.match(/^labels\s*:\s*(.*)$/i);
-  // A trailing bare `Label`/`Labels` prefix mid-stream (no colon yet) also counts
-  // as a nascent label line to strip, so it doesn't briefly render as body text.
-  const isNascentLabelLine =
-    !labelLineMatch && /^labels?$/i.test(lastLine.replace(/[:\s]*$/, ""));
-
-  let body = fullBody;
-  if (labelLineMatch || isNascentLabelLine) {
-    body = lines.slice(0, lastIdx).join("\n").trimEnd();
+  // The raw captured value for each kind (post-colon text), first-from-end. A
+  // bare nascent prefix records "" (nothing to parse yet, but the line is peeled).
+  const captured: Partial<Record<"labels" | "closes" | "relates", string>> = {};
+  // Index of the first body line NOT part of the peeled trailing block.
+  let bodyEnd = lines.length;
+  let cursor = lines.length - 1;
+  while (cursor >= 0) {
+    if (lines[cursor].trim() === "") {
+      cursor--;
+      continue;
+    }
+    const line = lines[cursor].trim();
+    // Require the colon so a normal sentence merely starting with the keyword
+    // (e.g. "Closes the gap …") is not mistaken for a directive line; the nascent
+    // pre-colon case is handled just below.
+    const m = line.match(/^(labels|closes|relates)\s*:\s*(.*)$/i);
+    // A trailing bare `Labels`/`Closes`/`Relates` prefix mid-stream (no colon
+    // yet) also counts as a nascent line to strip so it doesn't briefly render.
+    const nascent =
+      !m && /^(labels?|closes?|relates?)$/i.test(line.replace(/[:\s]*$/, ""));
+    if (!m && !nascent) break;
+    const kindRaw = (m ? m[1] : line.replace(/[:\s]*$/, "")).toLowerCase();
+    // Normalize the nascent singular forms (`label`/`close`/`relate`) to the key.
+    const kind = kindRaw.startsWith("label")
+      ? "labels"
+      : kindRaw.startsWith("close")
+        ? "closes"
+        : "relates";
+    // A second occurrence of an already-seen kind STOPS the loop (that earlier
+    // line is real body content, not another directive).
+    if (kind in captured) break;
+    captured[kind] = m ? (m[2] ?? "").trim() : "";
+    bodyEnd = cursor;
+    cursor--;
   }
 
-  if (availableLabels.length === 0) {
-    return { title, body, labels: [] };
-  }
+  const body =
+    bodyEnd < lines.length
+      ? lines.slice(0, bodyEnd).join("\n").trimEnd()
+      : fullBody;
 
-  // Canonical lookup keyed by lowercased name → the repo's own casing.
-  const canonical = new Map<string, string>();
-  for (const name of availableLabels) {
-    const trimmed = name.trim();
-    if (trimmed) canonical.set(trimmed.toLowerCase(), trimmed);
-  }
-
-  const rawNames = labelLineMatch?.[1]?.trim() ?? "";
-  const seen = new Set<string>();
+  // Validate the label names against the repo's set (canonical casing).
   const labels: string[] = [];
-  for (const part of rawNames.split(",")) {
-    const key = part.trim().toLowerCase();
-    if (!key) continue;
-    const match = canonical.get(key);
-    if (match && !seen.has(key)) {
-      seen.add(key);
-      labels.push(match);
+  if (availableLabels.length > 0 && captured.labels) {
+    const canonical = new Map<string, string>();
+    for (const name of availableLabels) {
+      const trimmed = name.trim();
+      if (trimmed) canonical.set(trimmed.toLowerCase(), trimmed);
+    }
+    const seen = new Set<string>();
+    for (const part of captured.labels.split(",")) {
+      const key = part.trim().toLowerCase();
+      if (!key) continue;
+      const match = canonical.get(key);
+      if (match && !seen.has(key)) {
+        seen.add(key);
+        labels.push(match);
+      }
     }
   }
 
-  return { title, body, labels };
+  // Validate issue numbers against the fed candidate set. A `#` prefix is
+  // accepted; only bare digits count; a number in both lines lands in `relates`.
+  const candidateSet = new Set(candidateIssueNumbers);
+  const parseNumbers = (rawLine: string | undefined): number[] => {
+    if (!rawLine) return [];
+    const seen = new Set<number>();
+    const out: number[] = [];
+    for (const part of rawLine.split(",")) {
+      const token = part.trim().replace(/^#/, "");
+      if (!/^\d+$/.test(token)) continue;
+      const n = Number.parseInt(token, 10);
+      if (candidateSet.has(n) && !seen.has(n)) {
+        seen.add(n);
+        out.push(n);
+      }
+    }
+    return out;
+  };
+  const relates = parseNumbers(captured.relates);
+  const relatesSet = new Set(relates);
+  const closes = parseNumbers(captured.closes).filter(
+    (n) => !relatesSet.has(n),
+  );
+
+  // Validate Jira keys against the fed candidate set (canonical uppercase). Only
+  // the `Relates:` line contributes — a key-shaped token on `Closes:` is dropped
+  // (Jira tickets are never closed from PR text). `jiraMentions` is empty when the
+  // candidate set is empty (the line is still peeled regardless).
+  const jiraMentions: string[] = [];
+  if (candidateJiraKeys.length > 0 && captured.relates) {
+    const canonicalKeys = new Set<string>();
+    for (const k of candidateJiraKeys) {
+      const trimmed = k.trim().toUpperCase();
+      if (trimmed) canonicalKeys.add(trimmed);
+    }
+    const seen = new Set<string>();
+    for (const part of captured.relates.split(",")) {
+      const token = part.trim().toUpperCase();
+      if (!/^[A-Z][A-Z0-9_]*-\d+$/.test(token)) continue;
+      if (canonicalKeys.has(token) && !seen.has(token)) {
+        seen.add(token);
+        jiraMentions.push(token);
+      }
+    }
+  }
+
+  return { title, body, labels, closes, relates, jiraMentions };
 }
 
 /** The branch name from a branch-name response, tolerant of a leaked preamble

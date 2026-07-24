@@ -395,6 +395,198 @@ fn budget_diff(diff_text: &str) -> BudgetedDiff {
     }
 }
 
+/// Extract candidate issue numbers referenced in git text (branch name, commit
+/// subjects). Deduplicated, first-occurrence order. KEEP IN SYNC:
+/// `extractIssueNumbers` in src/lib/issues/extract.ts — both sides use explicit
+/// leading-boundary matching (no lookbehind) so behavior stays identical.
+///
+/// Three patterns, applied in order 1→2→3 each over the FULL text (matching the
+/// TS pass order); results deduped preserving first-occurrence order across all
+/// patterns. Case table:
+///   `fix/123-crash` → [123]   (pattern 2: after `/`, digits then `-`)
+///   `#45`           → [45]    (pattern 1: `#` not preceded by letter/digit/`&`)
+///   `123-fix`       → [123]   (pattern 2: string start, digits then `-`)
+///   `&#39;`         → []      (pattern 1's `&` exclusion keeps HTML entities out)
+///   `issue-7`       → [7]     (pattern 3, case-insensitive)
+///   `v2-123`        → []      (pattern 2 fires only at start or after `/`)
+fn extract_issue_numbers(text: &str) -> Vec<u64> {
+    let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut out: Vec<u64> = Vec::new();
+    let bytes = text.as_bytes();
+
+    // Parse a run of ASCII digits starting at `start`, returning (value, end).
+    // `None` when there are no digits or the value overflows u64.
+    fn parse_digits(bytes: &[u8], start: usize) -> Option<(u64, usize)> {
+        let mut i = start;
+        let mut value: u64 = 0;
+        let mut any = false;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            any = true;
+            value = value.checked_mul(10)?.checked_add((bytes[i] - b'0') as u64)?;
+            i += 1;
+        }
+        if any {
+            Some((value, i))
+        } else {
+            None
+        }
+    }
+
+    let push = |n: u64, seen: &mut std::collections::HashSet<u64>, out: &mut Vec<u64>| {
+        // Drop 0 and anything > 999_999_999 (mirrors the TS guard).
+        if n == 0 || n > 999_999_999 {
+            return;
+        }
+        if seen.insert(n) {
+            out.push(n);
+        }
+    };
+
+    // Pattern 1: `#123` where `#` is at start or preceded by a char that is NOT
+    // `[A-Za-z0-9&]` (the `&` guard excludes HTML entities like `&#39;`).
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'#' {
+            let prev_ok = if i == 0 {
+                true
+            } else {
+                let p = bytes[i - 1];
+                !(p.is_ascii_alphanumeric() || p == b'&')
+            };
+            if prev_ok {
+                if let Some((n, _)) = parse_digits(bytes, i + 1) {
+                    push(n, &mut seen, &mut out);
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // Pattern 2: a segment-leading `123-` where the digits are at start or
+    // preceded by `/`.
+    i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let at_boundary = i == 0 || bytes[i - 1] == b'/';
+            if at_boundary {
+                if let Some((n, end)) = parse_digits(bytes, i) {
+                    if end < bytes.len() && bytes[end] == b'-' {
+                        push(n, &mut seen, &mut out);
+                    }
+                    // Skip past this digit run either way (it can't start another
+                    // boundary match mid-run).
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // Pattern 3: `issue-123` / `gh-123` case-insensitive, preceded by start or a
+    // non-alphanumeric.
+    i = 0;
+    while i < bytes.len() {
+        let prev_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+        if prev_ok {
+            let rest = &bytes[i..];
+            let prefix_len = if rest.len() >= 6 && rest[..5].eq_ignore_ascii_case(b"issue") {
+                Some(5usize)
+            } else if rest.len() >= 3 && rest[..2].eq_ignore_ascii_case(b"gh") {
+                Some(2usize)
+            } else {
+                None
+            };
+            if let Some(plen) = prefix_len {
+                if bytes[i + plen] == b'-' {
+                    if let Some((n, _)) = parse_digits(bytes, i + plen + 1) {
+                        push(n, &mut seen, &mut out);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    out
+}
+
+/// Extract the linked project's Jira issue keys from git text (branch name,
+/// commit subjects) — `<PROJECTKEY>-\d+` case-insensitive, deduped,
+/// first-occurrence order, upper-cased. KEEP IN SYNC: `extractJiraKeys` in
+/// src/lib/jira/keys.ts (same boundary table; no lookbehind — hand-rolled scan).
+///
+/// Boundary semantics (copied from keys.ts's documented table):
+///   - LEFT: the char before the key must NOT be `[A-Za-z0-9]` — underscore
+///     adjacency IS allowed (`feature_MYT-5` → MYT-5); a letter/digit prefix
+///     rejects (`XMYT-1` → []).
+///   - RIGHT (after the digits): reject a letter suffix (`MYT-12a` → []) and a
+///     version-like `dot+digit` (`MYT-1.2` → []); a sentence-ending period still
+///     matches (`fixes MYT-1.` → MYT-1).
+///
+/// Case-insensitive on the key. Empty text or empty `project_key` → `[]`.
+/// Case table: `feature_MYT-5 → MYT-5`, `feat/myt-2-fix → MYT-2`, `XMYT-1 → []`,
+/// `MYT-12a → []`, `MYT-1.2 → []`, `fixes MYT-1. → MYT-1`.
+fn extract_jira_keys(text: &str, project_key: &str) -> Vec<String> {
+    if text.is_empty() || project_key.is_empty() {
+        return Vec::new();
+    }
+    let bytes = text.as_bytes();
+    let key_bytes = project_key.as_bytes();
+    let klen = key_bytes.len();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // LEFT boundary: at start, or the preceding byte is not [A-Za-z0-9].
+        let left_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+        // Case-insensitive prefix match on the project key.
+        let key_ok = i + klen <= bytes.len() && bytes[i..i + klen].eq_ignore_ascii_case(key_bytes);
+        if left_ok && key_ok {
+            // Must be followed by `-` then ≥1 ASCII digit.
+            let dash = i + klen;
+            if dash < bytes.len() && bytes[dash] == b'-' {
+                let mut j = dash + 1;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j > dash + 1 {
+                    // At least one digit consumed. RIGHT boundary checks:
+                    //   - no trailing letter (`MYT-12a`)
+                    //   - no `dot+digit` (`MYT-1.2`), while `MYT-1.` still matches.
+                    let next = bytes.get(j).copied();
+                    let letter_suffix = next.is_some_and(|b| b.is_ascii_alphabetic());
+                    let dot_digit = next == Some(b'.')
+                        && bytes.get(j + 1).copied().is_some_and(|b| b.is_ascii_digit());
+                    if !letter_suffix && !dot_digit {
+                        // Canonical upper-case key so `myt-2` and `MYT-2` dedupe.
+                        let key = text[i..j].to_ascii_uppercase();
+                        if seen.insert(key.clone()) {
+                            out.push(key);
+                        }
+                        // Advance past this key (can't start another match mid-run).
+                        i = j;
+                        continue;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The set of ASCII-lowercased tokens of length ≥ 4 in `text`, splitting on any
+/// non-alphanumeric character. Used to score candidate-issue title overlap with
+/// the branch name + commit subjects when ranking fill candidates.
+fn long_tokens(text: &str) -> std::collections::HashSet<String> {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| t.len() >= 4)
+        .map(|t| t.to_ascii_lowercase())
+        .collect()
+}
+
 /// The trailing recipe `note`, restating the output-format constraints in one
 /// sentence so the calling agent knows what to produce even if it skims the
 /// system prompt. `output` is the artifact name; `constraints` restates the
@@ -571,6 +763,24 @@ fn assemble_branch_recipe(p: BranchPieces) -> Recipe {
     }
 }
 
+/// A real issue from the repo's tracker the model may link. KEEP IN SYNC with the
+/// TS `PrPromptInput.issueCandidates` entries (src/lib/ai/types.ts).
+struct IssueCandidate {
+    number: u64,
+    title: String,
+    /// Neutral state: "OPEN" / "CLOSED".
+    state: String,
+}
+
+/// A real issue from the repo's LINKED Jira project the model may mention.
+/// Mention-only: Jira tickets are never closed from PR-description text.
+struct JiraCandidate {
+    key: String,
+    summary: String,
+    /// Jira status category: "new" / "indeterminate" / "done" / "".
+    status_category: String,
+}
+
 /// The gathered pieces a PR-description recipe is assembled from.
 struct PrPieces {
     diff_text: String,
@@ -583,6 +793,16 @@ struct PrPieces {
     /// label's stated purpose) is threaded into the prompt so the model weighs a
     /// label by what it's for, not just a name-plausible match.
     available_labels: Vec<(String, Option<String>)>,
+    /// Real candidate issues the model may link (best-effort, fetched server-side).
+    /// Empty ⇒ the prompt is byte-identical to before and the issue-reference ban
+    /// stands.
+    candidate_issues: Vec<IssueCandidate>,
+    /// Real candidate issues from the repo's LINKED Jira project the model may
+    /// MENTION (best-effort; Bitbucket-only). Mutually exclusive with
+    /// `candidate_issues` — the Bitbucket-only gather makes both-non-empty
+    /// impossible by construction; if both ever arrive, `candidate_issues` wins
+    /// and this is ignored (precedence encoded in `assemble_pr_recipe`).
+    jira_candidates: Vec<JiraCandidate>,
     repo_instructions: Option<String>,
     global_instructions: String,
     /// Frontend provider tag: `"github"` / `"gitlab"` / `"bitbucket"`, or None
@@ -604,6 +824,38 @@ fn render_label_line(name: &str, description: &str) -> String {
     }
 }
 
+/// Render one candidate issue as a bullet for the `## Related issues` section:
+/// `- #123 — title`, ` (closed)` suffixed when closed, the ` — title` part omitted
+/// when the title is empty. Title capped at 140 chars. Mirrors the TS
+/// `renderIssueLine` (src/lib/ai/prompt.ts) — KEEP IN SYNC.
+fn render_issue_line(number: u64, title: &str, state: &str) -> String {
+    let closed = state.eq_ignore_ascii_case("CLOSED");
+    let suffix = if closed { " (closed)" } else { "" };
+    let title = title.trim();
+    if title.is_empty() {
+        format!("- #{number}{suffix}")
+    } else {
+        let capped: String = title.chars().take(140).collect();
+        format!("- #{number}{suffix} — {capped}")
+    }
+}
+
+/// Render one Jira candidate as a bullet for the `## Related issues` section:
+/// `- MYT-123 — summary`, ` (done)` suffixed when `status_category` is "done",
+/// bare `- MYT-123` when the summary is empty. Summary trimmed + 140-char cap.
+/// KEEP IN SYNC with the TS mirror (`renderJiraLine`, src/lib/ai/prompt.ts).
+fn render_jira_line(key: &str, summary: &str, status_category: &str) -> String {
+    let done = status_category.eq_ignore_ascii_case("done");
+    let suffix = if done { " (done)" } else { "" };
+    let summary = summary.trim();
+    if summary.is_empty() {
+        format!("- {key}{suffix}")
+    } else {
+        let capped: String = summary.chars().take(140).collect();
+        format!("- {key}{suffix} — {capped}")
+    }
+}
+
 /// Assemble the PR/MR-description recipe. Mirrors `buildPrPrompt`
 /// (src/lib/ai/prompt.ts) — provider-aware noun/markdown-flavor, the label
 /// proposal system section, and the closing instructions. KEEP IN SYNC.
@@ -616,7 +868,56 @@ fn assemble_pr_recipe(p: PrPieces) -> Recipe {
         "PR"
     };
 
-    let mut system_parts = vec![pr_system_for(p.provider.as_deref())];
+    // Real candidate issues the model may link (defensive cap 8, mirrored TS-side).
+    // Empty ⇒ the issue-reference ban stands and the recipe is byte-identical to
+    // before (no ban swap, no `## Related issues` section, unchanged note).
+    let candidates: Vec<&IssueCandidate> =
+        p.candidate_issues.iter().filter(|c| c.number > 0).take(8).collect();
+    let has_candidates = !candidates.is_empty();
+
+    // Jira candidates (Bitbucket repos with a linked project). Mention-only: they
+    // drive a `Relates:`-only variant, never a `Closes:` line. Precedence: native
+    // `candidate_issues` win — the Jira variant fires ONLY when there are no native
+    // candidates (the Bitbucket-only gather makes both-non-empty impossible, but the
+    // precedence is encoded here defensively). Filter empty keys, then cap at 8.
+    let jira_candidates: Vec<&JiraCandidate> = if has_candidates {
+        Vec::new()
+    } else {
+        p.jira_candidates
+            .iter()
+            .filter(|c| !c.key.is_empty())
+            .take(8)
+            .collect()
+    };
+    let has_jira = !jira_candidates.is_empty();
+
+    let mut base_system = pr_system_for(p.provider.as_deref());
+    if has_candidates {
+        // Swap the issue-reference ban line for the relaxed rule that allows the
+        // final `Closes:`/`Relates:` trailer lines drawn from the Related issues
+        // section. Both lines are constructed with the in-scope `abbrev`, so the
+        // swap works cross-provider (GitHub `PR` / GitLab `MR`).
+        let ban = format!(
+            "- NEVER reference issue or {abbrev} numbers, tickets, milestones, or external links (e.g. \"Closes #123\", \"part of #60\", \"fixes JIRA-4\"). You have no access to the issue tracker, so any such reference is fabricated — leave them out entirely."
+        );
+        let relaxed = format!(
+            "- Do not put issue or {abbrev} numbers, tickets, milestones, or external links in the description body — the ONLY issue references you may make are the final Closes:/Relates: lines defined in the \"Related issues\" section, chosen from its list. Any other reference is fabricated — leave it out."
+        );
+        base_system = base_system.replacen(&ban, &relaxed, 1);
+    } else if has_jira {
+        // Jira mention-only variant: swap the ban for a RELAXED line that permits
+        // only the final `Relates:` line (no `Closes:` — Jira tickets aren't closed
+        // from PR text). `abbrev` is "PR" on Bitbucket.
+        let ban = format!(
+            "- NEVER reference issue or {abbrev} numbers, tickets, milestones, or external links (e.g. \"Closes #123\", \"part of #60\", \"fixes JIRA-4\"). You have no access to the issue tracker, so any such reference is fabricated — leave them out entirely."
+        );
+        let relaxed = format!(
+            "- Do not put issue or {abbrev} numbers, tickets, milestones, or external links in the description body — the ONLY ticket references you may make are the final Relates: line defined in the \"Related issues\" section, chosen from its list. Any other reference is fabricated — leave it out."
+        );
+        base_system = base_system.replacen(&ban, &relaxed, 1);
+    }
+
+    let mut system_parts = vec![base_system];
     push_instruction_sections(
         &mut system_parts,
         p.repo_instructions.as_deref(),
@@ -685,6 +986,34 @@ fn assemble_pr_recipe(p: PrPieces) -> Recipe {
         ));
     }
 
+    // Related-issues proposal — only when real candidates were found (server-side
+    // fetch). Pushed AFTER the Labels section so the `Closes:`/`Relates:` trailer
+    // lines land after any `Labels:` line. Empty ⇒ this section is absent and the
+    // ban above is untouched.
+    if has_candidates {
+        let issue_lines = candidates
+            .iter()
+            .map(|c| render_issue_line(c.number, &c.title, &c.state))
+            .collect::<Vec<_>>()
+            .join("\n");
+        system_parts.push(format!(
+            "## Related issues\n{issue_lines}\nThese are real, open-or-closed issues from this repository's tracker that MAY be related to this change — judge each by its title against what the diff actually does. Most changes genuinely address at most one or two, often none; never force a link. After the description (and after the Labels line when present), report qualifying issues on up to two final lines, exactly like:\nCloses: 123, 456\nRelates: 789\nUse Closes ONLY for an issue this change fully resolves — merging will close it automatically, so prefer Relates when unsure. Use Relates for an issue this change advances or clearly connects to without resolving it. List ONLY numbers from the list above, never any other number; omit either line (or both) when no issue qualifies."
+        ));
+    } else if has_jira {
+        // Jira mention-only variant of the Related-issues section (Bitbucket + linked
+        // project). Pushed AFTER the Labels section so the `Relates:` line lands after
+        // any `Labels:` line. Only a `Relates:` line is offered — Jira tickets are not
+        // closed from PR text.
+        let issue_lines = jira_candidates
+            .iter()
+            .map(|c| render_jira_line(&c.key, &c.summary, &c.status_category))
+            .collect::<Vec<_>>()
+            .join("\n");
+        system_parts.push(format!(
+            "## Related issues\n{issue_lines}\nThese are real issues from this repository's linked Jira project that MAY be related to this change — judge each by its title against what the diff actually does. Most changes genuinely address at most one or two, often none; never force a link. After the description (and after the Labels line when present), report qualifying issues on ONE final line, exactly like:\nRelates: MYT-123, MYT-456\nNever use a Closes line for these — Jira tickets are not closed from pull-request text. List ONLY keys from the list above, never any other key; omit the line when no issue qualifies."
+        ));
+    }
+
     let mut closing = format!(
         "Write the {pr_noun} title and description. Lead with a summary of the goal, then group \
          related changes by theme under `###` headings when the diff touches several areas, citing \
@@ -696,8 +1025,30 @@ fn assemble_pr_recipe(p: PrPieces) -> Recipe {
              instructed.",
         );
     }
+    if has_candidates {
+        closing.push_str(
+            " Then, if any of the listed related issues qualify, end with the `Closes:` / `Relates:` \
+             line(s) as instructed.",
+        );
+    } else if has_jira {
+        closing.push_str(
+            " Then, if any of the listed related issues qualify, end with the `Relates:` line as \
+             instructed.",
+        );
+    }
     prompt_parts.push(closing);
 
+    // The note's trailing clause: with native candidates the `no issue/{abbrev}
+    // references` rule is replaced by the Closes:/Relates: allowance; with Jira
+    // candidates by the mention-only Relates: allowance; without either, it's
+    // byte-identical to before.
+    let note_tail = if has_candidates {
+        "; issue references may appear ONLY as the final Closes:/Relates: lines drawn from the Related issues section".to_string()
+    } else if has_jira {
+        "; ticket references may appear ONLY as the final Relates: line drawn from the Related issues section".to_string()
+    } else {
+        format!(" and no issue/{abbrev} references")
+    };
     Recipe {
         system: system_parts.join("\n\n"),
         prompt: prompt_parts.join("\n\n"),
@@ -705,8 +1056,7 @@ fn assemble_pr_recipe(p: PrPieces) -> Recipe {
             &format!("{pr_noun} title and description"),
             &format!(
                 "The first line is the {pr_noun} title (imperative, no trailing period), then a \
-                 blank line, then the description in {}, with no code fences and no issue/{abbrev} \
-                 references.",
+                 blank line, then the description in {}, with no code fences{note_tail}.",
                 copy.markdown_flavor
             ),
         ),
@@ -905,7 +1255,25 @@ impl GitDesktopMcp {
             })
             .unwrap_or_default();
 
+        // Related-issue candidates are best-effort (mirrors the labels fetch): any
+        // error — including Bitbucket's issues-disabled error — yields an empty list
+        // and thus no `## Related issues` section.
+        let candidate_issues = self.gather_pr_candidates(&head, &commit_subjects).await;
+
         let provider = provider_tag(&self.repo).await;
+
+        // On a Bitbucket repo with NO native candidates (its issue tracker is
+        // deprecated, so `candidate_issues` is always empty there) but a linked Jira
+        // project, gather Jira candidates for a mention-only `Relates:` variant.
+        // Best-effort: never fails the recipe. Mutually exclusive with the native list.
+        let jira_candidates = if candidate_issues.is_empty()
+            && provider.as_deref() == Some("bitbucket")
+        {
+            self.gather_jira_candidates(&head, &commit_subjects).await
+        } else {
+            Vec::new()
+        };
+
         let repo_instructions = crate::instructions::read_repo_instructions(self.repo.clone())
             .await
             .map_err(app_err)?;
@@ -919,10 +1287,195 @@ impl GitDesktopMcp {
             base_branch: base,
             head_branch: head,
             available_labels,
+            candidate_issues,
+            jira_candidates,
             repo_instructions,
             global_instructions: settings.global_instructions,
             provider,
         }))
+    }
+
+    /// Gather up to 8 real candidate issues for the PR-description prompt,
+    /// best-effort (any forge error → empty, matching the labels fetch). Numbers
+    /// referenced in the branch name + commit subjects are pinned first (extraction
+    /// order); remaining slots fill from the open-issue page ranked by title-token
+    /// overlap with the branch + subjects. Mirrors the TS candidate gathering.
+    async fn gather_pr_candidates(
+        &self,
+        head: &str,
+        commit_subjects: &[String],
+    ) -> Vec<IssueCandidate> {
+        // Text the extraction + ranking read from: branch name + each commit subject.
+        let subjects = commit_subjects.join("\n");
+        let extracted = extract_issue_numbers(&format!("{head}\n{subjects}"));
+
+        // The open-issue page (origin-pinned, like the labels fetch: `lens = None`).
+        // On any error (incl. Bitbucket's issues-disabled), there are no candidates.
+        let open_page: Vec<crate::github::issue::IssueInfo> =
+            crate::forge::forge_issue_list(self.repo.clone(), "open".to_string(), Some(50), None)
+                .await
+                .unwrap_or_default();
+
+        let mut out: Vec<IssueCandidate> = Vec::new();
+        let mut included: std::collections::HashSet<u64> = std::collections::HashSet::new();
+
+        // 1. Extracted numbers first (pinned, extraction order). Prefer the open-page
+        //    entry; for numbers not on the page, probe the single-issue view and
+        //    include on success, dropping silently on any error.
+        for n in &extracted {
+            if included.contains(n) {
+                continue;
+            }
+            if let Some(info) = open_page.iter().find(|i| i.number == *n) {
+                included.insert(*n);
+                out.push(IssueCandidate {
+                    number: info.number,
+                    title: info.title.clone(),
+                    state: info.state.clone(),
+                });
+            } else if let Ok(details) =
+                crate::forge::forge_issue_view(self.repo.clone(), *n, None).await
+            {
+                included.insert(*n);
+                out.push(IssueCandidate {
+                    number: details.number,
+                    title: details.title,
+                    state: details.state,
+                });
+            }
+        }
+
+        // 2. Fill remaining slots (up to 8 total) from the open page, ranked by the
+        //    count of shared long (≥4-char) tokens between the issue title and the
+        //    branch + subjects, tie-broken by `updated_at` descending.
+        if out.len() < 8 {
+            let context = format!("{head}\n{subjects}");
+            let context_tokens = long_tokens(&context);
+            let mut ranked: Vec<(usize, &crate::github::issue::IssueInfo)> = open_page
+                .iter()
+                .filter(|i| !included.contains(&i.number))
+                .map(|i| {
+                    let title_tokens = long_tokens(&i.title);
+                    let score = title_tokens
+                        .iter()
+                        .filter(|t| context_tokens.contains(*t))
+                        .count();
+                    (score, i)
+                })
+                .collect();
+            // Score desc, then updated_at desc (string compare on ISO-8601 is
+            // chronological).
+            ranked.sort_by(|a, b| {
+                b.0.cmp(&a.0)
+                    .then_with(|| b.1.updated_at.cmp(&a.1.updated_at))
+            });
+            for (_, info) in ranked {
+                if out.len() >= 8 {
+                    break;
+                }
+                out.push(IssueCandidate {
+                    number: info.number,
+                    title: info.title.clone(),
+                    state: info.state.clone(),
+                });
+            }
+        }
+
+        out
+    }
+
+    /// Gather up to 8 Jira candidates for the PR-description prompt from the repo's
+    /// LINKED Jira project (Bitbucket repos), best-effort — any failure (no link, a
+    /// Jira API error) yields an empty list so the recipe NEVER fails because Jira
+    /// isn't linked. Keys referenced in the branch name + commit subjects are pinned
+    /// first (extraction order); remaining slots fill from the open-issue page ranked
+    /// by summary-token overlap. Mirrors `gather_pr_candidates`.
+    async fn gather_jira_candidates(
+        &self,
+        head: &str,
+        commit_subjects: &[String],
+    ) -> Vec<JiraCandidate> {
+        // Resolve the linked project (site + key). No link ⇒ no candidates (the recipe
+        // must never fail because Jira isn't linked, so map the error to empty).
+        let Ok(link) = self.jira_link().await else {
+            return Vec::new();
+        };
+
+        // Text the extraction + ranking read from: branch name + each commit subject.
+        let subjects = commit_subjects.join("\n");
+        let extracted = extract_jira_keys(&format!("{head}\n{subjects}"), &link.project_key);
+
+        // The open-issue page (single page, 50-cap internal). Any error ⇒ no candidates.
+        let open_page: Vec<crate::forge::jira::JiraIssueInfo> =
+            crate::forge::jira::issue_list(&link.site_host, &link.project_key, "open")
+                .await
+                .unwrap_or_default();
+
+        let mut out: Vec<JiraCandidate> = Vec::new();
+        let mut included: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // 1. Extracted keys first (pinned, extraction order). Prefer the open-page
+        //    entry; for keys not on the page, probe the single-issue view (only after
+        //    confirming the key belongs to the linked project), including on success and
+        //    dropping silently on any error.
+        for key in &extracted {
+            if included.contains(key) {
+                continue;
+            }
+            if let Some(info) = open_page.iter().find(|i| i.key.eq_ignore_ascii_case(key)) {
+                included.insert(key.clone());
+                out.push(JiraCandidate {
+                    key: info.key.clone(),
+                    summary: info.summary.clone(),
+                    status_category: info.status_category.clone(),
+                });
+            } else if super::ensure_key_in_project(key, &link).is_ok() {
+                if let Ok(details) = crate::forge::jira::issue_view(&link.site_host, key).await {
+                    included.insert(key.clone());
+                    out.push(JiraCandidate {
+                        key: details.key,
+                        summary: details.summary,
+                        status_category: details.status_category,
+                    });
+                }
+            }
+        }
+
+        // 2. Fill remaining slots (up to 8 total) from the open page, ranked by the
+        //    count of shared long (≥4-char) tokens between the issue summary and the
+        //    branch + subjects, tie-broken by `updated_at` descending.
+        if out.len() < 8 {
+            let context = format!("{head}\n{subjects}");
+            let context_tokens = long_tokens(&context);
+            let mut ranked: Vec<(usize, &crate::forge::jira::JiraIssueInfo)> = open_page
+                .iter()
+                .filter(|i| !included.contains(&i.key))
+                .map(|i| {
+                    let summary_tokens = long_tokens(&i.summary);
+                    let score = summary_tokens
+                        .iter()
+                        .filter(|t| context_tokens.contains(*t))
+                        .count();
+                    (score, i)
+                })
+                .collect();
+            ranked.sort_by(|a, b| {
+                b.0.cmp(&a.0)
+                    .then_with(|| b.1.updated_at.cmp(&a.1.updated_at))
+            });
+            for (_, info) in ranked {
+                if out.len() >= 8 {
+                    break;
+                }
+                out.push(JiraCandidate {
+                    key: info.key.clone(),
+                    summary: info.summary.clone(),
+                    status_category: info.status_category.clone(),
+                });
+            }
+        }
+
+        out
     }
 
     /// Gather + assemble the branch-name recipe (WHOLE working tree). Errors with
@@ -1226,6 +1779,8 @@ mod tests {
             base_branch: "main".to_string(),
             head_branch: "feature/x".to_string(),
             available_labels: vec![],
+            candidate_issues: vec![],
+            jira_candidates: vec![],
             repo_instructions: None,
             global_instructions: String::new(),
             provider: Some("github".to_string()),
@@ -1257,6 +1812,8 @@ mod tests {
                 ("bug".to_string(), None),
                 ("  ".to_string(), None),
             ],
+            candidate_issues: vec![],
+            jira_candidates: vec![],
             repo_instructions: None,
             global_instructions: String::new(),
             provider: Some("gitlab".to_string()),
@@ -1292,6 +1849,8 @@ mod tests {
                 "no-changelog".to_string(),
                 Some("Skip the changelog check".to_string()),
             )],
+            candidate_issues: vec![],
+            jira_candidates: vec![],
             repo_instructions: None,
             global_instructions: String::new(),
             provider: Some("github".to_string()),
@@ -1315,6 +1874,8 @@ mod tests {
                 ("enhancement".to_string(), None),
                 ("chore".to_string(), Some("   ".to_string())),
             ],
+            candidate_issues: vec![],
+            jira_candidates: vec![],
             repo_instructions: None,
             global_instructions: String::new(),
             provider: Some("github".to_string()),
@@ -1323,6 +1884,368 @@ mod tests {
         assert!(recipe.system.contains("- chore"));
         assert!(!recipe.system.contains("- enhancement —"));
         assert!(!recipe.system.contains("- chore —"));
+    }
+
+    // ---- Related issues (candidate plumbing + render) ----------------------
+
+    /// The exact PR_SYSTEM issue-reference ban line (post provider-swap for GitHub
+    /// it's byte-identical) — used to assert the ban is present without candidates
+    /// and absent with them.
+    const BAN_LINE: &str = "- NEVER reference issue or PR numbers, tickets, milestones, or external links (e.g. \"Closes #123\", \"part of #60\", \"fixes JIRA-4\"). You have no access to the issue tracker, so any such reference is fabricated — leave them out entirely.";
+    const RELAXED_LINE: &str = "- Do not put issue or PR numbers, tickets, milestones, or external links in the description body — the ONLY issue references you may make are the final Closes:/Relates: lines defined in the \"Related issues\" section, chosen from its list. Any other reference is fabricated — leave it out.";
+
+    fn candidate(number: u64, title: &str, state: &str) -> IssueCandidate {
+        IssueCandidate {
+            number,
+            title: title.to_string(),
+            state: state.to_string(),
+        }
+    }
+
+    #[test]
+    fn pr_recipe_no_candidates_keeps_ban_and_old_note() {
+        // Byte-stability guard: with no candidates the ban stands, there's no
+        // `## Related issues` section, and the note ends with the old tail.
+        let recipe = assemble_pr_recipe(PrPieces {
+            diff_text: "diff --git a/x.rs b/x.rs\n+a\n".to_string(),
+            diff_truncated: false,
+            files: vec![file("x.rs", 1, 0, false)],
+            commit_subjects: vec![],
+            base_branch: "main".to_string(),
+            head_branch: "topic".to_string(),
+            available_labels: vec![],
+            candidate_issues: vec![],
+            jira_candidates: vec![],
+            repo_instructions: None,
+            global_instructions: String::new(),
+            provider: Some("github".to_string()),
+        });
+        assert!(recipe.system.contains(BAN_LINE));
+        assert!(!recipe.system.contains(RELAXED_LINE));
+        assert!(!recipe.system.contains("## Related issues"));
+        assert!(!recipe.prompt.contains("## Related issues"));
+        assert!(recipe
+            .note
+            .ends_with("with no code fences and no issue/PR references."));
+        assert!(!recipe.note.contains("Closes:/Relates:"));
+    }
+
+    #[test]
+    fn pr_recipe_with_candidates_swaps_ban_and_renders_section() {
+        let recipe = assemble_pr_recipe(PrPieces {
+            diff_text: "diff --git a/x.rs b/x.rs\n+a\n".to_string(),
+            diff_truncated: false,
+            files: vec![file("x.rs", 1, 0, false)],
+            commit_subjects: vec![],
+            base_branch: "main".to_string(),
+            head_branch: "fix/123-crash".to_string(),
+            available_labels: vec![],
+            candidate_issues: vec![
+                candidate(123, "Fix crash", "OPEN"),
+                candidate(7, "", "CLOSED"),
+                candidate(45, "Overlong title that should be capped ".repeat(10).trim(), "OPEN"),
+            ],
+            jira_candidates: vec![],
+            repo_instructions: None,
+            global_instructions: String::new(),
+            provider: Some("github".to_string()),
+        });
+        // Ban swapped for the relaxed rule.
+        assert!(recipe.system.contains(RELAXED_LINE));
+        assert!(!recipe.system.contains(BAN_LINE));
+        // Section present with the expected bullet forms.
+        assert!(recipe.system.contains("## Related issues"));
+        assert!(recipe.system.contains("- #123 — Fix crash"));
+        // Empty-title closed issue → bare form with closed marker, no ` — `.
+        assert!(recipe.system.contains("- #7 (closed)"));
+        assert!(!recipe.system.contains("- #7 (closed) —"));
+        // 140-char title cap (the rendered title portion is at most 140 chars).
+        let long_bullet = recipe
+            .system
+            .lines()
+            .find(|l| l.starts_with("- #45 "))
+            .expect("issue 45 bullet");
+        let rendered_title = long_bullet.trim_start_matches("- #45 — ");
+        assert_eq!(rendered_title.chars().count(), 140);
+        // Closing sentence and the swapped note tail.
+        assert!(recipe
+            .prompt
+            .contains("if any of the listed related issues qualify, end with the `Closes:` / `Relates:` line(s)"));
+        assert!(recipe.note.contains(
+            "issue references may appear ONLY as the final Closes:/Relates: lines drawn from the Related issues section."
+        ));
+        assert!(!recipe.note.contains("no issue/PR references"));
+    }
+
+    #[test]
+    fn pr_recipe_candidates_swap_uses_mr_on_gitlab() {
+        // The ban/relaxed lines are constructed with the in-scope abbrev, so the
+        // swap works cross-provider (GitLab → MR).
+        let recipe = assemble_pr_recipe(PrPieces {
+            diff_text: String::new(),
+            diff_truncated: false,
+            files: vec![],
+            commit_subjects: vec![],
+            base_branch: "main".to_string(),
+            head_branch: "topic".to_string(),
+            available_labels: vec![],
+            candidate_issues: vec![candidate(9, "Thing", "OPEN")],
+            jira_candidates: vec![],
+            repo_instructions: None,
+            global_instructions: String::new(),
+            provider: Some("gitlab".to_string()),
+        });
+        // The GitLab ban line uses "issue or MR numbers"; after the swap the relaxed
+        // MR-worded line is present and neither ban form remains.
+        assert!(recipe
+            .system
+            .contains("the ONLY issue references you may make are the final Closes:/Relates: lines"));
+        assert!(recipe.system.contains("issue or MR numbers, tickets, milestones, or external links in the description body"));
+        assert!(!recipe
+            .system
+            .contains("NEVER reference issue or MR numbers"));
+        assert!(recipe.system.contains("## Related issues"));
+    }
+
+    #[test]
+    fn pr_recipe_candidates_capped_at_eight() {
+        let candidate_issues: Vec<IssueCandidate> =
+            (1..=9).map(|n| candidate(n, &format!("Issue {n}"), "OPEN")).collect();
+        let recipe = assemble_pr_recipe(PrPieces {
+            diff_text: String::new(),
+            diff_truncated: false,
+            files: vec![],
+            commit_subjects: vec![],
+            base_branch: "main".to_string(),
+            head_branch: "topic".to_string(),
+            available_labels: vec![],
+            candidate_issues,
+            jira_candidates: vec![],
+            repo_instructions: None,
+            global_instructions: String::new(),
+            provider: Some("github".to_string()),
+        });
+        // Eight rendered, the ninth dropped by the defensive cap.
+        for n in 1..=8 {
+            assert!(recipe.system.contains(&format!("- #{n} — Issue {n}")));
+        }
+        assert!(!recipe.system.contains("- #9 — Issue 9"));
+    }
+
+    #[test]
+    fn render_issue_line_forms() {
+        assert_eq!(render_issue_line(123, "Fix crash", "OPEN"), "- #123 — Fix crash");
+        assert_eq!(render_issue_line(7, "", "CLOSED"), "- #7 (closed)");
+        assert_eq!(render_issue_line(7, "   ", "CLOSED"), "- #7 (closed)");
+        assert_eq!(render_issue_line(8, "Done", "CLOSED"), "- #8 (closed) — Done");
+        // Case-insensitive closed check.
+        assert_eq!(render_issue_line(9, "x", "closed"), "- #9 (closed) — x");
+        // 140-char title cap.
+        let long: String = "a".repeat(200);
+        let line = render_issue_line(1, &long, "OPEN");
+        let title = line.trim_start_matches("- #1 — ");
+        assert_eq!(title.chars().count(), 140);
+    }
+
+    // ---- Jira candidates (mention-only Related-issues variant) --------------
+
+    fn jira_candidate(key: &str, summary: &str, status_category: &str) -> JiraCandidate {
+        JiraCandidate {
+            key: key.to_string(),
+            summary: summary.to_string(),
+            status_category: status_category.to_string(),
+        }
+    }
+
+    /// The Bitbucket (abbrev "PR") relaxed-ban line for the Jira variant.
+    const JIRA_RELAXED_LINE: &str = "- Do not put issue or PR numbers, tickets, milestones, or external links in the description body — the ONLY ticket references you may make are the final Relates: line defined in the \"Related issues\" section, chosen from its list. Any other reference is fabricated — leave it out.";
+
+    #[test]
+    fn extract_jira_keys_case_table() {
+        // Underscore adjacency allowed; letter/digit prefix rejected.
+        assert_eq!(extract_jira_keys("feature_MYT-5", "MYT"), vec!["MYT-5"]);
+        // Case-insensitive key, canonical upper-case output.
+        assert_eq!(extract_jira_keys("feat/myt-2-fix", "MYT"), vec!["MYT-2"]);
+        // Letter prefix → no match.
+        assert_eq!(extract_jira_keys("XMYT-1", "MYT"), Vec::<String>::new());
+        // Trailing letter → no match.
+        assert_eq!(extract_jira_keys("MYT-12a", "MYT"), Vec::<String>::new());
+        // dot+digit → no match.
+        assert_eq!(extract_jira_keys("MYT-1.2", "MYT"), Vec::<String>::new());
+        // Sentence-ending period still matches.
+        assert_eq!(extract_jira_keys("fixes MYT-1.", "MYT"), vec!["MYT-1"]);
+        // Greedy digits (no MYT-1 from MYT-12).
+        assert_eq!(extract_jira_keys("MYT-12", "MYT"), vec!["MYT-12"]);
+        // Digit prefix rejected (`9MYT-1`).
+        assert_eq!(extract_jira_keys("9MYT-1", "MYT"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn extract_jira_keys_dedupes_and_is_case_insensitive() {
+        // `myt-2` and `MYT-2` dedupe to one canonical entry, first-occurrence order.
+        assert_eq!(
+            extract_jira_keys("myt-2 and MYT-2 and MYT-3", "MYT"),
+            vec!["MYT-2", "MYT-3"]
+        );
+        // Lowercased project key argument still matches.
+        assert_eq!(extract_jira_keys("MYT-9", "myt"), vec!["MYT-9"]);
+    }
+
+    #[test]
+    fn extract_jira_keys_empty_inputs() {
+        assert_eq!(extract_jira_keys("", "MYT"), Vec::<String>::new());
+        assert_eq!(extract_jira_keys("MYT-1", ""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn render_jira_line_forms() {
+        assert_eq!(render_jira_line("MYT-1", "Fix login", "new"), "- MYT-1 — Fix login");
+        // Done marker (case-insensitive).
+        assert_eq!(render_jira_line("MYT-2", "Ship it", "done"), "- MYT-2 (done) — Ship it");
+        assert_eq!(render_jira_line("MYT-3", "x", "DONE"), "- MYT-3 (done) — x");
+        // Bare key when the summary is empty (no dangling ` — `).
+        assert_eq!(render_jira_line("MYT-4", "", "new"), "- MYT-4");
+        assert_eq!(render_jira_line("MYT-5", "   ", "done"), "- MYT-5 (done)");
+        // 140-char summary cap.
+        let long: String = "a".repeat(200);
+        let line = render_jira_line("MYT-6", &long, "new");
+        let summary = line.trim_start_matches("- MYT-6 — ");
+        assert_eq!(summary.chars().count(), 140);
+    }
+
+    #[test]
+    fn pr_recipe_jira_candidates_render_relates_only_variant() {
+        // Bitbucket repo, no native candidates, Jira candidates present → the
+        // mention-only `Relates:` variant renders (no `Closes:` example).
+        let recipe = assemble_pr_recipe(PrPieces {
+            diff_text: "diff --git a/x.rs b/x.rs\n+a\n".to_string(),
+            diff_truncated: false,
+            files: vec![file("x.rs", 1, 0, false)],
+            commit_subjects: vec![],
+            base_branch: "main".to_string(),
+            head_branch: "feature/MYT-123-fix".to_string(),
+            available_labels: vec![],
+            candidate_issues: vec![],
+            jira_candidates: vec![
+                jira_candidate("MYT-1", "Fix login", "new"),
+                jira_candidate("MYT-2", "Ship it", "done"),
+            ],
+            repo_instructions: None,
+            global_instructions: String::new(),
+            provider: Some("bitbucket".to_string()),
+        });
+        // Relaxed Jira ban present; the native ban absent.
+        assert!(recipe.system.contains(JIRA_RELAXED_LINE));
+        assert!(!recipe.system.contains(BAN_LINE));
+        // Section renders the Jira bullets (done marker on MYT-2).
+        assert!(recipe.system.contains("## Related issues"));
+        assert!(recipe.system.contains("- MYT-1 — Fix login"));
+        assert!(recipe.system.contains("- MYT-2 (done) — Ship it"));
+        // The `Relates:` example is present; NO `Closes:` example anywhere.
+        assert!(recipe.system.contains("Relates: MYT-123, MYT-456"));
+        assert!(!recipe.system.contains("Closes: 123"));
+        assert!(recipe
+            .system
+            .contains("Never use a Closes line for these — Jira tickets are not closed"));
+        // Closing sentence for the Relates-only variant.
+        assert!(recipe
+            .prompt
+            .contains("if any of the listed related issues qualify, end with the `Relates:` line as instructed."));
+        // Note tail swapped to the ticket-variant.
+        assert!(recipe.note.contains(
+            "with no code fences; ticket references may appear ONLY as the final Relates: line drawn from the Related issues section."
+        ));
+        assert!(!recipe.note.contains("no issue/PR references"));
+    }
+
+    #[test]
+    fn pr_recipe_native_candidates_win_over_jira() {
+        // Both lists constructed non-empty (impossible in production, guarded here):
+        // native candidates win, no Jira section, Jira ban line absent.
+        let recipe = assemble_pr_recipe(PrPieces {
+            diff_text: "diff --git a/x.rs b/x.rs\n+a\n".to_string(),
+            diff_truncated: false,
+            files: vec![file("x.rs", 1, 0, false)],
+            commit_subjects: vec![],
+            base_branch: "main".to_string(),
+            head_branch: "topic".to_string(),
+            available_labels: vec![],
+            candidate_issues: vec![candidate(123, "Native issue", "OPEN")],
+            jira_candidates: vec![jira_candidate("MYT-1", "Jira issue", "new")],
+            repo_instructions: None,
+            global_instructions: String::new(),
+            provider: Some("github".to_string()),
+        });
+        // Native relaxed line, native bullet; no Jira bullet or Relates-only copy.
+        assert!(recipe.system.contains(RELAXED_LINE));
+        assert!(recipe.system.contains("- #123 — Native issue"));
+        assert!(!recipe.system.contains("- MYT-1"));
+        assert!(!recipe.system.contains(JIRA_RELAXED_LINE));
+        assert!(!recipe.system.contains("Jira tickets are not closed"));
+        // Native Closes:/Relates: example is what renders.
+        assert!(recipe.system.contains("Closes: 123, 456"));
+    }
+
+    #[test]
+    fn pr_recipe_jira_candidates_capped_at_eight() {
+        let jira_candidates: Vec<JiraCandidate> = (1..=9)
+            .map(|n| jira_candidate(&format!("MYT-{n}"), &format!("Issue {n}"), "new"))
+            .collect();
+        let recipe = assemble_pr_recipe(PrPieces {
+            diff_text: String::new(),
+            diff_truncated: false,
+            files: vec![],
+            commit_subjects: vec![],
+            base_branch: "main".to_string(),
+            head_branch: "topic".to_string(),
+            available_labels: vec![],
+            candidate_issues: vec![],
+            jira_candidates,
+            repo_instructions: None,
+            global_instructions: String::new(),
+            provider: Some("bitbucket".to_string()),
+        });
+        for n in 1..=8 {
+            assert!(recipe.system.contains(&format!("- MYT-{n} — Issue {n}")));
+        }
+        assert!(!recipe.system.contains("- MYT-9 — Issue 9"));
+    }
+
+    // ---- extract_issue_numbers (mirror of extract.ts) ----------------------
+
+    #[test]
+    fn extract_issue_numbers_case_table() {
+        assert_eq!(extract_issue_numbers("fix/123-crash"), vec![123]);
+        assert_eq!(extract_issue_numbers("#45"), vec![45]);
+        assert_eq!(extract_issue_numbers("123-fix"), vec![123]);
+        assert_eq!(extract_issue_numbers("&#39;"), Vec::<u64>::new());
+        assert_eq!(extract_issue_numbers("issue-7"), vec![7]);
+        assert_eq!(extract_issue_numbers("gh-7"), vec![7]);
+        assert_eq!(extract_issue_numbers("GH-7"), vec![7]);
+        assert_eq!(extract_issue_numbers("v2-123"), Vec::<u64>::new());
+        // `#` preceded by a letter/digit does not match.
+        assert_eq!(extract_issue_numbers("abc#12"), Vec::<u64>::new());
+        assert_eq!(extract_issue_numbers("9#12"), Vec::<u64>::new());
+        // 0 and out-of-range dropped.
+        assert_eq!(extract_issue_numbers("#0"), Vec::<u64>::new());
+        assert_eq!(extract_issue_numbers("#1000000000"), Vec::<u64>::new());
+        assert_eq!(extract_issue_numbers("#999999999"), vec![999_999_999]);
+    }
+
+    #[test]
+    fn extract_issue_numbers_dedupes_first_occurrence_order() {
+        // Same number twice → kept once (first occurrence).
+        assert_eq!(extract_issue_numbers("#12 #12"), vec![12]);
+        // Patterns applied in order 1→2→3 over the full text: pattern 1 (`#45`),
+        // then pattern 2 (`123-`), then pattern 3 (`issue-7`).
+        assert_eq!(
+            extract_issue_numbers("fix/123-thing #45 issue-7"),
+            vec![45, 123, 7]
+        );
+        // A number reachable by BOTH pattern 1 (`#5`) and pattern 2 (`5-` at string
+        // start) is emitted once — during the pattern-1 pass, which runs first —
+        // even though the pattern-2 hit appears earlier in the text.
+        assert_eq!(extract_issue_numbers("5-x #5"), vec![5]);
     }
 
     // ---- budget_diff (mirror of truncate.ts budgetDiff) --------------------

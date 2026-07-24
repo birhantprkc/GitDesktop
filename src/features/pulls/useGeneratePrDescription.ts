@@ -22,6 +22,34 @@ interface AvailableLabel {
   description?: string | null;
 }
 
+/** A validated real issue the model may link (fed as a grounded candidate). The
+ *  parser validates a proposed link's number against this set. */
+interface IssueCandidate {
+  number: number;
+  title: string;
+  state: string;
+}
+
+/** A mention-only Jira candidate from the repo's linked project (Bitbucket
+ *  repos). The parser validates a proposed `Relates:` key against this set. */
+interface JiraCandidate {
+  key: string;
+  summary: string;
+  statusCategory: string;
+}
+
+/** The parsed draft streamed to `onUpdate` — title/body plus the validated
+ *  labels, the model's proposed `Closes:` / `Relates:` issue numbers, and any
+ *  validated linked-Jira mention keys. */
+interface PrDraft {
+  title: string;
+  body: string;
+  labels: string[];
+  closes: number[];
+  relates: number[];
+  jiraMentions: string[];
+}
+
 /**
  * Streams an AI-written PR title + body from the branch diff and the commits
  * the PR would introduce. `onUpdate` fires with the parsed draft on each chunk.
@@ -39,15 +67,18 @@ export function useGeneratePrDescription(repoPath: string) {
       base: string,
       head: string,
       commitSubjects: string[],
-      onUpdate: (draft: {
-        title: string;
-        body: string;
-        labels: string[];
-      }) => void,
+      onUpdate: (draft: PrDraft) => void,
       availableLabels: AvailableLabel[],
       provider?: PromptProvider,
       /** Author's "Notes for reviewers" — reflected into the description. */
       reviewNotes?: string,
+      /** Validated real issues the model may link (grounded candidates). Empty ⇒
+       *  no issue links proposed. */
+      issueCandidates?: IssueCandidate[],
+      /** Mention-only Jira candidates (Bitbucket repos with a linked project).
+       *  Empty ⇒ no Jira mentions proposed. Mutually exclusive with
+       *  `issueCandidates` — `buildPrPrompt` gives natives precedence. */
+      jiraCandidates?: JiraCandidate[],
     ) => {
       await run(
         async (settings) => {
@@ -70,6 +101,8 @@ export function useGeneratePrDescription(repoPath: string) {
             globalInstructions: settings.globalInstructions,
             reviewNotes,
             availableLabels,
+            issueCandidates,
+            jiraCandidates,
             provider,
           });
         },
@@ -79,6 +112,8 @@ export function useGeneratePrDescription(repoPath: string) {
               extractPrDraft(
                 buffer,
                 availableLabels.map((l) => l.name),
+                (issueCandidates ?? []).map((c) => c.number),
+                (jiraCandidates ?? []).map((c) => c.key),
               ),
             ),
         },
@@ -94,11 +129,7 @@ export function useGeneratePrDescription(repoPath: string) {
       base: string,
       head: string,
       commitSubjects: string[],
-      onUpdate: (draft: {
-        title: string;
-        body: string;
-        labels: string[];
-      }) => void,
+      onUpdate: (draft: PrDraft) => void,
       /** Target host — swaps the change-request noun + markdown flavor in the
        *  prompt. Omit (local PRs) to keep the base GitHub wording. */
       provider?: PromptProvider,
@@ -108,6 +139,10 @@ export function useGeneratePrDescription(repoPath: string) {
       availableLabels: AvailableLabel[] = [],
       /** Author's "Notes for reviewers" — reflected into the description. */
       reviewNotes?: string,
+      /** Validated real issues the model may link (grounded candidates). */
+      issueCandidates?: IssueCandidate[],
+      /** Mention-only Jira candidates (Bitbucket + linked project). */
+      jiraCandidates?: JiraCandidate[],
     ) =>
       runFromDiff(
         () => gitBranchDiff(repoPath, base, head, RAW_DIFF_MAX_BYTES),
@@ -118,6 +153,8 @@ export function useGeneratePrDescription(repoPath: string) {
         availableLabels,
         provider,
         reviewNotes,
+        issueCandidates,
+        jiraCandidates,
       ),
     [repoPath, runFromDiff],
   );
@@ -131,11 +168,7 @@ export function useGeneratePrDescription(repoPath: string) {
       base: string,
       head: string,
       commitSubjects: string[],
-      onUpdate: (draft: {
-        title: string;
-        body: string;
-        labels: string[];
-      }) => void,
+      onUpdate: (draft: PrDraft) => void,
       provider?: PromptProvider,
       /** The repo's existing labels (name + description) to propose from. Empty ⇒
        *  no labels proposed. Invented labels the model returns are dropped by the
@@ -143,6 +176,10 @@ export function useGeneratePrDescription(repoPath: string) {
       availableLabels: AvailableLabel[] = [],
       /** Author's "Notes for reviewers" — reflected into the description. */
       reviewNotes?: string,
+      /** Validated real issues the model may link (grounded candidates). */
+      issueCandidates?: IssueCandidate[],
+      /** Mention-only Jira candidates (Bitbucket + linked project). */
+      jiraCandidates?: JiraCandidate[],
     ) =>
       runFromDiff(
         getDiff,
@@ -153,6 +190,8 @@ export function useGeneratePrDescription(repoPath: string) {
         availableLabels,
         provider,
         reviewNotes,
+        issueCandidates,
+        jiraCandidates,
       ),
     [runFromDiff],
   );
