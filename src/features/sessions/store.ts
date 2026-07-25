@@ -126,6 +126,33 @@ const SYSTEM_PROMPT =
   "Do NOT commit — the app commits each turn so the user can review it. When " +
   "finished with a turn, briefly summarize what you changed.";
 
+/**
+ * The handoff record that seeds the new-session composer.
+ *
+ * Everything past `prompt` is the composer's start-state, carried across a Settings
+ * round-trip: the isolation note's "Set up in Settings…" jump unmounts
+ * RepositoryView (App.tsx renders it behind `view === "repo"`), so the composer's
+ * local state would otherwise be lost — you'd come back from adding an agent to the
+ * container image only to find the composer re-seeded to a different agent, and the
+ * task would run as something you didn't choose. A plain handoff ("Implement this
+ * issue") sets none of them and the composer keeps its own values.
+ */
+export interface PendingTask {
+  repoPath: string;
+  prompt: string;
+  /** Absent = no explicit pick was made, so there's nothing to restore. */
+  isolation?: "worktree" | "container";
+  agent?: "claude" | "codex" | "copilot" | "opencode";
+  /** "" = the account default model. */
+  model?: string;
+  /** "" = Auto. */
+  effort?: string;
+  mode?: "single" | "ensemble";
+  /** Stashed verbatim — `null` is meaningful (follow the per-repo default set),
+   *  and is NOT the same as absent. */
+  mcpServers?: string[] | null;
+}
+
 interface SessionsState {
   /** All sessions, in creation order. Each runs in its own worktree. */
   sessions: AgentSession[];
@@ -142,10 +169,10 @@ interface SessionsState {
    *  cleared by the activation composer once it loads it. Lets the handoff cross
    *  the tab/Activity boundary without an imperative ref. `repoPath` scopes it so
    *  only that repo's composer picks it up. */
-  pendingTask: { repoPath: string; prompt: string } | null;
+  pendingTask: PendingTask | null;
   hydrate: () => Promise<void>;
   setActive: (id: string | null) => void;
-  setPendingTask: (task: { repoPath: string; prompt: string } | null) => void;
+  setPendingTask: (task: PendingTask | null) => void;
   start: (
     repoPath: string,
     prompt: string,
@@ -154,6 +181,9 @@ interface SessionsState {
     effort: string,
     ensembleId?: string,
     mcpServers?: string[],
+    /** Per-session override of the global isolation setting (the composer's
+     *  Isolation row). Absent = follow Settings → AI. */
+    isolation?: "worktree" | "container",
   ) => Promise<string | null>;
   /** Best-of-N: start one session per `arm` on the SAME task, sharing one ensemble
    *  id, so they can be reviewed side by side and the best one kept. Each arm runs
@@ -171,6 +201,9 @@ interface SessionsState {
     /** MCP server ids shared across every arm (each arm drops the ones its own
      *  agent/isolation can't use). Absent/empty = no MCP. */
     mcpServers?: string[],
+    /** Per-session isolation override, shared by every arm. Absent = follow
+     *  Settings → AI. */
+    isolation?: "worktree" | "container",
   ) => Promise<string[]>;
   send: (id: string, prompt: string) => Promise<void>;
   setModel: (id: string, model: string) => void;
@@ -533,6 +566,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     effort,
     ensembleId,
     mcpServers,
+    isolationOverride,
   ) => {
     const task = prompt.trim();
     if (!task || get().creating) return null;
@@ -541,11 +575,14 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     // same way), so resolve it once here. Both agents honor the setting: on the
     // host each runs worktree-confined by its own OS sandbox (Codex via
     // `-s workspace-write`); "container" wraps either in a kernel boundary.
-    const setting =
-      (await loadSettings().catch(() => null))?.agentIsolation ?? "worktree";
     // Every agent honors the setting now — Copilot's container authenticates from a
     // `gh auth token` (no mountable creds file), so it no longer forces host-only.
-    const isolation = setting;
+    // The composer's Isolation row can override it for THIS session; the global
+    // setting is only read (`??` short-circuits the await) when it didn't.
+    const isolation =
+      isolationOverride ??
+      (await loadSettings().catch(() => null))?.agentIsolation ??
+      "worktree";
     let wt: Awaited<ReturnType<typeof createWorktree>>;
     try {
       wt = await createWorktree(repoPath);
@@ -605,7 +642,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     return wt.id;
   },
 
-  startEnsemble: async (repoPath, prompt, arms, mcpServers) => {
+  startEnsemble: async (repoPath, prompt, arms, mcpServers, isolation) => {
     const task = prompt.trim();
     if (!task || arms.length === 0) return [];
     // One shared id ties the arms together; each is otherwise a normal session
@@ -626,6 +663,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
         // The shared MCP selection; start() drops it for an arm whose
         // agent/isolation can't run MCP, and runTurn filters per-agent each turn.
         mcpServers,
+        // One shared isolation for the whole ensemble (arms differ by agent/model,
+        // never by how they're sandboxed).
+        isolation,
       );
       if (id) ids.push(id);
     }

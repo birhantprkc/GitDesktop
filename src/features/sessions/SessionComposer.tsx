@@ -1,16 +1,20 @@
-import { StopIcon } from "@phosphor-icons/react";
+import { StopIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { AnimatePresence, m } from "motion/react";
 import {
   useEffect,
+  useId,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import type { AgentKind } from "@/lib/ai/agent";
 import { estimateRunCost } from "@/lib/ai/cost";
+import type { ContainerStatus } from "@/lib/ai/sandbox";
+import { useContainerStatus } from "@/lib/ai/sandbox-queries";
 import {
   buildPrompt,
   filterCommands,
@@ -28,18 +32,124 @@ import {
   mcpSupportedFor,
 } from "@/lib/settings/mcp";
 import { useRepoKeys, useSettings } from "@/lib/settings/queries";
+import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
 import {
+  AGENT_LABELS,
   AgentPicker,
   ComposerOptions,
+  type Isolation,
+  type IsolationNote,
   ModelPicker,
   modelsForAgent,
   type RunMode,
 } from "./AgentPickers";
 import { EnsembleRunDialog } from "./EnsembleRunDialog";
-import { type AgentSession, useSessionsStore } from "./store";
+import { type AgentSession, type PendingTask, useSessionsStore } from "./store";
 
 const MAX_MENTIONS = 8;
+
+/** Stable empty default so the container probe's props don't churn while settings load. */
+const NO_PROVIDERS: string[] = [];
+
+const RUNTIME_LABEL = { docker: "Docker", podman: "Podman" } as const;
+
+/** FALLBACK reason a not-ready container disables Start, used only when the
+ *  isolation note hasn't produced a specific one (see `blockedReason`). */
+const CONTAINER_BLOCKED_TEXT =
+  "Container isolation isn't ready — open Options for details.";
+
+/**
+ * The single line shown under the composer's Isolation control. Container is
+ * pick-then-warn: choosing it (or inheriting it from Settings) surfaces the same
+ * readiness probe Settings runs, with a jump to Settings → AI where the runtime and
+ * image are actually set up. A missing runtime / stopped engine / unbuilt image also
+ * blocks Start (see `containerBlocked`); everything after that — a stale image, an
+ * agent missing from it, a probe that couldn't run — only warns, because the backend
+ * verifies at turn 1 anyway and over-blocking on a guess is worse than a warning. On
+ * the worktree side the only note is the downgrade disclosure — running on the host
+ * when the global setting says container — so the drop in confinement is never silent.
+ */
+function isolationNoteFor({
+  effective,
+  global,
+  agent,
+  perAgentCopy,
+  status,
+  probeFailed,
+  agentInImage,
+}: {
+  effective: Isolation;
+  global: Isolation;
+  /** The composer's seed agent — the one whose host-sandbox story is described. */
+  agent: AgentKind;
+  /** False in best-of-N, where the arms can each pick a different agent, so any
+   *  agent-specific claim about the host sandbox could be false for some of them. */
+  perAgentCopy: boolean;
+  status: ContainerStatus | undefined;
+  /** The probe ran and failed (not merely still loading). */
+  probeFailed: boolean;
+  /** `agent` is among the agent CLIs the saved image config bakes in. */
+  agentInImage: boolean;
+}): IsolationNote | undefined {
+  if (effective === "worktree") {
+    if (global !== "container") return undefined;
+    return {
+      tone: "muted",
+      text:
+        agent === "codex" && perAgentCopy
+          ? "Runs on the host for this session — Codex keeps its own OS-enforced sandbox."
+          : "Runs on the host for this session — file writes are confined by convention, not the kernel.",
+    };
+  }
+  // A probe that failed with nothing to show for it. (Once there IS data, a later
+  // refetch failing — the recovery poll hitting a blip — shouldn't replace the
+  // specific reason Start is blocked with a vaguer one.)
+  if (!status)
+    return probeFailed
+      ? {
+          tone: "warn",
+          text: "Couldn't check container status — the session will verify at start.",
+        }
+      : { tone: "muted", text: "Checking container status…" };
+  if (!status.runtime)
+    return {
+      tone: "warn",
+      text: "No Docker or Podman found — container sessions need one installed.",
+      settingsAction: true,
+    };
+  const runtime = RUNTIME_LABEL[status.runtime];
+  if (!status.ready)
+    return {
+      tone: "warn",
+      text: `${runtime} is installed but its engine isn't running. Start it, then try again.`,
+    };
+  if (!status.imagePresent)
+    return {
+      tone: "warn",
+      text: `${runtime} is ready — build the agent image first.`,
+      settingsAction: true,
+    };
+  // More specific than the generic "doesn't match" below — the backend rejects turn
+  // 1 outright when the chosen agent isn't in the image, so name that agent. Still
+  // only a warning: a stale image can legitimately carry MORE agents than the saved
+  // config lists, and blocking on that guess would be worse. Skipped in best-of-N
+  // for the same reason as the downgrade copy — the arms pick their own agents, so
+  // naming the seed's would be as likely to mislead as to help.
+  if (!agentInImage && perAgentCopy)
+    return {
+      tone: "warn",
+      text: `The agent image wasn't built with ${AGENT_LABELS[agent]} — add it under Settings → AI and rebuild.`,
+      settingsAction: true,
+    };
+  if (!status.imageMatches)
+    return {
+      tone: "warn",
+      text: "The agent image doesn't match the current Node / agent selection — rebuild in Settings to apply.",
+      settingsAction: true,
+    };
+  return undefined;
+}
 
 /** An in-progress `@file` mention: the query typed after `@` and the index of
  *  the `@` in the draft (so it can be replaced on selection). */
@@ -98,6 +208,10 @@ export function SessionComposer({
   // enabled registry server); a concrete array once the user picks. Frozen at
   // turn 1, so it only matters before a session exists.
   const [startMcp, setStartMcp] = useState<string[] | null>(null);
+  // Isolation for a NEW session. null = follow the global Settings → AI value; a
+  // concrete pick overrides it for THIS session only. Agent-independent, so it
+  // deliberately survives an agent switch.
+  const [startIsolation, setStartIsolation] = useState<Isolation | null>(null);
   // Run mode for a NEW task: a single session, or best-of-N. The mode picker is
   // always clickable (the Send button isn't, until you type), so you can choose
   // best-of-N first; Send then follows the mode.
@@ -119,6 +233,13 @@ export function SessionComposer({
   const [histIndex, setHistIndex] = useState<number | null>(null);
   const [histStash, setHistStash] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
+  // Ties the disabled-Send explanation to the button via aria-describedby.
+  const blockedId = useId();
+  // The record this composer stashed for a Settings round-trip. The consume effect
+  // skips exactly that record (by identity) rather than latching shut, so if the
+  // composer ever stops unmounting on the jump (e.g. an <Activity> refactor) a
+  // LATER handoff record still consumes normally. Dies with the unmount today.
+  const stashedRef = useRef<PendingTask | null>(null);
 
   const running = session?.running ?? false;
   const model = session ? session.model : startModel;
@@ -134,7 +255,6 @@ export function SessionComposer({
   const onEffort = session
     ? (e: string) => setEffort(session.id, e)
     : setStartEffort;
-  const canSubmit = !running && !creating && draft.trim().length > 0;
   // Your sent prompts, oldest→newest, for Up/Down recall.
   const history = session ? session.turns.map((t) => t.prompt) : [];
 
@@ -169,11 +289,33 @@ export function SessionComposer({
   // point SessionActivation has forced "Delegate" mode and mounted this composer.
   // biome-ignore lint/correctness/useExhaustiveDependencies: stable setters/ref only
   useEffect(() => {
-    if (session || !pendingTask || pendingTask.repoPath !== repoPath) return;
+    if (
+      session ||
+      !pendingTask ||
+      pendingTask === stashedRef.current ||
+      pendingTask.repoPath !== repoPath
+    )
+      return;
     setMention(null);
     setSlash(null);
     setHistIndex(null);
     setDraftCaretEnd(pendingTask.prompt);
+    // A record stashed by the "Set up in Settings…" jump also carries the whole
+    // start-state, so the round-trip can't silently change what will run. A plain
+    // handoff carries none of it and the composer keeps its own values. Tested
+    // with `!== undefined` throughout: "" (default model / Auto effort) and null
+    // (follow the default MCP set) are real values, not absences. These are plain
+    // setState calls — the agent-change RESET (model + MCP) lives in AgentPicker's
+    // onChange handler, not an effect, so restoring an agent doesn't wipe the
+    // model or servers restored alongside it.
+    if (pendingTask.isolation !== undefined)
+      setStartIsolation(pendingTask.isolation);
+    if (pendingTask.agent !== undefined) setStartAgent(pendingTask.agent);
+    if (pendingTask.model !== undefined) setStartModel(pendingTask.model);
+    if (pendingTask.effort !== undefined) setStartEffort(pendingTask.effort);
+    if (pendingTask.mode !== undefined) setMode(pendingTask.mode);
+    if (pendingTask.mcpServers !== undefined)
+      setStartMcp(pendingTask.mcpServers);
     setPendingTask(null);
   }, [session, pendingTask, repoPath]);
 
@@ -245,7 +387,100 @@ export function SessionComposer({
       ),
     [settings.data?.mcpServers, repoKeys],
   );
-  const isContainer = settings.data?.agentIsolation === "container";
+  // Isolation for a NEW session: the global setting unless the composer's Options
+  // popover overrode it. Fixed at creation, so an ACTIVE session has none here (its
+  // own `session.isolation` governs, below). Derived during render — no effect.
+  const globalIsolation: Isolation =
+    settings.data?.agentIsolation ?? "worktree";
+  // Resolved ONCE (override ?? global) and reused by the gate, the note, and the
+  // radio value below, so the warn line and the Send gate can never disagree.
+  const resolvedStartIsolation: Isolation = startIsolation ?? globalIsolation;
+  const effectiveIsolation = !session ? resolvedStartIsolation : undefined;
+  const isContainer = effectiveIsolation === "container";
+  // Container readiness, probed lazily and shared with Settings → AI (same query
+  // key, so one Docker/Podman check serves both). Only while a new session is
+  // actually set to run in a container AND the Agent tab is showing — an
+  // <Activity>-hidden subtree still fetches.
+  const agentTabShowing = useUiStore((s) => s.repoTab === "agent");
+  const openSettings = useUiStore((s) => s.openSettings);
+  const containerStatus = useContainerStatus({
+    nodeVersion: settings.data?.agentImageNodeVersion ?? "",
+    providers: settings.data?.agentImageProviders ?? NO_PROVIDERS,
+    enabled: !session && isContainer && agentTabShowing && !!settings.data,
+  });
+  // A RESOLVED "can't run containers" blocks Start; loading (no data yet) never
+  // does, and a stale image, a missing agent, or a probe that couldn't run only warn.
+  const probe = containerStatus.data;
+  const probeFailed = containerStatus.isError;
+  // Whether the saved image config bakes in the agent this session would run.
+  const agentInImage =
+    settings.data?.agentImageProviders?.includes(startAgent) ?? false;
+  const containerBlocked =
+    isContainer &&
+    !!probe &&
+    (!probe.runtime || !probe.ready || !probe.imagePresent);
+  // Until settings resolve we don't yet know the global isolation, so the readiness
+  // gate above hasn't run — but start() reads settings itself and would happily
+  // launch a container session. Hold Start for those few milliseconds rather than
+  // let one slip past the gate. Deliberately silent: it's a load, not a problem.
+  // A settings load that FAILED is deliberately not pending — holding Send forever
+  // would be the worse bug. Residual: start()'s own loadSettings() can succeed where
+  // the query errored and launch per the real setting while the row showed the
+  // worktree fallback — near-unreachable, it errs toward MORE confinement than
+  // displayed, and turn 1 re-checks readiness in Rust.
+  const settingsPending = !session && !settings.data && !settings.isError;
+  const canSubmit =
+    !running &&
+    !creating &&
+    draft.trim().length > 0 &&
+    !containerBlocked &&
+    !settingsPending;
+  // The one line under the Isolation control — a container-readiness warning or the
+  // host-downgrade disclosure. Hoisted out of the JSX so the blocked strip and the
+  // best-of-N toast can name the SPECIFIC reason instead of the generic fallback.
+  const isolationNote = session
+    ? undefined
+    : isolationNoteFor({
+        effective: resolvedStartIsolation,
+        global: globalIsolation,
+        agent: startAgent,
+        // Best-of-N arms each pick their own agent, so no agent-specific claim
+        // (host sandbox, image membership) can be made.
+        perAgentCopy: mode !== "ensemble",
+        status: probe,
+        probeFailed,
+        agentInImage,
+      });
+  const blockedReason = isolationNote?.text ?? CONTAINER_BLOCKED_TEXT;
+  // The note's "Set up in Settings…" jump. Opening Settings unmounts
+  // RepositoryView (App.tsx renders it behind `view === "repo"`), which would take
+  // this composer's draft AND its isolation pick with it — a task typed, switched
+  // to Container, then sent to Settings to build the image would come back empty
+  // and silently back on the host. Stash both on the existing pendingTask record
+  // first; the activation composer re-seeds from it on remount.
+  const openIsolationSettings = () => {
+    // `openSettings` flips the view inside a view-transition callback (see
+    // lib/view-transition.ts — `doc.startViewTransition(() => flushSync(update))`),
+    // so the stash below commits a render BEFORE the unmount. Without the ref the
+    // consume effect would eat the record in that window and there'd be nothing
+    // left to restore; holding the record itself skips it by IDENTITY, so the
+    // remounted composer (fresh ref) consumes normally.
+    const task: PendingTask = {
+      repoPath,
+      prompt: draft,
+      // null = no explicit pick, so there's nothing to restore — collapse to absent.
+      isolation: startIsolation ?? undefined,
+      agent: startAgent,
+      model: startModel,
+      effort: startEffort,
+      mode,
+      // Verbatim: null here MEANS "follow the default set", so it must survive.
+      mcpServers: startMcp,
+    };
+    stashedRef.current = task;
+    setPendingTask(task);
+    openSettings("ai");
+  };
   // Servers the chosen agent can actually run (Codex = local/stdio only).
   const mcpServersForAgent = useMemo(
     () => mcpRegistry.filter((s) => mcpServerUsableBy(s, startAgent)),
@@ -264,7 +499,7 @@ export function SessionComposer({
   const mcpUsable = mcpSupportedFor(startAgent, isContainer);
   const mcpDisabledReason =
     !mcpUsable && startAgent === "codex"
-      ? "Codex runs MCP in container sessions — switch isolation in Settings → AI"
+      ? "Codex runs MCP in container sessions — switch Isolation to Container above"
       : undefined;
   // For an ACTIVE session the agent + isolation are fixed, so gate on the session's
   // own values and let the user re-pick servers (applies from the next turn).
@@ -338,6 +573,9 @@ export function SessionComposer({
               mcpServersForAgent.some((s) => s.id === id),
             )
           : undefined,
+        // Absent unless the user explicitly picked — start() then reads the global
+        // setting itself, exactly as before.
+        startIsolation ?? undefined,
       );
   };
 
@@ -358,6 +596,10 @@ export function SessionComposer({
   };
 
   const submit = () => {
+    // Container isolation that isn't ready — or settings that haven't resolved, so
+    // readiness was never checked: Enter must respect the same gates the Send
+    // button does (the composer's warn line explains the first one).
+    if (containerBlocked || settingsPending) return;
     // Best-of-N mode: the primary action opens the arm/cost dialog instead of
     // starting one session (the dialog runs the fan-out).
     if (!session && mode === "ensemble") {
@@ -390,10 +632,24 @@ export function SessionComposer({
     arms: { agent: AgentKind; model: string; effort: string }[],
   ) => {
     if (!pendingEnsemble) return;
+    // The probe can resolve blocked while the arm/cost dialog sits open. Confirming
+    // then would fan out N doomed arms — but the dialog has already closed itself,
+    // so say why rather than appear to do nothing.
+    if (containerBlocked) {
+      toast.error(blockedReason);
+      return;
+    }
     const mcp = mcpUsable
       ? effectiveMcp.filter((id) => mcpServersForAgent.some((s) => s.id === id))
       : undefined;
-    void startEnsemble(repoPath, pendingEnsemble, arms, mcp);
+    void startEnsemble(
+      repoPath,
+      pendingEnsemble,
+      arms,
+      mcp,
+      // Every arm runs the same way — arms differ by agent/model/effort only.
+      startIsolation ?? undefined,
+    );
     clearDraft();
     setPendingEnsemble("");
   };
@@ -633,6 +889,54 @@ export function SessionComposer({
               }
               className="max-h-40 min-h-9 w-full resize-none overflow-y-auto bg-transparent text-xs leading-relaxed outline-none placeholder:text-muted-foreground"
             />
+            {/* Why Send is disabled, in layout flow — the global setting alone can
+                put you here, in which case the Options badge doesn't move and a
+                hover-only tooltip would be the sole explanation. Carries the
+                SPECIFIC reason (engine down, image missing, …) and is what the Send
+                button points `aria-describedby` at while blocked. Reasons Settings
+                can fix carry the remedy here too, so it's reachable without ever
+                opening the Options popover; an engine that isn't running has no
+                `settingsAction` (Settings can't start a daemon) and gets no button. */}
+            <p
+              role="status"
+              // Mounted unconditionally: a live region created together with its
+              // text announces unreliably, so the region has to pre-exist and only
+              // its CONTENT change. `sr-only` (not `hidden`) keeps the empty state
+              // in the accessibility tree while taking it out of flow entirely, so
+              // the column's flex gap shows no phantom row.
+              className={
+                containerBlocked
+                  ? "flex items-start gap-1.5 text-[11px] text-foreground"
+                  : "sr-only"
+              }
+            >
+              {containerBlocked ? (
+                <>
+                  <WarningCircleIcon
+                    weight="fill"
+                    className="mt-px size-3.5 shrink-0"
+                    aria-hidden
+                  />
+                  {/* The id sits on the REASON alone so Send's aria-describedby
+                      doesn't read the remedy button's label as its description;
+                      role="status" on the parent still announces both together. */}
+                  <span id={blockedId}>{blockedReason}</span>
+                  {isolationNote?.settingsAction ? (
+                    // Same handler as the popover's button — it stashes the whole
+                    // start-state before navigating, so a bare openSettings here
+                    // would silently lose the draft and every pick.
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="-mt-0.5 h-6 shrink-0 px-1.5 text-[11px] text-muted-foreground"
+                      onClick={openIsolationSettings}
+                    >
+                      Set up in Settings…
+                    </Button>
+                  ) : null}
+                </>
+              ) : null}
+            </p>
             <div className="flex items-center gap-2 border-t pt-2">
               {/* Provider + model stay inline for quick access; run mode, effort,
                   and MCP collapse into Options so the row never overflows. Best-of-N
@@ -655,6 +959,19 @@ export function SessionComposer({
                 onEffort={session || mode === "single" ? onEffort : undefined}
                 mode={!session ? mode : undefined}
                 onMode={!session ? setMode : undefined}
+                isolation={
+                  session
+                    ? undefined
+                    : {
+                        value: resolvedStartIsolation,
+                        onChange: setStartIsolation,
+                        isOverride:
+                          startIsolation !== null &&
+                          startIsolation !== globalIsolation,
+                        note: isolationNote,
+                        onSettingsAction: openIsolationSettings,
+                      }
+                }
                 mcp={composerMcp}
               />
               <AnimatePresence mode="wait" initial={false}>
@@ -685,18 +1002,28 @@ export function SessionComposer({
                     exit={{ opacity: 0, scale: 0.96 }}
                     transition={quickTransition}
                   >
-                    <Button
-                      size="sm"
-                      className="min-w-20"
-                      disabled={!canSubmit}
-                      onClick={submit}
+                    {/* A `title` on a DISABLED button never fires, so the
+                        container-not-ready reason rides a wrapper span. */}
+                    <span
+                      className="inline-flex"
+                      title={containerBlocked ? blockedReason : undefined}
                     >
-                      {creating && !session
-                        ? "Starting…"
-                        : !session && mode === "ensemble"
-                          ? "Best-of-N…"
-                          : "Send"}
-                    </Button>
+                      <Button
+                        size="sm"
+                        className="min-w-20"
+                        disabled={!canSubmit}
+                        aria-describedby={
+                          containerBlocked ? blockedId : undefined
+                        }
+                        onClick={submit}
+                      >
+                        {creating && !session
+                          ? "Starting…"
+                          : !session && mode === "ensemble"
+                            ? "Best-of-N…"
+                            : "Send"}
+                      </Button>
+                    </span>
                   </m.div>
                 )}
               </AnimatePresence>
