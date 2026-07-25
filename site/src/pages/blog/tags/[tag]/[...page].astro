@@ -1,0 +1,168 @@
+---
+import type { GetStaticPaths, Page } from "astro";
+import SiteLayout from "../../../../layouts/SiteLayout.astro";
+import {
+  formatDate,
+  getPosts,
+  getTags,
+  isoDate,
+  type Post,
+  postUrl,
+  readingTime,
+  tagUrl,
+} from "../../../../lib/posts";
+
+// Static pages, not a client-side filter row: linkable, crawlable, and
+// keyboard-reachable for free, with no second stateful widget to wire up.
+export const getStaticPaths = (async ({ paginate }) => {
+  const [posts, tags] = await Promise.all([getPosts(), getTags()]);
+  return tags.flatMap(({ tag }) => {
+    const tagged = posts.filter((p) => p.data.tags.includes(tag));
+    // aiTotal rides along so the Just-Git header count can be honest about
+    // the rows that view hides (the per-page notice recounts page.data).
+    return paginate(tagged, {
+      pageSize: 10,
+      params: { tag },
+      props: { tag, aiTotal: tagged.filter((p) => p.data.ai).length },
+    });
+  });
+}) satisfies GetStaticPaths;
+
+interface Props {
+  page: Page<Post>;
+  tag: string;
+  /** AI posts across the WHOLE tag, for the header's Just-Git count. */
+  aiTotal: number;
+}
+
+const { page, tag, aiTotal } = Astro.props;
+const base = import.meta.env.BASE_URL;
+// This page's hidden rows, for the same notice the blog index shows.
+const aiCount = page.data.filter((p) => p.data.ai).length;
+---
+
+<SiteLayout
+  active="blog"
+  feed
+  breadcrumbs={[
+    { name: "Blog", path: "/blog/" },
+    { name: "Topics", path: "/blog/tags/" },
+    { name: tag, path: tagUrl(tag) },
+  ]}
+  title={`${tag} — GitDesktop blog`}
+  description={`Every GitDesktop post tagged ${tag}: engineering notes from building a native Git client for GitHub, GitLab and Bitbucket.`}
+  ogTitle={`Posts tagged ${tag}`}
+  ogDescription={`Engineering notes from building GitDesktop, tagged ${tag}.`}
+>
+  <section class="border-b border-line">
+    <div class="mx-auto max-w-6xl px-5 py-14 md:py-16">
+      <a
+        href={`${base}blog/`}
+        class="text-sm text-faint transition-colors hover:text-muted"
+      >
+        <span class="text-add">//</span> blog
+      </a>
+      <h1 class="mt-5 text-[clamp(1.75rem,4vw,2.75rem)] font-semibold tracking-tight">
+        {tag}
+      </h1>
+      <p class="mt-5 text-body">
+        <span data-view="ai">
+          {page.total} {page.total === 1 ? "post" : "posts"}.
+        </span>
+        <span data-view="git">
+          {page.total - aiTotal}{" "}
+          {page.total - aiTotal === 1 ? "post" : "posts"}.
+        </span>
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="mx-auto max-w-6xl px-5 py-6 md:py-10">
+      {
+        aiCount > 0 && (
+          /* Same notice as the blog index — a list that silently drops rows
+             reads as broken in Just Git. */
+          <p data-view="git" class="pb-6 text-sm text-muted">
+            {aiCount} AI-related {aiCount === 1 ? "post is" : "posts are"}{" "}
+            hidden.{" "}
+            <button
+              type="button"
+              data-mode-btn="ai"
+              class="cursor-pointer text-mint underline decoration-line-2 underline-offset-4 transition-colors hover:decoration-mint"
+            >
+              Show them
+            </button>
+          </p>
+        )
+      }
+      <ul class="divide-y divide-line border-y border-line">
+        {
+          page.data.map((post) => (
+            <li data-view={post.data.ai ? "ai" : undefined}>
+              <a href={postUrl(post)} class="group block py-7">
+                <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm text-muted">
+                  <time datetime={isoDate(post.data.pubDate)}>
+                    {formatDate(post.data.pubDate)}
+                  </time>
+                  <span aria-hidden="true" class="text-faint">
+                    ·
+                  </span>
+                  <span>{readingTime(post)} min read</span>
+                </div>
+                <h2 class="mt-2 max-w-[36ch] text-xl font-semibold tracking-tight underline decoration-line-2 underline-offset-4 transition-colors group-hover:decoration-mint">
+                  {post.data.title}
+                </h2>
+                <p class="mt-3 max-w-[68ch] text-[15px] leading-relaxed text-body">
+                  {post.data.description}
+                </p>
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+
+      {
+        (page.url.prev || page.url.next) && (
+          <nav
+            aria-label="Pagination"
+            class="flex items-center justify-between gap-4 py-8 text-sm"
+          >
+            {page.url.prev ? (
+              <a
+                href={page.url.prev}
+                class="text-mint underline decoration-line-2 underline-offset-4 transition-colors hover:decoration-mint"
+              >
+                ← Newer
+              </a>
+            ) : (
+              <span />
+            )}
+            <span class="text-muted">
+              Page {page.currentPage} of {page.lastPage}
+            </span>
+            {page.url.next ? (
+              <a
+                href={page.url.next}
+                class="text-mint underline decoration-line-2 underline-offset-4 transition-colors hover:decoration-mint"
+              >
+                Older →
+              </a>
+            ) : (
+              <span />
+            )}
+          </nav>
+        )
+      }
+
+      <p class="border-t border-line py-8 text-sm">
+        <a
+          href={`${base}blog/`}
+          class="text-mint underline decoration-line-2 underline-offset-4 transition-colors hover:decoration-mint"
+        >
+          ← All posts
+        </a>
+      </p>
+    </div>
+  </section>
+</SiteLayout>

@@ -1,12 +1,13 @@
 # Privacy Policy — GitDesktop
 
-_Last updated: 2026-06-19_
+_Last updated: 2026-07-25_
 
 > The canonical, hosted version of this policy is at <https://gitdesktop.app/privacy>.
 
 GitDesktop is a desktop Git client. This policy explains the limited, anonymous
 data it collects to improve the app, the third-party services your activity can
-reach, and your choices. It is not legal advice.
+reach, what the gitdesktop.app website measures, and your choices. It is not
+legal advice.
 
 ## Who we are
 
@@ -68,6 +69,35 @@ their own privacy policies, not ours:
   OpenAI, or OpenRouter). With a local **Ollama** model or the local **Claude
   Code / Codex CLI** agents, this stays on your machine. We never receive or
   store this content; it is governed by your chosen provider's terms.
+
+## The gitdesktop.app website
+
+This site is static. It has no accounts, sets no cookies, and runs no
+advertising or cross-site tracking.
+
+<!-- Web Analytics is enabled account-side (Cloudflare dashboard → Web
+     Analytics, "Automatic setup" on the proxied zone). It is EDGE-derived: no
+     beacon script is injected into the served HTML, which is what keeps the
+     "no other third-party scripts" claim below literally true. If collection
+     is ever switched to beacon-based, update both claims. Re-verified live
+     2026-07-25: zero references to static.cloudflareinsights.com in the
+     served apex HTML, browser UA included. -->
+
+- **Traffic measurement.** The site uses **Cloudflare Web Analytics** —
+  cookie-free, aggregate measurement (page views and referrers, derived at
+  Cloudflare's edge), with no client-side state and no cross-site profiles.
+  It is processed by Cloudflare under
+  [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/).
+- **Hosting.** The site is served by Cloudflare Pages; like any host, Cloudflare
+  processes standard request data (your IP address, user agent) to deliver the
+  pages.
+- **Release lookups.** The homepage and download page ask GitHub's public API
+  for the latest release, from your browser, so the version badge and download
+  buttons stay current — that request (and your IP) goes to GitHub, and the
+  installers themselves download from GitHub Releases.
+
+Fonts and every other asset are served from gitdesktop.app itself — there are no
+other third-party scripts or embeds.
 
 ## Retention
 

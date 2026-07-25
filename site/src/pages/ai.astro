@@ -6,7 +6,7 @@ import McpConfig from "../components/McpConfig.astro";
 import SiteLayout from "../layouts/SiteLayout.astro";
 
 const base = import.meta.env.BASE_URL;
-const download = `${base}download`;
+const download = `${base}download/`;
 
 const providers = [
   { name: "Anthropic", note: "Claude, direct API" },
@@ -39,7 +39,8 @@ const agentAbilities = [
 <SiteLayout
   active="ai"
   title="AI you control — commits, review, agents & MCP | GitDesktop"
-  description="GitDesktop's AI: generated commits and PR descriptions, code & security review, delegated agents with best-of-N, and running GitDesktop as an MCP server. Bring your own model — keys stay in your OS keychain, and every AI surface is hideable."
+  description="Generated commits, code and security review, delegated agents, and an MCP server — bring your own model, keep your keys, and hide it all whenever you want."
+  breadcrumbs={[{ name: "AI", path: "/ai/" }]}
   ogTitle="GitDesktop AI — you bring the model, you keep the keys"
   ogDescription="Generated commits and reviews, delegated agents, and an MCP server — on your own models (Anthropic, OpenAI, OpenRouter, Ollama, or a keyless CLI). Fully hideable."
 >
@@ -307,7 +308,7 @@ const agentAbilities = [
         <a href={download} class="rounded-lg bg-mint px-6 py-3 font-medium text-mint-ink transition-opacity hover:opacity-90">
           Download GitDesktop
         </a>
-        <a href={`${base}integrations`} class="rounded-lg border border-line-2 px-6 py-3 font-medium text-ink transition-colors hover:bg-surface">
+        <a href={`${base}integrations/`} class="rounded-lg border border-line-2 px-6 py-3 font-medium text-ink transition-colors hover:bg-surface">
           See integrations
         </a>
       </div>
