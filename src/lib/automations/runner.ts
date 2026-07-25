@@ -14,6 +14,7 @@ import {
 import { type PriorContext, resolvePriorContext } from "@/lib/ai/prior-context";
 import { buildReviewPrompt } from "@/lib/ai/prompt";
 import { isCliProvider, isLocalProvider } from "@/lib/ai/providers";
+import { reviewTimeoutSecs } from "@/lib/ai/review-timeout";
 import { runCliStream } from "@/lib/ai/stream";
 import type { AiSettings, PromptProvider, ReviewMode } from "@/lib/ai/types";
 import {
@@ -100,6 +101,27 @@ type PrAutomationEvent = Extract<
 >;
 
 const DIFF_MAX_BYTES = 200_000;
+
+/** How often a running automation refreshes its cross-instance claim file's mtime.
+ *  Rust's `STALE_CLAIM_AGE` (automation_claims.rs) reclaims a claim after 30 minutes
+ *  of silence, so 5 minutes (30/6) leaves a generous margin for timer drift while a
+ *  long review — the Review-timeout setting allows up to 60 minutes — keeps its
+ *  claim alive. Without it, a second instance would reclaim a LIVE run and post a
+ *  duplicate paid review. (Timers don't fire during OS suspend, so a 30+ minute
+ *  sleep mid-run can still go stale on resume — the same bounded single-duplicate
+ *  residual as before the heartbeat.) */
+const CLAIM_HEARTBEAT_MS = 5 * 60 * 1000;
+
+/** Upper bound on heartbeats per run: 30 × 5 min = 150 minutes. The cap runs from
+ *  the heartbeat's ARM (top of the try, before prompt building), so it must cover
+ *  the backend's 7200s max kill clamp — reachable by hand-editing settings.json;
+ *  the UI tops out at 60 min — PLUS the pre-stream phase (diff load, context
+ *  harvest, distill), with margin. A run still unsettled past that is wedged — an
+ *  HTTP stream has no deadline at all, and a stalled fetch (e.g. a LAN Ollama box
+ *  asleep mid-stream) never settles, so its `finally` never runs. Stopping the
+ *  heartbeat lets the claim age out (`STALE_CLAIM_AGE` + this cap) so a second
+ *  instance can recover the head — the recovery the stale-reclaim exists for. */
+const CLAIM_HEARTBEAT_MAX_BEATS = 30;
 
 /** The store key for a PR target, used to look up its review-history watermark. */
 function targetRef(event: PrAutomationEvent): string {
@@ -321,6 +343,21 @@ async function run(
       if (!won) continue; // another instance owns this run
       claimKey = repoKey;
     }
+    // Liveness heartbeat for the claim we just won: while this run is in flight we
+    // refresh its claim file's mtime, so the Rust stale-reclaim window measures "this
+    // instance went quiet" rather than "this review is slow". A 45/60-minute Review
+    // timeout would otherwise outlive the 30-minute window and let a second instance
+    // reclaim a LIVE run. Best-effort, like claim/release. Declared here, ARMED as the
+    // `try`'s first statement below: an interval leaked by a throw outside the
+    // `finally` would refresh the claim forever, defeating both the 30-minute reclaim
+    // and the 30-day sweep (both mtime-keyed) for the life of the process.
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const stopHeartbeat = () => {
+      if (heartbeat !== undefined) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+      }
+    };
     // Release this instance's claim (best-effort) so a non-delivering terminal path
     // (failure/cancel/no-op) doesn't permanently suppress the automation for this
     // head across instances. A successfully DELIVERED review keeps its claim.
@@ -399,6 +436,26 @@ async function run(
       ).catch(() => undefined);
     };
     try {
+      // First statement inside the try, so the arm and the `finally`'s disarm can
+      // never be separated by a throw (see the heartbeat comment above).
+      if (claimKey) {
+        let beats = 0;
+        heartbeat = setInterval(() => {
+          // Bounded so a wedged, never-settling run can't keep its claim fresh
+          // forever (see CLAIM_HEARTBEAT_MAX_BEATS).
+          if (beats >= CLAIM_HEARTBEAT_MAX_BEATS) {
+            stopHeartbeat();
+            return;
+          }
+          beats += 1;
+          void invoke("touch_automation_claim", {
+            repoKey: claimKey,
+            target: claimTarget,
+            headSha,
+            action,
+          }).catch(() => undefined);
+        }, CLAIM_HEARTBEAT_MS);
+      }
       const result = await generateReviewText(
         reviewCfg,
         action,
@@ -510,6 +567,11 @@ async function run(
       }
       // Persist a "Failed" stopped row (keeping its Re-run) instead of removing it.
       handle.fail(message);
+    } finally {
+      // Every terminal path lands here — including the `continue`s in both arms and
+      // the delivered-success path, which keeps its claim but must still stop
+      // heartbeating it.
+      stopHeartbeat();
     }
   }
   return { matched, attempted };
@@ -774,6 +836,9 @@ async function generateReviewText(
       // Read the reviewed commit / PR-head's files in a worktree, not whatever
       // branch happens to be checked out.
       headSha: event.kind === "commit" ? event.hash : event.headSha,
+      // The user's Review-timeout override (null = the backend's tier defaults).
+      timeoutSecs: reviewTimeoutSecs(appSettings.reviewTimeout),
+      timeoutConfigurable: true,
       // runCliStream replaces with the agent's final answer on done; the last
       // setText carries that clean review body (narration is peeled into onThoughts).
       setText: (t) => {
