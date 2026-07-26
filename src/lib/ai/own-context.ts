@@ -4,7 +4,11 @@ import { loadSettings } from "@/lib/settings/api";
 import { GD_COMMENT_ANCHOR } from "./comment-branding";
 import { getDigest, saveDigest } from "./own-digest-store";
 import { distillOwnComments } from "./own-distill";
-import { OWN_COMMENTS_CHAR_BUDGET, safeSlice } from "./truncate";
+import {
+  allocateBodyCaps,
+  capBody,
+  OWN_COMMENTS_CHAR_BUDGET,
+} from "./truncate";
 
 /** What `buildReviewPrompt` needs about GitDesktop's OWN prior comments on a PR. */
 export interface OwnCommentsContext {
@@ -23,10 +27,20 @@ export interface OwnCommentsContext {
   ownDistilled?: boolean;
 }
 
-/** Per-comment body cap before the global budget allocator — keep one verbose
- *  review from crowding out a later, shorter refutation. Head-kept: reviews
- *  front-load their blockers and a "fixed in `<sha>`" reply is short anyway. */
-const OWN_BODY_CAP = 1_500;
+/** Per-comment body FLOOR under the fair-share allocator — every comment is
+ *  guaranteed at least this many characters, so one verbose review can never
+ *  crowd out a later, shorter refutation. It is NOT a ceiling: a comment's actual
+ *  cap is its max-min share of the section budget, which is larger whenever
+ *  shorter comments leave slack. Head-kept: reviews front-load their blockers and
+ *  a "fixed in `<sha>`" reply is short anyway.
+ *
+ *  When `OWN_BODY_FLOOR × count > budget` the allocation degenerates to
+ *  floor-for-all and the caps therefore over-allocate the section budget — that
+ *  is by design, not a bug: these caps decide how the budget is SHARED, while
+ *  `fitOwn` (truncate.ts) stays the hard enforcement — dropping the MIDDLE
+ *  comments first, keeping the opening brief and the newest follow-ups — with
+ *  distillation firing before it in the over-budget regime. */
+const OWN_BODY_FLOOR = 1_500;
 
 /**
  * Strips the branded wrapper from a GitDesktop-authored comment so only the
@@ -42,7 +56,7 @@ const OWN_BODY_CAP = 1_500;
  * the URL in the body. The header is only ever the first line, so we strip it
  * only when the first non-blank line is the branded one.
  */
-function condenseOwnComment(body: string, cap: number): string {
+function condenseOwnComment(body: string): string {
   const lines = body.split("\n");
   // Footer: everything from the last anchor-bearing line to the end.
   let end = lines.length;
@@ -66,11 +80,10 @@ function condenseOwnComment(body: string, cap: number): string {
   const isRuleOrBlank = (l: string) => l.trim() === "" || /^\s*---\s*$/.test(l);
   while (kept.length > 0 && isRuleOrBlank(kept[0])) kept.shift();
   while (kept.length > 0 && isRuleOrBlank(kept[kept.length - 1])) kept.pop();
-  const cleaned = kept
+  return kept
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return cleaned.length > cap ? `${safeSlice(cleaned, cap)}…` : cleaned;
 }
 
 /** A short "where + state" tag for an inline comment or a thread reply. Plain
@@ -108,26 +121,70 @@ function isOwnAiReviewBody(body: string): boolean {
  *  `<sha>`" follow-up under it. Our own AI review/audit bodies are excluded
  *  first (redundant with the prior-review section). Returns the rendered blocks
  *  alongside the raw items that survived filtering (same order), so the caller can
- *  fingerprint the cache off the exact comments the blocks were built from. */
-function formatOwnComments(items: ExternalReviewItem[]): {
+ *  fingerprint the cache off the exact comments the blocks were built from.
+ *
+ *  Two passes, because each body's cap depends on all the others: pass 1 strips
+ *  the wrappers and drops the excluded/empty comments, then the surviving lengths
+ *  are fair-shared across `budget` net of the rendered scaffolding (see
+ *  `allocateBodyCaps` and the reserve below) and pass 2 renders each body under
+ *  its own cap. Capping per comment BEFORE knowing the section budget was the old
+ *  bug — a single long brief was cut to the floor even with the budget almost
+ *  entirely unspent. */
+function formatOwnComments(
+  items: ExternalReviewItem[],
+  budget: number,
+): {
   blocks: string[];
   survivors: ExternalReviewItem[];
 } {
   const ordered = [...items].sort((a, b) =>
     a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0,
   );
-  const blocks: string[] = [];
-  const survivors: ExternalReviewItem[] = [];
+  const cleaned: { item: ExternalReviewItem; body: string; prefix: string }[] =
+    [];
   for (const it of ordered) {
     if (isOwnAiReviewBody(it.body)) continue;
-    const body = condenseOwnComment(it.body, OWN_BODY_CAP);
+    const body = condenseOwnComment(it.body);
     if (!body) continue;
-    blocks.push(
-      `- (${it.author}${ownLocationTag(it)})\n  ${body.replace(/\n/g, "\n  ")}`,
-    );
-    survivors.push(it);
+    // Resolved once, so the reserve below is charged against exactly what pass 2
+    // renders.
+    cleaned.push({
+      item: it,
+      body,
+      prefix: `- (${it.author}${ownLocationTag(it)})\n  `,
+    });
   }
-  return { blocks, survivors };
+
+  // Same scaffolding reserve as the external section: the caps govern BODY
+  // length, but each rendered block also carries its `- (author …)` line, the
+  // two-space continuation indent on every body newline, and the `\n\n` joiner to
+  // the next block — all of which count against the budget `fitOwn` and the
+  // distill trigger measure. Charging it here is what makes those two comparisons
+  // apples-to-apples; unreserved, the blocks were over-allocated by construction,
+  // so `fitOwn` trimmed comments that would have fit and the distill trigger
+  // fired on scaffolding. The newline term uses `body.slice(0, provisionalCap)`
+  // (round 1 allocates with no scaffolding) so a long multi-line comment can't
+  // reserve for newlines its cap will cut away; round 2's caps are ≤ round 1's,
+  // keeping the count an upper bound (+1 covers `capBody`'s note line), and the
+  // only failure mode is slightly under-using the budget.
+  const lengths = cleaned.map((c) => c.body.length);
+  const provisional = allocateBodyCaps(lengths, budget, OWN_BODY_FLOOR);
+  let scaffold = 0;
+  cleaned.forEach(({ prefix, body }, i) => {
+    scaffold +=
+      prefix.length + 2 + 2 * body.slice(0, provisional[i]).split("\n").length;
+  });
+
+  const caps = allocateBodyCaps(
+    lengths,
+    Math.max(0, budget - scaffold),
+    OWN_BODY_FLOOR,
+  );
+  const blocks = cleaned.map(({ body, prefix }, i) => {
+    const capped = capBody(body, caps[i]);
+    return `${prefix}${capped.replace(/\n/g, "\n  ")}`;
+  });
+  return { blocks, survivors: cleaned.map((c) => c.item) };
 }
 
 /**
@@ -167,35 +224,56 @@ export async function resolveOwnCommentsContext(
   const own = items.filter((it) => it.body.includes(GD_COMMENT_ANCHOR));
   if (own.length === 0) return {};
 
-  const { blocks: ownItems, survivors } = formatOwnComments(own);
+  // The per-comment caps, the distill trigger, and the ledger cap all key off the
+  // SAME budget the rest of the prompt scales to (the user's Review-context knob,
+  // resolved before this call and threaded in as `ownBudgetChars`) — not the fixed
+  // 6K constant — so the knob actually reaches the own-comments section. The
+  // constant is a defensive default: every caller today resolves the knob and
+  // passes it, but a future one that doesn't still gets a sane section size.
+  const budget = opts?.ownBudgetChars ?? OWN_COMMENTS_CHAR_BUDGET;
+
+  const { blocks: ownItems, survivors } = formatOwnComments(own, budget);
   if (ownItems.length === 0) return {};
 
   // Over-budget own comments accumulate across review rounds until even
   // recency-first selection drops recorded decisions, so distill ALL of them
   // into a compact per-finding ledger via the app's generation model. Only when
-  // asked (interactive/automation callers opt in) and only when the joined raw
-  // blocks actually exceed the section budget — under-budget comments never call
-  // the model. Best-effort throughout: ANY failure (missing key, network, abort,
-  // empty output) falls back silently to the raw recency-first blocks, so
-  // distillation can never fail or delay-fail a review.
-  // The distill trigger and the ledger cap both key off the SAME budget the rest
-  // of the prompt scales to (the user's Review-context knob, resolved before this
-  // call and threaded in as `ownBudgetChars`) — not the fixed 6K constant — so the
-  // knob actually reaches the own-comments section. Defaults to the constant when
-  // no profile is supplied (the non-review generation paths).
-  const budget = opts?.ownBudgetChars ?? OWN_COMMENTS_CHAR_BUDGET;
+  // asked (interactive/automation callers opt in) and only when the joined blocks
+  // still exceed the section budget once each has been fair-shared down to its own
+  // cap — i.e. only in the regime where the comments genuinely can't all fit, so
+  // one long-but-affordable brief no longer calls the model. Both sides of that
+  // comparison now measure the same thing: `formatOwnComments` reserves the
+  // block scaffolding out of the budget, so `joinedLen` (bodies AND scaffolding)
+  // exceeding `budget` means the rendered section genuinely doesn't fit —
+  // previously the unreserved `- (author …)` lines and indents could push it over
+  // on their own and call the model for comments that actually fit. Best-effort
+  // throughout: ANY failure (missing key, network, abort, empty output) falls back
+  // silently to the raw recency-first blocks, so distillation can never fail or
+  // delay-fail a review.
   const joinedLen = ownItems.join("\n\n").length;
   if (opts?.distill && joinedLen > budget) {
     try {
       // Fingerprint the distilled comments so a repeat resolve with unchanged
       // comments hits the cache and never re-runs the model. Include the budget so
       // changing the Review-context knob re-distills to the right size rather than
-      // serving a stale-sized ledger.
+      // serving a stale-sized ledger, and the joined post-cap length so an IN-PLACE
+      // edit to a comment (which moves neither the count nor the newest timestamp)
+      // still invalidates. Existing cached digests miss once and re-distill.
+      //
+      // The `v2` prefix retires every ledger cached with the old truncation-note
+      // wording. Not because anything breaks on a re-cut — a cached note only ever
+      // sits at the ledger's END, and `fitOwn`'s head-cut either drops it with the
+      // tail or hits the partial-note guard, which keys off the note's HEAD (the
+      // half both wordings share) — but because a cached ledger that is NEVER
+      // re-cut carries the old "…on the PR thread" claim straight into the prompt,
+      // pointing an agentic reviewer at a thread that has no such text. That claim
+      // is exactly what the reworded note retired. One re-distill per PR buys the
+      // self-heal — the same accepted cost as the fingerprint's last change.
       const newest = survivors.reduce(
         (max, it) => (it.createdAt > max ? it.createdAt : max),
         survivors[0].createdAt,
       );
-      const fingerprint = `${survivors.length}#${newest}#${budget}`;
+      const fingerprint = `v2#${survivors.length}#${newest}#${budget}#${joinedLen}`;
       const cacheKey = `${kind}#${ref}`;
 
       const cached = await getDigest(repoPath, kind, ref);
@@ -234,7 +312,10 @@ export async function resolveOwnCommentsContext(
 
 /** Safety net: hard-cap the distilled ledger at the resolved own-comments section
  *  budget (the model is asked to stay ~3500 chars, well under, but never trust
- *  that). The cap is the profile-scaled budget, not the fixed constant. */
+ *  that). The cap is the profile-scaled budget, not the fixed constant. Through
+ *  `capBody`, so the cut is disclosed in the same note format as every other one:
+ *  a bare `…` is invisible to `stripTruncationNote`, so a ledger cut here and
+ *  again by `fitOwn` would have disclosed only the second cut's count. */
 function capLedger(ledger: string, cap: number): string {
-  return ledger.length > cap ? `${safeSlice(ledger, cap)}…` : ledger;
+  return capBody(ledger, cap);
 }

@@ -798,9 +798,10 @@ reviewers** field below the description — it pre-fills from any notes an agent
 MCP client with write access) deposited for the head branch via the GitDesktop MCP, and
 you can edit or clear it. When you create the PR, the notes post as its **first
 conversation comment** (under a *🗒️ Notes for reviewers* header, from your own account)
-before any automated review runs, and that review reads them as context — so a deliberate,
-documented decision isn't re-flagged. Notes present here also ground the **AI-generated**
-description{{/ai}}. Press {{key:mod+enter}} from any field to submit either the
+before any automated review runs, and that review reads them as context; on GitHub and
+GitLab the code reviews and security audits you start yourself read them too — so a
+deliberate, documented decision isn't re-flagged. Notes present here also ground the
+**AI-generated** description{{/ai}}. Press {{key:mod+enter}} from any field to submit either the
 **Create** or the **Edit** dialog.{{ai}} While a PR dialog is open, {{kbd:generate-commit-message}}
 runs its **Generate** for you.{{/ai}}
 
@@ -896,6 +897,11 @@ it already refuted or marked fixed as resolved instead of raising it cold. It al
 any **Notes for reviewers** the author left — deposited per branch by an agent through the
 GitDesktop MCP, or typed into the Create PR dialog and posted as the PR's first comment —
 as first-class grounding context, so a deliberate, documented decision isn't re-flagged.
+Those notes reach **every** review of a GitHub or GitLab PR: the automated ones, and the
+code reviews and security audits you start yourself. Any of this context can also be **held
+back**: the panel offers *Ignore previous review*, *Ignore external reviews*, and *Ignore
+author notes*, each shown only when there's something to ignore and each one click away
+from being restored — nothing is deleted, the next review simply leaves it out.
 When rounds
 accumulate past the prompt budget, the newest comments win, and the full history is
 **distilled into a compact decision ledger** (via your generation model) rather than cut

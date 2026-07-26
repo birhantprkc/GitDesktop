@@ -7,6 +7,7 @@ import {
   type ExternalContext,
   resolveExternalContext,
 } from "@/lib/ai/external-context";
+import { resolveReviewerNotesContext } from "@/lib/ai/notes-context";
 import {
   type OwnCommentsContext,
   resolveOwnCommentsContext,
@@ -206,6 +207,19 @@ interface RunControl {
   lane: Limiter | null;
 }
 
+/** Per-run opt-outs for {@link startReview}'s soft context. One object rather than
+ *  a tail of same-typed booleans: transposing two positional flags would silently
+ *  suppress the WRONG context with no type error. Every field defaults to false
+ *  (nothing suppressed). */
+export interface ReviewIgnoreOptions {
+  /** Skip the previous review's findings + the "changes since" delta. */
+  ignorePrior?: boolean;
+  /** Skip third-party AI-reviewer findings (Copilot/CodeRabbit/…). */
+  ignoreExternal?: boolean;
+  /** Skip the author's "Notes for reviewers". */
+  ignoreNotes?: boolean;
+}
+
 /** A queued second review mode + the config captured when the user requested it.
  *  Same target/key as the in-flight run — only the mode and its settings differ. */
 interface QueuedRun {
@@ -213,8 +227,9 @@ interface QueuedRun {
   mode: ReviewMode;
   context: ReviewContext;
   title: string;
-  ignorePrior: boolean;
-  ignoreExternal: boolean;
+  /** The opt-outs as they stood when the user queued this run — replayed verbatim
+   *  when it drains, so the queued run honors the toggles it was requested with. */
+  opts: ReviewIgnoreOptions;
 }
 
 const controls = new Map<string, RunControl>();
@@ -366,10 +381,12 @@ async function notifyReviewDone(
  * the Vercel AI SDK for HTTP providers or a local agent CLI for CLI providers.
  *
  * On a re-run, the PREVIOUS review's findings + a "changes since" delta ride
- * along as soft, re-verifiable context (unless `ignorePrior`); on a remote PR,
- * findings posted by third-party AI reviewers (Copilot/CodeRabbit) ride along
- * too (unless `ignoreExternal`). The result is persisted on success so the NEXT
- * run can build on it.
+ * along as soft, re-verifiable context; on a remote PR, findings posted by
+ * third-party AI reviewers (Copilot/CodeRabbit) ride along too, as do the
+ * author's "Notes for reviewers" — the same author-gated lift the automation
+ * runner uses, fed to BOTH modes. Each of the three is suppressed by its own flag
+ * in {@link ReviewIgnoreOptions} (`opts`), which defaults to suppressing nothing.
+ * The result is persisted on success so the NEXT run can build on it.
  */
 export async function startReview(
   target: ReviewTarget,
@@ -377,9 +394,13 @@ export async function startReview(
   ai: AiSettings,
   mode: ReviewMode,
   context: ReviewContext,
-  ignorePrior = false,
-  ignoreExternal = false,
+  opts: ReviewIgnoreOptions = {},
 ): Promise<void> {
+  const {
+    ignorePrior = false,
+    ignoreExternal = false,
+    ignoreNotes = false,
+  } = opts;
   const key = reviewKey(target);
   // Single-flight per key — one review streams into the single per-PR entry at a
   // time. A request for the OTHER mode while a run is in flight isn't dropped: it's
@@ -395,8 +416,9 @@ export async function startReview(
         mode,
         context,
         title,
-        ignorePrior,
-        ignoreExternal,
+        // The destructured defaults, not the raw `opts` — a queued run replays
+        // exactly the flags this call resolved.
+        opts: { ignorePrior, ignoreExternal, ignoreNotes },
       });
       useReviewStore.getState().patch(key, { queuedMode: mode });
     }
@@ -527,33 +549,49 @@ export async function startReview(
     // null at this point, and streamAi reassigns it once the stream opens.
     const preAbort = new AbortController();
     control.abort = preAbort;
-    // Third-party AI-reviewer findings AND GitDesktop's own prior comments on the
-    // remote PR — both best-effort, remote-only soft context. Resolved
-    // concurrently (independent harvests of the PR's review activity); kept
-    // separate so the battle-tested external path is untouched — a shared-fetch
-    // dedup is a later efficiency win (forge-dispatch-dedup backlog).
-    const [external, own]: [ExternalContext, OwnCommentsContext] =
-      await Promise.all([
-        resolveExternalContext(
-          target.repoPath,
-          target.kind,
-          target.ref,
-          context.headSha,
-          ignoreExternal,
-          context.provider,
-        ),
-        resolveOwnCommentsContext(
-          target.repoPath,
-          target.kind,
-          target.ref,
-          context.provider,
-          {
-            distill: true,
-            signal: preAbort.signal,
-            ownBudgetChars: budgetProfile.ownCharBudget,
-          },
-        ),
-      ]);
+    // Third-party AI-reviewer findings, GitDesktop's own prior comments, AND the
+    // author's "Notes for reviewers" on the remote PR — all best-effort,
+    // remote-only soft context. Resolved concurrently (independent harvests of
+    // the PR's review activity); kept separate so the battle-tested external path
+    // is untouched — a shared-fetch dedup is a later efficiency win
+    // (forge-dispatch-dedup backlog).
+    const [external, own, notes]: [
+      ExternalContext,
+      OwnCommentsContext,
+      { reviewNotes?: string },
+    ] = await Promise.all([
+      resolveExternalContext(
+        target.repoPath,
+        target.kind,
+        target.ref,
+        context.headSha,
+        ignoreExternal,
+        context.provider,
+        { budgetChars: budgetProfile.externalCharBudget },
+      ),
+      resolveOwnCommentsContext(
+        target.repoPath,
+        target.kind,
+        target.ref,
+        context.provider,
+        {
+          distill: true,
+          signal: preAbort.signal,
+          ownBudgetChars: budgetProfile.ownCharBudget,
+        },
+      ),
+      // The notes are lifted from the marker comment the Create-PR dialog (or an
+      // MCP client) posted, author-gated inside the resolver. Mode-agnostic —
+      // they ground a security audit exactly as they do a general review, the
+      // same as the automation runner. Bitbucket is skipped for the same reason
+      // the panel's query is: its conversation harvest yields nothing here.
+      target.kind === "remote" &&
+      /^\d+$/.test(target.ref) &&
+      context.provider !== "bitbucket" &&
+      !ignoreNotes
+        ? resolveReviewerNotesContext(target.repoPath, Number(target.ref))
+        : Promise.resolve({}),
+    ]);
     if (control.cancelled) return;
     // Agentic run: in repo-aware mode the reviewer explores. A CLI provider
     // reviews with the PR's files on disk and (for the tool-capable CLIs —
@@ -606,6 +644,7 @@ export async function startReview(
         ...prior,
         ...own,
         ...external,
+        ...notes,
       },
       mode,
     );
@@ -720,8 +759,7 @@ export async function startReview(
           next.ai,
           next.mode,
           next.context,
-          next.ignorePrior,
-          next.ignoreExternal,
+          next.opts,
         );
       }
     }
@@ -900,18 +938,9 @@ export function useReviewRun(target: ReviewTarget) {
       ai: AiSettings,
       mode: ReviewMode,
       context: ReviewContext,
-      ignorePrior?: boolean,
-      ignoreExternal?: boolean,
+      opts?: ReviewIgnoreOptions,
     ) => {
-      void startReview(
-        target,
-        context.title,
-        ai,
-        mode,
-        context,
-        ignorePrior,
-        ignoreExternal,
-      );
+      void startReview(target, context.title, ai, mode, context, opts);
     },
     [target],
   );

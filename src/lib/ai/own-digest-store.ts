@@ -6,7 +6,8 @@ import { storeName } from "@/lib/test-mode";
  * A distilled decision ledger for one PR's over-budget GitDesktop-own comments,
  * cached so re-review only re-runs the generation model when the comments
  * actually change. `fingerprint` couples the ledger to the raw comments it was
- * distilled from (their count + newest timestamp); a mismatch forces a re-distill.
+ * distilled from (their count and newest timestamp, the section budget, and the
+ * joined capped-block length); a mismatch forces a re-distill.
  * `ledger` is the model's own markdown — never parsed into structured data, and
  * always re-verified against the current diff by the reviewer that consumes it.
  */
@@ -14,7 +15,17 @@ export interface OwnCommentsDigest {
   schemaVersion: 1;
   /** `${kind}#${ref}` — one PR's ledger. */
   key: string;
-  /** Invalidation token: `${count}#${newestCreatedAt}` of the distilled comments. */
+  /** Invalidation token:
+   *  `v2#${count}#${newestCreatedAt}#${budget}#${joinedBlockChars}` — the
+   *  distilled comments' count and newest timestamp, the section budget they were
+   *  sized to, and the joined length of the capped blocks (which moves on an
+   *  in-place edit that changes neither of the first two). The leading version
+   *  tag retires ledgers whose cached TEXT is no longer what we would produce
+   *  today — it went to `v2` when the truncation note stopped claiming the omitted
+   *  characters are "on the PR thread", a claim that is false for a ledger and
+   *  would otherwise be served from cache into a prompt indefinitely. Bump it
+   *  again for any future change to what a cached ledger's text says; records with
+   *  a stale token simply miss once and re-distill. */
   fingerprint: string;
   /** The distilled ledger markdown — the cached soft context. */
   ledger: string;

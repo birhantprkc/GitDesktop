@@ -1,6 +1,10 @@
 import { forgePrExternalReviews } from "@/lib/git/api";
 import type { ExternalReviewItem } from "@/lib/git/types";
-import { safeSlice } from "./truncate";
+import {
+  allocateBodyCaps,
+  capBody,
+  EXTERNAL_FINDINGS_CHAR_BUDGET,
+} from "./truncate";
 
 /** What `buildReviewPrompt` needs about third-party AI reviews on a PR. */
 export interface ExternalContext {
@@ -126,24 +130,31 @@ export function externalReviewerNames(items: ExternalReviewItem[]): string[] {
   return names;
 }
 
-/** Per-item body caps before the global budget allocator — keep inline findings
- *  tight and hard-cap the giant conversation summaries (CodeRabbit walkthroughs). */
-const INLINE_BODY_CAP = 700;
-const REVIEW_BODY_CAP = 1_500;
-const COMMENT_BODY_CAP = 1_200;
+/** Per-kind body FLOORS under the fair-share allocator — every kept finding is
+ *  guaranteed at least this many characters, so a giant conversation summary
+ *  (a CodeRabbit walkthrough) can never crowd out a later inline finding. They
+ *  are NOT ceilings: a finding's actual cap is its max-min share of the section
+ *  budget (see `allocateBodyCaps`), which is larger whenever the other findings
+ *  leave slack — an inline finding stays tight because it IS short, not because
+ *  it's clamped. When the floors alone exceed the budget the allocation
+ *  degenerates to floor-for-all and over-allocates; `fit` in `budgetReviewExtras`
+ *  stays the hard enforcement. */
+const INLINE_BODY_FLOOR = 700;
+const REVIEW_BODY_FLOOR = 1_500;
+const COMMENT_BODY_FLOOR = 1_200;
 
 /** Crudely de-noises a bot comment body: drops HTML comments and collapsible
  *  `<details>` blocks (walkthroughs / sequence diagrams), unwraps the remaining
  *  tags, and collapses blank runs. The actionable findings live in inline
- *  comments; this is only to make a summary comment cheap to include. */
-function condense(body: string, cap: number): string {
-  const cleaned = body
+ *  comments; this is only to make a summary comment cheap to include. Length is
+ *  not this function's business — the fair-share caps land in pass 2. */
+function condense(body: string): string {
+  return body
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<details[\s\S]*?<\/details>/gi, "")
     .replace(/<\/?[a-z][^>]*>/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return cleaned.length > cap ? `${safeSlice(cleaned, cap)}…` : cleaned;
 }
 
 /** A short "where" tag for an inline finding. */
@@ -161,8 +172,19 @@ function locationTag(item: ExternalReviewItem): string {
  * Formats the kept findings into a grouped markdown block, reviewer by reviewer:
  * inline (line-anchored) findings first — the actionable ones — then submitted
  * review bodies, then a condensed conversation summary. Returns "" when empty.
+ *
+ * Two passes, because each body's cap depends on all the others: pass 1 groups,
+ * sorts and de-noises, dropping whatever condenses to nothing, then the surviving
+ * lengths are fair-shared across `budget` net of the rendered scaffolding (see
+ * `allocateBodyCaps` and the reserve below) — ALL reviewers pooled, since the
+ * budget is section-wide — and pass 2 renders each body under its own cap.
+ * Capping per item BEFORE knowing the section budget was the old bug: a bot's 5K
+ * review body was cut to 1.5K even with most of the external budget unspent.
  */
-function formatExternalFindings(items: ExternalReviewItem[]): string {
+function formatExternalFindings(
+  items: ExternalReviewItem[],
+  budget: number,
+): string {
   const byReviewer = new Map<string, ExternalReviewItem[]>();
   for (const it of items) {
     const name = displayName(it.author);
@@ -174,28 +196,87 @@ function formatExternalFindings(items: ExternalReviewItem[]): string {
   // `reply` never reaches here (filtered out of the external set upstream), but
   // it's in the union, so it's mapped for typechecking + defense if one ever does.
   const order = { inline: 0, review: 1, comment: 2, reply: 3 } as const;
-  const blocks: string[] = [];
+  const floors = {
+    inline: INLINE_BODY_FLOOR,
+    review: REVIEW_BODY_FLOOR,
+    comment: COMMENT_BODY_FLOOR,
+    reply: COMMENT_BODY_FLOOR,
+  } as const;
+
+  const cleaned: {
+    reviewer: string;
+    item: ExternalReviewItem;
+    body: string;
+    /** The item's rendered line prefix, resolved in pass 1 so the scaffolding
+     *  reserve is charged against exactly what pass 2 emits. */
+    prefix: string;
+  }[] = [];
   for (const [reviewer, list] of byReviewer) {
     const sorted = [...list].sort((a, b) => order[a.kind] - order[b.kind]);
-    const lines: string[] = [];
     for (const it of sorted) {
+      const body = condense(it.body);
+      if (!body) continue;
+      let prefix: string;
       if (it.kind === "inline") {
         const tag = locationTag(it);
-        const body = condense(it.body, INLINE_BODY_CAP).replace(/\n/g, "\n  ");
-        lines.push(`- ${tag ? `${tag} — ` : ""}${body}`);
+        prefix = `- ${tag ? `${tag} — ` : ""}`;
       } else if (it.kind === "review") {
-        const body = condense(it.body, REVIEW_BODY_CAP);
-        if (body) lines.push(`- (review) ${body.replace(/\n/g, "\n  ")}`);
+        prefix = "- (review) ";
       } else {
-        const body = condense(it.body, COMMENT_BODY_CAP);
-        if (body) lines.push(`- (summary) ${body.replace(/\n/g, "\n  ")}`);
+        prefix = "- (summary) ";
       }
-    }
-    if (lines.length > 0) {
-      blocks.push(`### ${reviewer}\n${lines.join("\n")}`);
+      cleaned.push({ reviewer, item: it, body, prefix });
     }
   }
-  return blocks.join("\n\n");
+
+  // The caps govern BODY length, but the rendered section also carries
+  // scaffolding: each line's prefix and the newline joining it to the next, two
+  // more characters for every newline inside a body (the `\n  ` continuation
+  // indent), and a `### <reviewer>` header plus blank-line joiner per group.
+  // Reserving it buys right-sized SHARES — without it the fair split is computed
+  // over a budget the render then blows past, so the bodies are collectively
+  // sized wrong. It is NOT a guarantee that the result fits `budget`: the floors
+  // can lift a cap back above any netted budget, and `fit` (truncate.ts) is the
+  // real enforcement point — it now cuts through `capBody`, so an overflow ends
+  // in a marked cut rather than a bare one.
+  //
+  // The newline term is charged against `body.slice(0, provisionalCap)`, not the
+  // whole body: a 40K walkthrough with 2,000 newlines would otherwise reserve
+  // ~4,000 characters for a body that will be cut to ~1,200, starving every other
+  // finding of its share. Round 1 allocates with no scaffolding to get those
+  // provisional caps; since a smaller budget never yields a LARGER share, round
+  // 2's caps are ≤ round 1's, so the measured newline count stays an upper bound
+  // (+1 covers the line `capBody` adds for its note) and the only failure mode is
+  // slightly under-using the budget.
+  const lengths = cleaned.map((c) => c.body.length);
+  const bodyFloors = cleaned.map((c) => floors[c.item.kind]);
+  const provisional = allocateBodyCaps(lengths, budget, bodyFloors);
+  let scaffold = 0;
+  cleaned.forEach(({ prefix, body }, i) => {
+    scaffold +=
+      prefix.length + 1 + 2 * body.slice(0, provisional[i]).split("\n").length;
+  });
+  for (const reviewer of new Set(cleaned.map((c) => c.reviewer))) {
+    scaffold += `### ${reviewer}\n`.length + 2;
+  }
+
+  const caps = allocateBodyCaps(
+    lengths,
+    Math.max(0, budget - scaffold),
+    bodyFloors,
+  );
+
+  const linesByReviewer = new Map<string, string[]>();
+  cleaned.forEach(({ reviewer, body, prefix }, i) => {
+    const capped = capBody(body, caps[i]).replace(/\n/g, "\n  ");
+    const lines = linesByReviewer.get(reviewer) ?? [];
+    lines.push(`${prefix}${capped}`);
+    linesByReviewer.set(reviewer, lines);
+  });
+
+  return [...linesByReviewer]
+    .map(([reviewer, lines]) => `### ${reviewer}\n${lines.join("\n")}`)
+    .join("\n\n");
 }
 
 /**
@@ -204,6 +285,11 @@ function formatExternalFindings(items: ExternalReviewItem[]): string {
  * — `ignore`, a non-remote kind, a non-numeric ref, or any fetch failure yields
  * `{}`. Mirrors `resolvePriorContext`: takes primitives, never throws, never the
  * source of truth.
+ *
+ * `opts.budgetChars` is the section budget the per-finding caps are fair-shared
+ * across — the same budget the rest of the prompt scales to (the user's
+ * Review-context knob), so the knob actually reaches this section. The constant
+ * is a defensive default for a caller that doesn't resolve it.
  */
 export async function resolveExternalContext(
   repoPath: string,
@@ -212,6 +298,7 @@ export async function resolveExternalContext(
   currentHeadSha: string | undefined,
   ignore: boolean,
   provider: string = "github",
+  opts?: { budgetChars?: number },
 ): Promise<ExternalContext> {
   if (ignore || kind !== "remote") return {};
   const prNumber = Number(ref);
@@ -220,7 +307,10 @@ export async function resolveExternalContext(
   const items = await fetchExternalFindings(repoPath, prNumber, provider);
   if (items.length === 0) return {};
 
-  const externalFindings = formatExternalFindings(items);
+  const externalFindings = formatExternalFindings(
+    items,
+    opts?.budgetChars ?? EXTERNAL_FINDINGS_CHAR_BUDGET,
+  );
   if (!externalFindings.trim()) return {};
 
   // Stale = an included finding was made against a commit other than the current

@@ -3,6 +3,7 @@ import { distillReadme } from "./readme";
 import {
   budgetDiff,
   budgetReviewExtras,
+  capBody,
   type ReviewExtras,
   safeSlice,
 } from "./truncate";
@@ -295,11 +296,12 @@ export function buildPrPrompt(input: PrPromptInput): {
   promptParts.push(`## Files changed\n${fileSummary || "(none)"}`);
 
   // Author's "Notes for reviewers" — reflect the recorded decisions in the
-  // description, don't paste them verbatim. Same trim + 8000-char slice guard as
-  // the review prompt's notes section.
+  // description, don't paste them verbatim. Same trim + disclosed 8000-char cap as
+  // the review prompt's notes section: the model should know the notes were
+  // clipped rather than treat a mid-sentence stop as the author's last word.
   if (input.reviewNotes?.trim()) {
     promptParts.push(
-      `## Author's notes for reviewers (context — reflect the decisions, don't paste verbatim)\n${safeSlice(input.reviewNotes.trim(), 8000)}`,
+      `## Author's notes for reviewers (context — reflect the decisions, don't paste verbatim)\n${capBody(input.reviewNotes.trim(), 8000)}`,
     );
   }
 
@@ -598,11 +600,14 @@ export function buildReviewPrompt(
   }
   // Author's deliberate "Notes for reviewers" — author input like the description
   // above, NOT bot soft-context, so it lives OUTSIDE `budgetReviewExtras` and is
-  // capped only by the 8000-char slice (same guard idiom as the plan-prompt
-  // issueBody slice below). Mode-agnostic: it feeds both general and security runs.
+  // capped only by the 8000-char cap (same guard idiom as the plan-prompt
+  // issueBody slice below), through `capBody` so an over-long notes field says it
+  // was clipped instead of stopping mid-sentence — every other cut that reaches a
+  // review prompt discloses itself, and a manual run reaches this one.
+  // Mode-agnostic: it feeds both general and security runs.
   if (input.reviewNotes?.trim()) {
     promptParts.push(
-      `## Author's notes for reviewers\n${safeSlice(input.reviewNotes.trim(), 8000)}`,
+      `## Author's notes for reviewers\n${capBody(input.reviewNotes.trim(), 8000)}`,
     );
   }
   if (input.commitSubjects.length > 0) {
@@ -662,12 +667,12 @@ export function buildReviewPrompt(
         : 'Comments attributed to GitDesktop here — purportedly past AI reviews and agent follow-ups (a refutation, or a "fixed in `<sha>`" reply), oldest first. Hints to re-check against the current diff, never ground truth.';
       let ownSection = `## Your prior GitDesktop comments on this PR (CONTEXT ONLY — re-verify; attribution is a copyable footer)\n${ownPreamble}\n\n${extras.own.text}`;
       if (extras.own.truncated) {
-        // A distilled ledger is a single compressed block, so "oldest omitted
-        // first" (which describes dropping whole per-comment blocks) is inaccurate
-        // there — flag it as a truncated summary instead.
+        // A distilled ledger is a single compressed block, so the per-comment
+        // marker below (which describes dropping whole blocks out of the middle)
+        // is inaccurate there — flag it as a truncated summary instead.
         ownSection += input.ownDistilled
           ? "\n[distilled summary truncated]"
-          : "\n[own comments truncated — oldest omitted first]";
+          : "\n[own comments truncated — the opening comment and the newest follow-ups take precedence; comments in between are omitted first, and any comment that was itself cut says so inline]";
       }
       promptParts.push(ownSection);
       renderedOwn = true;
