@@ -8,12 +8,13 @@ import {
   stripTruncationNote,
 } from "./truncate";
 
-/** Per-block head cap before the blocks are joined into the distillation prompt —
+/** FLOOR for the per-block head cap ({@link distillBlockCap} computes the cap
+ *  actually applied) before the blocks are joined into the distillation prompt —
  *  keeps one verbose review from crowding out later follow-ups. Head-kept WITH an
  *  explicit truncation note (`capBody`), so the ledger model can tell a block was
  *  clipped rather than reading a mid-sentence stop as the comment's end; reviews
  *  front-load their blockers, so the head is the part worth keeping. A block that
- *  exceeds this cap may already carry a note from its own per-comment cap — the
+ *  exceeds its cap may already carry a note from its own per-comment cap — the
  *  count restated here is CUMULATIVE across both cuts, never a note nested inside
  *  a note. This bounds each block, but NOT the total, which grows with block
  *  count — {@link DISTILL_INPUT_CAP} bounds the request. */
@@ -37,6 +38,53 @@ const DISTILL_INPUT_CAP = 48_000;
 const omittedMarker = (count: number) =>
   `- (${count} earlier GitDesktop comment(s) omitted for the distiller's input budget)`;
 
+/** What one {@link omittedMarker} costs the input budget: its own length plus the
+ *  `\n\n` joiner attaching it to the body. Module-level so the per-block cap below
+ *  and the selection walk inside `distillOwnComments` charge it identically — the
+ *  cap's whole job is to leave room for the marker the walk might render. */
+const markerCost = (count: number) => omittedMarker(count).length + 2;
+
+/** The per-block head cap actually applied to a record of `blockCount` blocks: an
+ *  equal share of {@link DISTILL_INPUT_CAP} *after* the joiners and the worst-case
+ *  omitted marker are charged, never below {@link DISTILL_BLOCK_CAP}.
+ *
+ *  A flat 6,000 meant the ledger model never read more than 6,000 chars of the
+ *  opening brief even on a short record with 42,000 chars of the input budget going
+ *  unspent — and the opening brief is precisely the block a summary can least afford
+ *  to be missing. Sharing the budget instead gives a 3-comment record 15,972 chars
+ *  per block.
+ *
+ *  The netting is what makes that safe, and it is NOT decoration. A naive
+ *  `DISTILL_INPUT_CAP / blockCount` hands out shares that consume the cap exactly,
+ *  leaving nothing for the `\n\n` between blocks — so once blocks actually sit at
+ *  their cap the selection walk below can no longer fit them all and drops one. It
+ *  drops the newest-first suffix's oldest member, which at `blockCount === 2` is
+ *  the NEWEST follow-up (the live dispositions), not a middle block: measured, a
+ *  2-block record of 40K blocks kept 2/2 under the flat 6,000 and 1/2 under the
+ *  un-netted share, and the same one-block loss appeared at every count from 2
+ *  through 7. Charging `2 × (blockCount − 1)` joiners plus `markerCost(blockCount)`
+ *  (worst-case digit width, the same trick `capBody` uses) keeps
+ *  `blockCount × cap + joiners` strictly under the input cap, so nothing drops for
+ *  want of room the caps already spent.
+ *
+ *  From `blockCount ≥ 8` the share falls under the floor and the floor binds, so
+ *  the cap — and therefore the whole selection — is byte-identical to the flat
+ *  6,000: a long record still overflows and still drops MIDDLE blocks, disclosed by
+ *  {@link omittedMarker}, exactly as before.
+ *
+ *  `blockCount` is always ≥ 1 in practice: `resolveOwnCommentsContext` returns
+ *  early on an empty record, so `distillOwnComments` is never called with no
+ *  blocks (which would fail on the pin regardless of what this returns). */
+function distillBlockCap(blockCount: number): number {
+  return Math.max(
+    DISTILL_BLOCK_CAP,
+    Math.floor(
+      (DISTILL_INPUT_CAP - 2 * (blockCount - 1) - markerCost(blockCount)) /
+        blockCount,
+    ),
+  );
+}
+
 // The ceiling on the distillation model call, so a hung generation model can
 // never stall review start — the abort throws and the caller falls back to the
 // raw recency-first blocks. Provider-aware because the two paths are an order of
@@ -57,6 +105,13 @@ const omittedMarker = (count: number) =>
 // comments, amortized over every later re-review, and a failed attempt is
 // remembered too. A genuinely hung model stays bounded, just at 180s instead of
 // 60s, with the same silent fallback.
+
+// Both ceilings were sized against a MEASURED 19.7K payload. `distillBlockCap`
+// now shares the input budget out instead of capping every block at 6,000, so a
+// 2- or 3-block record can hand the model close to the full 48K — the same
+// wall-clock budget over a wider input range. The measurement has not been
+// repeated at that size; re-measuring the CLI ceiling against a ~48K payload is a
+// recorded follow-up, not a constant change made on a guess.
 
 /** Distillation ceiling for an HTTP-API generation provider: it answers a ~20K
  *  prompt in seconds, so a minute is already generous. */
@@ -113,11 +168,12 @@ export async function distillOwnComments(input: {
   // `OWN_BLOCK_INDENT` on every re-cut: these blocks render their body under a
   // two-space continuation indent, so a note left at column 0 falls out of its
   // own list item. Now the normal path rather than an edge — `formatOwnComments`
-  // hands us its UNCAPPED blocks, which routinely exceed DISTILL_BLOCK_CAP.
+  // hands us its UNCAPPED blocks, which routinely exceed the per-block cap.
+  const blockCap = distillBlockCap(input.blocks.length);
   const capped = input.blocks.map((b) => {
-    if (b.length <= DISTILL_BLOCK_CAP) return b;
+    if (b.length <= blockCap) return b;
     const { text, omitted } = stripTruncationNote(b);
-    return capBody(text, DISTILL_BLOCK_CAP, omitted, OWN_BLOCK_INDENT);
+    return capBody(text, blockCap, omitted, OWN_BLOCK_INDENT);
   });
   // Selection mirrors `fitOwn`: PIN the oldest block, fit a NEWEST-first suffix of
   // the rest into what's left, and let the MIDDLE go. A pure newest-first suffix
@@ -125,14 +181,19 @@ export async function distillOwnComments(input: {
   // and the one block a summary can least afford to be missing.
   const pin = capped[0];
   const rest = capped.slice(1);
-  const markerCost = (count: number) => omittedMarker(count).length + 2;
 
   // If not even the pin plus the marker it might need fits, fall back to the newest
   // block alone, head-kept to the cap — through the same strip/cap pair, so this cut
   // discloses itself too and its count still folds in the block-cap cut above.
-  // Unreachable while DISTILL_BLOCK_CAP (6,000) < DISTILL_INPUT_CAP (48,000), which
-  // bounds the pin far under the cap — kept so the fallback is correct if the
-  // constants ever converge.
+  // Still unreachable under the scaled per-block cap, by either of its two
+  // regimes. In the SHARE regime (n ≤ 7) `distillBlockCap` charges the joiners AND
+  // `markerCost(n)` before dividing, so `n × cap + 2(n − 1) + markerCost(n) ≤
+  // DISTILL_INPUT_CAP` holds and the pin — one of those n shares — leaves room for
+  // its own joiner and marker with the other n−1 shares to spare. In the FLOOR
+  // regime (n ≥ 8) that sum exceeds the input cap by design (this is where the
+  // walk drops middle blocks, disclosed by the marker), but the pin itself is
+  // pinned at 6,000, further under the cap than any share. Kept so the fallback is
+  // correct if the constants ever converge.
   const newestAlone = (cap: number) => {
     const { text, omitted } = stripTruncationNote(capped[capped.length - 1]);
     return capBody(text, cap, omitted, OWN_BLOCK_INDENT);

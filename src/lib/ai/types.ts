@@ -167,6 +167,23 @@ export interface ReviewPromptInput {
    *  the budget), so it was compressed rather than cut. Flips the own-section
    *  preamble to frame it as a compressed summary. */
   ownDistilled?: boolean;
+  /** The repository's documentation surfaces as PATHS (never contents), derived
+   *  from what git tracks by `resolveDocSurfacesContext`. Makes documentation a
+   *  single finding class the review can sweep whole — including surfaces the
+   *  diff never touched. General mode only; absent ⇒ the block is omitted. */
+  docSurfaces?: string[];
+  /** The repo's own `.gitdesktop/instructions.md`, read from the LOCAL working
+   *  tree — never fetched from a PR head, though a checked-out PR branch is that
+   *  tree (see `repoInstructionsClause`). Project conventions the review judges
+   *  against — data, never instructions that override the system prompt — and
+   *  capped where it is rendered. Absent ⇒ the section is omitted. */
+  repoInstructions?: string | null;
+  /** The user's global AI instructions (Settings → AI instructions). Reviews take
+   *  BOTH sources, like every sibling prompt in prompt.ts — the settings pane and
+   *  the README both promise the two combine, and for a while reviews honored only
+   *  the per-repo file. Rendered beside `repoInstructions` under one framing, each
+   *  capped. Absent/empty ⇒ contributes nothing. */
+  globalInstructions?: string;
   /** Target host — swaps the change-request noun + markdown flavor in the review
    *  system prompt. Absent/`"github"` keeps the original GitHub wording. */
   provider?: PromptProvider;
