@@ -93,36 +93,75 @@ pub async fn git_branch_diff_files(
 }
 
 /// The full combined `base...compare` diff text plus its file summary, for
-/// feeding AI PR description generation. Mirrors `git_staged_diff`.
+/// feeding AI PR description generation. The `exclude` handling mirrors
+/// `git_staged_diff` exactly — the caller's AI-ignore patterns become git pathspec
+/// excludes and `excluded_files` reports how many changed files they hid, with
+/// `exclude: None` behaving as an unfiltered three-dot diff. Truncation deliberately
+/// differs: this cuts at a char boundary with a 1 MB default, not at a file boundary
+/// with the AI budget.
 #[tauri::command]
 pub async fn git_branch_diff(
     repo_path: String,
     base: String,
     compare: String,
     max_bytes: Option<usize>,
+    exclude: Option<Vec<String>>,
 ) -> AppResult<StagedDiff> {
     validate_ref(&base)?;
     validate_ref(&compare)?;
     let range = format!("{base}...{compare}");
-    let text_out = run_git(
-        Some(&repo_path),
-        &["diff", "--no-color", &range],
-        DEFAULT_TIMEOUT,
-    )
-    .await?;
+
+    // Translate ignore patterns into git pathspec excludes — pathspec globs are
+    // close to gitignore semantics, but `*` also matches `/` (wildmatch without
+    // WM_PATHNAME), so `src/*.rs` hides nested files too. ":(exclude)" needs at
+    // least one inclusive pathspec alongside it, hence the leading ".".
+    let mut pathspec: Vec<String> = Vec::new();
+    for pattern in exclude.unwrap_or_default() {
+        let pattern = pattern.trim();
+        if pattern.is_empty() || pattern.starts_with('#') {
+            continue;
+        }
+        pathspec.push(format!(":(exclude){pattern}"));
+    }
+
+    let mut diff_args: Vec<&str> = vec!["diff", "--no-color", &range];
+    let mut stat_args: Vec<&str> = vec!["diff", "--numstat", "-z", &range];
+    if !pathspec.is_empty() {
+        for args in [&mut diff_args, &mut stat_args] {
+            args.push("--");
+            args.push(".");
+            args.extend(pathspec.iter().map(String::as_str));
+        }
+    }
+
+    let (text_out, files_out) = tokio::try_join!(
+        run_git(Some(&repo_path), &diff_args, DEFAULT_TIMEOUT),
+        run_git(Some(&repo_path), &stat_args, DEFAULT_TIMEOUT)
+    )?;
     let (text, truncated) =
         truncate_at_char_boundary(text_out.stdout_lossy(), max_bytes.unwrap_or(1_000_000));
-    let files_out = run_git(
-        Some(&repo_path),
-        &["diff", "--numstat", "-z", &range],
-        DEFAULT_TIMEOUT,
-    )
-    .await?;
+    let files = parse_numstat_z(&files_out.stdout_lossy());
+
+    // Tell the caller how many changed files the excludes hid, so the AI
+    // prompt can mention that the diff is not the whole story.
+    let excluded_files = if pathspec.is_empty() {
+        0
+    } else {
+        let all = run_git(
+            Some(&repo_path),
+            &["diff", "--numstat", "-z", &range],
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+        let total = parse_numstat_z(&all.stdout_lossy()).len();
+        total.saturating_sub(files.len()) as u32
+    };
+
     Ok(StagedDiff {
         text,
         truncated,
-        files: parse_numstat_z(&files_out.stdout_lossy()),
-        excluded_files: 0,
+        files,
+        excluded_files,
     })
 }
 
@@ -688,6 +727,123 @@ mod tests {
         run(&repo_s, &["config", "user.email", "t@t.local"]).await;
         run(&repo_s, &["config", "user.name", "T"]).await;
         (base, repo_s)
+    }
+
+    /// `exclude` patterns hide matching files from BOTH the diff text and the file
+    /// list of the three-dot range, and `excluded_files` reports how many were
+    /// hidden. `None` (and a list of only blank/comment patterns) leaves the diff
+    /// unfiltered with a zero count.
+    #[tokio::test]
+    async fn branch_diff_applies_exclude_pathspecs() {
+        let (_base, repo) = seed_repo("branchdiff-exclude").await;
+        let root = std::path::Path::new(&repo);
+
+        std::fs::write(root.join("seed.txt"), "seed\n").unwrap();
+        run(&repo, &["add", "-A"]).await;
+        run(&repo, &["commit", "-qm", "seed"]).await;
+        let base_sha = run(&repo, &["rev-parse", "HEAD"]).await.trim().to_string();
+
+        // Six changed files on top of the base, shaped to exercise the three
+        // pattern kinds a real AI-ignore list uses: a bare filename, a glob, and a
+        // directory — the glob and directory cases each with a NESTED member.
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("tools")).unwrap();
+        std::fs::create_dir_all(root.join("vendor").join("sub")).unwrap();
+        std::fs::write(root.join("src").join("a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(root.join("notes.md"), "notes\n").unwrap();
+        std::fs::write(root.join("package-lock.json"), "{\"lock\": 1}\n").unwrap();
+        std::fs::write(root.join("tools").join("build.lock"), "locked\n").unwrap();
+        std::fs::write(root.join("vendor").join("lib.txt"), "vendored\n").unwrap();
+        std::fs::write(root.join("vendor").join("sub").join("x.txt"), "deep\n").unwrap();
+        run(&repo, &["add", "-A"]).await;
+        run(&repo, &["commit", "-qm", "work"]).await;
+
+        // No excludes → every file present, nothing reported hidden.
+        let all = git_branch_diff(repo.clone(), base_sha.clone(), "HEAD".into(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(all.files.len(), 6, "all six changed files are listed");
+        assert!(all.text.contains("package-lock.json"));
+        assert_eq!(all.excluded_files, 0);
+
+        // Excluding one file drops it from both the text and the file list, and
+        // the hidden count is the real difference for this range.
+        let filtered = git_branch_diff(
+            repo.clone(),
+            base_sha.clone(),
+            "HEAD".into(),
+            None,
+            Some(vec!["package-lock.json".into()]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(filtered.files.len(), 5);
+        assert!(
+            !filtered.files.iter().any(|f| f.path.contains("package-lock")),
+            "the excluded file is absent from the file list"
+        );
+        assert!(
+            !filtered.text.contains("package-lock.json"),
+            "the excluded file is absent from the diff text"
+        );
+        assert!(filtered.text.contains("src/a.rs"), "other files survive");
+        assert_eq!(filtered.excluded_files, 1);
+
+        // A GLOB pattern: `*` reaches into subdirectories, so a nested `.lock` is
+        // hidden too (`package-lock.json` is untouched — it doesn't end in `.lock`).
+        let globbed = git_branch_diff(
+            repo.clone(),
+            base_sha.clone(),
+            "HEAD".into(),
+            None,
+            Some(vec!["*.lock".into()]),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !globbed.files.iter().any(|f| f.path.ends_with(".lock")),
+            "the nested .lock is hidden — pathspec `*` reaches into subdirectories"
+        );
+        assert!(!globbed.text.contains("tools/build.lock"));
+        assert!(
+            globbed.files.iter().any(|f| f.path == "package-lock.json"),
+            "a non-matching lock-ish name survives"
+        );
+        assert_eq!(globbed.files.len(), 5);
+        assert_eq!(globbed.excluded_files, 1);
+
+        // A DIRECTORY pattern hides the whole subtree, nested files included.
+        let dir = git_branch_diff(
+            repo.clone(),
+            base_sha.clone(),
+            "HEAD".into(),
+            None,
+            Some(vec!["vendor/".into()]),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !dir.files.iter().any(|f| f.path.starts_with("vendor/")),
+            "every file under the excluded directory is hidden, at any depth"
+        );
+        assert!(!dir.text.contains("vendor/sub/x.txt"));
+        assert_eq!(dir.files.len(), 4);
+        assert_eq!(dir.excluded_files, 2);
+
+        // Blank and `#`-comment patterns are skipped, leaving no pathspec at all —
+        // identical to the unfiltered call, including the zero count.
+        let noop = git_branch_diff(
+            repo.clone(),
+            base_sha,
+            "HEAD".into(),
+            None,
+            Some(vec!["   ".into(), "# a comment".into()]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(noop.files.len(), 6);
+        assert_eq!(noop.excluded_files, 0);
+        assert_eq!(noop.text, all.text);
     }
 
     /// A match at a rev is found even after the working tree (and later commits)

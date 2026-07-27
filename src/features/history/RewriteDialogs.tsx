@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { createAiClient } from "@/lib/ai/client";
+import { aiExcludePatterns } from "@/lib/ai/ignore";
 import { buildCommitPrompt } from "@/lib/ai/prompt";
 import { required, useAppForm } from "@/lib/form";
 import {
@@ -44,20 +45,28 @@ export function useGenerateSquashMessage(
     setGenerating(true);
     try {
       const settings = await loadSettings();
+      // Only the diff depends on the ignore patterns — chain those two and let
+      // the batch run them alongside the commits and instructions reads.
       const [diff, commits, repoInstructions] = await Promise.all([
-        gitBranchDiff(repoPath, base, head, 200_000),
+        aiExcludePatterns(repoPath, settings.aiIgnorePatterns).then((exclude) =>
+          gitBranchDiff(repoPath, base, head, 200_000, exclude),
+        ),
         gitRecentCommits(repoPath, 10),
         readRepoInstructions(repoPath),
       ]);
       if (!diff.text.trim()) {
-        toast.error("These commits have no combined changes to describe.");
+        toast.error(
+          diff.excludedFiles > 0
+            ? "These commits' changes all match your AI ignore patterns — nothing to describe."
+            : "These commits have no combined changes to describe.",
+        );
         return;
       }
       const { system, prompt } = buildCommitPrompt({
         diffText: diff.text,
         diffTruncated: diff.truncated,
         files: diff.files,
-        excludedFiles: 0,
+        excludedFiles: diff.excludedFiles,
         recentSubjects: commits.map((c) => c.subject),
         repoInstructions,
         globalInstructions: settings.globalInstructions,
@@ -179,10 +188,15 @@ export function SquashDialog({
               </Button>
             ) : (
               // Wrap so the title still shows when the button is disabled — a
-              // native-disabled button swallows the tooltip.
+              // native-disabled button swallows the tooltip. `runHead` is the
+              // collapsing step's tip, so without it there's no range to diff.
               <span
                 className="mr-auto"
-                title="Generate the commit message with AI"
+                title={
+                  runHead
+                    ? "Generate the commit message with AI"
+                    : "Nothing to generate from — this squash has no run of commits to combine"
+                }
               >
                 <Button
                   type="button"

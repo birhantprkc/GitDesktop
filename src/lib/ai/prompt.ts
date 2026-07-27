@@ -73,7 +73,7 @@ export function buildCommitPrompt(input: CommitPromptInput): {
   };
 }
 
-const BRANCH_SYSTEM = `You generate a single git branch name for a set of in-progress changes.
+const BRANCH_SYSTEM = `You generate a single git branch name for a set of code changes.
 Output ONLY the branch name — one line, nothing else: no quotes, no explanation, no markdown, no trailing period.
 Use lowercase kebab-case, 2-5 words, specific to what the change does (avoid generic names like "updates" or "changes").
 If the existing branch names below show a prefix convention (e.g. "feature/", "fix/", "chore/"), follow it; otherwise pick a fitting type prefix such as "feature/" or "fix/".
@@ -110,6 +110,11 @@ export function buildBranchNamePrompt(input: BranchNamePromptInput): {
   if (input.recentBranches.length > 0) {
     promptParts.push(
       `## Existing branch names (convention reference)\n${input.recentBranches.join("\n")}`,
+    );
+  }
+  if (input.commitSubjects.length > 0) {
+    promptParts.push(
+      `## Commits on this branch (newest first)\n${input.commitSubjects.join("\n")}`,
     );
   }
   const diffBody =
@@ -293,7 +298,11 @@ export function buildPrPrompt(input: PrPromptInput): {
       `## Commits in this ${abbrev}\n${input.commitSubjects.map((s) => `- ${s}`).join("\n")}`,
     );
   }
-  promptParts.push(`## Files changed\n${fileSummary || "(none)"}`);
+  let filesSection = `## Files changed\n${fileSummary || "(none)"}`;
+  if ((input.excludedFiles ?? 0) > 0) {
+    filesSection += `\n[${input.excludedFiles} additional changed file(s) hidden by the user's AI ignore rules]`;
+  }
+  promptParts.push(filesSection);
 
   // Author's "Notes for reviewers" — reflect the recorded decisions in the
   // description, don't paste them verbatim. Same trim + disclosed 8000-char cap as

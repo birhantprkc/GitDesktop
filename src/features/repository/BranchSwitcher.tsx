@@ -37,6 +37,7 @@ import {
   useBranches,
   useCheckoutBranch,
   useCheckoutRemoteBranch,
+  useCompareBranches,
   useDefaultBranch,
   useDeleteBranch,
   useDeleteRemoteBranch,
@@ -395,11 +396,23 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       ),
     [sortedBranches, bq],
   );
+  // Both branch dialogs are always mounted, so their AI name-generation queries
+  // gate on one of them actually being open — and on AI being usable at all:
+  // without it the generate button renders nothing (or the setup button, which
+  // reads none of this), so a Hide-AI or unconfigured user would be paying for
+  // `git branch -r` plus two `git log` walks that feed nothing.
+  const branchDialogOpen =
+    (createOpen || renameTarget !== null) && aiEnabled && aiConfigured;
   // Branches that live on a remote but aren't checked out locally yet — fetched
-  // only while the menu is open. Drop ones already represented by a local branch
-  // (its row already shows ahead/behind + PR) and the internal session branches;
-  // dedupe a branch that exists on multiple remotes to one row.
-  const remoteBranchesQuery = useRemoteBranches(repoPath, open);
+  // while the menu is open, and while a branch dialog is open (it resolves the
+  // committed-work base off this list, and the palette can open it without ever
+  // opening the menu). Drop ones already represented by a local branch (its row
+  // already shows ahead/behind + PR) and the internal session branches; dedupe a
+  // branch that exists on multiple remotes to one row.
+  const remoteBranchesQuery = useRemoteBranches(
+    repoPath,
+    open || branchDialogOpen,
+  );
   const localNames = useMemo(
     () => new Set(allBranches.map((b) => b.name)),
     [allBranches],
@@ -416,6 +429,89 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       .filter((b) => (seen.has(b.name) ? false : (seen.add(b.name), true)))
       .sort((a, b) => b.lastCommitDate.localeCompare(a.lastCommitDate));
   }, [remoteBranchesQuery.data, localNames, bq]);
+  // The ref the branch dialogs are naming, and whose committed work the AI
+  // fallback describes: the rename target (which need NOT be checked out — every
+  // branch row's menu opens it), or the checked-out branch for a new one. Null ⇒
+  // both closed. The create side names the BRANCH, not the literal "HEAD", so the
+  // comparison's cache key changes when you switch branches — keyed on "HEAD" it
+  // would serve the previous branch's commits to a fast Generate. A detached HEAD
+  // has no branch name to key on and keeps the literal.
+  const namedRef =
+    renameTarget ?? (createOpen ? (currentName ?? "HEAD") : null);
+  // Whether the remote list has settled. Until it has, a missing `origin/<default>`
+  // means "not loaded yet", not "absent" — resolving the local default here is
+  // exactly the stale ref this base resolution exists to avoid. An ERRORED list
+  // settles too, and can't be trusted either: that case is reported as an error
+  // state below rather than silently falling through to the local default.
+  const remoteBranchesSettled = !remoteBranchesQuery.isPending;
+  // The default branch names the comparison base, so its own lookup gates the
+  // fallback too: a null `defaultName` while it's still loading must not read as
+  // "this repo has no default branch".
+  const defaultBranchSettled = !defaultBranch.isPending;
+  // Base for the fallback. Prefer the remote-tracking ref: a stale local default
+  // skews the three-dot diff, and when origin/HEAD resolved the default name the
+  // local twin may not even exist. Null (⇒ no fallback) when neither side has it.
+  const committedBase = useMemo(() => {
+    // An errored remote list must not fall through to the local default — that
+    // base can't be trusted, so no base ⇒ no fallback ⇒ the error state renders.
+    if (
+      !branchDialogOpen ||
+      !defaultName ||
+      !remoteBranchesSettled ||
+      remoteBranchesQuery.isError
+    )
+      return null;
+    const onOrigin = (remoteBranchesQuery.data ?? []).some(
+      (b) => b.remote === "origin" && b.name === defaultName,
+    );
+    if (onOrigin) return `origin/${defaultName}`;
+    return localNames.has(defaultName) ? defaultName : null;
+  }, [
+    branchDialogOpen,
+    defaultName,
+    remoteBranchesSettled,
+    remoteBranchesQuery.isError,
+    remoteBranchesQuery.data,
+    localNames,
+  ]);
+  // Commits the named ref has that the default branch doesn't — its committed
+  // work. A null base keeps the query disabled (both dialogs closed, or no
+  // resolvable default).
+  const committedCompare = useCompareBranches(
+    repoPath,
+    committedBase,
+    namedRef,
+  );
+  // Mirrors `useCompareBranches`' own enabled condition, so a query that never
+  // runs isn't read as "still loading" forever. base === compare survives only
+  // when no `origin/<default>` exists and the named ref IS the local default —
+  // with the remote ref preferred, `origin/main` vs `main` does run.
+  const comparing =
+    committedBase !== null && namedRef !== null && committedBase !== namedRef;
+  // Never let the affordance claim there's no committed work on evidence it
+  // doesn't have: while any input is in flight say so, and say so distinctly
+  // when the lookup failed outright.
+  const committedStatus: "ready" | "pending" | "error" = !branchDialogOpen
+    ? "ready"
+    : !defaultBranchSettled ||
+        (Boolean(defaultName) && !remoteBranchesSettled) ||
+        (comparing && committedCompare.isPending)
+      ? "pending"
+      : defaultBranch.isError ||
+          remoteBranchesQuery.isError ||
+          (comparing && committedCompare.isError)
+        ? "error"
+        : "ready";
+  const committedFallback = useMemo(() => {
+    const ahead = committedCompare.data?.ahead ?? [];
+    if (!committedBase || !namedRef || ahead.length === 0) return null;
+    // `ahead` is newest-first (plain `git log base..<ref>`); cap the subjects.
+    return {
+      base: committedBase,
+      compare: namedRef,
+      subjects: ahead.slice(0, 30).map((c) => c.subject),
+    };
+  }, [committedBase, namedRef, committedCompare.data]);
   // Only label rows with their remote when there's more than one to disambiguate.
   const multipleRemotes = useMemo(
     () =>
@@ -537,6 +633,11 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   // branch is being renamed.
   function openRename(branch: string) {
     setOpen(false);
+    // The two branch dialogs are mutually exclusive: their palette actions can
+    // fire while the other is open, and both feed the SAME committed-work
+    // lookup — leaving both open would name a new branch from the rename
+    // target's diff.
+    setCreateOpen(false);
     setRenameTarget(branch);
   }
 
@@ -639,6 +740,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
 
   function openCreate() {
     setOpen(false);
+    // Mutually exclusive with the rename dialog — see `openRename`.
+    setRenameTarget(null);
     setCreateOpen(true);
   }
 
@@ -1728,6 +1831,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         headExists={headExists}
         entries={status.data?.entries ?? []}
         allBranchNames={allBranches.map((b) => b.name)}
+        committedFallback={committedFallback}
+        committedStatus={committedStatus}
         currentName={currentName}
         defaultName={defaultName}
         onOpenSettings={openSettings}
@@ -1736,6 +1841,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       <RenameBranchDialog
         repoPath={repoPath}
         target={renameTarget}
+        currentName={currentName}
         onClose={() => setRenameTarget(null)}
         aiEnabled={aiEnabled}
         aiConfigured={aiConfigured}
@@ -1743,6 +1849,8 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         headExists={headExists}
         entries={status.data?.entries ?? []}
         allBranchNames={allBranches.map((b) => b.name)}
+        committedFallback={committedFallback}
+        committedStatus={committedStatus}
         onOpenSettings={openSettings}
       />
 
