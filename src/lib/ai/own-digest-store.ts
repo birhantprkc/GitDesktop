@@ -6,8 +6,12 @@ import { storeName } from "@/lib/test-mode";
  * A distilled decision ledger for one PR's over-budget GitDesktop-own comments,
  * cached so re-review only re-runs the generation model when the comments
  * actually change. `fingerprint` couples the ledger to the raw comments it was
- * distilled from (their count and newest timestamp, the section budget, and the
- * joined capped-block length); a mismatch forces a re-distill.
+ * distilled from (their count and newest timestamp, the section budget, and BOTH
+ * the joined capped-block length and the uncapped length the distiller actually
+ * read); a mismatch forces a re-distill. A FAILED attempt is remembered too, so a
+ * thread that can't distill doesn't re-pay the model ceiling on every re-review —
+ * and it rides ALONGSIDE any cached ledger in `failed`, with its own fingerprint,
+ * so remembering a dead end never destroys a still-valid one.
  * `ledger` is the model's own markdown — never parsed into structured data, and
  * always re-verified against the current diff by the reviewer that consumes it.
  */
@@ -16,22 +20,42 @@ export interface OwnCommentsDigest {
   /** `${kind}#${ref}` — one PR's ledger. */
   key: string;
   /** Invalidation token:
-   *  `v2#${count}#${newestCreatedAt}#${budget}#${joinedBlockChars}` — the
-   *  distilled comments' count and newest timestamp, the section budget they were
-   *  sized to, and the joined length of the capped blocks (which moves on an
-   *  in-place edit that changes neither of the first two). The leading version
-   *  tag retires ledgers whose cached TEXT is no longer what we would produce
-   *  today — it went to `v2` when the truncation note stopped claiming the omitted
-   *  characters are "on the PR thread", a claim that is false for a ledger and
-   *  would otherwise be served from cache into a prompt indefinitely. Bump it
-   *  again for any future change to what a cached ledger's text says; records with
-   *  a stale token simply miss once and re-distill. */
+   *  `v3#${count}#${newestCreatedAt}#${budget}#${cappedJoinedChars}#${uncappedChars}`
+   *  — the distilled comments' count and newest timestamp, the section budget they
+   *  were sized to, and two lengths: the joined capped blocks (the section render
+   *  this ledger was sized against) and the joined UNCAPPED blocks (what the
+   *  distiller actually read). Both are needed because an in-place edit moves
+   *  neither the count nor the newest timestamp, and an edit appended past a
+   *  block's cap moves only the uncapped one. The leading version tag retires
+   *  ledgers whose cached TEXT is no longer what we would produce today, or that
+   *  were keyed on a weaker token: it went to `v2` when the truncation note
+   *  stopped claiming the omitted characters are "on the PR thread" (false for a
+   *  ledger, and otherwise served from cache into a prompt indefinitely), and to
+   *  `v3` when the uncapped length joined the token. Bump it again for either kind
+   *  of change; records with a stale token simply miss once and re-distill. */
   fingerprint: string;
-  /** The distilled ledger markdown — the cached soft context. */
+  /** The distilled ledger markdown — the cached soft context. Empty when this
+   *  record only carries a failure memory and no ledger has ever succeeded. */
   ledger: string;
   /** Generation model the ledger was produced with (diagnostic). */
   model: string;
   createdAt: number;
+  /** The last distillation that failed, kept ALONGSIDE `ledger` rather than in
+   *  place of it — its own `fingerprint` is what the retry check matches, so a
+   *  failure for this round's comments never invalidates a ledger cached for an
+   *  earlier round, and a merge can't overwrite a good ledger with an empty one.
+   *  `at` anchors the retry window: a re-review inside it skips the attempt instead
+   *  of re-paying the model ceiling to fail again, while one after it tries afresh —
+   *  the usual causes (a missing generation key, a CLI not logged in, a network
+   *  blip) are properties of the MODEL and never move the fingerprint, so without
+   *  the clock a fixed config would stay locked out. `model` is the one the attempt
+   *  was made with (diagnostic) — empty when the settings load itself threw, or
+   *  when the provider runs on its account-default model (a blank
+   *  `settings.ai.model`, the default for codex-cli and selectable on the other
+   *  agent CLIs).
+   *  Absent until something fails, and dropped again by the next success; optional,
+   *  so `schemaVersion` stays 1 and older records read as never-failed. */
+  failed?: { fingerprint: string; at: number; model: string };
 }
 
 // Records live in personal app-data, keyed by the repo's worktree-stable identity
@@ -104,7 +128,12 @@ export async function getDigest(
 
 /** Upserts one PR's digest under its `${kind}#${ref}` key — replaces the prior
  *  record for that key (one digest per PR). Serialized + force-saved so an
- *  overlapping save can't reload a pre-flush snapshot. */
+ *  overlapping save can't reload a pre-flush snapshot.
+ *
+ *  For a FAILURE memory use {@link recordDigestFailure}, never this: a failure
+ *  must merge onto whatever is already stored, and doing the read on the caller's
+ *  side puts it outside the serialized queue — which is exactly how a concurrent
+ *  success gets overwritten by a stale spread. */
 export async function saveDigest(
   repoPath: string,
   record: OwnCommentsDigest,
@@ -118,6 +147,52 @@ export async function saveDigest(
     await store.set(key, bag);
     // Flush now instead of on autoSave's debounce, so the next serialized reload
     // can't re-read a pre-write disk snapshot and drop this change.
+    await store.save();
+  });
+}
+
+/**
+ * Records a FAILED distillation for one PR, merged onto whatever that PR's record
+ * already holds — a cached ledger survives untouched, and only `failed` changes.
+ *
+ * The whole read-modify-write runs INSIDE the serialized queue, which is the point
+ * of the function existing (the repo's settings-store house pattern: writers ride
+ * the chain). Doing the read on the caller's side leaves a window between it and
+ * the write — `getDigest` alone awaits `repoIdentity` plus two `store.get`s — and a
+ * concurrent success landing in that window is then clobbered by the loser's stale
+ * spread: the ledger is destroyed AND `failed` at the live fingerprint suppresses
+ * a re-distill for the retry window.
+ *
+ * `key` is re-asserted rather than inherited from the spread, so a record that
+ * somehow carries the wrong one is repaired rather than propagated.
+ */
+export async function recordDigestFailure(
+  repoPath: string,
+  kind: "remote" | "local",
+  ref: string,
+  failed: NonNullable<OwnCommentsDigest["failed"]>,
+): Promise<void> {
+  return serialize(async () => {
+    await reloadRaw();
+    const key = await keyFor(repoPath);
+    const store = await getStore();
+    const bag = (await store.get<Record<string, OwnCommentsDigest>>(key)) ?? {};
+    const recordKey = `${kind}#${ref}`;
+    const existing = bag[recordKey];
+    bag[recordKey] = {
+      // No record yet → a ledger-less skeleton, so the failure has somewhere to
+      // live without inventing a ledger that was never produced.
+      ...(existing ?? {
+        schemaVersion: 1,
+        fingerprint: failed.fingerprint,
+        ledger: "",
+        model: "",
+        createdAt: failed.at,
+      }),
+      key: recordKey,
+      failed,
+    };
+    await store.set(key, bag);
     await store.save();
   });
 }

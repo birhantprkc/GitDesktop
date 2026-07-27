@@ -161,9 +161,11 @@ export interface ReviewPromptInput {
    *  re-raising it. Our own posted AI review/audit bodies are excluded (redundant
    *  with `priorFindings`). Soft context like `priorFindings`; absent when none. */
   ownItems?: string[];
-  /** True when `ownItems` is a single machine-distilled decision ledger (the
-   *  over-budget own comments were compressed) rather than the raw per-comment
-   *  blocks — flips the own-section preamble to frame it as a compressed summary. */
+  /** True when `ownItems` is a single machine-distilled decision ledger instead of
+   *  the raw per-comment blocks — the section couldn't render the whole record (the
+   *  caps would drop whole comments outright, or trim away more than a quarter of
+   *  the budget), so it was compressed rather than cut. Flips the own-section
+   *  preamble to frame it as a compressed summary. */
   ownDistilled?: boolean;
   /** Target host — swaps the change-request noun + markdown flavor in the review
    *  system prompt. Absent/`"github"` keeps the original GitHub wording. */
