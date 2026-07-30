@@ -621,6 +621,7 @@ function deltaSection(
   state: ReviewDeltaState | undefined,
   extras: ReviewExtras,
   upstreamTruncated: boolean,
+  excludedFiles: number,
 ): string {
   const header = "## Changes since that review";
   if (state === "rewritten") {
@@ -637,7 +638,13 @@ function deltaSection(
     // dropped to keep the authoritative diff in budget — don't say "no changes".
     return `${header}\n(The delta was omitted to keep the current diff in context — re-review the full diff below.)`;
   }
-  const body = extras.delta.text.trim() || "(no textual changes)";
+  // An empty body with files hidden is NOT "nothing changed" — saying so would
+  // pass a filtered delta off as complete.
+  const body =
+    extras.delta.text.trim() ||
+    (excludedFiles > 0
+      ? "(every file changed since that review is hidden by the user's AI ignore rules)"
+      : "(no textual changes)");
   let section = `${header}\n${body}`;
   if (upstreamTruncated || extras.delta.truncated) {
     section +=
@@ -701,7 +708,13 @@ export function buildReviewPrompt(
       `## Commits\n${input.commitSubjects.map((s) => `- ${s}`).join("\n")}`,
     );
   }
-  promptParts.push(`## Files changed\n${fileSummary || "(none)"}`);
+  // Stronger wording than the generator's twin: an invented finding about a
+  // file the reviewer can't see reads as a real one.
+  let filesSection = `## Files changed\n${fileSummary || "(none)"}`;
+  if ((input.excludedFiles ?? 0) > 0) {
+    filesSection += `\n[${input.excludedFiles} additional changed file(s) hidden by the user's AI ignore rules — do not speculate about them]`;
+  }
+  promptParts.push(filesSection);
 
   // Soft context — our own prior review (+ "changes since" delta), our own PR
   // comments, and third-party AI findings — each gated independently. Placed AFTER
@@ -737,7 +750,12 @@ export function buildReviewPrompt(
       }
       promptParts.push(priorSection);
       promptParts.push(
-        deltaSection(input.deltaState, extras, Boolean(input.deltaTruncated)),
+        deltaSection(
+          input.deltaState,
+          extras,
+          Boolean(input.deltaTruncated),
+          input.deltaExcludedFiles ?? 0,
+        ),
       );
     }
     // Our own prior comments — highest-signal soft context, so it sits above

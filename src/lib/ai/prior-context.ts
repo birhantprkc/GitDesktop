@@ -1,5 +1,6 @@
 import { gitDiffBetweenRefs, gitFetchObjects } from "@/lib/git/api";
 import { getLatestReview } from "@/lib/pulls/reviews-history";
+import { filterDiffByAiIgnore } from "./ignore";
 import type { ReviewDeltaState, ReviewMode } from "./types";
 
 /** Upper bound on the delta fetched from git; the prompt budget trims further. */
@@ -12,6 +13,9 @@ export interface PriorContext {
   deltaDiffText?: string;
   deltaTruncated?: boolean;
   deltaState?: ReviewDeltaState;
+  /** Files the AI-ignore patterns hid from the delta. An emptied delta is
+   *  indistinguishable from "nothing changed" without this. */
+  deltaExcludedFiles?: number;
 }
 
 /**
@@ -24,6 +28,15 @@ export interface PriorContext {
  * Shared by the interactive review (`src/lib/stores/reviews.ts`) and the
  * automation runner's pr-open / pr-sync paths — both build on a prior the same
  * way. Takes primitives (not a `ReviewTarget`) to avoid a circular import.
+ *
+ * `exclude` is the caller's AI-ignore pattern list — required, not defaulted:
+ * an omitted privacy argument is how the next caller leaks. Empty for an
+ * agentic run.
+ * The delta is a SECOND diff, so filtering only the main one would leak the
+ * very files the user withheld. Filtered inside the try below, which fails
+ * closed: a filter failure drops the delta rather than carrying an unfiltered
+ * one. The hidden-file count comes back out as `deltaExcludedFiles` — a delta
+ * the filter emptied must not reach the model as "no changes".
  */
 export async function resolvePriorContext(
   repoPath: string,
@@ -31,6 +44,7 @@ export async function resolvePriorContext(
   ref: string,
   mode: ReviewMode,
   currentHeadSha: string | undefined,
+  exclude: string[],
 ): Promise<PriorContext> {
   const prior = await getLatestReview(repoPath, kind, ref, mode);
   if (!prior?.text.trim()) return {};
@@ -62,11 +76,20 @@ export async function resolvePriorContext(
       DELTA_MAX_BYTES,
     );
     if (delta.reason === "ok") {
+      // No file list pairs with a two-dot delta — its section keys are the
+      // whole candidate set.
+      const filtered = await filterDiffByAiIgnore({
+        repoPath,
+        text: delta.text,
+        files: [],
+        exclude,
+      });
       return {
         ...base,
-        deltaDiffText: delta.text,
+        deltaDiffText: filtered.text,
         deltaTruncated: delta.truncated,
         deltaState: "ok",
+        deltaExcludedFiles: filtered.excludedFiles,
       };
     }
     if (delta.reason === "rewritten") {

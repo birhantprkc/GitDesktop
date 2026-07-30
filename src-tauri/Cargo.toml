@@ -55,6 +55,13 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # `sha1_hex(file_path)_<old_pos>_<new_pos>` (see forge/gitlab.rs `gl_line_code`).
 # RustCrypto sha1 — hashing only, no extra default features needed.
 sha1 = "0.10"
+# The AI-ignore gitignore engine evaluates patterns in a throwaway EMPTY repo, so
+# only the user's patterns apply (git::ai_ignore). TempDir gives it an
+# unpredictable, exclusively-created path: a guessable one in a shared /tmp lets a
+# local attacker pre-seed `.git/info/exclude`, which outranks core.excludesFile and
+# would silently un-ignore a file. Test fixtures use it as RAII temp dirs too, so
+# a killed or panicking run leaks nothing.
+tempfile = "3"
 
 # Desktop-only: the updater plugin doesn't build for mobile.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
@@ -79,9 +86,3 @@ windows-sys = { version = "0.61", features = [
 # vendor/portable-pty/src/win/psuedocon.rs. Drop this when fixed upstream (wezterm).
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
-
-[dev-dependencies]
-# RAII temp dirs for tests: a killed or panicking run must not leak fixtures
-# into the system temp dir — TempDir removes the directory on Drop.
-# Already in the dependency graph transitively, so near-zero cost.
-tempfile = "3"

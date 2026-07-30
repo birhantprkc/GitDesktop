@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BlameDialog } from "@/features/history/BlameDialog";
 import { FileHistoryDialog } from "@/features/history/FileHistoryDialog";
+import { globLiteralPath, literalPathspec } from "@/lib/git/glob";
 import {
   useAppendRepoAiIgnore,
   useAppendToGitignore,
@@ -56,12 +57,14 @@ import { ConflictBanner } from "./ConflictBanner";
 import { FileRow } from "./FileRow";
 import { StashesDialog } from "./StashesDialog";
 
-/**
- * A staged rename is "delete old path + add new path"; restoring only the
- * new path would leave the old path's deletion staged, so include both.
- */
+/** The pathspecs that unstage one entry — a staged rename is "delete old path +
+ *  add new path", so both halves are needed or the old path's deletion stays
+ *  staged. Literal: these are paths the user picked, and a `[slug]`-style one
+ *  would otherwise unstage its glob-siblings too. */
 function unstagePaths(entry: FileEntry): string[] {
-  return entry.origPath ? [entry.path, entry.origPath] : [entry.path];
+  return (entry.origPath ? [entry.path, entry.origPath] : [entry.path]).map(
+    literalPathspec,
+  );
 }
 
 /**
@@ -406,29 +409,29 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   // Toggle one file's staged state — the row's +/- button and the single menu.
   function handleToggle(entry: FileEntry, staged: boolean) {
     if (staged) unstage.mutate(unstagePaths(entry), { onError });
-    else stage.mutate([entry.path], { onError });
+    else stage.mutate([literalPathspec(entry.path)], { onError });
   }
 
   // Single-file ignore / untrack (the per-row menu); the bulk equivalents are
   // ignoreSelected / untrackSelected below.
-  function ignoreOne(pattern: string) {
+  function ignoreOne(pattern: string, label: string) {
     appendIgnore.mutate([pattern], {
       onSuccess: (added) =>
         toast.success(
           added === 0
-            ? `"${pattern}" is already in .gitignore`
-            : `Added "${pattern}" to .gitignore`,
+            ? `"${label}" is already in .gitignore`
+            : `Added "${label}" to .gitignore`,
         ),
       onError,
     });
   }
-  function aiExcludeOne(pattern: string) {
+  function aiExcludeOne(pattern: string, label: string) {
     appendAiIgnore.mutate([pattern], {
       onSuccess: (added) =>
         toast.success(
           added === 0
-            ? `"${pattern}" is already in .gitdesktop/aiignore`
-            : `Added "${pattern}" to .gitdesktop/aiignore`,
+            ? `"${label}" is already in .gitdesktop/aiignore`
+            : `Added "${label}" to .gitdesktop/aiignore`,
         ),
       onError,
     });
@@ -465,7 +468,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
 
   function stageAll() {
     stage.mutate(
-      unstagedEntries.map((e) => e.path),
+      unstagedEntries.map((e) => literalPathspec(e.path)),
       { onError },
     );
   }
@@ -480,7 +483,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   function stageSelected() {
     if (selectionCount === 0) return;
     stage.mutate(
-      selectedEntries.map((e) => e.path),
+      selectedEntries.map((e) => literalPathspec(e.path)),
       { onError, onSuccess: () => setSelectedKeys(new Set()) },
     );
   }
@@ -507,7 +510,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   // de-dupes and skips lines already present.
   function ignoreSelected() {
     if (selectionCount === 0) return;
-    const patterns = selectedEntries.map((e) => `/${e.path}`);
+    const patterns = selectedEntries.map((e) => `/${globLiteralPath(e.path)}`);
     appendIgnore.mutate(patterns, {
       onSuccess: (added) => {
         toast.success(ignoreToast(added, patterns.length, ".gitignore"));
@@ -517,11 +520,12 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     });
   }
 
-  // Bulk AI-exclude: add a root-relative pathspec per selected file. The Rust
-  // side strips leading slashes, de-dupes, and skips lines already present.
+  // Bulk AI-exclude: add a `/path` line per selected file — the leading slash
+  // anchors each pattern to THIS file rather than every file with that name.
+  // The Rust side de-dupes and skips lines already present.
   function aiExcludeSelected() {
     if (selectionCount === 0) return;
-    const patterns = selectedEntries.map((e) => e.path);
+    const patterns = selectedEntries.map((e) => `/${globLiteralPath(e.path)}`);
     appendAiIgnore.mutate(patterns, {
       onSuccess: (added) => {
         toast.success(
@@ -539,8 +543,10 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
     if (selectedTracked.length === 0) return;
     untrack.mutate(
       {
-        pathspecs: selectedTracked.map((e) => e.path),
-        ignorePatterns: selectedTracked.map((e) => `/${e.path}`),
+        pathspecs: selectedTracked.map((e) => literalPathspec(e.path)),
+        ignorePatterns: selectedTracked.map(
+          (e) => `/${globLiteralPath(e.path)}`,
+        ),
       },
       {
         onSuccess: () => {
@@ -613,7 +619,9 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
       return;
     }
     const targets = stashScope.entries.map((e) => e.path);
-    stashPaths.mutate(targets, {
+    // Literal pathspecs so a `[slug]`-style path can't sweep a sibling's work
+    // into the stash; `targets` stays raw for the toast below.
+    stashPaths.mutate(targets.map(literalPathspec), {
       onSuccess: () => {
         toast.success(
           targets.length === 1

@@ -1,3 +1,4 @@
+pub mod ai_ignore;
 pub mod branches;
 pub mod commit;
 pub mod compare;
@@ -6,6 +7,7 @@ pub mod conflict;
 pub mod diff;
 pub mod history;
 pub mod ops;
+pub mod pathspec;
 pub mod remote;
 pub mod repo;
 pub mod runner;

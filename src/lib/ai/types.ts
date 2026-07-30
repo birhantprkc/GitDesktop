@@ -138,6 +138,10 @@ export interface ReviewPromptInput {
   diffText: string;
   diffTruncated: boolean;
   files: { path: string; added: number; deleted: number; isBinary: boolean }[];
+  /** Changed files hidden from this review's diff by the user's AI-ignore
+   *  patterns; absent/0 ⇒ no disclosure line. Always 0 alongside `agentic` —
+   *  only a non-agentic run filters its diff. */
+  excludedFiles?: number;
   /** Author-provided "Notes for reviewers" — the author's deliberate calls behind
    *  the change. Treated as author input like `body` (NOT soft bot context), so it
    *  is fed to both review modes and never subject to the extras budget. Absent ⇒
@@ -154,6 +158,9 @@ export interface ReviewPromptInput {
   deltaTruncated?: boolean;
   /** Why the delta is present or absent — frames the "Changes since" section. */
   deltaState?: ReviewDeltaState;
+  /** Files the AI-ignore patterns hid from the delta. Distinguishes an emptied
+   *  delta from a genuinely unchanged one. */
+  deltaExcludedFiles?: number;
   /** Pre-formatted findings posted on the remote PR by third-party AI reviewers
    *  (GitHub Copilot, CodeRabbit, …) — soft, re-verifiable context like
    *  `priorFindings`. Absent for local PRs and when none were found. */

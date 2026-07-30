@@ -12,7 +12,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::git::runner::{run_git, run_git_mutating, run_git_raw, DEFAULT_TIMEOUT};
+use crate::git::runner::{run_git_mutating, run_git_raw, DEFAULT_TIMEOUT};
 use crate::state::AppState;
 
 /// Cap on a conflicted file's working-tree size for AI resolution. Past this the
@@ -66,30 +66,19 @@ async fn stage_blob(repo: &str, stage: u8, path: &str) -> AppResult<Option<Strin
     Ok((out.code == 0).then(|| out.stdout_lossy()))
 }
 
-/// Whether the path matches any of the user's AI-ignore `exclude` patterns,
-/// using git's own pathspec matching (the same engine the staged diff uses;
-/// close to but not identical to gitignore semantics): list the path with
-/// `:(exclude)` magic pathspecs applied — if it drops out of the listing, a
-/// pattern matched it.
+/// Whether the path matches any of the user's AI-ignore `exclude` patterns —
+/// the gate that decides whether a conflicted file's contents go to a model.
+///
+/// Must stay on the gitignore engine (`git::ai_ignore::filter_ignored`), which
+/// a test pins to the same truth table as the pathspec side. An `ls-files` +
+/// `:(exclude)` listing CANNOT decide a single path: git strips the positive
+/// pathspec's leading directory off every negative pattern as well, so with
+/// `docs/secrets.env` as the positive term the pattern `secrets.env` is
+/// compared as `rets.env` and silently matches nothing (measured, git 2.51.1).
 async fn is_ai_ignored(repo: &str, path: &str, exclude: &[String]) -> AppResult<bool> {
-    let patterns: Vec<&str> = exclude
-        .iter()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && !s.starts_with('#'))
-        .collect();
-    if patterns.is_empty() {
-        return Ok(false);
-    }
-    // An unmerged path normally lists (once per stage); with a matching exclude
-    // pathspec it lists nothing. `:(exclude)` needs at least one positive
-    // pathspec, which `path` provides.
-    let mut args: Vec<String> = vec!["ls-files".into(), "--".into(), path.into()];
-    for p in &patterns {
-        args.push(format!(":(exclude){p}"));
-    }
-    let argref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = run_git(Some(repo), &argref, DEFAULT_TIMEOUT).await?;
-    Ok(out.stdout_lossy().trim().is_empty())
+    let one = [path.to_string()];
+    let hits = crate::git::ai_ignore::filter_ignored(repo, &one, exclude).await?;
+    Ok(!hits.is_empty())
 }
 
 /// The base/ours/theirs blobs plus the marked working file for a conflicted
@@ -153,7 +142,8 @@ pub async fn git_resolve_conflict(
         .await
         .map_err(AppError::Io)?;
     if stage {
-        run_git_mutating(&state, &repo_path, &["add", "--", &path], DEFAULT_TIMEOUT).await?;
+        let spec = crate::git::pathspec::literal(&path);
+        run_git_mutating(&state, &repo_path, &["add", "--", &spec], DEFAULT_TIMEOUT).await?;
     }
     Ok(())
 }
@@ -170,6 +160,15 @@ pub async fn git_checkout_conflict_side(
     path: String,
     side: String,
 ) -> AppResult<()> {
+    git_checkout_conflict_side_core(&state, repo_path, path, side).await
+}
+
+pub(crate) async fn git_checkout_conflict_side_core(
+    state: &AppState,
+    repo_path: String,
+    path: String,
+    side: String,
+) -> AppResult<()> {
     validate_rel_path(&path)?;
     let flag = match side.as_str() {
         "ours" => "--ours",
@@ -180,14 +179,18 @@ pub async fn git_checkout_conflict_side(
             )))
         }
     };
+    // Literal pathspec on both steps: a `[slug]`-style path would otherwise take
+    // this side for its glob-siblings too, silently resolving conflicts the user
+    // never opened.
+    let spec = crate::git::pathspec::literal(&path);
     run_git_mutating(
-        &state,
+        state,
         &repo_path,
-        &["checkout", flag, "--", &path],
+        &["checkout", flag, "--", &spec],
         DEFAULT_TIMEOUT,
     )
     .await?;
-    run_git_mutating(&state, &repo_path, &["add", "--", &path], DEFAULT_TIMEOUT).await?;
+    run_git_mutating(state, &repo_path, &["add", "--", &spec], DEFAULT_TIMEOUT).await?;
     Ok(())
 }
 
@@ -247,6 +250,7 @@ pub async fn git_diff_contents(old: String, new: String) -> AppResult<String> {
 /// test), so the resolve path is exercised end-to-end against a real repo.
 #[cfg(test)]
 pub(crate) async fn resolve_for_test(repo: &str, path: &str, content: &str) {
+    use crate::git::runner::run_git;
     tokio::fs::write(Path::new(repo).join(path), content)
         .await
         .unwrap();
@@ -269,9 +273,15 @@ mod tests {
         (dir, repo)
     }
 
-    /// Builds a real merge conflict on `file.txt` (base → "base", ours → "ours",
-    /// theirs → "theirs") and leaves the repo mid-merge.
-    async fn conflicted_repo(tag: &str) -> (tempfile::TempDir, String) {
+    /// Builds a real merge conflict on `path` (base → "base", ours → "ours",
+    /// theirs → "theirs") and leaves the repo mid-merge. `also_tracked` files are
+    /// committed at the base and never touched by the merge, so a test can modify
+    /// one and assert an operation left it alone.
+    async fn conflicted_repo(
+        tag: &str,
+        path: &str,
+        also_tracked: &[&str],
+    ) -> (tempfile::TempDir, String) {
         let (dir, repo) = temp_repo(tag);
         let git = |args: Vec<&'static str>| {
             let repo = repo.clone();
@@ -280,7 +290,13 @@ mod tests {
         git(vec!["init"]).await;
         git(vec!["config", "user.email", "t@t"]).await;
         git(vec!["config", "user.name", "t"]).await;
-        let file = Path::new(&repo).join("file.txt");
+        let file = Path::new(&repo).join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        for extra in also_tracked {
+            let p = Path::new(&repo).join(extra);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "sibling base\n").unwrap();
+        }
         std::fs::write(&file, "base\n").unwrap();
         git(vec!["add", "."]).await;
         git(vec!["commit", "-m", "base"]).await;
@@ -299,7 +315,7 @@ mod tests {
 
     #[tokio::test]
     async fn sides_carry_each_stage_and_markers() {
-        let (_dir, repo) = conflicted_repo("sides").await;
+        let (_dir, repo) = conflicted_repo("sides", "file.txt", &[]).await;
         let sides = git_conflict_sides(repo.clone(), "file.txt".into(), vec![])
             .await
             .unwrap();
@@ -314,7 +330,7 @@ mod tests {
     #[tokio::test]
     async fn checkout_side_takes_one_side_and_clears() {
         // ours → the current branch's version, conflict cleared.
-        let (_dir, repo) = conflicted_repo("ours-side").await;
+        let (_dir, repo) = conflicted_repo("ours-side", "file.txt", &[]).await;
         run_git(Some(&repo), &["checkout", "--ours", "--", "file.txt"], DEFAULT_TIMEOUT)
             .await
             .unwrap();
@@ -336,7 +352,7 @@ mod tests {
             .is_empty());
 
         // theirs → the incoming version.
-        let (_dir2, repo2) = conflicted_repo("theirs-side").await;
+        let (_dir2, repo2) = conflicted_repo("theirs-side", "file.txt", &[]).await;
         run_git(Some(&repo2), &["checkout", "--theirs", "--", "file.txt"], DEFAULT_TIMEOUT)
             .await
             .unwrap();
@@ -351,9 +367,63 @@ mod tests {
         );
     }
 
+    /// Taking one side touches ONLY the chosen path. Pathspecs glob, so a raw
+    /// `src/app/[slug]/page.tsx` also sweeps the character-class sibling
+    /// `src/app/s/page.tsx`: `checkout` reverts the user's separate edit to it
+    /// from the index and `add` stages the result, both exiting 0 (measured, git
+    /// 2.51.1).
+    #[tokio::test]
+    async fn checkout_side_does_not_touch_glob_siblings() {
+        let (_dir, repo) = conflicted_repo(
+            "conflict-glob",
+            "src/app/[slug]/page.tsx",
+            &["src/app/s/page.tsx"],
+        )
+        .await;
+        let sibling = Path::new(&repo).join("src/app/s/page.tsx");
+        std::fs::write(&sibling, "SIBLING WIP\n").unwrap();
+
+        let state = AppState::default();
+        git_checkout_conflict_side_core(
+            &state,
+            repo.clone(),
+            "src/app/[slug]/page.tsx".into(),
+            "theirs".into(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&repo).join("src/app/[slug]/page.tsx"))
+                .unwrap()
+                .replace("\r\n", "\n"),
+            "theirs\n",
+            "the chosen file took its side"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sibling)
+                .unwrap()
+                .replace("\r\n", "\n"),
+            "SIBLING WIP\n",
+            "the glob-sibling keeps its uncommitted edit"
+        );
+        let staged = run_git(
+            Some(&repo),
+            &["diff", "--cached", "--name-only"],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap()
+        .stdout_lossy();
+        assert!(
+            !staged.contains("src/app/s/page.tsx"),
+            "the glob-sibling was staged: {staged}"
+        );
+    }
+
     #[tokio::test]
     async fn ai_ignore_pattern_flags_the_path() {
-        let (_dir, repo) = conflicted_repo("ignore").await;
+        let (_dir, repo) = conflicted_repo("ignore", "file.txt", &[]).await;
         let hit = git_conflict_sides(repo.clone(), "file.txt".into(), vec!["*.txt".into()])
             .await
             .unwrap();
@@ -362,11 +432,37 @@ mod tests {
             .await
             .unwrap();
         assert!(!miss.ai_ignored);
+
+        // A NESTED copy of the same name: patterns are gitignore-style, so a bare
+        // `file.txt` must flag `docs/file.txt` too — a missed depth is a leak.
+        std::fs::create_dir_all(Path::new(&repo).join("docs")).unwrap();
+        std::fs::write(Path::new(&repo).join("docs").join("file.txt"), "nested\n").unwrap();
+        run_git(Some(&repo), &["add", "--", "docs/file.txt"], DEFAULT_TIMEOUT)
+            .await
+            .unwrap();
+
+        let nested = git_conflict_sides(repo.clone(), "docs/file.txt".into(), vec!["file.txt".into()])
+            .await
+            .unwrap();
+        assert!(nested.ai_ignored, "a bare name matches at any depth");
+
+        // ...while a leading `/` anchors to the repo root: the nested copy is
+        // free, the root one is still flagged.
+        let anchored_nested =
+            git_conflict_sides(repo.clone(), "docs/file.txt".into(), vec!["/file.txt".into()])
+                .await
+                .unwrap();
+        assert!(!anchored_nested.ai_ignored);
+        let anchored_root =
+            git_conflict_sides(repo, "file.txt".into(), vec!["/file.txt".into()])
+                .await
+                .unwrap();
+        assert!(anchored_root.ai_ignored);
     }
 
     #[tokio::test]
     async fn resolve_writes_and_clears_the_conflict() {
-        let (_dir, repo) = conflicted_repo("resolve").await;
+        let (_dir, repo) = conflicted_repo("resolve", "file.txt", &[]).await;
         // Before: the path is unmerged (`ls-files -u` lists it).
         let unmerged = run_git(Some(&repo), &["ls-files", "-u"], DEFAULT_TIMEOUT)
             .await
