@@ -14,9 +14,58 @@
  * pathspec ignores the backslash escapes .gitignore accepts (measured, git
  * 2.51.1). `]` outside a class is already literal; a literal backslash is
  * inexpressible on either engine and is left alone (impossible on Windows).
+ *
+ * A trailing space is the one case backslash IS the answer: .gitignore strips
+ * unescaped trailing whitespace, so a file named `notes ` yields the pattern
+ * `notes`, which hides a DIFFERENT file and leaves the named one visible
+ * (measured).
+ *
+ * That escape fixes the gitignore engine ONLY, and the two AI-ignore engines
+ * diverge on WINDOWS for this shape: a backslash in a pathspec is a SEPARATOR,
+ * not an escape, so an emitted `notes\ ` term normalizes to `notes/ ` and
+ * matches nothing (measured, git 2.51.1.windows.1: `:(glob)a\b.ts` matches
+ * `a/b.ts`, while `:(glob)a/b\.ts` matches nothing). Unix honors the escape,
+ * which is why the cross-engine test passes on CI. Pre-existing, not introduced
+ * here — the pathspec side never matched this shape either way.
+ *
+ * The escape is also defeated when the name ALREADY ends in a backslash
+ * (`notes\ `):
+ * the emitted `notes\\ ` is an even backslash run, so the space reads as
+ * unescaped and is stripped again. Bounded by the same limitation as above — a
+ * literal backslash is inexpressible here — and impossible on Windows.
  */
 export function globLiteralPath(path: string): string {
-  return path.replace(/[[*?]/g, (c) => `[${c}]`);
+  return path
+    .replace(/[[*?]/g, (c) => `[${c}]`)
+    .replace(/ +$/, (spaces) => spaces.replaceAll(" ", "\\ "));
+}
+
+/**
+ * Trims an ignore pattern the way git reads one — the mirror of Rust's
+ * `trim_ignore_pattern`, which the matcher itself applies.
+ *
+ * A trailing SPACE is insignificant to git unless backslash-escaped, and a
+ * blanket `trim()` here would strip the escape [`globLiteralPath`] just added
+ * before the pattern ever reaches the matcher. Only the space: git's
+ * `trim_trailing_spaces` special-cases it alone, so a trailing TAB belongs to the
+ * pattern (measured). A line ending is not part of the pattern either way —
+ * callers split a stored list on `\n`, which leaves the CR of a CRLF-stored one
+ * behind.
+ *
+ * The LEADING trim is ours, not git's: git keeps leading whitespace (measured).
+ * It is deliberate and unreachable from the menus, whose patterns all begin
+ * with `/` or `*`; it exists to forgive a hand-typed settings line.
+ */
+export function trimIgnorePattern(pattern: string): string {
+  const rest = pattern.trimStart().replace(/[\r\n]+$/, "");
+  let end = rest.length;
+  while (end > 0 && rest[end - 1] === " ") {
+    let slashes = 0;
+    while (rest[end - 2 - slashes] === "\\") slashes++;
+    if (slashes % 2 === 1) break;
+    end--;
+  }
+  return rest.slice(0, end);
 }
 
 /**

@@ -83,6 +83,36 @@ pub struct DetectedTerminal {
     pub path: String,
 }
 
+/// Trims an ignore pattern the way git reads one: a trailing SPACE is
+/// insignificant unless backslash-escaped, because `notes\ ` is the only way to
+/// name a file whose name ends in a space. A blanket `trim()` eats that escape
+/// and silently retargets the pattern at a different file.
+///
+/// Only `' '` — git's `trim_trailing_spaces` (dir.c) special-cases the space
+/// alone, so a trailing TAB is part of the pattern (measured, git 2.51.1:
+/// pattern `foo\t` matches `foo\t` and not `foo`). Trimming it here would
+/// retarget the pattern exactly the way the space case does.
+///
+/// The LEADING trim is ours, not git's: git treats leading whitespace as part of
+/// the pattern (measured — ` notes.md` hides ` notes.md`, not `notes.md`). It is
+/// deliberate and unreachable from the menus, whose patterns all begin with `/`
+/// or `*`; it exists to forgive a hand-typed settings line.
+pub(crate) fn trim_ignore_pattern(pattern: &str) -> &str {
+    let rest = pattern.trim_start().trim_end_matches(['\r', '\n']);
+    let bytes = rest.as_bytes();
+    let mut end = rest.len();
+    while end > 0 && bytes[end - 1] == b' ' {
+        // An odd run of preceding backslashes escapes it; an even run is itself
+        // escaped backslashes and leaves the space bare.
+        let slashes = bytes[..end - 1].iter().rev().take_while(|&&c| c == b'\\').count();
+        if slashes % 2 == 1 {
+            break;
+        }
+        end -= 1;
+    }
+    &rest[..end]
+}
+
 /// Appends one or more ignore patterns to the repo root .gitignore (created if
 /// absent). Trims and de-duplicates the batch and skips any pattern already
 /// present as an exact line, so bulk-ignoring a selection can't add duplicates.
@@ -93,7 +123,7 @@ pub async fn append_to_gitignore(repo_path: String, patterns: Vec<String>) -> Ap
     // Normalize + de-dupe within the batch (preserving order).
     let mut wanted: Vec<String> = Vec::new();
     for p in patterns {
-        let t = p.trim().to_string();
+        let t = trim_ignore_pattern(&p).to_string();
         if !t.is_empty() && !wanted.contains(&t) {
             wanted.push(t);
         }
@@ -113,7 +143,7 @@ pub async fn append_to_gitignore(repo_path: String, patterns: Vec<String>) -> Ap
     // mutate `content`).
     let to_add: Vec<String> = {
         let existing: std::collections::HashSet<&str> =
-            content.lines().map(str::trim).collect();
+            content.lines().map(trim_ignore_pattern).collect();
         wanted
             .into_iter()
             .filter(|p| !existing.contains(p.as_str()))
@@ -1045,6 +1075,21 @@ pub async fn open_with_program(program: String, path: String) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trim_ignore_pattern_keeps_an_escaped_trailing_space() {
+        assert_eq!(trim_ignore_pattern("  /notes.md  "), "/notes.md");
+        assert_eq!(trim_ignore_pattern("/notes.md\r"), "/notes.md");
+        // The escape is the whole point: `notes\ ` names a file ending in a space.
+        assert_eq!(trim_ignore_pattern("/notes\\ "), "/notes\\ ");
+        assert_eq!(trim_ignore_pattern("/notes\\  "), "/notes\\ ");
+        // An EVEN run is escaped backslashes, so the space after it is bare.
+        assert_eq!(trim_ignore_pattern("/notes\\\\ "), "/notes\\\\");
+        assert_eq!(trim_ignore_pattern("   "), "");
+        // A trailing TAB is part of the pattern — git trims spaces only (measured,
+        // 2.51.1: pattern `foo\t` matches `foo\t`, not `foo`).
+        assert_eq!(trim_ignore_pattern("/notes.md\t"), "/notes.md\t");
+    }
 
     fn gitignore_test_repo() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::Builder::new()

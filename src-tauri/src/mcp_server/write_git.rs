@@ -45,8 +45,48 @@ fn ok_text(msg: impl Into<String>) -> Result<CallToolResult, McpError> {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct StagePathsArgs {
-    /// Repo-relative paths to stage (or unstage). Directories and pathspecs are accepted.
+    /// Repo-relative paths to stage (or unstage). Files and directories are
+    /// matched exactly. Set `literal: false` to pass git pathspecs/globs instead.
     paths: Vec<String>,
+    /// Whether each entry names one exact file or directory (the default). Set
+    /// false only to pass a git pathspec or glob such as `*.log`.
+    #[serde(default = "default_true")]
+    literal: bool,
+}
+
+/// `serde(default)` yields `false` for a bool; these flags default to ON.
+fn default_true() -> bool {
+    true
+}
+
+/// Tool-supplied paths as git pathspecs, honoring the tool's `literal` flag.
+///
+/// Defaults to literal because the dominant caller shape is "act on the concrete
+/// paths repo_status just listed", where a raw `src/app/[slug]/page.tsx` also
+/// matches its glob-siblings — silently, with no way to tell from the result.
+/// `:(literal)` still recurses directories, so only a deliberate glob needs
+/// `literal: false`. Getting that wrong fails loudly for stage/unstage
+/// ("did not match any files", measured exit 128) — but NOT for `stash_push`:
+/// `git stash push` with a matched-nothing pathspec no-ops at exit 0
+/// ("No local changes to save", measured), so that tool reports success on a
+/// literalized glob that stashed nothing.
+///
+/// Used by `stage_files`, `unstage_files` and `stash_push` — not staging alone:
+/// `stash_push` sweeps the files it matches OUT of the working tree, so an
+/// over-match there costs a sibling's uncommitted work.
+///
+/// `discard_changes` deliberately does NOT route through this. It hands paths to
+/// `git_discard_paths_core`, which literalizes the tracked half itself and must
+/// keep the untracked half a plain filesystem name for `trash::delete`. Applying
+/// this helper there would corrupt that half.
+fn literal_pathspecs(paths: Vec<String>, literal: bool) -> Vec<String> {
+    if !literal {
+        return paths;
+    }
+    paths
+        .into_iter()
+        .map(|p| crate::git::pathspec::literal(&p))
+        .collect()
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -126,9 +166,14 @@ struct PullArgs {
 struct StashPushArgs {
     /// Optional repo-relative paths to stash. When omitted/empty, stashes ALL changes
     /// (including untracked). With `paths`, only those files are stashed; every other
-    /// file's staged and unstaged changes are left exactly as they were.
+    /// file's staged and unstaged changes are left exactly as they were. Files and
+    /// directories are matched exactly; set `literal: false` to pass a pathspec/glob.
     #[serde(default)]
     paths: Vec<String>,
+    /// Whether each entry names one exact file or directory (the default). Set
+    /// false only to pass a git pathspec or glob such as `*.log`.
+    #[serde(default = "default_true")]
+    literal: bool,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -242,8 +287,9 @@ impl GitDesktopMcp {
     // ---- RECOVERABLE (ensure_git_write) ----------------------------------
 
     #[tool(
-        description = "Stage files (git add) in the bound repository. Accepts repo-relative paths, \
-                       directories, or pathspecs. Requires --allow-git-write.",
+        description = "Stage files (git add) in the bound repository. Repo-relative paths and \
+                       directories match exactly; set literal=false to pass a pathspec or glob. \
+                       Requires --allow-git-write.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn stage_files(
@@ -254,7 +300,8 @@ impl GitDesktopMcp {
         for p in &args.paths {
             ensure_not_flag(p, "path")?;
         }
-        crate::git::stage::git_stage_core(&self.state, self.repo.clone(), args.paths)
+        let paths = literal_pathspecs(args.paths, args.literal);
+        crate::git::stage::git_stage_core(&self.state, self.repo.clone(), paths)
             .await
             .map_err(app_err)?;
         ok_text("staged")
@@ -262,7 +309,9 @@ impl GitDesktopMcp {
 
     #[tool(
         description = "Unstage files (restore from the index; drop from the index in an empty \
-                       repo) in the bound repository. Requires --allow-git-write.",
+                       repo) in the bound repository. Repo-relative paths and directories match \
+                       exactly; set literal=false to pass a pathspec or glob. Requires \
+                       --allow-git-write.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn unstage_files(
@@ -273,7 +322,8 @@ impl GitDesktopMcp {
         for p in &args.paths {
             ensure_not_flag(p, "path")?;
         }
-        crate::git::stage::git_unstage_core(&self.state, self.repo.clone(), args.paths)
+        let paths = literal_pathspecs(args.paths, args.literal);
+        crate::git::stage::git_unstage_core(&self.state, self.repo.clone(), paths)
             .await
             .map_err(app_err)?;
         ok_text("unstaged")
@@ -466,7 +516,8 @@ impl GitDesktopMcp {
     #[tool(
         description = "Stash changes in the bound repository. With no `paths`, stashes ALL changes \
                        (including untracked). With `paths`, stashes only those files, leaving every \
-                       other file's staged and unstaged changes exactly as they were. \
+                       other file's staged and unstaged changes exactly as they were; paths and \
+                       directories match exactly, set literal=false to pass a pathspec or glob. \
                        Requires --allow-git-write.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
@@ -484,7 +535,8 @@ impl GitDesktopMcp {
             for p in &args.paths {
                 ensure_not_flag(p, "path")?;
             }
-            crate::git::ops::git_stash_paths_core(&self.state, self.repo.clone(), args.paths)
+            let paths = literal_pathspecs(args.paths, args.literal);
+            crate::git::ops::git_stash_paths_core(&self.state, self.repo.clone(), paths)
                 .await
                 .map_err(app_err)?;
             ok_text("stashed selected paths")
@@ -853,7 +905,19 @@ mod tests {
     fn args_stage() -> StagePathsArgs {
         StagePathsArgs {
             paths: vec!["a.txt".into()],
+            literal: true,
         }
+    }
+
+    #[test]
+    fn literal_pathspecs_literalizes_only_when_asked() {
+        let paths = || vec!["src/app/[slug]/page.tsx".to_string(), "*.log".to_string()];
+        assert_eq!(
+            literal_pathspecs(paths(), true),
+            vec![":(literal)src/app/[slug]/page.tsx", ":(literal)*.log"]
+        );
+        // literal:false is the escape hatch for a caller that means the glob.
+        assert_eq!(literal_pathspecs(paths(), false), paths());
     }
 
     /// With ALL flags false, every gated tool must error before doing work. Destructive
@@ -923,7 +987,7 @@ mod tests {
         );
         assert_gated!(h.fetch(), "--allow-git-write");
         assert_gated!(
-            h.stash_push(Parameters(StashPushArgs { paths: vec![] })),
+            h.stash_push(Parameters(StashPushArgs { paths: vec![], literal: true })),
             "--allow-git-write"
         );
         assert_gated!(h.stash_pop(), "--allow-git-write");

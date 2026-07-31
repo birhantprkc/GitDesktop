@@ -1,10 +1,24 @@
 //! Concrete paths handed to git as pathspecs.
 //!
 //! Every command here takes paths the USER picked from a list, never a pattern
-//! they typed, so each one must match itself and nothing else. Commands whose
-//! callers may legitimately pass a glob — `git_untrack`'s `*.log` form, and the
-//! MCP `stage_files` tool, whose description promises pathspec support — are
-//! deliberately NOT routed through this; they discriminate at the call site.
+//! they typed, so each one must match itself and nothing else.
+//!
+//! Deliberately NOT routed through this, because a caller may legitimately pass
+//! a glob: `git_untrack` and `git_force_add` (the "untrack all `*.log`" menu
+//! form), plus the `git_stage_core` / `git_unstage_core` / `git_stash_paths_core`
+//! cores — the stash one literalizes only its internal re-feed (`ops.rs:664`),
+//! never the caller's `paths`. Their callers literalize instead: untrack
+//! `ChangesContextMenu.tsx:239,258`, `ChangesPanel.tsx:546`,
+//! `RepositoryFilesDialog.tsx:187`; force-add `RepositoryFilesDialog.tsx:207`;
+//! stage `ChangesPanel.tsx:412,471,486`; unstage the `unstagePaths` helper
+//! (`ChangesPanel.tsx:64`); stash `ChangesPanel.tsx:624`.
+//!
+//! The MCP write tools do NOT belong on that list: they literalize at the tool
+//! boundary in `mcp_server::write_git::literal_pathspecs`, with `literal: false`
+//! as the deliberate-glob escape hatch. See that helper for the tools it covers
+//! and why `discard_changes` is the exception.
+//!
+//! Keep this list true — it reads as the authoritative "stays raw" set.
 
 /// A concrete path as a pathspec that matches only itself.
 ///

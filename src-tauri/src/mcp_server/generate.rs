@@ -248,10 +248,39 @@ fn is_low_value_path(path: &str) -> bool {
         || path.ends_with(".snap")
 }
 
+/// The b-side path of a `diff --git` header. Mirrors `headerNewPath` in
+/// src/lib/ai/truncate.ts. KEEP IN SYNC.
+///
+/// git quotes each side independently when one needs escaping
+/// (`diff --git a/x "b/caf\303\251.txt"`), so both spellings must be accepted or a
+/// quoted header yields the whole header line as the "path". Inner escapes stay
+/// encoded on purpose: this value is only matched against low-value paths and
+/// listed in the file summary, never used as a lookup key.
+fn header_new_path(header: &str) -> Option<String> {
+    let at = header
+        .rfind(" \"b/")
+        .into_iter()
+        .chain(header.rfind(" b/"))
+        .max()?;
+    let mut token = &header[at + 1..];
+    if let Some(rest) = token.strip_prefix('"') {
+        token = match rest.rfind('"') {
+            Some(close) => &rest[..close],
+            None => rest,
+        };
+    } else if let Some(rest) = token.strip_suffix('\r') {
+        // A CRLF-terminated diff leaves the CR on the bare token, and it would
+        // then defeat the `ends_with` low-value checks — the lockfile ships
+        // whole. The quoted branch can't carry one: git escapes CR as `\r`.
+        token = rest;
+    }
+    token.strip_prefix("b/").map(str::to_string)
+}
+
 /// Split a diff into `diff --git` file sections, mirroring `splitIntoFileSections`
 /// in truncate.ts: split so each section starts at a `diff --git ` header, drop
-/// whitespace-only parts, and take the `b/<path>` side of the header (falling back
-/// to the whole header line when it doesn't match).
+/// whitespace-only parts, and resolve the b-side via [`header_new_path`], which
+/// accepts the bare and C-quoted spellings, falling back to the whole header line.
 fn split_into_file_sections(diff_text: &str) -> Vec<DiffFileSection<'_>> {
     let mut starts: Vec<usize> = Vec::new();
     let bytes = diff_text.as_bytes();
@@ -277,10 +306,7 @@ fn split_into_file_sections(diff_text: &str) -> Vec<DiffFileSection<'_>> {
             continue;
         }
         let header = part.split('\n').next().unwrap_or(part);
-        let path = header
-            .rfind(" b/")
-            .map(|p| header[p + 3..].to_string())
-            .unwrap_or_else(|| header.to_string());
+        let path = header_new_path(header).unwrap_or_else(|| header.to_string());
         sections.push(DiffFileSection { path, text: part });
     }
     sections
@@ -1742,6 +1768,41 @@ async fn untracked_files(repo: &str) -> Result<Vec<String>, crate::error::AppErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins the KEEP IN SYNC contract with `headerNewPath` in truncate.ts: both
+    /// take the LAST separator and accept a quoted b-side, and both leave inner
+    /// escapes encoded (this path is filtered and displayed, never a lookup key).
+    #[test]
+    fn header_new_path_accepts_both_quotings() {
+        assert_eq!(
+            header_new_path("diff --git a/src/a.ts b/src/a.ts").as_deref(),
+            Some("src/a.ts")
+        );
+        // Mixed: plain a-side, quoted b-side — the real GitHub rename shape.
+        assert_eq!(
+            header_new_path("diff --git a/.gitignore \"b/.gitignore\\r\"").as_deref(),
+            Some(".gitignore\\r")
+        );
+        // Both quoted.
+        assert_eq!(
+            header_new_path("diff --git \"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\"").as_deref(),
+            Some("caf\\303\\251.txt")
+        );
+        // A path containing " b/" resolves on the LAST separator — a pinned
+        // convention, not correctness: the bare header is inherently ambiguous
+        // for such names, and the contract here is TS/Rust agreement.
+        assert_eq!(
+            header_new_path("diff --git a/x b/y.txt b/x b/y.txt").as_deref(),
+            Some("y.txt")
+        );
+        // A CRLF-terminated diff leaves the CR on the bare token; keeping it
+        // would defeat the `$`-anchored low-value checks downstream.
+        assert_eq!(
+            header_new_path("diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml\r").as_deref(),
+            Some("pnpm-lock.yaml")
+        );
+        assert_eq!(header_new_path("diff --git nonsense"), None);
+    }
 
     fn file(path: &str, added: u32, deleted: u32, is_binary: bool) -> DiffStatEntry {
         DiffStatEntry {

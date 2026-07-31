@@ -51,7 +51,7 @@ fn actionable_lines(patterns: &[String]) -> (Vec<&str>, usize) {
     let mut lines: Vec<&str> = Vec::new();
     let mut skipped_negations = 0usize;
     for raw in patterns {
-        let line = raw.trim();
+        let line = crate::fsops::trim_ignore_pattern(raw);
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -442,7 +442,7 @@ mod tests {
 
     /// The measured truth table (git 2.51.1): for each AI-ignore pattern LIST,
     /// exactly which of `FIXTURE` it hides. Both engines must agree with it.
-    const PARITY: [(&[&str], &[&str]); 17] = [
+    const PARITY: [(&[&str], &[&str]); 19] = [
         (
             &["notes.md"],
             &["a/b/notes.md", "docs/notes.md", "notes.md"],
@@ -463,6 +463,12 @@ mod tests {
         ),
         (&["build/"], &["build/x.txt", "docs/build/y.txt"]),
         (&["build"], &["build/x.txt", "docs/build/y.txt"]),
+        // Anchored directory, both spellings: the leading `/` pins it to the repo
+        // root, so the nested `docs/build/` survives where the bare rows above
+        // hide it. The trailing-slash form is what *Exclude folder from AI*
+        // emits; the slashless twin pins the same anchoring for a typed line.
+        (&["/build/"], &["build/x.txt"]),
+        (&["/build"], &["build/x.txt"]),
         (
             &["node_modules"],
             &["node_modules/pkg/i.js", "src/node_modules/j.js"],
@@ -567,6 +573,112 @@ mod tests {
             .map(|p| p.to_string())
             .filter(|p| !listed.contains(p))
             .collect()
+    }
+
+    /// A trailing space survives into the match, which only a backslash escape
+    /// can express: gitignore strips an unescaped one, so the pattern for a file
+    /// named `notes ` would otherwise hide `notes` instead — the wrong file, and
+    /// the named one left visible.
+    ///
+    /// Gitignore engine only, deliberately: this engine takes arbitrary path
+    /// STRINGS, while the pathspec half matches against the index, and git on
+    /// Windows refuses to index a trailing-space path at all ("Invalid path").
+    #[tokio::test]
+    async fn escaped_trailing_space_matches_only_that_file() {
+        let (_dir, repo) = parity_repo().await;
+        let paths = vec!["notes ".to_string(), "notes".to_string()];
+
+        let escaped = git_filter_ai_ignored(repo.clone(), paths.clone(), vec!["notes\\ ".into()])
+            .await
+            .unwrap();
+        assert_eq!(escaped, vec!["notes ".to_string()]);
+
+        // Unescaped, git strips the space and the match lands on the other file.
+        let bare = git_filter_ai_ignored(repo, paths, vec!["notes ".into()])
+            .await
+            .unwrap();
+        assert_eq!(bare, vec!["notes".to_string()]);
+    }
+
+    /// The PATHSPEC engine's half of the escaped-trailing-space shape, which the
+    /// PARITY table cannot carry: git on Windows rejects a trailing-space path
+    /// outright ("Invalid path"), so it can never enter that fixture's index.
+    /// Pairs with [`escaped_trailing_space_matches_only_that_file`], which covers
+    /// the gitignore engine on every platform — together they are the parity
+    /// check for `\ `, split by platform deliberately.
+    ///
+    /// Skipped at RUNTIME rather than `#[cfg(unix)]`-gated so the body still
+    /// compiles on Windows; a cfg-gated test first compiles on CI, where a typo
+    /// costs a red run instead of a local one.
+    ///
+    /// TWO reasons it cannot run on Windows, and the second is the load-bearing
+    /// one: git there refuses to index a trailing-space path at all, AND a
+    /// backslash inside a pathspec is a separator rather than an escape, so the
+    /// `notes\ ` this anchored pattern emits becomes `notes/ ` and the pathspec
+    /// assertion below would be false there even if the fixture could be built.
+    /// The engines
+    /// genuinely diverge there for this shape — see `globLiteralPath`.
+    #[tokio::test]
+    async fn escaped_trailing_space_agrees_across_engines() {
+        if cfg!(windows) {
+            return;
+        }
+        let dir = tempfile::Builder::new()
+            .prefix("gd-aiignore-space-")
+            .tempdir()
+            .expect("create temp dir");
+        let repo = dir.path().to_string_lossy().into_owned();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.email", "t@t.local"],
+            vec!["config", "user.name", "T"],
+            vec!["config", "core.ignorecase", "false"],
+        ] {
+            run_git(Some(&repo), &args, DEFAULT_TIMEOUT).await.unwrap();
+        }
+        let files = ["notes ", "notes"];
+        for rel in files {
+            std::fs::write(Path::new(&repo).join(rel), "x\n").unwrap();
+        }
+        run_git(Some(&repo), &["add", "-A", "-f"], DEFAULT_TIMEOUT)
+            .await
+            .unwrap();
+
+        // Exactly what *Exclude from AI* now writes for a file named `notes `.
+        let patterns = vec!["/notes\\ ".to_string()];
+
+        let terms = pathspecs_for_repo(&repo, &patterns).await.specs;
+        let mut args: Vec<String> = vec!["ls-files".into(), "--".into(), ".".into()];
+        args.extend(terms);
+        let argref: Vec<&str> = args.iter().map(String::as_str).collect();
+        // NOT trimmed: the whole point is a name whose last character is a space.
+        let listed: BTreeSet<String> = run_git(Some(&repo), &argref, DEFAULT_TIMEOUT)
+            .await
+            .unwrap()
+            .stdout_lossy()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect();
+        let by_pathspec: BTreeSet<String> = files
+            .iter()
+            .map(|p| p.to_string())
+            .filter(|p| !listed.contains(p))
+            .collect();
+
+        let by_gitignore: BTreeSet<String> = git_filter_ai_ignored(
+            repo.clone(),
+            files.iter().map(|p| p.to_string()).collect(),
+            patterns,
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+
+        let want: BTreeSet<String> = ["notes ".to_string()].into_iter().collect();
+        assert_eq!(by_pathspec, want, "pathspec engine");
+        assert_eq!(by_gitignore, want, "gitignore engine");
     }
 
     /// The two engines agree with each other AND with the measured table, for
