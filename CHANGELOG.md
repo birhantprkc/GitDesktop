@@ -12,6 +12,236 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-31
+
+### Added
+
+- The site gained a guide to Atlassian's **August 20, 2026 retirement of the Bitbucket
+  issue tracker** — what happens, how to export or migrate your issues, and how a linked
+  Jira project (or GitDesktop's local issues) fills the gap:
+  [gitdesktop.app/bitbucket-issues-sunset](https://gitdesktop.app/bitbucket-issues-sunset/).
+- The site gained an honest, dated **GitDesktop vs GitHub Desktop** comparison — where
+  GitHub Desktop still wins, a feature-by-feature table verified against its current
+  stable release, and answers to the common questions:
+  [gitdesktop.app/compare/github-desktop](https://gitdesktop.app/compare/github-desktop/).
+- Terminal settings gained a **Custom command…** mode — give a full command with a
+  `{path}` placeholder (for example `wt -d {path}` or `tmux new-window -c {path}`) for
+  multiplexers, wrappers, or any terminal the auto-detection doesn't know. The command
+  runs shell-free, and macOS "Custom…" now also launches plain (non-`.app`) executables
+  correctly.
+- **Explore repositories.** A new full-page browser for finding a repo without knowing its
+  URL, with **GitHub**, **GitLab**, and **Bitbucket** tabs, a search box, and a sort control
+  (best match / most stars / recently updated). Before you type it shows **your own
+  repositories** grouped by owner and a **Popular** star-sorted feed (GitHub & GitLab);
+  typing searches all of GitHub (up to 1,000 results), all public GitLab projects, or your
+  Bitbucket workspaces. Open a result for its README preview and **Clone** it, **Fork** it
+  (all three providers, then clone the fork), **Star / Unstar** it (GitHub & GitLab), or
+  view it on its host. Reachable from the welcome screen and the command palette, and fully
+  keyboard-navigable.
+- **The site has a blog.** [gitdesktop.app/blog](https://gitdesktop.app/blog/) now carries
+  engineering notes from building GitDesktop, with per-topic pages and an
+  [RSS feed](https://gitdesktop.app/rss.xml). The site also picked up the search and
+  sharing basics it was missing: every page now has a canonical URL, a social preview card,
+  a sitemap and a `robots.txt`, and a real **404** page instead of the homepage answering
+  every unknown address.
+- **Per-session isolation.** Pick **Worktree** or **Container** for a single agent session
+  from the composer's **Options**, overriding your Settings → AI default for that one run
+  (Best-of-N arms share the pick). Choosing a container checks readiness inline — Docker or
+  Podman installed, the engine running, the agent image built — and keeps **Send** disabled
+  until it is, naming what's missing and offering a jump to Settings where that's what it
+  takes to fix it.
+- **Link issues when you open or edit a PR.** The Create and Edit PR dialogs now have a
+  **Linked issues** row (GitHub & GitLab, wherever the repo has an issue tracker):
+  reference real repo issues that are auto-detected from your branch name and commit
+  subjects, proposed for you when you **Generate** the description (from a grounded
+  shortlist of your open issues), or added by hand. Toggle each between **Closes**
+  (auto-closes the issue on merge) and **Relates to** — they're appended to the
+  description as `Closes #N` / `Relates to #N` lines, and opening **Edit** peels any
+  trailing ref lines back into chips (keyword preserved) and re-appends them on save, so
+  the chips are the single editor for that block. **Local PRs** get the same row (create
+  and edit), and their ref lines survive **promotion** verbatim to become real closing
+  refs on the forge. On a **Bitbucket** repo with a **linked Jira project**, the row
+  surfaces linked-Jira issues (`KEY-123`) as **mention-only** *Relates to* chips (Jira
+  tickets are never closed from PR text).
+- **Locate a moved repository.** Moved a repo on disk? The "no longer a git
+  repository" notice now offers **Locate…** to point GitDesktop at the folder's
+  new location — the entry keeps its alias, badges, and settings, and its app data
+  (local PRs and issues, review history, automations, and any Jira link) follows the
+  repo to its new home — alongside the existing Remove.
+- **Reviews you run yourself now read the author's Notes for reviewers.** Until now only
+  automated reviews saw them; the Review and Security audit buttons feed them to the model
+  too. A new **Ignore author notes** toggle in the review panel sets them aside for a run,
+  alongside the existing opt-outs for your previous review and external bot findings.
+- **Queue a second AI review.** Run a code review and a security audit on the same
+  pull request without waiting: start one while the other is streaming and it
+  **queues**, then runs automatically when the first finishes. A chip shows what's
+  up next (with **Dismiss** to drop it), and cancelling the running review still
+  lets the queued one proceed.
+
+### Changed
+
+- The MCP `stage_files`, `unstage_files` and `stash_push` tools now read each
+  entry as one exact file or directory, so an agent acting on
+  `src/app/[slug]/page.tsx` no longer touches its neighbours alongside it — which
+  for `stash_push` meant sweeping another file's uncommitted work out of the
+  working tree. Pass `literal: false` on the call to use a git pathspec or glob
+  such as `*.log`. The read-side `commit_diff` and `working_diff` tools' `path`
+  argument now also matches exactly, as their descriptions always said.
+- The privacy policy gained a **website** section: gitdesktop.app now measures traffic
+  with **Cloudflare Web Analytics** (cookie-free, aggregate, no cross-site profiles),
+  and the policy spells out the site's hosting and browser-side GitHub release lookups.
+- **AI reviews converge in fewer rounds** — a fuller first review, then fewer of them.
+  A re-review now checks each applied fix's own hunks — and how the fixes interact — in
+  the same round, and suggested fixes spell out what else they oblige you to touch, so
+  one round's fix stops becoming the next round's finding. A problem repeated across
+  files is reported once with every affected location, and everything the reviewer is
+  confident about lands in the first review instead of trickling out over several.
+- **General** re-reviews collect late-noticed polish in an explicitly non-blocking
+  leftover list instead of letting it hold rounds open, and every re-review — general or
+  security audit — wraps up in a line once nothing substantive is left. Decisions
+  you recorded in the PR description or *Notes for reviewers* are respected for every
+  kind of finding, and when a large diff crowds out GitDesktop's own earlier comments
+  the review is told they were omitted rather than quietly losing the record.
+- Agentic AI reviews now get 20 minutes before timing out (up from 10), and a new
+  **Review timeout** setting under *Settings → AI* lets you raise or pin the limit
+  for agent-CLI reviews.
+- **Re-reviews end with a verdict** — every AI re-review, general or security audit, now
+  closes with one of two explicit lines: `Verdict: blocking issues remain`, or
+  `Verdict: no blocking issues — remaining items are non-blocking; merge when ready`.
+  A round that resolved everything but noticed one nit used to read as another round;
+  now it says which it is.
+- **Reviews know where your docs live.** A general review is given the repository's
+  documentation surfaces by path — README, changelog, changelog fragments, docs
+  directories — so a user-facing change that leaves any of them stale comes back as one
+  finding naming every affected surface, including ones the diff never touched, instead
+  of one surface per round. Your **custom instructions** now reach reviews too — the
+  global ones from Settings and a repo's own `.gitdesktop/instructions.md` — as
+  conventions to judge the change against.
+- **The opening comment now keeps a guaranteed share of the budget, not just its
+  place in the queue.** Being kept rather than dropped only settles which comments
+  make it in; how much of each one survives is decided earlier, and there the opening
+  comment was treated as just another block — so on a long thread it was squeezed to
+  the same per-comment minimum as a one-line "fixed in `<sha>`" reply. It is now
+  allotted its share before the rest divide up what remains, and the decision-ledger
+  distiller reads more of every comment on shorter threads.
+
+### Fixed
+
+- **AI ignore patterns now follow `.gitignore`'s matching rules.** A bare name
+  matches at any depth (`secrets.env` also covers `config/secrets.env`), a bare
+  folder name hides that folder's contents wherever it sits (`node_modules`), a
+  leading `/` anchors a pattern to the repo root, and `*` stops at a `/`, so
+  `docs/*.log` covers `docs/a.log` but not `docs/sub/b.log`. **Patterns you
+  already have may hide more than they did:** saved lines carry no anchor —
+  including every one *Exclude from AI* added — so a stored `notes.md` now hides
+  each file of that name rather than only the copy at the root, and a stored
+  `build` or `node_modules` now hides those folders instead of nothing at all.
+  That only ever withholds more from a model, never less, but it's worth a look
+  at your lists. *Exclude from AI* now writes anchored lines
+  (`/src/config.ts`, `/vendor/`) that mean the one file or folder you picked,
+  matching what *Ignore* writes to `.gitignore`. `!` re-include lines aren't
+  supported.
+- **Files with unusual names survive diff parsing.** git escapes a non-ASCII path
+  like `café.txt` when it writes a diff, and GitDesktop skipped those files when
+  splitting a combined diff into per-file sections — so such a file showed no
+  diff in a pull-request or commit view, and was dropped from the diff sent for
+  an AI review or a generated description rather than being weighed against your
+  ignore patterns.
+- Your **AI ignore patterns** are now honored by AI reviews — the ones you start
+  from the PR panel and the automated ones alike, including the "changes since
+  your last review" delta they build on — where the whole diff previously
+  reached the provider. The prompt states how many files were held back rather
+  than passing the diff off as complete, and if every changed file is excluded,
+  nothing is sent at all. As everywhere else, a model that reads your repository
+  itself isn't limited by these patterns — that's what **Agentic review** on a
+  pull request turns on.
+- An automation review claim left behind by a crashed or outdated app instance no
+  longer blocks that pull request's review for other instances — a stale claim is
+  reclaimed after 30 minutes instead of waiting for the 30-day sweep. The
+  missed-review catch-up now works per review mode, so a failed general review is
+  retried even when the security audit already ran.
+- Your **AI ignore patterns** are now honored when generating the description
+  for a pull request you're creating (local PRs included, and the MCP
+  `generate_pr_description` tool), when generating a squashed commit's message,
+  and when generating a reworded commit's message in Edit history — those paths
+  previously sent the whole branch diff to the provider. The prompt states how
+  many files were held back rather than passing the diff off as complete.
+- **Generate from changes** now works on a branch whose work is already
+  committed. Whenever the working tree can't describe the branch being named —
+  it's clean, or you're renaming a branch you aren't on — it names the branch
+  from that branch's own committed work instead: the diff and commit subjects
+  vs. the default branch. That's exactly the case a rename usually needs.
+  Applies in the app and to the MCP `generate_branch_name` tool and prompt, and
+  when the button *is* disabled it now says why.
+- Editing or deleting a commit comment while viewing a fork through the
+  parent-repository (upstream) lens now targets the same repository the comment
+  was created on, instead of failing against the fork.
+- External AI-reviewer findings now fair-share the review-context budget instead of each
+  being cut at a small fixed size, a trimmed finding says so explicitly, and the **Review
+  context** size setting now reaches that section of the prompt.
+- **File actions and views now use exactly the file you picked when its path
+  contains `[`, `*` or `?`.** On a dynamic route like `src/app/[slug]/page.tsx`,
+  staging, unstaging, discarding, stashing, ignoring, untracking, force-adding
+  and taking one side of a conflict all act on that file alone. Those paths used
+  to be handled as match patterns, so a neighbouring file could be swept in
+  alongside the one you chose — most seriously, **discarding changes could throw
+  away another file's uncommitted work**, and resolving a conflict could silently
+  resolve a second file the same way. Reading is exact too: a file's history, and
+  its diff in the working tree, in a commit, in a stash, or against another
+  branch, no longer fold in a neighbour's commits and hunks. *Ignore* and
+  *Exclude from AI* also write a working pattern for a name that ends in a
+  space, which previously matched a different file and left the one you picked
+  alone.
+- Jira estimate fields no longer keep showing the "Enter a Jira duration" warning
+  after the value refreshes from the server.
+- AI re-reviews now read long GitDesktop-posted PR comments (context briefs, triage
+  summaries) in full when the review-context budget has room — previously every such comment
+  was silently cut to 1,500 characters no matter how much budget was free, so a reviewer
+  could be handed a numbered list that stopped after item 2. A comment that still has to be
+  trimmed now says so explicitly in the prompt instead of trailing off in a bare ellipsis.
+- **Long review threads keep their recorded decisions.** When GitDesktop's own comments
+  on a pull request substantially outgrow the review-context budget, the AI review now
+  reliably distills them into a compact decision ledger — reading the complete comments
+  rather than the already-trimmed ones, and giving an agent-CLI generation model the time
+  it needs to finish — so refutations and "fixed in `<sha>`" notes survive a long thread
+  instead of being cut away with the text.
+- When a PR's own-comments context outgrows its budget, the opening context comment is now
+  kept alongside the newest follow-ups instead of being the first thing dropped.
+- Merging a repository's old app data — on relocate, or when older path-keyed
+  records are folded onto its stable identity — no longer lets duplicate legacy
+  records (including records without ids) through.
+- Your **AI ignore patterns** now apply when you regenerate the description of an
+  already-open pull request or merge request, not only when you create one.
+  Excluded files are dropped from the forge's own diff before it reaches the
+  provider, and the prompt states how many were held back rather than passing the
+  diff off as complete; if every changed file is excluded, nothing is sent at all.
+- The error shown when a history-rewrite operation is blocked by uncommitted
+  changes no longer contains garbled characters — the dash renders properly.
+- **Security audits no longer assume GitDesktop's own tech stack.** The audit prompt told the
+  model, as fact, that the code in front of it was Rust and React, and applied exemptions
+  written for that stack to every repository you audit. Anything reachable through
+  environment variables or command-line flags was trusted outright (untrue for a server, a
+  container, or a shared CI runner), and missing authorization was waved off in frontend code on
+  the assumption that a separate backend was re-checking it. Each of those rules is now judged
+  against the code actually under review, and an audit sizes up the change's own language, trust
+  boundary, and existing validators first. **Prototype pollution** is now a named category too.
+- **More vulnerability classes can actually be reported.** The audit's list of risk categories
+  read as closed, so a real issue that fit none of its buckets — cross-site request forgery or a
+  missing origin check, over-permissive CORS, clickjacking — had nowhere to be filed; the list is
+  now explicitly open-ended. Memory-safety problems are also caught in the unsafe corners of
+  otherwise-managed languages (Java's `sun.misc.Unsafe`, Swift's `Unsafe*Pointer`, a Kotlin/JNI
+  boundary), and a value read from a cloned repository's own content and passed to a spawned
+  command is no longer treated as trusted just because the tool runs on your machine.
+- **Sharper severity and confidence on security findings.** *Critical* is now a severity that a
+  finding can actually carry — remote code execution, code execution triggered by content you
+  merely clone or open, full system compromise, or a mass data breach — where before it was
+  referenced by the reporting rules but never defined, so the worst issues had nowhere to go but
+  High. Confidence is now calibrated by what the reviewer actually saw, and the flat
+  ">80% confident" rule that contradicted the severity-scaled thresholds is gone.
+- Updating a single submodule whose path contains `[`, `*` or `?` now updates
+  that submodule. It previously initialized and checked out a *different* one
+  whose path happened to match, and left the one you asked for untouched.
+
 ## [0.5.2] - 2026-07-23
 
 ### Fixed
@@ -2313,7 +2543,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/theBGuy/GitDesktop/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/theBGuy/GitDesktop/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/theBGuy/GitDesktop/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/theBGuy/GitDesktop/compare/v0.4.0...v0.5.0
