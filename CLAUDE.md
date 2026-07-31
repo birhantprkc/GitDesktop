@@ -24,12 +24,14 @@ don't wait to be asked:**
    literal keys** (they resolve per-platform and reflect rebindings); gate AI content with
    the `ai: true` section flag + `{{ai}}…{{/ai}}` inline markers so *Hide AI* hides it.
    (Conventions + gotchas: `memory/help-guide-content-conventions.md`.)
-4. **Changelog fragment** — for any user-facing change, add a
+4. **Changelog fragment** — for any user-facing **app** change, add a
    `changelog.d/<added|changed|fixed>-<slug>.md` file whose body is the finished
-   Keep a Changelog bullet (written for humans). **Never edit `## [Unreleased]` in
-   `CHANGELOG.md` directly** — fragments are assembled there at release time, and
-   one file per change keeps parallel branches conflict-free. Preview with
-   `pnpm changelog:preview`; conventions live in `changelog.d/README.md`.
+   Keep a Changelog bullet (written for humans). The changelog ships in-app (release
+   body + updater notes), so **site-only work gets no fragment** — steps 1–2 are its
+   record. **Never edit `## [Unreleased]` in `CHANGELOG.md` directly** — fragments
+   are assembled there at release time, and one file per change keeps parallel
+   branches conflict-free. Preview with `pnpm changelog:preview`; conventions live
+   in `changelog.d/README.md`.
 
 When a change alters **existing** behavior, grep README / site / help for the old
 wording (e.g. the feature's old phrase) rather than updating spots from memory — stale

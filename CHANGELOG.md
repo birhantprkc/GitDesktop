@@ -16,14 +16,6 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ### Added
 
-- The site gained a guide to Atlassian's **August 20, 2026 retirement of the Bitbucket
-  issue tracker** — what happens, how to export or migrate your issues, and how a linked
-  Jira project (or GitDesktop's local issues) fills the gap:
-  [gitdesktop.app/bitbucket-issues-sunset](https://gitdesktop.app/bitbucket-issues-sunset/).
-- The site gained an honest, dated **GitDesktop vs GitHub Desktop** comparison — where
-  GitHub Desktop still wins, a feature-by-feature table verified against its current
-  stable release, and answers to the common questions:
-  [gitdesktop.app/compare/github-desktop](https://gitdesktop.app/compare/github-desktop/).
 - Terminal settings gained a **Custom command…** mode — give a full command with a
   `{path}` placeholder (for example `wt -d {path}` or `tmux new-window -c {path}`) for
   multiplexers, wrappers, or any terminal the auto-detection doesn't know. The command
@@ -38,12 +30,6 @@ under `changelog.d/` (see its README); those are assembled here at release time 
   (all three providers, then clone the fork), **Star / Unstar** it (GitHub & GitLab), or
   view it on its host. Reachable from the welcome screen and the command palette, and fully
   keyboard-navigable.
-- **The site has a blog.** [gitdesktop.app/blog](https://gitdesktop.app/blog/) now carries
-  engineering notes from building GitDesktop, with per-topic pages and an
-  [RSS feed](https://gitdesktop.app/rss.xml). The site also picked up the search and
-  sharing basics it was missing: every page now has a canonical URL, a social preview card,
-  a sitemap and a `robots.txt`, and a real **404** page instead of the homepage answering
-  every unknown address.
 - **Per-session isolation.** Pick **Worktree** or **Container** for a single agent session
   from the composer's **Options**, overriding your Settings → AI default for that one run
   (Best-of-N arms share the pick). Choosing a container checks readiness inline — Docker or
@@ -87,9 +73,6 @@ under `changelog.d/` (see its README); those are assembled here at release time 
   working tree. Pass `literal: false` on the call to use a git pathspec or glob
   such as `*.log`. The read-side `commit_diff` and `working_diff` tools' `path`
   argument now also matches exactly, as their descriptions always said.
-- The privacy policy gained a **website** section: gitdesktop.app now measures traffic
-  with **Cloudflare Web Analytics** (cookie-free, aggregate, no cross-site profiles),
-  and the policy spells out the site's hosting and browser-side GitHub release lookups.
 - **AI reviews converge in fewer rounds** — a fuller first review, then fewer of them.
   A re-review now checks each applied fix's own hunks — and how the fixes interact — in
   the same round, and suggested fixes spell out what else they oblige you to touch, so

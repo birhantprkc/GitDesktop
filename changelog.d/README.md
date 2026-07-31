@@ -7,6 +7,11 @@ changelog. At release time `pnpm release:prepare <version>` assembles these
 fragments into `CHANGELOG.md`, in your exact
 [Keep a Changelog](https://keepachangelog.com/) format, and deletes them.
 
+**App changes only.** This changelog ships inside the app (the release body and
+the updater's "what's new" both come from it), so marketing-site work — blog
+posts, comparison pages, anything under `site/` — gets **no fragment**, however
+user-facing it is on the web.
+
 ## Format
 
 Create a file named **`<category>-<slug>.md`**, where:
