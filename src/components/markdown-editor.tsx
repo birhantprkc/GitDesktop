@@ -227,6 +227,7 @@ export function MarkdownEditor({
   rows = 7,
   disabled,
   autoFocus,
+  fill,
   textareaClassName,
   actions,
   "aria-label": ariaLabel,
@@ -240,6 +241,13 @@ export function MarkdownEditor({
   rows?: number;
   disabled?: boolean;
   autoFocus?: boolean;
+  /** Grow the input (and Preview) to the parent flex column's spare height instead
+   *  of the default capped box. Every fill-mode box keeps a min-height floor so a
+   *  short window scrolls the parent rather than collapsing the editor. Only the
+   *  textarea's floor is caller-tunable (`min-h-24`, overridden via
+   *  `textareaClassName`); Preview's stays fixed at `min-h-24`, so a call site that
+   *  raises the textarea's floor gets a slightly shorter minimum in Preview. */
+  fill?: boolean;
   textareaClassName?: string;
   actions?: ReactNode;
   "aria-label"?: string;
@@ -381,7 +389,12 @@ export function MarkdownEditor({
   }, [focusIntoView]);
 
   return (
-    <div className="space-y-1.5">
+    <div
+      // No `min-h-0` on the fill root: `min-height: auto` floors it at its content
+      // minimum, so a short window scrolls the parent instead of shrinking the
+      // editor past the textarea's floor and painting it over the fields below.
+      className={fill ? "flex flex-1 flex-col gap-1.5" : "space-y-1.5"}
+    >
       <div className="flex items-center gap-1">
         <Button
           type="button"
@@ -459,10 +472,19 @@ export function MarkdownEditor({
         onKeyDown={handleKeyDown}
         rows={rows}
         disabled={disabled}
-        className={cn(textareaClassName, mode === "preview" && "hidden")}
+        className={cn(
+          fill && "min-h-24 flex-1",
+          textareaClassName,
+          mode === "preview" && "hidden",
+        )}
       />
       {mode === "preview" && (
-        <div className="max-h-72 min-h-24 overflow-y-auto border border-input px-3 py-2">
+        <div
+          className={cn(
+            fill ? "min-h-24 flex-1" : "max-h-72 min-h-24",
+            "overflow-y-auto border border-input px-3 py-2",
+          )}
+        >
           {value.trim() ? (
             <Markdown>{value}</Markdown>
           ) : (

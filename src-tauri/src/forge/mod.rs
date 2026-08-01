@@ -1891,6 +1891,29 @@ pub async fn forge_release_edit(
     }
 }
 
+/// Sync a release's `latest.json` updater manifest to the edited notes. GitHub-only —
+/// not for want of release assets (GitLab has those), but because the Tauri updater
+/// feed this app ships is a `latest.json` attached to a GitHub release; a GitLab
+/// release simply isn't where any installed app looks for its update.
+#[tauri::command]
+pub async fn forge_release_sync_updater_notes(
+    repo_path: String,
+    tag: String,
+    notes: String,
+) -> AppResult<()> {
+    match detect_non_github(&repo_path).await {
+        Some((Provider::GitLab, _)) => Err(AppError::InvalidArgument(
+            "The updater manifest is published on GitHub releases only.".into(),
+        )),
+        Some((Provider::Bitbucket, _)) => Err(AppError::InvalidArgument(
+            "Bitbucket releases aren't supported yet.".into(),
+        )),
+        _ => {
+            crate::github::release::gh_release_sync_updater_notes(&repo_path, &tag, &notes).await
+        }
+    }
+}
+
 /// Delete a release (optionally its git tag too), behind the abstraction.
 #[tauri::command]
 pub async fn forge_release_delete(

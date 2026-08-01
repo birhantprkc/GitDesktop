@@ -407,6 +407,138 @@ pub async fn gh_release_delete_asset(
     Ok(())
 }
 
+/// Tauri's updater manifest, attached to a release as an asset of this exact name.
+const UPDATER_MANIFEST: &str = "latest.json";
+
+/// Replaces the manifest's `notes` and nothing else — `version`, `pub_date` and
+/// every platform's URL + signature must survive verbatim or installed apps stop
+/// trusting the update. Absent `notes` is added. Re-serializing alphabetizes the
+/// keys (serde_json's Map is a BTreeMap without `preserve_order`), so the result
+/// isn't byte-diffable against CI's original; values are preserved and the
+/// manifest itself carries no signature over its own bytes. Rejects anything that
+/// doesn't carry the updater shape (string `version` + object `platforms`), so an
+/// unrelated asset that merely shares the name is never rewritten.
+fn patch_updater_notes(manifest: &str, notes: &str) -> AppResult<String> {
+    let mut value: serde_json::Value = serde_json::from_str(manifest)
+        .map_err(|e| AppError::Gh(format!("could not parse {UPDATER_MANIFEST}: {e}")))?;
+    let obj = value.as_object_mut().ok_or_else(|| {
+        AppError::Gh(format!("{UPDATER_MANIFEST} is not a JSON object"))
+    })?;
+    // Gate the shape here, before anything uploads: the re-upload clobbers, so
+    // rewriting a same-named asset that isn't an updater manifest (a repo's own
+    // version pointer, say) would destroy it. Failing on this path deletes nothing.
+    if !obj.get("version").is_some_and(serde_json::Value::is_string)
+        || !obj.get("platforms").is_some_and(serde_json::Value::is_object)
+    {
+        return Err(AppError::Gh(format!(
+            "{UPDATER_MANIFEST} isn't a Tauri updater manifest (needs a string \
+             `version` and an object `platforms`) — it was left unchanged."
+        )));
+    }
+    obj.insert("notes".to_string(), serde_json::Value::String(notes.to_string()));
+    serde_json::to_string_pretty(&value)
+        .map_err(|e| AppError::Gh(format!("could not write {UPDATER_MANIFEST}: {e}")))
+}
+
+/// Parks the patched manifest outside the temp dir when the upload fails, under the
+/// `latest.json` BASENAME a re-upload needs (the asset takes its name from the file).
+/// The directory is created EXCLUSIVELY by `Builder::tempdir` before it's persisted —
+/// a guessable name under the shared temp dir could be pre-created as a symlink by a
+/// local attacker and redirect the copy. Best-effort: failing here only costs the
+/// recovery hint, so it degrades to `None` rather than masking the upload error that
+/// prompted it.
+async fn save_updater_recovery_copy(src: std::path::PathBuf) -> Option<String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = tempfile::Builder::new()
+            .prefix("gd-updater-recovery-")
+            .tempdir()
+            .ok()?;
+        std::fs::copy(&src, dir.path().join(UPDATER_MANIFEST)).ok()?;
+        // Outlives this call by design — the user needs it to re-attach the asset.
+        let kept = dir.keep();
+        Some(kept.join(UPDATER_MANIFEST).to_string_lossy().into_owned())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Re-points a release's updater manifest at `notes`, so apps updating from that
+/// release show the same body the release page does. Download → patch → re-upload
+/// with `--clobber`, which gh implements as delete-THEN-upload: the manifest is
+/// briefly absent, and a failed upload leaves it deleted rather than stale. That
+/// makes the failure unrecoverable from the UI alone (the release no longer has the
+/// asset to re-download), so a failed upload parks the patched copy on disk and
+/// names its path in the error for a manual re-attach.
+pub async fn gh_release_sync_updater_notes(
+    repo_path: &str,
+    tag: &str,
+    notes: &str,
+) -> AppResult<()> {
+    validate_tag(tag)?;
+    let slug = crate::github::gh_origin_slug(repo_path).await?;
+    let dir = tokio::task::spawn_blocking(tempfile::tempdir)
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))??;
+    let dir_arg = dir.path().to_string_lossy().to_string();
+    run_gh(
+        Some(repo_path),
+        &[
+            "release",
+            "download",
+            tag,
+            "--repo",
+            &slug,
+            "--pattern",
+            UPDATER_MANIFEST,
+            "--dir",
+            &dir_arg,
+            "--clobber",
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    let path = dir.path().join(UPDATER_MANIFEST);
+    let file_arg = path.to_string_lossy().to_string();
+    let (patch_path, notes_owned) = (path.clone(), notes.to_string());
+    tokio::task::spawn_blocking(move || -> AppResult<()> {
+        // Local filesystem failures stay `Io` — surfacing them as `Gh` would blame
+        // GitHub for a problem on this machine.
+        let current = std::fs::read_to_string(&patch_path).map_err(AppError::Io)?;
+        std::fs::write(&patch_path, patch_updater_notes(&current, &notes_owned)?)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))??;
+    let upload = run_gh(
+        Some(repo_path),
+        &[
+            "release",
+            "upload",
+            tag,
+            &file_arg,
+            "--repo",
+            &slug,
+            "--clobber",
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await;
+    if let Err(e) = upload {
+        return Err(match save_updater_recovery_copy(path).await {
+            Some(saved) => AppError::Gh(format!(
+                "{e}\n\nThe patched {UPDATER_MANIFEST} was saved to {saved} — upload \
+                 that file to the release to restore the manifest."
+            )),
+            None => AppError::Gh(format!(
+                "{e}\n\nThe patched {UPDATER_MANIFEST} could not be saved locally, so \
+                 the release may now have no updater manifest."
+            )),
+        });
+    }
+    Ok(())
+}
+
 /// Downloads one asset (by exact name, used as the glob pattern) into `dir`.
 #[tauri::command]
 pub async fn gh_release_download_asset(
@@ -440,4 +572,63 @@ pub async fn gh_release_download_asset(
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MANIFEST: &str = r#"{
+      "version": "0.6.0",
+      "notes": "old notes",
+      "pub_date": "2026-07-31T00:00:00Z",
+      "platforms": {
+        "windows-x86_64": { "signature": "sig-abc", "url": "https://example/app.exe" }
+      }
+    }"#;
+
+    #[test]
+    fn patch_updater_notes_replaces_only_the_notes() {
+        let out = patch_updater_notes(MANIFEST, "new notes").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["notes"], "new notes");
+        assert_eq!(v["version"], "0.6.0");
+        assert_eq!(v["pub_date"], "2026-07-31T00:00:00Z");
+        assert_eq!(v["platforms"]["windows-x86_64"]["signature"], "sig-abc");
+        assert_eq!(
+            v["platforms"]["windows-x86_64"]["url"],
+            "https://example/app.exe"
+        );
+    }
+
+    #[test]
+    fn patch_updater_notes_adds_absent_notes() {
+        let out = patch_updater_notes(
+            r#"{"version":"1.0.0","platforms":{"linux-x86_64":{"signature":"s","url":"u"}}}"#,
+            "fresh",
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["notes"], "fresh");
+        assert_eq!(v["version"], "1.0.0");
+        assert_eq!(v["platforms"]["linux-x86_64"]["signature"], "s");
+    }
+
+    #[test]
+    fn patch_updater_notes_rejects_a_non_object() {
+        assert!(patch_updater_notes("[1, 2]", "x").is_err());
+        assert!(patch_updater_notes("not json", "x").is_err());
+    }
+
+    /// A same-named asset that isn't an updater manifest must survive untouched —
+    /// the re-upload clobbers, so a false accept would destroy it.
+    #[test]
+    fn patch_updater_notes_rejects_a_foreign_same_named_asset() {
+        assert!(patch_updater_notes(r#"{"foo":1}"#, "x").is_err());
+        // Right keys, wrong types.
+        assert!(patch_updater_notes(r#"{"version":1,"platforms":{}}"#, "x").is_err());
+        assert!(
+            patch_updater_notes(r#"{"version":"1.0.0","platforms":[]}"#, "x").is_err()
+        );
+    }
 }

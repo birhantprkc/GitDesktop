@@ -26,6 +26,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { presentError } from "@/lib/error-summary";
+import { UPDATER_MANIFEST_NAME } from "@/lib/git/api";
 import {
   forgeFeatureReady,
   useCheckoutCommit,
@@ -38,6 +40,7 @@ import {
   usePushTag,
   useReleaseDetails,
   useReleaseList,
+  useSyncUpdaterNotes,
   useTagList,
   useUploadReleaseAsset,
 } from "@/lib/git/queries";
@@ -81,6 +84,7 @@ export function TagDetailView({
   const tagList = useTagList(repoPath);
   const releaseList = useReleaseList(repoPath, ghReady);
   const editRelease = useEditRelease(repoPath);
+  const syncUpdaterNotes = useSyncUpdaterNotes(repoPath);
   const deleteRelease = useDeleteRelease(repoPath);
   const uploadAsset = useUploadReleaseAsset(repoPath);
   const deleteAsset = useDeleteReleaseAsset(repoPath);
@@ -95,6 +99,12 @@ export function TagDetailView({
   const [editNotes, setEditNotes] = useState("");
   const [editPrerelease, setEditPrerelease] = useState(false);
   const [editLatest, setEditLatest] = useState(false);
+  const [editSyncUpdater, setEditSyncUpdater] = useState(true);
+  // The submitted decision, captured at submit. The live checkbox can't stand in for
+  // it: phase 1's invalidation refetches the release mid-save, and a `latest.json`
+  // that the clobber has momentarily deleted would flip the gate and drop the latch
+  // while the upload is still running.
+  const [syncArmed, setSyncArmed] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [cleanupTag, setCleanupTag] = useState(false);
   const [createReleaseOpen, setCreateReleaseOpen] = useState(false);
@@ -137,6 +147,17 @@ export function TagDetailView({
 
   // ── Release view ───────────────────────────────────────────────────────────
   if (rel) {
+    // The updater manifest is a GitHub-only Tauri asset, so the sync affordance only
+    // makes sense on a release that actually ships one. Deliberately STRICTER than
+    // the other release writes (`canManage` also opens on a ready GitLab repo):
+    // there is no GitLab arm to fall back to here.
+    const canSyncUpdater =
+      canWrite && rel.assets.some((a) => a.name === UPDATER_MANIFEST_NAME);
+    // An armed sync makes Save two-phase; dismissing between the phases would fire the
+    // manifest upload at a closed dialog, so the whole operation latches. A plain edit
+    // (nothing armed) stays dismissible exactly as it always was.
+    const savePending = editRelease.isPending || syncUpdaterNotes.isPending;
+    const saveLatched = syncArmed && savePending;
     return (
       <div className="flex h-full flex-col">
         <header className="space-y-2 border-b px-4 py-3">
@@ -183,6 +204,8 @@ export function TagDetailView({
                     setEditNotes(rel.body);
                     setEditPrerelease(rel.isPrerelease);
                     setEditLatest(isLatest);
+                    setEditSyncUpdater(true);
+                    setSyncArmed(false);
                     setEditOpen(true);
                   }}
                 >
@@ -350,12 +373,24 @@ export function TagDetailView({
           </div>
         </ScrollArea>
 
-        <Dialog open={editOpen} onOpenChange={setEditOpen}>
-          <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-lg">
+        <Dialog
+          open={editOpen}
+          onOpenChange={(o) => {
+            if (!saveLatched) setEditOpen(o);
+          }}
+        >
+          {/* A fixed height (not a cap): release bodies routinely run thousands of
+              lines, so the notes editor claims the dialog's whole spare height. */}
+          <DialogContent className="flex h-[85vh] flex-col sm:max-w-2xl">
             <form
-              className="flex min-h-0 flex-col gap-4"
+              className="flex min-h-0 flex-1 flex-col gap-4"
               onSubmit={(e) => {
                 e.preventDefault();
+                // Empty notes leave the body untouched (the edit skips `--notes`),
+                // so there's nothing to carry into the manifest either.
+                const syncManifest =
+                  canSyncUpdater && editSyncUpdater && !!editNotes.trim();
+                setSyncArmed(syncManifest);
                 editRelease.mutate(
                   {
                     tag,
@@ -370,10 +405,45 @@ export function TagDetailView({
                   },
                   {
                     onSuccess: () => {
-                      toast.success("Release updated");
-                      setEditOpen(false);
+                      if (!syncManifest) {
+                        setSyncArmed(false);
+                        toast.success("Release updated");
+                        setEditOpen(false);
+                        return;
+                      }
+                      // The body edit has already landed, so a manifest failure is
+                      // partial state, not a failed save: close and disclose it —
+                      // re-submitting would only repeat the edit.
+                      syncUpdaterNotes.mutate(
+                        { tag, notes: editNotes.trim() },
+                        {
+                          onSuccess: () => {
+                            setSyncArmed(false);
+                            toast.success("Release updated");
+                            setEditOpen(false);
+                          },
+                          onError: (err) => {
+                            setSyncArmed(false);
+                            // Which stage failed decides what recovery is possible —
+                            // only a failed upload leaves a parked copy — so the
+                            // summary stays arm-neutral and the backend's own text
+                            // (carried into Details by toastError) names the specifics.
+                            toastError(
+                              new Error(
+                                `Release updated, but the updater manifest may not have been.\n\n${presentError(err).fullText}`,
+                              ),
+                            );
+                            setEditOpen(false);
+                          },
+                        },
+                      );
                     },
-                    onError,
+                    // The capture dies with the save it was taken for — phase 1
+                    // failing means no phase 2 will ever consume it.
+                    onError: (e) => {
+                      setSyncArmed(false);
+                      onError(e);
+                    },
                   },
                 );
               }}
@@ -385,20 +455,25 @@ export function TagDetailView({
                 </DialogDescription>
               </DialogHeader>
               {/* Fields scroll; header and submit footer stay pinned. */}
-              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
                 <Input
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
                   placeholder="Title"
                 />
-                <MarkdownEditor
-                  aria-label="Release notes"
-                  value={editNotes}
-                  onChange={setEditNotes}
-                  placeholder="Notes…"
-                  rows={8}
-                  textareaClassName="max-h-72 min-h-24 resize-y font-mono"
-                />
+                <div className="flex flex-1 flex-col">
+                  <MarkdownEditor
+                    aria-label="Release notes"
+                    value={editNotes}
+                    onChange={setEditNotes}
+                    placeholder="Notes…"
+                    fill
+                    // No `rows`/`resize-y` in fill mode: the explicit floor plus
+                    // `flex-1` set the height, and a manual drag fights the flex
+                    // sizing.
+                    textareaClassName="min-h-24 font-mono"
+                  />
+                </div>
                 {/* GitLab has neither pre-release nor a per-release latest flag. */}
                 {!isGitLab && (
                   <div className="flex flex-wrap gap-x-6 gap-y-2">
@@ -436,19 +511,42 @@ export function TagDetailView({
                     </div>
                   </div>
                 )}
+                {canSyncUpdater && (
+                  <div className="flex flex-col gap-1">
+                    <label
+                      className={`flex items-center gap-2 text-xs ${
+                        savePending
+                          ? "cursor-not-allowed opacity-60"
+                          : "cursor-pointer"
+                      }`}
+                    >
+                      {/* Frozen while saving: toggling mid-flight would misreport the
+                          state of a save whose decision was already captured. */}
+                      <Checkbox
+                        checked={editSyncUpdater}
+                        disabled={savePending}
+                        onCheckedChange={(c) => setEditSyncUpdater(c === true)}
+                      />
+                      Also update the updater manifest (latest.json)
+                    </label>
+                    <p className="text-muted-foreground text-[11px]">
+                      Keeps the notes installed apps see on update in sync with
+                      this edit.
+                    </p>
+                  </div>
+                )}
               </div>
               <DialogFooter>
                 <Button
                   type="button"
                   variant="outline"
+                  disabled={saveLatched}
                   onClick={() => setEditOpen(false)}
                 >
                   Cancel
                 </Button>
-                <Button type="submit" disabled={editRelease.isPending}>
-                  {editRelease.isPending && (
-                    <Spinner data-icon="inline-start" />
-                  )}
+                <Button type="submit" disabled={savePending}>
+                  {savePending && <Spinner data-icon="inline-start" />}
                   Save
                 </Button>
               </DialogFooter>

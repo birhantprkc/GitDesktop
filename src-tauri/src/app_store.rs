@@ -36,12 +36,65 @@ pub(crate) struct AiGenSettings {
     pub(crate) ai_ignore_patterns: Vec<String>,
 }
 
-/// Resolve the absolute path of the `settings.json` the frontend store writes.
-/// Mirrors `tauri-plugin-store` v2's `BaseDirectory::AppData` resolution
-/// (`dirs::data_dir()/<identifier>`) — see [`crate::local_prs::store_path`].
+/// Pure resolution of the store's directory, in precedence order. Under `cfg(test)`
+/// an arm 0 precedes all of these: [`store_path`] consults [`TEST_STORE_DIR`] before
+/// calling here, and that slot is the ONLY seam a test may use.
+/// 1. under `cfg!(test)`, NO store, whatever the environment says — an in-crate test
+///    can never read the developer's real settings, and a `GD_SETTINGS_DIR` exported
+///    in a dev or CI shell must not silently decide one either;
+/// 2. a non-empty `GD_SETTINGS_DIR` override — the operator/headless escape hatch for
+///    pointing a run at a store outside the app-data dir (an oplog-sibling knob);
+/// 3. otherwise the real app-data dir, `tauri-plugin-store` v2's
+///    `BaseDirectory::AppData` resolution (see [`crate::local_prs::store_path`]).
+///
+/// Arm 3 mirrors [`crate::oplog::resolve_store_base`]; the test arm deliberately
+/// diverges twice — it yields no store where the oplog needs a writable temp one
+/// (this module only READS), and it outranks the env var where the oplog's does not.
+fn resolve_store_dir(gd_settings_dir: Option<&str>, is_test: bool) -> Option<PathBuf> {
+    match gd_settings_dir {
+        _ if is_test => None,
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => Some(dirs::data_dir()?.join(APP_IDENTIFIER)),
+    }
+}
+
+/// In-process test override — arm 0, consulted by [`store_path`] before
+/// [`resolve_store_dir`] runs at all, and the only way a test can reach a store. It is
+/// set in-process rather than through `GD_SETTINGS_DIR` because mutating process env
+/// would race every other test's env reads in the same binary, which on POSIX is
+/// unsound, not merely flaky (the oplog seam refuses env mutation for the same reason).
+#[cfg(test)]
+static TEST_STORE_DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// Installs (or clears) the in-process override, returning the previous value so a
+/// caller can restore it. Test-only — [`TEST_STORE_DIR`] does not exist otherwise.
+#[cfg(test)]
+pub(crate) fn swap_test_store_dir(dir: Option<PathBuf>) -> Option<PathBuf> {
+    let mut slot = TEST_STORE_DIR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    std::mem::replace(&mut *slot, dir)
+}
+
+/// The in-process override currently installed, if any. Test-only.
+#[cfg(test)]
+pub(crate) fn test_store_dir() -> Option<PathBuf> {
+    TEST_STORE_DIR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// Absolute path of the `settings.json` the frontend store writes —
+/// `<store dir>/settings.json`. The in-process test override wins when one is
+/// installed; otherwise [`resolve_store_dir`] chooses the dir.
 fn store_path() -> Option<PathBuf> {
-    let data = dirs::data_dir()?;
-    Some(data.join(APP_IDENTIFIER).join(STORE_FILE))
+    #[cfg(test)]
+    if let Some(dir) = test_store_dir() {
+        return Some(dir.join(STORE_FILE));
+    }
+    let dir = resolve_store_dir(std::env::var("GD_SETTINGS_DIR").ok().as_deref(), cfg!(test))?;
+    Some(dir.join(STORE_FILE))
 }
 
 /// Read the `"settings"` object from the store file, or `None` when the file is
@@ -127,6 +180,45 @@ mod tests {
             return AiGenSettings::default();
         };
         parse_ai_generation_settings(&settings)
+    }
+
+    /// The three resolution arms. Arm 3 pins the production output as stable —
+    /// `dirs::data_dir()/<identifier>/settings.json` — so the seam can't quietly move
+    /// it; agreement with the Tauri path layer's own resolution is a contract this
+    /// can't check (no Tauri code runs here). Arm 1 is why no test in this crate can
+    /// be decided by the developer's real store OR by their exported environment.
+    #[test]
+    fn store_dir_resolution_arms() {
+        assert_eq!(
+            resolve_store_dir(Some("C:/tmp/gd-store"), true),
+            None,
+            "an exported GD_SETTINGS_DIR must not reach a test build — the in-process \
+             slot is the only seam a test may use"
+        );
+        assert_eq!(
+            resolve_store_dir(Some("C:/tmp/gd-store"), false),
+            Some(PathBuf::from("C:/tmp/gd-store")),
+            "outside tests, an explicit override wins"
+        );
+        assert_eq!(
+            resolve_store_dir(Some(""), false),
+            Some(dirs::data_dir().unwrap().join(APP_IDENTIFIER)),
+            "an EMPTY override is no override"
+        );
+        assert_eq!(resolve_store_dir(None, true), None, "no store under cfg(test)");
+        assert_eq!(
+            resolve_store_dir(None, false),
+            Some(dirs::data_dir().unwrap().join(APP_IDENTIFIER)),
+            "production: dirs::data_dir()/<identifier>, unchanged by the seam"
+        );
+        // …and the file the production arm points at is the frontend's own store.
+        assert_eq!(
+            resolve_store_dir(None, false).unwrap().join(STORE_FILE),
+            dirs::data_dir()
+                .unwrap()
+                .join(APP_IDENTIFIER)
+                .join("settings.json")
+        );
     }
 
     #[test]
