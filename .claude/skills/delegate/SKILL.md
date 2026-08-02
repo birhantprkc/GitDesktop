@@ -22,7 +22,7 @@ it is the only agent sanctioned to write files in this repo. The
 ## Phase 0 — Gate & ground
 
 - **Orchestrator gate.** This workflow requires a Fable- or Opus-family
-  orchestrator (`claude-fable-5` or `claude-opus-4-*`) as the MAIN
+  orchestrator (`claude-fable-5` or any `claude-opus-*` id) as the MAIN
   conversation model — check your own identity in your system prompt. If you
   are Sonnet, Haiku, or any smaller model: **STOP.** Tell the user /delegate
   is gated to Fable/Opus and offer to do the work inline instead. Never
@@ -106,7 +106,8 @@ Out of scope: <adjacent things it must leave alone>
 - Spawn `implementer` (Agent tool, `subagent_type: "implementer"`), one
   package per agent, spec included verbatim plus any context the agent can't
   discover (branch intent, related in-flight packages, impeccable brief).
-- **Route effort per package** (frontmatter `high` is the floor/default):
+- **Route effort per package** (frontmatter `high` is the default when
+  unrouted):
   `effort: "low"` for mechanical packages (docs-sync, changelog, renames);
   `effort: "xhigh"` for the single hardest package of a feature. Set via the
   Agent tool's `effort` param at dispatch.
@@ -118,7 +119,9 @@ Out of scope: <adjacent things it must leave alone>
 
 1. **Full mode:** one whole-feature `spec-reviewer` given ALL the specs +
    touched-file lists is the DEFAULT for ≤2 coupled packages (ask for
-   per-package verdicts); use per-package reviewers only for larger fan-outs.
+   per-package verdicts; raise its `maxTurns` per-dispatch for large
+   reviews — a capped-out reviewer returns a truncated review); use
+   per-package reviewers only for larger fan-outs.
    **Lite mode:** you review the diff yourself against the spec and
    gd-conventions.
 2. Run the integration checks yourself in the main loop: `pnpm build`, the

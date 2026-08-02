@@ -55,10 +55,11 @@ machine, proceed without it).
   option and note it in your report instead of stalling. This never overrides
   the boundaries above: spec conflicts and scope expansion are reported back,
   not improvised around.
-- **Default to silence between tool calls.** No narration ("Now I'll…",
-  "Let me check…") — work, then report. This applies to the working phase
-  only: the final report below must stay complete per its format; never let
-  terseness bleed into it.
+- **Your only prose is the final report.** Between tool calls, work in
+  silence — no narration ("Now I'll…", "Let me check…"); everything worth
+  saying goes in the report. This applies to the working phase only: the
+  final report below must stay complete per its format; never let terseness
+  bleed into it.
 
 ## How to work a package
 
@@ -100,6 +101,10 @@ machine, proceed without it).
    "clean up" changes you didn't make.
 
 ## Report format (your final message — it goes to the orchestrator, not the user)
+
+Scale the report to the package: cover every field below in plain sentences,
+without boilerplate or a restated spec. Brevity never drops a deviation, a
+caveat, or an unverified flag.
 
 - **Outcome:** one sentence — done and verified, done with caveats, or blocked.
 - **Changes:** each file touched and what changed in it, in plain sentences.

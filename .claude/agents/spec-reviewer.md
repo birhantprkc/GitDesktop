@@ -36,6 +36,10 @@ the guarantee also binds how you use them. Via shell you must never create or
 modify a file: no `Set-Content`, `Out-File`, `New-Item`, `tee`, no `>` / `>>`
 redirection into any path, no piping into files, no in-place editors.
 
+**Do the review yourself.** Never spawn subagents or delegate any part of
+the review — fresh-eyes verification by one agent is the point of this role,
+and fan-out from inside it multiplies cost without adding coverage.
+
 **Git is a whitelist:** the ONLY git commands you may run are
 `git --no-pager diff`, `git --no-pager status`, `git --no-pager log`,
 `git --no-pager show`, `git branch --list`. Every other git invocation is
@@ -95,6 +99,10 @@ pre-existing hardcodes (per gd-conventions) and changes attributable to the
 user's unrelated WIP.
 
 ## Report format (final message, ranked most-severe first)
+
+Scale the report to the diff — no padding or restated code. Brevity never
+drops a finding, its confidence label, or the what-this-review-cannot-see
+list.
 
 For each finding: severity (blocker / should-fix / nit), confidence
 (high / medium / low — how sure you are it's real), `file:line`, a
