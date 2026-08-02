@@ -7,6 +7,7 @@ import {
   runAgentReview,
 } from "./agent";
 import { PROVIDER_LABELS } from "./providers";
+import { terminalErrorMessage } from "./terminal-error";
 import type { AiClient, AiSettings, AiStreamRequest } from "./types";
 
 /** The `<CLI> login` command each agent uses to authenticate — mirrors the
@@ -136,7 +137,8 @@ export function createCliClient(settings: AiSettings): AiClient {
             // An errored run throws BEFORE the tail is yielded, matching the
             // `error`-kind branch — a failed run never paints its final text
             // into the caller's draft field.
-            if (event.isError) throw new Error("The run ended with an error.");
+            if (event.isError)
+              throw new Error(terminalErrorMessage(event.text));
             // The terminal event carries the authoritative full text. A coalescing
             // CLI (Codex emits NO deltas — only this final text) has emitted nothing
             // yet, so yield the untold tail; streaming CLIs already emitted it all.

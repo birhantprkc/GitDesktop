@@ -8,6 +8,7 @@ import {
   type TranscriptSegment,
 } from "@/lib/ai/agent";
 import { cleanupContainerSandbox, stopTestContainer } from "@/lib/ai/sandbox";
+import { terminalErrorMessage } from "@/lib/ai/terminal-error";
 import { repoIdentity } from "@/lib/git/repo-identity";
 import {
   commitWorktreeAll,
@@ -426,8 +427,9 @@ async function runTurn(
             // Codex delivers its whole message in the done event, not as `delta`s, so adopt
             // `ev.text` when nothing was streamed — otherwise the turn shows blank. Added as
             // a text segment too so the transcript shows it after its tool steps; streaming
-            // agents already have both.
-            ...(ev.text && !last.narration
+            // agents already have both. Never on an errored Done, whose text is the failure
+            // REASON — adopting it would render the reason as the agent's own message.
+            ...(ev.text && !last.narration && !ev.isError
               ? {
                   narration: ev.text,
                   segments: appendTranscriptText(last.segments ?? [], ev.text),
@@ -436,8 +438,10 @@ async function runTurn(
             ...(ev.isError
               ? {
                   status: "error",
-                  error:
-                    last.narration || ev.text || "The agent reported an error.",
+                  error: terminalErrorMessage(
+                    ev.text,
+                    "The agent reported an error.",
+                  ),
                 }
               : {}),
           });

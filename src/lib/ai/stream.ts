@@ -10,6 +10,7 @@ import type { AgentToolKind } from "./agent";
 import { cancelAgentReview, providerKind, runAgentReview } from "./agent";
 import { createAiClient, runAgenticStream } from "./client";
 import { isCliProvider } from "./providers";
+import { terminalErrorMessage } from "./terminal-error";
 import type { AiSettings } from "./types";
 
 export interface CliStreamOpts {
@@ -140,8 +141,10 @@ export async function runCliStream({
             settled = true;
             onCost?.(event.costUsd);
             // An errored run keeps whatever streamed — partial text plus the error, no strip.
+            // Surface the terminal text as the reason only when it's error-shaped
+            // (terminalErrorMessage refuses run output, e.g. a body ended by session.error).
             if (event.isError) {
-              reject(new Error("The run ended with an error."));
+              reject(new Error(terminalErrorMessage(event.text)));
               return;
             }
             // The terminal event's text IS the agent's final answer. The delta buffer
@@ -308,7 +311,9 @@ export interface RunStreamArgs {
 /**
  * Generic streaming-AI hook: routes a system+prompt to an HTTP provider (Vercel
  * AI SDK) or a CLI agent subprocess, accumulating the response into `text`.
- * `repoPath` is only used by CLI providers.
+ * `repoPath` is only used by CLI providers. `run` resolves true only for a run that
+ * completed without error and without a cancel, so a caller that consumes `text`
+ * afterwards can tell a real result from a failed/cancelled partial.
  */
 export function useAiTextStream() {
   const [generating, setGenerating] = useState(false);
@@ -335,47 +340,55 @@ export function useAiTextStream() {
     setStatus("");
   }, []);
 
-  const run = useCallback(async (ai: AiSettings, args: RunStreamArgs) => {
-    const gen = ++runGenRef.current;
-    const isCurrent = () => gen === runGenRef.current;
-    // A superseded run must not touch the shared state the newer run now owns.
-    const putText = (t: string) => {
-      if (isCurrent()) setText(t);
-    };
-    const putStatus = (s: string) => {
-      if (isCurrent()) setStatus(s);
-    };
-    cancelledRef.current = false;
-    setGenerating(true);
-    setText("");
-    setStatus("");
-    try {
-      await streamAi({
-        ai,
-        system: args.system,
-        prompt: args.prompt,
-        repoPath: args.repoPath,
-        setText: putText,
-        setStatus: putStatus,
-        onCliId: (id) => {
-          if (isCurrent()) cliIdRef.current = id;
-        },
-        onAbort: (a) => {
-          if (isCurrent()) abortRef.current = a;
-        },
-      });
-    } catch (e) {
-      if (!cancelledRef.current && isCurrent()) toastError(e);
-    } finally {
-      // Only the latest run settles the shared state.
-      if (isCurrent()) {
-        setGenerating(false);
-        setStatus("");
-        abortRef.current = null;
-        cliIdRef.current = null;
+  const run = useCallback(
+    async (ai: AiSettings, args: RunStreamArgs): Promise<boolean> => {
+      const gen = ++runGenRef.current;
+      const isCurrent = () => gen === runGenRef.current;
+      // A superseded run must not touch the shared state the newer run now owns.
+      const putText = (t: string) => {
+        if (isCurrent()) setText(t);
+      };
+      const putStatus = (s: string) => {
+        if (isCurrent()) setStatus(s);
+      };
+      cancelledRef.current = false;
+      setGenerating(true);
+      setText("");
+      setStatus("");
+      try {
+        await streamAi({
+          ai,
+          system: args.system,
+          prompt: args.prompt,
+          repoPath: args.repoPath,
+          setText: putText,
+          setStatus: putStatus,
+          onCliId: (id) => {
+            if (isCurrent()) cliIdRef.current = id;
+          },
+          onAbort: (a) => {
+            if (isCurrent()) abortRef.current = a;
+          },
+        });
+        // A cancel can also settle cleanly (a killed CLI run returns with no terminal
+        // event), so success is "no throw AND not cancelled" — and a superseded run
+        // must report failure rather than read the newer run's reset cancel flag.
+        return isCurrent() && !cancelledRef.current;
+      } catch (e) {
+        if (!cancelledRef.current && isCurrent()) toastError(e);
+        return false;
+      } finally {
+        // Only the latest run settles the shared state.
+        if (isCurrent()) {
+          setGenerating(false);
+          setStatus("");
+          abortRef.current = null;
+          cliIdRef.current = null;
+        }
       }
-    }
-  }, []);
+    },
+    [],
+  );
 
   return { run, cancel, reset, generating, text, status };
 }
