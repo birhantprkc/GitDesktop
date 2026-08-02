@@ -63,7 +63,7 @@
     "posthog-js": "^1.407.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "recharts": "3.10.0",
+    "recharts": "3.10.1",
     "shadcn": "^4.14.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
@@ -82,11 +82,11 @@
     "@types/node": "^24.13.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.4",
+    "@vitejs/plugin-react": "^6.0.5",
     "babel-plugin-react-compiler": "^1.0.0",
     "globals": "^17.7.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.4"
   },
-  "packageManager": "pnpm@11.7.0+sha512.19cc852c120c7125760f2443ee6be0ca5b40f9f50598de1a09a1f177503e010e57c23c77646e01e761de59bf874fb22a3398c33ab9691fc13eb946b6f0f4d620"
+  "packageManager": "pnpm@11.18.0+sha512.33d83c77da82f49fba836925c6f1b841181ec3132b670639bd012f7075f5c7cf634c5f870147c19aae7478fac01df09d8892e880454896edd23ee9b33757563c"
 }
