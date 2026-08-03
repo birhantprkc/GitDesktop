@@ -12,6 +12,61 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-03
+
+### Added
+
+- **Keep updater notes in step with the release.** When a GitHub release carries a
+  `latest.json` updater manifest, editing its notes offers to update the manifest's
+  notes in the same save (on by default), so the "what's new" your installed apps
+  show matches the release page. The manifest's version, dates, and platform
+  signatures are left untouched.
+
+### Changed
+
+- **Room to write release notes.** The notes editor in the New release and Edit
+  release dialogs now fills the dialog — replacing the short fixed box and its
+  drag-to-resize handle — so a long release body is readable and editable at a
+  glance in Write and Preview alike. The Edit release dialog is wider to match.
+
+### Fixed
+
+- A failed AI run no longer passes its error text off as a result: an outage or a
+  usage limit that interrupts a review never gets posted to your PR, and one that
+  interrupts a generation never lands in the commit-message or other drafts.
+  Failed reviews land in **Activity & notifications** with the reason (automated
+  ones with a one-click re-run), and posting a review that stopped part-way asks
+  first.
+- On Windows, AI-ignore patterns that use a backslash escape — the form a file
+  whose name ends in a space needs — now hide that file from the staged and
+  branch diffs sent to AI, matching how the rest of the app reads the same list.
+- Your **AI ignore patterns** now cover **new (untracked) files** when a
+  **branch name** is generated — in the app and over MCP — where their names
+  previously reached the provider whatever your patterns said. Names that match
+  are held back and counted in the prompt's hidden-files note instead.
+- Branch-name suggestions in repositories whose remote isn't named `origin` now
+  compare your work against that remote's branch instead of a possibly stale
+  local copy of it.
+- Base-branch detection now works in repositories whose remote isn't named
+  `origin` (a clone made with `git clone -o <name>`), so compare views and
+  generated branch names start from the right branch.
+- Automated PR reviews no longer run twice right after a push, so a re-review
+  costs one run instead of two.
+- MCP tools that can replace or discard things you didn't list — assignees and
+  reviewers, a milestone, a Jira assignee or label set, reviewer notes, a merge
+  that auto-resolves conflicts — now carry a destructive hint, so a connected
+  agent can ask first.
+- Editing a release through the MCP server now keeps the `latest.json` updater
+  notes in sync with the release notes, matching the in-app editor, so installed
+  apps show the same "what's new" however the release was edited.
+- A merged pull request's timeline now shows the commit it was merged as.
+- Stashing selected files now tells you when there was nothing to stash, instead
+  of reporting a stash that was never created.
+- The MCP `stash_push` tool now says when the paths it was given matched nothing,
+  so an agent can tell an empty stash from a successful one.
+- Removing an ignore rule deletes exactly the rule you picked, even when another
+  line in the same `.gitignore` differs from it only by a trailing escape.
+
 ## [0.6.0] - 2026-07-31
 
 ### Added
@@ -2526,7 +2581,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/theBGuy/GitDesktop/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/theBGuy/GitDesktop/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/theBGuy/GitDesktop/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/theBGuy/GitDesktop/compare/v0.5.0...v0.5.1
