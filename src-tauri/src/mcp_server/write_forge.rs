@@ -227,6 +227,12 @@ struct UpdateReleaseArgs {
     /// New prerelease state (GitHub only). Omit to keep the current state.
     #[serde(default)]
     prerelease: Option<bool>,
+    /// Whether to also point the release's `latest.json` Tauri updater manifest at
+    /// the new notes (GitHub only, and only when the release carries that asset).
+    /// Defaults to true; set false to leave the manifest alone. Only applies when
+    /// `notes` are given — without them the manifest is left alone.
+    #[serde(default)]
+    sync_updater_notes: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -382,6 +388,78 @@ struct CloseDiscussionArgs {
     /// to "RESOLVED".
     #[serde(default)]
     reason: String,
+}
+
+/// Tauri's updater manifest, attached to a release as an asset of this exact name.
+/// Mirrors `github::release`'s own constant (private to that module) and the
+/// frontend's `UPDATER_MANIFEST_NAME`.
+const UPDATER_MANIFEST: &str = "latest.json";
+
+/// The notes an updater-manifest sync should carry, or `None` when it must not run.
+/// Empty/whitespace notes leave the release body untouched (the edit trims and skips
+/// `--notes`), so syncing them would blank a live manifest; `Some(false)` is the
+/// caller's opt-out. The text is TRIMMED, matching what the edit wrote to the body.
+fn updater_notes_to_sync(notes: Option<&str>, sync: Option<bool>) -> Option<String> {
+    if sync == Some(false) {
+        return None;
+    }
+    notes
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+}
+
+/// Point a just-edited release's updater manifest at `notes`, mirroring the in-app
+/// editor's gate: GitHub only, and only when the release ships a `latest.json` asset.
+/// `None` = a gate skipped it, `Some(Err)` = a ready-to-report sentence for the caller
+/// to disclose alongside the successful edit (each failure arm words its own, so
+/// neither asserts a manifest exists when that is what went unverified). `current` is
+/// the pre-edit release read when the tool already needed one — an edit can't change
+/// the asset list.
+async fn sync_release_updater_notes(
+    repo: &str,
+    tag: &str,
+    notes: &str,
+    current: Option<&crate::github::release::ReleaseDetails>,
+) -> Option<Result<(), String>> {
+    // `detect_non_github` returning None IS the GitHub arm (forge's resilient
+    // default); GitLab/Bitbucket releases carry no Tauri updater manifest.
+    if crate::forge::detect_non_github(repo).await.is_some() {
+        return None;
+    }
+    let fetched;
+    let release = match current {
+        Some(r) => r,
+        None => {
+            match crate::forge::forge_release_view(repo.to_string(), tag.to_string()).await {
+                Ok(r) => {
+                    fetched = r;
+                    &fetched
+                }
+                // Can't tell whether a manifest is attached — report rather than
+                // let silence read as "this release has none".
+                Err(e) => {
+                    return Some(Err(format!(
+                        "The release was updated, but whether it carries a \
+                         {UPDATER_MANIFEST} updater manifest could not be checked: {e}"
+                    )))
+                }
+            }
+        }
+    };
+    if !release.assets.iter().any(|a| a.name == UPDATER_MANIFEST) {
+        return None;
+    }
+    Some(
+        crate::github::release::gh_release_sync_updater_notes(repo, tag, notes)
+            .await
+            .map_err(|e| {
+                format!(
+                    "The release was updated, but its {UPDATER_MANIFEST} updater manifest \
+                     was not: {e}"
+                )
+            }),
+    )
 }
 
 #[tool_router(router = write_forge_router, vis = "pub(crate)")]
@@ -1019,15 +1097,25 @@ impl GitDesktopMcp {
         description = "Edit a release's title and/or notes (and, on GitHub, its draft/prerelease \
                        state) by tag in the bound repository's forge (GitHub or GitLab, per its \
                        remote; Bitbucket releases aren't supported). Omitted fields keep their \
-                       current value (the current release is read first to preserve them). Requires \
+                       current value (the current release is read first to preserve them). When \
+                       `notes` are given and the release carries a `latest.json` Tauri updater \
+                       manifest (GitHub only), the manifest's notes are synced to match, so \
+                       installed apps show the same \"what's new\" as the release page — pass \
+                       `sync_updater_notes: false` to leave it alone. Releases without that asset \
+                       are unaffected. Syncing REPLACES the `latest.json` asset \
+                       (delete-then-upload), so a failed upload can leave the release without a \
+                       manifest; `updater_manifest_error` then carries the recovery details, \
+                       including the patched copy's path when one could be parked. Requires \
                        --allow-remote-write.",
-        annotations(read_only_hint = false, destructive_hint = false)
+        annotations(read_only_hint = false, destructive_hint = true)
     )]
     async fn update_release(
         &self,
         Parameters(args): Parameters<UpdateReleaseArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_remote_write()?;
+        // Decided before the fallbacks below consume `args.notes`.
+        let notes_to_sync = updater_notes_to_sync(args.notes.as_deref(), args.sync_updater_notes);
         // forge_release_edit sends title/notes AND applies prerelease/draft explicitly
         // (gh's `--flag=<bool>` form), so an omitted flag would otherwise be forced to its
         // param default. Read the current release to preserve whatever the caller didn't
@@ -1074,7 +1162,26 @@ impl GitDesktopMcp {
         )
         .await
         .map_err(app_err)?;
-        json_result(&serde_json::json!({ "tag": args.tag, "action": "updated" }))
+        let mut result = serde_json::json!({ "tag": args.tag, "action": "updated" });
+        // The edit already landed, so a manifest-sync failure is a caveat on a
+        // successful result, never a tool error — and its text carries the recovery
+        // path for a clobbered manifest, so it ships verbatim.
+        if let Some(sync_notes) = notes_to_sync {
+            match sync_release_updater_notes(&self.repo, &args.tag, &sync_notes, current.as_ref())
+                .await
+            {
+                Some(Ok(())) => {
+                    result["updater_manifest"] = serde_json::Value::String(format!(
+                        "Updater manifest ({UPDATER_MANIFEST}) synced to the edited notes."
+                    ));
+                }
+                Some(Err(disclosure)) => {
+                    result["updater_manifest_error"] = serde_json::Value::String(disclosure);
+                }
+                None => {}
+            }
+        }
+        json_result(&result)
     }
 
     #[tool(
@@ -1570,6 +1677,7 @@ mod tests {
             notes: Some("n".into()),
             draft: Some(false),
             prerelease: Some(false),
+            sync_updater_notes: None,
         })));
         assert_gated!(h.create_review_thread(Parameters(CreateReviewThreadArgs {
             number: 1,
@@ -1665,5 +1773,28 @@ mod tests {
             .await
             .expect_err("expected an unknown-kind rejection");
         assert!(err.to_string().contains("kind must be"), "got: {}", err);
+    }
+
+    /// The updater-sync gate: a sync only fires for notes the edit actually wrote,
+    /// and never against the caller's opt-out. Syncing empty notes would blank a
+    /// live manifest, since the edit itself skips `--notes` for them.
+    #[test]
+    fn updater_notes_to_sync_gates_empty_notes_and_the_opt_out() {
+        assert_eq!(updater_notes_to_sync(None, None), None, "no notes, no sync");
+        assert_eq!(
+            updater_notes_to_sync(Some("   "), None),
+            None,
+            "whitespace-only notes leave the body untouched, so nothing to sync"
+        );
+        assert_eq!(
+            updater_notes_to_sync(Some("n"), Some(false)),
+            None,
+            "the caller's opt-out wins over real notes"
+        );
+        assert_eq!(
+            updater_notes_to_sync(Some(" n "), None),
+            Some("n".to_string()),
+            "the synced text is trimmed, like the text the edit wrote"
+        );
     }
 }
