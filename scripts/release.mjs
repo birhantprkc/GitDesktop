@@ -512,6 +512,8 @@ async function main() {
   } else {
     // One atomic push — both refs land or neither does. We push the tag
     // explicitly: it is lightweight, so --follow-tags would silently skip it.
+    // Rides the ruleset's Repository-admin always-bypass (build + fragment are
+    // required checks); losing that bypass rejects this push, tag included.
     const push = spawnSync(
       "git",
       ["push", "--atomic", "origin", "master", tag],
@@ -524,6 +526,16 @@ async function main() {
       );
       say(
         `  git pull --rebase origin master && git tag -f ${tag} && git push --atomic origin master ${tag}`,
+      );
+      say(
+        dim(
+          "  (Rejected for protected-branch/rules instead? The account lost master's ruleset bypass — rebasing won't help.)",
+        ),
+      );
+      say(
+        dim(
+          `  To undo the release commit entirely (restores the fragments): git reset --hard HEAD~1 && git tag -d ${tag}`,
+        ),
       );
       rl.close();
       process.exit(1);
