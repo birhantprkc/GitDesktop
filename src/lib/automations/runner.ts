@@ -34,8 +34,8 @@ import type { DiffStatEntry } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { listLocalPrs, updateLocalPr } from "@/lib/pulls/local";
 import {
-  getLatestReview,
   listReviews,
+  type PersistedReview,
   saveReview,
 } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
@@ -49,7 +49,7 @@ import {
 import { errorMessage, invoke } from "@/lib/tauri/invoke";
 import {
   clearDismissedHead,
-  getDismissedHead,
+  getDismissedHeadMap,
   setDismissedHead,
 } from "./dismissals";
 import { useAutomationResults } from "./results";
@@ -258,6 +258,35 @@ async function run(
 
   const settings = await loadSettings();
   const notify = settings.notifications.automations;
+  // The gate stores, read once and shared by an event's per-action gate checks: `fresh`
+  // reloads from disk and queues behind any writer, and pr-reviews.json carries every
+  // review's full markdown, so sharing is what keeps a two-mode event from paying twice.
+  // Taken LAZILY — an event whose actions are all filtered out reads nothing, and commit
+  // events never reach the gates below.
+  let gateSnapshot: {
+    reviews: PersistedReview[];
+    dismissed: Partial<Record<ReviewMode, string>>;
+  } | null = null;
+  // Memoizes the resolved object rather than the promise — the action loop is sequential,
+  // so two calls can never be in flight across these awaits.
+  const gateState = async (prEvent: PrAutomationEvent) => {
+    if (!gateSnapshot) {
+      // Separate stores with independent queues, so neither read waits on the other.
+      const [reviews, dismissed] = await Promise.all([
+        listReviews(prEvent.repoPath, prEvent.target.type, targetRef(prEvent), {
+          fresh: true,
+        }),
+        getDismissedHeadMap(
+          prEvent.repoPath,
+          prEvent.target.type,
+          targetRef(prEvent),
+          { fresh: true },
+        ),
+      ]);
+      gateSnapshot = { reviews, dismissed };
+    }
+    return gateSnapshot;
+  };
   for (const { action, conditions } of actions) {
     if (only && action !== only) continue;
     if (
@@ -277,17 +306,11 @@ async function run(
     // the history store's MAX_PER_GROUP per (kind, ref, mode).
     if (event.kind === "pr-sync") {
       const headSha = event.headSha ?? "";
-      const covered = (
-        await listReviews(event.repoPath, event.target.type, targetRef(event))
-      ).filter((r) => r.mode === action);
+      const { reviews, dismissed } = await gateState(event);
+      const covered = reviews.filter((r) => r.mode === action);
       // A CANCELLED re-review persists the dismissed head, so a cancelled head doesn't
       // re-fire after an app relaunch — only a genuinely newer head does.
-      const dismissedHead = await getDismissedHead(
-        event.repoPath,
-        event.target.type,
-        targetRef(event),
-        action,
-      );
+      const dismissedHead = dismissed[action];
       // sameSha (not `===`) so a short-vs-full sha for the SAME head (Bitbucket's
       // 12-char poll head vs a full-40 seed) counts as "already reviewed" and
       // doesn't re-fire a redundant review each poll tick.
@@ -304,19 +327,12 @@ async function run(
     // a head this mode already dismissed. Mirror of the pr-sync gate, inverted — pr-sync
     // requires a prior review, pr-open requires its absence.
     if (event.kind === "pr-open") {
-      const prior = await getLatestReview(
-        event.repoPath,
-        event.target.type,
-        targetRef(event),
-        action,
-      );
+      const { reviews, dismissed } = await gateState(event);
+      // The list is newest-first, so this mode's first entry IS its latest review — the
+      // same record `getLatestReview` would return.
+      const prior = reviews.find((r) => r.mode === action);
       if (prior) continue;
-      const dismissedHead = await getDismissedHead(
-        event.repoPath,
-        event.target.type,
-        targetRef(event),
-        action,
-      );
+      const dismissedHead = dismissed[action];
       if (event.headSha && sameSha(dismissedHead ?? "", event.headSha)) {
         continue;
       }
@@ -578,6 +594,10 @@ async function run(
       // Every terminal path lands here — including both `continue`s and the delivered
       // success path, which keeps its claim but must stop heartbeating it.
       stopHeartbeat();
+      // This try is entered only past every gate, so reaching it means the action RAN:
+      // drop the shared snapshot so the next action re-reads what happened meanwhile
+      // (a delivery, or a cancel in another window flushing a dismissal).
+      gateSnapshot = null;
     }
   }
   return { matched, attempted };
