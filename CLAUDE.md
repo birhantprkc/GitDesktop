@@ -84,6 +84,16 @@ back-catalogue in the same change rather than grandfathering it.
   (two generated texts agreeing is one drafting process sampled twice, not
   evidence of a house style).
 
+Blog mechanics (not copy) — **scheduling**: a future `pubDate` keeps a post
+out of production builds — it behaves like a draft (visible in DEV and Pages
+previews) until the daily `site-scheduled-publish` cron (00:37 UTC nominal;
+GitHub can delay runs, so precision is the day, not the hour) rebuilds the
+site. Use a **bare date** — midnight UTC, still the prior evening in US time
+zones. A time component doesn't schedule an hour: the post appears on the
+first production build after its timestamp — the daily cron, or any earlier
+push/release rebuild — so a timestamp past ~00:37 UTC waits for the next
+daily run unless an unrelated rebuild lands sooner.
+
 ## Everyday commands
 
 ```sh
