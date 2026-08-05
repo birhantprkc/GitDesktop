@@ -221,7 +221,7 @@ export function triggerAutomations(event: AutomationEvent): void {
 
 /** What a {@link run} pass did, so a re-run can tell outcomes apart:
  *  - `matched`: rules that exist AND apply (past the `only` + branch gates). 0 = the rule
- *    genuinely no longer applies.
+ *    no longer applies, or automations are paused (Hide AI).
  *  - `attempted`: runs actually started. `matched > 0 && attempted === 0` means a claim or
  *    an already-covered head blocked it — retryable. */
 interface RunOutcome {
@@ -230,16 +230,23 @@ interface RunOutcome {
 }
 
 /**
- * Runs the automation rules matching `event`. `only` scopes a re-run to a single mode.
- * `replacesKey` is the stopped row a re-run replaces — removed the instant its replacement
- * registers, so the stopped row survives whenever nothing registers. Returns a
- * {@link RunOutcome} so a re-run can tell "rule gone" from "blocked" from "started".
+ * Runs the automation rules matching `event`, unless AI features are hidden — that
+ * pauses automations, so it returns immediately with a zero outcome. `only` scopes a
+ * re-run to a single mode. `replacesKey` is the stopped row a re-run replaces — removed
+ * the instant its replacement registers, so the stopped row survives whenever nothing
+ * registers. Returns a {@link RunOutcome} so a re-run can tell "rule gone" from
+ * "blocked" from "started".
  */
 async function run(
   event: AutomationEvent,
   only?: ReviewMode,
   replacesKey?: string,
 ): Promise<RunOutcome> {
+  // Hiding AI features PAUSES automations: no NEW run starts while `hideAi` is set
+  // (an in-flight run still completes and delivers — deliberate). Rules are kept and
+  // resume when AI is shown again.
+  const settings = await loadSettings();
+  if (settings.hideAi) return { matched: 0, attempted: 0 };
   const config = await loadAutomations();
   const repo = await repoAutomationsFor(config, event.repoPath);
   const actions = effectiveActions(config, repo, event.kind);
@@ -256,7 +263,6 @@ async function run(
   const head = event.kind === "commit" ? undefined : event.head;
   const base = event.kind === "commit" ? undefined : event.base;
 
-  const settings = await loadSettings();
   const notify = settings.notifications.automations;
   // The gate stores, read once and shared by an event's per-action gate checks: `fresh`
   // reloads from disk and queues behind any writer, and pr-reviews.json carries every
@@ -611,7 +617,8 @@ async function run(
  * cancelled run wrote one, and the pr-sync `sameSha(dismissedHead, headSha)` gate would
  * otherwise make the re-run a silent no-op. The run then flows through the normal pipeline
  * scoped to `only`. If the rule was disabled since, nothing matches and we toast rather
- * than leave a dead button.
+ * than leave a dead button. While AI features are hidden it stops before the clear —
+ * a paused re-run must not consume the watermark.
  */
 export function rerunAutomation(
   event: AutomationEvent,
@@ -622,6 +629,12 @@ export function rerunAutomation(
   const noun = event.kind === "commit" ? "commit" : "pull request";
   void (async () => {
     try {
+      // The dismissal clear below mutates BEFORE run()'s own pause gate, so a paused
+      // re-run has to stop here — clearing nothing and running nothing.
+      if ((await loadSettings()).hideAi) {
+        toast.info("Automations are paused while AI features are hidden.");
+        return;
+      }
       // Best-effort ONLY here: a cleared-dismissal failure must not block the
       // re-run (it just means the pr-sync gate might skip; we then toast retryable).
       if (event.kind !== "commit") {
