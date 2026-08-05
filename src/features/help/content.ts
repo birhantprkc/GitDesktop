@@ -649,9 +649,10 @@ request** dialog offers an **Add upstream remote** button that wires it up for y
 
 Browse open/closed PRs and open one in a full in-app view: description, commits, changed
 files with diffs, and CI checks. From there you can **comment** (with quote-reply),
-**review** (approve / comment / request changes), **edit** the title and body, manage
-**labels**, **assignees**, and **reviewers** (request a review from a collaborator — the
-picker excludes the PR author, whom GitHub won't let you request), flip a PR between
+**review** (approve / comment / request changes), **edit** the title and body (and
+**retarget** the base branch, unless the PR is stacked), manage **labels**,
+**assignees**, and **reviewers** (request a review from a collaborator — the picker
+excludes the PR author, whom GitHub won't let you request), flip a PR between
 **draft** and **ready for review** in either direction (a footer **Ready for review** /
 **Convert to draft** pair, also reachable from the command palette),
 **merge** (merge commit, squash, or rebase, with optional branch deletion), and **close**.
@@ -806,8 +807,12 @@ before any automated review runs, and that review reads them as context; on GitH
 GitLab the code reviews and security audits you start yourself read them too — so a
 deliberate, documented decision isn't re-flagged. Notes present here also ground the
 **AI-generated** description{{/ai}}. Press {{key:mod+enter}} from any field to submit either the
-**Create** or the **Edit** dialog.{{ai}} While a PR dialog is open, {{kbd:generate-commit-message}}
-runs its **Generate** for you.{{/ai}}
+**Create** or the **Edit** dialog. The **Edit** dialog also carries a **base branch**
+select, so you can **retarget** a pull request at a different branch without recreating it —
+on GitHub, GitLab, and Bitbucket alike. On a **stacked GitHub** pull request that select is
+disabled, since the stack decides what each member targets: dissolve the stack first (see
+*Stacked pull requests* below) and the base is yours to change again.{{ai}} While a PR dialog
+is open, {{kbd:generate-commit-message}} runs its **Generate** for you.{{/ai}}
 
 ## GitLab merge requests
 
@@ -815,7 +820,7 @@ Point the app at a **GitLab** repo and the same tab lists its **merge requests**
 closed/merged) next to any local PRs. Open one for the description, comments, commits, and a
 highlighted **diff** (with an **Open on GitLab** link) — and the GitLab MR writes:
 **comment** on it (and **edit** or **delete** your own comments), **close / reopen** it,
-**edit** its title and description,
+**edit** its title and description (and **retarget** its target branch),
 **approve / unapprove** it (a reviewer action,
 with the approval count shown inline), **request changes** (the blocking reviewer state —
 it adds you as a reviewer if needed, posts your drafted comment alongside, and clears when
@@ -865,6 +870,28 @@ it on the keys.
 
 Where the stack comes from depends on the forge: on **GitHub** it's the **native
 stacked-PR API**, and on **GitLab** a chain of merge requests is **detected automatically**.
+
+On **GitHub** you can also build the stack yourself, from the pull-request view. Whenever
+your open pull requests already form a chain — each one targeting the branch below it — the
+**Stack** area offers to **create a stack** out of that chain, or to **add it to** the stack
+this pull request already sits on, and shows you a **preview** of exactly what will be
+stacked, bottom to top, before anything is created. Confirm it and the chain becomes a real
+stack: one that navigates as a unit and **merges bottom-up as a single operation**. Only
+this repository's own pull requests can chain — a **fork** pull request never joins a
+stack — and where a repository has more open pull requests than fit one page, the offer
+stays quiet rather than guess at a chain it can't see whole. (GitLab finds stacked merge
+requests on its own and Bitbucket has no stacks, so this is GitHub-only.)
+
+A stacked pull request's **Stack** section also offers **Dissolve**, behind a confirmation.
+Dissolving takes the stack apart and nothing else: every pull request in it **stays open on
+its branch** — they just stop merging together. GitHub's API offers no way to reorder a
+stack in place, so to change the order, dissolve the stack and create it again in the order
+you want.
+
+**Create pull request stack**, **Add to pull request stack**, and **Dissolve pull request
+stack** are in the command palette ({{kbd:command-palette}}) too, offered from the
+pull-request view whenever they apply. Like the stack navigation commands they have no
+default shortcut, so give them one in **Settings → Keyboard** if you want them on the keys.
 
 On **GitHub**, merging is **stack-aware**: merging a stacked pull request merges it *and*
 every still-open pull request below it, bottom-up, as a single operation, so the stack
@@ -1246,10 +1273,11 @@ Once connected:
 - **Pull requests** — the **Pull Requests** tab lists a Bitbucket repo's PRs; open one to
   read its **diff**, **comments**, and **build statuses**, and to act on it: **comment**,
   **decline**, **merge** (merge commit, squash, or fast-forward, with an optional
-  delete-source-branch), **edit** the title/description, **approve/unapprove**,
-  **request changes** (a true toggle — click again to revoke; approving also clears it),
-  pick **reviewers** from your workspace members (the PR author can't review their own
-  PR, so they never appear), and flip **draft ↔ ready** in either direction. Its
+  delete-source-branch), **edit** the title/description (and **retarget** the destination
+  branch), **approve/unapprove**, **request changes** (a true toggle — click again to
+  revoke; approving also clears it), pick **reviewers** from your workspace members (the
+  PR author can't review their own PR, so they never appear), and flip **draft ↔ ready**
+  in either direction. Its
   **line-anchored review comments** render too — grouped by file in the conversation
   column and anchored in the Files diff (see *Review comments* under *Pull requests*) —
   with reply-in-thread and edit/delete of your own thread comments (Bitbucket has no
@@ -1497,10 +1525,11 @@ never grants another, and every flag is **off by default**, so read-only stays t
 Beyond \`--allow-write\` (local PRs and issues, above), **Allow remote write**
 (\`--allow-remote-write\`) lets an agent make **real forge writes** in this repo under your
 authenticated identity (GitHub \`gh\`, GitLab \`glab\`, or a stored Bitbucket token):
-**create, merge, update**, and **close/reopen** pull requests, toggle **draft** state,
-**request reviewers**, **edit labels**, set **assignees** (on issues and PRs), **approve**,
-**request changes**, or **withdraw** either, **start**, **reply to**, and **resolve** review
-threads, add or remove **reactions**, **rerun/cancel/dispatch** CI, **create/update releases**,
+**create, merge, update**, and **close/reopen** pull requests, **create, extend, or
+dissolve** a GitHub PR stack, toggle **draft** state, **request reviewers**, **edit labels**,
+set **assignees** (on issues and PRs), **approve**, **request changes**, or **withdraw**
+either, **start**, **reply to**, and **resolve** review threads, add or remove
+**reactions**, **rerun/cancel/dispatch** CI, **create/update releases**,
 **create, comment on, close/reopen**, and set the **milestone** of issues, and — on GitHub —
 **create, comment on, answer, and close/reopen discussions**. One caveat: **creating** a
 pull request pushes its head branch first, so it additionally needs \`--allow-git-write\`

@@ -10,16 +10,18 @@ export interface BranchPickerOptions {
   /** Selectable branch names in git order; session + archived branches excluded
    *  (archived ones in `keep` are retained). */
   names: string[];
-  /** value → label map for `field.SelectField`. */
+  /** value → label map for the select controls (`field.SelectField` and the
+   *  form-agnostic `SelectControl`). */
   items: Record<string, string>;
   /** value → trailing status chips; only branches with a chip appear here. */
   annotations: Record<string, ReactNode>;
 }
 
 /**
- * Branch options for the create-PR pickers: the filtered name list, the
- * value→label map, and per-branch status chips (checked out in another
- * worktree) that a `SelectField` renders after each option.
+ * Branch options for the PR branch pickers — create's head/base pair and the
+ * edit dialog's base picker: the filtered name list, the value→label map, and
+ * per-branch status chips (checked out in another worktree) rendered after each
+ * option.
  *
  * Agent-session branches (`gd/session/*`) are always excluded — they're
  * app-internal and submitting one would push it — and **archived** branches are
