@@ -476,6 +476,34 @@ pub struct PrListLabel {
     pub name: String,
 }
 
+/// A PR's membership in a stack — GitHub's first-class stacked PRs, and the
+/// equivalent chain GitLab's arm infers from open MRs (GitLab exposes no stack
+/// object). Bitbucket has no stack concept and never fills this.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStackInfo {
+    /// Stack identity: GitHub's stack number as a string; GitLab synthesized
+    /// "mr-<bottom-iid>". Stable within one inference pass — GitLab's re-roots
+    /// when the bottom MR merges and leaves the open list.
+    pub id: String,
+    /// 1 = bottom of the stack (merges first).
+    pub position: u32,
+    pub size: u32,
+}
+
+/// One layer of a stack as the detail view lists it, bottom→top.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStackMember {
+    pub number: u64,
+    pub title: String,
+    /// "open" | "merged" | "closed" — lowercase, provider-neutral.
+    pub state: String,
+    pub position: u32,
+    pub head_ref_name: String,
+    pub base_ref_name: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrInfo {
@@ -501,6 +529,11 @@ pub struct PrInfo {
     /// and GitLab query by number/iid and leave this "".
     #[serde(default)]
     pub head_sha: String,
+    /// Stack membership, when the PR is in one. No provider's list payload carries
+    /// it (`gh pr list --json` has no stack field), so it defaults to `None` and is
+    /// joined in from a supplementary call — hence the serde default.
+    #[serde(default)]
+    pub stack: Option<PrStackInfo>,
 }
 
 /// Submits a review: `action` is "approve", "comment", or "request_changes".
@@ -557,17 +590,25 @@ pub async fn gh_pr_comment(
     Ok(())
 }
 
-/// The outcome of a successful merge. The PR *did* merge; `cleanup_warning`
-/// carries a human-readable caveat when the post-merge remote head-branch
-/// cleanup failed (GitHub-only by construction — GitLab and Bitbucket fold
-/// deletion into the atomic merge server-side, so they never produce one). A
-/// merge *failure* is still an `Err`, never an outcome with a warning.
+/// The outcome of a successful merge — the merge was accepted; `cleanup_warning`
+/// carries a human-readable caveat about what did NOT happen afterwards. Two
+/// causes, both GitHub-only by construction (GitLab and Bitbucket fold deletion
+/// into the atomic merge server-side): the post-merge remote head-branch cleanup
+/// failed, or a stacked merge was handed to a merge QUEUE, where the PR hasn't
+/// landed yet and cleanup is deliberately skipped. A merge *failure* is still an
+/// `Err`, never an outcome with a warning.
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PrMergeOutcome {
-    /// `Some(msg)` — merged fine, but head-branch cleanup failed; `msg` always
-    /// states the merge succeeded. `None` — merged and cleaned up cleanly.
+    /// `Some(msg)` — accepted, but with a caveat the user must see (cleanup failed,
+    /// or the merge is queued and the branch was left alone); `msg` always states
+    /// what did happen. `None` — merged and cleaned up cleanly.
     pub cleanup_warning: Option<String>,
+    /// The merge was handed to a merge QUEUE and has not landed yet. State, not
+    /// prose: `cleanup_warning` carries the human detail, but a programmatic caller
+    /// (the MCP merge tool, the frontend) must branch on this rather than parse a
+    /// message — and must not treat the PR as merged or its branch as deleted.
+    pub queued: bool,
 }
 
 /// Merges the PR with the given strategy ("merge"/"squash"/"rebase"). With
@@ -579,8 +620,11 @@ pub struct PrMergeOutcome {
 /// (whose deletion is server-side and remote-only). We merge, then DELETE the
 /// remote ref via the API.
 ///
-/// Merge failure = `Err`. Cleanup failure after a landed merge = a
-/// `cleanup_warning` on a successful [`PrMergeOutcome`], never an error.
+/// Merge failure = `Err`. A successful [`PrMergeOutcome`] covers two non-clean
+/// endings, both carrying `cleanup_warning` and neither an error: the merge landed
+/// but branch cleanup failed, or a stacked merge was handed to a merge QUEUE and
+/// hasn't landed (`queued`), in which case cleanup is deliberately skipped —
+/// deleting the head branch would break the merge the queue still holds.
 #[tauri::command]
 pub async fn gh_pr_merge(
     repo_path: String,
@@ -601,14 +645,31 @@ pub async fn gh_pr_merge(
         }
     };
     let slug = crate::github::gh_lens_slug(&repo_path, lens.as_deref()).await?;
-    run_gh(
-        Some(&repo_path),
-        &["pr", "merge", &n, method, "--repo", &slug],
-        GH_NETWORK_TIMEOUT,
-    )
-    .await?;
-    // Merge landed: from here a cleanup failure is a warning on success, never an error.
-    let cleanup_warning = if delete_branch {
+    // A stack member rejects BOTH `gh pr merge` and the plain REST merge endpoint;
+    // GitHub requires its asynchronous merge API there. The probe is best-effort —
+    // when it can't tell, the legacy path runs and GitHub's own refusal is the
+    // backstop. Merging a member also merges every unmerged layer below it.
+    let queued = if gh_pr_is_stacked(&repo_path, &slug, number).await {
+        gh_pr_merge_async(&repo_path, &slug, number, &strategy).await? == StackedMergeResult::Queued
+    } else {
+        run_gh(
+            Some(&repo_path),
+            &["pr", "merge", &n, method, "--repo", &slug],
+            GH_NETWORK_TIMEOUT,
+        )
+        .await?;
+        false
+    };
+    // Merge accepted: from here a cleanup failure is a warning on success, never an error.
+    let cleanup_warning = if queued {
+        // A queued merge has NOT landed — deleting the head branch now would break
+        // the merge the queue is still holding. Skip cleanup and disclose it.
+        Some(if delete_branch {
+            format!("Merging #{number} was queued on GitHub and will land when the queue completes. The remote branch was left in place for the queue.")
+        } else {
+            format!("Merging #{number} was queued on GitHub and will land when the queue completes.")
+        })
+    } else if delete_branch {
         gh_delete_remote_head_branch(&repo_path, number, lens.as_deref())
             .await
             .err()
@@ -616,7 +677,156 @@ pub async fn gh_pr_merge(
     } else {
         None
     };
-    Ok(PrMergeOutcome { cleanup_warning })
+    Ok(PrMergeOutcome {
+        cleanup_warning,
+        queued,
+    })
+}
+
+/// Whether the PR is a stack member — the same `pull_stack_ref` reading the detail
+/// view uses, so the merge path can never cascade a stack the detail view didn't
+/// show. `false` on ANY failure (network, a host without stacks, an unparseable or
+/// incomplete `stack` object): the legacy merge path then runs, and GitHub rejects
+/// a stacked merge there with its own actionable error.
+async fn gh_pr_is_stacked(repo_path: &str, slug: &str, number: u64) -> bool {
+    let endpoint = format!("repos/{slug}/pulls/{number}");
+    let Ok(out) = run_gh_raw(Some(repo_path), &["api", &endpoint], GH_TIMEOUT).await else {
+        return false;
+    };
+    if out.code != 0 {
+        return false;
+    }
+    pull_stack_ref(&out.stdout_lossy()).is_some()
+}
+
+/// A merge-async response — the `PUT` acknowledgement and every poll share it.
+/// The state is the TOP-LEVEL `status`, with the tracking uuid and any message
+/// nested under `details`; GitHub's published docs describe a different shape, so
+/// this mirrors the live API. Every field optional: a shape drift reads as
+/// "still pending" rather than a false verdict.
+#[derive(Deserialize, Default)]
+struct MergeAsyncStatus {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    details: Option<MergeAsyncDetails>,
+}
+
+#[derive(Deserialize, Default)]
+struct MergeAsyncDetails {
+    #[serde(default)]
+    uuid: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+/// How a merge-async `status` ends the wait. `Enqueued` is NOT `Merged`: a merge
+/// queue owns the merge from then on and the PR hasn't landed, which is why the
+/// two are separate outcomes rather than one "done". Anything unrecognized keeps
+/// polling, so a new server state never reads as a failure.
+#[derive(PartialEq, Debug)]
+enum MergeAsyncOutcome {
+    Merged,
+    Enqueued,
+    Failed,
+    Pending,
+}
+
+fn classify_merge_async(status: Option<&str>) -> MergeAsyncOutcome {
+    match status.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("merged") => MergeAsyncOutcome::Merged,
+        Some("enqueued") => MergeAsyncOutcome::Enqueued,
+        Some("failed") => MergeAsyncOutcome::Failed,
+        _ => MergeAsyncOutcome::Pending,
+    }
+}
+
+/// Where a stacked merge ended up. `Queued` means accepted but NOT landed — the
+/// caller must skip head-branch cleanup and disclose the wait.
+#[derive(PartialEq, Debug)]
+enum StackedMergeResult {
+    Merged,
+    Queued,
+}
+
+/// Polls every 2s; gives up after 90s with a "may still have landed" message
+/// rather than claiming a failure (GitHub retains the result for 24h).
+const MERGE_ASYNC_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+const MERGE_ASYNC_DEADLINE: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Merges a stacked PR through GitHub's asynchronous merge API and waits for the
+/// verdict. `strategy` is the already-validated "merge"/"squash"/"rebase". The
+/// body is one string field, so `-f merge_method=…` suffices — no JSON on argv,
+/// which Windows `.cmd` shims reject.
+///
+/// An `enqueued` status ends the wait immediately with [`StackedMergeResult::Queued`]:
+/// a merge queue can take arbitrarily long, so polling on would false-fail at the
+/// deadline for a merge that is progressing fine.
+async fn gh_pr_merge_async(
+    repo_path: &str,
+    slug: &str,
+    number: u64,
+    strategy: &str,
+) -> AppResult<StackedMergeResult> {
+    let endpoint = format!("repos/{slug}/pulls/{number}/merge-async");
+    let method_arg = format!("merge_method={strategy}");
+    let out = run_gh(
+        Some(repo_path),
+        &["api", "--method", "PUT", &endpoint, "-f", &method_arg],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    // The PUT already succeeded, so the merge may be running — an unreadable
+    // acknowledgement is uncertainty, not a failed merge, and must read that way.
+    let mut current: MergeAsyncStatus =
+        serde_json::from_str(&out.stdout_lossy()).map_err(|_| {
+            AppError::Gh(format!(
+                "GitHub accepted the merge of #{number} but its response couldn't be read — refresh the pull request to check whether it completed."
+            ))
+        })?;
+    let uuid = current
+        .details
+        .as_ref()
+        .and_then(|d| d.uuid.clone())
+        .unwrap_or_default();
+    let poll_endpoint = format!("{endpoint}/{uuid}");
+    let deadline = std::time::Instant::now() + MERGE_ASYNC_DEADLINE;
+
+    loop {
+        match classify_merge_async(current.status.as_deref()) {
+            MergeAsyncOutcome::Merged => return Ok(StackedMergeResult::Merged),
+            MergeAsyncOutcome::Enqueued => return Ok(StackedMergeResult::Queued),
+            MergeAsyncOutcome::Failed => {
+                let message = current
+                    .details
+                    .and_then(|d| d.message)
+                    .filter(|m| !m.trim().is_empty())
+                    .unwrap_or_else(|| format!("GitHub could not merge #{number}."));
+                return Err(AppError::Gh(message));
+            }
+            MergeAsyncOutcome::Pending => {}
+        }
+        // No uuid = nothing to poll. That's a shape failure, not a slow merge, and
+        // the two must not share a message.
+        if uuid.is_empty() {
+            return Err(AppError::Gh(format!(
+                "GitHub accepted the merge of #{number} but didn't return a tracking id — refresh the pull request to check whether it completed."
+            )));
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(AppError::Gh(format!(
+                "Merging #{number} is taking longer than expected. It may still complete on GitHub — refresh the pull request to check."
+            )));
+        }
+        tokio::time::sleep(MERGE_ASYNC_POLL).await;
+        // A transient poll failure must never read as a failed merge — stay pending
+        // and let the deadline (whose message is honest about the uncertainty) end it.
+        current = run_gh(Some(repo_path), &["api", &poll_endpoint], GH_NETWORK_TIMEOUT)
+            .await
+            .ok()
+            .and_then(|o| serde_json::from_str::<MergeAsyncStatus>(&o.stdout_lossy()).ok())
+            .unwrap_or_default();
+    }
 }
 
 /// The slice of `gh pr view` needed to delete only the remote head branch after
@@ -1041,6 +1251,250 @@ pub(crate) async fn gh_pr_set_ready(
     Ok(())
 }
 
+/// One entry of `GET /repos/{slug}/stacks` (and of `…/stacks/{number}`). Tolerant
+/// serde over the untrusted payload. Two contracts the shape doesn't show:
+/// `pull_requests` is ordered BOTTOM→TOP, and the endpoint also returns dissolved
+/// stacks (`open: false`), so callers must filter on `open`.
+#[derive(Deserialize)]
+struct GhStackEntry {
+    #[serde(default)]
+    number: Option<u64>,
+    #[serde(default)]
+    open: Option<bool>,
+    #[serde(default)]
+    pull_requests: Vec<GhStackPr>,
+}
+
+/// A stack member as the stacks endpoint embeds it (a full PR object; only the
+/// fields the stack panel needs are read).
+#[derive(Deserialize)]
+struct GhStackPr {
+    #[serde(default)]
+    number: Option<u64>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    merged_at: Option<String>,
+    #[serde(default)]
+    head: Option<GhStackRef>,
+    #[serde(default)]
+    base: Option<GhStackRef>,
+}
+
+#[derive(Deserialize)]
+struct GhStackRef {
+    #[serde(rename = "ref", default)]
+    ref_name: Option<String>,
+}
+
+/// The nullable `stack` object a REST pull payload carries: `{id, number,
+/// position, size, base}`. `number` identifies the stack for the member fetch;
+/// `position`/`size` are the server's own answer, so they're taken verbatim.
+#[derive(Deserialize)]
+struct GhPullStackRef {
+    #[serde(default)]
+    number: Option<u64>,
+    #[serde(default)]
+    position: Option<u32>,
+    #[serde(default)]
+    size: Option<u32>,
+}
+
+/// The `stack` triple (stack number, position, size) from a REST pull payload;
+/// `None` when the PR is unstacked (the key is absent or JSON null) or the object
+/// is incomplete. The detail view and the merge path BOTH decide "is this PR
+/// stacked?" through here, so they can never disagree — a divergence would let one
+/// cascade a merge the other never disclosed. Pure — unit-tested.
+fn pull_stack_ref(body: &str) -> Option<(u64, u32, u32)> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let stack: GhPullStackRef = serde_json::from_value(value.get("stack")?.clone()).ok()?;
+    Some((stack.number?, stack.position?, stack.size?))
+}
+
+/// Map a stack's `pull_requests` (bottom→top) onto neutral members with 1-based
+/// positions. A merged layer stays a member and reads "merged" whatever its raw
+/// `state` says. Pure — unit-tested.
+fn stack_members_from(prs: &[GhStackPr]) -> Vec<PrStackMember> {
+    let ref_name = |r: &Option<GhStackRef>| {
+        r.as_ref()
+            .and_then(|r| r.ref_name.clone())
+            .unwrap_or_default()
+    };
+    prs.iter()
+        .enumerate()
+        .filter_map(|(idx, p)| {
+            Some(PrStackMember {
+                number: p.number?,
+                title: p.title.clone().unwrap_or_default(),
+                state: if p.merged_at.is_some() {
+                    "merged".to_string()
+                } else {
+                    p.state.clone().unwrap_or_default().to_ascii_lowercase()
+                },
+                position: idx as u32 + 1,
+                head_ref_name: ref_name(&p.head),
+                base_ref_name: ref_name(&p.base),
+            })
+        })
+        .collect()
+}
+
+/// Map a `GET /repos/{slug}/stacks` body onto a PR-number → membership map.
+/// Per-item tolerant: one malformed entry drops itself, not the whole join.
+///
+/// A stack counts only when `open` is explicitly `true` — the endpoint returns
+/// dissolved stacks too, and an ABSENT `open` fails CLOSED (unmarked) rather than
+/// assuming liveness. Pure — unit-tested, because that fail-closed choice would
+/// silently unmark every badge if the field were ever renamed.
+fn stack_memberships_from(
+    raw: Vec<serde_json::Value>,
+) -> std::collections::HashMap<u64, PrStackInfo> {
+    let mut map = std::collections::HashMap::new();
+    for stack in raw
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<GhStackEntry>(v).ok())
+    {
+        if stack.open != Some(true) {
+            continue;
+        }
+        let Some(id) = stack.number else {
+            continue;
+        };
+        let size = stack.pull_requests.len() as u32;
+        for (idx, pr) in stack.pull_requests.iter().enumerate() {
+            if let Some(number) = pr.number {
+                map.insert(
+                    number,
+                    PrStackInfo {
+                        id: id.to_string(),
+                        position: idx as u32 + 1,
+                        size,
+                    },
+                );
+            }
+        }
+    }
+    map
+}
+
+/// The repo's OPEN stacks as a PR-number → membership map, for the list join.
+/// Best-effort by contract: the list renders exactly as it did before stacks on
+/// any fail-open cause — no such endpoint (GHES), network error, unparseable
+/// body, or exceeding [`STACKS_TIMEOUT`] at the call site. One page only: past
+/// 100 open stacks the surplus goes unmarked rather than paginating a decoration.
+async fn gh_open_stack_memberships(
+    repo_path: &str,
+    slug: &str,
+) -> std::collections::HashMap<u64, PrStackInfo> {
+    let empty = std::collections::HashMap::new();
+    let endpoint = format!("repos/{slug}/stacks?per_page=100");
+    let Ok(out) = run_gh_raw(Some(repo_path), &["api", &endpoint], GH_TIMEOUT).await else {
+        return empty;
+    };
+    if out.code != 0 {
+        return empty;
+    }
+    let Ok(raw) = serde_json::from_str::<Vec<serde_json::Value>>(&out.stdout_lossy()) else {
+        return empty;
+    };
+    stack_memberships_from(raw)
+}
+
+/// What the detail view learned about a PR's stack. `unknown` is the tri-state
+/// the merge path depends on: the merge probe re-reads membership independently
+/// and WILL cascade a stacked merge, so a detail view that failed to probe must
+/// say "unknown", never render as confidently unstacked.
+struct PrStackProbe {
+    stack: Option<PrStackInfo>,
+    members: Vec<PrStackMember>,
+    /// The probe itself failed — membership is genuinely unknown, not absent.
+    unknown: bool,
+}
+
+impl PrStackProbe {
+    /// Probed successfully; this PR is in no stack.
+    fn unstacked() -> Self {
+        Self { stack: None, members: Vec::new(), unknown: false }
+    }
+    /// The probe failed (spawn, non-zero exit, unparseable body, or timeout).
+    fn unknown() -> Self {
+        Self { stack: None, members: Vec::new(), unknown: true }
+    }
+}
+
+/// This PR's stack membership plus the stack's members bottom→top, for the detail
+/// view. Distinguishes "probe failed" from "not stacked" (see [`PrStackProbe`]).
+/// The MEMBER fetch is best-effort within a KNOWN membership: failing it — timeout
+/// included — returns the membership the PR payload reported with an empty member
+/// list, which is incomplete, not unknown.
+///
+/// Each hop carries its OWN [`STACKS_TIMEOUT`] rather than one bound around both:
+/// a single outer bound would discard a membership hop 1 had already established
+/// just because hop 2 was still in flight, downgrading a firm "position 3 of 4"
+/// into a hedge.
+async fn gh_pr_stack(repo_path: &str, slug: &str, number: u64) -> PrStackProbe {
+    let endpoint = format!("repos/{slug}/pulls/{number}");
+    let Ok(Ok(out)) = tokio::time::timeout(
+        STACKS_TIMEOUT,
+        run_gh_raw(Some(repo_path), &["api", &endpoint], GH_TIMEOUT),
+    )
+    .await
+    else {
+        return PrStackProbe::unknown();
+    };
+    if out.code != 0 {
+        return PrStackProbe::unknown();
+    }
+    let body = out.stdout_lossy();
+    // An unreadable body is a failed probe; a readable body with no `stack` is a
+    // genuine answer. Only the latter is "unstacked".
+    if serde_json::from_str::<serde_json::Value>(&body).is_err() {
+        return PrStackProbe::unknown();
+    }
+    let Some((id, position, size)) = pull_stack_ref(&body) else {
+        return PrStackProbe::unstacked();
+    };
+
+    // Membership is settled from here — hop 2 can only add or omit the member list.
+    let members = tokio::time::timeout(STACKS_TIMEOUT, gh_stack_members(repo_path, slug, id))
+        .await
+        .unwrap_or_default();
+    PrStackProbe {
+        stack: Some(PrStackInfo { id: id.to_string(), position, size }),
+        members,
+        unknown: false,
+    }
+}
+
+/// One stack's members bottom→top. Empty on any failure — the caller treats that
+/// as "no member list", never an error.
+async fn gh_stack_members(repo_path: &str, slug: &str, stack_number: u64) -> Vec<PrStackMember> {
+    let endpoint = format!("repos/{slug}/stacks/{stack_number}");
+    let Ok(out) = run_gh_raw(Some(repo_path), &["api", &endpoint], GH_TIMEOUT).await else {
+        return Vec::new();
+    };
+    if out.code != 0 {
+        return Vec::new();
+    }
+    serde_json::from_str::<GhStackEntry>(&out.stdout_lossy())
+        .map(|entry| stack_members_from(&entry.pull_requests))
+        .unwrap_or_default()
+}
+
+/// How long any supplementary STACK probe may take before its caller gives up and
+/// renders without it. Bounds the four DECORATION reads — GitHub list, both hops
+/// of the GitHub detail probe, and the GitLab detail's open-MR list — well inside
+/// the underlying CLI timeouts (gh 30s, glab 120s), because stack data decorates a
+/// view that must render regardless. Dropping a timed-out probe kills its child
+/// process: both runners set `kill_on_drop`.
+///
+/// Deliberately NOT applied to [`gh_pr_is_stacked`]: that read is a merge-DECISION
+/// input, not a decoration. Cutting it short would silently route a stacked PR down
+/// the legacy path, so it keeps the full `GH_TIMEOUT`.
+pub(crate) const STACKS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 const PR_LIST_FIELDS: &str =
     "number,url,title,baseRefName,headRefName,isDraft,state,author,labels,createdAt";
 
@@ -1085,9 +1539,31 @@ pub async fn gh_pr_list(
         args.push("--limit");
         args.push(&limit_str);
     }
-    let out = run_gh(Some(&repo_path), &args, GH_TIMEOUT).await?;
-    serde_json::from_str(&out.stdout_lossy())
-        .map_err(|e| AppError::Gh(format!("could not parse gh pr list: {e}")))
+    // Stack membership needs its own endpoint (`gh pr list --json` has no stack
+    // field) and depends only on the slug. Open rows only: a closed list describes
+    // merges already made.
+    let want_stacks = state == "open";
+    let (out, stacks) = tokio::join!(run_gh(Some(&repo_path), &args, GH_TIMEOUT), async {
+        if !want_stacks {
+            return std::collections::HashMap::new();
+        }
+        // BOUNDED, not merely concurrent: the join removes the serial cost, the
+        // timeout removes the stall. A decoration must never hold the list.
+        tokio::time::timeout(
+            STACKS_TIMEOUT,
+            gh_open_stack_memberships(&repo_path, &slug),
+        )
+        .await
+        .unwrap_or_default()
+    });
+    let mut prs: Vec<PrInfo> = serde_json::from_str(&out?.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse gh pr list: {e}")))?;
+    // Strictly additive — `gh_open_stack_memberships` never errors, it just
+    // returns nothing when stacks are unavailable.
+    for pr in &mut prs {
+        pr.stack = stacks.get(&pr.number).cloned();
+    }
+    Ok(prs)
 }
 
 /// One PR's rolled-up CI signal, keyed by number — the hydration payload for the
@@ -1980,6 +2456,18 @@ pub struct PrDetails {
     pub squash_merge_allowed: Option<bool>,
     /// Whether the repository allows the rebase-merge method. See `merge_commit_allowed`.
     pub rebase_merge_allowed: Option<bool>,
+    /// This PR's stack membership; `None` when it isn't stacked.
+    pub stack: Option<PrStackInfo>,
+    /// The whole stack bottom→top (empty when unstacked). A merged layer stays a
+    /// member — GitHub does not shrink a stack on merge.
+    pub stack_members: Vec<PrStackMember>,
+    /// The stack probe FAILED, so `stack: None` means "unknown", not "unstacked".
+    /// Load-bearing because the merge path re-probes membership independently and
+    /// will cascade a stacked merge — a cached "not stacked" detail view would
+    /// otherwise let that happen undisclosed. GitHub only: GitLab's inference
+    /// failing open has no such consequence (each MR merges on its own, nothing
+    /// cascades), and Bitbucket has no stacks, so both report `false`.
+    pub stack_unknown: bool,
 }
 
 /// A merge/pull request's approval summary — who has approved and whether the
@@ -2074,20 +2562,21 @@ pub async fn gh_pr_view(
     // this fn calls (files/commits/reviews/comments) inherit the SAME lens so they
     // resolve to the SAME repo these PR numbers came from.
     let slug = crate::github::gh_lens_slug(&repo_path, lens.as_deref()).await?;
-    let out = run_gh(
-        Some(&repo_path),
-        &[
-            "pr",
-            "view",
-            &number.to_string(),
-            "--repo",
-            &slug,
-            "--json",
-            PR_VIEW_FIELDS,
-        ],
-        GH_TIMEOUT,
-    )
-    .await?;
+    let n = number.to_string();
+    // Stack membership rides alongside the view AND is bounded — per hop, inside
+    // `gh_pr_stack`, so a slow member fetch can't discard a membership already
+    // established. Timing out hop 1 is a FAILED probe, not "unstacked".
+    let view_args = ["pr", "view", &n, "--repo", &slug, "--json", PR_VIEW_FIELDS];
+    let (out, probe) = tokio::join!(
+        run_gh(Some(&repo_path), &view_args, GH_TIMEOUT),
+        gh_pr_stack(&repo_path, &slug, number),
+    );
+    let PrStackProbe {
+        stack,
+        members: stack_members,
+        unknown: stack_unknown,
+    } = probe;
+    let out = out?;
     let raw: RawPr = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Gh(format!("could not parse gh pr view: {e}")))?;
 
@@ -2357,6 +2846,9 @@ pub async fn gh_pr_view(
         merge_commit_allowed: merge_settings.merge_commit_allowed,
         squash_merge_allowed: merge_settings.squash_merge_allowed,
         rebase_merge_allowed: merge_settings.rebase_merge_allowed,
+        stack,
+        stack_members,
+        stack_unknown,
     })
 }
 
@@ -4062,6 +4554,9 @@ fn rest_pull_to_pr_info(p: GhPrRestPull) -> PrInfo {
         labels: Vec::new(),
         created_at: String::new(),
         head_sha: String::new(),
+        // The duplicate probe only needs identity — stack membership is the PR
+        // list's and the detail view's job.
+        stack: None,
     }
 }
 
@@ -4355,13 +4850,15 @@ fn scrape_pr_ref(stdout: &str) -> (u64, String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        external_items_from_thread_nodes, host_from_url, is_diff_too_large, map_timeline_node,
-        parse_actions_run_job, real_check_time, real_time_or_empty,
-        parse_auth_accounts, parse_pr_url_repo, reconstruct_pr_diff,
+        classify_merge_async, external_items_from_thread_nodes, host_from_url, is_diff_too_large,
+        map_timeline_node, parse_actions_run_job, parse_auth_accounts, parse_pr_url_repo,
+        pull_stack_ref, real_check_time, real_time_or_empty, reconstruct_pr_diff,
         reject_upstream_create_metadata, rest_comment_to_out, rest_commit_to_out,
         rest_pull_to_pr_info, rest_review_to_out, rollup_state_to_ci, scrape_pr_ref,
-        split_commit_message, upstream_pulls_endpoint, GhPrFile, GhPrRestComment, GhPrRestCommit,
-        GhPrRestCommitGitAuthor, GhPrRestCommitInner, GhPrRestPull, GhPrRestReview,
+        split_commit_message, stack_members_from, stack_memberships_from, upstream_pulls_endpoint,
+        GhPrFile, GhPrRestComment, GhPrRestCommit, GhPrRestCommitGitAuthor,
+        GhPrRestCommitInner, GhPrRestPull, GhPrRestReview, GhStackEntry, MergeAsyncOutcome,
+        MergeAsyncStatus, PrDetails, PrInfo, PrMergeOutcome, PrStackInfo, PrStackMember,
         PrTimelineEventOut, RawLogin,
     };
     use crate::error::AppError;
@@ -4389,6 +4886,296 @@ mod tests {
             },
             author: None,
         }
+    }
+
+    /// A `PrDetails` with everything empty but the two stack fields — the wire
+    /// shape is what these tests pin, not the payload.
+    fn details_with_stack(
+        stack: Option<PrStackInfo>,
+        stack_members: Vec<PrStackMember>,
+        stack_unknown: bool,
+    ) -> PrDetails {
+        PrDetails {
+            id: String::new(),
+            number: 22,
+            title: String::new(),
+            body: String::new(),
+            author: String::new(),
+            author_avatar_url: String::new(),
+            state: String::new(),
+            is_draft: false,
+            base_ref_name: String::new(),
+            head_ref_name: String::new(),
+            additions: 0,
+            deletions: 0,
+            url: String::new(),
+            commits: Vec::new(),
+            files: Vec::new(),
+            reviews: Vec::new(),
+            comments: Vec::new(),
+            checks: Vec::new(),
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            reviewers: Vec::new(),
+            completed_reviewers: Vec::new(),
+            merge_commit_allowed: None,
+            squash_merge_allowed: None,
+            rebase_merge_allowed: None,
+            stack,
+            stack_members,
+            stack_unknown,
+        }
+    }
+
+    /// The frontend reads these keys verbatim; a serde rename slip here has
+    /// silently produced `undefined` in TS before, so the wire shape is pinned.
+    #[test]
+    fn stack_fields_serialize_camel_case() {
+        let details = details_with_stack(
+            Some(PrStackInfo {
+                id: "133465".to_string(),
+                position: 1,
+                size: 2,
+            }),
+            vec![PrStackMember {
+                number: 21,
+                title: "bottom".to_string(),
+                state: "merged".to_string(),
+                position: 1,
+                head_ref_name: "feat-a".to_string(),
+                base_ref_name: "main".to_string(),
+            }],
+            false,
+        );
+        let v = serde_json::to_value(&details).unwrap();
+        assert_eq!(v["stack"]["id"], "133465");
+        assert_eq!(v["stack"]["position"], 1);
+        assert_eq!(v["stack"]["size"], 2);
+        assert_eq!(v["stackMembers"][0]["number"], 21);
+        assert_eq!(v["stackMembers"][0]["state"], "merged");
+        assert_eq!(v["stackMembers"][0]["headRefName"], "feat-a");
+        assert_eq!(v["stackMembers"][0]["baseRefName"], "main");
+        // Snake-case keys must NOT appear.
+        assert!(v.get("stack_members").is_none());
+        assert!(v["stackMembers"][0].get("head_ref_name").is_none());
+
+        assert_eq!(v["stackUnknown"], false);
+        assert!(v.get("stack_unknown").is_none());
+
+        // Unstacked: an explicit null plus an empty array, never a missing key.
+        let v = serde_json::to_value(details_with_stack(None, Vec::new(), false)).unwrap();
+        assert!(v["stack"].is_null());
+        assert_eq!(v["stackMembers"], serde_json::json!([]));
+        assert_eq!(v["stackUnknown"], false);
+
+        // Probe failed: `stack` is null exactly as for an unstacked PR, so
+        // `stackUnknown` is the ONLY signal separating the two — it must always be
+        // present, never skipped.
+        let v = serde_json::to_value(details_with_stack(None, Vec::new(), true)).unwrap();
+        assert!(v["stack"].is_null());
+        assert_eq!(v["stackUnknown"], true);
+    }
+
+    #[test]
+    fn pr_info_stack_defaults_absent_and_round_trips() {
+        // `gh pr list --json` never emits a stack field — it must default, not fail.
+        let row: PrInfo = serde_json::from_str(
+            r#"{"number":7,"url":"u","title":"t","baseRefName":"main","headRefName":"f",
+                "isDraft":false,"state":"OPEN"}"#,
+        )
+        .unwrap();
+        assert!(row.stack.is_none());
+        assert!(serde_json::to_value(&row).unwrap()["stack"].is_null());
+
+        let joined: PrInfo = serde_json::from_str(
+            r#"{"number":7,"url":"u","title":"t","baseRefName":"main","headRefName":"f",
+                "isDraft":false,"state":"OPEN","stack":{"id":"9","position":2,"size":3}}"#,
+        )
+        .unwrap();
+        let stack = joined.stack.expect("stack should round-trip");
+        assert_eq!((stack.id.as_str(), stack.position, stack.size), ("9", 2, 3));
+    }
+
+    /// The single reading that decides stacked-or-not on BOTH the detail and the
+    /// merge path — a drift here silently changes which PRs cascade on merge.
+    #[test]
+    fn pull_stack_ref_reads_the_nullable_stack_object() {
+        // The live shape: `stack` on a plain REST pull read.
+        assert_eq!(
+            pull_stack_ref(
+                r#"{"number":22,"stack":{"id":133465,"number":22,"position":1,"size":2,
+                    "base":{"ref":"main","sha":"cafe"}}}"#
+            ),
+            Some((22, 1, 2))
+        );
+        // Unstacked, both spellings.
+        assert_eq!(pull_stack_ref(r#"{"number":22,"stack":null}"#), None);
+        assert_eq!(pull_stack_ref(r#"{"number":22}"#), None);
+        // An incomplete triple is NOT a stack — the merge path must not cascade on
+        // a membership the detail view couldn't render.
+        assert_eq!(pull_stack_ref(r#"{"stack":{"number":22,"position":1}}"#), None);
+        assert_eq!(pull_stack_ref(r#"{"stack":{"position":1,"size":2}}"#), None);
+        assert_eq!(pull_stack_ref(r#"{"stack":{}}"#), None);
+        // Garbage in, no verdict out.
+        assert_eq!(pull_stack_ref("not json"), None);
+        assert_eq!(pull_stack_ref(r#"{"stack":"yes"}"#), None);
+    }
+
+    #[test]
+    fn stack_members_map_bottom_to_top_with_merged_layers() {
+        // A stacks-endpoint entry: `pull_requests` bottom→top, and a merged layer
+        // stays a member (GitHub doesn't shrink a stack on merge).
+        let entry: GhStackEntry = serde_json::from_str(
+            r#"{"id":133465,"number":22,"open":true,"base":{"ref":"main"},
+                "pull_requests":[
+                  {"number":21,"title":"bottom","state":"closed","merged_at":"2026-08-04T00:00:00Z",
+                   "head":{"ref":"feat-a"},"base":{"ref":"main"}},
+                  {"number":23,"title":"top","state":"OPEN","merged_at":null,
+                   "head":{"ref":"feat-b"},"base":{"ref":"feat-a"}}
+                ]}"#,
+        )
+        .unwrap();
+        let members = stack_members_from(&entry.pull_requests);
+        assert_eq!(members.len(), 2);
+        assert_eq!((members[0].number, members[0].position), (21, 1));
+        // merged_at wins over the raw "closed" state.
+        assert_eq!(members[0].state, "merged");
+        assert_eq!(members[0].head_ref_name, "feat-a");
+        assert_eq!((members[1].number, members[1].position), (23, 2));
+        // Provider-neutral lowercase.
+        assert_eq!(members[1].state, "open");
+        assert_eq!(members[1].base_ref_name, "feat-a");
+    }
+
+    /// `queued` is STATE the MCP merge tool and the frontend branch on — a caller
+    /// must never have to parse `cleanupWarning`'s prose to learn the PR didn't land.
+    #[test]
+    fn merge_outcome_pins_queued_in_both_states() {
+        // Landed cleanly: no caveat, not queued.
+        let v = serde_json::to_value(PrMergeOutcome::default()).unwrap();
+        assert_eq!(v["queued"], false);
+        assert!(v["cleanupWarning"].is_null());
+        assert!(v.get("cleanup_warning").is_none());
+
+        // Queued: the flag carries the state, the warning only the detail text.
+        let v = serde_json::to_value(PrMergeOutcome {
+            cleanup_warning: Some("Merging #7 was queued on GitHub…".to_string()),
+            queued: true,
+        })
+        .unwrap();
+        assert_eq!(v["queued"], true);
+        assert!(v["cleanupWarning"].is_string());
+
+        // Merged but cleanup failed: a caveat WITHOUT the queued flag — the two
+        // caveat causes must stay distinguishable.
+        let v = serde_json::to_value(PrMergeOutcome {
+            cleanup_warning: Some("Merged #7, but the remote branch…".to_string()),
+            queued: false,
+        })
+        .unwrap();
+        assert_eq!(v["queued"], false);
+        assert!(v["cleanupWarning"].is_string());
+    }
+
+    /// The list join's whole payload contract. The `open`-absent arm is the one
+    /// that matters most: it fails CLOSED, so a field rename upstream unmarks every
+    /// badge rather than marking dissolved stacks as live.
+    #[test]
+    fn stack_memberships_skip_dissolved_and_open_absent_stacks() {
+        let raw: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[
+              {"number":22,"open":true,"pull_requests":[{"number":21},{"number":23},{"number":25}]},
+              {"number":30,"open":false,"pull_requests":[{"number":31},{"number":32}]},
+              {"number":40,"pull_requests":[{"number":41},{"number":42}]},
+              {"number":"not-a-number","open":true,"pull_requests":[{"number":51}]},
+              {"number":60,"open":true,"pull_requests":[{"number":61},{"number":62}]}
+            ]"#,
+        )
+        .unwrap();
+        let map = stack_memberships_from(raw);
+
+        // Open stack: 1-based positions, size = member count.
+        assert_eq!(map[&21].position, 1);
+        assert_eq!(map[&23].position, 2);
+        assert_eq!(map[&25].position, 3);
+        assert_eq!(map[&21].size, 3);
+        assert_eq!(map[&21].id, "22");
+        // A dissolved stack (`open: false`) contributes nothing.
+        assert!(!map.contains_key(&31));
+        assert!(!map.contains_key(&32));
+        // `open` ABSENT is skipped too — fails closed, never assumed live.
+        assert!(!map.contains_key(&41));
+        assert!(!map.contains_key(&42));
+        // One malformed entry (`number` a string) drops itself…
+        assert!(!map.contains_key(&51));
+        // …and does NOT poison the entries after it.
+        assert_eq!(map[&61].position, 1);
+        assert_eq!(map[&62].position, 2);
+        assert_eq!(map[&62].id, "60");
+        assert_eq!(map.len(), 5);
+    }
+
+    #[test]
+    fn merge_async_parses_the_live_response_shapes() {
+        // The PUT acknowledgement: top-level `status`, uuid nested under `details`
+        // (GitHub's published docs describe `state`/top-level uuid — the live API
+        // does not).
+        let started: MergeAsyncStatus = serde_json::from_str(
+            r#"{"status":"pending","details":{"message":"Merge request enqueued",
+                "uuid":"6a1f-…","merge_method":"merge","merge_action":"default",
+                "expected_head_sha":"deadbeef"}}"#,
+        )
+        .unwrap();
+        assert_eq!(started.status.as_deref(), Some("pending"));
+        assert_eq!(
+            started.details.and_then(|d| d.uuid).as_deref(),
+            Some("6a1f-…")
+        );
+        assert_eq!(
+            classify_merge_async(Some("pending")),
+            MergeAsyncOutcome::Pending
+        );
+
+        // Poll → merged.
+        let merged: MergeAsyncStatus = serde_json::from_str(
+            r#"{"status":"merged","details":{"message":"Merged","sha":"cafe"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            classify_merge_async(merged.status.as_deref()),
+            MergeAsyncOutcome::Merged
+        );
+
+        // Poll → failed, carrying the server's message verbatim.
+        let failed: MergeAsyncStatus = serde_json::from_str(
+            r#"{"status":"failed","details":{"message":"Base branch was modified"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            classify_merge_async(failed.status.as_deref()),
+            MergeAsyncOutcome::Failed
+        );
+        assert_eq!(
+            failed.details.and_then(|d| d.message).as_deref(),
+            Some("Base branch was modified")
+        );
+
+        // A merge queue owns an enqueued merge: accepted, but NOT merged — it must
+        // stay distinct from Merged so the caller skips head-branch cleanup.
+        assert_eq!(
+            classify_merge_async(Some("ENQUEUED")),
+            MergeAsyncOutcome::Enqueued
+        );
+        assert_ne!(
+            classify_merge_async(Some("enqueued")),
+            MergeAsyncOutcome::Merged
+        );
+        // Absent or unrecognized states keep polling, never a false verdict.
+        assert_eq!(classify_merge_async(None), MergeAsyncOutcome::Pending);
+        assert_eq!(
+            classify_merge_async(Some("something_new")),
+            MergeAsyncOutcome::Pending
+        );
     }
 
     #[test]

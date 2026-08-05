@@ -488,6 +488,15 @@ workflow against any two branches with no remote at all).
   current step inline and a live step checklist when expanded, while finished **GitHub
   Actions** and **GitLab pipeline** jobs peek their log inline and **Bitbucket** and
   other external checks link out (name/state/URL, no fetchable logs).
+- **Stacked PRs** — a stack **position badge** (*2/3*) on stacked rows in the PR list, and a
+  **Stack** section on the PR view listing every member bottom → top, keyboard-navigable
+  (with palette commands for the next and previous PR in the stack). GitHub's **native
+  stacks** come straight from its API; on **GitLab**, chains of merge requests are
+  **detected automatically**. On GitHub, merging is **stack-aware**: merging a stacked pull
+  request merges it *and* every still-open pull request below it, bottom-up, as one
+  operation — or, when the base branch uses a **merge queue**, hands the stack to the queue
+  to land when it clears. The merge dialog spells out that full scope before you confirm,
+  naming the pull requests it will merge, in order, whenever it has the list.
 - **Record management** — open a local PR's context menu in the list to **Archive / Unarchive**
   or **Delete** it (Delete confirms; the branches are untouched), also from the command
   palette.

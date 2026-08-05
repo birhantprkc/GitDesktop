@@ -630,8 +630,13 @@ impl GitDesktopMcp {
         description = "Merge a pull request (by number) in the bound repository's forge (GitHub, \
                        GitLab, or Bitbucket, per its remote), under the authenticated forge user. \
                        `strategy` is \"merge\" (default), \"squash\", or \"rebase\" (rebase is \
-                       GitHub-only). A merge is NOT trivially reversible. Optionally deletes the \
-                       head branch. Requires --allow-remote-write.",
+                       GitHub-only). A merge is NOT trivially reversible. On GitHub a stack merges \
+                       bottom-up: merging a stacked PR ALSO merges every still-open PR below it in \
+                       its stack, in one irreversible step — read `stack` and `stackMembers` via \
+                       get_pull_request first to see what would go with it. Optionally deletes the \
+                       head branch. The result's `action` is \"merged\", or \"queued\" when a merge \
+                       queue took the merge — queued means NOT yet merged: the head branch is left \
+                       in place and `deleted_branch` is false. Requires --allow-remote-write.",
         annotations(read_only_hint = false, destructive_hint = true)
     )]
     async fn merge_pull_request(
@@ -650,14 +655,23 @@ impl GitDesktopMcp {
         )
         .await
         .map_err(app_err)?;
+        // The branch is gone only on a clean merge: BOTH caveat causes leave it in
+        // place — a failed deletion (protected ref, lost permission) and a queued
+        // merge, whose cleanup is skipped so the queue isn't broken. Every caveat
+        // sets `cleanup_warning`, so its absence is the one honest signal. Computed
+        // BEFORE the `if let` below consumes the field.
+        let deleted_branch = args.delete_branch && outcome.cleanup_warning.is_none();
+        // A QUEUED merge has not landed — an agent branching on these fields must
+        // not read it as merged.
         let mut result = serde_json::json!({
             "pull_request": args.number,
-            "action": "merged",
+            "action": if outcome.queued { "queued" } else { "merged" },
             "strategy": strategy,
-            "deleted_branch": args.delete_branch,
+            "deleted_branch": deleted_branch,
         });
-        // The merge succeeded; a cleanup_warning means only the branch deletion failed —
-        // surface it as a caveat, not a tool error (the merge isn't reversible from here).
+        // The merge was accepted; a cleanup_warning means either the branch deletion
+        // failed or the merge is queued — a caveat, not a tool error (neither is
+        // reversible from here).
         if let Some(warning) = outcome.cleanup_warning {
             result["cleanup_warning"] = serde_json::Value::String(warning);
         }

@@ -22,7 +22,8 @@ use crate::github::issue::{IssueDetails, IssueInfo, IssueReactions, Milestone, R
 use crate::github::pr::{
     ApprovalState, CommitCommentOut, DraftCommentIn, ExternalReviewItem, PrAuthor, PrCheckOut,
     PrCiStatus, PrCommitOut, PrDetails, PrFileOut, PrInfo, PrListLabel, PrPollInfo, PrRef,
-    PrThreadOut, PrTimelineEventOut, RepoLabel, ReviewSubmitOut, ReviewThreadOut,
+    PrStackInfo, PrStackMember, PrThreadOut, PrTimelineEventOut, RepoLabel, ReviewSubmitOut,
+    ReviewThreadOut, STACKS_TIMEOUT,
 };
 use crate::github::release::{ReleaseAsset, ReleaseDetails, ReleaseInfo};
 use crate::state::AppState;
@@ -292,7 +293,168 @@ fn from_glab_mr(m: GlabMr) -> PrInfo {
         created_at: m.created_at,
         // GitLab queries CI by MR iid (headPipeline), never by SHA — leave it empty.
         head_sha: String::new(),
+        // GitLab has no stack object; chains are inferred over a whole open list
+        // (see `infer_mr_stacks`), which a single MR can't do.
+        stack: None,
     }
+}
+
+/// Infer stacked-MR chains from the OPEN merge requests: `(iid, source branch,
+/// target branch)` in, `iid → (stack id, 1-based position, chain size)` out.
+/// GitLab auto-detects a stack server-side when an MR targets another open MR's
+/// source branch but exposes no stack object, so we reconstruct the same relation
+/// from the list.
+///
+/// Only unambiguous LINEAR chains of two or more MRs are marked, and ambiguity is
+/// judged per CONNECTED COMPONENT, not per link: a source branch shared by two
+/// open MRs identifies no unique parent, and an MR with two open children is a
+/// branching stack — GitHub disallows those, so a component containing either
+/// shape is left entirely unmarked rather than re-rooted at the break (an MR
+/// whose own base is ambiguous is not a stack bottom). Pure — unit-tested.
+fn infer_mr_stacks(open: &[(u64, &str, &str)]) -> HashMap<u64, (String, u32, u32)> {
+    let mut sources: HashMap<&str, Vec<u64>> = HashMap::new();
+    for (iid, head, _) in open {
+        sources.entry(*head).or_default().push(*iid);
+    }
+
+    // Candidate links join a component even when they're AMBIGUOUS — that's what
+    // lets one bad link poison its whole chain instead of silently splitting it.
+    let mut neighbors: HashMap<u64, Vec<u64>> = HashMap::new();
+    let mut has_parent: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
+    let mut ambiguous: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for (iid, _, base) in open {
+        // The open MRs offering this target branch as their source. An MR can't be
+        // its own parent (a self-targeting MR just sits on a plain branch).
+        let candidates: Vec<u64> = sources
+            .get(*base)
+            .map(|c| c.iter().copied().filter(|p| p != iid).collect())
+            .unwrap_or_default();
+        for parent in &candidates {
+            neighbors.entry(*iid).or_default().push(*parent);
+            neighbors.entry(*parent).or_default().push(*iid);
+        }
+        match candidates.as_slice() {
+            // No open MR owns this branch — a genuine chain bottom.
+            [] => {}
+            [parent] => {
+                has_parent.insert(*iid);
+                children.entry(*parent).or_default().push(*iid);
+            }
+            _ => {
+                ambiguous.insert(*iid);
+            }
+        }
+    }
+    for (parent, kids) in &children {
+        if kids.len() > 1 {
+            ambiguous.insert(*parent);
+        }
+    }
+
+    let mut result = HashMap::new();
+    let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    // Walk components in list order so the output never depends on hash iteration.
+    for (start, _, _) in open {
+        if !seen.insert(*start) {
+            continue;
+        }
+        let mut component = vec![*start];
+        let mut queue = vec![*start];
+        while let Some(node) = queue.pop() {
+            for next in neighbors.get(&node).into_iter().flatten() {
+                if seen.insert(*next) {
+                    component.push(*next);
+                    queue.push(*next);
+                }
+            }
+        }
+        if component.iter().any(|iid| ambiguous.contains(iid)) {
+            continue;
+        }
+        // Unambiguous: every link is unique in both directions, so the component is
+        // one chain. A component whose every MR has a parent is a cycle — no bottom,
+        // nothing emitted.
+        let Some(bottom) = component.iter().find(|iid| !has_parent.contains(iid)) else {
+            continue;
+        };
+        let mut chain = vec![*bottom];
+        let mut cursor = *bottom;
+        // Bounded by the component: an unambiguous component can't join a cycle to a
+        // parentless bottom, so this is belt-and-braces against an infinite walk.
+        while chain.len() < component.len() {
+            let Some([next]) = children.get(&cursor).map(Vec::as_slice) else {
+                break;
+            };
+            cursor = *next;
+            chain.push(cursor);
+        }
+        if chain.len() < 2 {
+            continue;
+        }
+        let id = format!("mr-{bottom}");
+        let size = chain.len() as u32;
+        for (idx, iid) in chain.into_iter().enumerate() {
+            result.insert(iid, (id.clone(), idx as u32 + 1, size));
+        }
+    }
+    result
+}
+
+/// Fill each row's `stack` from the chains inferred over the SAME list. Membership
+/// is only as complete as the list in hand: callers pass the full open page (a
+/// truncated list would hide a chain's bottom and mis-position the rows above it),
+/// so the real limits are >100 open MRs and merged layers, which an open list has
+/// dropped entirely.
+fn apply_mr_stacks(prs: &mut [PrInfo]) {
+    let rows: Vec<(u64, &str, &str)> = prs
+        .iter()
+        .map(|p| {
+            (
+                p.number,
+                p.head_ref_name.as_str(),
+                p.base_ref_name.as_str(),
+            )
+        })
+        .collect();
+    let stacks = infer_mr_stacks(&rows);
+    for pr in prs.iter_mut() {
+        pr.stack = stacks.get(&pr.number).map(|(id, position, size)| PrStackInfo {
+            id: id.clone(),
+            position: *position,
+            size: *size,
+        });
+    }
+}
+
+/// One MR's chain membership plus that chain's members bottom→top, for the detail
+/// view. Reads the `stack` field `list_prs` already annotated onto its rows —
+/// inference runs once, there. `(None, [])` when the MR isn't in the list or
+/// isn't in an unambiguous chain.
+fn mr_stack_from_rows(open: &[PrInfo], number: u64) -> (Option<PrStackInfo>, Vec<PrStackMember>) {
+    let Some(stack) = open
+        .iter()
+        .find(|p| p.number == number)
+        .and_then(|p| p.stack.as_ref())
+    else {
+        return (None, Vec::new());
+    };
+    let mut members: Vec<PrStackMember> = open
+        .iter()
+        .filter_map(|p| {
+            let member = p.stack.as_ref()?;
+            (member.id == stack.id).then(|| PrStackMember {
+                number: p.number,
+                title: p.title.clone(),
+                state: p.state.to_ascii_lowercase(),
+                position: member.position,
+                head_ref_name: p.head_ref_name.clone(),
+                base_ref_name: p.base_ref_name.clone(),
+            })
+        })
+        .collect();
+    members.sort_by_key(|m| m.position);
+    (Some(stack.clone()), members)
 }
 
 /// The signed-in user's merge requests for this repo. `state` is `"open"` or
@@ -311,10 +473,20 @@ pub async fn list_prs(repo_path: &str, state: &str, limit: Option<u32>) -> AppRe
             )));
         }
     };
-    // GitLab pages at `per_page` (max 100); default to a full page. When a `limit` is
-    // asked, request at most that many per state and truncate the merged result to it
-    // (a "closed" filter fans out over two states, so the raw total can exceed `limit`).
-    let per_page = limit.map_or(100, |n| n.clamp(1, 100));
+    // GitLab pages at `per_page` (max 100). The OPEN set always requests a full page
+    // regardless of `limit`: stack inference reads the whole open list, and a
+    // server-side truncation would hide a chain's bottom and mis-position the rows
+    // above it. Paying for a full page on a small `limit` is therefore DELIBERATE —
+    // narrowing this fetch back down would silently corrupt the positions rather
+    // than merely returning fewer rows. A `limit` narrows the RESULT after inference
+    // instead. Closed states have no inference, so they keep the cheaper
+    // `limit`-sized page (a "closed" filter fans out over two states, so the raw
+    // total can exceed `limit`).
+    let per_page = if state == "open" {
+        100
+    } else {
+        limit.map_or(100, |n| n.clamp(1, 100))
+    };
     let mut prs = Vec::new();
     for s in states {
         let endpoint = format!("projects/{enc}/merge_requests?state={s}&per_page={per_page}");
@@ -322,6 +494,12 @@ pub async fn list_prs(repo_path: &str, state: &str, limit: Option<u32>) -> AppRe
         let mrs: Vec<GlabMr> = serde_json::from_str(&out.stdout_lossy())
             .map_err(|e| AppError::Glab(format!("could not parse GitLab merge requests: {e}")))?;
         prs.extend(mrs.into_iter().map(from_glab_mr));
+    }
+    // Chains are inferred over the open set only — a closed list's rows describe
+    // merges already made. Inference sees the full page (see `per_page`), so a
+    // `limit` narrows what's returned without distorting positions.
+    if state == "open" {
+        apply_mr_stacks(&mut prs);
     }
     if let Some(n) = limit {
         prs.truncate(n as usize);
@@ -871,16 +1049,26 @@ async fn project_label_colors(repo_path: &str, enc: &str) -> HashMap<String, Str
 pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
     let enc = encode_project(&project_path(repo_path).await?);
 
-    // Core fields + changed files in one call.
-    let out = run_glab(
-        Some(repo_path),
-        &[
-            "api",
-            &format!("projects/{enc}/merge_requests/{number}/changes"),
-        ],
-        GLAB_NETWORK_TIMEOUT,
-    )
-    .await?;
+    // Core fields + changed files in one call, alongside the open-MR list that
+    // stack inference needs — GitLab has no per-MR stack object, so membership can
+    // only come from the whole open set. Fail-open: an empty list simply leaves
+    // this MR unstacked.
+    let changes_endpoint = format!("projects/{enc}/merge_requests/{number}/changes");
+    let changes_args = ["api", changes_endpoint.as_str()];
+    let (out, open_prs) = tokio::join!(
+        run_glab(Some(repo_path), &changes_args, GLAB_NETWORK_TIMEOUT),
+        // BOUNDED as well as concurrent: glab's own ceiling is 120s, and a stack
+        // decoration must never gate the MR view for that long. Elapsing falls back
+        // to no chain, exactly like an errored list.
+        async {
+            tokio::time::timeout(STACKS_TIMEOUT, list_prs(repo_path, "open", None))
+                .await
+                .unwrap_or_else(|_| Ok(Vec::new()))
+                .unwrap_or_default()
+        },
+    );
+    let out = out?;
+    let (stack, stack_members) = mr_stack_from_rows(&open_prs, number);
     let mr: GlabMrChanges = serde_json::from_str(&out.stdout_lossy())
         .map_err(|e| AppError::Glab(format!("could not parse GitLab merge request: {e}")))?;
 
@@ -1098,6 +1286,11 @@ pub async fn view_pr(repo_path: &str, number: u64) -> AppResult<PrDetails> {
         merge_commit_allowed: None,
         squash_merge_allowed: None,
         rebase_merge_allowed: None,
+        stack,
+        stack_members,
+        // Inference failing open has no disclosure consequence here: a GitLab merge
+        // never cascades, so an unknown chain can't hide a multi-MR merge.
+        stack_unknown: false,
     })
 }
 
@@ -7452,6 +7645,173 @@ pub async fn repo_readme(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `(iid, position, size)` per MR, sorted — the readable shape of an inference.
+    fn chain_of(open: &[(u64, &str, &str)]) -> Vec<(u64, String, u32, u32)> {
+        let mut rows: Vec<(u64, String, u32, u32)> = infer_mr_stacks(open)
+            .into_iter()
+            .map(|(iid, (id, position, size))| (iid, id, position, size))
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    #[test]
+    fn infer_mr_stacks_marks_a_linear_chain_bottom_first() {
+        // A (feat-a → main) ← B (feat-b → feat-a): B targets A's source branch.
+        let rows = chain_of(&[(7, "feat-a", "main"), (8, "feat-b", "feat-a")]);
+        assert_eq!(
+            rows,
+            vec![
+                (7, "mr-7".to_string(), 1, 2),
+                (8, "mr-7".to_string(), 2, 2),
+            ]
+        );
+        // Three deep, and list order must not matter.
+        let rows = chain_of(&[
+            (30, "feat-c", "feat-b"),
+            (10, "feat-a", "main"),
+            (20, "feat-b", "feat-a"),
+        ]);
+        assert_eq!(
+            rows,
+            vec![
+                (10, "mr-10".to_string(), 1, 3),
+                (20, "mr-10".to_string(), 2, 3),
+                (30, "mr-10".to_string(), 3, 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn infer_mr_stacks_leaves_ambiguous_shapes_unmarked() {
+        // Branching stack: two open MRs both target feat-a. GitHub disallows the
+        // shape, so the whole chain stays unmarked rather than picking an order.
+        assert!(infer_mr_stacks(&[
+            (1, "feat-a", "main"),
+            (2, "feat-b", "feat-a"),
+            (3, "feat-c", "feat-a"),
+        ])
+        .is_empty());
+        // Two open MRs sharing a source branch identify no unique parent.
+        assert!(infer_mr_stacks(&[
+            (1, "feat-a", "main"),
+            (2, "feat-a", "release"),
+            (3, "feat-b", "feat-a"),
+        ])
+        .is_empty());
+    }
+
+    /// Rows as `list_prs` returns them: stacks already annotated, state in GitLab's
+    /// uppercase neutral casing.
+    fn row(number: u64, head: &str, base: &str, stack: Option<(&str, u32, u32)>) -> PrInfo {
+        PrInfo {
+            number,
+            url: String::new(),
+            title: format!("MR {number}"),
+            base_ref_name: base.to_string(),
+            head_ref_name: head.to_string(),
+            is_draft: false,
+            state: "OPEN".to_string(),
+            author: None,
+            labels: Vec::new(),
+            created_at: String::new(),
+            head_sha: String::new(),
+            stack: stack.map(|(id, position, size)| PrStackInfo {
+                id: id.to_string(),
+                position,
+                size,
+            }),
+        }
+    }
+
+    #[test]
+    fn mr_stack_from_rows_filters_by_id_sorts_and_lowercases_state() {
+        // Two chains plus an unstacked MR; the chain rows are deliberately out of
+        // position order in the list.
+        let open = vec![
+            row(2, "a2", "a1", Some(("mr-1", 2, 2))),
+            row(9, "solo", "main", None),
+            row(6, "b2", "b1", Some(("mr-5", 2, 2))),
+            row(1, "a1", "main", Some(("mr-1", 1, 2))),
+            row(5, "b1", "release", Some(("mr-5", 1, 2))),
+        ];
+
+        let (stack, members) = mr_stack_from_rows(&open, 2);
+        let stack = stack.expect("MR 2 is in a chain");
+        assert_eq!((stack.id.as_str(), stack.position, stack.size), ("mr-1", 2, 2));
+        // Only the SAME chain's rows, sorted bottom→top — never the other chain's.
+        assert_eq!(
+            members.iter().map(|m| m.number).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(members[0].position, 1);
+        assert_eq!(members[0].head_ref_name, "a1");
+        assert_eq!(members[0].base_ref_name, "main");
+        assert_eq!(members[0].title, "MR 1");
+        // Provider-neutral lowercase, from GitLab's uppercase row state.
+        assert_eq!(members[0].state, "open");
+
+        // The other chain resolves independently.
+        let (stack, members) = mr_stack_from_rows(&open, 6);
+        assert_eq!(stack.expect("MR 6 is in a chain").id, "mr-5");
+        assert_eq!(
+            members.iter().map(|m| m.number).collect::<Vec<_>>(),
+            vec![5, 6]
+        );
+
+        // An unstacked MR, and one absent from the list entirely.
+        assert!(mr_stack_from_rows(&open, 9).0.is_none());
+        assert!(mr_stack_from_rows(&open, 9).1.is_empty());
+        assert!(mr_stack_from_rows(&open, 404).0.is_none());
+    }
+
+    #[test]
+    fn infer_mr_stacks_unmarks_the_whole_component_not_just_the_bad_link() {
+        // A backport shape: !10 and !11 both source feat-a (onto main and release),
+        // !12 stacks on feat-a, !13 on !12. !12's base is an ambiguous open-MR head,
+        // so !12 is NOT a bottom — dropping only the bad link would re-root the
+        // chain there and report [12, 13] as a stack. The ambiguity poisons the
+        // whole component instead.
+        assert!(infer_mr_stacks(&[
+            (10, "feat-a", "main"),
+            (11, "feat-a", "release"),
+            (12, "feat-b", "feat-a"),
+            (13, "feat-c", "feat-b"),
+        ])
+        .is_empty());
+    }
+
+    #[test]
+    fn infer_mr_stacks_finds_nothing_without_a_chain() {
+        // Independent MRs onto the trunk — a lone MR is not a stack of one.
+        assert!(infer_mr_stacks(&[(1, "feat-a", "main"), (2, "feat-b", "main")]).is_empty());
+        assert!(infer_mr_stacks(&[]).is_empty());
+        // A self-targeting MR can't be its own parent.
+        assert!(infer_mr_stacks(&[(1, "feat-a", "feat-a")]).is_empty());
+        // A 2-cycle (each MR targets the other's source branch) has no parentless
+        // bottom, so the component yields nothing rather than looping.
+        assert!(infer_mr_stacks(&[(1, "feat-a", "feat-b"), (2, "feat-b", "feat-a")]).is_empty());
+    }
+
+    #[test]
+    fn infer_mr_stacks_handles_two_independent_chains() {
+        let rows = chain_of(&[
+            (1, "a1", "main"),
+            (2, "a2", "a1"),
+            (5, "b1", "release"),
+            (6, "b2", "b1"),
+        ]);
+        assert_eq!(
+            rows,
+            vec![
+                (1, "mr-1".to_string(), 1, 2),
+                (2, "mr-1".to_string(), 2, 2),
+                (5, "mr-5".to_string(), 1, 2),
+                (6, "mr-5".to_string(), 2, 2),
+            ]
+        );
+    }
 
     #[test]
     fn gitlab_order_by_maps_each_sort() {

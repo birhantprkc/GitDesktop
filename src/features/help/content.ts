@@ -851,6 +851,29 @@ GitLab works too**: sign \`glab\` in to your instance (from Accounts, or
 automatically. Its issues, CI pipelines, and
 releases work too (see their sections below).
 
+## Stacked pull requests
+
+When a pull request is part of a **stack** — a chain where each PR targets the one below it
+instead of the base branch — its row in the list carries a **position badge** (*2/3*), and
+the PR view gains a **Stack** section listing every member from the bottom of the stack up,
+with the one you're reading marked. Select a member — click it, or move through the section
+with **↑ / ↓** — to open that pull request. The command palette ({{kbd:command-palette}}) also
+carries **Next pull request in stack** and **Previous pull request in stack**, offered from
+the pull-request view whenever there's another member in that direction; both are palette
+commands with no default shortcut, so give them one in **Settings → Keyboard** if you want
+it on the keys.
+
+Where the stack comes from depends on the forge: on **GitHub** it's the **native
+stacked-PR API**, and on **GitLab** a chain of merge requests is **detected automatically**.
+
+On **GitHub**, merging is **stack-aware**: merging a stacked pull request merges it *and*
+every still-open pull request below it, bottom-up, as a single operation, so the stack
+lands in dependency order without you walking it by hand — or, when the base branch uses a
+**merge queue**, is handed to the queue and lands when it clears, the head branch left in
+place for it. Before you confirm, the merge dialog **spells out the full scope of the
+merge** — naming each pull request it will merge, in the order they'll go in, whenever it
+has the list.
+
 ## Bitbucket PRs
 
 Point the app at a **Bitbucket Cloud** repo (connect with an Atlassian API token in
@@ -1756,10 +1779,10 @@ bindings (formatted for your platform) — rebind any of them in **Settings → 
 
 ## Moving around
 
-- **↑ / ↓** navigate every list — files, commits, branches, PRs, runs, sessions, and the
-  side rails (Settings, Repository settings, and this guide). **Shift + ↑ / ↓** extends a
-  selection in History. **Enter** opens the highlighted item; **Esc** closes dialogs and
-  menus.
+- **↑ / ↓** navigate every list — files, commits, branches, PRs, stack members, runs,
+  sessions, and the side rails (Settings, Repository settings, and this guide).
+  **Shift + ↑ / ↓** extends a selection in History. **Enter** opens the highlighted item;
+  **Esc** closes dialogs and menus.
 - **Tabs:** {{kbd:tab-changes}} Changes · {{kbd:tab-history}} History ·
   {{kbd:tab-compare}} Compare · {{kbd:tab-pulls}} Pull Requests · {{kbd:tab-actions}}
   Actions · {{kbd:tab-issues}} Issues · {{kbd:tab-discussions}} Discussions ·

@@ -163,6 +163,11 @@ import {
   type SuggestionApply,
   threadToMarkdown,
 } from "./ReviewThreads";
+import {
+  isNativeStack,
+  StackSection,
+  stackMergeDisclosure,
+} from "./StackSection";
 import { SubmitReviewDialog } from "./SubmitReviewDialog";
 import { useGeneratePrDescription } from "./useGeneratePrDescription";
 import {
@@ -329,17 +334,19 @@ export function RemotePrView({
   const pendingPrSection = useUiStore((s) => s.pendingPrSection);
   const setPendingPrSection = useUiStore((s) => s.setPendingPrSection);
   const selectedPr = useUiStore((s) => s.selectedPr);
+  const selectPr = useUiStore((s) => s.selectPr);
+  // Whether this view owns the current selection. Several hint/palette paths
+  // gate on it so a still-mounted lagging view (deferredPr) can't answer first.
+  const isSelectedPr =
+    selectedPr?.kind === "remote" && selectedPr.id === String(number);
   // The activity dock's "View" lands here via a pending hint; switch to the
-  // review sub-tab once, then clear it. Guarded on this being the *selected* PR
-  // so a still-mounted lagging view (deferredPr) can't swallow the hint first.
+  // review sub-tab once, then clear it.
   useEffect(() => {
-    const isSelected =
-      selectedPr?.kind === "remote" && selectedPr.id === String(number);
-    if (pendingPrSection === "review" && isSelected) {
+    if (pendingPrSection === "review" && isSelectedPr) {
       setSection("review");
       setPendingPrSection(null);
     }
-  }, [pendingPrSection, setPendingPrSection, selectedPr, number]);
+  }, [pendingPrSection, setPendingPrSection, isSelectedPr]);
   const aiEnabled = useAiEnabled();
   const rulesConfig = useEffectiveBranchRules(repoPath);
   const defaultBranch = useDefaultBranch(repoPath);
@@ -424,6 +431,35 @@ export function RemotePrView({
       !details.data?.isDraft &&
       details.data?.state === "OPEN" &&
       !busy,
+  );
+
+  // Palette twins of the Stack section's arrow keys: step one position up or down
+  // the stack. Each action is enabled only when a member actually sits at that
+  // position, so it DISABLES at the stack's ends (never wrapping — a stack is a
+  // dependency chain) and whenever the member list is missing, rather than
+  // offering a command that would silently do nothing.
+  function stackNeighbor(delta: 1 | -1) {
+    const info = details.data?.stack;
+    if (!info) return undefined;
+    return (details.data?.stackMembers ?? []).find(
+      (m) => m.position === info.position + delta,
+    );
+  }
+  function goToStackNeighbor(delta: 1 | -1) {
+    // Re-resolved on activation: `enabled` is a render snapshot, while `run` reads
+    // live state through useEffectEvent.
+    const target = stackNeighbor(delta);
+    if (target) selectPr({ kind: "remote", id: String(target.number) });
+  }
+  useHotkeyAction(
+    "pr-stack-next",
+    () => goToStackNeighbor(1),
+    isSelectedPr && !!stackNeighbor(1),
+  );
+  useHotkeyAction(
+    "pr-stack-previous",
+    () => goToStackNeighbor(-1),
+    isSelectedPr && !!stackNeighbor(-1),
   );
 
   const [composeBody, setComposeBody] = useState("");
@@ -677,12 +713,21 @@ export function RemotePrView({
       },
       {
         onSuccess: (outcome) => {
-          toast.success(`Merged #${number}`);
-          // The PR merged; a cleanupWarning means only the post-merge remote
-          // head-branch deletion failed. Surface it as a (non-error) warning so
-          // the successful merge isn't dressed up as a failure.
-          if (outcome.cleanupWarning) {
-            toast.warning(outcome.cleanupWarning, { duration: 10000 });
+          // A queued merge was accepted but hasn't landed, so announce the state
+          // once — mirroring the auto-merge arm — instead of a "Merged" success
+          // that the queue detail would immediately contradict.
+          if (outcome.queued) {
+            toast.success(
+              outcome.cleanupWarning ?? `Merge queued for #${number}`,
+            );
+          } else {
+            toast.success(`Merged #${number}`);
+            // Merged for real; a cleanupWarning here means only the post-merge
+            // remote head-branch deletion failed. Surface it as a (non-error)
+            // warning so the successful merge isn't dressed up as a failure.
+            if (outcome.cleanupWarning) {
+              toast.warning(outcome.cleanupWarning, { duration: 10000 });
+            }
           }
           setMergeOpen(false);
         },
@@ -835,6 +880,20 @@ export function RemotePrView({
     mergeState.data?.pipelineStatus ?? "",
   );
   const autoMergeArmed = mergeState.data?.autoMergeEnabled ?? false;
+  // What a stacked merge lands beyond the PR on screen — null when this PR is
+  // unstacked or everything below it already merged, leaving today's copy right.
+  // Known stacks gate on the stack's own id, not the detected provider: forge
+  // status can be pending or failed here (canMerge deliberately stays on then),
+  // which would otherwise drop the disclosure on GitHub and invent one on GitLab.
+  // `hostCascades` is the unknown arm's fallback — no stack, so no id to read.
+  const stackMerge = stackMergeDisclosure({
+    stack: pr?.stack,
+    members: pr?.stackMembers,
+    stackUnknown: pr?.stackUnknown ?? false,
+    prNoun,
+    atomic: isNativeStack(pr?.stack),
+    hostCascades: providerKey === "github",
+  });
 
   // Approval display (GitLab + Bitbucket): a quiet count shown only when there's
   // something to report — someone approved, or a GitLab Premium project requires
@@ -1304,6 +1363,14 @@ export function RemotePrView({
             }}
           />
         )}
+        {/* Stack members, bottom-first — self-hiding for an unstacked PR, so an
+            unstacked header is unchanged. */}
+        <StackSection
+          stack={pr.stack}
+          members={pr.stackMembers}
+          currentNumber={number}
+          onSelect={(n) => selectPr({ kind: "remote", id: String(n) })}
+        />
         <ChecksRollup
           checks={pr.checks}
           repoPath={repoPath}
@@ -2257,6 +2324,8 @@ export function RemotePrView({
         pending={mergeAuto ? armAutoMerge.isPending : mergePr.isPending}
         onConfirm={confirmMerge}
         auto={mergeAuto}
+        stackNotice={stackMerge?.notice}
+        confirmLabel={stackMerge?.confirmLabel}
       />
 
       <EditTitleBodyDialog

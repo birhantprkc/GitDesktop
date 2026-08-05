@@ -1422,6 +1422,33 @@ export interface PrRef {
  *  arms ignore it, so the frontend gates the lens UI to GitHub forks. */
 export type RemoteLens = "origin" | "upstream";
 
+/** A PR's membership in a stack — a linear chain where each PR targets the one
+ *  below it. Absent/null means unstacked. Provenance differs per forge and `id`
+ *  carries it: GitHub's is native (numeric id) and keeps merged members, so
+ *  `size` never shrinks; GitLab's is inferred over OPEN MRs ("mr-<iid>" id), so
+ *  a merged layer leaves the chain and both `position` and `size` shrink — and a
+ *  two-MR chain losing one stops being marked at all. Bitbucket has no stacks. */
+export interface PrStackInfo {
+  /** Stack identity: GitHub stack number as a string; GitLab "mr-<iid>". */
+  id: string;
+  /** 1 = bottom of the stack (merges first). */
+  position: number;
+  size: number;
+}
+
+/** One member of a stack, for the detail view's Stack section. On GitHub merging
+ *  a member atomically merges every still-open member below it, bottom-up; GitLab
+ *  merges that MR alone and retargets the next, so nothing cascades there. */
+export interface PrStackMember {
+  number: number;
+  title: string;
+  /** "open" | "merged" | "closed" */
+  state: string;
+  position: number;
+  headRefName: string;
+  baseRefName: string;
+}
+
 export interface PrInfo {
   number: number;
   url: string;
@@ -1440,6 +1467,8 @@ export interface PrInfo {
    *  Bitbucket has no batch pipeline endpoint. "" for GitHub/GitLab (their CI
    *  fetch keys on PR number / MR iid, not the SHA). */
   headSha: string;
+  /** Stack membership, driving the row's position badge. Null/absent = unstacked. */
+  stack?: PrStackInfo | null;
 }
 
 /** A PR's rolled-up CI signal for the list-row icon. "none" = no checks. */
@@ -1678,6 +1707,15 @@ export interface PrDetails {
   /** Whether the repository allows the rebase-merge method. GitHub only; `null` =
    *  unknown — do not gate on `null`. */
   rebaseMergeAllowed: boolean | null;
+  /** Stack membership. Null/absent = unstacked (the Stack section renders nothing). */
+  stack?: PrStackInfo | null;
+  /** Every member of `stack`, bottom-first; empty when the PR is unstacked. */
+  stackMembers: PrStackMember[];
+  /** True when the stack probe itself FAILED, so a null `stack` above means
+   *  "unknown", not "known unstacked" — the two are not interchangeable on a
+   *  merge path that can cascade. GitHub-only this wave (only GitHub cascades);
+   *  the GitLab and Bitbucket arms always report false. */
+  stackUnknown: boolean;
 }
 
 /** A reviewer who has submitted a verdict, as supplied by the backend (GitLab
