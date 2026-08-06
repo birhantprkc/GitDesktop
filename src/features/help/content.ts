@@ -79,12 +79,13 @@ From the welcome screen (or the repo switcher in the header):
 Once a repo is open you land on the **Changes** tab. The header's tab rail holds the
 three primary views — **Changes**, **History**, and **Pull Requests** — and a
 **More ▾** menu holds the rest: **Compare**, {{ai}}**Agent**, {{/ai}}**Issues**,
-**Discussions**, **Actions**, **Tags**, and **Insights**. The More button shows the
-active secondary tab's name, so the rail always says where you are.
+**Code TODOs**, **Discussions**, **Actions**, **Findings**, **Tags**, **Tasks**,
+and **Insights**. The More button shows the active secondary tab's name, so the
+rail always says where you are.
 
 Switch tabs with the number keys ({{kbd:tab-changes}} through {{kbd:tab-insights}}; see
-*Keyboard & navigation*). Issues, Discussions, Actions, and Tags need \`gh\` and a GitHub
-remote{{ai}}; the **Agent** tab appears only when AI features are enabled{{/ai}}.
+*Keyboard & navigation*). Issues, Discussions, Actions, Findings, and Tags need \`gh\` and a
+GitHub remote{{ai}}; the **Agent** tab appears only when AI features are enabled{{/ai}}.
 
 > Tip: press {{kbd:command-palette}} anytime for the command palette — the fastest way
 > to find a feature when you don't know where it lives — or {{kbd:show-help}} to reopen
@@ -1245,6 +1246,32 @@ to jump to that run. You can also get an OS **notification** when a run finishes
 (**Settings → Notifications**).`,
   },
   {
+    id: "findings",
+    label: "Findings",
+    body: `# Findings
+
+The **Findings** tab (in the More ▾ menu; palette-only by default — bind a key in
+**Settings → Keyboard**) collects what GitHub's security scanning has turned up for the repo, so you
+can read it without opening the browser. It covers **GitHub** repositories; on a GitLab
+or Bitbucket repo the tab says so instead.
+
+- **Dependabot alerts** — every open alert, grouped by the vulnerable package. Each one
+  shows its **severity**, the **affected version range**, the **first patched version**,
+  and a **CVSS** score when GitHub reports one.
+- **Security advisories** — the advisories published on the repository itself.
+
+Move through the list with **↑ / ↓**; select a row for its detail, then **View on
+GitHub** to open it there.
+
+A category that isn't reporting tells you why rather than looking empty. When Dependabot
+alerts are switched off for the repo and you have repo-admin access, **Open security
+settings** takes you straight to **Repository settings → Security**, where you turn
+scanning on (see *Repository settings*). When your GitHub access can't read a category, you see what GitHub said
+about it; when the check couldn't complete at all, you get a **Retry**.
+
+The tab fetches when you open it — use the refresh button for the current state.`,
+  },
+  {
     id: "bitbucket",
     label: "Bitbucket repositories",
     body: `# Bitbucket repositories
@@ -1816,8 +1843,9 @@ bindings (formatted for your platform) — rebind any of them in **Settings → 
 - **Tabs:** {{kbd:tab-changes}} Changes · {{kbd:tab-history}} History ·
   {{kbd:tab-compare}} Compare · {{kbd:tab-pulls}} Pull Requests · {{kbd:tab-actions}}
   Actions · {{kbd:tab-issues}} Issues · {{kbd:tab-discussions}} Discussions ·
-  {{kbd:tab-tags}} Tags · {{kbd:tab-insights}} Insights.{{ai}} The **Agent** tab is
-  palette-only by default (bind a key in Settings).{{/ai}}
+  {{kbd:tab-tags}} Tags · {{kbd:tab-insights}} Insights. The **Code TODOs**, **Findings**,
+  and **Tasks** tabs are palette-only by default{{ai}}, as is **Agent**{{/ai}} (bind a key
+  in **Settings → Keyboard**).
 - {{kbd:show-repositories}} repositories · {{kbd:show-branches}} branches ·
   {{kbd:back-to-repositories}} back to repositories · {{kbd:focus-filter}} focus the
   filter.
