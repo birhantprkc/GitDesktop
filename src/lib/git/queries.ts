@@ -118,12 +118,12 @@ export const repoKeys = {
 };
 
 /**
- * The keys a staging-class mutation touches: repo status, every working-tree file diff,
+ * The keys a working-tree write invalidates: repo status, every working-tree file diff,
  * and only the MUTABLE file-at-rev slices — `"worktree"` and the index `":0"`, which
- * staging rewrites — all prefix-matched. Hot mutations (stage/unstage/discard/apply)
- * pass this to {@link useRepoMutation} so they don't mark the heavy
- * history/branches/Insights/SBOM queries stale. Committed-rev reads (HEAD, commit SHAs)
- * are immutable here and deliberately left alone.
+ * staging rewrites — all prefix-matched. Staging-class mutations (stage/unstage/discard/
+ * apply) pass this ALONE so they don't mark the heavy history/branches/Insights/SBOM
+ * queries stale; {@link useCommit} passes it as its AWAITED set and defers what HEAD
+ * moves to {@link commitAftermathKeys}. Committed-rev reads are immutable under staging.
  */
 const workingTreeKeys = (repo: string) =>
   [
@@ -131,6 +131,42 @@ const workingTreeKeys = (repo: string) =>
     ["repo", repo, "diff"],
     ["repo", repo, "file-b64", "worktree"],
     ["repo", repo, "file-b64", ":0"],
+  ] as const;
+
+/** The families a commit (or amend) makes stale BEYOND the working tree —
+ *  history, branch tips/counters, HEAD-rev blobs, and operation state, both
+ *  in-flight (a commit can conclude a merge or an interrupted journaled op)
+ *  and prospective (merge/conflict previews, local-PR merge states).
+ *  Invalidated fire-and-forget so the Commit button never waits on them;
+ *  forge-backed keys (pr/issue/CI/…) are deliberately absent — a local
+ *  commit cannot change forge state. */
+const commitAftermathKeys = (repo: string) =>
+  [
+    repoKeys.log(repo),
+    repoKeys.commits(repo),
+    repoKeys.branches(repo),
+    ["repo", repo, "log-search"],
+    ["repo", repo, "recent-commits"],
+    ["repo", repo, "commit-authors"],
+    ["repo", repo, "unpushed-count"],
+    ["repo", repo, "unpushed-messages"],
+    ["repo", repo, "branch-stats"],
+    ["repo", repo, "stats"],
+    ["repo", repo, "divergence"],
+    ["repo", repo, "compare"],
+    ["repo", repo, "file-log"],
+    ["repo", repo, "blame"],
+    ["repo", repo, "file-b64", "HEAD"],
+    ["repo", repo, "op-state"],
+    ["repo", repo, "conflict-file"],
+    ["repo", repo, "merge-preview"],
+    ["repo", repo, "conflict-preview"],
+    ["repo", repo, "local-pr-merge-states"],
+    ["repo", repo, "oplog-check"],
+    ["repo", repo, "insights", "contributors"],
+    ["repo", repo, "insights", "commit-activity"],
+    ["repo", repo, "insights", "code-frequency"],
+    ["repo", repo, "insights", "punch-card"],
   ] as const;
 
 export function useGitInstalled() {
@@ -2761,7 +2797,8 @@ export function useForkRepoByName() {
  * A mutation that invalidates repo queries on completion. Defaults to the whole repo
  * subtree (correct but broad); pass `opts.invalidate` to narrow it for hot mutations
  * (each key is prefix-matched). Reserve the whole-subtree default for ops that touch
- * history or branch topology (checkout/pull/reset/merge).
+ * history or branch topology (checkout/pull/reset/merge); a hot history op (commit)
+ * splits instead — narrow awaited `invalidate` plus deferred `opts.invalidateAfter`.
  */
 function useRepoMutation<TArgs, TData>(
   repo: string,
@@ -2770,6 +2807,11 @@ function useRepoMutation<TArgs, TData>(
     /** Query keys to invalidate on completion (prefix-matched). Defaults to the
      *  whole repo subtree. */
     invalidate?: readonly (readonly unknown[])[];
+    /** Keys invalidated fire-and-forget on top of `invalidate` — NEVER awaited, so
+     *  callers can refresh heavy/slow families without holding the mutation's
+     *  isPending. Sequenced after the awaited set only under `refetchBeforeSuccess`;
+     *  otherwise both fire together in `onSettled`. */
+    invalidateAfter?: readonly (readonly unknown[])[];
     /** Invalidate (and AWAIT) in onSuccess instead of fire-and-forget in
      *  onSettled, so the refetch lands BEFORE the caller's own onSuccess —
      *  commit uses this so the emptied list, cleared draft, and toast appear
@@ -2784,11 +2826,27 @@ function useRepoMutation<TArgs, TData>(
         queryClient.invalidateQueries({ queryKey }),
       ),
     );
+  const invalidateAfter = () =>
+    Promise.all(
+      (opts.invalidateAfter ?? []).map((queryKey) =>
+        queryClient.invalidateQueries({ queryKey }),
+      ),
+    );
   return useMutation({
     mutationFn,
     ...(opts.refetchBeforeSuccess
-      ? { onSuccess: () => invalidate() }
-      : { onSettled: () => void invalidate() }),
+      ? {
+          onSuccess: async () => {
+            await invalidate();
+            void invalidateAfter();
+          },
+        }
+      : {
+          onSettled: () => {
+            void invalidate();
+            void invalidateAfter();
+          },
+        }),
   });
 }
 
@@ -2947,13 +3005,18 @@ export function useUnstage(repo: string) {
 }
 
 export function useCommit(repo: string) {
-  // refetchBeforeSuccess: the emptied changes list, cleared draft, and toast land
-  // together.
+  // Awaited: only the working tree, so the emptied changes list, cleared draft,
+  // and toast land together without waiting on forge queries; history and branch
+  // counters refresh behind the toast (commitAftermathKeys).
   return useRepoMutation(
     repo,
     (args: { title: string; body?: string; amend?: boolean }) =>
       api.gitCommit(repo, args.title, args.body, args.amend ?? false),
-    { refetchBeforeSuccess: true },
+    {
+      invalidate: workingTreeKeys(repo),
+      invalidateAfter: commitAftermathKeys(repo),
+      refetchBeforeSuccess: true,
+    },
   );
 }
 
