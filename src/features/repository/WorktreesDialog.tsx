@@ -1,6 +1,7 @@
 import {
   ArrowLineUpIcon,
   CaretLeftIcon,
+  CopyIcon,
   DotsThreeVerticalIcon,
   FolderOpenIcon,
   GitBranchIcon,
@@ -40,6 +41,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { copyText } from "@/lib/clipboard";
 import {
   useAddUserWorktree,
   useBranches,
@@ -384,15 +386,19 @@ function WorktreeRow({
             <FolderOpenIcon />
             {isCurrent ? "Current worktree" : "Open worktree"}
           </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => copyText(path, "Path copied")}>
+            <CopyIcon />
+            Copy path
+          </DropdownMenuItem>
           <DropdownMenuItem
-            // git can't move the main worktree, and moving the one you're
-            // standing in risks a cwd lock + a stale active path — rename it
-            // after switching away.
-            disabled={isMain || isCurrent}
+            // git can't move the main worktree or a locked one, and moving the
+            // one you're standing in risks a cwd lock + a stale active path —
+            // rename it after switching away.
+            disabled={isMain || isCurrent || isLocked}
             onClick={onRename}
           >
             <PencilSimpleIcon />
-            Rename…
+            {isLocked ? "Rename… (locked)" : "Rename…"}
           </DropdownMenuItem>
           {!isMain &&
             (isLocked ? (
@@ -479,7 +485,7 @@ function RowTags({
 
 // --------------------------------------------------------------- rename worktree
 
-function RenameWorktreeDialog({
+export function RenameWorktreeDialog({
   repoPath,
   worktree,
   onClose,
@@ -568,7 +574,7 @@ function RenameWorktreeDialog({
 
 // ----------------------------------------------------------------- lock worktree
 
-function LockWorktreeDialog({
+export function LockWorktreeDialog({
   repoPath,
   worktree,
   onClose,
@@ -600,9 +606,9 @@ function LockWorktreeDialog({
         <DialogHeader>
           <DialogTitle>Lock worktree</DialogTitle>
           <DialogDescription>
-            Locking stops git from pruning or removing this worktree without a
-            forced confirmation — useful for one on a removable or network
-            drive. Add an optional note for why.
+            Locking stops this worktree from being pruned or renamed, and
+            deleting it asks for a forced confirmation — useful for one on a
+            removable or network drive. Add an optional note for why.
           </DialogDescription>
         </DialogHeader>
 

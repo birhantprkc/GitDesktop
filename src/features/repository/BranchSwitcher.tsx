@@ -57,6 +57,7 @@ import {
   useStashCount,
   useStashPop,
   useSwitchAutostash,
+  useUnlockUserWorktree,
   useUpdateBranchFrom,
   useUserWorktrees,
 } from "@/lib/git/queries";
@@ -96,6 +97,7 @@ import {
   reportAutostashOutcome,
   useStashReapplyRecovery,
 } from "./useStashReapplyRecovery";
+import { LockWorktreeDialog, RenameWorktreeDialog } from "./WorktreesDialog";
 
 /** Lower-cased, forward-slashed path for cross-source comparison — git emits
  *  "/", the app stores "\" on Windows. */
@@ -183,6 +185,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   const remotes = useRemotes(repoPath);
   const setBranchArchived = useSetBranchArchived(repoPath);
   const openWorktree = useOpenWorktree();
+  const unlockWorktree = useUnlockUserWorktree(repoPath);
   const recovery = useStashReapplyRecovery(repoPath);
   const settings = useSettings();
   const saveSettings = useSaveSettings();
@@ -242,8 +245,15 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     path: string;
   } | null>(null);
   // The worktree pending a "Promote to main workspace" confirm — set by the
-  // palette action (the Worktrees dialog hosts its own promote flow).
+  // palette action and the Worktrees-section row menu (the Worktrees dialog
+  // hosts its own promote flow).
   const [promoteTarget, setPromoteTarget] = useState<UserWorktree | null>(null);
+  // Worktrees-section row menu targets — the rename and lock flows reuse the
+  // Worktrees dialog's own dialogs.
+  const [renameWorktreeTarget, setRenameWorktreeTarget] =
+    useState<UserWorktree | null>(null);
+  const [lockWorktreeTarget, setLockWorktreeTarget] =
+    useState<UserWorktree | null>(null);
 
   const head = status.data?.branch;
   const currentName = head?.name ?? null;
@@ -1093,7 +1103,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     const div = divByName.get(branch.name);
     const canUpdate = Boolean(defaultName) && branch.name !== defaultName;
     const deletionBlocked = isDeletionBlocked(rulesConfig, branch.name);
-    const inWorktree = worktreeByBranch.has(branch.name);
+    // The worktree (other than the active checkout) this branch occupies, when
+    // any — the Delete worktree… item gates on it (git refuses to remove the
+    // main working tree).
+    const rowWorktree = (userWorktrees.data ?? []).find(
+      (w) => w.path === worktreeByBranch.get(branch.name),
+    );
+    const inWorktree = rowWorktree !== undefined;
     // Outbound sync gating. `pushable` = tracked on a KNOWN remote and ahead →
     // offer a plain push to that remote (disabled with "(diverged)" when also
     // behind); the backend resolves to the branch's own upstream remote.
@@ -1422,17 +1438,16 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
           <ContextMenuSeparator />
           {inWorktree && (
             <ContextMenuItem
+              disabled={rowWorktree?.isMain}
               onClick={() => {
-                const wtPath = worktreeByBranch.get(branch.name);
-                const wt = (userWorktrees.data ?? []).find(
-                  (w) => w.path === wtPath,
-                );
-                if (!wt) return;
+                if (!rowWorktree) return;
                 setOpen(false);
-                setRemoveWorktreeTarget(wt);
+                setRemoveWorktreeTarget(rowWorktree);
               }}
             >
-              Remove worktree…
+              {rowWorktree?.isMain
+                ? "Delete worktree… (main workspace)"
+                : "Delete worktree…"}
             </ContextMenuItem>
           )}
           <ContextMenuItem
@@ -1673,41 +1688,133 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   <p className="px-3 py-1 text-[11px] font-medium text-muted-foreground">
                     Worktrees
                   </p>
+                  {/* No isCurrent gating on these menus: otherWorktrees excludes
+                      the active checkout, by the same normalized-path comparison
+                      the whole section keys on. */}
                   {otherWorktrees.map((w) => (
-                    <button
-                      key={w.path}
-                      type="button"
-                      data-row={w.path}
-                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
-                      onClick={() => {
-                        setOpen(false);
-                        openWorktree(w.path);
-                      }}
-                    >
-                      <TreeStructureIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">
-                        {w.isDetached ? "detached HEAD" : w.branch || "—"}
-                      </span>
-                      {w.isMain && (
-                        <Badge variant="secondary" className="shrink-0">
-                          Main
-                        </Badge>
-                      )}
-                      <span
-                        className="max-w-[45%] shrink-0 truncate text-[11px] text-muted-foreground"
-                        onMouseEnter={(e) => {
-                          const el = e.currentTarget;
-                          // Full path is the useful tooltip (the row already
-                          // shows the folder name). removeAttribute, not
-                          // title="", so an unclipped row leaves no empty tooltip.
-                          if (el.scrollWidth > el.clientWidth)
-                            el.title = w.path;
-                          else el.removeAttribute("title");
-                        }}
-                      >
-                        {baseName(w.path)}
-                      </span>
-                    </button>
+                    <ContextMenu key={w.path}>
+                      <ContextMenuTrigger
+                        render={
+                          <button
+                            type="button"
+                            data-row={w.path}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
+                            onClick={() => {
+                              setOpen(false);
+                              openWorktree(w.path);
+                            }}
+                          >
+                            <TreeStructureIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                            <span className="min-w-0 flex-1 truncate">
+                              {w.isDetached ? "detached HEAD" : w.branch || "—"}
+                            </span>
+                            {w.isMain && (
+                              <Badge variant="secondary" className="shrink-0">
+                                Main
+                              </Badge>
+                            )}
+                            <span
+                              className="max-w-[45%] shrink-0 truncate text-[11px] text-muted-foreground"
+                              onMouseEnter={(e) => {
+                                const el = e.currentTarget;
+                                // Full path is the useful tooltip (the row already
+                                // shows the folder name). removeAttribute, not
+                                // title="", so an unclipped row leaves no empty tooltip.
+                                if (el.scrollWidth > el.clientWidth)
+                                  el.title = w.path;
+                                else el.removeAttribute("title");
+                              }}
+                            >
+                              {baseName(w.path)}
+                            </span>
+                          </button>
+                        }
+                      />
+                      <ContextMenuContent className="min-w-48">
+                        <ContextMenuItem
+                          onClick={() => {
+                            setOpen(false);
+                            openWorktree(w.path);
+                          }}
+                        >
+                          Open worktree
+                        </ContextMenuItem>
+                        <ContextMenuItem
+                          onClick={() => copyText(w.path, "Path copied")}
+                        >
+                          Copy path
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem
+                          // git worktree move refuses the main worktree and a
+                          // locked one.
+                          disabled={w.isMain || w.isLocked}
+                          onClick={() => {
+                            setOpen(false);
+                            setRenameWorktreeTarget(w);
+                          }}
+                        >
+                          {w.isMain
+                            ? "Rename… (main workspace)"
+                            : w.isLocked
+                              ? "Rename… (locked)"
+                              : "Rename…"}
+                        </ContextMenuItem>
+                        {!w.isMain &&
+                          (w.isLocked ? (
+                            <ContextMenuItem
+                              // In-place state change: the list refreshes via the
+                              // mutation's invalidation, so the popover stays open.
+                              onClick={() =>
+                                unlockWorktree.mutate(w.path, {
+                                  onSuccess: () =>
+                                    toast.success("Worktree unlocked"),
+                                  onError,
+                                })
+                              }
+                            >
+                              Unlock
+                            </ContextMenuItem>
+                          ) : (
+                            <ContextMenuItem
+                              onClick={() => {
+                                setOpen(false);
+                                setLockWorktreeTarget(w);
+                              }}
+                            >
+                              Lock…
+                            </ContextMenuItem>
+                          ))}
+                        {/* Promote moves this worktree's branch into the main
+                            workspace, so it needs a linked worktree with a
+                            branch. */}
+                        {!w.isMain && !w.isDetached && (
+                          <ContextMenuItem
+                            disabled={w.isLocked}
+                            onClick={() => {
+                              setOpen(false);
+                              setPromoteTarget(w);
+                            }}
+                          >
+                            {w.isLocked
+                              ? "Promote to main workspace… (locked)"
+                              : "Promote to main workspace…"}
+                          </ContextMenuItem>
+                        )}
+                        <ContextMenuSeparator />
+                        <ContextMenuItem
+                          disabled={w.isMain}
+                          onClick={() => {
+                            setOpen(false);
+                            setRemoveWorktreeTarget(w);
+                          }}
+                        >
+                          {w.isMain
+                            ? "Delete worktree… (main workspace)"
+                            : "Delete worktree…"}
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
                   ))}
                 </div>
               )}
@@ -1956,6 +2063,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       />
 
       <DeleteWorktreeDialog
+        key={removeWorktreeTarget?.path ?? "no-remove"}
         repoPath={repoPath}
         worktree={removeWorktreeTarget}
         onClose={() => setRemoveWorktreeTarget(null)}
@@ -2098,6 +2206,20 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         repoPath={repoPath}
         worktree={promoteTarget}
         onClose={() => setPromoteTarget(null)}
+      />
+
+      <RenameWorktreeDialog
+        key={renameWorktreeTarget?.path ?? "no-rename"}
+        repoPath={repoPath}
+        worktree={renameWorktreeTarget}
+        onClose={() => setRenameWorktreeTarget(null)}
+      />
+
+      <LockWorktreeDialog
+        key={lockWorktreeTarget?.path ?? "no-lock"}
+        repoPath={repoPath}
+        worktree={lockWorktreeTarget}
+        onClose={() => setLockWorktreeTarget(null)}
       />
     </>
   );
