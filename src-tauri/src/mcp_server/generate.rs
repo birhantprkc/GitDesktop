@@ -1128,18 +1128,69 @@ impl GitDesktopMcp {
 impl GitDesktopMcp {
     /// The user's AI-ignore patterns for the bound repo: the repo's own ignore
     /// file first, then the global setting's patterns — the merge every recipe
-    /// passes to the git layer as pathspec excludes. Takes the caller's already-read
-    /// `settings`, so one recipe call reads the settings store exactly once.
+    /// passes to the git layer. Takes the caller's already-read `settings`, so
+    /// one recipe call reads the settings store exactly once.
+    ///
+    /// Repo-first/global-LAST is a security invariant, not a preference: `!`
+    /// un-ignore lines are honored last-match-wins, and `.gitdesktop/aiignore` is
+    /// committed content anyone with push access can write. Reversed, a committed
+    /// `!` could re-expose a file the user excluded globally.
+    ///
+    /// The repo file is read from the working-tree TOPLEVEL, not `self.repo` as
+    /// given: `read_repo_ai_ignore` joins `.gitdesktop/aiignore` under whatever
+    /// path it gets, and a `--repo` bound to a subdirectory finds no file there —
+    /// whose NotFound arm is an empty list, silently dropping the team's whole
+    /// committed rule set while the global patterns still apply.
     async fn ai_ignore_patterns(
         &self,
         settings: &crate::app_store::AiGenSettings,
     ) -> Result<Vec<String>, McpError> {
-        let repo_ignore = crate::instructions::read_repo_ai_ignore(self.repo.clone())
+        let toplevel = self.toplevel().await.map_err(app_err)?.to_string();
+        let repo_ignore = crate::instructions::read_repo_ai_ignore(toplevel)
             .await
             .map_err(app_err)?;
         Ok(repo_ignore
             .into_iter()
             .chain(settings.ai_ignore_patterns.iter().cloned())
+            .collect())
+    }
+
+    /// The bound repo's committed `.gitdesktop/instructions.md`, read from the
+    /// working-tree TOPLEVEL for the same reason as
+    /// [`Self::ai_ignore_patterns`]: the reader joins a fixed relative path onto
+    /// whatever it is given and answers NotFound with `None`, so a `--repo` bound
+    /// to a subdirectory drops the repo's instructions without a word.
+    async fn repo_instructions(&self) -> Result<Option<String>, McpError> {
+        let toplevel = self.toplevel().await.map_err(app_err)?.to_string();
+        crate::instructions::read_repo_instructions(toplevel)
+            .await
+            .map_err(app_err)
+    }
+
+    /// Untracked (new) file paths, NUL-separated and raw — these names are matched
+    /// against the user's AI-ignore rules, so any rewriting of them fails OPEN. Without
+    /// `-z` git C-quotes a name holding a quote, backslash, or non-ASCII byte
+    /// (`"caf\303\251.txt"`), and trimming would fold a trailing-space name onto a
+    /// different name's spelling; either way the rule that covers it stops matching.
+    ///
+    /// Listed from the working-tree TOPLEVEL rather than `self.repo` as given:
+    /// `ls-files` prints names relative to its cwd and lists only that subtree, so a
+    /// `--repo` pointing below the root would both hand the engine names an anchored
+    /// rule cannot match — leaking the NAME — and silently drop every untracked file
+    /// outside that subdirectory.
+    async fn untracked_files(&self) -> Result<Vec<String>, crate::error::AppError> {
+        let toplevel = self.toplevel().await?;
+        let out = crate::git::runner::run_git(
+            Some(toplevel),
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+            crate::git::runner::DEFAULT_TIMEOUT,
+        )
+        .await?;
+        Ok(out
+            .stdout_lossy()
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
             .collect())
     }
 
@@ -1171,9 +1222,7 @@ impl GitDesktopMcp {
         let commits = crate::git::commit::git_recent_commits(self.repo.clone(), 10)
             .await
             .map_err(app_err)?;
-        let repo_instructions = crate::instructions::read_repo_instructions(self.repo.clone())
-            .await
-            .map_err(app_err)?;
+        let repo_instructions = self.repo_instructions().await?;
 
         Ok(assemble_commit_recipe(CommitPieces {
             diff_text: staged.text,
@@ -1286,9 +1335,7 @@ impl GitDesktopMcp {
             Vec::new()
         };
 
-        let repo_instructions = crate::instructions::read_repo_instructions(self.repo.clone())
-            .await
-            .map_err(app_err)?;
+        let repo_instructions = self.repo_instructions().await?;
 
         Ok(assemble_pr_recipe(PrPieces {
             diff_text: diff.text,
@@ -1506,7 +1553,7 @@ impl GitDesktopMcp {
 
         // `git diff HEAD` omits untracked files; list their paths so a branch made
         // entirely of new files can still be named (mirrors the in-app call site).
-        let untracked_paths = untracked_files(&self.repo).await.map_err(app_err)?;
+        let untracked_paths = self.untracked_files().await.map_err(app_err)?;
         // Untracked names never pass through a diff, so the ignore patterns have to
         // be applied to them here — a name is disclosure too. Their hidden count
         // joins the diff's: downstream both mean "in-progress changes hidden".
@@ -1617,9 +1664,7 @@ impl GitDesktopMcp {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let repo_instructions = crate::instructions::read_repo_instructions(self.repo.clone())
-            .await
-            .map_err(app_err)?;
+        let repo_instructions = self.repo_instructions().await?;
 
         Ok(assemble_branch_recipe(BranchPieces {
             diff_text: diff.text,
@@ -1794,26 +1839,6 @@ async fn committed_base_ref(repo: &str) -> Option<String> {
         return Some(default);
     }
     None
-}
-
-/// Untracked (new) file paths, NUL-separated and raw — these names are matched
-/// against the user's AI-ignore rules, so any rewriting of them fails OPEN. Without
-/// `-z` git C-quotes a name holding a quote, backslash, or non-ASCII byte
-/// (`"caf\303\251.txt"`), and trimming would fold a trailing-space name onto a
-/// different name's spelling; either way the rule that covers it stops matching.
-async fn untracked_files(repo: &str) -> Result<Vec<String>, crate::error::AppError> {
-    let out = crate::git::runner::run_git(
-        Some(repo),
-        &["ls-files", "--others", "--exclude-standard", "-z"],
-        crate::git::runner::DEFAULT_TIMEOUT,
-    )
-    .await?;
-    Ok(out
-        .stdout_lossy()
-        .split('\0')
-        .filter(|p| !p.is_empty())
-        .map(str::to_string)
-        .collect())
 }
 
 /// What the AI-ignore filter left of an untracked-name list. Mirrors the TS
@@ -2797,7 +2822,14 @@ mod tests {
         std::fs::write(repo.join("sub dir").join("a b.md"), "x\n").unwrap();
         std::fs::write(repo.join("café.txt"), "x\n").unwrap();
 
-        let mut names = untracked_files(&repo_s).await.expect("list untracked");
+        let mcp = crate::mcp_server::GitDesktopMcp::with_options(
+            repo_s.clone(),
+            false,
+            false,
+            false,
+            false,
+        );
+        let mut names = mcp.untracked_files().await.expect("list untracked");
         names.sort();
         assert_eq!(
             names,
@@ -2807,6 +2839,203 @@ mod tests {
                 "sub dir/a b.md".to_string(),
             ]
         );
+    }
+
+    /// A `--repo` BELOW the working-tree root still lists the whole tree, with
+    /// ROOT-relative names — so the user's anchored rules match and nothing
+    /// outside the subdirectory silently disappears.
+    ///
+    /// Listed from the subdir instead, `ls-files` would print `secret.env` rather
+    /// than `services/api/secret.env`: an anchored `/services/api/secret.env` rule
+    /// stops matching and the NAME reaches the model, while `root-untracked.txt`
+    /// vanishes from the recipe entirely.
+    #[tokio::test]
+    async fn untracked_files_lists_from_the_toplevel_for_a_subdir_repo() {
+        let base_dir = tempfile::Builder::new()
+            .prefix("gd-untracked-subdir-test-")
+            .tempdir()
+            .expect("create temp dir");
+        let repo = base_dir.path().join("repo");
+        std::fs::create_dir_all(repo.join("services").join("api")).unwrap();
+        let repo_s = repo.to_string_lossy().into_owned();
+        git(&repo_s, &["init", "-q"]).await;
+
+        std::fs::write(
+            repo.join("services").join("api").join("secret.env"),
+            "TOKEN=x\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("root-untracked.txt"), "x\n").unwrap();
+
+        let subdir = repo
+            .join("services")
+            .join("api")
+            .to_string_lossy()
+            .into_owned();
+        let mcp = crate::mcp_server::GitDesktopMcp::with_options(
+            subdir.clone(),
+            false,
+            false,
+            false,
+            false,
+        );
+        let mut names = mcp.untracked_files().await.expect("list untracked");
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "root-untracked.txt".to_string(),
+                "services/api/secret.env".to_string(),
+            ],
+            "names are root-relative and the whole tree is listed"
+        );
+
+        // …which is what lets the user's anchored rule actually hide it.
+        let filtered = filter_untracked_by_ai_ignore(
+            &subdir,
+            names,
+            &["/services/api/secret.env".to_string()],
+        )
+        .await
+        .expect("filter untracked");
+        assert_eq!(filtered.paths, vec!["root-untracked.txt".to_string()]);
+        assert_eq!(filtered.excluded, 1);
+        assert_eq!(filtered.unreadable, 0);
+    }
+
+    /// The repo's COMMITTED aiignore is found from the toplevel, so a `--repo`
+    /// bound to a subdirectory still honors the team's rules.
+    ///
+    /// `read_repo_ai_ignore` joins `.gitdesktop/aiignore` under the path it is
+    /// given, and its NotFound arm returns an empty list — so from a subdirectory
+    /// the whole committed rule set silently vanished while the global patterns
+    /// kept working, which is what made the gap quiet. Driven through the real
+    /// `ai_ignore_patterns` → `filtered_diff` composition the recipes use.
+    #[tokio::test]
+    async fn repo_aiignore_is_read_from_the_toplevel_for_a_subdir_repo() {
+        let base_dir = tempfile::Builder::new()
+            .prefix("gd-subdir-aiignore-test-")
+            .tempdir()
+            .expect("create temp dir");
+        let repo = base_dir.path().join("repo");
+        std::fs::create_dir_all(repo.join("services").join("api")).unwrap();
+        std::fs::create_dir_all(repo.join(".gitdesktop")).unwrap();
+        let repo_s = repo.to_string_lossy().into_owned();
+        git(&repo_s, &["init", "-q"]).await;
+        git(&repo_s, &["config", "user.email", "t@t.local"]).await;
+        git(&repo_s, &["config", "user.name", "T"]).await;
+
+        // The TEAM's rule, COMMITTED at the repo root so it is not itself part of
+        // the staged diff under test.
+        std::fs::write(repo.join(".gitdesktop").join("aiignore"), "*.env\n").unwrap();
+        git(&repo_s, &["add", "-A", "-f"]).await;
+        git(&repo_s, &["commit", "-qm", "add team aiignore"]).await;
+
+        std::fs::write(
+            repo.join("services").join("api").join("x.env"),
+            "TOKEN=SECRET_MARKER\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join("services").join("api").join("app.js"),
+            "// APP_MARKER\n",
+        )
+        .unwrap();
+        git(&repo_s, &["add", "-A", "-f"]).await;
+
+        let subdir = repo
+            .join("services")
+            .join("api")
+            .to_string_lossy()
+            .into_owned();
+        // No global patterns: the repo file is the ONLY source, so a dropped read
+        // shows up as a leak rather than being masked.
+        let settings = crate::app_store::AiGenSettings::default();
+
+        for (label, path) in [("subdirectory", &subdir), ("toplevel", &repo_s)] {
+            let mcp = crate::mcp_server::GitDesktopMcp::with_options(
+                path.clone(),
+                false,
+                false,
+                false,
+                false,
+            );
+            let exclude = mcp
+                .ai_ignore_patterns(&settings)
+                .await
+                .expect("assemble exclude list");
+            assert_eq!(exclude, vec!["*.env".to_string()], "{label}: exclude list");
+
+            let filtered = crate::git::ai_ignore::filtered_diff(
+                path,
+                &["diff", "--cached", "--no-color"],
+                &["diff", "--cached", "--numstat", "-z"],
+                &exclude,
+                true,
+            )
+            .await
+            .expect("filtered diff");
+            assert_eq!(
+                filtered
+                    .files
+                    .iter()
+                    .map(|f| f.path.as_str())
+                    .collect::<Vec<_>>(),
+                ["services/api/app.js"],
+                "{label}: file list"
+            );
+            assert_eq!(filtered.excluded_files, 1, "{label}: disclosure");
+            assert!(
+                !filtered.text.contains("SECRET_MARKER"),
+                "{label}: the committed rule must keep this content out"
+            );
+            assert!(filtered.text.contains("APP_MARKER"), "{label}: survivor");
+        }
+    }
+
+    /// The repo's committed instructions are found from the toplevel, so a
+    /// `--repo` bound to a subdirectory still steers every recipe with them.
+    ///
+    /// Same quiet shape as the aiignore read: a fixed relative join plus a
+    /// NotFound arm that answers `None`, so from a subdirectory the repo's rules
+    /// simply stopped applying. Asserted at `repo_instructions`, the one seam all
+    /// three recipes now share, rather than through a full prompt render.
+    #[tokio::test]
+    async fn repo_instructions_are_read_from_the_toplevel_for_a_subdir_repo() {
+        let base_dir = tempfile::Builder::new()
+            .prefix("gd-subdir-instructions-test-")
+            .tempdir()
+            .expect("create temp dir");
+        let repo = base_dir.path().join("repo");
+        std::fs::create_dir_all(repo.join("services").join("api")).unwrap();
+        std::fs::create_dir_all(repo.join(".gitdesktop")).unwrap();
+        let repo_s = repo.to_string_lossy().into_owned();
+        git(&repo_s, &["init", "-q"]).await;
+        std::fs::write(
+            repo.join(".gitdesktop").join("instructions.md"),
+            "Always mention the ticket id.\n",
+        )
+        .unwrap();
+
+        let subdir = repo
+            .join("services")
+            .join("api")
+            .to_string_lossy()
+            .into_owned();
+        for (label, path) in [("subdirectory", &subdir), ("toplevel", &repo_s)] {
+            let mcp = crate::mcp_server::GitDesktopMcp::with_options(
+                path.clone(),
+                false,
+                false,
+                false,
+                false,
+            );
+            assert_eq!(
+                mcp.repo_instructions().await.expect("read instructions"),
+                Some("Always mention the ticket id.".to_string()),
+                "{label}: the repo's committed instructions"
+            );
+        }
     }
 
     /// The store override is process-wide, so the tests that depend on the settings

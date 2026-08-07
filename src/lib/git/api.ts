@@ -3049,16 +3049,17 @@ export const readRepoAiIgnore = (repoPath: string) =>
   invoke<string[]>("read_repo_ai_ignore", { repoPath });
 
 /** Appends AI-ignore patterns to `<repo>/.gitdesktop/aiignore` (created if
- *  absent), returning the number of patterns actually appended (already-present
- *  ones are skipped). */
+ *  absent), returning the number actually appended. Skipped only when already
+ *  EFFECTIVE — a pattern sitting before a later `!` un-ignore line is re-added
+ *  at the end, where last-match-wins puts it back in force. */
 export const appendRepoAiIgnore = (repoPath: string, patterns: string[]) =>
   invoke<number>("append_repo_ai_ignore", { repoPath, patterns });
 
 /** Which of `paths` the user's AI-ignore patterns hide, decided by git's own
- *  gitignore engine — the same matcher the diff-side pathspec translation is
- *  pinned to. For path lists the frontend holds itself (a remote PR's changed
- *  files): the paths need not exist in the working tree or index. Returns `[]`
- *  when nothing matches, or when either list is empty. */
+ *  gitignore engine — the same matcher the diff commands filter through. For
+ *  path lists the frontend holds itself (a remote PR's changed files): the paths
+ *  need not exist in the working tree or index. Returns `[]` when nothing
+ *  matches, or when either list is empty. */
 export const gitFilterAiIgnored = (
   repoPath: string,
   paths: string[],

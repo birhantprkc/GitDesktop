@@ -15,6 +15,11 @@ function ignoreLines(patterns: string): string[] {
  * `.gitdesktop/aiignore` entries first, then the global setting's lines
  * (`aiIgnorePatterns`, raw and newline-joined).
  *
+ * That order is a security invariant, not a preference: `!` un-ignore lines are
+ * honored last-match-wins, and the repo file is committed content anyone with
+ * push access can write. Global LAST means a committed `!` can never re-expose a
+ * file the user excluded globally.
+ *
  * Rejects when the repo file can't be read — except under
  * `tolerateRepoReadError`, which the conflict-resolve surface passes so an
  * unreadable repo file can't abort a resolution the global patterns alone can
@@ -78,7 +83,7 @@ export async function filterPathsByAiIgnore(input: {
 /**
  * Drops every AI-ignored file from an already-resolved unified diff and its
  * changed-file list, client-side — the one recipe for both diff sources, since
- * the pathspec-exclude route (`gitBranchDiff`'s `exclude`) only exists where
+ * the server-side route (`gitBranchDiff`'s `exclude`) only exists where
  * GitDesktop runs the diff itself and a forge-supplied PR diff arrives whole.
  *
  * Candidates are the UNION of the diff's own section keys and the file list,
