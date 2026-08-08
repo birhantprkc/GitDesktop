@@ -7,7 +7,7 @@
 //! semantics; the metadata tools reuse an existing command core directly.
 
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{schemars, tool, tool_router, ErrorData as McpError};
 
 use super::{
@@ -263,7 +263,7 @@ impl GitDesktopMcp {
         Parameters(args): Parameters<ReadFileArgs>,
     ) -> Result<CallToolResult, McpError> {
         let text = read_file_core(&self.repo, &args.path, args.at_ref.as_deref()).await?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     #[tool(description = "List tags, newest first. Returns JSON.")]

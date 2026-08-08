@@ -22,7 +22,7 @@
 //! name but only READ it, so they carry no such guard.)
 
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{schemars, tool, tool_router, ErrorData as McpError};
 
 use super::{app_err, ensure_not_flag, json_result, GitDesktopMcp, SESSION_BRANCH_PREFIX};
@@ -44,7 +44,7 @@ fn ensure_not_session_branch(name: &str) -> Result<(), McpError> {
 
 /// Emits a plain-text success result for the (many) core commands that return `()`.
 fn ok_text(msg: impl Into<String>) -> Result<CallToolResult, McpError> {
-    Ok(CallToolResult::success(vec![Content::text(msg.into())]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(msg.into())]))
 }
 
 // ---- Parameter structs ----------------------------------------------------

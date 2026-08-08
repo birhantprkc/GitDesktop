@@ -20,7 +20,7 @@
 //! truncated — matching the TS `budgeted.truncated || diffTruncated`.
 
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, GetPromptResult, PromptMessage, PromptMessageRole};
+use rmcp::model::{CallToolResult, GetPromptResult, PromptMessage, Role};
 use rmcp::{prompt, prompt_router, schemars, tool, tool_router, ErrorData as McpError};
 
 use super::{app_err, ensure_not_flag, json_result, to_value, GitDesktopMcp};
@@ -1689,7 +1689,7 @@ fn recipe_as_prompt(recipe: Recipe) -> GetPromptResult {
         note,
     } = recipe;
     GetPromptResult::new(vec![PromptMessage::new_text(
-        PromptMessageRole::User,
+        Role::User,
         format!("{system}\n\n{prompt}"),
     )])
     .with_description(note)
