@@ -1,6 +1,7 @@
 import {
   ArrowClockwiseIcon,
   GearSixIcon,
+  InfoIcon,
   LockKeyIcon,
   QuestionIcon,
   ShieldCheckIcon,
@@ -9,6 +10,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useRef, useState } from "react";
 import { RelativeTime } from "@/components/relative-time";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -29,19 +31,32 @@ import {
   useRepoAdmin,
 } from "@/lib/git/queries";
 import type {
+  CodeScanningAlertOut,
   DependabotAlertOut,
   FindingAvailability,
   RepoAdvisoryOut,
+  SecretScanningAlertOut,
 } from "@/lib/github/security-findings";
 import {
+  useCodeScanningAlerts,
   useDependabotAlerts,
   useRepoAdvisories,
+  useSecretScanningAlerts,
 } from "@/lib/github/security-findings";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { type SelectedFinding, useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
-import { SEVERITY_RANK, SeverityChip, severityLevel } from "./severity";
+import {
+  CodeScanningChip,
+  codeScanningRank,
+  SEVERITY_RANK,
+  SeverityChip,
+  severityLevel,
+  VALIDITY_RANK,
+  ValidityChip,
+  validityLevel,
+} from "./severity";
 
 /** Ceiling for a category's row limit. MUST stay in lockstep with `clamp_limit`
  *  in src-tauri/src/github/security_findings.rs, which is the source of truth:
@@ -62,6 +77,29 @@ interface AlertGroup {
   packageName: string;
   ecosystem: string;
   rows: AlertRow[];
+}
+
+interface CodeScanningRow {
+  id: string;
+  alert: CodeScanningAlertOut;
+}
+
+interface CodeScanningGroup {
+  key: string;
+  /** The rule's human name where it has one, else the raw id — never blank. */
+  label: string;
+  rows: CodeScanningRow[];
+}
+
+interface SecretRow {
+  id: string;
+  alert: SecretScanningAlertOut;
+}
+
+interface SecretGroup {
+  key: string;
+  label: string;
+  rows: SecretRow[];
 }
 
 /** Worst-first, for every finding category: both endpoints order by date, so the
@@ -102,12 +140,77 @@ function buildAlertGroups(alerts: DependabotAlertOut[]): AlertGroup[] {
   return [...groups.values()];
 }
 
+function buildCodeScanningGroups(
+  alerts: CodeScanningAlertOut[],
+): CodeScanningGroup[] {
+  // Sort first, group after: the groups AND the rows inside each group both run
+  // worst-first, and the server's date order stays the tiebreak within a rung.
+  const sorted = alerts.toSorted(
+    (a, b) => codeScanningRank(a) - codeScanningRank(b),
+  );
+  const groups = new Map<string, CodeScanningGroup>();
+  sorted.forEach((alert, i) => {
+    const row: CodeScanningRow = {
+      id: alert.number === 0 ? `cs-i${i}` : `cs-${alert.number}`,
+      alert,
+    };
+    const bucket = groups.get(alert.ruleId);
+    if (bucket) bucket.rows.push(row);
+    else {
+      groups.set(alert.ruleId, {
+        key: alert.ruleId,
+        // `||`, not `??`: the tolerant Raw parse degrades a missing field to an
+        // empty string, so an empty name must fall through the same as a null.
+        label: alert.ruleName || alert.ruleId || "Unidentified rule",
+        rows: [row],
+      });
+    }
+  });
+  return [...groups.values()];
+}
+
+/** Urgency order for leaked secrets: a credential that still works first, then
+ *  newest. `createdAt` is ISO-8601, so a string compare is a date compare. */
+const bySecretUrgency = (
+  a: SecretScanningAlertOut,
+  b: SecretScanningAlertOut,
+) =>
+  VALIDITY_RANK[validityLevel(a.validity)] -
+    VALIDITY_RANK[validityLevel(b.validity)] ||
+  b.createdAt.localeCompare(a.createdAt);
+
+/** A secret type's display name, falling back through the tolerated-empty fields
+ *  the Raw parse can leave behind. Shared by the group header and the row title
+ *  so the two can never disagree — and grouping on it keeps two differently-typed
+ *  secrets apart when both lost their display name. */
+const secretTypeLabel = (a: SecretScanningAlertOut) =>
+  a.secretTypeDisplayName || a.secretType || "Unknown secret type";
+
+function buildSecretGroups(alerts: SecretScanningAlertOut[]): SecretGroup[] {
+  const sorted = alerts.toSorted(bySecretUrgency);
+  const groups = new Map<string, SecretGroup>();
+  sorted.forEach((alert, i) => {
+    const row: SecretRow = {
+      id: alert.number === 0 ? `secret-i${i}` : `secret-${alert.number}`,
+      alert,
+    };
+    const label = secretTypeLabel(alert);
+    const bucket = groups.get(label);
+    if (bucket) bucket.rows.push(row);
+    else groups.set(label, { key: label, label, rows: [row] });
+  });
+  return [...groups.values()];
+}
+
 /** Whether two selections point at the same finding. Degenerate identities (a
  *  tolerated alert numbered 0, an advisory with no GHSA id) can't be told apart
  *  by the stored selection, so the first matching row wins. */
 function sameFinding(a: SelectedFinding, b: SelectedFinding): boolean {
-  if (a.type === "alert") return b.type === "alert" && a.number === b.number;
-  return b.type === "advisory" && a.ghsaId === b.ghsaId;
+  if (a.type === "advisory")
+    return b.type === "advisory" && a.ghsaId === b.ghsaId;
+  // The three numbered categories keep separate number sequences, so the type
+  // tag has to match too — alert #4 is not code scanning alert #4.
+  return b.type !== "advisory" && b.type === a.type && b.number === a.number;
 }
 
 const matchesAlert = (a: DependabotAlertOut, q: string) =>
@@ -116,6 +219,19 @@ const matchesAlert = (a: DependabotAlertOut, q: string) =>
   a.summary.toLowerCase().includes(q) ||
   a.ghsaId.toLowerCase().includes(q) ||
   (a.cveId?.toLowerCase().includes(q) ?? false);
+
+const matchesCodeScanning = (a: CodeScanningAlertOut, q: string) =>
+  !q ||
+  a.ruleId.toLowerCase().includes(q) ||
+  (a.ruleName?.toLowerCase().includes(q) ?? false) ||
+  a.message.toLowerCase().includes(q) ||
+  a.path.toLowerCase().includes(q) ||
+  a.toolName.toLowerCase().includes(q);
+
+const matchesSecret = (a: SecretScanningAlertOut, q: string) =>
+  !q ||
+  a.secretType.toLowerCase().includes(q) ||
+  a.secretTypeDisplayName.toLowerCase().includes(q);
 
 const matchesAdvisory = (adv: RepoAdvisoryOut, q: string) =>
   !q ||
@@ -129,6 +245,24 @@ function SectionHeader({ title }: { title: string }) {
     <h3 className="border-b bg-muted/40 px-3 py-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
       {title}
     </h3>
+  );
+}
+
+/** `path:line`, truncated from the *start* so the filename — the part that
+ *  identifies the finding — survives. `dir="rtl"` moves the ellipsis to the
+ *  leading edge; the `<bdi>` keeps the path itself reading left-to-right. */
+function PathLabel({ path, line }: { path: string; line: number | null }) {
+  // A tolerated alert can arrive with no path at all; a line number hung off the
+  // placeholder would read as a location, so it's dropped with the path.
+  const text = path
+    ? line === null
+      ? path
+      : `${path}:${line}`
+    : "No file path";
+  return (
+    <span dir="rtl" className="ml-auto min-w-0 truncate font-mono" title={text}>
+      <bdi>{text}</bdi>
+    </span>
   );
 }
 
@@ -171,16 +305,20 @@ function ReasonCard({
 }
 
 /**
- * The card for any envelope that isn't `"available"`. `onEnable` is passed only
- * by a category with a repo-level toggle; a category without one still reports
- * the state the server named rather than falling through to "couldn't check".
- * `Category` is the sentence-initial form of `category`.
+ * The card for any envelope that isn't `"available"`. `notEnabledMessage` and
+ * `noResultsYetMessage` are the category's own copy for those two states;
+ * `onEnable` is passed on top of either only where the app can open the toggle.
+ * A category without them still reports the state the server named rather than
+ * falling through to "couldn't check". `Category` is the sentence-initial form
+ * of `category`.
  */
 function UnavailableCard({
   availability,
   detail,
   category,
   Category,
+  notEnabledMessage,
+  noResultsYetMessage,
   onRetry,
   onEnable,
 }: {
@@ -188,26 +326,58 @@ function UnavailableCard({
   detail: string | null;
   category: string;
   Category: string;
+  notEnabledMessage?: string;
+  noResultsYetMessage?: string;
   onRetry: () => void;
   onEnable?: () => void;
 }) {
+  const enableAction = onEnable ? (
+    <Button variant="outline" size="sm" onClick={onEnable}>
+      <GearSixIcon data-icon="inline-start" />
+      Open security settings
+    </Button>
+  ) : undefined;
+  const retryAction = (
+    <Button variant="outline" size="sm" onClick={onRetry}>
+      <ArrowClockwiseIcon data-icon="inline-start" />
+      Retry
+    </Button>
+  );
+
   if (availability === "notEnabled") {
-    return onEnable ? (
+    // The category's own sentence is how a non-admin learns what to ask for, so
+    // it shows with or without the action. It already names the cause, so the
+    // server's detail would only restate it — detail is for the generic path.
+    return (
       <ReasonCard
         icon={ShieldSlashIcon}
-        message="Dependabot alerts are off for this repository. Turn them on to see vulnerable dependencies here."
-        action={
-          <Button variant="outline" size="sm" onClick={onEnable}>
-            <GearSixIcon data-icon="inline-start" />
-            Open security settings
-          </Button>
+        message={
+          notEnabledMessage ?? `${Category} aren't enabled for this repository.`
         }
+        detail={notEnabledMessage ? null : detail}
+        action={enableAction}
       />
-    ) : (
+    );
+  }
+  if (availability === "noResultsYet") {
+    // Deliberately not phrased as "turn it on": this state can't distinguish an
+    // unconfigured feature from one whose first analysis is still running, so
+    // both the copy and the actions cover each — settings for setup, Retry for
+    // a run that may since have finished. Retry is the non-admin's only path.
+    return (
       <ReasonCard
-        icon={ShieldSlashIcon}
-        message={`${Category} aren't enabled for this repository.`}
-        detail={detail}
+        icon={InfoIcon}
+        message={
+          noResultsYetMessage ??
+          `No ${category} have been reported for this repository yet — the feature may not be set up, or its first run may still be going.`
+        }
+        detail={noResultsYetMessage ? null : detail}
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            {enableAction}
+            {retryAction}
+          </div>
+        }
       />
     );
   }
@@ -220,19 +390,21 @@ function UnavailableCard({
       />
     );
   }
-  return (
-    <ReasonCard
-      icon={QuestionIcon}
-      message={`Couldn't check ${category}.`}
-      detail={detail}
-      action={
-        <Button variant="outline" size="sm" onClick={onRetry}>
-          <ArrowClockwiseIcon data-icon="inline-start" />
-          Retry
-        </Button>
-      }
-    />
-  );
+  if (availability === "indeterminate") {
+    return (
+      <ReasonCard
+        icon={QuestionIcon}
+        message={`Couldn't check ${category}.`}
+        detail={detail}
+        action={retryAction}
+      />
+    );
+  }
+  // Every state is branched above, so this is unreachable — and the assignment
+  // is the point: a new FindingAvailability variant fails to compile here
+  // instead of silently rendering the "couldn't check" card.
+  const _exhaustive: never = availability;
+  return _exhaustive;
 }
 
 function LoadFailed({
@@ -263,9 +435,10 @@ export function FindingsPanel({
   active: boolean;
 }) {
   const forge = useForgeStatus(repoPath);
-  // Dependabot alerts and repository advisories are GitHub-only surfaces, so the
-  // gate is the capability, not a per-provider dispatch: a GitLab/Bitbucket repo
-  // fires no query at all.
+  // All four categories — Dependabot alerts, code scanning, secret scanning and
+  // repository advisories — are GitHub-only surfaces, so the gate is the
+  // capability, not a per-provider dispatch: a GitLab/Bitbucket repo fires no
+  // query at all.
   const ready = forgeReady(forge.data);
   const supported = forgeSupports(forge.data, "securityFindings");
   const enabled = ready && supported;
@@ -283,6 +456,18 @@ export function FindingsPanel({
   const requestRepoSettings = useUiStore((s) => s.requestRepoSettings);
 
   const alerts = useDependabotAlerts(repoPath, enabled, active, limits.alerts);
+  const codeScanning = useCodeScanningAlerts(
+    repoPath,
+    enabled,
+    active,
+    limits.codeScanning,
+  );
+  const secrets = useSecretScanningAlerts(
+    repoPath,
+    enabled,
+    active,
+    limits.secretScanning,
+  );
   const advisories = useRepoAdvisories(
     repoPath,
     enabled,
@@ -298,11 +483,21 @@ export function FindingsPanel({
 
   const query = filterText.trim().toLowerCase();
   const alertsOut = alerts.data;
+  const codeScanningOut = codeScanning.data;
+  const secretsOut = secrets.data;
   const advisoriesOut = advisories.data;
   const allAlerts = alertsOut?.alerts ?? [];
+  const allCodeScanning = codeScanningOut?.alerts ?? [];
+  const allSecrets = secretsOut?.alerts ?? [];
   const allAdvisories = advisoriesOut?.advisories ?? [];
   const alertGroups = buildAlertGroups(
     allAlerts.filter((a) => matchesAlert(a, query)),
+  );
+  const codeScanningGroups = buildCodeScanningGroups(
+    allCodeScanning.filter((a) => matchesCodeScanning(a, query)),
+  );
+  const secretGroups = buildSecretGroups(
+    allSecrets.filter((a) => matchesSecret(a, query)),
   );
   const advisoryRows = allAdvisories
     .filter((a) => matchesAdvisory(a, query))
@@ -315,11 +510,15 @@ export function FindingsPanel({
 
   const alertsShown =
     !alerts.isError && alertsOut?.availability === "available";
+  const codeScanningShown =
+    !codeScanning.isError && codeScanningOut?.availability === "available";
+  const secretsShown =
+    !secrets.isError && secretsOut?.availability === "available";
   const advisoriesShown =
     !advisories.isError && advisoriesOut?.availability === "available";
 
-  // Flat, document-order nav list: the grouped alert rows, then the advisory
-  // rows. Group headers and the Load-more buttons are intentionally skipped.
+  // Flat, document-order nav list: the grouped rows of each section in the order
+  // the sections render. Group headers and the Load-more buttons are skipped.
   const navRows: { id: string; finding: SelectedFinding }[] = [];
   if (alertsShown) {
     for (const group of alertGroups) {
@@ -327,6 +526,26 @@ export function FindingsPanel({
         navRows.push({
           id: row.id,
           finding: { type: "alert", number: row.alert.number },
+        });
+      }
+    }
+  }
+  if (codeScanningShown) {
+    for (const group of codeScanningGroups) {
+      for (const row of group.rows) {
+        navRows.push({
+          id: row.id,
+          finding: { type: "codeScanning", number: row.alert.number },
+        });
+      }
+    }
+  }
+  if (secretsShown) {
+    for (const group of secretGroups) {
+      for (const row of group.rows) {
+        navRows.push({
+          id: row.id,
+          finding: { type: "secretScanning", number: row.alert.number },
         });
       }
     }
@@ -353,7 +572,11 @@ export function FindingsPanel({
     rowKey: (row) => row.id,
   });
 
-  const refreshing = alerts.isFetching || advisories.isFetching;
+  const refreshing =
+    alerts.isFetching ||
+    codeScanning.isFetching ||
+    secrets.isFetching ||
+    advisories.isFetching;
   const refreshReason = enabled
     ? "Refresh findings"
     : !supported && ready
@@ -391,7 +614,7 @@ export function FindingsPanel({
           ref={filterRef}
           value={filterText}
           onChange={(e) => setFilterText(e.target.value)}
-          placeholder="Filter by package, summary, GHSA, or CVE"
+          placeholder="Filter by package, rule, secret type, summary, GHSA, or CVE"
           className="h-7"
           autoComplete="off"
         />
@@ -424,6 +647,7 @@ export function FindingsPanel({
                 detail={alertsOut.detail}
                 category="dependency alerts"
                 Category="Dependency alerts"
+                notEnabledMessage="Dependabot alerts are off for this repository. Turn them on to see vulnerable dependencies here."
                 onRetry={() => alerts.refetch()}
                 onEnable={
                   canOpenRepoSettings
@@ -454,9 +678,9 @@ export function FindingsPanel({
                       <div className="flex items-baseline gap-2 px-3 py-1 text-[11px] text-muted-foreground">
                         <span
                           className="truncate font-mono text-foreground"
-                          title={group.packageName}
+                          title={group.packageName || "Unknown package"}
                         >
-                          {group.packageName}
+                          {group.packageName || "Unknown package"}
                         </span>
                         <span className="shrink-0">{group.ecosystem}</span>
                         <span className="ml-auto shrink-0 tabular-nums">
@@ -528,6 +752,278 @@ export function FindingsPanel({
               </>
             )}
 
+            <SectionHeader title="Code scanning" />
+            {codeScanning.isError ? (
+              <LoadFailed
+                category="code scanning alerts"
+                onRetry={() => codeScanning.refetch()}
+              />
+            ) : !codeScanningOut ? (
+              <RowSkeletons />
+            ) : codeScanningOut.availability !== "available" ? (
+              <UnavailableCard
+                availability={codeScanningOut.availability}
+                detail={codeScanningOut.detail}
+                category="code scanning alerts"
+                Category="Code scanning alerts"
+                notEnabledMessage="Code scanning is off for this repository. Turn it on to see alerts here."
+                noResultsYetMessage="Code scanning hasn't reported results for this repository yet — it may still need setting up, or its first analysis may still be running."
+                onRetry={() => codeScanning.refetch()}
+                onEnable={
+                  canOpenRepoSettings
+                    ? () => requestRepoSettings("security")
+                    : undefined
+                }
+              />
+            ) : (
+              <>
+                {codeScanningGroups.length === 0 ? (
+                  allCodeScanning.length > 0 ? (
+                    <p className="px-3 py-4 text-xs text-muted-foreground">
+                      No code scanning alerts match the filter.
+                    </p>
+                  ) : (
+                    <Empty className="py-8">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <ShieldCheckIcon />
+                        </EmptyMedia>
+                        <EmptyTitle>No open code scanning alerts</EmptyTitle>
+                      </EmptyHeader>
+                    </Empty>
+                  )
+                ) : (
+                  codeScanningGroups.map((group) => (
+                    <div key={group.key}>
+                      <div className="flex items-baseline gap-2 px-3 py-1 text-[11px] text-muted-foreground">
+                        <span
+                          className={cn(
+                            "truncate text-foreground",
+                            // A rule with no name falls back to its id, which
+                            // reads as an identifier, so it gets the mono face.
+                            group.label === group.key && "font-mono",
+                          )}
+                          title={group.label}
+                        >
+                          {group.label}
+                        </span>
+                        {/* The raw id, alongside a named rule. Suppressed when
+                            the id is itself empty — the label already covers it. */}
+                        {group.key && group.label !== group.key ? (
+                          <span
+                            className="min-w-0 shrink truncate font-mono"
+                            title={group.key}
+                          >
+                            {group.key}
+                          </span>
+                        ) : null}
+                        <span className="ml-auto shrink-0 tabular-nums">
+                          {group.rows.length}
+                        </span>
+                      </div>
+                      {group.rows.map(({ id, alert: a }) => (
+                        <button
+                          type="button"
+                          key={id}
+                          data-row={id}
+                          className={cn(
+                            "block w-full border-b px-3 py-2 text-left",
+                            selectedRowId === id
+                              ? "bg-accent text-accent-foreground"
+                              : "hover:bg-muted/60",
+                          )}
+                          onClick={() =>
+                            selectFinding({
+                              type: "codeScanning",
+                              number: a.number,
+                            })
+                          }
+                        >
+                          <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                            <CodeScanningChip
+                              securitySeverity={a.securitySeverity}
+                              severity={a.severity}
+                            />
+                            <PathLabel path={a.path} line={a.startLine} />
+                            <span className="shrink-0">
+                              <RelativeTime date={a.createdAt} />
+                            </span>
+                          </p>
+                          {/* Full-width message line, matching the alert rows. */}
+                          <p
+                            className="mt-1 truncate text-xs font-medium"
+                            title={a.message}
+                          >
+                            {a.message}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  ))
+                )}
+                {codeScanningOut.truncated &&
+                  (limits.codeScanning >= FINDINGS_LIMIT_CAP ? (
+                    <p className="border-t px-3 py-3 text-xs text-muted-foreground">
+                      Showing the first{" "}
+                      {allCodeScanning.length.toLocaleString()} code scanning
+                      alerts.
+                    </p>
+                  ) : (
+                    <LoadMoreRow
+                      count={allCodeScanning.length}
+                      loading={codeScanning.isFetching}
+                      onLoadMore={() =>
+                        setFindingsLimits({
+                          ...limits,
+                          codeScanning: Math.min(
+                            limits.codeScanning + PAGE_SIZE,
+                            FINDINGS_LIMIT_CAP,
+                          ),
+                        })
+                      }
+                    />
+                  ))}
+              </>
+            )}
+
+            <SectionHeader title="Secret scanning" />
+            {secrets.isError ? (
+              <LoadFailed
+                category="secret scanning alerts"
+                onRetry={() => secrets.refetch()}
+              />
+            ) : !secretsOut ? (
+              <RowSkeletons />
+            ) : secretsOut.availability !== "available" ? (
+              <UnavailableCard
+                availability={secretsOut.availability}
+                detail={secretsOut.detail}
+                category="secret scanning alerts"
+                Category="Secret scanning alerts"
+                notEnabledMessage="Secret scanning is off for this repository. Turn it on to catch leaked credentials."
+                onRetry={() => secrets.refetch()}
+                onEnable={
+                  canOpenRepoSettings
+                    ? () => requestRepoSettings("security")
+                    : undefined
+                }
+              />
+            ) : (
+              <>
+                {secretGroups.length === 0 ? (
+                  allSecrets.length > 0 ? (
+                    <p className="px-3 py-4 text-xs text-muted-foreground">
+                      No secret scanning alerts match the filter.
+                    </p>
+                  ) : (
+                    <Empty className="py-8">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <ShieldCheckIcon />
+                        </EmptyMedia>
+                        <EmptyTitle>No open secret scanning alerts</EmptyTitle>
+                      </EmptyHeader>
+                    </Empty>
+                  )
+                ) : (
+                  secretGroups.map((group) => (
+                    <div key={group.key}>
+                      <div className="flex items-baseline gap-2 px-3 py-1 text-[11px] text-muted-foreground">
+                        <span
+                          className="truncate text-foreground"
+                          title={group.label}
+                        >
+                          {group.label}
+                        </span>
+                        <span className="ml-auto shrink-0 tabular-nums">
+                          {group.rows.length}
+                        </span>
+                      </div>
+                      {group.rows.map(({ id, alert: a }) => (
+                        <button
+                          type="button"
+                          key={id}
+                          data-row={id}
+                          className={cn(
+                            "block w-full border-b px-3 py-2 text-left",
+                            selectedRowId === id
+                              ? "bg-accent text-accent-foreground"
+                              : "hover:bg-muted/60",
+                          )}
+                          onClick={() =>
+                            selectFinding({
+                              type: "secretScanning",
+                              number: a.number,
+                            })
+                          }
+                        >
+                          <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                            <ValidityChip validity={a.validity} />
+                            {/* Only ever rendered for a confirmed public leak —
+                                a null `publiclyLeaked` means GitHub didn't say. */}
+                            {a.publiclyLeaked === true ? (
+                              <Badge
+                                variant="outline"
+                                className="text-destructive"
+                              >
+                                Publicly leaked
+                              </Badge>
+                            ) : null}
+                            {/* Rows in a group share a type and often a date, so
+                                the alert number is what tells them apart — but a
+                                tolerated alert numbered 0 has none to show. */}
+                            {a.number === 0 ? null : (
+                              <span className="ml-auto shrink-0 tabular-nums">
+                                #{a.number}
+                              </span>
+                            )}
+                            {/* The number span normally carries `ml-auto`;
+                                without it the date takes over pushing right. */}
+                            <span
+                              className={cn(
+                                "shrink-0",
+                                a.number === 0 && "ml-auto",
+                              )}
+                            >
+                              <RelativeTime date={a.createdAt} />
+                            </span>
+                          </p>
+                          {/* Full-width type line, matching the alert rows. */}
+                          <p
+                            className="mt-1 truncate text-xs font-medium"
+                            title={secretTypeLabel(a)}
+                          >
+                            {secretTypeLabel(a)}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  ))
+                )}
+                {secretsOut.truncated &&
+                  (limits.secretScanning >= FINDINGS_LIMIT_CAP ? (
+                    <p className="border-t px-3 py-3 text-xs text-muted-foreground">
+                      Showing the first {allSecrets.length.toLocaleString()}{" "}
+                      secret scanning alerts.
+                    </p>
+                  ) : (
+                    <LoadMoreRow
+                      count={allSecrets.length}
+                      loading={secrets.isFetching}
+                      onLoadMore={() =>
+                        setFindingsLimits({
+                          ...limits,
+                          secretScanning: Math.min(
+                            limits.secretScanning + PAGE_SIZE,
+                            FINDINGS_LIMIT_CAP,
+                          ),
+                        })
+                      }
+                    />
+                  ))}
+              </>
+            )}
+
             <SectionHeader title="Advisories" />
             {advisories.isError ? (
               <LoadFailed
@@ -542,6 +1038,7 @@ export function FindingsPanel({
                 detail={advisoriesOut.detail}
                 category="security advisories"
                 Category="Security advisories"
+                notEnabledMessage="Repository advisories are only published on public repositories."
                 onRetry={() => advisories.refetch()}
               />
             ) : (
@@ -586,10 +1083,18 @@ export function FindingsPanel({
                       >
                         <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
                           <SeverityChip severity={adv.severity} />
-                          <span className="ml-auto min-w-0 truncate font-mono">
-                            {adv.ghsaId}
+                          {adv.ghsaId ? (
+                            <span className="ml-auto min-w-0 truncate font-mono">
+                              {adv.ghsaId}
+                            </span>
+                          ) : null}
+                          {/* The GHSA span normally carries `ml-auto`; without
+                              it the state takes over pushing the row right. */}
+                          <span
+                            className={cn("shrink-0", !adv.ghsaId && "ml-auto")}
+                          >
+                            {adv.state}
                           </span>
-                          <span className="shrink-0">{adv.state}</span>
                           {when ? (
                             <span className="shrink-0">
                               <RelativeTime date={when} />
