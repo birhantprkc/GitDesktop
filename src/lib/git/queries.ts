@@ -6,7 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { isDirtyTreeRefusal } from "@/lib/error-summary";
 import { isAppError } from "@/lib/tauri/invoke";
 import { COLD_START_NO_GH, COLD_START_NO_GIT } from "@/lib/test-mode";
@@ -43,6 +43,7 @@ import type {
   IssueType,
   PrDetails,
   PrInfo,
+  PrMergeabilityState,
   PrThreadOut,
   Reaction,
   RemoteLens,
@@ -939,6 +940,55 @@ export function usePrListCi(
   });
 }
 
+/** Hydrates PR-list rows with each PR's mergeability, keyed by number — the rows' conflict
+ *  chip. Runs separately from `usePrList`, and its numbers digest in the key is
+ *  load-bearing, for exactly the reasons documented on `usePrListCi` above. `prs` never
+ *  reaches the backend (it re-queries the page from the filters): it is here only to
+ *  form that digest and to keep the read off an empty page. */
+export function usePrListMergeability(
+  repo: string,
+  enabled: boolean,
+  state: api.PrStateFilter,
+  limit: number | undefined,
+  prs: PrInfo[] | undefined,
+  lens: RemoteLens,
+) {
+  return useQuery({
+    queryKey: [
+      "repo",
+      repo,
+      "pr-mergeability",
+      lens,
+      state,
+      limit ?? null,
+      prs?.map((p) => p.number).join(",") ?? "",
+    ] as const,
+    queryFn: async () => {
+      const rows = await api.forgePrListMergeability(repo, state, limit, lens);
+      return new Map<number, PrMergeabilityState>(
+        Object.entries(rows).map(([number, mergeState]) => [
+          Number(number),
+          mergeState,
+        ]),
+      );
+    },
+    enabled: enabled && !!prs && prs.length > 0,
+    staleTime: 30_000,
+    // Keeps the current chips while a "Load more" grows the list (that moves only the
+    // limit/digest segments, idx 5/6), but ONLY within the same repo, lens AND state.
+    // A placeholder is served even while this query is DISABLED — query-core applies it
+    // on any keyed query with no data yet — so matching on repo alone (what the shared
+    // `keepPreviousDataForRepo` does) would paint the open tab's map onto closed rows,
+    // and origin's onto upstream's, since numbers collide across both axes.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey?.[1] === repo &&
+      prevQuery?.queryKey?.[3] === lens &&
+      prevQuery?.queryKey?.[4] === state
+        ? prev
+        : undefined,
+  });
+}
+
 export function useRepoLabels(
   repo: string,
   enabled: boolean,
@@ -979,6 +1029,86 @@ export function usePrDetails(
     enabled: number !== null,
     placeholderData: keepPreviousDataForRepo(repo),
   });
+}
+
+/** How many reads the "checking" ladder gets per VISIT before it concedes: GitHub's
+ *  async mergeability compute normally settles within a few primed reads, and an
+ *  unbounded poll would burn API budget forever on a PR whose answer never comes. */
+const MERGEABILITY_POLL_LIMIT = 6;
+
+/** A PR's mergeability against its base — the conflict banner's server truth. GitHub
+ *  computes it asynchronously and this read PRIMES that computation, so "checking"
+ *  re-polls on the bounded ladder above, and `polling` lets the banner tell "still
+ *  climbing" from "gave up". The ladder counts per MOUNT and per PR rather than off the
+ *  cache entry's cumulative `dataUpdateCount`, which would leave a PR that once hit the
+ *  ceiling unable to poll again all session; `retry` restarts it by hand. */
+export function usePrMergeability(
+  repo: string,
+  number: number | null,
+  lens: RemoteLens,
+  enabled: boolean,
+) {
+  // The ref is what `refetchInterval` reads — it runs outside render, and a render-time
+  // read of mutable state goes stale once the React Compiler memoizes it. The state
+  // mirror is the render-visible half.
+  const polls = useRef(0);
+  const ladderFor = useRef("");
+  const seen = useRef({ ok: 0, failed: 0 });
+  const [pollsUsed, setPollsUsed] = useState(0);
+  const query = useQuery({
+    queryKey: ["repo", repo, "pr", lens, number ?? 0, "mergeability"] as const,
+    queryFn: () => api.forgePrMergeability(repo, number ?? 0, lens),
+    enabled: enabled && number !== null,
+    staleTime: 15_000,
+    // `polls.current` is the ONE ladder counter, fed below by completions of either
+    // kind. The cache's own cumulative counts are deliberately not used here: they
+    // outlive the mount, so a PR that once hit the ceiling could never poll again.
+    refetchInterval: (q) =>
+      q.state.data?.state === "checking" &&
+      polls.current < MERGEABILITY_POLL_LIMIT
+        ? 2_500
+        : false,
+    refetchIntervalInBackground: false,
+  });
+
+  const identity = [repo, number, lens].join("|");
+  const checking = query.data?.state === "checking";
+  const updatedAt = query.dataUpdatedAt;
+  const failedAt = query.errorUpdatedAt;
+  // One ladder step per COMPLETED read that left the question open — a success still
+  // saying "checking", OR a failure. Counting failures is what actually bounds a flaky
+  // or rate-limited forge: the last good answer stays "checking" in the cache, so a
+  // success-only ladder would poll every 2.5s forever and never reach the gave-up arm.
+  // Compared against the last timestamps seen so an unrelated re-render can't spend a
+  // rung, and reset whenever the PR or lens changes — each is its own question.
+  useEffect(() => {
+    if (ladderFor.current !== identity) {
+      ladderFor.current = identity;
+      polls.current = 0;
+      seen.current = { ok: 0, failed: 0 };
+    }
+    const advanced =
+      updatedAt > seen.current.ok || failedAt > seen.current.failed;
+    seen.current = { ok: updatedAt, failed: failedAt };
+    if (advanced && checking) polls.current += 1;
+    setPollsUsed(polls.current);
+  }, [identity, checking, updatedAt, failedAt]);
+
+  const refetch = query.refetch;
+  const retry = useCallback(() => {
+    polls.current = 0;
+    setPollsUsed(0);
+    void refetch();
+  }, [refetch]);
+
+  return {
+    data: query.data,
+    isFetching: query.isFetching,
+    /** Still climbing the ladder, so "checking" is an honest thing to show. */
+    polling: checking && pollsUsed < MERGEABILITY_POLL_LIMIT,
+    /** Restart the ladder and read again — the gave-up banner's Retry. */
+    retry,
+  };
 }
 
 export function usePrDiff(
@@ -3789,6 +3919,76 @@ export function useAbortLocalPrMerge(repo: string) {
     (args: { worktreePath: string; opId: string | null }) =>
       api.gitAbortLocalPrMerge(repo, args.worktreePath, args.opId),
   );
+}
+
+/** Merges the base into a remote PR's head branch in an isolated worktree, pushing the
+ *  head when it comes out clean. Repo-wide invalidation is deliberate: a clean run moves
+ *  the remote branch, so mergeability, the PR view and branch state all go stale. */
+export function useMergeRemotePr(repo: string, lens: RemoteLens) {
+  return useRepoMutation(
+    repo,
+    (args: { number: number; base: string; head: string; message?: string }) =>
+      api.gitMergeRemotePr(
+        repo,
+        args.number,
+        args.base,
+        args.head,
+        args.message ?? null,
+        lens,
+      ),
+  );
+}
+
+/** Commits a paused remote-PR resolution and pushes the head branch. */
+export function useFinishRemotePrResolve(repo: string, lens: RemoteLens) {
+  return useRepoMutation(
+    repo,
+    (args: {
+      head: string;
+      worktreePath: string;
+      worktreeId: string;
+      message?: string;
+    }) =>
+      api.gitFinishRemotePrResolve(
+        repo,
+        args.head,
+        args.worktreePath,
+        args.worktreeId,
+        args.message ?? null,
+        lens,
+      ),
+  );
+}
+
+/** Discards a paused remote-PR resolution by deleting its worktree. */
+export function useAbortRemotePrResolve(repo: string) {
+  return useRepoMutation(repo, (args: { worktreePath: string }) =>
+    api.gitAbortRemotePrResolve(repo, args.worktreePath),
+  );
+}
+
+/** An unfinished resolve worktree for this PR (e.g. left by an earlier session), or
+ *  null — feeds the banner's resume offer. Keyed by lens like every sibling PR key:
+ *  the fork's #7 and the parent's #7 are different pull requests. */
+export function useFindRemotePrResolve(
+  repo: string,
+  number: number | null,
+  lens: RemoteLens,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: [
+      "repo",
+      repo,
+      "pr",
+      lens,
+      number ?? 0,
+      "resolve-worktree",
+    ] as const,
+    queryFn: () => api.gitFindRemotePrResolve(repo, number ?? 0, lens),
+    enabled: enabled && number !== null,
+    staleTime: 5_000,
+  });
 }
 
 /** Pre-merge conflict prediction for a local PR's `base`/`head`, keyed under the

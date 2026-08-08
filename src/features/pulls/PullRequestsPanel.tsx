@@ -3,6 +3,7 @@ import {
   ClockIcon,
   GitPullRequestIcon,
   StackSimpleIcon,
+  WarningIcon,
   XCircleIcon,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
@@ -25,6 +26,7 @@ import {
   usePrefetchPr,
   usePrList,
   usePrListCi,
+  usePrListMergeability,
 } from "@/lib/git/queries";
 import { providerLabel } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
@@ -78,6 +80,29 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
     lens,
   );
   const ciMap = prListCi.data;
+  // Row conflict chips. The extra gates are load-bearing on top of `ghReady`: this call
+  // takes seconds on large GitHub repos and every active forge query joins the commit
+  // mutation's awaited invalidation set, so it must be idle off this tab and off the
+  // Closed tab, where no row has live mergeability to report.
+  // `!isPlaceholderData` covers the first half of a lens/tab switch: while the LIST is
+  // still serving the previous page's rows, this stays idle rather than describing a
+  // page that isn't on screen. None of these gates stop a chip on their own, though —
+  // a DISABLED query still renders placeholder data, so keeping the previous tab's or
+  // lens's map off these rows is the hook's placeholder comparator's job.
+  // PR numbers repeat across states and repos, so a misplaced chip is a wrong claim.
+  const repoTab = useUiStore((s) => s.repoTab);
+  const prListMergeability = usePrListMergeability(
+    repoPath,
+    ghReady &&
+      repoTab === "pulls" &&
+      stateFilter === "open" &&
+      !prList.isPlaceholderData,
+    stateFilter,
+    limit,
+    prList.data,
+    lens,
+  );
+  const mergeMap = prListMergeability.data;
   const onStateFilter = (s: PrStateFilter) => {
     setStateFilter(s);
     setLimit(PAGE_SIZE);
@@ -370,6 +395,20 @@ export function PullRequestsPanel({ repoPath }: { repoPath: string }) {
               {/* Ahead of the branch names so the row's truncation can't eat it.
                   Text carries the meaning; the label is self-contained so the
                   glyph reads on its own. */}
+              {mergeMap?.get(pr.number) === "conflicting" && (
+                <>
+                  {" · "}
+                  <span
+                    role="img"
+                    title="Has conflicts with the base branch"
+                    aria-label="Has conflicts with the base branch"
+                    className="inline-flex items-center gap-1 align-middle text-warning"
+                  >
+                    <WarningIcon className="size-3 shrink-0" />
+                    Conflicts
+                  </span>
+                </>
+              )}
               {pr.stack && (
                 <>
                   {" · "}

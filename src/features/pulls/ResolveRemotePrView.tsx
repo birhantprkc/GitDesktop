@@ -10,14 +10,12 @@ import { Spinner } from "@/components/ui/spinner";
 import { ConflictFileView } from "@/features/repository/ConflictFileView";
 import { ConflictResolveView } from "@/features/repository/ConflictResolveView";
 import {
-  useAbortLocalPrMerge,
-  useFinishLocalPrMerge,
+  useAbortRemotePrResolve,
+  useFinishRemotePrResolve,
   useRepoStatus,
 } from "@/lib/git/queries";
-import type { FileEntry } from "@/lib/git/types";
+import type { FileEntry, RemoteLens } from "@/lib/git/types";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
-import type { LocalPr } from "@/lib/pulls/local";
-import { useUpdateLocalPr } from "@/lib/pulls/queries";
 import { useAiEnabled, useReviewConfigured } from "@/lib/settings/queries";
 import { useConfirm } from "@/lib/stores/confirm";
 import { useConflictResolve } from "@/lib/stores/conflict-resolve";
@@ -26,63 +24,81 @@ import { cn } from "@/lib/utils";
 
 const baseName = (path: string) => path.split("/").pop() || path;
 
-/** Local-PR wording: this throws away a paused MERGE into the user's own branch, not a
- *  remote-PR resolution — deliberately NOT shared with the remote surface's copy. */
-const DISCARD_MERGE_CONFIRM = {
-  title: "Discard this merge?",
-  body: "The conflict resolution is thrown away; your branch and working tree are untouched.",
-  confirmLabel: "Discard merge",
+/** The one wording for discarding a resolution — the banner's Discard and this
+ *  surface's both ask through it, so the two prompts can't drift apart. */
+export const DISCARD_RESOLVE_CONFIRM = {
+  title: "Discard this resolution?",
+  body: "The hidden worktree is deleted — your branch, working tree, and the pull request are untouched.",
+  confirmLabel: "Discard resolution",
   confirmVariant: "destructive",
 } as const;
 
+/** Shared by the render derivation and the selection effect so both classify a
+ *  conflict the same way. */
+const conflictedEntries = (entries: FileEntry[]) =>
+  entries.filter(
+    (e) => e.unstaged === "conflicted" || e.staged === "conflicted",
+  );
+
 /**
- * The isolated-worktree conflict-resolution surface for a paused local-PR merge.
- * The merge lives in a hidden detached worktree at `pr.pendingMerge.worktreePath`
- * — the user's branch and working tree are untouched. This surface mirrors the
- * Changes tab, scoped to that worktree: a conflicted-file list on the left, the
- * shared conflict editor on the right. Finish (once every conflict is resolved)
- * commits and advances the base; Abort throws the worktree away.
+ * The isolated-worktree conflict-resolution surface for a REMOTE pull request. The
+ * merge of the base into the PR's head lives in a hidden detached worktree — the
+ * user's branch and working tree are untouched — and finishing pushes the resolved
+ * head back to the pull request. Mirrors the Changes tab scoped to that worktree:
+ * conflicted-file list on the left, the shared conflict editor on the right.
  *
  * The conflict machinery is `repoPath`-parameterized, so `ConflictFileView` /
  * `ConflictResolveView` and `useRepoStatus` just take the worktree path.
  */
-export function ResolveConflictsView({
+export function ResolveRemotePrView({
   repoPath,
-  pr,
+  head,
+  base,
+  worktreePath,
+  worktreeId,
+  lens,
+  onDone,
 }: {
   repoPath: string;
-  pr: LocalPr;
+  head: string;
+  base: string;
+  worktreePath: string;
+  worktreeId: string;
+  lens: RemoteLens;
+  /** Leave the takeover — the worktree is gone (finished or discarded). */
+  onDone: () => void;
 }) {
-  const pending = pr.pendingMerge;
-  const worktreePath = pending?.worktreePath ?? "";
   const status = useRepoStatus(worktreePath);
-  const update = useUpdateLocalPr(repoPath);
-  const finish = useFinishLocalPrMerge(repoPath);
-  const abort = useAbortLocalPrMerge(repoPath);
+  const finish = useFinishRemotePrResolve(repoPath, lens);
+  const abort = useAbortRemotePrResolve(repoPath);
   const aiEnabled = useAiEnabled();
   const reviewConfigured = useReviewConfigured();
   // Same AI-resolution store the Changes tab drives: `activePath` decides whether
   // the selected file shows the AI streaming view or the manual editor, and
-  // `startAll` kicks off a "resolve all" walk. It selects files via the main UI
-  // store (harmless here — we track our own selection below and follow its walk).
+  // `startAll` kicks off a "resolve all" walk. It selects files via the main UI store,
+  // which is a real cross-surface bleed here — those paths live in a HIDDEN worktree.
+  // Stopping the walk on unmount is the honest minimum; scoping the store per surface
+  // is deliberately deferred.
   const startAll = useConflictResolve((s) => s.startAll);
   const activePath = useConflictResolve((s) => s.activePath);
+  const stopResolveWalk = useConflictResolve((s) => s.stop);
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
-  const entries = status.data?.entries ?? [];
-  const conflicted: FileEntry[] = entries.filter(
-    (e) => e.unstaged === "conflicted" || e.staged === "conflicted",
-  );
+  // Leaving the takeover must disarm the walk: a leftover `activePath` pointing into
+  // the hidden worktree would otherwise hijack the Changes tab's selection.
+  useEffect(() => () => stopResolveWalk(), [stopResolveWalk]);
+
+  const conflicted = conflictedEntries(status.data?.entries ?? []);
   const conflictedPaths = conflicted.map((e) => e.path);
 
   // Keep a valid selection: default to the first conflict, and drop it once that
   // file is resolved (leaves the list). Following `activePath` lets an AI
-  // "resolve all" run visibly walk the list as each file completes. Keyed on
-  // `status.data` (the source of `conflicted`) so it re-runs as files resolve.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: derived from status.data
+  // "resolve all" run visibly walk the list as each file completes.
   useEffect(() => {
-    const paths = conflicted.map((e) => e.path);
+    const paths = conflictedEntries(status.data?.entries ?? []).map(
+      (e) => e.path,
+    );
     if (activePath && paths.includes(activePath)) {
       setSelectedPath(activePath);
       return;
@@ -93,8 +109,6 @@ export function ResolveConflictsView({
     });
   }, [activePath, status.data]);
 
-  if (!pending) return null;
-
   const remaining = conflictedPaths.length;
   // Gated on a SUCCESSFUL read: an errored status query (a worktree that vanished
   // underneath us) leaves no entries, which would otherwise read as "all resolved".
@@ -103,35 +117,21 @@ export function ResolveConflictsView({
   const busy = finish.isPending || abort.isPending;
 
   function onFinish() {
-    if (!pending) return;
     finish.mutate(
-      {
-        base: pr.base,
-        strategy: pending.strategy,
-        message: pending.message,
-        worktreePath: pending.worktreePath,
-        worktreeId: pending.worktreeId,
-        opId: pending.opId,
-      },
+      { head, worktreePath, worktreeId },
       {
         onSuccess: (outcome) => {
-          if (outcome.status === "merged") {
-            update.mutate({
-              id: pr.id,
-              mutate: (cur) => ({
-                ...cur,
-                status: "merged",
-                mergedAt: new Date().toISOString(),
-                pendingMerge: undefined,
-              }),
-            });
-            toast.success(`Merged ${pr.head} into ${pr.base}`);
+          if (outcome.status === "pushed") {
+            toast.success(`Conflicts resolved — pushed ${head}`);
+            onDone();
             return;
           }
-          // A multi-step rebase re-paused on the next commit's conflicts, still
-          // in the same worktree. Leave `pendingMerge` untouched — the live
-          // worktree status already drives this surface.
-          toast("More conflicts to resolve");
+          // Unreachable by contract: finish either pushes or errors — it never hands
+          // back conflicts (that shape belongs to the local sibling's rebase path).
+          // Surfaced rather than swallowed, so a contract drift can't pass silently.
+          toastError(
+            new Error("The resolve finished with an unexpected result."),
+          );
         },
         onError: toastError,
       },
@@ -139,17 +139,13 @@ export function ResolveConflictsView({
   }
 
   async function onAbort() {
-    if (!pending) return;
-    if (!(await useConfirm.getState().ask(DISCARD_MERGE_CONFIRM))) return;
+    if (!(await useConfirm.getState().ask(DISCARD_RESOLVE_CONFIRM))) return;
     abort.mutate(
-      { worktreePath: pending.worktreePath, opId: pending.opId },
+      { worktreePath },
       {
         onSuccess: () => {
-          update.mutate({
-            id: pr.id,
-            mutate: (cur) => ({ ...cur, pendingMerge: undefined }),
-          });
-          toast.success("Merge discarded");
+          toast.success("Resolution discarded");
+          onDone();
         },
         onError: toastError,
       },
@@ -166,14 +162,17 @@ export function ResolveConflictsView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* Header: warning tone naming the merge, with the batch AI action, Abort,
-          and Finish (gated on zero remaining conflicts). */}
+      {/* Header: names the merge direction and where the result lands, with the
+          batch AI action, Discard, and Finish (gated on zero remaining conflicts). */}
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b px-3 py-2 text-xs">
         <span className="flex min-w-0 items-center gap-1.5 text-warning">
           <WarningIcon className="size-3.5 shrink-0" />
-          <span className="min-w-0 truncate">
-            Resolving conflicts · <span className="font-mono">{pr.head}</span> →{" "}
-            <span className="font-mono">{pr.base}</span>
+          {/* Wraps rather than truncates — this sentence is the only place the
+              direction and the push are stated, so it can never be cut off. */}
+          <span className="min-w-0">
+            Merging <span className="font-mono">{base}</span> into{" "}
+            <span className="font-mono">{head}</span> — finishing pushes the
+            result to the pull request.
           </span>
         </span>
         <div className="flex items-center gap-1.5">
@@ -181,6 +180,7 @@ export function ResolveConflictsView({
             <Button
               size="xs"
               variant="ghost"
+              disabled={busy}
               onClick={() => startAll(conflictedPaths)}
             >
               <SparkleIcon data-icon="inline-start" />
@@ -193,7 +193,7 @@ export function ResolveConflictsView({
             disabled={busy}
             onClick={() => void onAbort()}
           >
-            Abort
+            Discard
           </Button>
           {/* Wrap so the disabled reason still shows on hover — a native-disabled
               button swallows its `title` (vendored Button's pointer-events-none). */}
@@ -207,7 +207,7 @@ export function ResolveConflictsView({
               onClick={onFinish}
             >
               {finish.isPending && <Spinner data-icon="inline-start" />}
-              Finish merge
+              Finish &amp; push
             </Button>
           </span>
         </div>
@@ -225,7 +225,7 @@ export function ResolveConflictsView({
             <div className="flex items-start gap-1.5 p-3 text-xs text-muted-foreground">
               <CheckCircleIcon className="mt-px size-3.5 shrink-0 text-success" />
               <span>
-                All conflicts resolved — Finish to complete the merge.
+                All conflicts resolved — Finish to push the updated branch.
               </span>
             </div>
           ) : (
@@ -259,7 +259,7 @@ export function ResolveConflictsView({
         <div className="min-h-0 flex-1">
           {done ? (
             <div className="flex h-full items-center justify-center p-6 text-center text-xs text-muted-foreground">
-              All conflicts resolved — Finish to complete the merge.
+              All conflicts resolved — Finish to push the updated branch.
             </div>
           ) : selectedPath ? (
             activePath === selectedPath ? (
