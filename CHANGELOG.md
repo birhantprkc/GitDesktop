@@ -12,6 +12,108 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-08
+
+### Added
+
+- AI ignore lists now honor `!` un-ignore lines with full gitignore semantics —
+  and a repo's committed `.gitdesktop/aiignore` can never re-expose a file your
+  global patterns exclude.
+- **Findings tab:** browse a GitHub repo's open Dependabot alerts (grouped by
+  package, with severity, affected range, and first patched version) and its
+  security advisories without leaving the app — with a direct path to turn
+  scanning on when it's off.
+- **Pull-request conflicts, surfaced and resolved in-app.** A remote pull request
+  now shows whether it merges cleanly into its base — as GitHub and GitLab report
+  it, and as a local prediction on Bitbucket — with a **Conflicts** chip on the
+  open rows in the list. When it doesn't, **Resolve conflicts** merges the base
+  into the PR's head in a hidden isolated worktree, leaving your branch and
+  working tree untouched: resolve the files in the in-app conflict editor, then
+  **Finish & push** updates the pull request's head branch (never force-pushed).
+  **Discard** throws the attempt away, and an unfinished resolution is offered
+  back when you return to the pull request.
+- **Stack management:** when your open GitHub pull requests already
+  form a chain, the PR view offers to make a stack of them — or to add them to the
+  stack that PR sits on — showing exactly what will be stacked, bottom to top,
+  before anything happens; **Dissolve** takes a stack apart again and leaves every
+  pull request open on its branch. The Edit dialog can also **retarget a pull
+  request's base branch** on GitHub, GitLab, and Bitbucket.
+- **Stacked pull requests:** stack position badges in the PR list, a stack
+  navigator on the PR view (GitHub native stacks; GitLab stacked MRs detected
+  automatically), and, on GitHub, stack-aware merging that merges a stack
+  bottom-up as one operation.
+- **Stash and reapply:** when a pull or branch update is blocked by uncommitted
+  changes — or you switch branches with work in progress — GitDesktop offers to
+  stash them (untracked files included), run the operation, and reapply them on
+  the other side. A reapply that hits conflicts lands the files in the changes
+  list; one that can't run at all leaves them safely stashed — the backup stash
+  is kept either way. **Automatically stash and reapply on pull and branch
+  updates** (Settings → General) makes it the default for both, and the
+  branch-switch prompt remembers a **Reapply after switching** choice of
+  its own.
+- **Worktree context menu in the branch dropdown.** Right-click a worktree row to
+  open it, copy its path, rename, lock or unlock, promote to the main workspace,
+  or delete it — worktree management right where the worktrees are listed, no
+  dialog detour. The Worktrees dialog's own row menu gains **Copy path** too.
+
+### Changed
+
+- AI ignore patterns now filter staged and branch diffs through Git's own ignore
+  engine, matching .gitignore semantics exactly — and a renamed file is hidden
+  entirely when either its old or new name matches.
+- **One name for deleting a worktree.** The branch row's *Remove worktree…* action
+  is now *Delete worktree…*, matching the Worktrees dialog and the new worktree-row
+  menu, so the same action reads the same wherever you find it.
+
+### Fixed
+
+- Dialogs that generate text with AI no longer let you save past a suggestion
+  that is still being written. Create branch, Rename branch, the repository
+  General settings on GitHub, GitLab and Bitbucket, and the task editor now keep
+  their confirm button (and the Enter key) disabled until the suggestion lands.
+  Closing either branch dialog also cancels the suggestion instead of leaving it
+  running, which previously let a late result drop into the name field the next
+  time the dialog opened — even when it was naming a different branch.
+- The Commit button now finishes the moment your commit lands. It no longer
+  waits for pull request, issue, and CI lists to refresh over the network
+  first — a wait that could stretch to minutes on a slow connection.
+- Switching to a different file while an AI conflict resolution is still
+  streaming now stops that resolution instead of leaving it running unseen
+  against your AI provider.
+- AI review automations no longer double-run a pull request that was already
+  reviewed when a second GitDesktop window or instance — or a restarted dev
+  session — watches the same repository: automation decisions now read the
+  review history on disk instead of a stale in-memory copy.
+- **Hide AI features** now also pauses your configured automations — while AI is
+  hidden, nothing new runs or posts review comments, and Settings → General notes
+  when automations you've turned on are paused. Your rules are kept and start
+  firing again the moment you show AI features. The PR review panel also no longer
+  fetches your provider's model catalog until you open the model picker.
+- **Deleting a locked worktree now works, and a refused deletion says so.** A
+  locked worktree is removed for real — folder and git registration together —
+  instead of leaving a ghost entry stuck in the worktree list.
+  When git declines a deletion (the worktree is locked, or holds uncommitted
+  work), GitDesktop reports why and leaves the folder untouched, so you can
+  unlock it or confirm the forced delete. Renaming a locked worktree is blocked
+  up front too — the menu item says why, and **Unlock** is the way through —
+  instead of failing with a raw git error.
+- **GitDesktop's MCP server now speaks the current protocol revision.** Clients
+  that negotiate the 2026-07-28 revision of the Model Context Protocol get
+  correctly formed tool results, so newer agents connect to the server cleanly.
+- **GitDesktop's MCP server now identifies itself by name.** Agents and MCP
+  clients list the connected server as **GitDesktop**, at the app's own version,
+  instead of the name and version of the underlying SDK.
+- **Continuing a conflicted merge records just your merge message.** Git's
+  `# Conflicts:` comment block stays out of the commit, so what lands — and what
+  everyone reads on the forge — is the message you meant. GitDesktop cleans that
+  message the way git's own editor flow does, so any line that *starts* with `#`
+  is dropped from a merge message you wrote yourself; a `#` mid-line, like the
+  issue reference in `Fix #42`, is left alone.
+- Staged and unstaged diffs now get the same VSCode-fidelity syntax highlighting
+  as every other diff surface for TSX, JSX, Rust, Astro, Svelte, and other
+  TextMate-highlighted languages — including very large diffs, which now
+  highlight off the UI thread.
+
 ## [0.6.1] - 2026-08-03
 
 ### Added
@@ -2581,7 +2683,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/theBGuy/GitDesktop/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/theBGuy/GitDesktop/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/theBGuy/GitDesktop/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/theBGuy/GitDesktop/compare/v0.5.1...v0.5.2
