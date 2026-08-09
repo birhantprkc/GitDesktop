@@ -94,6 +94,10 @@ jobs:
             libssl-dev \
             file
 
+      - name: Pin newer linuxdeploy for AppImage bundling
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/pin-linuxdeploy
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
@@ -127,3 +131,10 @@ jobs:
           args: ${{ matrix.args }}
           # uploadUpdaterJson defaults to true → generates & attaches latest.json.
           updaterJsonPreferNsis: true
+
+      # Runs after the asset upload, but the release stays a draft until every
+      # leg is green, so a red guard still blocks publishing.
+      - name: Guard against a bundled libwayland-client
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash .github/scripts/appimage-guard.sh
