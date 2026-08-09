@@ -665,7 +665,12 @@ struct BranchPieces {
     diff_truncated: bool,
     files: Vec<DiffStatEntry>,
     untracked_paths: Vec<String>,
+    /// Every hidden changed file — pattern matches AND unreadable names.
     excluded_files: u32,
+    /// The subset of `excluded_files` hidden because their names aren't readable
+    /// text. Rendered as its own cause: no rule the user could write matches a
+    /// lossily-decoded name (a bare `*` still can — the U+FFFD guard is separate).
+    unreadable: u32,
     recent_branches: Vec<String>,
     /// Subjects of the commits this branch adds over its base, newest first —
     /// supplied ONLY on the committed-work fallback path, empty on the working-tree
@@ -702,10 +707,24 @@ fn assemble_branch_recipe(p: BranchPieces) -> Recipe {
             &file_summary
         }
     );
-    if p.excluded_files > 0 {
+    // The two causes stay separate: an unreadable name is hidden with no pattern
+    // configured at all, so folding it in blames rules the user may not have.
+    // KEEP IN SYNC: `buildBranchNamePrompt` renders these three forms byte-identically.
+    let pattern_hidden = p.excluded_files.saturating_sub(p.unreadable);
+    if pattern_hidden > 0 && p.unreadable > 0 {
         files_section.push_str(&format!(
-            "\n[{} additional changed file(s) hidden by the user's AI ignore rules]",
-            p.excluded_files
+            "\n[{pattern_hidden} additional changed file(s) hidden by the user's AI ignore rules; \
+             {} more new file(s) left out because their names aren't readable text]",
+            p.unreadable
+        ));
+    } else if pattern_hidden > 0 {
+        files_section.push_str(&format!(
+            "\n[{pattern_hidden} additional changed file(s) hidden by the user's AI ignore rules]"
+        ));
+    } else if p.unreadable > 0 {
+        files_section.push_str(&format!(
+            "\n[{} new file(s) left out because their names aren't readable text]",
+            p.unreadable
         ));
     }
     let mut prompt_parts = vec![files_section];
@@ -1672,6 +1691,10 @@ impl GitDesktopMcp {
             files: diff.files,
             untracked_paths,
             excluded_files: diff.excluded_files,
+            // Same subset on both paths: the working-tree fold put filtered.excluded
+            // (unreadable included) into diff.excluded_files, and the committed fold
+            // carries that total onward.
+            unreadable: filtered.unreadable,
             recent_branches: branches,
             commit_subjects,
             repo_instructions,
@@ -2021,6 +2044,7 @@ mod tests {
             files: vec![file("logo.png", 0, 0, true)],
             untracked_paths: vec!["new.rs".to_string()],
             excluded_files: 0,
+            unreadable: 0,
             recent_branches: vec!["feature/a".to_string(), "fix/b".to_string()],
             commit_subjects: vec![],
             repo_instructions: None,
@@ -2052,6 +2076,7 @@ mod tests {
             files: vec![file("x.rs", 1, 1, false)],
             untracked_paths: vec![],
             excluded_files: 2,
+            unreadable: 0,
             recent_branches: vec!["feature/a".to_string()],
             commit_subjects: vec![
                 "fix: newest".to_string(),
@@ -2074,6 +2099,81 @@ mod tests {
         assert!(recipe
             .prompt
             .contains("[2 additional changed file(s) hidden by the user's AI ignore rules]"));
+    }
+
+    /// Both causes at once: the note splits the total, so neither count is reported
+    /// under the other's reason.
+    #[test]
+    fn branch_recipe_note_splits_pattern_and_unreadable_causes() {
+        let recipe = assemble_branch_recipe(BranchPieces {
+            diff_text: String::new(),
+            diff_truncated: false,
+            files: vec![],
+            untracked_paths: vec!["new.rs".to_string()],
+            excluded_files: 3,
+            unreadable: 1,
+            recent_branches: vec![],
+            commit_subjects: vec![],
+            repo_instructions: None,
+            global_instructions: String::new(),
+        });
+        assert!(
+            recipe.prompt.contains(
+                "[2 additional changed file(s) hidden by the user's AI ignore rules; 1 more new \
+                 file(s) left out because their names aren't readable text]"
+            ),
+            "prompt:\n{}",
+            recipe.prompt
+        );
+    }
+
+    /// Unreadable names with no pattern hits: the note cites ONLY that cause — blaming
+    /// the ignore rules would send a user who has none to an empty settings page.
+    #[test]
+    fn branch_recipe_note_unreadable_only_never_blames_ignore_rules() {
+        let recipe = assemble_branch_recipe(BranchPieces {
+            diff_text: String::new(),
+            diff_truncated: false,
+            files: vec![],
+            untracked_paths: vec!["ok.rs".to_string()],
+            excluded_files: 2,
+            unreadable: 2,
+            recent_branches: vec![],
+            commit_subjects: vec![],
+            repo_instructions: None,
+            global_instructions: String::new(),
+        });
+        assert!(
+            recipe
+                .prompt
+                .contains("[2 new file(s) left out because their names aren't readable text]"),
+            "prompt:\n{}",
+            recipe.prompt
+        );
+        assert!(
+            !recipe.prompt.contains("hidden by the user's AI ignore rules"),
+            "no pattern hid anything here:\n{}",
+            recipe.prompt
+        );
+    }
+
+    /// Nothing hidden either way ⇒ no disclosure note at all.
+    #[test]
+    fn branch_recipe_note_absent_when_nothing_is_hidden() {
+        let recipe = assemble_branch_recipe(BranchPieces {
+            diff_text: String::new(),
+            diff_truncated: false,
+            files: vec![file("x.rs", 1, 0, false)],
+            untracked_paths: vec![],
+            excluded_files: 0,
+            unreadable: 0,
+            recent_branches: vec![],
+            commit_subjects: vec![],
+            repo_instructions: None,
+            global_instructions: String::new(),
+        });
+        assert!(!recipe.prompt.contains("hidden by the user's AI ignore rules"));
+        assert!(!recipe.prompt.contains("aren't readable text"));
     }
 
     #[test]
@@ -2761,6 +2861,7 @@ mod tests {
             files: vec![],
             untracked_paths: filtered.paths,
             excluded_files: filtered.excluded,
+            unreadable: filtered.unreadable,
             recent_branches: vec![],
             commit_subjects: vec![],
             repo_instructions: None,
@@ -2779,7 +2880,8 @@ mod tests {
     /// A name that lost bytes to the lossy decode (invalid UTF-8 on disk — reachable on
     /// Linux/macOS, not creatable on Windows, so it's fed in as a String here) can match
     /// no rule the user could write, and is hidden on that basis alone: no pattern is
-    /// configured here, and it is still dropped and counted.
+    /// configured here, and it is still dropped and counted — and the note the recipe
+    /// renders from that output cites only the unreadable cause.
     #[tokio::test]
     async fn untracked_names_that_lost_bytes_are_hidden() {
         let base_dir = tempfile::Builder::new()
@@ -2800,6 +2902,34 @@ mod tests {
         // Counted apart from the pattern hits, so no message can blame the (empty)
         // pattern list for it.
         assert_eq!(filtered.unreadable, 1);
+
+        // Both counts come from the real filter here, so the note form is pinned
+        // end-to-end, not just from hand-fed counters (the twin above does the same
+        // for the pattern cause).
+        let recipe = assemble_branch_recipe(BranchPieces {
+            diff_text: String::new(),
+            diff_truncated: false,
+            files: vec![],
+            untracked_paths: filtered.paths,
+            excluded_files: filtered.excluded,
+            unreadable: filtered.unreadable,
+            recent_branches: vec![],
+            commit_subjects: vec![],
+            repo_instructions: None,
+            global_instructions: String::new(),
+        });
+        assert!(
+            recipe
+                .prompt
+                .contains("[1 new file(s) left out because their names aren't readable text]"),
+            "prompt:\n{}",
+            recipe.prompt
+        );
+        assert!(
+            !recipe.prompt.contains("hidden by the user's AI ignore rules"),
+            "no pattern hid anything here:\n{}",
+            recipe.prompt
+        );
     }
 
     /// `-z` keeps the listed names byte-exact: a name with a space stays whole, and a
@@ -3125,6 +3255,8 @@ mod tests {
     /// undisclosed. Exact counts hold because no settings store is read under
     /// `cfg(test)` (app_store's `resolve_store_dir`), so the repo's own ignore file is
     /// the whole pattern set.
+    // Held across awaits deliberately — the guard IS the serialization (see SETTINGS_STORE_LOCK).
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn branch_recipe_counts_ignored_untracked_names() {
         let _guard = settings_lock();
@@ -3151,6 +3283,8 @@ mod tests {
     /// with a pattern a user could really hold (`*` hides everything, so the recipe
     /// must refuse and say why). The twin above owes its exactness to the arm that
     /// keeps the developer's real store out of every test.
+    // Held across awaits deliberately — the guard IS the serialization (see SETTINGS_STORE_LOCK).
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn branch_recipe_reads_the_resolved_settings_store() {
         let _guard = settings_lock();
