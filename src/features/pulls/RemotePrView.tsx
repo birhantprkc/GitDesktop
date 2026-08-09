@@ -91,6 +91,8 @@ import {
   forgeFeatureReady,
   PIPELINE_IN_FLIGHT,
   prDiffOptions,
+  TRIAGE_ACCESS_ITEM_REASON,
+  triageAccessReason,
   useAbortRemotePrResolve,
   useApplySuggestion,
   useApprovePr,
@@ -122,6 +124,7 @@ import {
   usePrTimeline,
   useReopenPr,
   useRepoStatus,
+  useRepoWriteAccess,
   useRequestChangesPr,
   useSetPrAssignees,
   useSetPrDraft,
@@ -135,6 +138,7 @@ import {
   useUnapprovePr,
   useUnminimizeComment,
   useUnrequestChangesPr,
+  writeAccessReason,
 } from "@/lib/git/queries";
 import {
   detectStackOffer,
@@ -282,10 +286,26 @@ export function RemotePrView({
   // targets the fork (origin) or its parent (upstream) — "origin" everywhere but a
   // GitHub fork whose lens is set upstream.
   const lens = useRepoLens(repoPath);
+  // The viewer's push permission on the lens repo — the axis the per-action
+  // forge flags don't cover. Only fetched once a provider is known; an
+  // unanswered probe leaves every control exactly as it is.
+  const writeAccess = useRepoWriteAccess(
+    repoPath,
+    lens,
+    !!forge.data?.provider,
+  );
+  const writeReason = writeAccessReason(writeAccess.data);
+  // Labels, assignees, reviewers and hiding comments are granted at TRIAGE tier,
+  // below push — gating them on the write axis would strip a triager's controls.
+  const triageReason = triageAccessReason(writeAccess.data);
+  // Menu items can't show a tooltip once disabled — they carry the compact
+  // reason in their label instead.
+  const triageItemReason = triageReason ? TRIAGE_ACCESS_ITEM_REASON : undefined;
   // Per-action write-capability flags from forge status + provider (gating
   // convention: usePrCapabilities).
   const {
     canWrite,
+    writeBlocked,
     canComment,
     canChangeState,
     canEdit,
@@ -308,7 +328,7 @@ export function RemotePrView({
     canCommentCommits,
     canCreateThread,
     canSubmitReview,
-  } = usePrCapabilities(forge.data, provider);
+  } = usePrCapabilities(forge.data, provider, writeAccess.data);
   const details = usePrDetails(repoPath, number, lens);
   const prDiff = usePrDiff(repoPath, number, lens);
   const setAssignees = useSetPrAssignees(repoPath, lens);
@@ -1650,6 +1670,7 @@ export function RemotePrView({
             labelableId={pr.id}
             labels={pr.labels}
             lens={lens}
+            disabledReason={triageReason}
           />
         ) : (
           pr.labels.length > 0 && (
@@ -1669,6 +1690,7 @@ export function RemotePrView({
             value={pr.assignees}
             commitOnClose
             lens={lens}
+            disabledReason={triageReason}
             onChange={(next) =>
               setAssignees.mutate(
                 { number, assignees: next },
@@ -1703,6 +1725,7 @@ export function RemotePrView({
               enabled
               value={humanReviewers}
               lens={lens}
+              disabledReason={triageReason}
               onChange={(next) =>
                 setReviewers.mutate(
                   { number, reviewers: next },
@@ -1758,7 +1781,12 @@ export function RemotePrView({
         {/* GitLab-only time-tracking summary; a popover with estimate/add-spent
             while the MR is open, static once closed. */}
         {canTrackTime && (
-          <MrTimeTracking repoPath={repoPath} number={number} open={isOpen} />
+          <MrTimeTracking
+            repoPath={repoPath}
+            number={number}
+            open={isOpen}
+            disabledReason={triageReason}
+          />
         )}
         {/* Bitbucket-only PR-tasks chip — quiet until there are unresolved tasks;
             jumps to the Tasks section. Same usePrTasks query as the section. */}
@@ -2174,6 +2202,7 @@ export function RemotePrView({
                               ? () => unhideComment(c.id)
                               : undefined
                           }
+                          disabledReason={triageItemReason}
                           reactions={
                             canReact
                               ? reactions.data?.comments[c.id]
@@ -2596,19 +2625,28 @@ export function RemotePrView({
                 <ClockCountdownIcon className="size-3.5 shrink-0" />
                 Auto-merge enabled
               </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                onClick={() =>
-                  cancelAutoMerge.mutate(number, {
-                    onSuccess: () => toast.success("Auto-merge canceled"),
-                    onError,
-                  })
+              <span
+                title={writeReason}
+                className={
+                  writeBlocked
+                    ? "inline-flex cursor-not-allowed"
+                    : "inline-flex"
                 }
               >
-                Cancel auto-merge
-              </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy || writeBlocked}
+                  onClick={() =>
+                    cancelAutoMerge.mutate(number, {
+                      onSuccess: () => toast.success("Auto-merge canceled"),
+                      onError,
+                    })
+                  }
+                >
+                  Cancel auto-merge
+                </Button>
+              </span>
             </div>
           )}
           <span className="flex-1" />
@@ -2635,19 +2673,24 @@ export function RemotePrView({
                 render={
                   <span
                     title={
-                      pr.isDraft
+                      // Permission outranks the availability hints: a viewer who
+                      // can't push can't act on any of them.
+                      writeReason ??
+                      (pr.isDraft
                         ? `Mark the ${prNoun} ready before merging`
                         : mergeGuardMissing
                           ? "Reload to merge — couldn't load the head commit to guard the merge"
                           : allMergeMethodsBlocked
                             ? "No merge method is enabled by both this repository's settings and its branch rules"
-                            : `Merge this ${prNoun}`
+                            : `Merge this ${prNoun}`)
                     }
+                    className={writeBlocked ? "cursor-not-allowed" : undefined}
                   >
                     <Button
                       size="sm"
                       disabled={
                         busy ||
+                        writeBlocked ||
                         pr.isDraft ||
                         mergeGuardMissing ||
                         allMergeMethodsBlocked

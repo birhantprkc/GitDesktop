@@ -39,6 +39,7 @@ import type {
 } from "@/lib/git/types";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 import { CreateIssueDialog } from "./CreateIssueDialog";
 
 /** Open/closed glyph for a related issue, so state isn't conveyed by text alone. */
@@ -57,11 +58,16 @@ export function RelatedRow({
   onOpen,
   onRemove,
   pending,
+  removeDisabledReason,
 }: {
   issue: RelatedIssue;
   onOpen: (n: number) => void;
   onRemove: () => void;
   pending?: boolean;
+  /** Set when the viewer lacks the access this row's remove needs — callers pass
+   *  the reason for the matching axis (sub-issues are write, dependency and
+   *  related-issue links are triage). The button stays visible but disabled. */
+  removeDisabledReason?: string;
 }) {
   return (
     <div className="group flex items-center gap-1.5 text-xs">
@@ -75,16 +81,32 @@ export function RelatedRow({
         <span className="text-muted-foreground">#{issue.number}</span>{" "}
         {issue.title}
       </button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        aria-label={`Remove #${issue.number}`}
-        disabled={pending}
-        className="text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 disabled:opacity-100"
-        onClick={onRemove}
+      {/* A natively disabled button swallows `title`, so the reason rides a
+          wrapping span. */}
+      <span
+        title={removeDisabledReason}
+        className={
+          removeDisabledReason
+            ? "inline-flex cursor-not-allowed"
+            : "inline-flex"
+        }
       >
-        {pending ? <Spinner /> : <XIcon />}
-      </Button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Remove #${issue.number}`}
+          disabled={pending || !!removeDisabledReason}
+          className={cn(
+            "text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+            // Full opacity only for the in-flight spinner — a permission-blocked
+            // remove keeps the vendored disabled dim.
+            pending && "disabled:opacity-100",
+          )}
+          onClick={onRemove}
+        >
+          {pending ? <Spinner /> : <XIcon />}
+        </Button>
+      </span>
     </div>
   );
 }
@@ -97,12 +119,16 @@ function RelationList({
   onOpen,
   onRemove,
   isRemoving,
+  removeDisabledReason,
 }: {
   label: string;
   items: RelatedIssue[];
   onOpen: (n: number) => void;
   onRemove: (target: number) => void;
   isRemoving: (target: number) => boolean;
+  /** Set when the viewer may not edit dependencies: each row's remove stays
+   *  visible but disabled, with this text as its hint. */
+  removeDisabledReason?: string;
 }) {
   return (
     <div className="space-y-1">
@@ -114,6 +140,7 @@ function RelationList({
           onOpen={onOpen}
           onRemove={() => onRemove(it.number)}
           pending={isRemoving(it.number)}
+          removeDisabledReason={removeDisabledReason}
         />
       ))}
     </div>
@@ -184,12 +211,17 @@ export function IssueSubIssues({
   issueId,
   number,
   lens,
+  disabledReason,
 }: {
   repoPath: string;
   issueId: string;
   number: number;
   /** The origin|upstream lens the parent issue view resolved. */
   lens: RemoteLens;
+  /** Set when the viewer may not write to the repo: the add + remove
+   *  affordances stay visible but disabled, with this text as their hint. The
+   *  parent breadcrumb and the checklist itself are reads and stay live. */
+  disabledReason?: string;
 }) {
   const relations = useIssueRelations(repoPath, number, lens);
   const addSub = useAddSubIssue(repoPath, lens);
@@ -252,19 +284,32 @@ export function IssueSubIssues({
           <span className="flex-1" />
           {mode === null && (
             <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    aria-label="Add a sub-issue"
-                  />
+              {/* A natively disabled button swallows `title`, so the reason
+                  rides a wrapping span. Every item in this menu is a write, so
+                  the gate sits on the trigger rather than on each item. */}
+              <span
+                title={disabledReason}
+                className={
+                  disabledReason
+                    ? "inline-flex cursor-not-allowed"
+                    : "inline-flex"
                 }
               >
-                <PlusIcon data-icon="inline-start" />
-                Add sub-issue
-                <CaretDownIcon data-icon="inline-end" />
-              </DropdownMenuTrigger>
+                <DropdownMenuTrigger
+                  disabled={!!disabledReason}
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      aria-label="Add a sub-issue"
+                    />
+                  }
+                >
+                  <PlusIcon data-icon="inline-start" />
+                  Add sub-issue
+                  <CaretDownIcon data-icon="inline-end" />
+                </DropdownMenuTrigger>
+              </span>
               <DropdownMenuContent align="end" className="min-w-52">
                 <DropdownMenuItem onClick={() => setCreateOpen(true)}>
                   Create new sub-issue…
@@ -295,6 +340,7 @@ export function IssueSubIssues({
               removeSub.mutate({ parentId: issueId, subId: s.id }, { onError })
             }
             pending={removeSub.isPending && removeSub.variables?.subId === s.id}
+            removeDisabledReason={disabledReason}
           />
         ))}
 
@@ -341,11 +387,15 @@ export function IssueRelationships({
   repoPath,
   number,
   lens,
+  disabledReason,
 }: {
   repoPath: string;
   number: number;
   /** The origin|upstream lens the parent issue view resolved. */
   lens: RemoteLens;
+  /** Set when the viewer lacks the access dependency edits need: Add and the
+   *  per-row removes disable, with this text as their hint. The lists stay live. */
+  disabledReason?: string;
 }) {
   const dependencies = useIssueDependencies(repoPath, number, lens);
   const setDep = useSetIssueDependency(repoPath, lens);
@@ -378,19 +428,32 @@ export function IssueRelationships({
         <span className="flex-1" />
         {addRelation === null && (
           <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  aria-label="Add a relationship"
-                />
+            {/* A natively disabled button swallows `title`, so the reason rides
+                a wrapping span. Every item in this menu is a write, so the gate
+                sits on the trigger rather than on each item. */}
+            <span
+              title={disabledReason}
+              className={
+                disabledReason
+                  ? "inline-flex cursor-not-allowed"
+                  : "inline-flex"
               }
             >
-              <PlusIcon data-icon="inline-start" />
-              Add
-              <CaretDownIcon data-icon="inline-end" />
-            </DropdownMenuTrigger>
+              <DropdownMenuTrigger
+                disabled={!!disabledReason}
+                render={
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    aria-label="Add a relationship"
+                  />
+                }
+              >
+                <PlusIcon data-icon="inline-start" />
+                Add
+                <CaretDownIcon data-icon="inline-end" />
+              </DropdownMenuTrigger>
+            </span>
             <DropdownMenuContent align="end" className="min-w-44">
               <DropdownMenuItem onClick={() => setAddRelation("blocked_by")}>
                 Blocked by…
@@ -420,6 +483,7 @@ export function IssueRelationships({
             setDep.variables.relation === "blocked_by" &&
             setDep.variables.target === t
           }
+          removeDisabledReason={disabledReason}
         />
       )}
       {blocking.length > 0 && (
@@ -439,6 +503,7 @@ export function IssueRelationships({
             setDep.variables.relation === "blocking" &&
             setDep.variables.target === t
           }
+          removeDisabledReason={disabledReason}
         />
       )}
       {depsLoaded &&

@@ -656,6 +656,11 @@ instead of a dead end.) When a token is within a week of expiring, a quiet **dis
 notice** at the top of this tab (and the Issues tab) reminds you to reconnect before it
 lapses.
 
+What you can *do* here follows your access on the repository: when you lack the access an
+action needs — push access to **merge**, a lighter tier (GitHub's triage, GitLab's
+Reporter) for **labels**, **assignees**, and **reviewers** — the control stays where it is,
+disabled, and says what it requires instead of failing when you press it.
+
 ## Fork · Upstream lens
 
 When the repo is a **GitHub fork** — an \`origin\` you pushed to plus an \`upstream\`
@@ -1114,6 +1119,11 @@ add labels, **close / reopen**, **lock**, and **transfer** an issue to another r
 - **Dependencies** — link issues as blocked-by / blocking.
 - **Development** — see linked PRs and branches, and **create a branch** wired to the
   issue.
+
+As on the Pull Requests tab, these follow your access on the repository: an action you
+don't have the access for — a lighter tier for labels, assignees and milestones, push
+access for pinning, transferring or creating a branch — stays visible but disabled and
+says what it needs.
 
 ## Fork · Upstream lens
 

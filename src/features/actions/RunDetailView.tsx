@@ -15,7 +15,12 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { forgeFeatureReady, useForgeStatus } from "@/lib/git/queries";
+import {
+  forgeFeatureReady,
+  useForgeStatus,
+  useRepoWriteAccess,
+  writeAccessReason,
+} from "@/lib/git/queries";
 import { providerLabel } from "@/lib/git/types";
 import type { RunJob } from "@/lib/github/actions";
 import {
@@ -64,6 +69,7 @@ function JobRow({
   onDebug,
   onPlay,
   playing = false,
+  playDisabledReason,
 }: {
   repoPath: string;
   job: RunJob;
@@ -76,6 +82,9 @@ function JobRow({
   onPlay?: () => void;
   /** Whether the play mutation is in flight for THIS job. */
   playing?: boolean;
+  /** Set when the viewer may not push: the play button stays visible but
+   *  disabled, with this text as its hint. */
+  playDisabledReason?: string;
 }) {
   // Failed and in-progress jobs are the interesting ones — open them by default.
   const [open, setOpen] = useState(
@@ -129,21 +138,32 @@ function JobRow({
           )}
         </button>
         {onPlay && (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="mr-2 shrink-0 text-muted-foreground"
-            disabled={playing}
-            aria-label={`Run job ${job.name}`}
-            onClick={onPlay}
+          // A natively disabled button swallows `title`, so the reason rides a
+          // wrapping span.
+          <span
+            title={playDisabledReason}
+            className={
+              playDisabledReason
+                ? "inline-flex cursor-not-allowed"
+                : "inline-flex"
+            }
           >
-            {playing ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
-              <PlayIcon data-icon="inline-start" />
-            )}
-            Run job
-          </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="mr-2 shrink-0 text-muted-foreground"
+              disabled={playing || !!playDisabledReason}
+              aria-label={`Run job ${job.name}`}
+              onClick={onPlay}
+            >
+              {playing ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <PlayIcon data-icon="inline-start" />
+              )}
+              Run job
+            </Button>
+          </span>
         )}
         {onDebug && (
           <Button
@@ -301,6 +321,20 @@ export function RunDetailView({
   // alone gates — never `canWrite || …`. With the gate GitHub never matches the
   // manual-job shape anyway.
   const canPlay = forgeFeatureReady(forge.data, "ciJobPlay");
+  // Re-run and cancel are repo writes: an explicitly read-only viewer keeps the
+  // buttons (disabled, with the reason). CI is repo-wide — no lens.
+  const writeAccess = useRepoWriteAccess(
+    repoPath,
+    undefined,
+    tabActive && !!provider,
+  );
+  const writeReason = writeAccessReason(writeAccess.data);
+  const writeBlocked = writeAccess.data?.canPush === false;
+  // Shared by every disabled-with-reason wrapper below (a natively-disabled
+  // Button swallows `title`, so it rides the span).
+  const blockedSpanClass = writeBlocked
+    ? "inline-flex cursor-not-allowed"
+    : "inline-flex";
   const remoteLabel = providerLabel(provider);
   // GitLab pipelines and Bitbucket steps carry no per-job step list; only GitHub
   // jobs do — so the steps placeholder is suppressed for both.
@@ -336,9 +370,11 @@ export function RunDetailView({
           toast.success(
             provider === "gitlab"
               ? "Retrying pipeline"
-              : failedOnly
-                ? "Re-running failed jobs"
-                : "Re-running workflow",
+              : provider === "bitbucket"
+                ? "Triggering a new pipeline"
+                : failedOnly
+                  ? "Re-running failed jobs"
+                  : "Re-running workflow",
           ),
         onError: toastError,
       },
@@ -409,69 +445,88 @@ export function RunDetailView({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {active || gitlabBlocked
             ? canCancel && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={cancel.isPending}
-                  onClick={doCancel}
-                >
-                  {cancel.isPending ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <ProhibitIcon data-icon="inline-start" />
-                  )}
-                  Cancel run
-                </Button>
+                <span title={writeReason} className={blockedSpanClass}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={cancel.isPending || writeBlocked}
+                    onClick={doCancel}
+                  >
+                    {cancel.isPending ? (
+                      <Spinner data-icon="inline-start" />
+                    ) : (
+                      <ProhibitIcon data-icon="inline-start" />
+                    )}
+                    Cancel run
+                  </Button>
+                </span>
               )
             : provider === "gitlab"
               ? canRerun &&
                 retryable && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={rerun.isPending}
-                    title="Restart this pipeline's failed and canceled jobs"
-                    onClick={() => doRerun(true)}
+                  <span
+                    title={
+                      writeReason ??
+                      "Restart this pipeline's failed and canceled jobs"
+                    }
+                    className={blockedSpanClass}
                   >
-                    <ArrowClockwiseIcon data-icon="inline-start" />
-                    Retry pipeline
-                  </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={rerun.isPending || writeBlocked}
+                      onClick={() => doRerun(true)}
+                    >
+                      <ArrowClockwiseIcon data-icon="inline-start" />
+                      Retry pipeline
+                    </Button>
+                  </span>
                 )
               : provider === "bitbucket"
                 ? canRerun &&
                   bitbucketRerunnable && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={rerun.isPending}
-                      title="Trigger this pipeline's branch again"
-                      onClick={() => doRerun(true)}
+                    <span
+                      title={
+                        writeReason ?? "Trigger this pipeline's branch again"
+                      }
+                      className={blockedSpanClass}
                     >
-                      <ArrowClockwiseIcon data-icon="inline-start" />
-                      Rerun pipeline
-                    </Button>
-                  )
-                : canWrite && (
-                    <>
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={rerun.isPending}
-                        onClick={() => doRerun(false)}
+                        disabled={rerun.isPending || writeBlocked}
+                        onClick={() => doRerun(true)}
                       >
                         <ArrowClockwiseIcon data-icon="inline-start" />
-                        Re-run all jobs
+                        Rerun pipeline
                       </Button>
-                      {failed && (
+                    </span>
+                  )
+                : canWrite && (
+                    <>
+                      <span title={writeReason} className={blockedSpanClass}>
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={rerun.isPending}
-                          onClick={() => doRerun(true)}
+                          disabled={rerun.isPending || writeBlocked}
+                          onClick={() => doRerun(false)}
                         >
                           <ArrowClockwiseIcon data-icon="inline-start" />
-                          Re-run failed jobs
+                          Re-run all jobs
                         </Button>
+                      </span>
+                      {failed && (
+                        <span title={writeReason} className={blockedSpanClass}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={rerun.isPending || writeBlocked}
+                            onClick={() => doRerun(true)}
+                          >
+                            <ArrowClockwiseIcon data-icon="inline-start" />
+                            Re-run failed jobs
+                          </Button>
+                        </span>
                       )}
                     </>
                   )}
@@ -529,6 +584,7 @@ export function RunDetailView({
                       : undefined
                   }
                   playing={playJob.isPending && playJob.variables === job.id}
+                  playDisabledReason={writeReason}
                 />
               ))}
             </div>

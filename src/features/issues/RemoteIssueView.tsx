@@ -45,6 +45,8 @@ import { presentError } from "@/lib/error-summary";
 import type { LockReason, MinimizeReason } from "@/lib/git/api";
 import {
   forgeFeatureReady,
+  TRIAGE_ACCESS_ITEM_REASON,
+  triageAccessReason,
   useCloseIssue,
   useCommentIssue,
   useDeleteIssue,
@@ -60,10 +62,13 @@ import {
   useMinimizeComment,
   usePinIssue,
   useReopenIssue,
+  useRepoWriteAccess,
   useToggleReaction,
   useTransferIssue,
   useUnlockIssue,
   useUnminimizeComment,
+  WRITE_ACCESS_ITEM_REASON,
+  writeAccessReason,
 } from "@/lib/git/queries";
 import { providerLabel } from "@/lib/git/types";
 import { formatBinding } from "@/lib/hotkeys/binding";
@@ -120,6 +125,24 @@ export function RemoteIssueView({
   // The single lens-resolution point for this surface (package B2): every issue
   // read/write below targets the fork (origin) or its parent (upstream).
   const lens = useRepoLens(repoPath);
+  // The viewer's permission on the lens repo — a PERMISSION axis the per-action
+  // flags below don't cover, so it never hides a control: it only disables one,
+  // and only on an explicit denial. Triage is its own, LOWER tier: labels,
+  // assignees, milestones, hide-comments and the other issue-metadata rows come
+  // with it without push, so those read `canTriage`; pin, transfer, delete and
+  // branch creation are write-tier. Each blocked flag derives from its reason so
+  // the two can never disagree.
+  const writeAccess = useRepoWriteAccess(repoPath, lens, !!provider);
+  const writeReason = writeAccessReason(writeAccess.data);
+  const triageReason = triageAccessReason(writeAccess.data);
+  const writeBlocked = !!writeReason;
+  const triageBlocked = !!triageReason;
+  // A disabled menu item drops pointer events, so its explanation goes in the
+  // label; each suffix is empty whenever its axis allows the action.
+  const triageItemReason = triageReason ? TRIAGE_ACCESS_ITEM_REASON : undefined;
+  const writeItemReason = writeReason ? WRITE_ACCESS_ITEM_REASON : undefined;
+  const itemSuffix = writeItemReason ? ` — ${writeItemReason}` : "";
+  const triageSuffix = triageItemReason ? ` — ${triageItemReason}` : "";
   // GitLab WRITES land per-action. Each shared control is
   // `canWrite || forgeFeatureReady(...)` so GitHub keeps its controls while a
   // forge-status query is pending/failed (canWrite default-true) AND a ready GitLab
@@ -141,6 +164,10 @@ export function RemoteIssueView({
   // pin stays GitHub-only via `canWrite`. GitLab locks without a reason and
   // "moves" instead of transferring — labels/submenus branch on the provider.
   const isGitLab = provider === "gitlab";
+  // Locking is write-tier on GitHub but only Reporter (triage) on GitLab, so
+  // the lock arms take their axis from the provider.
+  const lockBlocked = isGitLab ? triageBlocked : writeBlocked;
+  const lockSuffix = isGitLab ? triageSuffix : itemSuffix;
   const canLock = canWrite || forgeFeatureReady(forge.data, "issueLock");
   const canTransfer =
     canWrite || forgeFeatureReady(forge.data, "issueTransfer");
@@ -429,6 +456,7 @@ export function RemoteIssueView({
               <DropdownMenuContent align="end" className="min-w-52">
                 {canWrite && (
                   <DropdownMenuItem
+                    disabled={writeBlocked}
                     onClick={() =>
                       pinIssue.mutate(
                         { number, pinned: !issue.isPinned },
@@ -443,11 +471,13 @@ export function RemoteIssueView({
                     }
                   >
                     {issue.isPinned ? "Unpin issue" : "Pin issue"}
+                    {itemSuffix}
                   </DropdownMenuItem>
                 )}
                 {canLock &&
                   (issue.locked ? (
                     <DropdownMenuItem
+                      disabled={lockBlocked}
                       onClick={() =>
                         unlockIssue.mutate(number, {
                           onSuccess: () =>
@@ -456,11 +486,12 @@ export function RemoteIssueView({
                         })
                       }
                     >
-                      Unlock conversation
+                      Unlock conversation{lockSuffix}
                     </DropdownMenuItem>
                   ) : isGitLab ? (
                     // GitLab locks without a reason — a plain item, no submenu.
                     <DropdownMenuItem
+                      disabled={lockBlocked}
                       onClick={() =>
                         lockIssue.mutate(
                           { number, reason: null },
@@ -472,12 +503,18 @@ export function RemoteIssueView({
                         )
                       }
                     >
-                      Lock conversation
+                      Lock conversation{lockSuffix}
                     </DropdownMenuItem>
                   ) : (
                     <DropdownMenuSub>
-                      <DropdownMenuSubTrigger>
-                        Lock conversation…
+                      {/* The vendored sub-trigger carries no disabled styling
+                          of its own (unlike menu items), so the dim rides a
+                          call-site class. */}
+                      <DropdownMenuSubTrigger
+                        disabled={writeBlocked}
+                        className="data-disabled:opacity-50"
+                      >
+                        Lock conversation…{itemSuffix}
                       </DropdownMenuSubTrigger>
                       <DropdownMenuSubContent>
                         {LOCK_REASONS.map(([label, reason]) => (
@@ -508,20 +545,23 @@ export function RemoteIssueView({
                 )}
                 {canTransfer && (
                   <DropdownMenuItem
+                    disabled={writeBlocked}
                     onClick={() => {
                       setTransferDest("");
                       setTransferOpen(true);
                     }}
                   >
                     {isGitLab ? "Move issue…" : "Transfer issue…"}
+                    {itemSuffix}
                   </DropdownMenuItem>
                 )}
                 {canDelete && (
                   <DropdownMenuItem
                     variant="destructive"
+                    disabled={writeBlocked}
                     onClick={() => setDeleteOpen(true)}
                   >
-                    Delete issue…
+                    Delete issue…{itemSuffix}
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -637,6 +677,7 @@ export function RemoteIssueView({
                   issueId={issue.id}
                   number={number}
                   lens={lens}
+                  disabledReason={writeReason}
                 />
               )}
               {comments.map((c) => (
@@ -664,6 +705,7 @@ export function RemoteIssueView({
                       ? () => unhideComment(c.id)
                       : undefined
                   }
+                  disabledReason={triageItemReason}
                   reactions={
                     canReact ? reactions.data?.comments[c.id] : undefined
                   }
@@ -811,6 +853,8 @@ export function RemoteIssueView({
           canLinkIssues={canLinkIssues}
           remoteLabel={remoteLabel}
           lens={lens}
+          pickerDisabledReason={triageReason}
+          writeItemReason={writeItemReason}
         />
       </div>
 

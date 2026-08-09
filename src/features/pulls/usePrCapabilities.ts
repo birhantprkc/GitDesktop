@@ -1,5 +1,9 @@
 import { forgeFeatureReady } from "@/lib/git/queries";
-import type { ForgeProvider, ForgeStatus } from "@/lib/git/types";
+import type {
+  ForgeProvider,
+  ForgeRepoWriteAccess,
+  ForgeStatus,
+} from "@/lib/git/types";
 
 /**
  * Per-action write-capability flags for a remote PR/MR, derived from the repo's
@@ -15,10 +19,20 @@ import type { ForgeProvider, ForgeStatus } from "@/lib/git/types";
  * - A provider-ONLY control (no GitHub analogue here, e.g. GitLab auto-merge,
  *   Bitbucket tasks) gates on the forge feature ALONE — `canWrite || …` would
  *   duplicate a GitHub control that lives elsewhere.
+ *
+ * Axes, never conflated: every `can*` flag above is AVAILABILITY (is this action
+ * wired for this provider?) and decides what RENDERS. `writeBlocked` is
+ * PERMISSION and decides only what is ENABLED — consumers disable-with-reason
+ * and never hide on permission. Triage is a SEPARATE, lower tier granting
+ * labels, assignees, milestones, review requests and hiding comments without
+ * push, so a triage control keys on `triageAccessReason`, never on
+ * `writeBlocked`. Absent or unanswered probe data leaves `writeBlocked` false
+ * (fail open).
  */
 export function usePrCapabilities(
   forgeData: ForgeStatus | undefined,
   provider: ForgeProvider | null | undefined,
+  writeAccess?: ForgeRepoWriteAccess,
 ) {
   const canWrite = provider !== "gitlab" && provider !== "bitbucket";
   const canComment = canWrite || forgeFeatureReady(forgeData, "mrComment");
@@ -84,9 +98,13 @@ export function usePrCapabilities(
   // providers.
   const canSubmitReview =
     canWrite || forgeFeatureReady(forgeData, "mrReviewSubmit");
+  // Only an explicit denial blocks: null/undefined (probe pending, failed, or
+  // unable to answer) must behave exactly as before.
+  const writeBlocked = writeAccess?.canPush === false;
 
   return {
     canWrite,
+    writeBlocked,
     canComment,
     canChangeState,
     canEdit,
