@@ -7,13 +7,11 @@ import {
   GitForkIcon,
   QuestionIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { Button } from "@/components/ui/button";
-import { usePickAndOpenRepo } from "@/features/repository/useOpenRepoByPath";
 import { useUpdateCheck } from "@/features/updates/useUpdateCheck";
 import { formatBinding } from "@/lib/hotkeys/binding";
-import { useEffectiveBindings, useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { dispatchAction, useEffectiveBindings } from "@/lib/hotkeys/hotkeys";
 import type { ActionId } from "@/lib/hotkeys/registry";
 import {
   useAiEnabled,
@@ -21,22 +19,17 @@ import {
   useSettings,
 } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
-import { CloneRepoDialog } from "./CloneRepoDialog";
-import { CreateRepoDialog } from "./CreateRepoDialog";
 import { RecentRepoList } from "./RecentRepoList";
 
 export function WelcomeScreen() {
   const openSettings = useUiStore((s) => s.openSettings);
   const openHelp = useUiStore((s) => s.openHelp);
   const openExplore = useUiStore((s) => s.openExplore);
-  const pickAndOpen = usePickAndOpenRepo();
   const settings = useSettings();
   const saveSettings = useSaveSettings();
   const aiEnabled = useAiEnabled();
   const bindings = useEffectiveBindings();
   const updateAvailable = Boolean(useUpdateCheck().data);
-  const [cloneOpen, setCloneOpen] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
 
   function dismissNudge() {
     if (settings.data) {
@@ -47,10 +40,6 @@ export function WelcomeScreen() {
     dismissNudge();
     openHelp();
   }
-
-  useHotkeyAction("add-local-repository", pickAndOpen);
-  useHotkeyAction("clone-repository", () => setCloneOpen(true));
-  useHotkeyAction("new-repository", () => setCreateOpen(true));
 
   // The primary entry points, surfaced as a launcher: label on the left, the
   // live keyboard shortcut on the right (honours user remaps via bindings).
@@ -66,21 +55,21 @@ export function WelcomeScreen() {
       label: "Open repository",
       icon: FolderOpenIcon,
       variant: "default",
-      onClick: pickAndOpen,
+      onClick: () => dispatchAction("add-local-repository"),
     },
     {
       id: "clone-repository",
       label: "Clone repository",
       icon: GitForkIcon,
       variant: "outline",
-      onClick: () => setCloneOpen(true),
+      onClick: () => dispatchAction("clone-repository"),
     },
     {
       id: "new-repository",
       label: "Create repository",
       icon: FolderPlusIcon,
       variant: "outline",
-      onClick: () => setCreateOpen(true),
+      onClick: () => dispatchAction("new-repository"),
     },
     {
       id: "open-explore",
@@ -196,9 +185,6 @@ export function WelcomeScreen() {
           </div>
         </div>
       </main>
-
-      <CloneRepoDialog open={cloneOpen} onOpenChange={setCloneOpen} />
-      <CreateRepoDialog open={createOpen} onOpenChange={setCreateOpen} />
     </div>
   );
 }

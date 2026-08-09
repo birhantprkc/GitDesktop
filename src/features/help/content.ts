@@ -65,7 +65,8 @@ A few things worth knowing up front:
 {{/ai}}
 ## Open your first repository
 
-From the welcome screen (or the repo switcher in the header):
+Use the welcome screen's buttons, the repo switcher in the header, or the command
+palette — wherever you are in the app, these actions and their shortcuts are available:
 
 - **Open repository** ({{kbd:add-local-repository}}) — point at a folder that's already
   a Git repo.
@@ -73,6 +74,10 @@ From the welcome screen (or the repo switcher in the header):
   clone your **GitHub**, **GitLab**, or **Bitbucket** repos from their tabs.
 - **Create repository** ({{kbd:new-repository}}) — start a new repo with an optional
   README, \`.gitignore\`, and license.
+
+On macOS, the menu bar mirrors these: **File → New / Open / Clone Repository…** plus
+an **Open Recent** list of your last ten repos, with **Settings…** in the
+**GitDesktop** menu. Menu items work from any screen.
 
 ## Finding your way around
 

@@ -7,15 +7,19 @@ import { ConfirmDialogHost } from "@/components/confirm-dialog-host";
 import { Spinner } from "@/components/ui/spinner";
 import { ReconnectDialog } from "@/features/accounts/ReconnectDialog";
 import { ActivityStrip } from "@/features/activity/ActivityDock";
+import { useMacAppMenu } from "@/features/app-menu/useMacAppMenu";
 import { AutomationResultDialog } from "@/features/automations/AutomationResultDialog";
 import { ExploreScreen } from "@/features/explore/ExploreScreen";
 import { HelpScreen } from "@/features/help/HelpScreen";
 import { RepositoryView } from "@/features/repository/RepositoryView";
+import { usePickAndOpenRepo } from "@/features/repository/useOpenRepoByPath";
 import { SettingsScreen } from "@/features/settings/SettingsScreen";
 import { CommandPalette } from "@/features/shortcuts/CommandPalette";
 import { ShortcutsDialog } from "@/features/shortcuts/ShortcutsDialog";
 import { UpdateChecker } from "@/features/updates/UpdateChecker";
 import { WhatsNew } from "@/features/updates/WhatsNew";
+import { CloneRepoDialog } from "@/features/welcome/CloneRepoDialog";
+import { CreateRepoDialog } from "@/features/welcome/CreateRepoDialog";
 import { GitMissingScreen } from "@/features/welcome/GitMissingScreen";
 import { useRepoDrop } from "@/features/welcome/useRepoDrop";
 import { WelcomeScreen } from "@/features/welcome/WelcomeScreen";
@@ -49,6 +53,19 @@ function App() {
   const applyTheme = useApplyTheme();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const pickAndOpen = usePickAndOpenRepo();
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const dialogOpen = cloneOpen || createOpen;
+
+  // The dialogs live above the view switch, so navigation no longer unmounts
+  // them (e.g. the clone dialog's "Open Settings → Accounts") — close them
+  // when the screen changes, or the new screen mounts behind the modal.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `view` is an intentional close trigger, not read directly
+  useEffect(() => {
+    setCloneOpen(false);
+    setCreateOpen(false);
+  }, [view]);
 
   // Show a one-time passive notice on first launch, letting users opt out.
   const noticeShown = useRef(false);
@@ -128,7 +145,38 @@ function App() {
 
   // The app-wide hotkey dispatcher plus the always-available actions.
   useHotkeysListener();
-  useHotkeyAction("open-settings", openSettings);
+  // The macOS menu bar routes into the same action dispatch; inert elsewhere.
+  useMacAppMenu();
+  // Settings… is exposed in the macOS menu bar, which stays clickable on the
+  // git-missing screen — without the gate it would flip the view to a Settings
+  // screen that never renders, surfacing only after Retry.
+  useHotkeyAction(
+    "open-settings",
+    openSettings,
+    gitInstalled.isSuccess && !dialogOpen,
+  );
+  // App owns the three repo actions outright: they must work on every screen
+  // (Settings/Help/Explore mount neither the welcome list nor the repo
+  // switcher), and duplicate registrations would shadow by mount order.
+  // Disabled until git resolves — the dialogs render below the early returns,
+  // so a click before then would stash a stale `open` that pops later. An open
+  // clone/create dialog suppresses all four: the native menu bar sits outside
+  // the webview's modal overlay, so a menu click there would stack a second.
+  useHotkeyAction(
+    "add-local-repository",
+    pickAndOpen,
+    gitInstalled.isSuccess && !dialogOpen,
+  );
+  useHotkeyAction(
+    "clone-repository",
+    () => setCloneOpen(true),
+    gitInstalled.isSuccess && !dialogOpen,
+  );
+  useHotkeyAction(
+    "new-repository",
+    () => setCreateOpen(true),
+    gitInstalled.isSuccess && !dialogOpen,
+  );
   // Palette-only deep link; hidden alongside the panel when AI features are off.
   useHotkeyAction(
     "open-mcp-servers-settings",
@@ -210,6 +258,8 @@ function App() {
         <ActivityStrip />
       </div>
       <AutomationResultDialog />
+      <CloneRepoDialog open={cloneOpen} onOpenChange={setCloneOpen} />
+      <CreateRepoDialog open={createOpen} onOpenChange={setCreateOpen} />
       <ConfirmDialogHost />
       <ReconnectDialog />
       <UpdateChecker />
