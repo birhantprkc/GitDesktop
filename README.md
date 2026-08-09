@@ -35,9 +35,10 @@ Settings → Accounts switches the active account per host.
 ## Install
 
 **[Download the latest release →](https://github.com/theBGuy/GitDesktop/releases/latest)**
-Pick the installer for your OS under **Assets**. Builds are signed and keep
-themselves up to date (see [Updates](#updates)). Prefer to build from source? See
-[Development](#development).
+Pick the installer for your OS under **Assets** — or, on macOS, install with
+Homebrew: `brew install --cask thebguy/tap/gitdesktop`. Builds are signed and
+keep themselves up to date (see [Updates](#updates)). Prefer to build from
+source? See [Development](#development).
 
 ## Highlights
 
