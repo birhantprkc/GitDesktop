@@ -13,7 +13,7 @@
 </p>
 
 GitDesktop is a free, open-source (Apache-2.0) Git client for Windows, macOS,
-and Linux, built with Tauri 2 and React 19 by theBGuy. It keeps GitHub
+and Linux, built with Tauri 2 and React 19. It keeps GitHub
 Desktop's approachable model and goes further: staging, diffs, branches, and
 history for any remote, plus the whole pull-request loop (code review and
 CI) on GitHub, GitLab, and Bitbucket, with issues in-app on GitHub and
