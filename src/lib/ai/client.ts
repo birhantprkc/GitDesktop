@@ -19,6 +19,55 @@ export class MissingApiKeyError extends Error {
   }
 }
 
+/** The human-readable reason out of a provider error payload, whether it nests under
+ *  `error` as an object (OpenAI, Google), sits bare on `message`, or is a plain string
+ *  under `error` (Ollama's native `/api`), array-wrapped (Google) or not. One reader
+ *  for both call sites below: the parsed response body and the raw in-stream payload
+ *  carry the same shapes, so they must accept the same set. */
+function errorTextOf(value: unknown): string | null {
+  const entry = (Array.isArray(value) ? value[0] : value) as {
+    error?: { message?: unknown } | string;
+    message?: unknown;
+  } | null;
+  const nested = entry?.error;
+  const message =
+    typeof nested === "string" ? nested : (nested?.message ?? entry?.message);
+  return typeof message === "string" && message.trim() ? message : null;
+}
+
+/**
+ * The provider's own explanation for a failed call, falling back to the generic
+ * message. Three constraints shape it: a body the SDK's error schema can't parse
+ * leaves `APICallError.message` as the bare HTTP reason phrase with the cause unread
+ * in `responseBody` (Google's is array-wrapped, so a rejected key reads "Bad Request"
+ * rather than "Invalid Auth key."); a retry moves that body onto `RetryError.lastError`,
+ * and `isRetryable` covers 429/5xx — the quota case; and an in-stream error part is the
+ * provider's already-parsed payload rather than an Error.
+ */
+function providerErrorMessage(e: unknown): string {
+  const unwrapped = ((e as { lastError?: unknown } | null)?.lastError ?? e) as {
+    responseBody?: unknown;
+  } | null;
+  const body = unwrapped?.responseBody;
+  if (typeof body === "string" && body.trim()) {
+    try {
+      const fromBody = errorTextOf(JSON.parse(body));
+      if (fromBody) return fromBody;
+    } catch {
+      // Not JSON — the generic message is the best we have.
+    }
+  }
+  // An Error's own `message` is what the generic fallback already returns; only a raw
+  // payload object needs reading here.
+  if (!(unwrapped instanceof Error)) {
+    const fromPayload = errorTextOf(unwrapped);
+    if (fromPayload) return fromPayload;
+  }
+  // Deliberately the wrapper, not `unwrapped`: a retry's message embeds the last
+  // error's text and adds the attempt count, which is worth keeping.
+  return errorMessage(e);
+}
+
 /**
  * Resolves `settings` to a ready model: reads the saved API key (or an unsaved
  * override), throwing {@link MissingApiKeyError} when a key-requiring provider has
@@ -100,7 +149,7 @@ export async function createAiClient(
               yield part.text;
               break;
             case "error":
-              throw new Error(errorMessage(part.error));
+              throw new Error(providerErrorMessage(part.error));
             case "abort":
               throw new DOMException(
                 "The generation was cancelled.",
@@ -123,7 +172,7 @@ export async function createAiClient(
         ) {
           throw new DOMException("The generation was cancelled.", "AbortError");
         }
-        throw new Error(errorMessage(e));
+        throw new Error(providerErrorMessage(e));
       }
     },
     async testConnection() {
@@ -139,7 +188,7 @@ export async function createAiClient(
               message: "Model returned an empty response.",
             } as const);
       } catch (e) {
-        return { ok: false, message: errorMessage(e) } as const;
+        return { ok: false, message: providerErrorMessage(e) } as const;
       }
     },
   };
@@ -239,7 +288,7 @@ export async function runAgenticStream(opts: AgenticStreamOpts): Promise<void> {
         : {}),
     });
   } catch (e) {
-    throw new Error(annotateToolError(errorMessage(e)));
+    throw new Error(annotateToolError(providerErrorMessage(e)));
   }
 
   let buffer = "";
@@ -302,7 +351,7 @@ export async function runAgenticStream(opts: AgenticStreamOpts): Promise<void> {
           break;
         }
         case "error": {
-          throw new Error(annotateToolError(errorMessage(part.error)));
+          throw new Error(annotateToolError(providerErrorMessage(part.error)));
         }
         case "abort": {
           // `type: 'abort'` is real in the installed ai@6 TextStreamPart union; an
@@ -316,7 +365,7 @@ export async function runAgenticStream(opts: AgenticStreamOpts): Promise<void> {
     }
   } catch (e) {
     if (opts.abortSignal.aborted) return; // clean cancellation — not an error
-    throw new Error(annotateToolError(errorMessage(e)));
+    throw new Error(annotateToolError(providerErrorMessage(e)));
   }
 
   // A clean finish that produced no prose (all steps spent on tool calls, or ended on

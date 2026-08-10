@@ -25,12 +25,14 @@ export const GOOGLE_AI_STUDIO_BASE_URL =
 export const GOOGLE_AI_STUDIO_KEYS_URL = "https://aistudio.google.com/apikey";
 
 /** Suggested Gemini ids. The head is what `defaultModelForProvider("google")`
- *  stamps on a provider switch, so it must be a currently-served model — Google
- *  retires ids fast (the 1.5 line and 2.0 Flash are already shut down). */
+ *  stamps on a provider switch, so it must be currently served — Google retires
+ *  ids fast (the 1.5 line and 2.0 Flash are shut down). Flash tiers only: Pro
+ *  answers a FREE AI Studio key with 429 `limit: 0`. The live catalog still
+ *  offers Pro — it lists what a key can SEE, not what its tier can CALL. */
 const GEMINI_MODELS = [
   "gemini-3.6-flash",
   "gemini-3.5-flash",
-  "gemini-2.5-pro",
+  "gemini-3.5-flash-lite",
 ];
 
 /** Presets for the `openai-compatible` provider — each is an OpenAI-compatible
