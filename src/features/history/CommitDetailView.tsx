@@ -45,7 +45,7 @@ import { providerLabel } from "@/lib/git/types";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
-import { cn } from "@/lib/utils";
+import { cn, PLACEHOLDER_FADE } from "@/lib/utils";
 import { FileRowActions } from "./FileRowActions";
 import { useAmendWithConfirm } from "./useAmendCommit";
 
@@ -79,7 +79,14 @@ export function CommitDetailView({
   // large IPC payload otherwise deserializes on the main thread and stalls
   // input). The file-list highlight still uses effectivePath, so it stays live.
   const deferredPath = useDeferredValue(effectivePath);
-  const diff = useCommitFileDiff(repoPath, hash, deferredPath);
+  // Fetch only once the path is one this commit actually changed. The path comes
+  // FROM the file list, so it's the previous commit's both while that list is a
+  // placeholder AND for the deferred frame after it settles — and a fetch there
+  // "succeeds" with an empty diff, flashing "No changes to show".
+  const diffEnabled =
+    !files.isPlaceholderData &&
+    (files.data?.some((f) => f.path === deferredPath) ?? false);
+  const diff = useCommitFileDiff(repoPath, hash, deferredPath, diffEnabled);
 
   // Commit-comment surface — mirrors the PR Commits drill-in (PrCommitDetail),
   // but lights up ONLY when the repo has a ready forge, the provider supports
@@ -193,10 +200,23 @@ export function CommitDetailView({
   const commit = details.data;
   const totalAdded = files.data.reduce((sum, f) => sum + f.added, 0);
   const totalDeleted = files.data.reduce((sum, f) => sum + f.deleted, 0);
+  // Everything derived from these two queries is the PREVIOUS commit's until the
+  // selected one lands; fade it so the pane never passes stale content off as
+  // current. The ⋯ actions act on the `hash` prop, so they stay solid.
+  const staleDim =
+    (details.isPlaceholderData || files.isPlaceholderData) && "opacity-80";
+  // The diff pane keeps serving the previous file's diff for longer than the rest
+  // (its query stays on placeholder data through the gated window above), so it
+  // fades on its own state. Never nested inside another dim — 0.8² reads as
+  // disabled.
+  const diffDim = (staleDim || diff.isPlaceholderData) && "opacity-80";
 
+  // Identity comes from the `hash` PROP, never `commit.hash`: while the next
+  // commit's details load, `details.data` is still the previous commit's
+  // placeholder — copying from it would hand over the wrong SHA.
   async function copyHash() {
     try {
-      await navigator.clipboard.writeText(commit.hash);
+      await navigator.clipboard.writeText(hash);
       toast.success("Commit hash copied");
     } catch {
       toast.error("Could not copy to clipboard");
@@ -226,32 +246,59 @@ export function CommitDetailView({
   });
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" aria-busy={Boolean(staleDim)}>
       <header className="space-y-1 border-b px-4 py-3">
-        <h2 className="text-sm font-medium">{commit.subject}</h2>
+        <h2 className={cn("text-sm font-medium", PLACEHOLDER_FADE, staleDim)}>
+          {commit.subject}
+        </h2>
         {commit.body && (
-          <p className="max-h-24 overflow-y-auto text-xs whitespace-pre-wrap text-muted-foreground">
+          <p
+            className={cn(
+              "max-h-24 overflow-y-auto text-xs whitespace-pre-wrap text-muted-foreground",
+              PLACEHOLDER_FADE,
+              staleDim,
+            )}
+          >
             {commit.body}
           </p>
         )}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <CommitAuthorAvatar name={commit.author} email={commit.authorEmail} />
-          <span>{commit.author}</span>
-          <span>•</span>
-          <span>{formatRelativeTime(commit.date)}</span>
-          <span>•</span>
+          <span
+            className={cn(
+              "flex items-center gap-2",
+              PLACEHOLDER_FADE,
+              staleDim,
+            )}
+          >
+            <CommitAuthorAvatar
+              name={commit.author}
+              email={commit.authorEmail}
+            />
+            <span>{commit.author}</span>
+            <span>•</span>
+            <span>{formatRelativeTime(commit.date)}</span>
+            <span>•</span>
+          </span>
           <button
             type="button"
             className="inline-flex items-center gap-1 font-mono hover:text-foreground"
             onClick={copyHash}
             title="Copy full hash"
           >
-            {commit.hash.slice(0, 7)}
+            {hash.slice(0, 7)}
             <CopyIcon className="size-3" />
           </button>
           <span className="flex-1" />
-          <span className="text-success">+{totalAdded}</span>
-          <span className="text-destructive">-{totalDeleted}</span>
+          <span
+            className={cn(
+              "flex items-center gap-2",
+              PLACEHOLDER_FADE,
+              staleDim,
+            )}
+          >
+            <span className="text-success">+{totalAdded}</span>
+            <span className="text-destructive">-{totalDeleted}</span>
+          </span>
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -300,25 +347,34 @@ export function CommitDetailView({
                 Cherry-pick commit
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={() => copyText(commit.hash, "SHA copied")}
-              >
+              <DropdownMenuItem onClick={() => copyText(hash, "SHA copied")}>
                 Copy SHA
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <JiraRefRow
-          repoPath={repoPath}
-          sources={[
-            { label: "commit subject", text: commit.subject },
-            { label: "commit message body", text: commit.body },
-          ]}
-        />
+        {/* Absent rather than faded while the details are a placeholder: these
+            are CLICKABLE links mined from the message text, and a dimmed one
+            still navigates to the previous commit's issue. */}
+        {!details.isPlaceholderData && (
+          <JiraRefRow
+            repoPath={repoPath}
+            sources={[
+              { label: "commit subject", text: commit.subject },
+              { label: "commit message body", text: commit.body },
+            ]}
+          />
+        )}
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-72 shrink-0 flex-col border-r">
+        <aside
+          className={cn(
+            "flex w-72 shrink-0 flex-col border-r",
+            PLACEHOLDER_FADE,
+            staleDim,
+          )}
+        >
           <p className="border-b px-3 py-1.5 text-xs text-muted-foreground">
             {files.data.length} changed file{files.data.length === 1 ? "" : "s"}
           </p>
@@ -363,7 +419,10 @@ export function CommitDetailView({
             </FileRowActions>
           </ScrollArea>
         </aside>
-        <main className="min-w-0 flex-1">
+        <main
+          aria-busy={Boolean(diffDim)}
+          className={cn("min-w-0 flex-1", PLACEHOLDER_FADE, diffDim)}
+        >
           {deferredPath ? (
             <DiffSurface
               filePath={deferredPath}
