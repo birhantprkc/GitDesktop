@@ -3,6 +3,7 @@ import type { AiProviderId } from "./types";
 export const PROVIDER_LABELS: Record<AiProviderId, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
+  google: "Google AI Studio",
   "openai-compatible": "OpenAI-compatible",
   openrouter: "OpenRouter",
   ollama: "Ollama (local)",
@@ -16,6 +17,21 @@ export const PROVIDER_LABELS: Record<AiProviderId, string> = {
 /** Host for Ollama's hosted models, reached with an API key (vs the local
  *  server). Native API at `/api`, OpenAI-compatible model list at `/v1/models`. */
 export const OLLAMA_CLOUD_HOST = "https://ollama.com";
+
+/** Google AI Studio's fixed OpenAI-compatible endpoint — the `google` provider's
+ *  base URL and catalog host — and the key page linked from the Settings key hint. */
+export const GOOGLE_AI_STUDIO_BASE_URL =
+  "https://generativelanguage.googleapis.com/v1beta/openai";
+export const GOOGLE_AI_STUDIO_KEYS_URL = "https://aistudio.google.com/apikey";
+
+/** Suggested Gemini ids. The head is what `defaultModelForProvider("google")`
+ *  stamps on a provider switch, so it must be a currently-served model — Google
+ *  retires ids fast (the 1.5 line and 2.0 Flash are already shut down). */
+const GEMINI_MODELS = [
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-2.5-pro",
+];
 
 /** Presets for the `openai-compatible` provider — each is an OpenAI-compatible
  *  `/chat/completions` endpoint. The Vercel AI Gateway is an aggregator (one host,
@@ -44,13 +60,6 @@ export const OPENAI_COMPATIBLE_PRESETS: OpenAiCompatiblePreset[] = [
       "deepseek/deepseek-v3.1",
     ],
     keysUrl: "https://vercel.com/dashboard/ai-gateway",
-  },
-  {
-    id: "gemini",
-    label: "Google Gemini",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    models: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
-    keysUrl: "https://aistudio.google.com/apikey",
   },
   {
     id: "deepseek",
@@ -82,6 +91,7 @@ export const OPENAI_COMPATIBLE_PRESETS: OpenAiCompatiblePreset[] = [
 export const PROVIDERS_REQUIRING_KEY: AiProviderId[] = [
   "anthropic",
   "openai",
+  "google",
   "openai-compatible",
   "openrouter",
   "ollama-cloud",
@@ -119,6 +129,7 @@ export const MODEL_SUGGESTIONS: Record<AiProviderId, string[]> = {
   openai: ["gpt-4.1-mini", "gpt-4.1", "o4-mini"],
   // Generic fallback only; the picked preset's own models drive the live list.
   "openai-compatible": OPENAI_COMPATIBLE_PRESETS[0].models,
+  google: GEMINI_MODELS,
   openrouter: [
     "anthropic/claude-haiku-4.5",
     "openai/gpt-4.1-mini",

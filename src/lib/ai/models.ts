@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getSecret } from "@/lib/git/api";
 import { guardedFetch } from "./guarded-fetch";
 import {
+  GOOGLE_AI_STUDIO_BASE_URL,
   MODEL_SUGGESTIONS,
   OLLAMA_CLOUD_HOST,
   OPENAI_COMPATIBLE_PRESETS,
@@ -11,10 +12,13 @@ import type { AiSettings } from "./types";
 /** Static fallback model list when the live catalog is unavailable. For the
  *  openai-compatible provider it's the matching preset's own models (not the
  *  generic default), so e.g. picking DeepSeek without a key still suggests
- *  DeepSeek models. */
+ *  DeepSeek models. A base URL left over from the retired Gemini preset matches
+ *  no preset, so it takes the `google` suggestions rather than falling through to
+ *  the generic default's aggregator ids, which Google's endpoint rejects. */
 function fallbackModels(settings: AiSettings): string[] {
   if (settings.provider === "openai-compatible") {
     const base = settings.openaiCompatibleBaseUrl.replace(/\/$/, "");
+    if (base === GOOGLE_AI_STUDIO_BASE_URL) return MODEL_SUGGESTIONS.google;
     const preset = OPENAI_COMPATIBLE_PRESETS.find((p) => p.baseUrl === base);
     if (preset) return preset.models;
   }
@@ -30,6 +34,23 @@ export interface AvailableModels {
 /** OpenAI's /v1/models mixes in embeddings, audio, images… keep chat models. */
 const OPENAI_NON_CHAT =
   /embed|whisper|tts|dall-e|audio|realtime|moderation|image|transcribe|babbage|davinci|codex|search/i;
+
+/** Google's catalog mixes its text families in with media generators and other
+ *  non-chat entries (veo, lyria, nano-banana, aqa, antigravity) that share no
+ *  vocabulary with {@link OPENAI_NON_CHAT}. Allowlisting the two text families
+ *  excludes future media families by default instead of chasing each new name. */
+const GOOGLE_CHAT_FAMILY = /^(gemini|gemma)-/;
+
+/** Google's catalog, normalized for the model picker. The prefix strip must run
+ *  BEFORE the family test — a `models/`-prefixed id fails `^gemini-` and would
+ *  filter the whole catalog away. Also used for a custom base URL aimed at the
+ *  same endpoint. */
+function googleChatModels(data: { id: string }[]): string[] {
+  return data
+    .map((m) => m.id.replace(/^models\//, ""))
+    .filter((id) => GOOGLE_CHAT_FAMILY.test(id) && !OPENAI_NON_CHAT.test(id))
+    .sort();
+}
 
 async function fetchProviderModels(
   settings: AiSettings,
@@ -71,6 +92,14 @@ async function fetchProviderModels(
       );
       return (json.data as { id: string }[]).map((m) => m.id);
     }
+    case "google": {
+      const key = await getSecret("google");
+      if (!key) return [];
+      const json = await fetchJson(`${GOOGLE_AI_STUDIO_BASE_URL}/models`, {
+        Authorization: `Bearer ${key}`,
+      });
+      return googleChatModels(json.data as { id: string }[]);
+    }
     case "openai-compatible": {
       const key = await getSecret("openai-compatible");
       const base = settings.openaiCompatibleBaseUrl.replace(/\/$/, "");
@@ -79,7 +108,12 @@ async function fetchProviderModels(
       const json = await fetchJson(`${base}/models`, {
         Authorization: `Bearer ${key}`,
       });
-      return (json.data as { id: string }[]).map((m) => m.id).sort();
+      const data = json.data as { id: string }[];
+      // A custom base URL can still point at Google's catalog (and saved settings
+      // from the retired Gemini preset do), which needs the `google` normalization;
+      // other endpoints list only their own models.
+      if (base === GOOGLE_AI_STUDIO_BASE_URL) return googleChatModels(data);
+      return data.map((m) => m.id).sort();
     }
     case "openrouter": {
       // public endpoint, no key required
