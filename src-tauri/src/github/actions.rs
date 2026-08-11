@@ -215,6 +215,31 @@ pub async fn gh_run_rerun(repo_path: String, run_id: u64, failed: bool) -> AppRe
     Ok(())
 }
 
+/// Approves a run that GitHub is withholding pending maintainer approval — the
+/// gate on a first-time contributor's fork PR. There is no `gh run` verb for it,
+/// so it goes through the REST endpoint directly. Distinct from
+/// `pending_deployments`, which gates environment protection rules, not the run.
+///
+/// Lens-scoped, unlike its origin-pinned `gh_run_*` siblings: its surface is the
+/// PR checks strip, which renders under the `upstream` lens too, where the held
+/// run lives on the PARENT repo and an origin slug would 404.
+#[tauri::command]
+pub async fn gh_run_approve(repo_path: String, run_id: u64, lens: Option<String>) -> AppResult<()> {
+    let slug = crate::github::gh_lens_slug(&repo_path, lens.as_deref()).await?;
+    run_gh(
+        Some(&repo_path),
+        &[
+            "api",
+            "--method",
+            "POST",
+            &format!("repos/{slug}/actions/runs/{run_id}/approve"),
+        ],
+        GH_NETWORK_TIMEOUT,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Cancels an in-progress run.
 #[tauri::command]
 pub async fn gh_run_cancel(repo_path: String, run_id: u64) -> AppResult<()> {
