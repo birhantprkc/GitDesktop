@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, State, Window, WindowEvent};
@@ -41,9 +44,9 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main_window(app),
             "quit" => {
-                // Capture geometry before exiting (the window may still be visible
-                // and moved since the last close).
-                let _ = app.save_window_state(WINDOW_STATE_FLAGS);
+                // Final flush before exiting — the window may have moved since the
+                // last debounced save.
+                save_geometry_before_exit(app);
                 app.exit(0);
             }
             _ => {}
@@ -90,26 +93,89 @@ pub fn init_window_title(app: &AppHandle) {
     }
 }
 
-/// On window close, hide to the tray (keeping the app — and any in-flight
-/// review — running) when the user's "close to tray" preference is on. When
-/// it's off, the close proceeds and the app quits (it's the only window). The
-/// tray "Quit" bypasses this entirely via `app.exit`.
-pub fn handle_window_event(window: &Window, event: &WindowEvent) {
-    if let WindowEvent::CloseRequested { api, .. } = event {
-        // Persist geometry NOW, while the window is still visible at its real
-        // position. This is the reliable save point: `tauri dev` is usually killed
-        // (so the plugin's save-on-exit never runs), and a close-to-tray hide isn't
-        // a real close, so nothing else would capture the position.
-        let _ = window.app_handle().save_window_state(WINDOW_STATE_FLAGS);
-        if window.state::<AppState>().close_to_tray() {
-            let _ = window.hide();
-            api.prevent_close();
-        } else {
-            // No tray-resident lifetime wanted — quit explicitly rather than
-            // rely on last-window-closed auto-exit (a tray icon can keep the
-            // event loop alive).
-            window.app_handle().exit(0);
+/// Quiet period a move/resize must survive before its geometry save fires.
+const GEOMETRY_SAVE_DEBOUNCE: Duration = Duration::from_millis(1000);
+
+/// Bumped per move/resize event; a pending save runs only if it still holds the
+/// latest value. `Relaxed` is enough — the counter synchronizes nothing else.
+static GEOMETRY_SAVE_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// Persists window geometry. Call ONLY from the event-loop thread:
+/// `save_window_state` holds the plugin's state-cache lock across window getters
+/// that block on that thread, whose own move/resize handlers take the same lock —
+/// off-thread the two deadlock mid-drag. Skipped while minimized, where the plugin
+/// omits position/size but still records `maximized: false`, clobbering a maximized
+/// layout. Paths that end in `app.exit` use `save_geometry_before_exit` instead,
+/// which restores the window first so the plugin's own unguarded save on
+/// `RunEvent::Exit` reads the real state rather than an iconic one.
+fn save_geometry(app: &AppHandle) {
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    if main.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let _ = app.save_window_state(WINDOW_STATE_FLAGS);
+}
+
+/// Geometry flush for the paths that quit: the plugin saves again — unguarded —
+/// on `RunEvent::Exit`, and a minimize clears the runtime's cached maximized
+/// flag, so an iconic window has to be restored first or that save records
+/// `maximized: false`. Restored only when actually iconic, since unminimizing
+/// also shows the window; a tray-resident window is normally not iconic (one
+/// hidden while minimized flashes briefly before the quit).
+fn save_geometry_before_exit(app: &AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        if main.is_minimized().unwrap_or(false) {
+            let _ = main.unminimize();
         }
+    }
+    save_geometry(app);
+}
+
+/// Move/resize events schedule a debounced geometry save. On window close,
+/// hide to the tray (keeping the app — and any in-flight review — running)
+/// when the user's "close to tray" preference is on. When it's off, the close
+/// proceeds and the app quits (it's the only window). The tray "Quit"
+/// bypasses this entirely via `app.exit`.
+pub fn handle_window_event(window: &Window, event: &WindowEvent) {
+    match event {
+        WindowEvent::CloseRequested { api, .. } => {
+            // Final flush for movement the debounce below hasn't caught yet — a
+            // close-to-tray hide isn't a real close, so nothing else captures it.
+            if window.state::<AppState>().close_to_tray() {
+                save_geometry(window.app_handle());
+                let _ = window.hide();
+                api.prevent_close();
+            } else {
+                // No tray-resident lifetime wanted — quit explicitly rather than
+                // rely on last-window-closed auto-exit (a tray icon can keep the
+                // event loop alive).
+                save_geometry_before_exit(window.app_handle());
+                window.app_handle().exit(0);
+            }
+        }
+        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+            // Debounce behind a per-event timer task, gated on an epoch counter so
+            // only the newest one saves — race-free where a single-flight debouncer
+            // has a lost-wakeup window, and tokio timers are cheap enough to spend
+            // one task per event.
+            let epoch = GEOMETRY_SAVE_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
+            let app = window.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(GEOMETRY_SAVE_DEBOUNCE).await;
+                if GEOMETRY_SAVE_EPOCH.load(Ordering::Relaxed) != epoch {
+                    return;
+                }
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if GEOMETRY_SAVE_EPOCH.load(Ordering::Relaxed) == epoch {
+                        save_geometry(&handle);
+                    }
+                });
+            });
+        }
+        _ => {}
     }
 }
 
