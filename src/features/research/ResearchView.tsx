@@ -31,10 +31,11 @@ import {
   captureAgentSelection,
   clearAgentSelection,
 } from "@/features/sessions/agentSelect";
-import type { AgentKind } from "@/lib/ai/agent";
+import { type AgentKind, defaultAgentKind } from "@/lib/ai/agent";
 import { formatUsd } from "@/lib/ai/cost";
 import { copyText } from "@/lib/clipboard";
 import { formatBinding } from "@/lib/hotkeys/binding";
+import { useSettings } from "@/lib/settings/queries";
 import { toastError } from "@/lib/toast";
 import {
   assembleSessionReport,
@@ -210,20 +211,27 @@ export function ResearchComposer({
   seed: ResearchSeed | null;
 }) {
   const start = useResearchStore((s) => s.start);
+  const settings = useSettings();
   const [topic, setTopic] = useState(seed?.topic ?? "");
   const [depth, setDepth] = useState<ResearchDepth>(
     seed?.depth ?? "brainstorm",
   );
-  const [agent, setAgent] = useState<AgentKind>("claude");
+  // An explicit pick; null = follow the Settings default. Derived during render
+  // — no effect — so settings arriving late can't clobber a pick.
+  const [agentPick, setAgentPick] = useState<AgentKind | null>(null);
+  const agent: AgentKind = agentPick ?? defaultAgentKind(settings.data);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
+  // A model picked for one agent isn't in another's list; "" = the account
+  // default. Derived, so a default-agent change drops a model it can't run.
+  const modelForAgent = modelsForAgent(agent).includes(model) ? model : "";
 
   const canRun = topic.trim().length > 0;
   const copy = INTENT_COPY[depth];
 
   const submit = () => {
     if (!canRun) return;
-    start({ repoPath, agent, model, effort, topic, depth });
+    start({ repoPath, agent, model: modelForAgent, effort, topic, depth });
   };
 
   return (
@@ -266,12 +274,12 @@ export function ResearchComposer({
             <AgentPicker
               value={agent}
               onChange={(a) => {
-                setAgent(a);
+                setAgentPick(a);
                 setModel(""); // model lists differ between agents
               }}
             />
             <ModelPicker
-              value={model}
+              value={modelForAgent}
               onChange={setModel}
               models={modelsForAgent(agent)}
             />

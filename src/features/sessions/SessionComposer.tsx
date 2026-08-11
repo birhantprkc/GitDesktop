@@ -11,7 +11,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import type { AgentKind } from "@/lib/ai/agent";
+import { type AgentKind, defaultAgentKind } from "@/lib/ai/agent";
 import { estimateRunCost } from "@/lib/ai/cost";
 import type { ContainerStatus } from "@/lib/ai/sandbox";
 import { useContainerStatus } from "@/lib/ai/sandbox-queries";
@@ -195,12 +195,23 @@ export function SessionComposer({
   const pendingTask = useSessionsStore((s) => s.pendingTask);
   const setPendingTask = useSessionsStore((s) => s.setPendingTask);
   const sessions = useSessionsStore((s) => s.sessions);
+  // The start-agent default derives from settings, so this must resolve first.
+  const settings = useSettings();
   const [draft, setDraft] = useState("");
   const [startModel, setStartModel] = useState("");
   const [startEffort, setStartEffort] = useState("");
-  const [startAgent, setStartAgent] = useState<
-    "claude" | "codex" | "copilot" | "opencode"
-  >("claude");
+  // An explicit pick for a NEW session; null = follow the Settings default.
+  // Derived during render — no effect — so settings arriving late can't clobber
+  // a pick, and a later Settings change moves the unpicked default.
+  const [startAgentPick, setStartAgentPick] = useState<AgentKind | null>(null);
+  const startAgent: AgentKind =
+    startAgentPick ?? defaultAgentKind(settings.data);
+  // A model picked for one agent isn't in another's list; "" = the account default.
+  // Derived, so every path that can move the agent — the picker, a stash restore,
+  // settings landing — drops a model the new agent can't run.
+  const startModelForAgent = modelsForAgent(startAgent).includes(startModel)
+    ? startModel
+    : "";
   // MCP servers opted into for a NEW session. null = "use the default" (every
   // enabled registry server); a concrete array once the user picks. Frozen at
   // turn 1, so it only matters before a session exists.
@@ -239,7 +250,7 @@ export function SessionComposer({
   const stashedRef = useRef<PendingTask | null>(null);
 
   const running = session?.running ?? false;
-  const model = session ? session.model : startModel;
+  const model = session ? session.model : startModelForAgent;
   // Agent is fixed once a session exists; while starting, it's user-selectable.
   const agent = session ? session.agent : startAgent;
   const models = modelsForAgent(agent);
@@ -305,7 +316,7 @@ export function SessionComposer({
     // onChange, so restoring an agent doesn't wipe the model restored with it.
     if (pendingTask.isolation !== undefined)
       setStartIsolation(pendingTask.isolation);
-    if (pendingTask.agent !== undefined) setStartAgent(pendingTask.agent);
+    if (pendingTask.agent !== undefined) setStartAgentPick(pendingTask.agent);
     if (pendingTask.model !== undefined) setStartModel(pendingTask.model);
     if (pendingTask.effort !== undefined) setStartEffort(pendingTask.effort);
     if (pendingTask.mode !== undefined) setMode(pendingTask.mode);
@@ -364,7 +375,6 @@ export function SessionComposer({
   // draft is a slash invocation, keyed on the repo ROOT (not the worktree) so it
   // stays cached across the session's worktree transition, and on the agent
   // (each CLI reads different dirs).
-  const settings = useSettings();
   const customCommands = settings.data?.customCommands;
   // Scope/override lookup keys for this repo (identity + raw path), so a
   // repo-scoped server or per-repo override set from a sibling worktree is
@@ -463,8 +473,11 @@ export function SessionComposer({
       repoPath,
       prompt: draft,
       // null = no explicit pick, so there's nothing to restore — collapse to absent.
+      // For agent that's load-bearing: the jump lands on the panel hosting Default
+      // agent, so an unpicked composer must follow a value changed there, not pin
+      // the stale derived one.
       isolation: startIsolation ?? undefined,
-      agent: startAgent,
+      agent: startAgentPick ?? undefined,
       model: startModel,
       effort: startEffort,
       mode,
@@ -556,7 +569,7 @@ export function SessionComposer({
       start(
         repoPath,
         text,
-        startModel,
+        startModelForAgent,
         startAgent,
         startEffort,
         undefined,
@@ -936,7 +949,7 @@ export function SessionComposer({
                 <AgentPicker
                   value={startAgent}
                   onChange={(a) => {
-                    setStartAgent(a);
+                    setStartAgentPick(a);
                     setStartModel(""); // model lists differ between agents
                     setStartMcp(null); // re-derive the new agent's default servers
                   }}
@@ -1025,7 +1038,11 @@ export function SessionComposer({
       <EnsembleRunDialog
         open={ensembleOpen}
         onOpenChange={setEnsembleOpen}
-        seed={{ agent: startAgent, model: startModel, effort: startEffort }}
+        seed={{
+          agent: startAgent,
+          model: startModelForAgent,
+          effort: startEffort,
+        }}
         estimate={costEstimate}
         onRun={runEnsemble}
       />

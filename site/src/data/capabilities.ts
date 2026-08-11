@@ -555,6 +555,11 @@ export const capabilities: Capability[] = [
   {
     group: "AI · agents & sessions",
     ai: true,
+    label: "Default agent — pin one, or follow a CLI-agent AI provider",
+  },
+  {
+    group: "AI · agents & sessions",
+    ai: true,
     label: "Watch the agent work step by step, with an inline diff per edit",
   },
   {
