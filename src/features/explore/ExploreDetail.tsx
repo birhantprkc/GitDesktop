@@ -36,17 +36,22 @@ import type { ExploreCloneTarget } from "./ExploreCloneDialog";
 import { compactNumber } from "./explore-utils";
 
 /** The Explore detail pane: the selected repo's header, actions (clone / fork /
- *  star / view), and its lazily-fetched README. `features` gates fork/star; a
- *  selected repo drives the star + README queries. */
+ *  star / view), and its lazily-fetched README. `features` gates fork/star, and
+ *  `viewer` (the screen's own-repos query) additionally gates fork; a selected
+ *  repo drives the star + README queries. */
 export function ExploreDetail({
   provider,
   repo,
   features,
+  viewer,
   onClone,
 }: {
   provider: ForgeProvider;
   repo: ForgeSearchRepo | null;
   features: ForgeProviderFeatures | undefined;
+  /** The signed-in user's login; null while resolving, and may be "" when the
+   *  provider's viewer probe fails (both fall back to the capability-only gate). */
+  viewer: string | null;
   onClone: (target: ExploreCloneTarget) => void;
 }) {
   if (!repo) {
@@ -69,6 +74,7 @@ export function ExploreDetail({
       provider={provider}
       repo={repo}
       features={features}
+      viewer={viewer}
       onClone={onClone}
     />
   );
@@ -78,15 +84,26 @@ function ExploreDetailBody({
   provider,
   repo,
   features,
+  viewer,
   onClone,
 }: {
   provider: ForgeProvider;
   repo: ForgeSearchRepo;
   features: ForgeProviderFeatures | undefined;
+  viewer: string | null;
   onClone: (target: ExploreCloneTarget) => void;
 }) {
   const label = providerLabel(provider);
-  const canFork = features?.implemented.repoForkByName ?? false;
+  // Forking always creates the copy under your own account, so a repo you own
+  // personally is never a valid target — hidden, not disabled, since there's
+  // nothing actionable to explain. Personal ownership, not write access: org
+  // repos stay forkable; an unknown viewer (null, or the "" non-GitHub backends
+  // emit) falls back to the capability gate. On Bitbucket the compare is inert in
+  // practice — `owner` is a workspace slug, `viewer` a username — which is why the
+  // guide scopes this behavior to GitHub and GitLab.
+  const canFork =
+    (features?.implemented.repoForkByName ?? false) &&
+    !(viewer && repo.owner === viewer);
   const canStar = features?.implemented.repoStar ?? false;
   const canReadme = features?.implemented.repoReadme ?? false;
 

@@ -273,6 +273,12 @@ struct GlabMr {
     labels: Vec<String>,
     #[serde(default)]
     created_at: String,
+    /// The head/target projects. Differing ids mean a fork MR; `None` on either
+    /// side leaves `cross_repository` false rather than guessing.
+    #[serde(default)]
+    source_project_id: Option<u64>,
+    #[serde(default)]
+    target_project_id: Option<u64>,
 }
 
 fn from_glab_mr(m: GlabMr) -> PrInfo {
@@ -298,9 +304,12 @@ fn from_glab_mr(m: GlabMr) -> PrInfo {
         // over rows already in hand — it has no probe to fail, so never unknown.
         stack: None,
         stack_unknown: false,
-        // The fork marker gates GITHUB stack membership; `glab mr list` carries no
-        // equivalent here, so it stays false rather than guessing.
-        cross_repository: false,
+        // A fork MR lives in a different project; either id missing leaves this
+        // false rather than guessing a fork the resolve flow would then refuse.
+        cross_repository: match (m.source_project_id, m.target_project_id) {
+            (Some(src), Some(tgt)) => src != tgt,
+            _ => false,
+        },
     }
 }
 
@@ -410,10 +419,13 @@ fn infer_mr_stacks(open: &[(u64, &str, &str)]) -> HashMap<u64, (String, u32, u32
 /// is only as complete as the list in hand: callers pass the full open page (a
 /// truncated list would hide a chain's bottom and mis-position the rows above it),
 /// so the real limits are >100 open MRs and merged layers, which an open list has
-/// dropped entirely.
+/// dropped entirely. Cross-repository rows sit out the inference entirely: their
+/// source branch lives in another project, so its name says nothing about a chain
+/// in this one.
 fn apply_mr_stacks(prs: &mut [PrInfo]) {
     let rows: Vec<(u64, &str, &str)> = prs
         .iter()
+        .filter(|p| !p.cross_repository)
         .map(|p| {
             (
                 p.number,
@@ -8014,6 +8026,34 @@ mod tests {
         }
     }
 
+    /// The same row from a FORK: its source branch name is a coincidence, not a link.
+    fn fork_row(number: u64, head: &str, base: &str) -> PrInfo {
+        PrInfo {
+            cross_repository: true,
+            ..row(number, head, base, None)
+        }
+    }
+
+    #[test]
+    fn apply_mr_stacks_ignores_fork_rows() {
+        // A fork MR whose source branch happens to be named `feat-a` — the same name
+        // the real chain's bottom uses. Counted, it would make `feat-a` an ambiguous
+        // parent and poison the whole chain.
+        let mut prs = vec![
+            fork_row(99, "feat-a", "main"),
+            row(7, "feat-a", "main", None),
+            row(8, "feat-b", "feat-a", None),
+        ];
+        apply_mr_stacks(&mut prs);
+        // The fork row is never a member…
+        assert!(prs[0].stack.is_none());
+        // …and the real chain still marks, bottom→top.
+        let bottom = prs[1].stack.as_ref().expect("MR 7 is the chain bottom");
+        let top = prs[2].stack.as_ref().expect("MR 8 is the chain top");
+        assert_eq!((bottom.id.as_str(), bottom.position, bottom.size), ("mr-7", 1, 2));
+        assert_eq!((top.id.as_str(), top.position, top.size), ("mr-7", 2, 2));
+    }
+
     #[test]
     fn mr_stack_from_rows_filters_by_id_sorts_and_lowercases_state() {
         // Two chains plus an unstacked MR; the chain rows are deliberately out of
@@ -8672,6 +8712,29 @@ mod tests {
         assert_eq!(p.labels.len(), 2);
         // Opened-time maps through (CI status is a separate follow-up fetch).
         assert_eq!(p.created_at, "2026-07-01T10:00:00Z");
+        // The fixture carries no project ids at all — absent must read as same-repo.
+        assert!(!p.cross_repository);
+    }
+
+    /// A fork MR's source project differs from its target; either id absent (an
+    /// older cached shape) must read as same-repo, never as a fork.
+    #[test]
+    fn cross_repository_compares_mr_project_ids() {
+        let mr = |ids: &str| -> PrInfo {
+            let json = format!(
+                r#"{{"iid":7,"web_url":"","title":"t","target_branch":"main",
+                     "source_branch":"feat","state":"opened"{ids}}}"#
+            );
+            from_glab_mr(serde_json::from_str(&json).unwrap())
+        };
+        // Differing projects → a fork MR.
+        assert!(mr(r#","source_project_id":42,"target_project_id":7"#).cross_repository);
+        // Same project → a plain branch MR.
+        assert!(!mr(r#","source_project_id":7,"target_project_id":7"#).cross_repository);
+        // Either side missing or null → false rather than a guess.
+        assert!(!mr(r#","target_project_id":7"#).cross_repository);
+        assert!(!mr(r#","source_project_id":42"#).cross_repository);
+        assert!(!mr(r#","source_project_id":null,"target_project_id":7"#).cross_repository);
     }
 
     #[test]
