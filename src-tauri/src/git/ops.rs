@@ -3494,11 +3494,24 @@ pub async fn git_unpushed_messages(
     Ok(messages)
 }
 
-fn validate_tag_name(name: &str) -> AppResult<()> {
-    if name.is_empty() || name.starts_with('-') {
-        return Err(AppError::InvalidArgument(format!("invalid tag name: {name}")));
+/// The tag-name rules for every path a tag rides: `refs/tags/<name>` push and
+/// delete refspecs, `gh release` argv, and GitLab release endpoint paths. Adds
+/// the rev-expression forms `git check-ref-format` forbids to the shared ref
+/// validator, which permits them only for branch start-points (rev expressions
+/// may use them).
+/// The single-`@` rule is deliberately absent — it matches the ENTIRE refname,
+/// never `refs/tags/<name>`, so a tag named `@` is creatable (probe-verified).
+/// CI-dispatch refs are free-text branch-or-tag and deliberately skip this.
+pub(crate) fn validate_tag_name(name: &str) -> AppResult<()> {
+    if name.contains('~') || name.contains('^') || name.contains("..") || name.contains("@{") {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid tag name: {name}"
+        )));
     }
-    Ok(())
+    // The shared validator covers empty / leading `-` / refspec metacharacters —
+    // `*` in a `refs/tags/<name>` refspec would mirror-push every tag.
+    crate::git::branches::validate_ref_name(name)
+        .map_err(|_| AppError::InvalidArgument(format!("invalid tag name: {name}")))
 }
 
 #[tauri::command]
@@ -3644,6 +3657,31 @@ mod tests {
 
     fn dropping(content: &str, lines: &[u32]) -> String {
         remove_lines(content, &lines.iter().copied().collect())
+    }
+
+    /// Tag names are interpolated into `refs/tags/<name>` and `:refs/tags/<name>`
+    /// push refspecs, where `*` mirror-pushes every tag and `:` retargets the
+    /// push — so the metacharacters are refused before any remote work.
+    #[test]
+    fn validate_tag_name_rejects_refspec_metacharacters() {
+        for bad in [
+            "a:b", "a*b", "a?", "a[b", "a b", "a\\b", "a\u{7}b", "", "-x",
+            // Rev-expression forms git itself refuses in a ref name.
+            "v1~1", "v1^2", "a@{b", "v1..2",
+        ] {
+            assert!(
+                validate_tag_name(bad).is_err(),
+                "expected {bad:?} to be rejected"
+            );
+        }
+        // `@` and `@`-components are creatable tags (probe-verified) — git's
+        // anti-`@` rule matches the whole refname, never `refs/tags/<name>`.
+        for good in ["feat/x", "release-1.2", "v1.0.0", "a@b", "v1/x", "@", "v1/@/x"] {
+            assert!(
+                validate_tag_name(good).is_ok(),
+                "expected {good:?} to be accepted"
+            );
+        }
     }
 
     #[test]
@@ -4638,6 +4676,33 @@ detached
         let (dir, repo) = setup_repo(marker).await;
         let (bare_dir, bare) = add_bare_remote(&repo, marker, "origin").await;
         (dir, bare_dir, repo, bare)
+    }
+
+    /// The tag push end to end against a real (file) remote: the tightened name
+    /// check must let a normal tag through, and refuse a glob before pushing.
+    #[tokio::test]
+    async fn push_tag_lands_the_tag_on_the_remote() {
+        let (_dir, _bare_dir, repo, bare) = setup_repo_with_origin("push-tag").await;
+        let head = rev(&repo, "HEAD").await;
+        let state = AppState::default();
+
+        git_tag_core(&state, repo.clone(), "v1.0.0".to_string(), head.clone())
+            .await
+            .unwrap();
+        git_push_tag_core(&state, repo.clone(), "v1.0.0".to_string())
+            .await
+            .unwrap();
+        assert_eq!(rev(&bare, "refs/tags/v1.0.0").await, head);
+
+        // A glob name never reaches the refspec (it would mirror-push every tag).
+        // Assert on the VALIDATOR's rejection: git refusing the odd refspec later
+        // would satisfy a bare `is_err()` for the wrong reason.
+        match git_push_tag_core(&state, repo, "v1.*".to_string()).await {
+            Err(AppError::InvalidArgument(msg)) => {
+                assert!(msg.contains("invalid tag name"), "got: {msg}");
+            }
+            other => panic!("expected the tag validator to reject the glob, got {other:?}"),
+        }
     }
 
     /// A second bare repo wired to `repo` under `remote` — what a fork clone's

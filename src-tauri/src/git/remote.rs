@@ -704,7 +704,7 @@ fn build_push_args(
     if untracked || gone || set_upstream {
         // Publish + track, under the LOCAL name.
         args.extend(["-u", target].map(str::to_string));
-        args.push(format!("refs/heads/{branch}:refs/heads/{branch}"));
+        args.push(publish_refspec(branch));
     } else if target == remotename {
         // Tracked → its own remote: target the remote branch name explicitly (it
         // may differ from the local one).
@@ -717,16 +717,24 @@ fn build_push_args(
         // Tracked, but pushing to a DIFFERENT remote than the upstream — a copy
         // under the local name, no `-u`, upstream config untouched (never retrack).
         args.push(target.to_string());
-        args.push(format!("refs/heads/{branch}:refs/heads/{branch}"));
+        args.push(publish_refspec(branch));
     }
     args
+}
+
+/// Fully-qualified same-name push refspec. Qualification alone only stops a
+/// leading `+`/`-` from reading as a force/delete marker at refspec position 0;
+/// the metacharacters that could reshape the refspec (`* ? [ : \`) are rejected
+/// by [`crate::git::branches::validate_ref_name`], which every caller runs first.
+pub(crate) fn publish_refspec(branch: &str) -> String {
+    format!("refs/heads/{branch}:refs/heads/{branch}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         build_push_args, cache_get, cache_invalidate, cache_put, git_push_core,
-        git_remote_remove_core, is_auth_class_failure, parse_upstream_tracking,
+        git_remote_remove_core, is_auth_class_failure, parse_upstream_tracking, publish_refspec,
         resolve_push_target, run_git_mutating_with_creds,
     };
     use crate::error::AppError;
@@ -989,6 +997,17 @@ mod tests {
                 "refs/heads/feature:refs/heads/feature"
             ]
         );
+    }
+
+    #[test]
+    fn publish_refspec_is_fully_qualified_on_both_sides() {
+        assert_eq!(
+            publish_refspec("feature"),
+            "refs/heads/feature:refs/heads/feature"
+        );
+        // A `+` lands INSIDE the ref path, never at refspec position 0 where git
+        // would read it as the force marker.
+        assert_eq!(publish_refspec("+x"), "refs/heads/+x:refs/heads/+x");
     }
 
     #[test]
