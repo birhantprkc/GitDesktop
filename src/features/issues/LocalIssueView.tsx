@@ -111,6 +111,18 @@ export function LocalIssueView({
       });
     },
   });
+  // A different issue must never inherit this one's unsent drafts or open
+  // confirm/promote/edit dialogs — a render-time state adjustment, not an effect.
+  const [lastId, setLastId] = useState(id);
+  if (id !== lastId) {
+    setLastId(id);
+    setComment("");
+    setLabelInput("");
+    setDeletingCommentId(null);
+    setConfirmDelete(false);
+    setPromoteOpen(false);
+    edit.setOpen(false);
+  }
 
   if (!issue) {
     return <DiffPlaceholder message="This local issue no longer exists" />;

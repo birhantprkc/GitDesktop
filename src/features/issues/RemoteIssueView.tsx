@@ -6,7 +6,7 @@ import {
   PencilSimpleIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useRef, useState } from "react";
+import { useEffectEvent, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   MarkdownEditor,
@@ -222,6 +222,34 @@ export function RemoteIssueView({
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferDest, setTransferDest] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const edit = useEditTitleBody({
+    onSave: async ({ title, body }) => {
+      await editIssue.mutateAsync({ number, title, body });
+    },
+    successToast: "Issue updated",
+  });
+  // A different issue must never inherit this one's unsent draft or open
+  // delete/transfer/edit dialogs — a render-time state adjustment, not an effect.
+  // The lens is part of the identity: it can collapse to "origin" without a
+  // remount (upstream remote goes away), leaving the number pointing at another repo.
+  // The same identity keys the sidebar below, remounting its own per-issue drafts.
+  const issueIdentity = `${repoPath}#${lens}#${number}`;
+  const [lastIdentity, setLastIdentity] = useState(issueIdentity);
+  if (issueIdentity !== lastIdentity) {
+    setLastIdentity(issueIdentity);
+    setComposeBody("");
+    setDeletingCommentId(null);
+    setDeleteOpen(false);
+    setTransferOpen(false);
+    setTransferDest("");
+    edit.setOpen(false);
+  }
+  // The restore below can land after the user switched issues; an effect event
+  // reads the LIVE identity so a late rejection can't resurrect text elsewhere.
+  const restoreDraft = useEffectEvent((submittedFor: string, body: string) => {
+    if (submittedFor !== issueIdentity) return;
+    setComposeBody((cur) => (cur.trim() ? cur : body));
+  });
   // Destination suggestions come from the viewer's repos on the SAME provider
   // as this repo; each query only fires while its dialog variant is open. The
   // GitLab list is repo-scoped so it targets the repo's own (possibly
@@ -235,12 +263,6 @@ export function RemoteIssueView({
   const onError = (e: unknown) => toastError(e);
 
   const issue = details.data;
-  const edit = useEditTitleBody({
-    onSave: async ({ title, body }) => {
-      await editIssue.mutateAsync({ number, title, body });
-    },
-    successToast: "Issue updated",
-  });
 
   if (details.isPending) {
     return (
@@ -286,12 +308,13 @@ export function RemoteIssueView({
     // Clear the draft immediately (the perceived-speed win) and append the
     // synthetic comment optimistically; on error restore the draft, but only if
     // the composer is still empty so we never clobber newly-typed text.
+    const submittedFor = issueIdentity;
     setComposeBody("");
     comment.mutate(
       { number, body, author: forge.data?.login ?? "You" },
       {
         onError: (e) => {
-          setComposeBody((cur) => (cur.trim() ? cur : body));
+          restoreDraft(submittedFor, body);
           onError(e);
         },
       },
@@ -840,6 +863,9 @@ export function RemoteIssueView({
           )}
         </div>
         <IssueSidebar
+          // Remounts the rail per issue so its sections' drafts (the uncontrolled
+          // "Add spent" input, the link picker) can't commit against a new number.
+          key={issueIdentity}
           repoPath={repoPath}
           number={number}
           issue={issue}

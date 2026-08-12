@@ -31,7 +31,7 @@ import type {
 } from "@/lib/ai/types";
 import { track } from "@/lib/analytics";
 import { readRepoInstructions } from "@/lib/git/api";
-import type { DiffStatEntry } from "@/lib/git/types";
+import type { DiffStatEntry, RemoteLens } from "@/lib/git/types";
 import { notifyIfUnfocused } from "@/lib/notify";
 import { saveReview } from "@/lib/pulls/reviews-history";
 import { queryClient } from "@/lib/query-client";
@@ -45,6 +45,11 @@ export interface ReviewContext {
   commitSubjects: string[];
   /** Repo working directory — the CLI agent runs here. */
   repoPath: string;
+  /** The origin|upstream lens the PR was opened under — scopes every per-PR store
+   *  this run touches (prior reviews, the own-comments digest), since a fork's two
+   *  lenses surface DIFFERENT PRs under the same number. "origin" for local PRs,
+   *  which have no forge lens. */
+  lens: RemoteLens;
   /** Target host — swaps the change-request noun + markdown flavor in the review
    *  system prompt. Absent (local PRs / commit reviews) keeps the base GitHub
    *  wording. */
@@ -65,6 +70,9 @@ export interface ReviewTarget {
   kind: "remote" | "local";
   repoPath: string;
   repoName: string;
+  /** The lens the PR was opened under — part of the identity, since a fork's two
+   *  lenses surface different PRs at the same `ref`. "origin" for local PRs. */
+  lens: RemoteLens;
   /** Remote PR number (as a string) or local PR id. */
   ref: string;
 }
@@ -138,6 +146,7 @@ const EMPTY_TARGET: ReviewTarget = {
   kind: "remote",
   repoPath: "",
   repoName: "",
+  lens: "origin",
   ref: "",
 };
 
@@ -153,13 +162,15 @@ const EMPTY_ENTRY: ReviewEntry = {
   error: "",
 };
 
-/** Stable store key for a review run. */
+/** Stable store key for a review run. The lens segment keeps a fork's origin and
+ *  upstream PRs — same number, different repos — on separate runs. */
 export function reviewKey(t: {
   kind: string;
   repoPath: string;
+  lens: RemoteLens;
   ref: string;
 }): string {
-  return `${t.kind}:${t.repoPath}#${t.ref}`;
+  return `${t.kind}:${t.repoPath}#${t.lens}#${t.ref}`;
 }
 
 interface ReviewStore {
@@ -363,7 +374,11 @@ async function notifyReviewDone(
       repoPath: target.repoPath,
       repoName: target.repoName,
       target: { type: "pr", kind: target.kind, ref: target.ref },
-      dedupeKey: `review:${target.kind}:${target.repoPath}:${target.ref}:${ok}`,
+      // The lens is in the dedupe key because a fork's origin and upstream PRs share
+      // a number: without it, two reviews settling in the same window collapse into
+      // one notification. (The `target` above carries no lens, so the click-through
+      // still lands on whichever lens the repo is currently set to.)
+      dedupeKey: `review:${target.kind}:${target.repoPath}:${target.lens}:${target.ref}:${ok}`,
     });
     void notifyIfUnfocused(headline, subtitle);
   } catch {
@@ -548,6 +563,7 @@ export async function startReview(
       ? {}
       : await resolvePriorContext(
           target.repoPath,
+          context.lens,
           target.kind,
           target.ref,
           mode,
@@ -601,6 +617,7 @@ export async function startReview(
       ),
       resolveOwnCommentsContext(
         target.repoPath,
+        context.lens,
         target.kind,
         target.ref,
         context.provider,
@@ -746,6 +763,7 @@ export async function startReview(
         id: crypto.randomUUID(),
         kind: target.kind,
         ref: target.ref,
+        lens: context.lens,
         mode,
         model: ai.model,
         title,
@@ -765,6 +783,7 @@ export async function startReview(
             queryKey: [
               "review-history",
               target.repoPath,
+              context.lens,
               target.kind,
               target.ref,
             ],
@@ -880,7 +899,7 @@ export function dismissQueuedReview(key: string): void {
  * `fail()` instead keeps it as a stopped "Failed" row.
  *
  * The key lives in a dedicated `auto:<n>` namespace off `reviewSeq`, which can never
- * collide with a panel run's `reviewKey` (`kind:repoPath#ref`).
+ * collide with a panel run's `reviewKey` (`kind:repoPath#lens#ref`).
  */
 export function registerAutomationRun(opts: {
   title: string;

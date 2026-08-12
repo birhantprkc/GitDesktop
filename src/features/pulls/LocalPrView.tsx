@@ -75,7 +75,10 @@ import {
   type TimelineEntry,
 } from "./PrTimeline";
 import { ResolveConflictsView } from "./ResolveConflictsView";
-import { useGeneratePrDescription } from "./useGeneratePrDescription";
+import {
+  useCancelOnIdentityChange,
+  useGeneratePrDescription,
+} from "./useGeneratePrDescription";
 import {
   composeBodyWithRefs,
   splitBodyRefBlock,
@@ -111,11 +114,6 @@ export function LocalPrView({
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(
     null,
   );
-  const [lastId, setLastId] = useState(id);
-  if (id !== lastId) {
-    setLastId(id);
-    setSelectedCommitHash(null);
-  }
   // The activity dock's "View" lands here via a pending hint; switch to the
   // review sub-tab once, then clear it. Guarded on this being the *selected* PR
   // so a still-mounted lagging view (deferredPr) can't swallow the hint first.
@@ -166,7 +164,22 @@ export function LocalPrView({
       });
     },
   });
+  // A different PR must never inherit this one's drill-in, unsent drafts, or open
+  // delete/promote/edit dialogs — a render-time state adjustment, not an effect.
+  const [lastId, setLastId] = useState(id);
+  if (id !== lastId) {
+    setLastId(id);
+    setSelectedCommitHash(null);
+    setComment("");
+    setLabelInput("");
+    setDeletingCommentId(null);
+    setPromoteOpen(false);
+    edit.setOpen(false);
+  }
   const prGen = useGeneratePrDescription(repoPath);
+  // The edit dialog's in-flight generation belongs to the PR it was started on; the
+  // cancel is imperative, so it rides an effect rather than the block above.
+  useCancelOnIdentityChange(id, prGen.cancel);
   // Context-sensitive reuse of the generate-commit-message binding (mod+g by
   // default) for the Edit dialog's chord + button hint — a rebinding drives both.
   const generateBinding =
@@ -586,6 +599,9 @@ export function LocalPrView({
             body: pr.body,
             commitSubjects: ahead.map((c) => c.subject),
             repoPath,
+            // A local PR has no forge lens; "origin" keeps its per-PR review stores
+            // on the keys they used before the lens dimension existed.
+            lens: "origin",
             // `ahead` (git log) is newest-first, so the head is the first entry.
             headSha: ahead[0]?.hash,
             loadDiff: () =>

@@ -7,7 +7,7 @@ import {
   TagIcon,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useRef, useState } from "react";
+import { useEffectEvent, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   MarkdownEditor,
@@ -202,6 +202,33 @@ export function DiscussionView({
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [draftLabels, setDraftLabels] = useState<Set<string>>(new Set());
   const [deletingDiscussion, setDeletingDiscussion] = useState(false);
+  // A different discussion must never inherit this one's unsent drafts, reply
+  // target, delete confirm, or label draft — render-time, not an effect. The
+  // repo is part of the identity because discussion numbers repeat across repos.
+  const discussionIdentity = `${repoPath}#${number}`;
+  const [lastIdentity, setLastIdentity] = useState(discussionIdentity);
+  if (discussionIdentity !== lastIdentity) {
+    setLastIdentity(discussionIdentity);
+    setComposeBody("");
+    setReplyingTo(null);
+    setReplyBody("");
+    setDeletingCommentId(null);
+    setDeletingDiscussion(false);
+    setLabelsOpen(false);
+    setDraftLabels(new Set());
+  }
+  // Both submits clear their composer only once the mutation resolves, which can
+  // be after a switch — an effect event reads the LIVE identity so a late success
+  // can't wipe text the user has since typed against another discussion.
+  const clearComposeIfSame = useEffectEvent((submittedFor: string) => {
+    if (submittedFor !== discussionIdentity) return;
+    setComposeBody("");
+  });
+  const clearReplyIfSame = useEffectEvent((submittedFor: string) => {
+    if (submittedFor !== discussionIdentity) return;
+    setReplyBody("");
+    setReplyingTo(null);
+  });
 
   const onError = (e: unknown) => toastError(e);
   const d = details.data;
@@ -224,21 +251,20 @@ export function DiscussionView({
 
   function submitComment() {
     if (!d || !composeBody.trim()) return;
+    const submittedFor = discussionIdentity;
     addComment.mutate(
       { discussionId: d.id, body: composeBody.trim() },
-      { onSuccess: () => setComposeBody(""), onError },
+      { onSuccess: () => clearComposeIfSame(submittedFor), onError },
     );
   }
 
   function submitReply(commentId: string) {
     if (!d || !replyBody.trim()) return;
+    const submittedFor = discussionIdentity;
     addComment.mutate(
       { discussionId: d.id, body: replyBody.trim(), replyToId: commentId },
       {
-        onSuccess: () => {
-          setReplyBody("");
-          setReplyingTo(null);
-        },
+        onSuccess: () => clearReplyIfSame(submittedFor),
         onError,
       },
     );
@@ -315,16 +341,13 @@ export function DiscussionView({
     const addIds = ids([...draftLabels].filter((n) => !applied.has(n)));
     const removeIds = ids([...applied].filter((n) => !draftLabels.has(n)));
     if (addIds.length > 0 || removeIds.length > 0) {
-      editLabels.mutate(
-        {
-          kind: "discussion",
-          number: d.number,
-          labelableId: d.id,
-          addIds,
-          removeIds,
-        },
-        { onError },
-      );
+      editLabels.mutate({
+        kind: "discussion",
+        number: d.number,
+        labelableId: d.id,
+        addIds,
+        removeIds,
+      });
     }
   }
 

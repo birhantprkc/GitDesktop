@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
   useClearReviewDrafts,
   useReviewDrafts,
 } from "@/lib/pulls/review-drafts";
+import { toastError } from "@/lib/toast";
 
 /**
  * The submit-a-review dialog: a capability-gated verdict radio (Comment always;
@@ -46,12 +47,25 @@ export function SubmitReviewDialog({
   /** The origin|upstream lens the parent PR view resolved. */
   lens: RemoteLens;
 }) {
-  const drafts = useReviewDrafts(repoPath, number);
+  const drafts = useReviewDrafts(repoPath, lens, number);
   const submitReview = useSubmitReview(repoPath, lens);
-  const clearDrafts = useClearReviewDrafts(repoPath, number);
+  const clearDrafts = useClearReviewDrafts(repoPath, lens, number);
   const [verdict, setVerdict] = useState<ReviewVerdict>("comment");
   const [summary, setSummary] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The parent re-keys this dialog on the PR identity, so a switch can unmount it
+  // mid-submit — past `handleOpenChange`'s pending guard. That takes away BOTH of
+  // this component's report channels: the inline error below has nowhere to render
+  // (hence the catch's toast fallback), and react-query stops delivering `mutate`
+  // callbacks once the observer loses its listeners (hence `mutateAsync` in the
+  // cleanup). Either loss would let a failed or PARTIAL post read as success.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const draftList = drafts.data ?? [];
   const count = draftList.length;
@@ -102,8 +116,13 @@ export function SubmitReviewDialog({
     } catch (e) {
       // The post itself failed — keep the dialog open, Submit re-armed, and show
       // the message verbatim (on GitLab/Bitbucket it can disclose partial posting,
-      // which the user needs to see in full).
-      setError(e instanceof Error ? e.message : String(e));
+      // which the user needs to see in full). Unmounted mid-submit, that surface is
+      // gone, so the failure rides a toast rather than vanishing.
+      if (mounted.current) {
+        setError(e instanceof Error ? e.message : String(e));
+      } else {
+        toastError(e);
+      }
       return;
     }
     // The review posted. From here Submit must NEVER re-arm — a second click
@@ -116,12 +135,13 @@ export function SubmitReviewDialog({
     // Clearing the (client-only) drafts is a best-effort cleanup AFTER the post
     // landed; a failure here can't un-post, so surface it as a non-blocking
     // warning pointing at the pending bar's Discard — never as a submit error.
-    clearDrafts.mutate(undefined, {
-      onError: () =>
+    clearDrafts
+      .mutateAsync()
+      .catch(() =>
         toast.warning(
           "Review posted, but clearing the pending comments failed — discard them from the pending review bar so they aren't submitted again.",
         ),
-    });
+      );
   }
 
   return (

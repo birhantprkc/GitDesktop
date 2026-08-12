@@ -216,7 +216,10 @@ import {
 } from "./StackSection";
 import { SubmitReviewDialog } from "./SubmitReviewDialog";
 import { useBranchPickerOptions } from "./useBranchPickerOptions";
-import { useGeneratePrDescription } from "./useGeneratePrDescription";
+import {
+  useCancelOnIdentityChange,
+  useGeneratePrDescription,
+} from "./useGeneratePrDescription";
 import {
   composeBodyWithJiraRefs,
   composeBodyWithRefs,
@@ -288,6 +291,11 @@ export function RemotePrView({
   // targets the fork (origin) or its parent (upstream) — "origin" everywhere but a
   // GitHub fork whose lens is set upstream.
   const lens = useRepoLens(repoPath);
+  // Which PR is on screen. `repoPath` because a number is only unique within one
+  // repo, and the lens because it can flip while this view stays MOUNTED —
+  // removing the upstream remote collapses the gate, so the same number becomes a
+  // different repo's PR.
+  const entityKey = `${repoPath}#${lens}#${number}`;
   // The viewer's push permission on the lens repo — the axis the per-action
   // forge flags don't cover. Only fetched once a provider is known; an
   // unanswered probe leaves every control exactly as it is.
@@ -498,8 +506,8 @@ export function RemotePrView({
   const [submitOpen, setSubmitOpen] = useState(false);
   // Pending-review drafts (local-only until submitted); shared by the Files-tab
   // anchors, the PendingReviewBar count, and the ReviewComposer's draft count.
-  const drafts = useReviewDrafts(repoPath, number);
-  const clearDrafts = useClearReviewDrafts(repoPath, number);
+  const drafts = useReviewDrafts(repoPath, lens, number);
+  const clearDrafts = useClearReviewDrafts(repoPath, lens, number);
   // The composer/thread-create side of the forge detection: a strict provider key
   // (default "github" — gh is the authoritative default for an unrecognized host).
   const providerKey: ForgeProvider = provider ?? "github";
@@ -886,6 +894,17 @@ export function RemotePrView({
   );
 
   const [composeBody, setComposeBody] = useState("");
+  // Both land after a mutation settles, by which time the user may have switched
+  // PRs — an effect event reads the LIVE identity, so a late settle can never
+  // resurrect text on, or blank the draft of, whatever PR is on screen now.
+  const restoreDraft = useEffectEvent((submittedFor: string, body: string) => {
+    if (submittedFor !== entityKey) return;
+    setComposeBody((cur) => (cur.trim() ? cur : body));
+  });
+  const clearDraft = useEffectEvent((submittedFor: string) => {
+    if (submittedFor !== entityKey) return;
+    setComposeBody("");
+  });
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,
   );
@@ -1090,12 +1109,15 @@ export function RemotePrView({
       });
       return;
     }
+    // Guard the deferred clear like submitComment's restore: after a PR
+    // switch it would wipe text just typed on the newly shown PR.
+    const submittedFor = entityKey;
     requestChangesPr.mutate(
       { number, body: composeBody.trim() },
       {
         onSuccess: () => {
           toast.success("Requested changes");
-          setComposeBody("");
+          clearDraft(submittedFor);
         },
         onError: (e) => {
           if (prev) queryClient.setQueryData(key, prev);
@@ -1111,13 +1133,14 @@ export function RemotePrView({
     // Clear the draft immediately (the perceived-speed win) and append the
     // synthetic comment optimistically; on error restore the draft, but only if
     // the composer is still empty so we never clobber newly-typed text.
+    const submittedFor = entityKey;
     setComposeBody("");
     comment.mutate(
       { number, body, author: forge.data?.login ?? "You" },
       {
         onSuccess: () => toast.success("Comment added"),
         onError: (e) => {
-          setComposeBody((cur) => (cur.trim() ? cur : body));
+          restoreDraft(submittedFor, body);
           onError(e);
         },
       },
@@ -1284,16 +1307,33 @@ export function RemotePrView({
     [prDiff.data],
   );
 
-  // Reset the manual file selection when a different PR is shown — a
-  // render-time state adjustment, not an effect.
-  const [lastNumber, setLastNumber] = useState(number);
-  if (number !== lastNumber) {
-    setLastNumber(number);
+  // Reset per-PR view state when a different PR is shown — a render-time state
+  // adjustment, not an effect. Keyed on the lens-bearing identity, not the number:
+  // a lens flip under a mounted view is a different repo's PR at the same number.
+  // The same identity re-keys the metadata pickers, whose drafts live inside them.
+  const [lastEntity, setLastEntity] = useState(entityKey);
+  if (entityKey !== lastEntity) {
+    setLastEntity(entityKey);
     setSelectedPath(null);
     setSelectedCommitOid(null);
-    // A different PR must never inherit this one's conflict-resolution takeover.
+    // Everything below is bound to the PR it was opened on — the conflict-resolution
+    // takeover, the dialogs and confirmations, the unsent draft — so a different PR
+    // must inherit none of it.
     setResolve(null);
+    setComposeBody("");
+    setDeletingCommentId(null);
+    setDeletingThreadCommentId(null);
+    setSubmitOpen(false);
+    setDiscardConfirmOpen(false);
+    setMergeOpen(false);
+    setMergeAuto(false);
+    setMergeStrategy("merge");
+    setDeleteBranch(false);
+    edit.setOpen(false);
   }
+  // The edit dialog's in-flight generation belongs to the PR it was started on; the
+  // cancel is imperative, so it rides an effect rather than the block above.
+  useCancelOnIdentityChange(entityKey, prGen.cancel);
   // Default to the first changed file until the user picks one.
   const effectivePath =
     selectedPath && pr?.files.some((f) => f.path === selectedPath)
@@ -1724,8 +1764,13 @@ export function RemotePrView({
           <span className="text-success">+{pr.additions}</span>
           <span className="text-destructive">-{pr.deletions}</span>
         </div>
+        {/* The three metadata pickers below are keyed on the entity: each seeds a
+            draft on open and commits it on close by diffing against LIVE props, and
+            a keyboard PR switch leaves the popover open (no outside press to close
+            it) — so without the key the old PR's draft lands on the new one. */}
         {isOpen && canEditLabels ? (
           <LabelsPopover
+            key={entityKey}
             repoPath={repoPath}
             enabled
             number={number}
@@ -1748,6 +1793,7 @@ export function RemotePrView({
             read-only chips, like the labels row. */}
         {isOpen && canEditAssignees ? (
           <AssigneesPopover
+            key={entityKey}
             repoPath={repoPath}
             enabled
             value={pr.assignees}
@@ -1783,6 +1829,7 @@ export function RemotePrView({
         {isOpen && canEditReviewers ? (
           <div className="flex flex-wrap items-center gap-1.5">
             <ReviewersPopover
+              key={entityKey}
               repoPath={repoPath}
               number={number}
               enabled
@@ -1956,6 +2003,9 @@ export function RemotePrView({
             body: pr.body,
             commitSubjects: pr.commits.map((c) => c.headline),
             repoPath,
+            // Scopes the run's per-PR stores (prior reviews, own-comments digest) to
+            // the lens this view resolved — a fork's two lenses are different PRs.
+            lens,
             // Provider-aware review copy (MR/merge-request noun, markdown flavor).
             provider: provider ?? undefined,
             // gh GraphQL returns commits oldest-first, so the head is the last.
@@ -2588,6 +2638,7 @@ export function RemotePrView({
           {/* Pending-review status bar — hidden until a draft exists. */}
           <PendingReviewBar
             repoPath={repoPath}
+            lens={lens}
             number={number}
             onSubmit={() => setSubmitOpen(true)}
           />
@@ -2604,6 +2655,7 @@ export function RemotePrView({
             threads={reviewThreads.data}
             drafts={drafts.data}
             repoPath={repoPath}
+            lens={lens}
             number={number}
             lineWidget={reviewLineWidget}
             onQuote={quoteReply}
@@ -3003,8 +3055,12 @@ export function RemotePrView({
       />
 
       {/* The batch submit-review dialog (Review control, pending-review bar, palette
-          action). Verdict caps ride canWrite for GitHub, forge flags elsewhere. */}
+          action). Verdict caps ride canWrite for GitHub, forge flags elsewhere.
+          Keyed on the entity: it owns verdict/summary/error state that ONLY its own
+          onOpenChange resets, so a switch has to remount it — closing it from the
+          reset block alone would leave the previous PR's verdict on the next open. */}
       <SubmitReviewDialog
+        key={entityKey}
         repoPath={repoPath}
         number={number}
         open={submitOpen}

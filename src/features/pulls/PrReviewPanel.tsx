@@ -95,16 +95,18 @@ export function PrReviewPanel({
 }) {
   const settings = useSettings();
   const repoName = useUiStore((s) => s.repoName) ?? "";
-  // The review run is keyed by repo + PR so it survives this panel unmounting;
-  // memoized so its identity is stable across the panel's many re-renders.
+  // The review run is keyed by repo + lens + PR so it survives this panel
+  // unmounting; memoized so its identity is stable across the panel's many
+  // re-renders.
   const target = useMemo<ReviewTarget>(
     () => ({
       kind: prKind,
       repoPath: context.repoPath,
       repoName,
+      lens: context.lens,
       ref: prRef,
     }),
-    [prKind, context.repoPath, repoName, prRef],
+    [prKind, context.repoPath, repoName, context.lens, prRef],
   );
   const {
     generate,
@@ -128,7 +130,12 @@ export function PrReviewPanel({
 
   // Prior reviews for this PR, used for the per-mode context banner. Read-only —
   // never creates a record, so a first-ever review is unaffected.
-  const history = useReviewHistory(context.repoPath, prKind, prRef);
+  const history = useReviewHistory(
+    context.repoPath,
+    context.lens,
+    prKind,
+    prRef,
+  );
   const latestByMode = useMemo(() => {
     const out: Partial<Record<ReviewMode, PersistedReview>> = {};
     // The list is newest-first, so the first hit per mode is the latest. Skip
@@ -687,6 +694,7 @@ export function PrReviewPanel({
           )}
         <ReviewHistory
           repoPath={context.repoPath}
+          lens={context.lens}
           prKind={prKind}
           prRef={prRef}
         />

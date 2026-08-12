@@ -13,6 +13,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -1543,6 +1544,22 @@ export function JiraIssueView({
   const transitionTo = useJiraTransitionTo(repoPath, link.data);
   const [composeBody, setComposeBody] = useState("");
   const composerRef = useRef<MarkdownEditorHandle>(null);
+  // A different issue must never inherit this one's unsent comment draft — a
+  // render-time state adjustment, not an effect. The repo is part of the identity
+  // because two repos linked to DIFFERENT Jira sites can share an issue key. The
+  // same identity keys the sidebar below, remounting its own per-issue drafts.
+  const issueIdentity = `${repoPath}#${issueKey}`;
+  const [lastIdentity, setLastIdentity] = useState(issueIdentity);
+  if (issueIdentity !== lastIdentity) {
+    setLastIdentity(issueIdentity);
+    setComposeBody("");
+  }
+  // The restore below can land after the user switched issues; an effect event
+  // reads the LIVE identity so a late rejection can't resurrect text elsewhere.
+  const restoreDraft = useEffectEvent((submittedFor: string, body: string) => {
+    if (submittedFor !== issueIdentity) return;
+    setComposeBody((cur) => (cur.trim() ? cur : body));
+  });
 
   // The link resolved to nothing (unlinked, or unlinked while this view was
   // open): the issue query is disabled, so it would otherwise sit on a pending
@@ -1591,12 +1608,13 @@ export function JiraIssueView({
     if (!body) return;
     // Clear the draft immediately (perceived speed); restore it on error, but
     // only if the composer is still empty so we never clobber newly-typed text.
+    const submittedFor = issueIdentity;
     setComposeBody("");
     comment.mutate(
       { issueKey, bodyMd: body },
       {
         onError: (e) => {
-          setComposeBody((cur) => (cur.trim() ? cur : body));
+          restoreDraft(submittedFor, body);
           toastError(e);
         },
       },
@@ -1802,6 +1820,9 @@ export function JiraIssueView({
         </div>
 
         <JiraIssueSidebar
+          // Remounts the rail per issue so its sections' drafts (log-work
+          // duration/note, the labels popover) can't commit against a new key.
+          key={issueIdentity}
           className={cn(PLACEHOLDER_FADE, staleDim)}
           repoPath={repoPath}
           issueKey={issueKey}
