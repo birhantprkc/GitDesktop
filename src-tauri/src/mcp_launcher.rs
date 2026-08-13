@@ -17,10 +17,20 @@
 //! exercise it). Otherwise the launcher path is simply `current_exe()`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
+
+/// Serializes the whole ensure/refresh path process-wide — three writers can
+/// reach it at once (the startup refresh, the launcher-path command, Add to
+/// PATH). Unserialized, `sweep_strays` deletes a concurrent writer's in-flight
+/// temp or just-moved-aside exe (Windows handles share DELETE), so the loser
+/// fails with a misleading error after a wasted ~50MB copy. Held only across
+/// synchronous fs work, never an `.await`; poison is ignored — a panicked
+/// writer leaves nothing the next one can't overwrite.
+static ENSURE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Env override for the managed bin directory. Set → that dir is used as the
 /// managed bin dir in ALL builds (this is how dev/live validation exercises the
@@ -140,6 +150,12 @@ fn marker_path(dest: &Path) -> PathBuf {
 /// Whether the managed copy at `dest` is stale relative to `want`. Stale ⇔ the
 /// dest exe is absent, OR the marker is missing/unparseable, OR any of its three
 /// fields differs from `want`.
+///
+/// The marker attests WHICH source/version the copy was made from — not the
+/// copy's bytes. In-place tampering of `dest` is outside the contract: a writer
+/// with that access could forge the sibling marker too, and every crash or
+/// quarantine path self-repairs (dest-absent is stale; `copy_into_place` writes
+/// the marker only after the exe rename lands).
 fn is_stale(dest: &Path, want: &Marker) -> bool {
     if !dest.exists() {
         return true;
@@ -198,10 +214,9 @@ fn copy_into_place(source: &Path, dest: &Path, want: &Marker) -> AppResult<()> {
         let _ = std::fs::remove_file(&tmp);
         return Err(AppError::Io(e));
     }
-    // 4. Move an existing dest exe ASIDE first: on Windows `fs::rename` FAILS if
-    //    the target exists (no POSIX overwrite), and a RUNNING image can be
-    //    renamed but never deleted or replaced — so rename-aside works even while
-    //    an old MCP server is still running that copy.
+    // 4. Move an existing dest exe ASIDE first: on Windows a RUNNING image can be
+    //    renamed but never deleted or replaced — so rename-aside is what lets the
+    //    promotion succeed while an old MCP server still runs that copy.
     let mut moved_old: Option<PathBuf> = None;
     if dest.exists() {
         let old = unique_sibling(dest, "old");
@@ -232,6 +247,21 @@ fn copy_into_place(source: &Path, dest: &Path, want: &Marker) -> AppResult<()> {
     Ok(())
 }
 
+/// The single framing every launcher failure wears. Settings renders the
+/// message verbatim (inline, and as the reason the write-config buttons are
+/// disabled) and the Add-to-PATH toast shows the same string, so a bare
+/// `io error: …` there would name nothing the user recognizes. `at` carries the
+/// managed path once it's resolved.
+fn launcher_error(at: Option<&Path>, e: impl std::fmt::Display) -> AppError {
+    match at {
+        Some(dest) => AppError::Command(format!(
+            "Couldn't prepare the MCP launcher at {}: {e}",
+            dest.display()
+        )),
+        None => AppError::Command(format!("Couldn't prepare the MCP launcher: {e}")),
+    }
+}
+
 /// Ensure the managed launcher exists and is fresh for `version`, returning its
 /// absolute path (inactive ⇒ `current_exe()`; fresh ⇒ no writes; stale ⇒ copy).
 ///
@@ -239,20 +269,22 @@ fn copy_into_place(source: &Path, dest: &Path, want: &Marker) -> AppResult<()> {
 /// NEVER falls back to the installed exe's path, which would quietly
 /// reintroduce the file-lock / kill-by-name bugs this exists to fix.
 pub fn ensure(version: &str) -> AppResult<PathBuf> {
-    match resolve()? {
+    match resolve().map_err(|e| launcher_error(None, e))? {
         Resolution::Inactive(exe) => Ok(exe),
         Resolution::Managed(dest) => {
-            let source = current_exe()?;
-            let want = marker_for(&source, version)?;
+            let source = current_exe().map_err(|e| launcher_error(Some(&dest), e))?;
+            let want = marker_for(&source, version).map_err(|e| launcher_error(Some(&dest), e))?;
             if !is_stale(&dest, &want) {
                 return Ok(dest);
             }
             ensure_in_dir(&source, &dest, &want).map_err(|e| {
-                AppError::Command(format!(
-                    "Couldn't prepare the MCP launcher at {}: {e}. If an antivirus \
-                     quarantined it, restore/allow it and retry.",
-                    dest.display()
-                ))
+                // Quarantine explains a failure only here, where the exe is
+                // actually copied and renamed; the steps above just read paths
+                // and metadata.
+                launcher_error(
+                    Some(&dest),
+                    format!("{e}. If an antivirus quarantined it, restore/allow it and retry."),
+                )
             })?;
             Ok(dest)
         }
@@ -294,7 +326,15 @@ fn refresh_dest_if_stale(source: &Path, dest: &Path, want: &Marker) {
 
 /// The re-copy core, parameterized on `source`/`dest`/`want` so tests drive it
 /// against a temp dir without touching process-global env or the real bin dir.
+///
+/// Serialized by [`ENSURE_LOCK`], with the staleness check RE-run inside it: a
+/// waiter whose racer just finished the same copy returns without redoing it
+/// (callers' pre-lock checks are only a lock-free fast path).
 fn ensure_in_dir(source: &Path, dest: &Path, want: &Marker) -> AppResult<()> {
+    let _guard = ENSURE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    if !is_stale(dest, want) {
+        return Ok(());
+    }
     copy_into_place(source, dest, want)
 }
 
@@ -306,7 +346,7 @@ pub async fn mcp_launcher_path(app: tauri::AppHandle) -> AppResult<String> {
     let version = app.package_info().version.to_string();
     let path = tauri::async_runtime::spawn_blocking(move || ensure(&version))
         .await
-        .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))??;
+        .map_err(|e| launcher_error(None, e))??;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -337,6 +377,25 @@ mod tests {
         assert!(s.contains("\"sourceMtimeMs\""), "expected camelCase: {s}");
         let back: Marker = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back, m);
+    }
+
+    #[test]
+    fn launcher_errors_always_name_the_launcher() {
+        // Settings renders these verbatim — inline, and as the reason the
+        // write-config buttons are disabled — so a message that doesn't name the
+        // launcher reads as an unattributed IO error.
+        let bare = launcher_error(None, "io error: os error 2").to_string();
+        assert_eq!(
+            bare,
+            "Couldn't prepare the MCP launcher: io error: os error 2"
+        );
+        let dest = Path::new("C:").join("bin").join(LAUNCHER_FILE);
+        let framed = launcher_error(Some(&dest), "io error: os error 2").to_string();
+        assert!(
+            framed.starts_with("Couldn't prepare the MCP launcher at "),
+            "{framed}"
+        );
+        assert!(framed.contains(&dest.display().to_string()), "{framed}");
     }
 
     /// Set up a temp bin dir with a copied launcher + marker and return
@@ -418,10 +477,84 @@ mod tests {
         // Second call with the same marker is a no-op: nothing is stale, so the
         // recipe isn't re-run. (Guarded via is_stale, mirroring `ensure`.)
         assert!(!is_stale(&dest, &want));
-        // Re-running the recipe anyway still succeeds and leaves a valid copy.
+        // Calling in anyway succeeds — the under-lock re-check short-circuits it.
         ensure_in_dir(&source, &dest, &want).unwrap();
         assert!(dest.exists());
         assert_eq!(read_marker(&dest).as_ref(), Some(&want));
+    }
+
+    /// A stand-in source exe plus the bin dir it gets copied into, so the
+    /// concurrency tests copy kilobytes (not the real ~50MB binary) and can tell
+    /// a fresh copy from a tampered one by content.
+    fn fake_source(dir: &Path, body: &[u8]) -> (PathBuf, PathBuf, PathBuf) {
+        let source = dir.join("source-exe");
+        std::fs::write(&source, body).unwrap();
+        let bin = dir.join("bin");
+        let dest = bin.join(LAUNCHER_FILE);
+        (source, bin, dest)
+    }
+
+    #[test]
+    fn concurrent_ensure_in_dir_never_errors_or_leaves_strays() {
+        // Four writers racing the same copy — the real overlap is the startup
+        // refresh still running when Settings (or Add to PATH) ensures. Without
+        // the lock, one writer's `sweep_strays` deletes another's in-flight temp
+        // and that writer fails with a misleading error.
+        let (_guard, dir) = scratch_dir("race");
+        let (source, bin, dest) = fake_source(&dir, &vec![b'S'; 64 * 1024]);
+        let want = marker_for(&source, "1.2.3").unwrap();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let (source, dest, want) = (source.clone(), dest.clone(), want.clone());
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    ensure_in_dir(&source, &dest, &want)
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join()
+                .expect("writer thread panicked")
+                .expect("a racing writer must not fail");
+        }
+
+        assert_eq!(read_marker(&dest).as_ref(), Some(&want));
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            std::fs::read(&source).unwrap(),
+            "the surviving copy is the source, in full"
+        );
+        let strays: Vec<String> = std::fs::read_dir(&bin)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        assert!(strays.is_empty(), "temp/old strays survived: {strays:?}");
+    }
+
+    #[test]
+    fn ensure_in_dir_skips_the_copy_a_racer_already_did() {
+        // What makes the loser of the race cheap instead of a redundant ~50MB
+        // copy: the under-lock staleness re-check. Rewriting the dest body while
+        // the marker matches is ONLY the observable for "the copy was skipped" —
+        // content integrity is deliberately not the marker's contract (see
+        // `is_stale`).
+        let (_guard, dir) = scratch_dir("skip-redundant");
+        let (source, _bin, dest) = fake_source(&dir, b"launcher bytes");
+        let want = marker_for(&source, "1.2.3").unwrap();
+        ensure_in_dir(&source, &dest, &want).unwrap();
+
+        std::fs::write(&dest, b"tampered").unwrap();
+        ensure_in_dir(&source, &dest, &want).unwrap();
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            b"tampered".to_vec(),
+            "fresh marker ⇒ the copy is skipped, not redone (skip observable; integrity is not the marker contract)"
+        );
     }
 
     #[test]

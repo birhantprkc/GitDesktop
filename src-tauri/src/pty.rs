@@ -39,11 +39,17 @@ pub struct PtyState {
     ptys: Arc<Mutex<HashMap<String, PtyHandle>>>,
 }
 
-/// Control side of one PTY: the master (resize), a writer (input), and the child
+/// Control side of one PTY: the master (resize), an input queue, and the child
 /// (kill). The reader is owned by the streaming thread, not here.
 struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// Queues input for the PTY's writer thread. The writer itself lives there, so
+    /// a child that stops reading can never block a caller holding the PTY map
+    /// lock; dropping this handle closes the channel, which ends that thread.
+    input: std::sync::mpsc::Sender<Vec<u8>>,
+    /// Bytes sitting in `input` — added on queue, subtracted once written. Shared
+    /// with the writer thread; see [`PTY_INPUT_QUEUE_CAP`].
+    queued: Arc<std::sync::atomic::AtomicUsize>,
     child: Box<dyn Child + Send + Sync>,
     /// A temp script file to delete once the process exits (Tasks runs write the
     /// script body to a temp file); `None` for host/container shells.
@@ -61,6 +67,16 @@ struct PtyHandle {
 
 /// Monotonic source for [`PtyHandle::gen`].
 static PTY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Bytes one PTY may have queued for its writer thread. Deliberately far above any
+/// legitimate burst (the largest paste anyone would make), because its only job is
+/// to bound memory against a child that has genuinely stopped reading — a healthy
+/// child that's merely busy must never lose a keystroke to it. Input past the cap
+/// is dropped rather than queued: a wedged PTY's input is already lost, and
+/// dropping it beats growing without bound. The gate reads the BACKLOG only, so
+/// one oversized chunk still lands (memory bound = cap + one in-flight chunk)
+/// rather than a healthy giant paste being dropped whole.
+const PTY_INPUT_QUEUE_CAP: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -448,6 +464,49 @@ fn teardown_handle(mut h: PtyHandle) {
     cleanup_handle(&mut h);
 }
 
+/// Hands `data` to a PTY's writer thread, unless that PTY is already sitting on
+/// [`PTY_INPUT_QUEUE_CAP`] bytes it hasn't managed to write. Counts the bytes in
+/// BEFORE queuing them, so the writer can never subtract a chunk it hasn't seen.
+fn queue_pty_input(
+    input: &std::sync::mpsc::Sender<Vec<u8>>,
+    queued: &std::sync::atomic::AtomicUsize,
+    data: Vec<u8>,
+) {
+    let len = data.len();
+    if queued.load(std::sync::atomic::Ordering::Relaxed) >= PTY_INPUT_QUEUE_CAP {
+        return;
+    }
+    queued.fetch_add(len, std::sync::atomic::Ordering::Relaxed);
+    if input.send(data).is_err() {
+        // Nothing will ever write it — the writer thread is gone.
+        queued.fetch_sub(len, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Drains queued input to the PTY on a dedicated thread. Writing can block for as
+/// long as the child ignores its input, so it must never happen under the PTY map
+/// lock (that froze the app once, and made `pty_close` unreachable). A single
+/// consumer keeps per-PTY writes in the order they were queued. Returns — dropping
+/// the writer, which sends EOF to the slave — when the channel closes (the handle
+/// was torn down) or the write fails.
+fn pump_pty_input(
+    mut writer: impl Write,
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    queued: Arc<std::sync::atomic::AtomicUsize>,
+) {
+    while let Ok(chunk) = rx.recv() {
+        let written = writer.write_all(&chunk).is_ok();
+        if written {
+            let _ = writer.flush();
+        }
+        // Off the books either way: a failed chunk is gone, not pending.
+        queued.fetch_sub(chunk.len(), std::sync::atomic::Ordering::Relaxed);
+        if !written {
+            break;
+        }
+    }
+}
+
 /// Opens a PTY, starts streaming its output to `on_event`, and registers it under
 /// `id`. The frontend writes/resizes/closes it by that id.
 #[tauri::command]
@@ -510,13 +569,21 @@ pub async fn pty_open(
         Err(e) => return Err(fail(format!("terminal writer: {e}"))),
     };
 
+    // Input goes through a channel to a thread that owns the writer — see
+    // `pump_pty_input`.
+    let (input, input_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let pump_queued = queued.clone();
+    std::thread::spawn(move || pump_pty_input(writer, input_rx, pump_queued));
+
     let gen = PTY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let cleanup_path = cleanup.clone();
     let prev = state.ptys.lock().unwrap().insert(
         id.clone(),
         PtyHandle {
             master: pair.master,
-            writer,
+            input,
+            queued,
             child,
             cleanup,
             tree_kill,
@@ -603,13 +670,16 @@ pub async fn pty_open(
     Ok(())
 }
 
-/// Writes the user's keystrokes (UTF-8) to the PTY.
+/// Queues the user's keystrokes (UTF-8) for the PTY. Sync command (main thread),
+/// so it only enqueues — the blocking write happens on the writer thread. Input
+/// that can't be delivered (the thread exited, or the queue is at
+/// [`PTY_INPUT_QUEUE_CAP`] because the child stopped reading) is dropped: the
+/// caller discards write errors anyway, and `Exit` is what reports a dead terminal.
 #[tauri::command]
 pub fn pty_write(state: State<'_, PtyState>, id: String, data: String) -> AppResult<()> {
-    let mut map = state.ptys.lock().unwrap();
-    if let Some(h) = map.get_mut(&id) {
-        h.writer.write_all(data.as_bytes()).map_err(AppError::Io)?;
-        let _ = h.writer.flush();
+    let map = state.ptys.lock().unwrap();
+    if let Some(h) = map.get(&id) {
+        queue_pty_input(&h.input, &h.queued, data.into_bytes());
     }
     Ok(())
 }
@@ -827,6 +897,313 @@ async fn task_open_terminal_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::sync::Condvar;
+    use std::time::{Duration, Instant};
+
+    /// The input side of the PTY map. A real `PtyHandle` needs a live child, so the
+    /// concurrency tests key on the two fields `pty_write` touches.
+    type TestPtys = Arc<Mutex<HashMap<String, (Sender<Vec<u8>>, Arc<AtomicUsize>)>>>;
+
+    /// Appends every write to a shared buffer, so a test can assert ordering.
+    struct RecordingWriter(Arc<Mutex<Vec<u8>>>);
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Blocks inside `write` until released — a child that has stopped reading its
+    /// input (a full ConPTY input buffer).
+    struct WedgedWriter {
+        entered: Sender<()>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+        written: Arc<AtomicUsize>,
+    }
+    impl Write for WedgedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let _ = self.entered.send(());
+            let (lock, cv) = &*self.release;
+            let mut go = lock.lock().unwrap();
+            while !*go {
+                go = cv.wait(go).unwrap();
+            }
+            self.written.fetch_add(buf.len(), Ordering::SeqCst);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The control side of a [`WedgedWriter`]: `entered` fires as each write blocks,
+    /// `gate` releases them, `written` totals the bytes that got through.
+    struct Wedge {
+        entered: Receiver<()>,
+        gate: Arc<(Mutex<bool>, Condvar)>,
+        written: Arc<AtomicUsize>,
+    }
+
+    fn wedged_writer() -> (WedgedWriter, Wedge) {
+        let (entered_tx, entered) = channel();
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let written = Arc::new(AtomicUsize::new(0));
+        (
+            WedgedWriter {
+                entered: entered_tx,
+                release: gate.clone(),
+                written: written.clone(),
+            },
+            Wedge {
+                entered,
+                gate,
+                written,
+            },
+        )
+    }
+
+    fn release(gate: &Arc<(Mutex<bool>, Condvar)>) {
+        let (lock, cv) = &**gate;
+        *lock.lock().unwrap() = true;
+        cv.notify_all();
+    }
+
+    /// Waits for the writer thread to work the queue down to nothing.
+    fn wait_for_drain(queued: &AtomicUsize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while queued.load(Ordering::SeqCst) != 0 {
+            assert!(Instant::now() < deadline, "the writer never drained the queue");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Reports its own drop — the observable that stands in for "EOF reached the
+    /// slave", which dropping the writer is what produces.
+    struct DropSpy {
+        dropped: Arc<AtomicBool>,
+        fail: bool,
+    }
+    impl Write for DropSpy {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.fail {
+                Err(std::io::Error::other("the child is gone"))
+            } else {
+                Ok(buf.len())
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl Drop for DropSpy {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn queued_writes_reach_the_pty_in_order() {
+        // One consumer, so keystrokes land in the order the frontend queued them —
+        // it fires unordered, unawaited invokes, one per keystroke.
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let queued = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = channel();
+        let writer = RecordingWriter(sink.clone());
+        let pump = std::thread::spawn(move || pump_pty_input(writer, rx, queued));
+
+        let mut expected = Vec::new();
+        for i in 0..1000u32 {
+            let chunk = format!("{i};").into_bytes();
+            expected.extend_from_slice(&chunk);
+            tx.send(chunk).unwrap();
+        }
+        drop(tx);
+        pump.join().unwrap();
+        assert_eq!(*sink.lock().unwrap(), expected);
+    }
+
+    #[test]
+    fn a_wedged_write_leaves_the_pty_map_lock_free() {
+        // Mirrors the commands: `pty_write` sends under the map lock, `pty_close`
+        // takes that same lock — which must stay reachable while a write is stuck.
+        let ptys: TestPtys = Arc::default();
+        let queued = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = channel();
+        ptys.lock()
+            .unwrap()
+            .insert("t".to_string(), (tx, queued.clone()));
+        let (writer, wedge) = wedged_writer();
+        let pump = std::thread::spawn(move || pump_pty_input(writer, rx, queued));
+
+        // `pty_write`: lock → get → queue → drop the guard.
+        {
+            let map = ptys.lock().unwrap();
+            let (input, queued) = map.get("t").unwrap();
+            queue_pty_input(input, queued, b"hello".to_vec());
+        }
+        wedge
+            .entered
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the writer thread should have reached the blocking write");
+        assert!(
+            ptys.try_lock().is_ok(),
+            "a wedged write is holding the PTY map lock — pty_close would be stuck"
+        );
+
+        release(&wedge.gate);
+        ptys.lock().unwrap().remove("t");
+        pump.join().unwrap();
+    }
+
+    #[test]
+    fn writing_under_the_map_lock_blocks_close_control() {
+        // Negative control for the test above: the pre-fix shape (write_all under the
+        // map lock) DOES block a `pty_close`-style acquire, so that assertion can fail.
+        let writers: Arc<Mutex<HashMap<String, WedgedWriter>>> = Arc::default();
+        let (writer, wedge) = wedged_writer();
+        writers.lock().unwrap().insert("t".to_string(), writer);
+
+        let writing = writers.clone();
+        let write = std::thread::spawn(move || {
+            let mut map = writing.lock().unwrap();
+            let _ = map.get_mut("t").unwrap().write_all(b"hello");
+        });
+        wedge
+            .entered
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the writing thread should have reached the blocking write");
+        assert!(
+            writers.try_lock().is_err(),
+            "control failed: the write is not actually holding the lock"
+        );
+
+        release(&wedge.gate);
+        write.join().unwrap();
+    }
+
+    #[test]
+    fn input_past_the_queue_cap_is_dropped_while_the_pty_is_wedged() {
+        // A child that stopped reading must not let continued typing grow the queue
+        // without bound — but nothing under the cap may ever be dropped.
+        let ptys: TestPtys = Arc::default();
+        let queued = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = channel();
+        ptys.lock()
+            .unwrap()
+            .insert("t".to_string(), (tx, queued.clone()));
+        let (writer, wedge) = wedged_writer();
+        let pump = {
+            let queued = queued.clone();
+            std::thread::spawn(move || pump_pty_input(writer, rx, queued))
+        };
+
+        let mib = vec![b'x'; 1024 * 1024];
+        let queue = |data: Vec<u8>| {
+            let map = ptys.lock().unwrap();
+            let (input, queued) = map.get("t").unwrap();
+            queue_pty_input(input, queued, data);
+        };
+        for _ in 0..8 {
+            queue(mib.clone());
+        }
+        wedge
+            .entered
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the writer thread should have reached the blocking write");
+        assert_eq!(queued.load(Ordering::SeqCst), PTY_INPUT_QUEUE_CAP);
+
+        queue(mib.clone());
+        queue(mib.clone());
+        assert_eq!(
+            queued.load(Ordering::SeqCst),
+            PTY_INPUT_QUEUE_CAP,
+            "input past the cap must be dropped, not queued"
+        );
+        assert!(
+            ptys.try_lock().is_ok(),
+            "a wedged write is holding the PTY map lock — pty_close would be stuck"
+        );
+
+        release(&wedge.gate);
+        ptys.lock().unwrap().remove("t");
+        pump.join().unwrap();
+        assert_eq!(
+            wedge.written.load(Ordering::SeqCst),
+            PTY_INPUT_QUEUE_CAP,
+            "the over-cap writes reached the PTY after all"
+        );
+        assert_eq!(queued.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_drained_queue_accepts_input_again() {
+        // The cap gates a backlog, it isn't a latch: once the child catches up, the
+        // next keystroke goes through.
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let queued = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = channel();
+        let writer = RecordingWriter(sink.clone());
+        let pump = {
+            let queued = queued.clone();
+            std::thread::spawn(move || pump_pty_input(writer, rx, queued))
+        };
+
+        queue_pty_input(&tx, &queued, b"first".to_vec());
+        wait_for_drain(&queued);
+        queue_pty_input(&tx, &queued, b"second".to_vec());
+        drop(tx);
+        pump.join().unwrap();
+        assert_eq!(*sink.lock().unwrap(), b"firstsecond".to_vec());
+        assert_eq!(queued.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn closing_the_channel_drops_the_writer() {
+        // Dropping the writer is what sends EOF to the slave, so a torn-down handle
+        // (close, or a StrictMode re-open displacing it) must end the pump.
+        let dropped = Arc::new(AtomicBool::new(false));
+        let writer = DropSpy {
+            dropped: dropped.clone(),
+            fail: false,
+        };
+        let queued = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = channel();
+        let pump = std::thread::spawn(move || pump_pty_input(writer, rx, queued));
+        tx.send(b"hi".to_vec()).unwrap();
+        drop(tx);
+        pump.join().unwrap();
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_failed_write_ends_the_writer_thread() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let writer = DropSpy {
+            dropped: dropped.clone(),
+            fail: true,
+        };
+        let queued = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = channel();
+        let pump = {
+            let queued = queued.clone();
+            std::thread::spawn(move || pump_pty_input(writer, rx, queued))
+        };
+        queue_pty_input(&tx, &queued, b"hi".to_vec());
+        pump.join().unwrap();
+        assert!(dropped.load(Ordering::SeqCst));
+        // The failed chunk comes off the books too, so a live handle whose writer
+        // died doesn't sit at a phantom backlog.
+        assert_eq!(queued.load(Ordering::SeqCst), 0);
+        // Later keystrokes then find a closed channel: `pty_write` drops them and
+        // still answers Ok — the Exit event is what reports the dead terminal.
+        queue_pty_input(&tx, &queued, b"more".to_vec());
+        assert_eq!(queued.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn task_interp_maps_every_key_the_frontend_offers() {
