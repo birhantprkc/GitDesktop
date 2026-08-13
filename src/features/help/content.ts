@@ -669,9 +669,10 @@ notice** at the top of this tab (and the Issues tab) reminds you to reconnect be
 lapses.
 
 What you can *do* here follows your access on the repository: when you lack the access an
-action needs — push access to **merge**, a lighter tier (GitHub's triage, GitLab's
-Reporter) for **labels**, **assignees**, and **reviewers** — the control stays where it is,
-disabled, and says what it requires instead of failing when you press it.
+action needs — push access to **merge** or to flip a pull request between **draft** and
+**ready for review**, a lighter tier (GitHub's triage, GitLab's Reporter) for **labels**,
+**assignees**, **reviewers**, and **closing or reopening** — the control stays where it
+is, disabled, and says what it requires instead of failing when you press it.
 
 ## Fork · Upstream lens
 
@@ -740,8 +741,9 @@ exposes no fetchable job logs).
 
 Comments, replies, edits, and descriptions use a Markdown editor with **Write / Preview**
 tabs and a formatting toolbar (bold, italic, headings, quote, code, links, and bulleted
-/ numbered / task lists, with {{key:mod+b}} / {{key:mod+i}} / {{key:mod+k}}). The same
-editor is everywhere you write Markdown — issues, discussions, and release notes.
+/ numbered / task lists, with {{key:mod+b}} / {{key:mod+i}} / {{key:mod+k}}); press
+{{key:mod+enter}} to submit a comment or save an edit. The same editor is everywhere
+you write Markdown — issues, discussions, and release notes.
 
 ## Conflicts with the base branch
 
@@ -1170,9 +1172,9 @@ add labels, **close / reopen**, **lock**, and **transfer** an issue to another r
   issue.
 
 As on the Pull Requests tab, these follow your access on the repository: an action you
-don't have the access for — a lighter tier for labels, assignees and milestones, push
-access for pinning, transferring or creating a branch — stays visible but disabled and
-says what it needs.
+don't have the access for — a lighter tier for labels, assignees, milestones, and
+closing or reopening, push access for pinning, transferring or creating a branch —
+stays visible but disabled and says what it needs.
 
 ## Fork · Upstream lens
 
@@ -1197,7 +1199,7 @@ next to any local issues. Open one to read the description and comments — and 
 issue **writes**: **comment** on the issue (and **edit** or **delete** your own comments),
 **close / reopen** it, **edit** its title and
 description, **react** with emoji on the description and comments (GitLab's award emoji),
-and set its **labels**, **assignees**, and **milestone** right in the side
+and set its **assignees**, **labels**, and **milestone** right in the side
 rail. The rail also carries GitLab-unique fields: a **due date** (type a date and
 press Enter, or pick from the calendar; **Clear** removes it, and an open issue past
 its date reads "Past due"), a **confidential** toggle (hides the issue from

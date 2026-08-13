@@ -11,13 +11,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { required, useAppForm, withForm } from "@/lib/form";
-import { eventToBinding, formatBinding } from "@/lib/hotkeys/binding";
+import { eventToBinding, SUBMIT_HINT } from "@/lib/hotkeys/binding";
 import { useEffectiveBindings } from "@/lib/hotkeys/hotkeys";
 import { toastError } from "@/lib/toast";
-
-/** Platform-correct submit hint (Cmd+Enter on macOS, Ctrl+Enter else) — never a
- *  literal modifier (house platform-mod-key rule). Mirrors CreateLocalPrDialog. */
-const SUBMIT_HINT = formatBinding("mod+enter");
 
 /** Shared form shape so the hook's `useAppForm` and the `withForm` dialog agree. */
 export const editTitleBodyFormOpts = formOptions({

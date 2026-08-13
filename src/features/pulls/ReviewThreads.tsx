@@ -22,15 +22,11 @@ import type {
   ForgeProvider,
   ReviewThreadOut,
 } from "@/lib/git/types";
-import { formatBinding } from "@/lib/hotkeys/binding";
+import { SUBMIT_HINT } from "@/lib/hotkeys/binding";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { synthesizeThreadHunk } from "./suggestion-utils";
-
-/** Platform-correct submit-shortcut hint (⌘+Enter on macOS, Ctrl+Enter else) —
- *  never hardcode the modifier. Exported so RemotePrView shares one definition. */
-export const SUBMIT_HINT = formatBinding("mod+enter");
 
 /** Sets a hover title only when the element is actually clipped (measures
  *  `currentTarget`, not an inner span) — the file-group header truncates. */

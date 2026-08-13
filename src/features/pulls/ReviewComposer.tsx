@@ -4,14 +4,10 @@ import { MarkdownEditor } from "@/components/markdown-editor";
 import { Button } from "@/components/ui/button";
 import { useCreateReviewThread } from "@/lib/git/queries";
 import type { RemoteLens } from "@/lib/git/types";
-import { formatBinding } from "@/lib/hotkeys/binding";
+import { SUBMIT_HINT } from "@/lib/hotkeys/binding";
 import { useAddReviewDraft } from "@/lib/pulls/review-drafts";
 import { toastError } from "@/lib/toast";
 import { buildSuggestionFence, extractNewSideLines } from "./suggestion-utils";
-
-/** Platform-correct submit hint (Cmd+Enter on macOS, Ctrl+Enter else) — never a
- *  literal modifier (house platform-mod-key rule). */
-const SUBMIT_HINT = formatBinding("mod+enter");
 
 export interface ReviewComposerProps {
   repoPath: string;

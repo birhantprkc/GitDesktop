@@ -8,10 +8,8 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffectEvent, useRef, useState } from "react";
 import { toast } from "sonner";
-import {
-  MarkdownEditor,
-  type MarkdownEditorHandle,
-} from "@/components/markdown-editor";
+import { DisabledReasonButton } from "@/components/disabled-reason-button";
+import type { MarkdownEditorHandle } from "@/components/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +25,7 @@ import {
 import { Markdown } from "@/components/ui/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CommentComposer } from "@/features/conversations/CommentComposer";
 import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialog";
 import {
   EditTitleBodyDialog,
@@ -71,7 +70,6 @@ import {
   writeAccessReason,
 } from "@/lib/git/queries";
 import { providerLabel } from "@/lib/git/types";
-import { formatBinding } from "@/lib/hotkeys/binding";
 import { useRepoLens } from "@/lib/repo-lens/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { formatRelativeTime } from "@/lib/time";
@@ -93,10 +91,6 @@ const LOCK_REASONS: [string, LockReason | null][] = [
   ["Spam", "spam"],
   ["Too heated", "too_heated"],
 ];
-
-/** Platform-correct submit hint (Cmd+Enter on macOS, Ctrl+Enter else) — never a
- *  literal modifier (house platform-mod-key rule). */
-const SUBMIT_HINT = formatBinding("mod+enter");
 
 /**
  * Full read+write view for a GitHub issue: header, description, threaded
@@ -128,10 +122,10 @@ export function RemoteIssueView({
   // The viewer's permission on the lens repo — a PERMISSION axis the per-action
   // flags below don't cover, so it never hides a control: it only disables one,
   // and only on an explicit denial. Triage is its own, LOWER tier: labels,
-  // assignees, milestones, hide-comments and the other issue-metadata rows come
-  // with it without push, so those read `canTriage`; pin, transfer, delete and
-  // branch creation are write-tier. Each blocked flag derives from its reason so
-  // the two can never disagree.
+  // assignees, milestones, hide-comments, close/reopen and the other
+  // issue-metadata rows come with it without push, so those read `canTriage`;
+  // pin, transfer, delete and branch creation are write-tier. Each blocked flag
+  // derives from its reason so the two can never disagree.
   const writeAccess = useRepoWriteAccess(repoPath, lens, !!provider);
   const writeReason = writeAccessReason(writeAccess.data);
   const triageReason = triageAccessReason(writeAccess.data);
@@ -420,6 +414,75 @@ export function RemoteIssueView({
   )
     .filter((n) => !repoQuery || n.toLowerCase().includes(repoQuery))
     .slice(0, 6);
+
+  // The close/reopen arm ends the bottom bar behind a spacer — inside the
+  // composer's action row when commenting is allowed, alone in the bar when the
+  // provider permits state changes but not comments.
+  const stateActions = (
+    <>
+      <span className="flex-1" />
+      {canChangeState &&
+        (isOpen ? (
+          <>
+            <DisabledReasonButton
+              variant="outline"
+              size="sm"
+              disabled={busy || triageBlocked}
+              reason={triageReason}
+              onClick={() => doClose("completed")}
+            >
+              Close issue
+            </DisabledReasonButton>
+            {/* Close reasons are a GitHub concept; GitLab has none. The caret is
+                a menu TRIGGER: native `disabled` holds the menu shut, and the
+                hint rides a wrapping span since a disabled Button swallows
+                `title` (house trigger idiom). */}
+            {canWrite && (
+              <DropdownMenu>
+                <span title={triageReason} className="inline-flex">
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="Other close options"
+                        disabled={busy || triageBlocked}
+                      />
+                    }
+                  >
+                    <CaretDownIcon />
+                  </DropdownMenuTrigger>
+                </span>
+                <DropdownMenuContent align="end" className="min-w-52">
+                  <DropdownMenuItem onClick={() => doClose("completed")}>
+                    Close as completed
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => doClose("not_planned")}>
+                    Close as not planned
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </>
+        ) : (
+          <DisabledReasonButton
+            variant="outline"
+            size="sm"
+            disabled={busy || triageBlocked}
+            reason={triageReason}
+            onClick={() =>
+              reopenIssue.mutate(number, {
+                onSuccess: () => toast.success(`Reopened #${number}`),
+                onError,
+              })
+            }
+          >
+            <ArrowCounterClockwiseIcon data-icon="inline-start" />
+            Reopen
+          </DisabledReasonButton>
+        ))}
+    </>
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -751,116 +814,40 @@ export function RemoteIssueView({
               GitLab the composer + close/reopen show, but the GitHub-only
               close-reason dropdown stays hidden (GitLab has no reasons);
               Bitbucket has neither, so the whole bar hides. */}
-          {(canComment || canChangeState) && (
-            <div className="space-y-2 border-t p-3">
-              {canComment && (
-                <MarkdownEditor
-                  ref={composerRef}
-                  aria-label="Leave a comment"
-                  placeholder="Leave a comment…"
-                  value={composeBody}
-                  onChange={setComposeBody}
-                  onKeyDown={(e) => {
-                    if (
-                      (e.ctrlKey || e.metaKey) &&
-                      e.key === "Enter" &&
-                      composeBody.trim() &&
-                      !busy
-                    ) {
-                      e.preventDefault();
-                      submitComment();
-                    }
-                  }}
-                  rows={2}
-                  textareaClassName="max-h-32 min-h-12 resize-y"
-                />
-              )}
-              <div className="flex items-center gap-2">
-                {canComment && (
-                  <>
+          {canComment ? (
+            <CommentComposer
+              ref={composerRef}
+              ariaLabel="Leave a comment"
+              placeholder="Leave a comment…"
+              value={composeBody}
+              onChange={setComposeBody}
+              onSubmit={submitComment}
+              submitLabel="Comment"
+              busy={busy}
+              // Clear is site-rendered rather than the shared `onClear` one: the
+              // close/reopen arm follows it, and the shared Clear is `ml-auto`.
+              actions={
+                <>
+                  {composeBody.trim() && (
                     <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!composeBody.trim() || busy}
-                      onClick={submitComment}
-                      title={SUBMIT_HINT}
-                    >
-                      Comment
-                    </Button>
-                    {composeBody.trim() && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => setComposeBody("")}
-                        title="Discard this draft (e.g. a quote reply)"
-                      >
-                        Clear
-                      </Button>
-                    )}
-                  </>
-                )}
-                <span className="flex-1" />
-                {canChangeState &&
-                  (isOpen ? (
-                    <>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => doClose("completed")}
-                      >
-                        Close issue
-                      </Button>
-                      {/* Close reasons are a GitHub concept; GitLab has none. */}
-                      {canWrite && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button
-                                variant="outline"
-                                size="icon-sm"
-                                aria-label="Other close options"
-                                disabled={busy}
-                              />
-                            }
-                          >
-                            <CaretDownIcon />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="min-w-52">
-                            <DropdownMenuItem
-                              onClick={() => doClose("completed")}
-                            >
-                              Close as completed
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => doClose("not_planned")}
-                            >
-                              Close as not planned
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                    </>
-                  ) : (
-                    <Button
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
                       disabled={busy}
-                      onClick={() =>
-                        reopenIssue.mutate(number, {
-                          onSuccess: () => toast.success(`Reopened #${number}`),
-                          onError,
-                        })
-                      }
+                      onClick={() => setComposeBody("")}
+                      title="Discard this draft (e.g. a quote reply)"
                     >
-                      <ArrowCounterClockwiseIcon data-icon="inline-start" />
-                      Reopen
+                      Clear
                     </Button>
-                  ))}
-              </div>
+                  )}
+                  {stateActions}
+                </>
+              }
+            />
+          ) : canChangeState ? (
+            <div className="space-y-2 border-t p-3">
+              <div className="flex items-center gap-2">{stateActions}</div>
             </div>
-          )}
+          ) : null}
         </div>
         <IssueSidebar
           // Remounts the rail per issue so its sections' drafts (the uncontrolled

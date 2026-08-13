@@ -22,7 +22,11 @@ import {
   useForgeStatus,
   useRepoStatus,
 } from "@/lib/git/queries";
-import { eventToBinding, formatBinding } from "@/lib/hotkeys/binding";
+import {
+  eventToBinding,
+  formatBinding,
+  SUBMIT_HINT,
+} from "@/lib/hotkeys/binding";
 import { useEffectiveBindings } from "@/lib/hotkeys/hotkeys";
 import { updateLocalPr } from "@/lib/pulls/local";
 import { useCreateLocalPr } from "@/lib/pulls/queries";
@@ -38,10 +42,6 @@ import {
   composeBodyWithRefs,
   useLinkedIssueChips,
 } from "./useLinkedIssueChips";
-
-/** Platform-correct submit hint (Cmd+Enter on macOS, Ctrl+Enter else) — never a
- *  literal modifier (house platform-mod-key rule). */
-const SUBMIT_HINT = formatBinding("mod+enter");
 
 // Rendered exactly ONCE, hoisted in RepositoryView — never render it inside a tab
 // panel. Its success handler's `setRepoTab("pulls")` would hide a panel host's

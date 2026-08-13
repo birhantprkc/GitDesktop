@@ -44,7 +44,11 @@ import {
   providerLabel,
   type RemoteLens,
 } from "@/lib/git/types";
-import { eventToBinding, formatBinding } from "@/lib/hotkeys/binding";
+import {
+  eventToBinding,
+  formatBinding,
+  SUBMIT_HINT,
+} from "@/lib/hotkeys/binding";
 import { useEffectiveBindings } from "@/lib/hotkeys/hotkeys";
 import { useJiraLink } from "@/lib/jira/queries";
 import {
@@ -66,10 +70,6 @@ import {
   useJiraMentionChips,
   useLinkedIssueChips,
 } from "./useLinkedIssueChips";
-
-/** Platform-correct submit hint (Cmd+Enter on macOS, Ctrl+Enter else) — never a
- *  literal modifier (house platform-mod-key rule). */
-const SUBMIT_HINT = formatBinding("mod+enter");
 
 export function CreatePrDialog({
   repoPath,
@@ -882,7 +882,10 @@ export function CreatePrDialog({
                               className="size-2 shrink-0 rounded-full"
                               style={{ backgroundColor: `#${label.color}` }}
                             />
-                            <span className="flex-1 truncate">
+                            <span
+                              className="flex-1 truncate"
+                              title={label.name}
+                            >
                               {label.name}
                             </span>
                           </label>
