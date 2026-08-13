@@ -6,8 +6,9 @@ import {
 } from "@phosphor-icons/react";
 import { Badge } from "@/components/ui/badge";
 import type { ForgeSearchRepo } from "@/lib/git/types";
+import { repoStateLabel } from "@/lib/repo-labels";
 import { cn } from "@/lib/utils";
-import { compactNumber, exploreOptionId } from "./explore-utils";
+import { exploreOptionId, starParts } from "./explore-utils";
 
 /** One repository result row — a `role="option"` in the results listbox. Row
  *  anatomy mirrors the clone browser's RepoRow (leading icon by private/fork
@@ -26,6 +27,8 @@ export function ExploreResultRow({
     : repo.fork
       ? GitForkIcon
       : BookBookmarkIcon;
+  const stateLabel = repoStateLabel(repo.private, repo.fork);
+  const star = starParts(repo.stars ?? null);
   return (
     <button
       type="button"
@@ -39,7 +42,21 @@ export function ExploreResultRow({
       )}
     >
       <span className="flex items-center gap-2">
-        <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+        {stateLabel ? (
+          <span
+            role="img"
+            aria-label={stateLabel}
+            title={stateLabel}
+            className="flex shrink-0 items-center text-muted-foreground"
+          >
+            <Icon className="size-3.5" aria-hidden />
+          </span>
+        ) : (
+          <Icon
+            className="size-3.5 shrink-0 text-muted-foreground"
+            aria-hidden
+          />
+        )}
         <span className="min-w-0 flex-1 truncate">
           <span className="text-muted-foreground">{repo.owner}/</span>
           <span className="font-medium">{repo.name}</span>
@@ -49,10 +66,17 @@ export function ExploreResultRow({
             Archived
           </Badge>
         )}
-        {repo.stars != null && (
-          <span className="flex shrink-0 items-center gap-0.5 tabular-nums text-muted-foreground">
-            <StarIcon className="size-3" />
-            {compactNumber.format(repo.stars)}
+        {star && (
+          // role="img" prunes the icon AND the number, so the label carries both
+          // the count and its unit.
+          <span
+            role="img"
+            aria-label={star.label}
+            title={star.label}
+            className="flex shrink-0 items-center gap-0.5 tabular-nums text-muted-foreground"
+          >
+            <StarIcon className="size-3" aria-hidden />
+            {star.text}
           </span>
         )}
       </span>

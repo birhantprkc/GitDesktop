@@ -27,6 +27,7 @@ import { cloneRepo, forgeClone, validateRepo } from "@/lib/git/api";
 import { useForgeRepos } from "@/lib/git/queries";
 import type { ForgeProvider, ForgeRepo } from "@/lib/git/types";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
+import { repoStateLabel } from "@/lib/repo-labels";
 import { useAddRecentRepo, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { errorMessage, isAppError } from "@/lib/tauri/invoke";
@@ -504,6 +505,9 @@ function RepoRow({
     : repo.fork
       ? GitForkIcon
       : BookBookmarkIcon;
+  // The glyph takes no `title`: the row already hovers its description / full
+  // name.
+  const stateLabel = repoStateLabel(repo.private, repo.fork);
   return (
     <button
       type="button"
@@ -517,7 +521,17 @@ function RepoRow({
         active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
       )}
     >
-      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+      {stateLabel ? (
+        <span
+          role="img"
+          aria-label={stateLabel}
+          className="flex shrink-0 items-center text-muted-foreground"
+        >
+          <Icon className="size-3.5" aria-hidden />
+        </span>
+      ) : (
+        <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      )}
       <span className="min-w-0 flex-1 truncate">{repo.name}</span>
       {repo.archived && (
         <Badge variant="secondary" className="shrink-0 text-[10px]">

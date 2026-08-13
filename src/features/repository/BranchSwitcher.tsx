@@ -1582,51 +1582,53 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
           }
         }}
       >
-        <Popover.Trigger
-          render={
-            <Button
-              variant="ghost"
-              size="sm"
-              // Large shrink factor: flex removes space proportionally to
-              // factor × base size, so the header cascade collapses branch (20)
-              // → CI badge (4) → repo (1) — the label absorbs the pressure
-              // first.
-              className="min-w-0 shrink-20"
-              disabled={busy || amending}
-              title={
-                amending
-                  ? "Finish or stop amending to switch branches"
-                  : undefined
-              }
-            >
-              <GitBranchIcon data-icon="inline-start" />
-              <span
-                className="min-w-0 truncate"
-                // Only expose the full label as a tooltip when it's actually
-                // clipped — measured just-in-time on hover, so no ref needed.
-                // Remove the attribute (not title="") when unclipped: an empty
-                // title="" is still a title in Chromium and would suppress the
-                // Button's own conditional (amending) title above.
-                onMouseEnter={(e) => {
-                  const el = e.currentTarget;
-                  if (el) {
-                    if (el.scrollWidth > el.clientWidth)
-                      el.title = currentLabel;
-                    else el.removeAttribute("title");
-                  }
-                }}
-              >
-                {currentLabel}
-              </span>
-              {head?.detached && (
-                <Badge variant="secondary" className="ml-1 shrink-0">
-                  detached
-                </Badge>
-              )}
-              <CaretDownIcon data-icon="inline-end" />
-            </Button>
+        {/* The reason rides the wrapper (a disabled trigger drops pointer
+            events, so its own `title` never surfaces), and the wrapper is the
+            header's flex item, so it owns the shrink-20 that makes the branch
+            label collapse before the CI badge (4); the inner Button needs
+            `shrink` to undo the vendored `shrink-0`, or nothing truncates. */}
+        <span
+          className={cn(
+            "inline-flex min-w-0 shrink-20",
+            amending && "cursor-not-allowed",
+          )}
+          title={
+            amending ? "Finish or stop amending to switch branches" : undefined
           }
-        />
+        >
+          <Popover.Trigger
+            disabled={busy || amending}
+            render={
+              <Button variant="ghost" size="sm" className="min-w-0 shrink">
+                <GitBranchIcon data-icon="inline-start" />
+                <span
+                  className="min-w-0 truncate"
+                  // Only expose the full label as a tooltip when it's actually
+                  // clipped — measured just-in-time on hover, so no ref needed.
+                  // Remove the attribute (not title="") when unclipped: an empty
+                  // title="" is still a title in Chromium and would suppress the
+                  // wrapper's conditional (amending) title above.
+                  onMouseEnter={(e) => {
+                    const el = e.currentTarget;
+                    if (el) {
+                      if (el.scrollWidth > el.clientWidth)
+                        el.title = currentLabel;
+                      else el.removeAttribute("title");
+                    }
+                  }}
+                >
+                  {currentLabel}
+                </span>
+                {head?.detached && (
+                  <Badge variant="secondary" className="ml-1 shrink-0">
+                    detached
+                  </Badge>
+                )}
+                <CaretDownIcon data-icon="inline-end" />
+              </Button>
+            }
+          />
+        </span>
         <Popover.Portal>
           <Popover.Positioner
             align="start"
