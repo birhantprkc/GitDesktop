@@ -1,0 +1,4 @@
+# Gitignored files copied into worktrees Claude Code creates with git.
+# Only paths that match a pattern AND are gitignored are copied. Uses .gitignore syntax.
+.env
+.impeccable/config.local.json

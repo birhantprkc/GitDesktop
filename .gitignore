@@ -33,3 +33,4 @@ dist-ssr
 /claude_strings.txt
 /.playwright-mcp/
 /.env.claude
+/.claude/settings.local.json
