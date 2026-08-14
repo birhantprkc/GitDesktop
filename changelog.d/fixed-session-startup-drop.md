@@ -1,2 +1,0 @@
-- Agent sessions started while the app is still loading are no longer
-  dropped from the sidebar.

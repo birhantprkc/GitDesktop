@@ -12,6 +12,162 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-14
+
+### Added
+
+- **Default agent.** A new choice in Settings → AI decides which CLI a new
+  Session, Plan, or Research run opens on: leave it on **Auto** to follow your AI
+  provider whenever it's an agent CLI, or pin Claude, Codex, GitHub Copilot, or
+  opencode for every new run.
+- **Findings on GitLab.** The **Findings** tab now works on GitLab repositories:
+  it reads the newest completed pipeline for your branch (falling back to the
+  default branch, and saying so, and picking up scans that run in triggered
+  child pipelines) and lists its **SAST**, **secret detection**, and
+  **code quality** findings — on every tier, Free included, where GitLab's own
+  vulnerability report is Ultimate-only. Each finding opens with its severity,
+  file and line, scanner, and identifiers, plus **View file on GitLab** at the
+  scanned commit; every section says why it has nothing to show — scanning not
+  set up, a report that isn't downloadable, expired artifacts, or a pipeline
+  that hasn't finished — so an empty list only reads as clean when a report
+  proved it.
+- **Maintainer actions for pull requests from a fork.** Approve a workflow run
+  GitHub is holding for approval, update a pull request's branch when it falls
+  behind its base (a merge, or a rebase you confirm), and push follow-up commits
+  straight to the contributor's fork — with a guard that catches publishing a
+  fork pull request's branch to the wrong repository.
+- **Google AI Studio** is now a provider in its own right. Paste an AI Studio API
+  key in **Settings → AI** and pick from your live Gemini catalog — no base URL to
+  copy in first. It replaces the OpenAI-compatible **Google Gemini** preset;
+  setups already using that preset keep working, and moving to the new provider
+  only needs the key pasted once.
+
+### Changed
+
+- Comment boxes across pull requests, issues, commits, and discussions now
+  share the same keyboard-shortcut hint, and the submit shortcut no longer
+  triggers on an empty draft.
+- **Google AI Studio suggests models a free key can actually run.** The suggested
+  Gemini list is now Flash-tier only — Pro models reject a free AI Studio key
+  outright, so they were a dead end for most new setups. Pro is still one pick
+  away in the live model list.
+- The GitLab issue side rail now lists **assignees**, **labels**, and
+  **milestone** in the same order as the GitHub rail, so an issue's metadata sits
+  where you expect it on either provider — and the read-only sidebar's empty
+  state now says exactly which fields are unset.
+- Release asset sizes are easier to scan — formatted the same way sizes
+  appear everywhere else in the app.
+- Pull request and issue **Close**, **Reopen**, and draft controls now say why
+  they're unavailable when your role doesn't allow the action, instead of
+  failing at the server.
+
+### Fixed
+
+- Stopping an AI review or agent session now always takes effect, even
+  in the first moments of a run, and a stuck agent process can no longer
+  leave the run hanging past its time limit.
+- Plan, research, and agent-session completion notifications now arrive
+  even when a different repository's Agent tab is in front.
+- **AI failures explain themselves.** A failed **Test connection**, generation, or AI
+  review now shows the provider's own reason (e.g. "Invalid Auth key.", a quota
+  message, or Ollama's "model not found") instead of a bare "Bad Request", and the
+  connection-test result clears whenever what it tested changes — key saved or
+  removed, provider or model switched, allowed hosts edited — so a setup you just
+  fixed no longer looks broken.
+- Release-asset and linked-issue rows show their remove buttons at all times, so
+  you can see what a row lets you do without hovering it first.
+- Deleting a release asset now asks you to confirm first, on both GitHub and
+  GitLab.
+- A pull request's Merge menu now stays closed while merging is unavailable
+  (draft, no write access, or the merge safety check still loading).
+- A contributor's fork branch with the same name as yours no longer masquerades as
+  your own work: branch pull-request badges, the Compare tab's and Create dialog's
+  duplicate checks, Bitbucket's duplicate-create guard, and GitLab stacked-MR
+  detection all now skip fork pull requests.
+- Editing a comment now focuses the text box immediately, and Ctrl+Enter
+  (Cmd+Enter on macOS) saves it — on pull request conversations, review
+  threads, commit comments, issues, discussions, and pending review drafts
+  alike.
+- An AI-generated commit message now stays with the repository and branch
+  it was started on — switching away mid-generation stops the stream
+  instead of filling the other branch's commit box.
+- Switching items in the pull request, issue, Jira, discussion, and
+  commit views now resets everything in progress for the previous item —
+  comment drafts, open dialogs and confirmations, and label picks — and
+  stops an in-flight AI description, so nothing typed or armed for one
+  item can land on another.
+- Multi-step Git operations now run as one uninterruptible unit, so
+  editing history, resolving a conflict by taking one side, and keeping
+  or discarding an agent session can no longer collide with another Git
+  operation running at the same time — from a second window or your own
+  next click. A commit made alongside one of these is kept instead of
+  being swept away if the operation rolls itself back.
+- Copying a commit's SHA right after selecting it now always copies the commit you
+  selected, the Jira button opens the issue you selected rather than the one still
+  on screen, detail views visibly indicate when they are still loading the next
+  item instead of silently showing the previous one, and a diff can no longer
+  render under another file's header.
+- The repository-files and merge-picker dialogs, the stash-drop prompt, the
+  task-run prompt, and the MCP replace prompt hold their contents while
+  closing instead of flashing blank or stale copy for the last instant.
+- Buttons that are unavailable for a stated reason explain themselves on hover;
+  outside of menu and popover triggers they also stay reachable by keyboard, so
+  screen readers announce the reason.
+- **Fork** is no longer offered on repositories you personally own — in Explore on
+  GitHub and GitLab, and in the GitHub repository menu — since a fork always lands
+  under your own account. Organization repositories remain forkable.
+- Relative timestamps ("3 minutes ago") stay live while a view is open, and a
+  running CI job, step or GitHub Actions check counts its elapsed time up
+  second by second.
+- GitLab CI/CD variable values — including variables passed when running a
+  pipeline manually — and webhook secret tokens now reach glab over stdin instead
+  of the command line, keeping them out of the system process table.
+- Screen readers now name the repository glyphs in **Explore** and the clone
+  browser, the star counts in Explore, and each CI check and workflow step's
+  state in a pull request's checks list, so nothing in those rows is left to
+  shape and color.
+- Setting up the MCP launcher no longer fails with a spurious error when
+  several parts of the app prepare it at the same time.
+- Pushes GitDesktop makes on your behalf (PR/MR creation, repository publish, tag
+  push) now validate the branch or tag name up front and only ever touch that
+  exact ref on the remote, and the same tag rules guard creating, editing, and
+  deleting releases on GitHub and GitLab.
+- The MCP registry browser and the Insights dependency hovercards now shrug off
+  odd data from a package registry: you still get the rest of the results.
+- Pressing the submit shortcut in an empty reply box (review-thread replies,
+  discussion replies, and commit line comments) no longer fires the app-wide
+  Commit action.
+- Plans and research runs now follow a relocated repository immediately,
+  and stay with it after the move.
+- On forks, pending review comments, AI review history, and related caches
+  are now kept separately for your fork's pull requests and the
+  upstream repository's, so a review can't be drafted on one and
+  submitted against the other.
+- Pull request views always open on a tab that's there: jumping to a review from
+  the activity dock, or turning AI features off while reading one, now lands you
+  on the Conversation tab whenever the AI Review tab isn't available.
+- Agent sessions started while the app is still loading are no longer
+  dropped from the sidebar.
+- Saving settings no longer overwrites recent-repository details or your
+  Bitbucket token's expiry date when they changed in the background while
+  the Settings screen was open.
+- The composer's `/` command menu and Add to PATH no longer make the app
+  hitch while they read from disk.
+- Repositories with very large ignore lists no longer hit spurious
+  30-second timeouts when listing ignored files or filtering AI-hidden
+  paths, and posting long GitHub or GitLab API bodies can no longer hang.
+- Typing or pasting into a terminal or task that has stopped reading its
+  input no longer freezes the app, and closing it always works.
+- Reaction chips and discussion upvotes announce their on/off state to screen
+  readers, so the toggle you're on is clear without relying on the highlight.
+- The hook list in **Git hooks** walks with the arrow keys, matching the rest of
+  the app's lists.
+- Long label, assignee, and reviewer names that get truncated in pickers now
+  show their full text on hover.
+- The window's size and position are remembered as you arrange them, so your
+  layout comes back the next time you launch — even if the app never got a clean
+  exit.
+
 ## [0.8.0] - 2026-08-09
 
 ### Added
@@ -2748,7 +2904,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/theBGuy/GitDesktop/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/theBGuy/GitDesktop/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/theBGuy/GitDesktop/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/theBGuy/GitDesktop/compare/v0.6.0...v0.6.1
