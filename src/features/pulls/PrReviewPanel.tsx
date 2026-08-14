@@ -13,6 +13,7 @@ import { AnimatePresence, m } from "motion/react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ElapsedTime } from "@/components/elapsed-time";
+import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -34,6 +35,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { detectAgentCli, providerKind } from "@/lib/ai/agent";
+import { LOGIN_COMMAND } from "@/lib/ai/cli-client";
 import { buildAiCommentBody } from "@/lib/ai/comment-branding";
 import { useAvailableModels } from "@/lib/ai/models";
 import {
@@ -58,7 +60,7 @@ import {
   useReviewRun,
 } from "@/lib/stores/reviews";
 import { useUiStore } from "@/lib/stores/ui";
-import { formatDuration, formatRelativeTime } from "@/lib/time";
+import { formatDuration, validEpochMs } from "@/lib/time";
 import { ReviewHistory } from "./ReviewHistory";
 import { ThoughtsDisclosure } from "./ThoughtsDisclosure";
 
@@ -421,16 +423,8 @@ export function PrReviewPanel({
           cliDetect.data.authed === "notAuthed" && (
             <p className="text-xs text-warning">
               {PROVIDER_LABELS[provider]} is installed but not signed in — run{" "}
-              <code className="font-mono">
-                {cliKind === "copilot"
-                  ? "copilot login"
-                  : cliKind === "codex"
-                    ? "codex login"
-                    : cliKind === "opencode"
-                      ? "opencode auth login"
-                      : "claude login"}
-              </code>{" "}
-              in a terminal.
+              <code className="font-mono">{LOGIN_COMMAND[cliKind]}</code> in a
+              terminal.
             </p>
           )}
         {providerDiffers && secNeedsKey && !secKeyPreview.data && (
@@ -454,16 +448,7 @@ export function PrReviewPanel({
           secCliDetect.data.authed === "notAuthed" && (
             <p className="text-xs text-warning">
               {PROVIDER_LABELS[secProvider]} is installed but not signed in —
-              run{" "}
-              <code className="font-mono">
-                {secCliKind === "copilot"
-                  ? "copilot login"
-                  : secCliKind === "codex"
-                    ? "codex login"
-                    : secCliKind === "opencode"
-                      ? "opencode auth login"
-                      : "claude login"}
-              </code>{" "}
+              run <code className="font-mono">{LOGIN_COMMAND[secCliKind]}</code>{" "}
               in a terminal to run a security audit.
             </p>
           )}
@@ -590,11 +575,21 @@ export function PrReviewPanel({
             >
               <SparkleIcon className="size-3 shrink-0" />
               <span className="min-w-0">
-                {ignored
-                  ? `Next ${label} starts fresh, ignoring your previous one.`
-                  : `Next ${label} builds on your last (${formatRelativeTime(
-                      new Date(prior.finishedAt).toISOString(),
-                    )}).`}
+                {ignored ? (
+                  `Next ${label} starts fresh, ignoring your previous one.`
+                ) : validEpochMs(prior.finishedAt) ? (
+                  <>
+                    {`Next ${label} builds on your last (`}
+                    <RelativeTime
+                      date={new Date(prior.finishedAt).toISOString()}
+                    />
+                    {")."}
+                  </>
+                ) : (
+                  // A corrupt persisted stamp would throw in `toISOString` —
+                  // drop the parenthetical, never the sentence.
+                  `Next ${label} builds on your last.`
+                )}
               </span>
               <button
                 type="button"

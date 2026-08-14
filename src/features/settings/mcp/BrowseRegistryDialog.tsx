@@ -16,6 +16,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { useRelativeNow } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -40,7 +41,7 @@ import {
   searchRegistry,
   uniqueServerName,
 } from "@/lib/settings/mcp-registry";
-import { formatRelativeTime } from "@/lib/time";
+import { formatRelativeTime, parseableDate } from "@/lib/time";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useLatestRef } from "@/lib/use-latest-ref";
 
@@ -90,6 +91,9 @@ export function BrowseRegistryDialog({
   const [query, setQuery] = useState("");
   const debounced = useDebouncedValue(query.trim(), 300);
   const [activeIndex, setActiveIndex] = useState(-1);
+  // The meta line is assembled as one joined string, so the shared clock has to
+  // be threaded in by hand — `<RelativeTime>` can't render inside it.
+  const now = useRelativeNow();
   // Registry names added this session — flips their row to "Added".
   const [added, setAdded] = useState<Set<string>>(new Set());
   // Server names already in the managed registry when the dialog opened, shown
@@ -472,10 +476,11 @@ export function BrowseRegistryDialog({
                                 stat
                                   ? `${compactNumber.format(stat.forks)} forks`
                                   : null,
-                                stat?.pushedAt
-                                  ? `updated ${formatRelativeTime(stat.pushedAt)}`
-                                  : c.publishedAt
-                                    ? `published ${formatRelativeTime(c.publishedAt)}`
+                                stat?.pushedAt && parseableDate(stat.pushedAt)
+                                  ? `updated ${formatRelativeTime(stat.pushedAt, now)}`
+                                  : c.publishedAt &&
+                                      parseableDate(c.publishedAt)
+                                    ? `published ${formatRelativeTime(c.publishedAt, now)}`
                                     : null,
                                 stat?.archived ? "archived" : null,
                               ]

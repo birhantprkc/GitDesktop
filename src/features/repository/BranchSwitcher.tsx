@@ -14,6 +14,7 @@ import {
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -67,6 +68,7 @@ import { listUserWorktrees, type UserWorktree } from "@/lib/git/worktree";
 import { secondaryClickLabel } from "@/lib/hotkeys/binding";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
+import { LOCAL_AUDIT_STATE, REMOTE_AUDIT_STATE } from "@/lib/pulls/audit";
 import { useLocalPrs } from "@/lib/pulls/queries";
 import { useSetRepoLens } from "@/lib/repo-lens/queries";
 import {
@@ -76,7 +78,6 @@ import {
   useSettings,
 } from "@/lib/settings/queries";
 import { type SelectedPr, useUiStore } from "@/lib/stores/ui";
-import { formatRelativeTime } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import {
@@ -353,11 +354,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       const state: PrState =
         pr.isDraft && pr.state === "OPEN"
           ? "draft"
-          : pr.state === "MERGED"
-            ? "merged"
-            : pr.state === "CLOSED"
-              ? "closed"
-              : "open";
+          : (REMOTE_AUDIT_STATE[pr.state] ?? "open");
       consider(pr.headRefName, {
         state,
         label: `#${pr.number}`,
@@ -365,12 +362,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
       });
     }
     for (const pr of localPrs.data ?? []) {
-      const state: PrState =
-        pr.status === "merged"
-          ? "merged"
-          : pr.status === "closed"
-            ? "closed"
-            : "open";
+      const state: PrState = LOCAL_AUDIT_STATE[pr.status];
       consider(pr.head, {
         state,
         label: "local",
@@ -1382,7 +1374,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
                   })()}
                 {branch.lastCommitDate && (
                   <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
-                    {formatRelativeTime(branch.lastCommitDate)}
+                    <RelativeTime date={branch.lastCommitDate} />
                   </span>
                 )}
               </span>
@@ -1532,7 +1524,7 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
               )}
               {branch.lastCommitDate && (
                 <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-                  {formatRelativeTime(branch.lastCommitDate)}
+                  <RelativeTime date={branch.lastCommitDate} />
                 </span>
               )}
             </button>

@@ -20,6 +20,7 @@ import {
   useState,
 } from "react";
 import { DisabledReasonButton } from "@/components/disabled-reason-button";
+import { RunDuration } from "@/components/elapsed-time";
 import { LogBlock } from "@/components/LogBlock";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -40,6 +41,7 @@ import {
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
 import { useRepoLens } from "@/lib/repo-lens/queries";
 import { useConfirm } from "@/lib/stores/confirm";
+import { formatDurationBetween } from "@/lib/time";
 import { toastError } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
@@ -160,22 +162,6 @@ function currentStep(job: RunJob | undefined) {
   return job?.steps.find((s) => s.status === "in_progress") ?? null;
 }
 
-/** "1m 12s" elapsed between two ISO timestamps (mirrors RunDetailView's helper).
- *  Returns "" when either timestamp is missing/unparseable. */
-function duration(start?: string, end?: string): string {
-  if (!start || !end) return "";
-  const s = new Date(start).getTime();
-  const e = new Date(end).getTime();
-  if (Number.isNaN(s) || Number.isNaN(e) || e < s) return "";
-  const sec = Math.round((e - s) / 1000);
-  if (sec < 60) return `${sec}s`;
-  const m = Math.floor(sec / 60);
-  const r = sec % 60;
-  if (m < 60) return r ? `${m}m ${r}s` : `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
-
 /** Sets a hover title only when the name is actually clipped by `truncate`;
  *  mirrors the only-when-clipped pattern in CommitsList/WorktreesDialog. */
 const clipTitle = (value: string) => (e: MouseEvent<HTMLElement>) => {
@@ -250,7 +236,9 @@ function RunSteps({ job }: { job: RunJob }) {
   return (
     <div className="mt-1.5 space-y-0.5">
       {job.steps.map((step) => {
-        const elapsed = duration(step.startedAt, step.completedAt);
+        const running = step.status === "in_progress" && !!step.startedAt;
+        const since = new Date(step.startedAt).getTime();
+        const elapsed = formatDurationBetween(step.startedAt, step.completedAt);
         return (
           <div
             key={step.number}
@@ -279,11 +267,12 @@ function RunSteps({ job }: { job: RunJob }) {
             >
               {step.name}
             </span>
-            {elapsed && (
-              <span className="shrink-0 text-muted-foreground tabular-nums">
-                {elapsed}
-              </span>
-            )}
+            <RunDuration
+              running={running}
+              since={since}
+              elapsed={elapsed}
+              className="shrink-0 text-muted-foreground"
+            />
           </div>
         );
       })}
@@ -318,7 +307,13 @@ function CheckRow({
   isRunning: boolean;
 }) {
   const { tone, Icon, label } = checkPresentation(check.status, provider);
-  const elapsed = duration(check.startedAt, check.completedAt);
+  // The live counter is gated on `isRunning`, never on `check.completedAt`: that
+  // field rides usePrDetails (focus-only refetch), so a finished check keeps it
+  // empty and the counter would climb forever in a focused window. `isRunning`
+  // folds in the 5s-polled run job, the only authority that says a check stopped.
+  const runningSince =
+    isRunning && check.startedAt ? new Date(check.startedAt).getTime() : null;
+  const elapsed = formatDurationBetween(check.startedAt, check.completedAt);
   // "Actions check" = a details URL we parsed a run id out of. A job id peeks
   // one job's log; a run id without a job falls back to the run's failed logs.
   const isActionsCheck = Boolean(check.runId);
@@ -369,11 +364,12 @@ function CheckRow({
           · {stepPeek}
         </span>
       )}
-      {elapsed && (
-        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-          {elapsed}
-        </span>
-      )}
+      <RunDuration
+        running={runningSince !== null}
+        since={runningSince}
+        elapsed={elapsed}
+        className="shrink-0 text-[11px] text-muted-foreground"
+      />
     </>
   );
 
