@@ -3,8 +3,21 @@ import type { AppSettings, McpServer } from "@/lib/settings/api";
 import { invoke } from "@/lib/tauri/invoke";
 import type { AiProviderId } from "./types";
 
-/** Which agent CLI the Rust backend should drive. */
-export type AgentKind = "claude" | "codex" | "copilot" | "opencode";
+const AGENT_KINDS = ["claude", "codex", "copilot", "opencode"] as const;
+
+/** Which agent CLI the Rust backend should drive. Derived from the list so a new
+ *  entry widens the type and `isAgentKind` together. */
+export type AgentKind = (typeof AGENT_KINDS)[number];
+
+/** Whether a raw value names an agent CLI — a picker hands back its select's
+ *  own value (`string | null`), and an unrecognized one falls back to a
+ *  default. */
+export function isAgentKind(value: unknown): value is AgentKind {
+  return (
+    typeof value === "string" &&
+    (AGENT_KINDS as readonly string[]).includes(value)
+  );
+}
 
 export type AuthStatus = "authed" | "notAuthed" | "unknown";
 

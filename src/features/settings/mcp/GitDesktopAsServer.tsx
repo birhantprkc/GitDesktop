@@ -32,6 +32,16 @@ import { toastError } from "@/lib/toast";
  *  `.mcp.json`, or a client's global (all-projects) user config. */
 type InstallTarget = "project" | "claude" | "copilot";
 
+/** The replace-confirm prompt per target — each names the config the existing
+ *  `gitdesktop` entry would be overwritten in. */
+const REPLACE_PROMPTS: Record<InstallTarget, string> = {
+  project:
+    "This repo's .mcp.json already has a gitdesktop entry. Replace it with the configuration shown?",
+  claude:
+    "Claude Code's user config already has a gitdesktop server. Replace it?",
+  copilot: "Copilot's user config already has a gitdesktop server. Replace it?",
+};
+
 /** The four `--allow-*` permission flags, in ladder order, mapped to their
  *  human tier label. Drives both the installed-tier readout and the drift
  *  comparison — every other arg (`mcp`, `--repo`, its value, unknown flags) is
@@ -81,6 +91,16 @@ export function GitDesktopAsServer({ repoPath }: { repoPath: string | null }) {
   const [confirmTarget, setConfirmTarget] = useState<InstallTarget | null>(
     null,
   );
+  // The confirm dialog stays mounted through Base UI's ~100ms exit fade, by
+  // which time `confirmTarget` is already null — its contents render from this
+  // retained value or they blank mid-fade. Appearance (copy and the button's
+  // disabled reason) reads the retained value; the open gate and the confirm
+  // dispatch stay on live `confirmTarget`, so a mid-fade click is a no-op.
+  const [shownTarget, setShownTarget] = useState<InstallTarget | null>(
+    confirmTarget,
+  );
+  if (confirmTarget && confirmTarget !== shownTarget)
+    setShownTarget(confirmTarget);
   // Which global client is mid-removal — parallel to `busyTarget` (which tracks
   // installs) so per-row Install/Reinstall/Remove disable each other.
   const [removingClient, setRemovingClient] = useState<
@@ -137,7 +157,7 @@ export function GitDesktopAsServer({ repoPath }: { repoPath: string | null }) {
   // must share that button's gate: `project` follows the shareable-aware entry
   // gate; the global targets always embed the launcher path.
   const confirmDisabledReason =
-    confirmTarget === "project" ? entryDisabledReason : launcherDisabledReason;
+    shownTarget === "project" ? entryDisabledReason : launcherDisabledReason;
 
   // Single source of truth for both Copy and Write — the exact entry that gets
   // merged into .mcp.json under `mcpServers.gitdesktop`.
@@ -739,9 +759,7 @@ export function GitDesktopAsServer({ repoPath }: { repoPath: string | null }) {
               <DialogHeader>
                 <DialogTitle>Replace existing entry?</DialogTitle>
                 <DialogDescription>
-                  {confirmTarget === "project"
-                    ? "This repo's .mcp.json already has a gitdesktop entry. Replace it with the configuration shown?"
-                    : `${confirmTarget === "claude" ? "Claude Code" : "Copilot"}'s user config already has a gitdesktop server. Replace it?`}
+                  {shownTarget && REPLACE_PROMPTS[shownTarget]}
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>

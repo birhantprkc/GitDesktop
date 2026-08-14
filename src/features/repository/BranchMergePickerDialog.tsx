@@ -38,14 +38,25 @@ export interface MergeRunOptions {
 
 const PICKER_COPY: Record<
   PickerMode,
-  { title: (current: string) => string; action: string }
+  { title: (current: string) => string; description: string; action: string }
 > = {
-  merge: { title: (c) => `Merge into ${c}`, action: "Merge" },
+  merge: {
+    title: (c) => `Merge into ${c}`,
+    description: "Merge conflicts, if any, will appear in the changes list.",
+    action: "Merge",
+  },
   squash: {
     title: (c) => `Squash and merge into ${c}`,
+    description:
+      "Combines the selected branch's changes into staged changes for a single commit.",
     action: "Squash and merge",
   },
-  rebase: { title: (c) => `Rebase ${c} onto`, action: "Rebase" },
+  rebase: {
+    title: (c) => `Rebase ${c} onto`,
+    description:
+      "Replays your branch's commits on top of the selected branch. Aborted automatically on conflicts.",
+    action: "Rebase",
+  },
 };
 
 /**
@@ -71,6 +82,11 @@ export function BranchMergePickerDialog({
   currentLabel: string;
 }) {
   const [pickerBranch, setPickerBranch] = useState("");
+  // The dialog stays mounted through Base UI's ~100ms exit fade, by which time
+  // `mode` is already null — its contents render from this retained value or
+  // they blank mid-fade.
+  const [shownMode, setShownMode] = useState<PickerMode | null>(mode);
+  if (mode && mode !== shownMode) setShownMode(mode);
   const branchSelectId = useId();
   const conflictSelectId = useId();
   // Advanced merge options (merge mode only).
@@ -174,14 +190,10 @@ export function BranchMergePickerDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {mode ? PICKER_COPY[mode].title(currentLabel) : ""}
+            {shownMode ? PICKER_COPY[shownMode].title(currentLabel) : ""}
           </DialogTitle>
           <DialogDescription>
-            {mode === "rebase"
-              ? "Replays your branch's commits on top of the selected branch. Aborted automatically on conflicts."
-              : mode === "squash"
-                ? "Combines the selected branch's changes into staged changes for a single commit."
-                : "Merge conflicts, if any, will appear in the changes list."}
+            {shownMode ? PICKER_COPY[shownMode].description : ""}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
@@ -205,7 +217,7 @@ export function BranchMergePickerDialog({
             </SelectContent>
           </Select>
         </div>
-        {mode === "merge" && (
+        {shownMode === "merge" && (
           <div className="space-y-3">
             <div className="min-h-5 text-xs">{renderMergePreview()}</div>
             <label className="flex cursor-pointer items-center gap-2 text-xs">
@@ -256,7 +268,7 @@ export function BranchMergePickerDialog({
             Cancel
           </Button>
           <Button onClick={runPicker} disabled={!pickerBranch}>
-            {mode ? PICKER_COPY[mode].action : ""}
+            {shownMode ? PICKER_COPY[shownMode].action : ""}
           </Button>
         </DialogFooter>
       </DialogContent>
