@@ -220,6 +220,18 @@ mention it as plain prose. AI-only content gated with `ai: true` +
 `{{ai}}…{{/ai}}`. Verify every claim against code; sweep stale "coming soon"
 mentions when a feature ships.
 
+## Prevention standing rules (owner-adopted 2026-08-15)
+
+- **Tripwire:** a fix that closes a CLASS of defect ships its mechanical guard
+  in the same change — a biome `noRestrictedImports` entry, a `scripts/check-*`
+  pattern or allowlist rule, or a pinning test. A swept class without a
+  tripwire has re-opened before; the sweep alone is not the fix.
+- **Class-grep at accept time:** when a review or session finding is accepted,
+  grep its class immediately — fix every sibling in the same batch, or record
+  the count with a named home. Never leave the Nth instance for a later PR.
+- **Conventions-sync:** a change that builds a reusable primitive adds its line
+  to THIS file in the same change (the docs-sync rule, applied to idioms).
+
 ## Definition of done
 
 Verification green (failures quoted verbatim, passes one line each); edge

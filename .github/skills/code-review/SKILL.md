@@ -111,6 +111,12 @@ and Windows.
   any new inline refspec construction. Untrusted values passed to `gh api -F`
   (a leading `@` reads a local file — use `-f` for raw strings); secrets or
   token-shaped strings in fixtures.
+- **Prevention rules**: a fix that closes a defect class ships a mechanical
+  guard in the same PR (a Biome restricted-import entry, a guard-script
+  pattern/allowlist rule, or a pinning test) — flag a class fix without one.
+  An accepted finding's siblings are swept in the same batch or recorded with
+  a count. A new reusable primitive documents itself in
+  `.claude/skills/gd-conventions/SKILL.md` in the same PR.
 
 ## Scoping & state discipline
 
