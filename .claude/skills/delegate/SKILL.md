@@ -92,6 +92,13 @@ Docs-sync: <README/site/help/changelog items, or "orchestrator handles">
 Out of scope: <adjacent things it must leave alone>
 ```
 
+Every spec's Objective or Acceptance answers one more question: **what does this
+change make newly REACHABLE?** Both arms — code paths (a cap raised, a guard
+removed, a dead path revived) and interactions (state that stops resetting,
+controls that become operable during transient windows, stale data that becomes
+actionable). PR #207 spent eight review rounds discovering that answer post-hoc;
+it is a design-time question.
+
 ## Phase 2 — Decompose
 
 - Package file scopes must be **disjoint** — that is what makes parallel
