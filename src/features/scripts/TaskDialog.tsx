@@ -40,6 +40,7 @@ import {
 } from "@/lib/scripts/types";
 import { useAiConfigured, useAiEnabled } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
+import { useRetained } from "@/lib/use-retained";
 import { cn } from "@/lib/utils";
 import { useAnalyzeScript } from "./useAnalyzeScript";
 import { useGenerateScript } from "./useGenerateScript";
@@ -100,6 +101,9 @@ export function TaskDialog({
   onDelete: (id: string) => void;
 }) {
   const editing = task !== "new" && task !== null ? task : null;
+  const shownTask = useRetained(task);
+  const shownEditing =
+    shownTask !== "new" && shownTask !== null ? shownTask : null;
   const repoPath = useUiStore((s) => s.repoPath);
   const openSettings = useUiStore((s) => s.openSettings);
   const aiEnabled = useAiEnabled();
@@ -250,7 +254,7 @@ export function TaskDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{editing ? "Edit task" : "New task"}</DialogTitle>
+          <DialogTitle>{shownEditing ? "Edit task" : "New task"}</DialogTitle>
           <DialogDescription>
             A saved script you can run from here without a terminal. Point it at
             an existing script in the repo, or write one inline. Either way it
@@ -625,14 +629,24 @@ export function TaskDialog({
         </label>
 
         <div className="flex items-center gap-2">
-          <Button size="sm" onClick={save} disabled={!canSave}>
-            {editing ? "Save" : "Create task"}
+          <Button
+            size="sm"
+            // The label rides the retained task, so the dispatch carries the
+            // liveness: after close `save()` would write under an unmatched id
+            // and still toast "Saved".
+            onClick={() => {
+              if (task === null) return;
+              save();
+            }}
+            disabled={!canSave}
+          >
+            {shownEditing ? "Save" : "Create task"}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <span className="flex-1" />
-          {editing &&
+          {shownEditing &&
             (confirmDelete ? (
               <>
                 <span className="text-xs text-muted-foreground">Delete?</span>
@@ -646,7 +660,9 @@ export function TaskDialog({
                 <Button
                   size="sm"
                   variant="destructive"
-                  onClick={() => onDelete(editing.id)}
+                  onClick={() => {
+                    if (editing) onDelete(editing.id);
+                  }}
                 >
                   Delete
                 </Button>

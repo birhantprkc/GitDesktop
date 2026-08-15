@@ -38,8 +38,18 @@ export function PerRepoStateControl({
 }) {
   const override = pickForRepo(server.repoOverrides, repoKeys);
   const baseline = server.enabled ? "On" : "Optional";
+  // Labels, built here because the inherited option names the baseline; without
+  // them Base UI shows the raw value ("optional") in the trigger. The popup
+  // renders from this map too, so the two can never drift.
+  const items: Record<string, string> = {
+    default: `Default · ${baseline}`,
+    on: "On",
+    optional: "Optional",
+    off: "Off",
+  };
   return (
     <Select
+      items={items}
       value={override ?? "default"}
       disabled={disabled}
       onValueChange={(v) =>
@@ -54,10 +64,11 @@ export function PerRepoStateControl({
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="default">Default · {baseline}</SelectItem>
-        <SelectItem value="on">On</SelectItem>
-        <SelectItem value="optional">Optional</SelectItem>
-        <SelectItem value="off">Off</SelectItem>
+        {Object.entries(items).map(([state, label]) => (
+          <SelectItem key={state} value={state}>
+            {label}
+          </SelectItem>
+        ))}
       </SelectContent>
     </Select>
   );

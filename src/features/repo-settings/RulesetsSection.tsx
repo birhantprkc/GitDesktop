@@ -34,6 +34,19 @@ const ENFORCEMENTS: { value: RulesetEnforcement; label: string }[] = [
   { value: "disabled", label: "Disabled" },
 ];
 
+/** Trigger labels for the enforcement selects — without them Base UI shows the
+ *  raw value ("evaluate"). */
+const ENFORCEMENT_ITEMS: Record<string, string> = Object.fromEntries(
+  ENFORCEMENTS.map((e) => [e.value, e.label]),
+);
+
+/** Labels for the ref-scope select — trigger and popup both render from here. */
+const REF_SCOPE_ITEMS: Record<string, string> = {
+  default: "Default branch",
+  all: "All branches",
+  custom: "Custom patterns…",
+};
+
 /** Rule types we model in the editor. Any others on an edited ruleset are
  *  preserved untouched (so advanced rules aren't dropped). */
 const MANAGED_RULE_TYPES = [
@@ -286,6 +299,7 @@ function RulesetList({
               ) : (
                 <>
                   <Select
+                    items={ENFORCEMENT_ITEMS}
                     value={rs.enforcement}
                     disabled={setEnforcement.isPending}
                     onValueChange={(v) =>
@@ -416,6 +430,7 @@ function RulesetForm({
         <div className="space-y-1.5">
           <Label htmlFor="ruleset-enforcement">Enforcement</Label>
           <Select
+            items={ENFORCEMENT_ITEMS}
             value={d.enforcement}
             onValueChange={(v) =>
               v && set("enforcement", v as RulesetEnforcement)
@@ -438,6 +453,7 @@ function RulesetForm({
       <div className="space-y-1.5">
         <Label htmlFor="ruleset-scope">Target branches</Label>
         <Select
+          items={REF_SCOPE_ITEMS}
           value={d.refScope}
           onValueChange={(v) => v && set("refScope", v as Draft["refScope"])}
         >
@@ -445,9 +461,11 @@ function RulesetForm({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="default">Default branch</SelectItem>
-            <SelectItem value="all">All branches</SelectItem>
-            <SelectItem value="custom">Custom patterns…</SelectItem>
+            {Object.entries(REF_SCOPE_ITEMS).map(([scope, label]) => (
+              <SelectItem key={scope} value={scope}>
+                {label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         {d.refScope === "custom" && (

@@ -97,6 +97,14 @@ const COMMON_EVENTS: { id: string; label: string }[] = [
   { id: "discussion", label: "Discussions" },
 ];
 
+/** Labels for the webhook content-type select — without them Base UI shows the
+ *  raw value ("form") instead of the media type in the trigger; the popup renders
+ *  from this map too, so the two can never drift. */
+const CONTENT_TYPE_ITEMS: Record<string, string> = {
+  json: "application/json",
+  form: "application/x-www-form-urlencoded",
+};
+
 function eventsSummary(events: string[]): string {
   if (events.includes("*")) return "All events";
   if (events.length === 0) return "No events";
@@ -833,6 +841,7 @@ function WebhookForm({
         <div className="space-y-1.5">
           <Label htmlFor="hook-content-type">Content type</Label>
           <Select
+            items={CONTENT_TYPE_ITEMS}
             value={contentType}
             onValueChange={(v) => setContentType(v as "json" | "form")}
           >
@@ -840,10 +849,11 @@ function WebhookForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="json">application/json</SelectItem>
-              <SelectItem value="form">
-                application/x-www-form-urlencoded
-              </SelectItem>
+              {Object.entries(CONTENT_TYPE_ITEMS).map(([ct, label]) => (
+                <SelectItem key={ct} value={ct}>
+                  {label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>

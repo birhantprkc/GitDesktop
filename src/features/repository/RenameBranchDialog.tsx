@@ -14,8 +14,10 @@ import { useRenameBranch } from "@/lib/git/queries";
 import { refNameWarning, sanitizeRefName } from "@/lib/git/ref-name";
 import type { FileEntry } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
+import { useRetained } from "@/lib/use-retained";
 import { GenerateBranchNameButton } from "./GenerateBranchNameButton";
 import {
+  type BranchNameGenerator,
   type CommittedNameSource,
   useGenerateBranchName,
 } from "./useGenerateBranchName";
@@ -64,6 +66,17 @@ export function RenameBranchDialog({
 }) {
   const renameBranch = useRenameBranch(repoPath);
   const branchNameGen = useGenerateBranchName(repoPath);
+  // The Generate affordance's copy — and so its enabled state — is retained
+  // through the close fade below, so the dispatch carries the liveness: a click
+  // after close would start an uncancellable generation whose name lands in the
+  // next open's field.
+  const guardedGen: BranchNameGenerator = {
+    ...branchNameGen,
+    generate: async (opts) => {
+      if (target === null) return;
+      await branchNameGen.generate(opts);
+    },
+  };
   // Every close path routes through here: the dialog stays mounted, so an
   // in-flight suggestion would otherwise land in the field on the NEXT open,
   // which may be naming a different branch.
@@ -71,8 +84,17 @@ export function RenameBranchDialog({
     branchNameGen.cancel();
     onClose();
   };
+  const shownTarget = useRetained(target);
+  // The parent's committed-work lookup collapses when the dialog closes, so
+  // these two retain on the dialog's own discriminant rather than their values:
+  // null / "ready" are legitimate while it's open (a branch with no commits).
+  const shownCommittedFallback = useRetained(
+    committedFallback,
+    target !== null,
+  );
+  const shownCommittedStatus = useRetained(committedStatus, target !== null);
   // Only the checked-out branch's own working tree describes it.
-  const targetIsCurrent = target !== null && target === currentName;
+  const targetIsCurrent = shownTarget !== null && shownTarget === currentName;
 
   const renameForm = useAppForm({
     defaultValues: { name: "" },
@@ -100,6 +122,18 @@ export function RenameBranchDialog({
     if (target !== null) seedOnOpen(target);
   }, [target]);
 
+  // Generations are bound to the target they were started for: the rename
+  // hotkey stays live over the open dialog, so `target` can swap mid-stream and
+  // a suggestion for the old branch would otherwise land in a form that is now
+  // renaming a different one. `cancel` is stable (a no-dep `useCallback` in
+  // `useAiStream`), so this re-runs only on a target change. Closing cancels
+  // here as well as in `closeDialog` — aborting twice is a no-op.
+  const cancelGenerate = branchNameGen.cancel;
+  useEffect(() => {
+    if (target === null) return;
+    return () => cancelGenerate();
+  }, [target, cancelGenerate]);
+
   return (
     <Dialog
       open={target !== null}
@@ -125,7 +159,7 @@ export function RenameBranchDialog({
             <DialogTitle>Rename branch</DialogTitle>
             <DialogDescription>
               Renames{" "}
-              <span className="font-mono wrap-break-word">{target}</span>.
+              <span className="font-mono wrap-break-word">{shownTarget}</span>.
             </DialogDescription>
           </DialogHeader>
           <renameForm.AppField
@@ -141,7 +175,7 @@ export function RenameBranchDialog({
             )}
           </renameForm.AppField>
           <GenerateBranchNameButton
-            gen={branchNameGen}
+            gen={guardedGen}
             aiEnabled={aiEnabled}
             aiConfigured={aiConfigured}
             hasChanges={hasChanges}
@@ -149,8 +183,8 @@ export function RenameBranchDialog({
             entries={entries}
             recentBranches={allBranchNames}
             nameTarget={targetIsCurrent ? "checked-out-branch" : "other-branch"}
-            committedFallback={committedFallback}
-            committedStatus={committedStatus}
+            committedFallback={shownCommittedFallback}
+            committedStatus={shownCommittedStatus}
             // Renaming never picks a base — the fallback always applies here.
             basedElsewhere={null}
             onName={(name) => renameForm.setFieldValue("name", name)}
