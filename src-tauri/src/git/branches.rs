@@ -8,6 +8,9 @@ use crate::git::runner::{
 use crate::git::types::{Branch, BranchDivergence, RemoteBranch};
 use crate::state::AppState;
 
+/// The shared guard against refspec/argv injection from a user-named ref: every
+/// ref-reaching name routes through here or through `validate_tag_name`. Rev
+/// syntax (`~ ^ @ { }`) is deliberately accepted, for branch start-points.
 pub(crate) fn validate_ref_name(name: &str) -> AppResult<()> {
     if name.is_empty() || name.starts_with('-') {
         return Err(AppError::InvalidArgument(format!(
@@ -25,6 +28,20 @@ pub(crate) fn validate_ref_name(name: &str) -> AppResult<()> {
         .chars()
         .any(|c| matches!(c, '*' | '?' | '[' | ':' | '\\' | ' ') || c.is_ascii_control())
     {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid branch name: {name}"
+        )));
+    }
+    Ok(())
+}
+
+/// The stricter gate for inputs that must name a BRANCH and nothing else: it adds
+/// a rejection of rev-expression syntax, which `rev-parse` would otherwise resolve
+/// (`feature~1` exists under `refs/heads/` as the branch's parent commit), and of
+/// bare `@`, git's HEAD shorthand in the rev positions these names reach.
+pub(crate) fn validate_branch_name(name: &str) -> AppResult<()> {
+    validate_ref_name(name)?;
+    if name == "@" || name.contains(['~', '^']) || name.contains("..") || name.contains("@{") {
         return Err(AppError::InvalidArgument(format!(
             "invalid branch name: {name}"
         )));
@@ -554,7 +571,10 @@ pub async fn git_branch_merge_states(
 ) -> AppResult<Vec<BranchMergeState>> {
     let mut result = Vec::with_capacity(pairs.len());
     for pair in pairs {
-        let valid_head = validate_ref_name(&pair.head).is_ok();
+        // The branch-name gate, not the ref gate: this reconciles LOCAL PR records,
+        // and a record persisted with a rev expression (`feature~1`) would pass the
+        // probe below and auto-transition the PR against a commit no branch is at.
+        let valid_head = validate_branch_name(&pair.head).is_ok();
         let head_exists = if valid_head {
             run_git_raw(
                 Some(&repo_path),
@@ -572,7 +592,7 @@ pub async fn git_branch_merge_states(
         } else {
             false
         };
-        let merged = if valid_head && validate_ref_name(&pair.base).is_ok() {
+        let merged = if valid_head && validate_branch_name(&pair.base).is_ok() {
             run_git_raw(
                 Some(&repo_path),
                 &["merge-base", "--is-ancestor", &pair.head, &pair.base],
@@ -667,8 +687,8 @@ pub async fn git_update_branch_from(
     branch: String,
     base: String,
 ) -> AppResult<String> {
-    validate_ref_name(&branch)?;
-    validate_ref_name(&base)?;
+    validate_branch_name(&branch)?;
+    validate_branch_name(&base)?;
     if branch == base {
         return Err(AppError::InvalidArgument(
             "a branch can't be updated from itself".to_string(),
@@ -834,7 +854,7 @@ fn unique_suffix() -> String {
 mod tests {
     use super::{
         build_create_branch_args, git_branches, git_create_branch_core, git_default_branch,
-        parse_upstream_track, validate_ref_name,
+        parse_upstream_track, validate_branch_name, validate_ref_name,
     };
     use crate::git::runner::{run_git, DEFAULT_TIMEOUT};
     use crate::state::AppState;
@@ -928,6 +948,25 @@ mod tests {
             "main~3", "HEAD", "HEAD@{2}", "abc123def",
         ] {
             assert!(validate_ref_name(ok).is_ok(), "should accept {ok:?}");
+        }
+    }
+
+    #[test]
+    fn validate_branch_name_rejects_rev_expressions_ref_name_accepts() {
+        // The whole point of the stricter gate: `~`/`^` shapes RESOLVE under
+        // `rev-parse --verify refs/heads/…`, so an existence probe alone passes
+        // them and the caller proceeds against an ancestor commit.
+        for bad in ["feature~1", "main^", "HEAD@{1}", "main..other", "a^{commit}", "@"] {
+            assert!(validate_ref_name(bad).is_ok(), "ref gate accepts {bad:?}");
+            assert!(
+                validate_branch_name(bad).is_err(),
+                "branch gate should reject {bad:?}"
+            );
+        }
+        // Refspec metacharacters stay rejected, and real branch names stay valid.
+        assert!(validate_branch_name("a*b").is_err());
+        for ok in ["feature", "feat/x", "release-1.0", "fix_123"] {
+            assert!(validate_branch_name(ok).is_ok(), "should accept {ok:?}");
         }
     }
 

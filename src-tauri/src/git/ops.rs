@@ -1992,8 +1992,6 @@ pub async fn git_merge_local_pr(
     message: String,
     strategy: String,
 ) -> AppResult<LocalPrMergeOutcome> {
-    validate_branch_arg(&base)?;
-    validate_branch_arg(&head)?;
     let root = worktree_root_dir(&repo_path)?;
     merge_local_pr(&state, &repo_path, &base, &head, &message, &strategy, &root).await
 }
@@ -2013,6 +2011,13 @@ pub(crate) async fn merge_local_pr(
     root: &Path,
 ) -> AppResult<LocalPrMergeOutcome> {
     use crate::git::runner::run_git;
+
+    // `base` reaches `refs/heads/<base>` (finalize_base's update-ref) and `head`
+    // the merge argv, so both take the branch-name gate: refspec metacharacters
+    // AND rev-expression syntax, which would otherwise merge/advance an ancestor
+    // (`feature~1` resolves). In the core, so every caller is gated.
+    crate::git::branches::validate_branch_name(base)?;
+    crate::git::branches::validate_branch_name(head)?;
 
     let message = if message.trim().is_empty() {
         format!("Merge {head} into {base}")
@@ -2230,7 +2235,9 @@ pub(crate) async fn finish_local_pr_merge(
     worktree_id: &str,
     op_id: Option<String>,
 ) -> AppResult<LocalPrMergeOutcome> {
-    validate_branch_arg(base)?;
+    // Same gate as `merge_local_pr` — this path reaches the identical
+    // `finalize_base` update-ref refspec.
+    crate::git::branches::validate_branch_name(base)?;
 
     // When `base` IS the current branch, `finalize_base` ends in a `merge --ff-only`
     // into the main tree — re-guard clean HERE, since the user may have dirtied it
@@ -2648,10 +2655,10 @@ pub(crate) async fn merge_remote_pr(
     root: &Path,
 ) -> AppResult<RemotePrResolveOutcome> {
     // Both names are interpolated into fetch/push refspecs, so they take the
-    // STRICT validator (its `*?[:\ ` blocklist is the refspec-injection defense),
-    // and they take it before anything mutates.
-    crate::git::branches::validate_ref_name(base)?;
-    crate::git::branches::validate_ref_name(head)?;
+    // STRICT validator (its `*?[:\ ` blocklist is the refspec-injection defense,
+    // plus the rev-expression rejection), and they take it before anything mutates.
+    crate::git::branches::validate_branch_name(base)?;
+    crate::git::branches::validate_branch_name(head)?;
     let remote = resolve_pr_remote(repo_path, lens).await?;
 
     // Resume before starting: an existing worktree for this (remote, PR) holds
@@ -2843,7 +2850,7 @@ pub(crate) async fn finish_remote_pr_resolve(
     lens: Option<&str>,
     root: &Path,
 ) -> AppResult<RemotePrResolveOutcome> {
-    crate::git::branches::validate_ref_name(head)?;
+    crate::git::branches::validate_branch_name(head)?;
     let remote = resolve_pr_remote(repo_path, lens).await?;
     ensure_pr_resolve_worktree(root, worktree_path)?;
     // Parse the identity this module itself encodes into the directory name —
@@ -4688,6 +4695,35 @@ detached
         assert_eq!(super::repo_hash("C:/Repos/App").len(), 16);
     }
 
+    /// `base` reaches `refs/heads/<base>` in `finalize_base`'s `update-ref` and
+    /// `head` the merge argv, so both are refused for refspec metacharacters
+    /// AND rev-expression syntax before any git runs. The rev cases are the
+    /// sharper half: `rev-parse` RESOLVES them, so `feature~1` would pass an
+    /// existence probe and merge an ancestor, then fail at `refs/heads/main~1`.
+    #[tokio::test]
+    async fn merge_local_pr_rejects_metacharacters_and_rev_expressions() {
+        // A real directory that is deliberately NOT a repo: without the guard the
+        // first `rev-parse` fails as `AppError::Git`, so asserting the
+        // `InvalidArgument` variant (not merely `is_err`) is what pins the guard.
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let repo = dir.path().to_string_lossy().into_owned();
+        let root = dir.path().join("root");
+        let state = AppState::default();
+        for bad in [
+            "a*b", "a?b", "a[b", "a:b", "feature~1", "main^", "HEAD@{1}", "main..other", "@",
+        ] {
+            for (base, head) in [(bad, "feature"), ("main", bad)] {
+                assert!(
+                    matches!(
+                        merge_local_pr(&state, &repo, base, head, "m", "merge", &root).await,
+                        Err(AppError::InvalidArgument(_))
+                    ),
+                    "expected {base:?} -> {head:?} to be refused as an invalid branch name"
+                );
+            }
+        }
+    }
+
     /// A clean local-PR merge where `base` is NOT the current branch: the main
     /// tree stays on its branch with its uncommitted work intact, and `base`
     /// advances to the merged commit via `update-ref` (never checked out).
@@ -5641,12 +5677,31 @@ detached
         let root = root_holder.path().join("root");
         let state = AppState::default();
 
-        for (base, head) in [("ma*in", "feature"), ("main", "fea:ture"), ("main", "*")] {
+        // Metacharacters and rev expressions alike: on this path the names are
+        // interpolated into `+refs/heads/{head}:refs/remotes/{remote}/{head}`,
+        // whose refname rules reject all of them before anything resolves. The
+        // gate is defense-in-depth, and buys an early error naming the bad
+        // branch where the ungated path fails later as an opaque invalid-refspec
+        // fetch error. (Resolution is the LOCAL path's hazard.)
+        for (base, head) in [
+            ("ma*in", "feature"),
+            ("main", "fea:ture"),
+            ("main", "*"),
+            ("feature~1", "feature"),
+            ("main", "feature~1"),
+            ("main^", "feature"),
+            ("main", "HEAD@{1}"),
+            ("main..other", "feature"),
+            ("main", "@"),
+        ] {
             let err = merge_remote_pr(&state, &repo, 5, base, head, None, None, &root)
                 .await
                 .unwrap_err();
+            // The MESSAGE, not just the variant: this clone has no remotes, so
+            // `resolve_pr_remote` also fails as `InvalidArgument` — a variant-only
+            // assertion passes with the name gate removed entirely.
             assert!(
-                matches!(err, AppError::InvalidArgument(_)),
+                matches!(&err, AppError::InvalidArgument(m) if m.contains("invalid branch name")),
                 "{base}/{head} got: {err:?}"
             );
         }
