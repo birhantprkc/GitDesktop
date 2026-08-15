@@ -1,4 +1,4 @@
-import { useEffectEvent, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { DisabledReasonButton } from "@/components/disabled-reason-button";
 import { MarkdownEditor } from "@/components/markdown-editor";
@@ -23,6 +23,7 @@ import type {
 } from "@/lib/git/types";
 import { SUBMIT_HINT } from "@/lib/hotkeys/binding";
 import { toastError } from "@/lib/toast";
+import { useKeyedEntityState } from "@/lib/use-keyed-entity-state";
 
 export type DiffSections = ReturnType<typeof splitUnifiedDiff>;
 
@@ -211,6 +212,9 @@ function toThread(c: CommitCommentOut): PrThreadOut {
  * the selected file — so the labelled group here lists every anchored comment that
  * isn't visible inline (another file, or unresolvable to a new-side line), so none
  * is ever silently dropped.
+ *
+ * It owns its pane sizing: a bottom pane capped at 45% of its flex-column parent,
+ * so a caller drops it in as a sibling rather than wrapping it.
  */
 export function CommitComments({
   repoPath,
@@ -221,6 +225,8 @@ export function CommitComments({
   selectedPath,
   onSelectFile,
   lens,
+  stale = false,
+  enabled = true,
 }: {
   repoPath: string;
   sha: string;
@@ -237,31 +243,31 @@ export function CommitComments({
   /** Which repo the commit's comments live on: "origin" (the History surface, or
    *  a non-fork) or the parent under the upstream lens (PR-commit context). */
   lens: RemoteLens;
+  /** The parent is still showing the PREVIOUS commit's content (placeholder data)
+   *  while `sha` already names the new one — pass it so writes hold. */
+  stale?: boolean;
+  /** Whether this commit takes comments at all. False renders nothing, but the
+   *  component STAYS MOUNTED so per-commit drafts survive a commit that doesn't
+   *  (yet) support them; the read is disabled with it. */
+  enabled?: boolean;
 }) {
-  const comments = useCommitComments(repoPath, sha, lens);
+  const comments = useCommitComments(repoPath, enabled ? sha : null, lens);
   const createComment = useCreateCommitComment(repoPath, lens);
   const editComment = useEditCommitComment(repoPath, lens);
   const deleteComment = useDeleteCommitComment(repoPath, lens);
 
-  const [body, setBody] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  // Neither call site keys this component on the commit, so a different commit
-  // must never inherit the previous one's draft or pending delete confirm — a
-  // render-time state adjustment, not an effect. Identity is the same triple the
-  // comments are read and written under.
+  // Identity is the same triple the comments are read and written under.
   const commitIdentity = `${repoPath}#${lens}#${sha}`;
+  const draft = useKeyedEntityState(commitIdentity, "");
+  // Neither call site keys this component on the commit, so a different commit
+  // must never inherit the previous one's pending delete confirm — a render-time
+  // state adjustment, not an effect.
   const [lastIdentity, setLastIdentity] = useState(commitIdentity);
   if (commitIdentity !== lastIdentity) {
     setLastIdentity(commitIdentity);
-    setBody("");
     setDeletingId(null);
   }
-  // The restore below can land after the user moved to another commit; an effect
-  // event reads the LIVE identity so a late rejection can't resurrect text there.
-  const restoreDraft = useEffectEvent((submittedFor: string, text: string) => {
-    if (submittedFor !== commitIdentity) return;
-    setBody((cur) => (cur.trim() ? cur : text));
-  });
 
   const list = comments.data ?? [];
   const whole = list.filter((c) => c.path == null);
@@ -281,23 +287,28 @@ export function CommitComments({
       .filter(({ path, line }) => !(path === selectedPath && line != null));
   }, [anchored, diffSections, selectedPath]);
 
+  // Parents serve the previous commit's content as placeholder while arrowing
+  // through history, so hold writes until the shown commit is the addressed one.
   const busy =
-    createComment.isPending || editComment.isPending || deleteComment.isPending;
+    createComment.isPending ||
+    editComment.isPending ||
+    deleteComment.isPending ||
+    stale;
 
   function submit() {
-    const text = body.trim();
-    if (!text) return;
+    const text = draft.value.trim();
+    if (!text || stale) return;
     // Clear the draft immediately (perceived-speed win); the hook appends the
     // synthetic comment optimistically. On error restore the draft, but only if
-    // the composer is still empty so newly-typed text is never clobbered.
+    // that commit's composer is still empty so newly-typed text is never clobbered.
     const submittedFor = commitIdentity;
-    setBody("");
+    draft.set("");
     createComment.mutate(
       { sha, body: text },
       {
         onSuccess: () => toast.success("Comment added"),
         onError: (e) => {
-          restoreDraft(submittedFor, text);
+          draft.setFor(submittedFor, (prev) => (prev.trim() ? prev : text));
           toastError(e);
         },
       },
@@ -305,6 +316,9 @@ export function CommitComments({
   }
 
   function saveEdit(commentId: string, next: string) {
+    // The comment id is the previous commit's while the write addresses `sha`,
+    // so a mismatched pair would edit against a commit that never showed it.
+    if (stale) return;
     editComment.mutate(
       { sha, commentId, body: next },
       {
@@ -314,8 +328,12 @@ export function CommitComments({
     );
   }
 
+  // After every hook: an unsupported commit renders nothing, but the mounted
+  // component keeps this surface's per-commit drafts alive across it.
+  if (!enabled) return null;
+
   return (
-    <div className="flex min-h-0 flex-col">
+    <div className="flex max-h-[45%] min-h-0 shrink-0 flex-col border-t">
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
         {comments.isError ? (
           <p className="text-xs text-destructive">
@@ -328,10 +346,17 @@ export function CommitComments({
                 key={c.id}
                 thread={toThread(c)}
                 onSaveEdit={
-                  c.viewerDidAuthor ? (next) => saveEdit(c.id, next) : undefined
+                  c.viewerDidAuthor && !stale
+                    ? (next) => saveEdit(c.id, next)
+                    : undefined
                 }
+                // Withholding the handler only drops the menu entry; an editor
+                // already open when the commit changed needs its Save held too.
+                editHeld={stale}
                 onDelete={
-                  c.viewerDidAuthor ? () => setDeletingId(c.id) : undefined
+                  c.viewerDidAuthor && !stale
+                    ? () => setDeletingId(c.id)
+                    : undefined
                 }
               />
             ))}
@@ -367,12 +392,13 @@ export function CommitComments({
                       <Thread
                         thread={toThread(c)}
                         onSaveEdit={
-                          c.viewerDidAuthor
+                          c.viewerDidAuthor && !stale
                             ? (next) => saveEdit(c.id, next)
                             : undefined
                         }
+                        editHeld={stale}
                         onDelete={
-                          c.viewerDidAuthor
+                          c.viewerDidAuthor && !stale
                             ? () => setDeletingId(c.id)
                             : undefined
                         }
@@ -396,8 +422,8 @@ export function CommitComments({
         <CommentComposer
           ariaLabel="Comment on this commit"
           placeholder="Leave a comment…"
-          value={body}
-          onChange={setBody}
+          value={draft.value}
+          onChange={draft.set}
           onSubmit={submit}
           submitLabel="Comment"
           busy={busy}

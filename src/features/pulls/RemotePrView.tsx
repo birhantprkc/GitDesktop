@@ -161,6 +161,7 @@ import { useConfirm } from "@/lib/stores/confirm";
 import { useConflictResolve } from "@/lib/stores/conflict-resolve";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
+import { useKeyedEntityState } from "@/lib/use-keyed-entity-state";
 import { cn } from "@/lib/utils";
 import { ChecksRollup } from "./ChecksRollup";
 import { LinkedIssuesField } from "./LinkedIssuesField";
@@ -551,18 +552,23 @@ export function RemotePrView({
   const providerKey: ForgeProvider = provider ?? "github";
 
   // Palette-only PR actions — mounted here so they live only while a remote PR is
-  // open.
+  // open. Every one whose enablement reads `details.data` also gates on
+  // `!details.isPlaceholderData`: during a switch that data is the previous PR's,
+  // so the command would offer (and act on) a PR the user never opened.
   const draftCount = drafts.data?.length ?? 0;
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   useHotkeyAction(
     "submit-review",
     () => setSubmitOpen(true),
-    canSubmitReview && details.data?.state === "OPEN",
+    isSelectedPr &&
+      canSubmitReview &&
+      details.data?.state === "OPEN" &&
+      !details.isPlaceholderData,
   );
   useHotkeyAction(
     "discard-pending-review",
     () => setDiscardConfirmOpen(true),
-    draftCount > 0,
+    isSelectedPr && draftCount > 0,
   );
   // The shared Ready / Convert-to-draft pair: visible when a wired provider
   // (GitLab/Bitbucket) flags `mrDraftToggle`, or on GitHub via `canWrite` (its
@@ -571,8 +577,10 @@ export function RemotePrView({
   const draftPairVisible = canToggleDraft || (isGitHubProvider && canWrite);
   // One in-flight PR mutation at a time: every footer/state control and its palette
   // twin disables while any of these runs. Declared above the palette wiring so both
-  // share the exact same gate.
+  // share the exact same gate. Placeholder details are the previously shown PR's and
+  // the footer's verbs derive from them, so the same gate holds through a switch.
   const busy =
+    details.isPlaceholderData ||
     comment.isPending ||
     mergePr.isPending ||
     closePr.isPending ||
@@ -599,7 +607,7 @@ export function RemotePrView({
           onError,
         },
       ),
-    draftPairVisible && !!details.data?.isDraft && !busy,
+    isSelectedPr && draftPairVisible && !!details.data?.isDraft && !busy,
   );
   useHotkeyAction(
     "pr-convert-to-draft",
@@ -611,7 +619,8 @@ export function RemotePrView({
           onError,
         },
       ),
-    draftPairVisible &&
+    isSelectedPr &&
+      draftPairVisible &&
       !details.data?.isDraft &&
       details.data?.state === "OPEN" &&
       !busy,
@@ -638,12 +647,12 @@ export function RemotePrView({
   useHotkeyAction(
     "pr-stack-next",
     () => goToStackNeighbor(1),
-    isSelectedPr && !!stackNeighbor(1),
+    isSelectedPr && !details.isPlaceholderData && !!stackNeighbor(1),
   );
   useHotkeyAction(
     "pr-stack-previous",
     () => goToStackNeighbor(-1),
-    isSelectedPr && !!stackNeighbor(-1),
+    isSelectedPr && !details.isPlaceholderData && !!stackNeighbor(-1),
   );
 
   // Stack writes are GitHub-only, and the chain that would be stacked is read
@@ -683,7 +692,10 @@ export function RemotePrView({
   const stackWriteError = stackCreate.error ?? stackAdd.error ?? null;
 
   function confirmStackOffer() {
-    if (!stackOffer) return;
+    // `offerEnabled` reads the rendered PR's stack state, so during a switch the
+    // offer can be computed under the previous PR's eligibility — refuse rather
+    // than write a stack on that basis.
+    if (!stackOffer || details.isPlaceholderData) return;
     if (stackOffer.kind === "create") {
       stackCreate.mutate(stackOffer.members, {
         onSuccess: (outcome) =>
@@ -746,7 +758,9 @@ export function RemotePrView({
 
   async function dissolveStack() {
     const info = details.data?.stack;
-    if (!info || dissolveStackNumber === null) return;
+    // The confirm names this stack's id and size, both read off the rendered PR.
+    if (!info || dissolveStackNumber === null || details.isPlaceholderData)
+      return;
     const count = details.data?.stackMembers.length || info.size;
     const ok = await useConfirm.getState().ask({
       title: `Dissolve stack #${info.id}?`,
@@ -764,17 +778,20 @@ export function RemotePrView({
   useHotkeyAction(
     "pr-stack-create",
     () => offerRef.current?.expand(),
-    isSelectedPr && stackOffer?.kind === "create",
+    isSelectedPr && !details.isPlaceholderData && stackOffer?.kind === "create",
   );
   useHotkeyAction(
     "pr-stack-add",
     () => offerRef.current?.expand(),
-    isSelectedPr && stackOffer?.kind === "add",
+    isSelectedPr && !details.isPlaceholderData && stackOffer?.kind === "add",
   );
   useHotkeyAction(
     "pr-stack-dissolve",
     () => void dissolveStack(),
-    isSelectedPr && canDissolveStack && !stackDissolve.isPending,
+    isSelectedPr &&
+      !details.isPlaceholderData &&
+      canDissolveStack &&
+      !stackDissolve.isPending,
   );
 
   // Server truth first; the local preview only fills the gap where the forge has none.
@@ -834,7 +851,7 @@ export function RemotePrView({
    *  and just pushes when there are none. `withAi` hands the conflicts the backend
    *  just reported straight to the AI walk, so the takeover opens already working. */
   function runResolve(withAi: boolean) {
-    if (resolve) return;
+    if (details.isPlaceholderData || resolve) return;
     const info = details.data;
     if (!info) return;
     // Always route through the backend, even when `findResolve` reports a worktree: it
@@ -893,6 +910,7 @@ export function RemotePrView({
     "pr-resolve-conflicts",
     () => runResolve(false),
     isSelectedPr &&
+      !details.isPlaceholderData &&
       (canResolveConflicts || resolveWorktree !== null) &&
       !resolve &&
       !mergeRemotePr.isPending,
@@ -902,11 +920,13 @@ export function RemotePrView({
    *  rewrites the head's history and force-pushes it — on a fork that branch is the
    *  contributor's — so it asks first. */
   async function runUpdateBranch(rebase: boolean) {
+    if (details.isPlaceholderData) return;
     const base = details.data?.baseRefName;
     if (!base) return;
     // The one refusal rule, shared by the button, the menu item, the palette and
     // any future caller — no UI gate is the only thing between a viewer who may
-    // not push (or a second click) and the mutation.
+    // not push (or a second click) and the mutation. It derives from the rendered
+    // PR, the previous one during a switch — hence the placeholder refusal above.
     if (updateBlockedReason !== undefined || updateBranch.isPending) return;
     if (rebase) {
       const ok = await useConfirm.getState().ask({
@@ -928,21 +948,10 @@ export function RemotePrView({
   useHotkeyAction(
     "pr-update-branch",
     () => void runUpdateBranch(false),
-    isSelectedPr && canUpdateBranch,
+    isSelectedPr && !details.isPlaceholderData && canUpdateBranch,
   );
 
-  const [composeBody, setComposeBody] = useState("");
-  // Both land after a mutation settles, by which time the user may have switched
-  // PRs — an effect event reads the LIVE identity, so a late settle can never
-  // resurrect text on, or blank the draft of, whatever PR is on screen now.
-  const restoreDraft = useEffectEvent((submittedFor: string, body: string) => {
-    if (submittedFor !== entityKey) return;
-    setComposeBody((cur) => (cur.trim() ? cur : body));
-  });
-  const clearDraft = useEffectEvent((submittedFor: string) => {
-    if (submittedFor !== entityKey) return;
-    setComposeBody("");
-  });
+  const compose = useKeyedEntityState(entityKey, "");
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,
   );
@@ -1054,8 +1063,13 @@ export function RemotePrView({
 
   // Deferred into the handler: calling makeQuoteReply(ref) during render made the
   // React Compiler bail out of this whole component (refs-in-render rule).
-  const quoteReply = (body: string) =>
-    makeQuoteReply({ composerRef, setBody: setComposeBody })(body);
+  const quoteReply = (body: string) => {
+    // Every quotable body — the description and each rendered comment — belongs to
+    // the PR on screen, which mid-switch is the previous one, while the draft it
+    // would land in is keyed to the new one.
+    if (details.isPlaceholderData) return;
+    makeQuoteReply({ composerRef, setBody: compose.set })(body);
+  };
 
   // GitLab + Bitbucket approve/unapprove — one toggle keyed on whether the viewer
   // approved. GitLab's `user_can_approve` is unreliable on Free (false even when
@@ -1064,6 +1078,7 @@ export function RemotePrView({
   // otherwise the label lags a full approve-POST + refetch. Success invalidation
   // reconciles; errors roll back.
   async function toggleApproval() {
+    if (details.isPlaceholderData) return;
     const approved = approvals.data?.viewerHasApproved ?? false;
     const action = approved ? unapprovePr : approvePr;
     // Must mirror usePrApprovals' key exactly — its lens segment is always the
@@ -1113,6 +1128,7 @@ export function RemotePrView({
   // optimistic flip as the approve toggle — the state lives in the separate
   // approvals query.
   async function requestChanges() {
+    if (details.isPlaceholderData) return;
     const requested = approvals.data?.viewerRequestedChanges ?? false;
     // Already requested on GitLab: the button is a focusable state indicator
     // (its title says how to clear); a re-click must not fire the Premium-only
@@ -1147,15 +1163,13 @@ export function RemotePrView({
       });
       return;
     }
-    // Guard the deferred clear like submitComment's restore: after a PR
-    // switch it would wipe text just typed on the newly shown PR.
     const submittedFor = entityKey;
     requestChangesPr.mutate(
-      { number, body: composeBody.trim() },
+      { number, body: compose.value.trim() },
       {
         onSuccess: () => {
           toast.success("Requested changes");
-          clearDraft(submittedFor);
+          compose.clearFor(submittedFor);
         },
         onError: (e) => {
           if (prev) queryClient.setQueryData(key, prev);
@@ -1166,19 +1180,19 @@ export function RemotePrView({
   }
 
   function submitComment() {
-    const body = composeBody.trim();
-    if (!body) return;
+    const body = compose.value.trim();
+    if (!body || details.isPlaceholderData) return;
     // Clear the draft immediately (the perceived-speed win) and append the
     // synthetic comment optimistically; on error restore the draft, but only if
-    // the composer is still empty so we never clobber newly-typed text.
+    // that PR's composer is still empty so we never clobber newly-typed text.
     const submittedFor = entityKey;
-    setComposeBody("");
+    compose.set("");
     comment.mutate(
       { number, body, author: forge.data?.login ?? "You" },
       {
         onSuccess: () => toast.success("Comment added"),
         onError: (e) => {
-          restoreDraft(submittedFor, body);
+          compose.setFor(submittedFor, (prev) => (prev.trim() ? prev : body));
           onError(e);
         },
       },
@@ -1312,10 +1326,9 @@ export function RemotePrView({
     setSelectedPath(null);
     setSelectedCommitOid(null);
     // Everything below is bound to the PR it was opened on — the conflict-resolution
-    // takeover, the dialogs and confirmations, the unsent draft — so a different PR
-    // must inherit none of it.
+    // takeover, the dialogs and confirmations — so a different PR must inherit
+    // none of it.
     setResolve(null);
-    setComposeBody("");
     setDeletingCommentId(null);
     setDeletingThreadCommentId(null);
     setSubmitOpen(false);
@@ -1389,6 +1402,16 @@ export function RemotePrView({
         ? `${approval.approvedBy.length} of ${approval.approvalsRequired} approvals`
         : `${approval.approvedBy.length} approval${approval.approvedBy.length === 1 ? "" : "s"}`
       : null;
+  // Every handler that refuses while the rendered PR is the previous one reads
+  // this, so each of their entry points can hold too rather than sit enabled and
+  // do nothing.
+  const detailsStale = details.isPlaceholderData;
+  // The metadata pickers seed from the rendered PR and commit the WHOLE set on
+  // close, so one opened mid-switch would write the previous PR's members under
+  // the new number. Their triggers disable on a reason, so this rides that seam.
+  const pickerReason = detailsStale
+    ? "Loading this pull request…"
+    : triageReason;
 
   if (details.isPending) {
     return (
@@ -1430,6 +1453,9 @@ export function RemotePrView({
   // because TS doesn't carry the outer `!pr` guard into these hoisted closures.
   const prForGen = pr;
   function openEditWithChips() {
+    // Every seed below is read off the rendered PR, which is the previous one
+    // during a switch — an edit opened then would carry its title and body.
+    if (detailsStale) return;
     // Seed the base picker from the PR as it stands, so a re-open never carries
     // a previous session's unsaved pick.
     setEditBase(prForGen.baseRefName);
@@ -1528,11 +1554,14 @@ export function RemotePrView({
   const fileDiffLookup = (path: string): string | undefined =>
     fileSections.get(path);
 
+  // The pane keeps rendering the previous PR's diff through a switch, so its lines
+  // can belong to another PR than the `number` a new thread would be created under.
+  const diffStale = detailsStale || prDiff.isPlaceholderData;
   // The inline line-comment composer for the Files tab: only when the provider allows
   // creating a thread, anchored to the selected file (its section prefills a
   // suggestion's code). Absent otherwise ⇒ read-only diff.
   const reviewLineWidget: LineWidget | undefined =
-    canCreateThread && effectivePath
+    canCreateThread && effectivePath && !diffStale
       ? {
           enabled: true,
           render: ({ side, line, fromLine, onClose }) => (
@@ -1599,6 +1628,9 @@ export function RemotePrView({
   // overlaps (its completed reviewers have already left `pr.reviewers`).
   const completedLogins = new Set(completedReviewers.map((c) => c.login));
   function saveCommentEdit(commentId: string, body: string) {
+    // The comment id is the rendered PR's while the write addresses `number` —
+    // GitLab routes by both, so a mismatched pair edits nothing it showed.
+    if (detailsStale) return;
     editComment.mutate(
       { number, commentId, body },
       {
@@ -1609,6 +1641,8 @@ export function RemotePrView({
   }
 
   function saveThreadCommentEdit(commentId: string, body: string) {
+    // Same pairing as saveCommentEdit, on the review-thread side.
+    if (detailsStale) return;
     editReviewComment.mutate(
       { number, commentId, body },
       {
@@ -1747,6 +1781,7 @@ export function RemotePrView({
             <Button
               variant="outline"
               size="xs"
+              disabled={detailsStale}
               onClick={openEditWithChips}
               title="Edit the title and description"
             >
@@ -1802,7 +1837,7 @@ export function RemotePrView({
             labelableId={pr.id}
             labels={pr.labels}
             lens={lens}
-            disabledReason={triageReason}
+            disabledReason={pickerReason}
           />
         ) : (
           pr.labels.length > 0 && (
@@ -1823,7 +1858,7 @@ export function RemotePrView({
             value={pr.assignees}
             commitOnClose
             lens={lens}
-            disabledReason={triageReason}
+            disabledReason={pickerReason}
             onChange={(next) =>
               setAssignees.mutate(
                 { number, assignees: next },
@@ -1859,7 +1894,7 @@ export function RemotePrView({
               enabled
               value={humanReviewers}
               lens={lens}
-              disabledReason={triageReason}
+              disabledReason={pickerReason}
               onChange={(next) =>
                 setReviewers.mutate(
                   { number, reviewers: next },
@@ -1949,6 +1984,9 @@ export function RemotePrView({
           onSelect={(n) => selectPr({ kind: "remote", id: String(n) })}
           onDissolve={canDissolveStack ? dissolveStack : undefined}
           dissolving={stackDissolve.isPending}
+          // `dissolveStack` refuses while the rendered stack is the previous PR's,
+          // so hold its control — without the spinner a real write would show.
+          disabled={detailsStale}
         />
         {stackOffer && (
           <StackOffer
@@ -1956,6 +1994,9 @@ export function RemotePrView({
             offer={stackOffer}
             rows={offerRows}
             pending={stackCreate.isPending || stackAdd.isPending}
+            // Same hold as the dissolve control: `confirmStackOffer` refuses while
+            // the offer's eligibility came from the previous PR. Cancel stays live.
+            disabled={detailsStale}
             error={
               stackWriteError ? presentError(stackWriteError).summary : null
             }
@@ -1990,11 +2031,17 @@ export function RemotePrView({
         provider={provider}
         forkBlocked={!!pr.crossRepository}
         hasResolveWorktree={resolveWorktree !== null}
-        busy={mergeRemotePr.isPending || abortRemotePrResolve.isPending}
+        busy={
+          mergeRemotePr.isPending ||
+          abortRemotePrResolve.isPending ||
+          detailsStale
+        }
         conflictFiles={predictedFiles}
         behindBy={behindBy}
         updateBlockedReason={updateBlockedReason}
-        updateBusy={updateBranch.isPending}
+        // Busy-shaped, not a reason: `runUpdateBranch` refuses through the switch
+        // window, and a sub-second hold needs no explaining text.
+        updateBusy={updateBranch.isPending || detailsStale}
         onResolve={() => runResolve(false)}
         onResolveWithAi={() => runResolve(true)}
         onDiscard={() => void discardResolve()}
@@ -2038,6 +2085,10 @@ export function RemotePrView({
                 })),
           }}
           posting={comment.isPending}
+          // The context above is seeded from the rendered PR, so through a switch
+          // `stale` holds both the run and the post — without the spinner that
+          // `posting` shows for a real one.
+          stale={detailsStale}
           // The panel posts its AI review as a comment and passes `asBot: true`,
           // forwarded to the mutation so GitLab attributes it to the review-bot
           // identity (other providers ignore the flag).
@@ -2093,16 +2144,24 @@ export function RemotePrView({
                       >
                         Copy link
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => quoteReply(pr.body)}>
-                        Quote reply
-                      </DropdownMenuItem>
+                      {/* Absent, not disabled, while the description belongs to
+                          the previous PR — the same shape the thread menus take
+                          when their `onQuote` is withheld. */}
+                      {!detailsStale && (
+                        <DropdownMenuItem onClick={() => quoteReply(pr.body)}>
+                          Quote reply
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuItem
                         onClick={() => copyText(pr.body, "Markdown copied")}
                       >
                         Copy markdown
                       </DropdownMenuItem>
                       {isOpen && canEdit && (
-                        <DropdownMenuItem onClick={openEditWithChips}>
+                        <DropdownMenuItem
+                          disabled={detailsStale}
+                          onClick={openEditWithChips}
+                        >
                           Edit
                         </DropdownMenuItem>
                       )}
@@ -2151,17 +2210,27 @@ export function RemotePrView({
                 canEditOwnThreadComments={canEditOwnThreadComments}
                 canEditOwnComments={canEditOwnComments}
                 canReact={canReact}
-                onQuote={quoteReply}
+                onQuote={detailsStale ? undefined : quoteReply}
                 onThreadReply={(threadId, body) =>
                   threadReply.mutateAsync({ threadId, body })
                 }
                 onThreadResolve={(threadId, resolved) =>
                   threadResolve.mutateAsync({ threadId, resolved })
                 }
-                onEditThreadComment={saveThreadCommentEdit}
-                onDeleteThreadComment={setDeletingThreadCommentId}
-                onEditComment={saveCommentEdit}
-                onDeleteComment={setDeletingCommentId}
+                // All four pair a rendered comment id with `number`, so they're
+                // withheld through a switch; `editHeld` covers an editor already
+                // open when it began.
+                onEditThreadComment={
+                  detailsStale ? undefined : saveThreadCommentEdit
+                }
+                onDeleteThreadComment={
+                  detailsStale ? undefined : setDeletingThreadCommentId
+                }
+                onEditComment={detailsStale ? undefined : saveCommentEdit}
+                onDeleteComment={
+                  detailsStale ? undefined : setDeletingCommentId
+                }
+                editHeld={detailsStale}
                 onHideComment={hideComment}
                 onUnhideComment={unhideComment}
                 onToggleReaction={toggleReaction}
@@ -2178,7 +2247,7 @@ export function RemotePrView({
                     : "Review comments"
                 }
                 isError={reviewThreads.isError}
-                onQuote={quoteReply}
+                onQuote={detailsStale ? undefined : quoteReply}
                 onReply={
                   canThreadReply
                     ? (threadId, body) =>
@@ -2192,13 +2261,16 @@ export function RemotePrView({
                     : undefined
                 }
                 onEditComment={
-                  canEditOwnThreadComments ? saveThreadCommentEdit : undefined
+                  canEditOwnThreadComments && !detailsStale
+                    ? saveThreadCommentEdit
+                    : undefined
                 }
                 onDeleteComment={
-                  canEditOwnThreadComments
+                  canEditOwnThreadComments && !detailsStale
                     ? setDeletingThreadCommentId
                     : undefined
                 }
+                editHeld={detailsStale}
                 provider={providerKey}
                 apply={suggestionApply}
                 fileDiffLookup={fileDiffLookup}
@@ -2223,10 +2295,10 @@ export function RemotePrView({
           {canComment && (
             <CommentComposer
               ref={composerRef}
-              value={composeBody}
-              onChange={setComposeBody}
+              value={compose.value}
+              onChange={compose.set}
               onSubmit={submitComment}
-              onClear={() => setComposeBody("")}
+              onClear={() => compose.set("")}
               submitLabel="Comment"
               ariaLabel="Leave a comment"
               placeholder="Leave a comment…"
@@ -2332,7 +2404,7 @@ export function RemotePrView({
                           ? canUnrequestChanges
                             ? "Revoke your change request"
                             : "You've requested changes — approve, or remove yourself as a reviewer on GitLab, to clear"
-                          : composeBody.trim()
+                          : compose.value.trim()
                             ? "Request changes, posting your draft as a comment"
                             : `Request changes on this ${prNoun} (adds you as a reviewer)`
                       }
@@ -2415,7 +2487,7 @@ export function RemotePrView({
             lens={lens}
             number={number}
             lineWidget={reviewLineWidget}
-            onQuote={quoteReply}
+            onQuote={detailsStale ? undefined : quoteReply}
             onReply={
               canThreadReply
                 ? (threadId, body) =>
