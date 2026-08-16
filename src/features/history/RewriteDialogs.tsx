@@ -97,7 +97,7 @@ export function useGenerateSquashMessage(
 /**
  * Confirms a squash of selected unpushed commits: edit the combined commit
  * message, then the rewrite engine replays `base..HEAD` with the run
- * collapsed into one commit. Conflicts roll back untouched.
+ * collapsed into one commit. A conflict rolls it back.
  */
 export function SquashDialog({
   repoPath,
@@ -160,7 +160,7 @@ export function SquashDialog({
             <DialogTitle>Squash {count} commits?</DialogTitle>
             <DialogDescription>
               Combines the selected commits into one. This rewrites local
-              history; if replaying hits a conflict, nothing is changed.
+              history; a conflict rolls it back.
             </DialogDescription>
           </DialogHeader>
           <form.AppField

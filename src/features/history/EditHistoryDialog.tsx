@@ -69,7 +69,7 @@ const ACTION_LABEL = new Map(ACTIONS.map((a) => [a.value, a.label]));
  * The unified interactive-rebase editor over the unpushed tip (`base..HEAD`).
  * Each row picks an action (pick / reword / squash / fixup / drop), reorders
  * with ↑/↓, and edits its message inline; the plan compiles to the replay
- * engine, which applies it atomically (any conflict rolls back untouched).
+ * engine, which applies it all at once (a conflict rolls it back).
  */
 export function EditHistoryDialog({
   repoPath,
@@ -206,8 +206,8 @@ export function EditHistoryDialog({
           <DialogTitle>Edit history</DialogTitle>
           <DialogDescription>
             Reshape your unpushed commits — reword, squash, fixup, drop, or
-            reorder. Newest on top. This rewrites local history; if replaying
-            hits a conflict, nothing is changed.
+            reorder. Newest on top. This rewrites local history; a conflict
+            rolls it back.
           </DialogDescription>
         </DialogHeader>
 
