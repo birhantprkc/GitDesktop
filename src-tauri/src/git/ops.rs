@@ -7,8 +7,8 @@ use crate::error::{AppError, AppResult};
 use crate::git::diff::parse_numstat_z;
 use crate::git::history::validate_hash;
 use crate::git::runner::{
-    run_git, run_git_mutating, run_git_raw, run_git_raw_input, DEFAULT_TIMEOUT, NETWORK_TIMEOUT,
-    WORKTREE_OP_TIMEOUT,
+    run_git, run_git_mutating, run_git_mutating_raw, run_git_raw, run_git_raw_input,
+    DEFAULT_TIMEOUT, NETWORK_TIMEOUT, WORKTREE_OP_TIMEOUT,
 };
 use crate::git::types::{FileDiff, RepoOpState, RewriteStep, StashEntry, TagInfo};
 use crate::state::AppState;
@@ -80,6 +80,30 @@ async fn rebase_stopped_for_edit(repo: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Which verb a pending `.git/sequencer` is replaying: `Some(true)` for revert,
+/// `Some(false)` for cherry-pick, `None` when no sequencer state exists.
+///
+/// A multi-commit `cherry-pick -n` that conflicts leaves the sequencer with NO
+/// `CHERRY_PICK_HEAD` (measured, git 2.51.1: `--no-commit` never writes one), so
+/// the todo's verb is the only signal for that window — the app's own
+/// squash/fixup engine creates it. An unreadable or empty todo reads as
+/// cherry-pick, matching the best-effort probes around it. Interactive rebase
+/// uses `rebase-merge/git-rebase-todo` instead, so it can never land here.
+async fn sequencer_reverting(repo: &str) -> Option<bool> {
+    if !git_path_exists(repo, "sequencer").await {
+        return None;
+    }
+    let todo = git_dir_path(repo, "sequencer/todo")
+        .await
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .unwrap_or_default();
+    let verb = todo
+        .lines()
+        .find(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .and_then(|line| line.split_whitespace().next());
+    Some(verb == Some("revert"))
+}
+
 /// Which multi-step git operation, if any, is mid-flight — drives the
 /// conflict-resolution banner.
 #[tauri::command]
@@ -94,10 +118,21 @@ pub(crate) async fn op_state(repo_path: &str) -> AppResult<RepoOpState> {
     let rebasing = git_path_exists(repo_path, "rebase-merge").await
         || git_path_exists(repo_path, "rebase-apply").await;
     let edit_paused = rebasing && rebase_stopped_for_edit(repo_path).await;
+    let cherry_head = git_path_exists(repo_path, "CHERRY_PICK_HEAD").await;
+    let revert_head = git_path_exists(repo_path, "REVERT_HEAD").await;
+    // The sequencer only decides the verb when neither head marker names it —
+    // folding a revert into `cherry_picking` would mislabel the banner and hand
+    // Continue/Abort the wrong git command.
+    let sequencer = if cherry_head || revert_head {
+        None
+    } else {
+        sequencer_reverting(repo_path).await
+    };
     Ok(RepoOpState {
         merging: git_path_exists(repo_path, "MERGE_HEAD").await,
         rebasing,
-        cherry_picking: git_path_exists(repo_path, "CHERRY_PICK_HEAD").await,
+        cherry_picking: cherry_head || sequencer == Some(false),
+        reverting: revert_head || sequencer == Some(true),
         edit_paused,
     })
 }
@@ -115,14 +150,15 @@ pub(crate) async fn has_unmerged(repo: &str) -> AppResult<bool> {
 /// should [`op_state`] ever gain a fallible read.
 pub(crate) async fn op_in_progress(repo: &str) -> bool {
     match op_state(repo).await {
-        Ok(state) => state.merging || state.rebasing || state.cherry_picking,
+        Ok(state) => state.mid_op(),
         Err(_) => true,
     }
 }
 
 /// Refuses to stash mid-operation: `git stash push` can't write an unmerged
-/// index, and stashing a merge/rebase/cherry-pick that is only staged-resolved
-/// sweeps the resolution out of the operation git is still holding state for.
+/// index, and stashing a merge/rebase/cherry-pick/revert that is only
+/// staged-resolved sweeps the resolution out of the operation git still holds
+/// state for.
 /// The mid-op detection is best-effort (see [`op_in_progress`]), and a rebase
 /// paused at an `edit` step is refused as well, matching autostash. Only
 /// lock-free runners, so callers may hold the repo lock across it.
@@ -134,7 +170,7 @@ pub(crate) async fn refuse_mid_op(repo: &str) -> AppResult<()> {
     }
     if op_in_progress(repo).await {
         return Err(AppError::InvalidArgument(
-            "Can't stash while a merge, rebase or cherry-pick is in progress — finish or abort it first."
+            "Can't stash while a merge, rebase, cherry-pick or revert is in progress — finish or abort it first."
                 .into(),
         ));
     }
@@ -143,12 +179,12 @@ pub(crate) async fn refuse_mid_op(repo: &str) -> AppResult<()> {
 
 fn validate_op(op: &str) -> AppResult<()> {
     match op {
-        "merge" | "rebase" | "cherry-pick" => Ok(()),
+        "merge" | "rebase" | "cherry-pick" | "revert" => Ok(()),
         _ => Err(AppError::InvalidArgument(format!("unknown operation: {op}"))),
     }
 }
 
-/// Abandons an in-progress merge/rebase/cherry-pick, restoring the
+/// Abandons an in-progress merge/rebase/cherry-pick/revert, restoring the
 /// pre-operation state.
 #[tauri::command]
 pub async fn git_op_abort(
@@ -168,7 +204,7 @@ pub async fn git_op_abort(
 }
 
 /// Finishes an in-progress operation once every conflict is resolved and
-/// staged. A merge concludes with its commit; rebase/cherry-pick continue
+/// staged. A merge concludes with its commit; rebase/cherry-pick/revert continue
 /// with `core.editor=true` so git never tries to open an editor.
 #[tauri::command]
 pub async fn git_op_continue(
@@ -1701,7 +1737,15 @@ pub(crate) async fn git_merge_core(
         }
     }
     args.push(&branch);
-    run_git_mutating(state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    // Raw, because a conflicted merge reports entirely on stdout and leaves
+    // stderr empty — `failure_text` is what keeps that report in the error.
+    let out = run_git_mutating_raw(state, &repo_path, &args, DEFAULT_TIMEOUT).await?;
+    if out.code != 0 {
+        return Err(AppError::Git {
+            code: out.code,
+            stderr: out.failure_text(),
+        });
+    }
     Ok(())
 }
 
@@ -2024,6 +2068,23 @@ fn orphaned_resolve_worktrees(all_paths: &[String], keep: &[String]) -> Vec<Stri
         .collect()
 }
 
+/// A branch's tip, read through its fully-qualified ref. Never a bare name:
+/// gitrevisions resolves `refs/tags/<name>` BEFORE `refs/heads/<name>`, so a tag
+/// sharing the branch name would silently anchor a merge to the tag's commit
+/// (git only warns, and exits 0). Callers validate `base` with
+/// `validate_branch_name`, so the interpolation carries no refspec syntax.
+async fn branch_tip(repo_path: &str, base: &str) -> AppResult<String> {
+    Ok(run_git(
+        Some(repo_path),
+        &["rev-parse", "--verify", &format!("refs/heads/{base}")],
+        DEFAULT_TIMEOUT,
+    )
+    .await?
+    .stdout_lossy()
+    .trim()
+    .to_string())
+}
+
 /// Advances `base` to `new_sha` after the merge landed in the resolve worktree,
 /// picking the safe mechanic for wherever `base` is checked out:
 /// - the MAIN repo's current branch → `merge --ff-only` there (the tree was gated
@@ -2031,14 +2092,51 @@ fn orphaned_resolve_worktrees(all_paths: &[String], keep: &[String]) -> Vec<Stri
 /// - checked out in ANOTHER worktree → run the ff-only INSIDE that worktree so its
 ///   index and working tree advance too. A bare `update-ref` would desync it
 ///   (phantom reverts). A dirty one fails cleanly and `base` stays unchanged.
-/// - checked out nowhere → `update-ref`, no working tree touched.
+/// - checked out nowhere → a compare-and-swap `update-ref`, no working tree
+///   touched.
+///
+/// `expected_tip` is where `base` stood when the merge was built. Every arm is
+/// refused unless `base` is still exactly there, because all three would
+/// otherwise honor a rewind as readily as a fresh commit: `merge --ff-only`
+/// fast-forwards happily from a `reset --hard <ancestor>`, and a containment
+/// test accepts it too. `None` means the anchor could not be established (an
+/// unjournaled merge) — the containment test alone then stands, which still
+/// refuses a diverged base but cannot see a deliberate rewind.
 async fn finalize_base(
     state: &AppState,
     repo_path: &str,
     base: &str,
     new_sha: &str,
     current: &str,
+    expected_tip: Option<&str>,
 ) -> AppResult<()> {
+    let moved = || {
+        format!(
+            "{base} moved while this merge was being prepared, so advancing it would discard \
+             that change. {base} is unchanged — re-run the merge from its current tip."
+        )
+    };
+    // One read, before any arm: whatever `base` points at now has to match the
+    // tip the merge was built on.
+    let tip_now = branch_tip(repo_path, base).await?;
+    if let Some(expected) = expected_tip {
+        if tip_now != expected {
+            return Err(AppError::Command(moved()));
+        }
+    } else {
+        // Anchor unknown: fall back to containment, which catches a base that
+        // gained commits but not one deliberately moved back.
+        let contains = run_git_raw(
+            Some(repo_path),
+            &["merge-base", "--is-ancestor", &tip_now, new_sha],
+            DEFAULT_TIMEOUT,
+        )
+        .await?;
+        if contains.code != 0 {
+            return Err(AppError::Command(moved()));
+        }
+    }
+
     if base == current {
         // `base` is the main repo's current branch — fast-forward its working
         // tree to the merged commit. (Guaranteed a fast-forward: `new_sha` was
@@ -2091,13 +2189,25 @@ async fn finalize_base(
     }
 
     // Not checked out anywhere — move the ref directly, no working tree touched.
+    // git's own `<oldvalue>` argument closes the window between the check above
+    // and this write.
     run_git_mutating(
         state,
         repo_path,
-        &["update-ref", &format!("refs/heads/{base}"), new_sha],
+        &["update-ref", &format!("refs/heads/{base}"), new_sha, &tip_now],
         DEFAULT_TIMEOUT,
     )
-    .await?;
+    .await
+    .map_err(|e| match e {
+        // Only a CAS mismatch means `base` moved — git says `is at <sha> but
+        // expected <sha>` (measured, 2.51.1). "cannot lock ref" alone does NOT
+        // discriminate: a stale .lock file and a permissions failure say it too,
+        // and must keep git's own message rather than a wrong explanation.
+        AppError::Git { stderr, .. } if stderr.contains("but expected") => {
+            AppError::Command(format!("{}\n{stderr}", moved()))
+        }
+        other => other,
+    })?;
     Ok(())
 }
 
@@ -2166,11 +2276,9 @@ pub(crate) async fn merge_local_pr(
     .stdout_lossy()
     .trim()
     .to_string();
-    let base_tip = run_git(Some(repo_path), &["rev-parse", base], DEFAULT_TIMEOUT)
-        .await?
-        .stdout_lossy()
-        .trim()
-        .to_string();
+    // Fully-qualified: this one read anchors the journal, the resolve worktree's
+    // start point, and the rebase strategy's replay range.
+    let base_tip = branch_tip(repo_path, base).await?;
 
     // Only advancing the CURRENT branch touches the main tree — gate that one
     // case on a clean tree (finalize_base's `merge --ff-only` would otherwise
@@ -2269,7 +2377,10 @@ pub(crate) async fn merge_local_pr(
                 .stdout_lossy()
                 .trim()
                 .to_string();
-            if let Err(err) = finalize_base(state, repo_path, base, &new_sha, &current).await {
+            // The tip is still in scope here — no need to recover it.
+            if let Err(err) =
+                finalize_base(state, repo_path, base, &new_sha, &current, Some(&base_tip)).await
+            {
                 // base couldn't be advanced (e.g. checked out elsewhere, or the
                 // ff-only failed) — clean up the worktree and surface the cause.
                 remove_resolve_worktree(state, repo_path, &worktree_path).await;
@@ -2479,7 +2590,18 @@ pub(crate) async fn finish_local_pr_merge(
         .stdout_lossy()
         .trim()
         .to_string();
-    finalize_base(state, repo_path, base, &new_sha, &current).await?;
+    // The resolution session is unbounded, so the tip this merge was built on has
+    // to come from the journal `merge_local_pr` wrote before it started.
+    let expected_tip = crate::oplog::pre_op_tip(repo_path, &op_id).await;
+    finalize_base(
+        state,
+        repo_path,
+        base,
+        &new_sha,
+        &current,
+        expected_tip.as_deref(),
+    )
+    .await?;
     remove_resolve_worktree(state, repo_path, worktree_path).await;
     crate::oplog::finish(repo_path, &op_id, None).await;
     Ok(LocalPrMergeOutcome {
@@ -3460,10 +3582,10 @@ pub(crate) async fn rewrite_commits_with_timeouts(
         if let Some(err) = failure {
             // Roll back: abort any in-progress pick, then return the branch to its
             // pre-run tip. The abort stays best-effort and outside the verdict —
-            // `reset --hard` clears the unmerged index and CHERRY_PICK_HEAD, so a
-            // failed abort with a good reset blocks no later git work (a multi-hash
-            // step's `.git/sequencer` survives the reset but refuses nothing; only
-            // `--abort` clears it, which is why the recovery text names it). The
+            // `reset --hard` clears the unmerged index and CHERRY_PICK_HEAD, but a
+            // multi-hash step's `.git/sequencer` survives it and only `--abort`
+            // clears it, which is why the recovery text names that command: while
+            // it is there the repo still reads as mid-op (see `op_state`). The
             // reset itself is captured: the error must not promise a rollback that
             // didn't happen.
             let _ = run_git(
@@ -3564,13 +3686,11 @@ pub async fn git_rebase_edit(
     // pending message files (its `exec ... -F msg` lines would then fail on
     // --continue, losing the message), and the post-run check would mask it as
     // success.
-    if git_path_exists(&repo_path, "rebase-merge").await
-        || git_path_exists(&repo_path, "rebase-apply").await
-        || git_path_exists(&repo_path, "MERGE_HEAD").await
-        || git_path_exists(&repo_path, "CHERRY_PICK_HEAD").await
-    {
+    // Shares [`op_state`]'s detection rather than re-listing markers: the
+    // hand-rolled copy this replaces missed the sequencer-only and revert windows.
+    if op_in_progress(&repo_path).await {
         return Err(AppError::InvalidArgument(
-            "a rebase, merge, or cherry-pick is already in progress — finish or abort it from the banner first".into(),
+            "a rebase, merge, cherry-pick or revert is already in progress — finish or abort it from the banner first".into(),
         ));
     }
     // git rebase refuses a dirty tree too, but a clear message here is nicer.
@@ -4685,6 +4805,142 @@ mod tests {
 
     }
 
+    /// The state the app's own squash/fixup engine creates: a multi-hash
+    /// `cherry-pick -n` that conflicts leaves `.git/sequencer` and NO
+    /// `CHERRY_PICK_HEAD` (measured, git 2.51.1), which every marker-file gate
+    /// used to read as "nothing in flight".
+    #[tokio::test]
+    async fn op_state_sees_a_sequencer_only_cherry_pick() {
+        let (dir, repo) = setup_repo("seq-pick").await;
+        let base = head_branch(&repo).await;
+        git(&repo, &["switch", "-c", "feature"]).await;
+        commit_file(&repo, dir.path(), "a.txt", "f1\n", "feat one").await;
+        commit_file(&repo, dir.path(), "a.txt", "f2\n", "feat two").await;
+        let f1 = rev(&repo, "feature~1").await;
+        let f2 = rev(&repo, "feature").await;
+        git(&repo, &["switch", &base]).await;
+        commit_file(&repo, dir.path(), "a.txt", "mine\n", "base edit").await;
+        let tip = rev(&repo, "HEAD").await;
+
+        let attempt = run_git_raw(
+            Some(&repo),
+            &["cherry-pick", "-n", &f1, &f2],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_ne!(attempt.code, 0, "the multi-hash pick should conflict");
+        assert!(
+            !git_path_exists(&repo, "CHERRY_PICK_HEAD").await,
+            "`-n` writes no CHERRY_PICK_HEAD — the whole point of the sequencer probe"
+        );
+
+        let state = op_state(&repo).await.unwrap();
+        assert!(state.cherry_picking, "the sequencer names the pick");
+        assert!(!state.reverting);
+        assert!(op_in_progress(&repo).await);
+
+        // Reachable through the guard that clears another op's pending files. The
+        // message is load-bearing: the dirty-tree guard below it also refuses this
+        // tree, so only the wording proves WHICH guard caught it.
+        let refused = git_rebase_edit(repo.clone(), tip, vec![pick(&f1)]).await;
+        let Err(AppError::InvalidArgument(msg)) = &refused else {
+            panic!("edit-rebase must refuse over sequencer state, got {refused:?}");
+        };
+        assert!(
+            msg.contains("already in progress"),
+            "the mid-op guard must be the one that refuses: {msg}"
+        );
+    }
+
+    /// A conflicted `git revert` is its own operation: labeled as a revert, never
+    /// folded into cherry-pick (which would hand Continue the wrong git command).
+    #[tokio::test]
+    async fn op_state_sees_a_revert_and_continues_it() {
+        let (dir, repo) = setup_repo("revert-op").await;
+        commit_file(&repo, dir.path(), "a.txt", "v1\n", "one").await;
+        let target = rev(&repo, "HEAD").await;
+        commit_file(&repo, dir.path(), "a.txt", "v2\n", "two").await;
+
+        let revert = run_git_raw(
+            Some(&repo),
+            &["revert", "--no-edit", &target],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_ne!(revert.code, 0, "the revert should conflict");
+
+        let state = op_state(&repo).await.unwrap();
+        assert!(state.reverting);
+        assert!(!state.cherry_picking, "a revert is not a cherry-pick");
+        assert!(op_in_progress(&repo).await);
+
+        // The `revert` arms of validate_op / op_continue are now reachable.
+        std::fs::write(dir.path().join("a.txt"), "resolved\n").unwrap();
+        git(&repo, &["add", "a.txt"]).await;
+        let app = AppState::default();
+        op_continue(&app, &repo, "revert").await.unwrap();
+        assert!(!op_state(&repo).await.unwrap().reverting);
+        assert_eq!(subjects(&repo).await.len(), 4, "the revert commit landed");
+    }
+
+    /// Every flag counts, and `edit_paused` alone does not — the gates that once
+    /// re-listed these fields each missed a different one, so the predicate they
+    /// now share is pinned per flag rather than through any single caller.
+    #[test]
+    fn mid_op_covers_every_operation_flag() {
+        let clear = RepoOpState {
+            merging: false,
+            rebasing: false,
+            cherry_picking: false,
+            reverting: false,
+            edit_paused: false,
+        };
+        assert!(!clear.mid_op(), "a quiet repo is not mid-op");
+        for set in [
+            |s: &mut RepoOpState| s.merging = true,
+            |s: &mut RepoOpState| s.rebasing = true,
+            |s: &mut RepoOpState| s.cherry_picking = true,
+            |s: &mut RepoOpState| s.reverting = true,
+        ] {
+            let mut state = clear.clone();
+            set(&mut state);
+            assert!(state.mid_op(), "{state:?} is mid-op");
+        }
+        let mut paused = clear.clone();
+        paused.edit_paused = true;
+        assert!(
+            !paused.mid_op(),
+            "edit_paused qualifies `rebasing`; it never stands alone"
+        );
+    }
+
+    /// The sequencer's verb decides which op it is; anything unreadable stays a
+    /// cherry-pick, matching the best-effort contract of the probes around it.
+    #[tokio::test]
+    async fn sequencer_verb_discriminates_revert_from_cherry_pick() {
+        let (_dir, repo) = setup_repo("seq-verb").await;
+        let seq = std::path::Path::new(&repo).join(".git/sequencer");
+        std::fs::create_dir_all(&seq).unwrap();
+
+        std::fs::write(seq.join("todo"), "revert abc1234 undo it\n").unwrap();
+        let state = op_state(&repo).await.unwrap();
+        assert!(state.reverting && !state.cherry_picking);
+
+        std::fs::write(seq.join("todo"), "pick abc1234 add it\n").unwrap();
+        let state = op_state(&repo).await.unwrap();
+        assert!(state.cherry_picking && !state.reverting);
+
+        std::fs::write(seq.join("todo"), "").unwrap();
+        let state = op_state(&repo).await.unwrap();
+        assert!(state.cherry_picking && !state.reverting);
+
+        std::fs::remove_dir_all(&seq).unwrap();
+        let state = op_state(&repo).await.unwrap();
+        assert!(!state.cherry_picking && !state.reverting);
+    }
+
     #[tokio::test]
     async fn rebase_onto_moves_only_its_own_commits() {
         // The "branched off the wrong branch" scenario: `fix` was branched off
@@ -4723,6 +4979,45 @@ mod tests {
             "fix's commits sit directly on the new base's tip"
         );
 
+    }
+
+    /// A conflicted merge writes everything to stdout and leaves stderr empty
+    /// (measured, git 2.51.1), so the error has to carry stdout — `AppError::Git`
+    /// renders an empty stderr as "git exited with code N", which the frontend's
+    /// conflict markers cannot classify.
+    #[tokio::test]
+    async fn merge_conflict_error_carries_the_classifiable_output() {
+        let (dir, repo) = setup_repo("merge-conflict-payload").await;
+        let base = head_branch(&repo).await;
+        git(&repo, &["switch", "-c", "feature"]).await;
+        commit_file(&repo, dir.path(), "a.txt", "feature-side\n", "feat edit").await;
+        git(&repo, &["switch", &base]).await;
+        commit_file(&repo, dir.path(), "a.txt", "base-side\n", "base edit").await;
+
+        let state = AppState::default();
+        let err = git_merge_core(
+            &state,
+            repo.clone(),
+            "feature".into(),
+            false,
+            false,
+            "none".into(),
+        )
+        .await
+        .unwrap_err();
+        let AppError::Git { stderr, .. } = &err else {
+            panic!("expected a git error, got {err:?}");
+        };
+        // Mirrors the frontend's anchored CONFLICT_MARKERS (error-summary.ts).
+        assert!(
+            stderr.lines().any(|l| l.starts_with("CONFLICT (")),
+            "the conflict line must reach the frontend: {stderr}"
+        );
+        assert!(
+            stderr.contains("Automatic merge failed"),
+            "git's merge verdict must survive: {stderr}"
+        );
+        assert!(op_state(&repo).await.unwrap().merging);
     }
 
     #[tokio::test]
@@ -6097,6 +6392,307 @@ detached
         );
     }
 
+    /// The wording `finalize_base`'s CAS refusal discriminates on. Both failures
+    /// say "cannot lock ref", so only `is at <sha> but expected <sha>` marks the
+    /// compare-and-swap mismatch — a git release that reworded it would turn every
+    /// other update-ref failure into a wrong "base moved" explanation.
+    #[tokio::test]
+    async fn update_ref_names_a_cas_mismatch_distinctly() {
+        let (dir, repo) = setup_repo("cas-wording").await;
+        commit_file(&repo, dir.path(), "b.txt", "b\n", "second").await;
+        let tip = rev(&repo, "HEAD").await;
+        git(&repo, &["branch", "target", "HEAD~1"]).await;
+
+        // `target` is at HEAD~1, so claiming it is at `tip` is a CAS mismatch.
+        let mismatch = run_git_raw(
+            Some(&repo),
+            &["update-ref", "refs/heads/target", &tip, &tip],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_ne!(mismatch.code, 0);
+        assert!(
+            mismatch.stderr.contains("but expected"),
+            "git no longer names a CAS mismatch distinctly: {}",
+            mismatch.stderr
+        );
+
+        // A different update-ref failure: same "cannot lock ref" lead-in, no
+        // mismatch phrase — the half that makes the discriminant necessary.
+        let other = run_git_raw(
+            Some(&repo),
+            &["update-ref", "refs/heads/absent", &tip, &tip],
+            DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_ne!(other.code, 0);
+        assert!(
+            other.stderr.contains("cannot lock ref") && !other.stderr.contains("but expected"),
+            "a non-mismatch failure must not read as a moved base: {}",
+            other.stderr
+        );
+    }
+
+    /// A tag sharing the base branch's name must not steer the merge: gitrevisions
+    /// resolves `refs/tags/<name>` BEFORE `refs/heads/<name>`, and git only warns
+    /// (exit 0), so a bare-name read would anchor the journal, the resolve
+    /// worktree and the replay range to the tag's commit.
+    #[tokio::test]
+    async fn local_pr_merge_ignores_a_tag_sharing_the_base_branch_name() {
+        let (dir, repo) = setup_repo("lpr-tag-shadow").await;
+        let base = head_branch(&repo).await;
+        let stale = rev(&repo, "HEAD").await;
+        commit_file(&repo, dir.path(), "a.txt", "base-side\n", "base edit").await;
+        let base_before = rev(&repo, "HEAD").await;
+        git(&repo, &["switch", "-c", "feature", &stale]).await;
+        commit_file(&repo, dir.path(), "f.txt", "feature\n", "feat commit").await;
+        // Off base for the update-ref arm, by SHA and before the tag exists:
+        // `git switch -c <new> <start-point>` refuses an ambiguous start-point
+        // outright (`fatal: ambiguous object name`, exit 128), unlike the
+        // `rev-parse` read this test is about, which quietly picks the tag.
+        git(&repo, &["switch", "-c", "work", &base_before]).await;
+        // A tag on an OLDER commit, named exactly like the base branch.
+        git(&repo, &["tag", &base, &stale]).await;
+        assert_ne!(stale, base_before, "the tag points somewhere else");
+
+        let root_holder = tempfile::tempdir().expect("create temp dir");
+        let root = root_holder.path().join("root");
+        let state = AppState::default();
+        let outcome = merge_local_pr(&state, &repo, &base, "feature", "merge it", "merge", &root)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.status, "merged");
+        assert_eq!(
+            outcome.base_tip, base_before,
+            "the merge is anchored to the BRANCH tip, not the tag's commit"
+        );
+        // Read through the qualified ref — a bare name is ambiguous here now.
+        let base_after = branch_tip(&repo, &base).await.unwrap();
+        assert_ne!(base_after, base_before, "base advanced from its own tip");
+        git(
+            &repo,
+            &["merge-base", "--is-ancestor", &base_before, &base_after],
+        )
+        .await;
+        git(&repo, &["cat-file", "-e", &format!("{base_after}:f.txt")]).await;
+    }
+
+    /// The green direction, and the only test that would catch an anchor that is
+    /// present but WRONG: the refusal tests stay green against any anchor that
+    /// merely differs from base's tip — including the pre-op HEAD its sibling
+    /// journal calls record — so one successful finish through a real `op_id` is
+    /// what pins `pre_op_tip` to base's tip and the `"preOpTip"` store key to the
+    /// reader.
+    #[tokio::test]
+    async fn local_pr_finish_through_the_journaled_anchor_still_merges() {
+        let (dir, repo) = setup_repo("lpr-anchor-green").await;
+        let base = head_branch(&repo).await;
+        git(&repo, &["switch", "-c", "feature"]).await;
+        commit_file(&repo, dir.path(), "a.txt", "feature-side\n", "feat edit").await;
+        git(&repo, &["switch", &base]).await;
+        commit_file(&repo, dir.path(), "a.txt", "base-side\n", "base edit").await;
+        // Off base, so finalize takes the update-ref arm. Its own branch tip is
+        // deliberately NOT base's, so a HEAD-shaped anchor would refuse here.
+        git(&repo, &["switch", "-c", "work"]).await;
+        commit_file(&repo, dir.path(), "w.txt", "w\n", "work edit").await;
+        let base_before = rev(&repo, &base).await;
+
+        let root_holder = tempfile::tempdir().expect("create temp dir");
+        let root = root_holder.path().join("root");
+        let state = AppState::default();
+        let outcome = merge_local_pr(&state, &repo, &base, "feature", "merge it", "merge", &root)
+            .await
+            .unwrap();
+        assert_eq!(outcome.status, "conflicts");
+        let wt = outcome.worktree_path.clone().expect("worktree path set");
+        assert!(
+            outcome.op_id.is_some(),
+            "the anchor under test comes from the oplog entry"
+        );
+
+        // Resolve toward the incoming side, so base's new tip must carry
+        // feature's content rather than its own.
+        git(&wt, &["checkout", "--theirs", "a.txt"]).await;
+        git(&wt, &["add", "a.txt"]).await;
+
+        // Nothing touches `base` in between — the anchor must accept it.
+        let done = finish_local_pr_merge(
+            &state,
+            &repo,
+            &base,
+            "merge",
+            "merge it",
+            &wt,
+            &outcome.worktree_id.clone().unwrap_or_default(),
+            outcome.op_id.clone(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(done.status, "merged");
+        let base_after = rev(&repo, &base).await;
+        assert_ne!(base_after, base_before, "base advanced");
+        assert_eq!(
+            base_after, done.base_tip,
+            "base is at the commit the resolve worktree produced"
+        );
+        assert_eq!(
+            nlf(git(&repo, &["show", &format!("{base_after}:a.txt")]).await),
+            "feature-side\n",
+            "base carries the resolution staged in the worktree"
+        );
+        assert!(
+            !std::path::Path::new(&wt).exists(),
+            "the resolve worktree is torn down on success"
+        );
+    }
+
+    /// A backward move is intent too: someone resetting `base` to an ancestor
+    /// mid-resolution means it, and every finalize arm would honor the rewind as
+    /// readily as a commit (`merge --ff-only` fast-forwards from it; containment
+    /// accepts it). Only the journaled pre-op tip can tell "we started here" from
+    /// "someone moved it back", so this drives the real `op_id`.
+    #[tokio::test]
+    async fn local_pr_finish_refuses_a_base_reset_backwards_during_resolution() {
+        let (dir, repo) = setup_repo("lpr-base-rewound").await;
+        let base = head_branch(&repo).await;
+        let root_tip = rev(&repo, "HEAD").await;
+        git(&repo, &["switch", "-c", "feature"]).await;
+        commit_file(&repo, dir.path(), "a.txt", "feature-side\n", "feat edit").await;
+        git(&repo, &["switch", &base]).await;
+        commit_file(&repo, dir.path(), "a.txt", "base-side\n", "base edit").await;
+        git(&repo, &["switch", "-c", "work"]).await;
+
+        let root_holder = tempfile::tempdir().expect("create temp dir");
+        let root = root_holder.path().join("root");
+        let state = AppState::default();
+        let outcome = merge_local_pr(&state, &repo, &base, "feature", "merge it", "merge", &root)
+            .await
+            .unwrap();
+        assert_eq!(outcome.status, "conflicts");
+        let wt = outcome.worktree_path.clone().expect("worktree path set");
+        // Without a journaled id there is no anchor and this test would pass
+        // vacuously through the containment fallback.
+        assert!(
+            outcome.op_id.is_some(),
+            "the anchor under test comes from the oplog entry"
+        );
+
+        git(&wt, &["checkout", "--ours", "a.txt"]).await;
+        git(&wt, &["add", "a.txt"]).await;
+
+        // Someone deliberately rewinds `base` to the commit before the merge was
+        // started — an ancestor of what the worktree built, so containment alone
+        // would wave it through.
+        git(&repo, &["branch", "-f", &base, &root_tip]).await;
+
+        let done = finish_local_pr_merge(
+            &state,
+            &repo,
+            &base,
+            "merge",
+            "merge it",
+            &wt,
+            &outcome.worktree_id.clone().unwrap_or_default(),
+            outcome.op_id.clone(),
+        )
+        .await;
+        let Err(err) = done else {
+            panic!("expected the rewound base to be refused");
+        };
+        assert!(
+            err.to_string().contains("moved"),
+            "the refusal names the moved base: {err}"
+        );
+        assert_eq!(
+            rev(&repo, &base).await,
+            root_tip,
+            "the rewind stands — the merge did not re-advance it"
+        );
+        assert!(
+            std::path::Path::new(&wt).exists(),
+            "the resolve worktree survives so the user can retry"
+        );
+    }
+
+    /// The resolve session is unbounded, so `base` can gain a commit while the
+    /// user works. Advancing it anyway would drop that commit silently — the
+    /// refusal keeps it, and the worktree survives so the resolution isn't lost.
+    /// Drives `op_id: None` on purpose: this is the containment fallback that
+    /// stands in for an unjournaled merge.
+    #[tokio::test]
+    async fn local_pr_finish_refuses_when_base_moved_and_keeps_the_worktree() {
+        let (dir, repo) = setup_repo("lpr-base-moved").await;
+        let base = head_branch(&repo).await;
+        git(&repo, &["switch", "-c", "feature"]).await;
+        commit_file(&repo, dir.path(), "a.txt", "feature-side\n", "feat edit").await;
+        git(&repo, &["switch", &base]).await;
+        commit_file(&repo, dir.path(), "a.txt", "base-side\n", "base edit").await;
+        // Off base, so finalize_base takes the update-ref path.
+        git(&repo, &["switch", "-c", "work"]).await;
+
+        let root_holder = tempfile::tempdir().expect("create temp dir");
+        let root = root_holder.path().join("root");
+        let state = AppState::default();
+        let outcome = merge_local_pr(&state, &repo, &base, "feature", "merge it", "merge", &root)
+            .await
+            .unwrap();
+        assert_eq!(outcome.status, "conflicts");
+        let wt = outcome.worktree_path.clone().expect("worktree path set");
+
+        git(&wt, &["checkout", "--ours", "a.txt"]).await;
+        git(&wt, &["add", "a.txt"]).await;
+
+        // A concurrent writer lands a commit on `base` mid-resolution. Plumbing,
+        // so the main tree stays where the flow left it.
+        let base_before = rev(&repo, &base).await;
+        let tree = git(&repo, &["rev-parse", &format!("{base_before}^{{tree}}")])
+            .await
+            .trim()
+            .to_string();
+        let landed = git(
+            &repo,
+            &["commit-tree", &tree, "-p", &base_before, "-m", "concurrent"],
+        )
+        .await
+        .trim()
+        .to_string();
+        // `branch -f` rather than an interpolated `refs/heads/<base>` refspec:
+        // the static invariant gate treats those templates as a reviewed surface.
+        git(&repo, &["branch", "-f", &base, &landed]).await;
+
+        let done = finish_local_pr_merge(
+            &state,
+            &repo,
+            &base,
+            "merge",
+            "merge it",
+            &wt,
+            &outcome.worktree_id.clone().unwrap_or_default(),
+            None,
+        )
+        .await;
+        let Err(err) = done else {
+            panic!("expected the moved base to be refused");
+        };
+        assert!(
+            err.to_string().contains("moved"),
+            "the refusal names the moved base: {err}"
+        );
+        assert_eq!(
+            rev(&repo, &base).await,
+            landed,
+            "the concurrent commit is still base's tip — nothing was eaten"
+        );
+        assert!(
+            std::path::Path::new(&wt).exists(),
+            "the resolve worktree survives so the user can retry"
+        );
+    }
+
     /// KNOWN degenerate case, pinned deliberately (NOT changed this round):
     /// `merge --squash` writes no MERGE_HEAD (measured, git 2.51.1), so an
     /// all-"ours" squash genuinely stages nothing, the commit is skipped, and
@@ -6993,7 +7589,7 @@ detached
         let err = git_stash_all_core(&state, repo.clone()).await.unwrap_err();
         assert_eq!(
             message(err),
-            "Can't stash while a merge, rebase or cherry-pick is in progress — finish or abort it first."
+            "Can't stash while a merge, rebase, cherry-pick or revert is in progress — finish or abort it first."
         );
     }
 

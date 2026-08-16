@@ -52,13 +52,13 @@ const OPENAI_NON_CHAT =
  *  excludes future media families by default instead of chasing each new name. */
 const GOOGLE_CHAT_FAMILY = /^(gemini|gemma)-/;
 
-/** Google's catalog, normalized for the model picker. The prefix strip must run
+/** Google's catalog ids, normalized for the model picker. The prefix strip must run
  *  BEFORE the family test — a `models/`-prefixed id fails `^gemini-` and would
  *  filter the whole catalog away. Also used for a custom base URL aimed at the
  *  same endpoint. */
-function googleChatModels(data: { id: string }[]): string[] {
-  return data
-    .map((m) => m.id.replace(/^models\//, ""))
+function googleChatModels(ids: string[]): string[] {
+  return ids
+    .map((id) => id.replace(/^models\//, ""))
     .filter((id) => GOOGLE_CHAT_FAMILY.test(id) && !OPENAI_NON_CHAT.test(id))
     .sort();
 }
@@ -72,6 +72,51 @@ const MISSING_KEY = Symbol("missing-key");
 /** The twin of {@link MISSING_KEY} for an openai-compatible provider with a key but
  *  no base URL: also a no-request state, but the user has a different thing to fix. */
 const MISSING_BASE_URL = Symbol("missing-base-url");
+
+/** A catalog response our own shape casts couldn't read. Distinct from every other
+ *  failure here because the message is OURS: routing it through
+ *  `providerErrorMessage` would quote a TypeError to the user as the provider's
+ *  explanation of what went wrong. */
+class CatalogShapeError extends Error {
+  constructor() {
+    super("The provider's response didn't match the expected format.");
+    this.name = "CatalogShapeError";
+  }
+}
+
+/** Runs a fetched catalog body through its provider's shape mapping, converting a
+ *  shape failure into {@link CatalogShapeError}. Only the mapping is wrapped — the
+ *  fetch stays outside, so HTTP/network failures keep the provider's own words.
+ *  {@link catalogIds} does the element-level work; this stays the net that keeps a
+ *  future unguarded access in some arm from reaching `providerErrorMessage`. */
+function shaped(map: () => string[]): string[] {
+  try {
+    return map();
+  } catch {
+    throw new CatalogShapeError();
+  }
+}
+
+/** Reads a catalog payload's entries into the ids under `idKey`. Drift is a
+ *  {@link CatalogShapeError}: a payload that isn't an array at all, or a non-empty one
+ *  whose entries yield no usable id — a 200 response can carry a drifted body, so
+ *  emptiness there means "we couldn't read this", not "there are no models". An EMPTY
+ *  payload is NOT drift: a provider may genuinely list nothing, which the caller
+ *  reports as `cause: "empty"`. Individual malformed entries beside usable ones are
+ *  dropped, so one bad row can't cost the user the catalog. Domain filters (chat-only,
+ *  family allowlists) run on the RESULT for the same reason — filtering every id away
+ *  is an empty catalog, not a failure to read one. */
+function catalogIds(payload: unknown, idKey: "id" | "name"): string[] {
+  if (!Array.isArray(payload)) throw new CatalogShapeError();
+  const ids: string[] = [];
+  for (const entry of payload) {
+    if (!entry || typeof entry !== "object") continue;
+    const id = (entry as Record<string, unknown>)[idKey];
+    if (typeof id === "string" && id.trim()) ids.push(id);
+  }
+  if (payload.length > 0 && ids.length === 0) throw new CatalogShapeError();
+  return ids;
+}
 
 async function fetchProviderModels(
   settings: AiSettings,
@@ -104,10 +149,11 @@ async function fetchProviderModels(
       const json = await fetchJson("https://api.openai.com/v1/models", {
         Authorization: `Bearer ${key}`,
       });
-      return (json.data as { id: string }[])
-        .map((m) => m.id)
-        .filter((id) => !OPENAI_NON_CHAT.test(id))
-        .sort();
+      return shaped(() =>
+        catalogIds(json.data, "id")
+          .filter((id) => !OPENAI_NON_CHAT.test(id))
+          .sort(),
+      );
     }
     case "anthropic": {
       const key = await getSecret("anthropic");
@@ -119,7 +165,7 @@ async function fetchProviderModels(
           "anthropic-version": "2023-06-01",
         },
       );
-      return (json.data as { id: string }[]).map((m) => m.id);
+      return shaped(() => catalogIds(json.data, "id"));
     }
     case "google": {
       const key = await getSecret("google");
@@ -127,7 +173,7 @@ async function fetchProviderModels(
       const json = await fetchJson(`${GOOGLE_AI_STUDIO_BASE_URL}/models`, {
         Authorization: `Bearer ${key}`,
       });
-      return googleChatModels(json.data as { id: string }[]);
+      return shaped(() => googleChatModels(catalogIds(json.data, "id")));
     }
     case "openai-compatible": {
       const key = await getSecret("openai-compatible");
@@ -139,24 +185,26 @@ async function fetchProviderModels(
       const json = await fetchJson(`${base}/models`, {
         Authorization: `Bearer ${key}`,
       });
-      const data = json.data as { id: string }[];
-      // A custom base URL can still point at Google's catalog (and saved settings
-      // from the retired Gemini preset do), which needs the `google` normalization;
-      // other endpoints list only their own models.
-      if (base === GOOGLE_AI_STUDIO_BASE_URL) return googleChatModels(data);
-      return data.map((m) => m.id).sort();
+      return shaped(() => {
+        const ids = catalogIds(json.data, "id");
+        // A custom base URL can still point at Google's catalog (and saved settings
+        // from the retired Gemini preset do), which needs the `google` normalization;
+        // other endpoints list only their own models.
+        if (base === GOOGLE_AI_STUDIO_BASE_URL) return googleChatModels(ids);
+        return ids.sort();
+      });
     }
     case "openrouter": {
       // public endpoint, no key required
       const json = await fetchJson("https://openrouter.ai/api/v1/models");
-      return (json.data as { id: string }[]).map((m) => m.id).sort();
+      return shaped(() => catalogIds(json.data, "id").sort());
     }
     case "ollama": {
       const base = settings.ollamaBaseUrl.replace(/\/$/, "");
       const json = await fetchJson(`${base}/api/tags`);
-      return ((json.models ?? []) as { name: string }[])
-        .map((m) => m.name)
-        .sort();
+      // `?? []` kept: an absent `models` key stays an empty catalog, as before. A
+      // PRESENT but non-array one is drift, which `catalogIds` refuses.
+      return shaped(() => catalogIds(json.models ?? [], "name").sort());
     }
     case "ollama-cloud": {
       const key = await getSecret("ollama-cloud");
@@ -165,7 +213,7 @@ async function fetchProviderModels(
       const json = await fetchJson(`${OLLAMA_CLOUD_HOST}/v1/models`, {
         Authorization: `Bearer ${key}`,
       });
-      return (json.data as { id: string }[]).map((m) => m.id).sort();
+      return shaped(() => catalogIds(json.data, "id").sort());
     }
     case "claude-cli":
     case "codex-cli":
@@ -226,7 +274,12 @@ export function useAvailableModels(
         return {
           models: fallbackModels(settings),
           live: false,
-          reason: providerErrorMessage(e),
+          // A shape failure is ours to explain; everything else here is the
+          // provider's request that failed, so it keeps the provider's words.
+          reason:
+            e instanceof CatalogShapeError
+              ? e.message
+              : providerErrorMessage(e),
           cause: "failed",
         };
       }

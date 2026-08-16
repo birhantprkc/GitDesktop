@@ -246,7 +246,18 @@ pub struct RepoOpState {
     pub merging: bool,
     pub rebasing: bool,
     pub cherry_picking: bool,
+    pub reverting: bool,
     /// An interactive rebase is paused at an `edit` (vs a conflict) — the user
     /// should amend the commit, then continue.
     pub edit_paused: bool,
+}
+
+impl RepoOpState {
+    /// Whether a multi-step operation is mid-flight — the single home of the flag
+    /// list, so a gate can't drift by re-listing the fields and missing one.
+    /// `edit_paused` is excluded: it qualifies `rebasing` rather than standing on
+    /// its own.
+    pub fn mid_op(&self) -> bool {
+        self.merging || self.rebasing || self.cherry_picking || self.reverting
+    }
 }

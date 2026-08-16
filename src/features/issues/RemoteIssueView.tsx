@@ -300,6 +300,22 @@ export function RemoteIssueView({
     closeIssue.isPending ||
     reopenIssue.isPending ||
     detailsStale;
+  // Which term of `busy` the composer names, ranked: the switch window outranks a
+  // write the viewer started, being the hold they can't have caused themselves.
+  const composerReason = (() => {
+    switch (true) {
+      case detailsStale:
+        return staleReason;
+      case comment.isPending:
+        return "Posting your comment…";
+      case closeIssue.isPending:
+        return "Closing this issue…";
+      case reopenIssue.isPending:
+        return "Reopening this issue…";
+      default:
+        return undefined;
+    }
+  })();
   const comments = issue.comments.filter((c) => hasVisibleBody(c.body));
 
   function submitComment() {
@@ -348,7 +364,11 @@ export function RemoteIssueView({
     );
   }
 
+  // Both take a comment id off the RENDERED issue, which through a switch is the
+  // previous one, so either would hide a comment on the issue the viewer just
+  // left. The menu items disable on the same wait; these arms back them up.
   function hideComment(commentId: string, classifier: MinimizeReason) {
+    if (detailsStale) return;
     minimizeComment.mutate(
       { commentId, classifier },
       { onSuccess: () => toast.success("Comment hidden"), onError },
@@ -356,6 +376,7 @@ export function RemoteIssueView({
   }
 
   function unhideComment(commentId: string) {
+    if (detailsStale) return;
     unminimizeComment.mutate(commentId, {
       onSuccess: () => toast.success("Comment shown"),
       onError,
@@ -818,17 +839,15 @@ export function RemoteIssueView({
                   </p>
                 )}
                 {canReact && (
-                  // The counts are a read and stay; only the toggles hold. A
-                  // disabled button swallows `title`, so the wait rides the span.
-                  <span title={staleReason} className="inline-flex">
-                    <ReactionBar
-                      reactions={reactions.data?.body ?? []}
-                      disabled={detailsStale}
-                      onToggle={(content, active) =>
-                        toggleReaction(issue.id, content, active)
-                      }
-                    />
-                  </span>
+                  // The counts are a read and stay; only the toggles hold.
+                  <ReactionBar
+                    reactions={reactions.data?.body ?? []}
+                    disabled={detailsStale}
+                    reason={staleReason}
+                    onToggle={(content, active) =>
+                      toggleReaction(issue.id, content, active)
+                    }
+                  />
                 )}
               </div>
               {canWrite && (
@@ -880,7 +899,10 @@ export function RemoteIssueView({
                       ? () => unhideComment(c.id)
                       : undefined
                   }
-                  disabledReason={triageItemReason}
+                  // Hide/Unhide stay visible but disabled through the switch. The
+                  // permission reason ranks first — it's the one still true once
+                  // the selected issue is on screen.
+                  disabledReason={triageItemReason ?? staleReason}
                   reactions={
                     canReact ? reactions.data?.comments[c.id] : undefined
                   }
@@ -891,6 +913,7 @@ export function RemoteIssueView({
                       : undefined
                   }
                   reactionsHeld={detailsStale}
+                  reactionsReason={staleReason}
                 />
               ))}
               {comments.length === 0 && (
@@ -914,20 +937,22 @@ export function RemoteIssueView({
               onSubmit={submitComment}
               submitLabel="Comment"
               busy={busy}
+              reason={composerReason}
               // Clear is site-rendered rather than the shared `onClear` one: the
               // close/reopen arm follows it, and the shared Clear is `ml-auto`.
               actions={
                 <>
                   {compose.value.trim() && (
-                    <Button
+                    <DisabledReasonButton
                       variant="ghost"
                       size="sm"
                       disabled={busy}
+                      reason={composerReason}
                       onClick={() => compose.set("")}
                       title="Discard this draft (e.g. a quote reply)"
                     >
                       Clear
-                    </Button>
+                    </DisabledReasonButton>
                   )}
                   {stateActions}
                 </>
