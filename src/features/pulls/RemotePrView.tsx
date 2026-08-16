@@ -82,6 +82,7 @@ import {
   forgeFeatureReady,
   PIPELINE_IN_FLIGHT,
   prDiffOptions,
+  prUpdateBranchKeys,
   TRIAGE_ACCESS_ITEM_REASON,
   triageAccessReason,
   useAbortRemotePrResolve,
@@ -151,6 +152,7 @@ import {
 import { formatBinding } from "@/lib/hotkeys/binding";
 import { useEffectiveBindings, useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useJiraLink } from "@/lib/jira/queries";
+import type { PrSection } from "@/lib/pulls/pr-section";
 import {
   useClearReviewDrafts,
   useReviewDrafts,
@@ -169,12 +171,12 @@ import { PendingReviewBar } from "./PendingReviewBar";
 import { PrActivityFeed, usePrThreadClaims } from "./PrActivityFeed";
 import { PrCommitDetail } from "./PrCommitDetail";
 import {
+  PR_SWITCH_LOADING_REASON,
   type PrMergeabilityArm,
   PrMergeabilityBanner,
 } from "./PrMergeabilityBanner";
 import { PrReviewPanel } from "./PrReviewPanel";
 import { PrTasksChip, PrTasksSection } from "./PrTasksSection";
-import type { PrSection } from "./pr-section";
 import {
   MergePrDialog,
   MrTimeTracking,
@@ -393,17 +395,26 @@ export function RemotePrView({
   );
   const lensRemote = lensRemoteName(lens);
   const serverState = mergeability.data?.state;
-  // The local prediction does double duty: it stands in where the forge ANSWERS but has
-  // no truth to give (Bitbucket), and it NAMES the conflicting files when the forge says
-  // "conflicting" but won't say where. A FAILED read is not covered — it leaves
-  // `serverState` undefined, which disables this too. Never for a fork head either: its
-  // branch may not exist under our remote. Hoisted because a DISABLED query keeps
-  // serving its last value, so every reader of the prediction has to gate on this too.
+  // A read that never landed — unreachable, not undecided. A settled answer that a later
+  // refresh failed on keeps that answer: server truth outranks the local prediction, so
+  // a bare `isError` here would paint a stale prediction over a mergeable PR.
+  const forgeUnreachable = mergeability.isError && !mergeability.data;
+  // The local prediction stands in wherever the forge has no mergeability to give —
+  // Bitbucket by design, or a read that never landed (it runs on local refs and never
+  // fetches, so it answers with the forge unreachable) — and it NAMES the conflicting
+  // files when the forge says "conflicting" but won't say where. Never for a fork head:
+  // a same-named branch under our remote would make the prediction lie. The placeholder
+  // term is the PR-switch guard — details serves the PREVIOUS PR's refs while the new
+  // mergeability read has none. Hoisted because a DISABLED query keeps serving its last
+  // value, so every reader of the prediction has to gate on this too.
   const previewEnabled =
     repoTab === "pulls" &&
     isOpenPr &&
+    !details.isPlaceholderData &&
     !details.data?.crossRepository &&
-    (serverState === "unavailable" || serverState === "conflicting");
+    (serverState === "unavailable" ||
+      serverState === "conflicting" ||
+      forgeUnreachable);
   const conflictPreview = useConflictPreview(
     repoPath,
     `${lensRemote}/${details.data?.baseRefName ?? ""}`,
@@ -430,6 +441,9 @@ export function RemotePrView({
     lens,
     divergenceEnabled,
   );
+  // The divergence query's own identity axes, so an awaited update-branch answer can
+  // tell "still this PR" from "the view moved on".
+  const divergenceIdentity = [repoPath, number, lens].join("|");
   const updateBranch = usePrUpdateBranch(repoPath);
   const mergeRemotePr = useMergeRemotePr(repoPath, lens);
   const abortRemotePrResolve = useAbortRemotePrResolve(repoPath);
@@ -507,15 +521,16 @@ export function RemotePrView({
   // query counts — `writeAccess` feeds `writeBlocked`, not availability, and it
   // stays pending forever on a repo with no provider (it's a disabled query).
   const capabilitiesSettled = !forge.isPending;
-  // The activity dock's "View" lands here via a pending hint; switch to the
-  // review sub-tab once if it's available, then clear the hint either way so
+  // A notification's click-through lands here via a pending hint; switch to the
+  // hinted sub-tab once if it's available, then clear the hint either way so
   // an unusable hint can't fire against a later PR. (Until capabilities settle
   // the hint is left armed — navigating away in that sub-second window can
   // carry it to the next PR; accepted.)
   useEffect(() => {
     if (!capabilitiesSettled) return;
-    if (pendingPrSection === "review" && isSelectedPr) {
-      if (availableSections.includes("review")) setSection("review");
+    if (pendingPrSection !== null && isSelectedPr) {
+      if (availableSections.includes(pendingPrSection))
+        setSection(pendingPrSection);
       setPendingPrSection(null);
     }
   }, [
@@ -816,7 +831,58 @@ export function RemotePrView({
     !!isOpenPr &&
     !details.data?.crossRepository &&
     (serverConflicting || predictedConflict);
+  // Only a clean prediction is a claim worth making on the unreachable arm; an unknown
+  // or still-running one has nothing to say. Gated like every other prediction reader.
+  const predictedClean =
+    previewEnabled && conflictPreview.data?.status === "clean";
   const behindBy = divergenceEnabled ? (divergence.data?.behindBy ?? 0) : 0;
+  // Same gate as `behindBy` — a disabled divergence query keeps serving its last value,
+  // and a latch left armed on one PR must never paint onto the next.
+  const updatingBranch = divergenceEnabled && divergence.updating;
+  // Only a click arms the word on an update, so a background divergence read can never
+  // toast; the identity travels with it because a PR or lens switch retires the answer
+  // rather than reporting it against whatever is on screen now.
+  const awaitedUpdate = useRef<{ identity: string; base: string } | null>(null);
+  const settleUpdate = useEffectEvent(() => {
+    const awaited = awaitedUpdate.current;
+    if (!awaited) return;
+    awaitedUpdate.current = null;
+    if (awaited.identity !== divergenceIdentity) return;
+    // Past this line the component's repoPath/number/lens ARE the awaited PR's — they
+    // are what `divergenceIdentity` is built from, and the guard above just matched it.
+    if (behindBy === 0) {
+      // The mutation's invalidation ran at 202-accept time, against a head that had not
+      // moved yet, so details/commits/files and the checks rollup still hold the
+      // pre-update read. Refresh them before the toast claims the update landed. The
+      // divergence key stays out: the poll just read it, and that read is what got here.
+      void Promise.all(
+        prUpdateBranchKeys(repoPath, number, lens).map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }),
+        ),
+      );
+      // A long update spends the mergeability ladder against the UNKNOWN that GitHub
+      // reports throughout, so the refetch above would land on a gave-up arm. The head
+      // just moved: the question is new again, and the ladder has to start over with it.
+      mergeability.retry();
+      toast.success(`Branch updated from ${awaited.base}.`);
+      return;
+    }
+    // The ladder conceded with the head still behind: GitHub's job outlived it. Say
+    // where things stand rather than claiming either outcome, and DON'T invalidate or
+    // restart the mergeability ladder — nothing has been observed to change, the job is
+    // still running so six fresh rungs would just exhaust against UNKNOWN again, and the
+    // strip's own Retry is the honest affordance. Focus and the stale windows catch the
+    // eventual landing.
+    toast.info(`GitHub is still updating this branch from ${awaited.base}.`);
+  });
+  // Runs on mount and on either dep's change, not only the transition out of updating —
+  // the ref guard is what makes a run with nothing pending a no-op. Held off while the
+  // divergence query is disabled: `updatingBranch` reads false there for reasons that
+  // have nothing to do with the job finishing.
+  useEffect(() => {
+    if (updatingBranch || !divergenceEnabled) return;
+    settleUpdate();
+  }, [updatingBranch, divergenceEnabled]);
   // Updating the branch pushes the base onto the head, so it takes push permission —
   // and on a fork the contributor's "allow edits by maintainers" too. Only an
   // explicit denial blocks; unknown must never read as one.
@@ -828,23 +894,37 @@ export function RemotePrView({
 
   // The banner's arm: server truth, then the local prediction where the forge has
   // none, then the resume offer — the resolve worktree is only worth its own line
-  // when there's nothing more urgent to say about the merge. Behind-the-base is the
-  // quietest line of all, so it fills only the arm that would otherwise stay silent.
-  const bannerArm: PrMergeabilityArm = !isOpenPr
-    ? null
-    : serverConflicting
-      ? "conflicting"
-      : predictedConflict
-        ? "predicted"
-        : findResolve.data
-          ? "resume"
-          : mergeability.data?.state !== "checking"
-            ? behindBy > 0
-              ? "behind"
-              : null
-            : mergeability.polling
-              ? "checking"
-              : "unknown";
+  // when there's nothing more urgent to say about the merge. `updating` outranks
+  // `checking` because GitHub reports mergeability UNKNOWN for the whole async update
+  // window, and that arm would otherwise hide the very thing the user just started.
+  // Behind-the-base and the unreachable line are the quietest of all, so they fill
+  // only an arm that would otherwise stay silent.
+  const bannerArm: PrMergeabilityArm = (() => {
+    switch (true) {
+      case !isOpenPr:
+        return null;
+      case serverConflicting:
+        return "conflicting";
+      case predictedConflict:
+        return "predicted";
+      case !!findResolve.data:
+        return "resume";
+      case updatingBranch:
+        return "updating";
+      case mergeability.data?.state === "checking":
+        return mergeability.polling ? "checking" : "unknown";
+      // A settled answer that a later read failed to refresh stays invisible; only a
+      // read that never landed leaves the banner with nothing but the local prediction.
+      case forgeUnreachable:
+        return "unreachable";
+      case behindBy > 0:
+        return "behind";
+      default:
+        return null;
+    }
+  })();
+  // No `updating` term needed: the arm only reads "behind" once the ladder has fallen
+  // past that case. The submitting window is its own thing — it precedes the latch.
   const canUpdateBranch =
     bannerArm === "behind" &&
     updateBlockedReason === undefined &&
@@ -930,7 +1010,12 @@ export function RemotePrView({
     // any future caller — no UI gate is the only thing between a viewer who may
     // not push (or a second click) and the mutation. It derives from the rendered
     // PR, the previous one during a switch — hence the placeholder refusal above.
-    if (updateBlockedReason !== undefined || updateBranch.isPending) return;
+    if (
+      updateBlockedReason !== undefined ||
+      updateBranch.isPending ||
+      updatingBranch
+    )
+      return;
     if (rebase) {
       const ok = await useConfirm.getState().ask({
         title: `Rebase onto ${base}?`,
@@ -942,7 +1027,15 @@ export function RemotePrView({
     updateBranch.mutate(
       { number, rebase, lens },
       {
-        onSuccess: () => toast.success(`Branch updated from ${base}.`),
+        // GitHub only ACCEPTED the job here, so the word goes to the poll: the strip
+        // holds the updating line and `settleUpdate` speaks once a read has seen the
+        // head catch up (or the ladder concede). Arming only follows a ladder that
+        // actually took the request — a refused one would leave the ref waiting for a
+        // poll that never runs, and fire its toast on some later visit to this PR.
+        onSuccess: () => {
+          if (divergence.awaitUpdate())
+            awaitedUpdate.current = { identity: divergenceIdentity, base };
+        },
         onError,
       },
     );
@@ -1412,7 +1505,7 @@ export function RemotePrView({
   // What a control that holds through the switch says, in one wording. It ranks
   // BELOW any permission or read-error reason wherever both hold: those never
   // lift on their own and are the ones still true once the switch lands.
-  const staleReason = detailsStale ? "Loading this pull request…" : undefined;
+  const staleReason = detailsStale ? PR_SWITCH_LOADING_REASON : undefined;
   // The metadata pickers seed from the rendered PR and commit the WHOLE set on
   // close, so one opened mid-switch would write the previous PR's members under
   // the new number. Their triggers disable on a reason, so this rides that seam.
@@ -2056,11 +2149,14 @@ export function RemotePrView({
           detailsStale
         }
         conflictFiles={predictedFiles}
+        predictedClean={predictedClean}
+        forgeUnreachable={forgeUnreachable}
         behindBy={behindBy}
         updateBlockedReason={updateBlockedReason}
-        // Busy-shaped, not a reason: `runUpdateBranch` refuses through the switch
-        // window, and a sub-second hold needs no explaining text.
-        updateBusy={updateBranch.isPending || detailsStale}
+        // Busy-shaped, not a reason — the banner supplies its own words for the wait,
+        // which now spans GitHub's whole queued update rather than one CLI call.
+        updateBusy={updateBranch.isPending || updatingBranch || detailsStale}
+        updateSubmitting={updateBranch.isPending}
         onResolve={() => runResolve(false)}
         onResolveWithAi={() => runResolve(true)}
         onDiscard={() => void discardResolve()}
