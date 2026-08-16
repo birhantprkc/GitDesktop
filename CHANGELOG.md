@@ -12,6 +12,75 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-16
+
+### Changed
+
+- The comment box now keeps a separate draft for each discussion, pull request,
+  issue, and History commit you're working in, so you can switch between them
+  and pick up where you left off.
+- Pull request and issue actions explain why they're unavailable while the one
+  you picked is still loading — **Review…**, merge, approve, request changes,
+  close, reopen, the draft toggle, sub-issues and the metadata pickers all say
+  so — and a missing write or triage permission is named ahead of the loading
+  note. Reaction and upvote buttons hold the same way — in discussions too —
+  until the one you picked is on screen.
+
+### Fixed
+
+- When a cherry-pick onto another branch can't complete, the automatic
+  rollback returns the target branch to its prior tip and puts you back on
+  the branch you started from; if that rollback itself can't complete, the
+  error names the target's pre-run tip and the exact commands to recover.
+- Dropdowns read the same collapsed as they do open — the session composer's
+  agent, model, and effort pickers, the research intent picker, the pull request
+  review provider picker, and the selects across Settings and repository
+  settings all show their full labels.
+- Error toasts name the failure you actually hit: a push, checkout, or fetch
+  error stays on screen as itself even when a commit message or file name
+  mentions conflicts, and a paused cherry-pick reads as a cherry-pick however
+  the commit it stopped on is titled.
+- Dialog text stays put while a dialog closes — confirms keep the branch, tag,
+  commit, file, task, pull request, or repository they were about, and the error
+  and AI result viewers keep their contents, all the way through the closing
+  animation.
+- Switching between light and dark re-colors highlighted code instantly: diffs
+  and webhook delivery payloads pick up the new theme's syntax colors in place.
+- Reconnecting a GitHub account picks up the token scopes it just granted right
+  away, so scope-gated actions become available immediately.
+- Local PR branch fields now accept only real branch names — a Git revision
+  expression such as `feature~1` or `main^` (possible via the MCP server's
+  `create_local_pr`) previously passed validation and could merge a different
+  commit than the branch it named.
+- The model picker now tells you why the live model list couldn't load — the
+  provider's own message for a rejected key, or the blocked-host hint for a custom
+  server — and refreshes as soon as you save or clear the API key.
+- Picking a folder in **Open repository…** that isn't a git repository says so
+  plainly and stops there; the **Locate…** and **Remove** fixes stay with the
+  recent-repository list, where they have a row to act on.
+- AI-generated release notes follow the repo's own `.gitdesktop/instructions.md`,
+  the same as every other generation.
+- Release actions always act on the tag you selected: publishing, editing,
+  deleting a release and adding, downloading or removing its assets wait —
+  saying so — until that tag's release has loaded.
+- Edits and deletions of a pending review comment report a failure even when you
+  move to another pull request while the write is in flight.
+- When an interactive-rebase rewrite can't complete, the error now tells the truth
+  about the rollback: it confirms your branch was restored, and when the rollback
+  itself fails it names the tip your branch had before the run and the exact
+  commands to recover.
+- The repository **visibility** and Dependabot **check for updates** pickers
+  read the same closed as they do open — the selected value is capitalized to
+  match the entry you chose.
+- Shortcut hints name the keys your Mac actually uses: the markdown toolbar's
+  **Bold**, **Italic**, and **Link** buttons show Cmd, and Settings → Keyboard
+  names Cmd and Option while you record a binding.
+- Stashing is now refused while a merge, rebase or cherry-pick is in progress —
+  including one whose conflicts you have already resolved and staged — so the
+  resolution stays with the operation git is still tracking, and promoting a
+  worktree is blocked while the main workspace is mid-operation, before the
+  point of no return.
+
 ## [0.9.0] - 2026-08-14
 
 ### Added
@@ -2904,7 +2973,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/theBGuy/GitDesktop/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/theBGuy/GitDesktop/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/theBGuy/GitDesktop/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/theBGuy/GitDesktop/compare/v0.6.1...v0.7.0
