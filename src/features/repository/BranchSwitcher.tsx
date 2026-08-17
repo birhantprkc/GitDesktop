@@ -92,7 +92,10 @@ import {
   type MergeRunOptions,
   type PickerMode,
 } from "./BranchMergePickerDialog";
-import { CleanupBranchesDialog } from "./CleanupBranchesDialog";
+import {
+  CleanupBranchesDialog,
+  prCheckStateFrom,
+} from "./CleanupBranchesDialog";
 import { CreateBranchDialog } from "./CreateBranchDialog";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
 import { ForkPrPublishGuard } from "./ForkPrPublishGuard";
@@ -592,6 +595,13 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   });
   const stashes = stashCount.data ?? 0;
   const hasChanges = (status.data?.entries.length ?? 0) > 0;
+  // Rebase refuses only on dirty TRACKED files, so the proactive stash offer
+  // keys on this — an untracked-only tree rebases fine, and stashing it
+  // unasked would move those files into a stash on any replay conflict.
+  const hasTrackedChanges = (status.data?.entries ?? []).some(
+    (e) =>
+      e.staged !== null || (e.unstaged !== null && e.unstaged !== "untracked"),
+  );
   // Naming a branch from changes needs a commit to diff against; an unborn HEAD
   // (no commits) has nothing to compare the working tree to.
   const headExists = Boolean(head?.oid);
@@ -787,6 +797,20 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     });
   }
 
+  // Rebase refuses on ANY dirty tracked file, not just one the replay would
+  // touch, so this dead-ends more often than the merge above — offer the same
+  // stash → rebase → reapply compound. `false` leaves the error to the caller.
+  function beginRebaseRecovery(e: unknown, branch: string) {
+    return recovery.handleError(e, {
+      operationLabel: "rebase",
+      detail: branch,
+      detailPreposition: "onto",
+      reappliedMessage: `Rebased onto ${branch} and reapplied your changes.`,
+      plainMessage: `Rebased onto ${branch}`,
+      run: { op: "rebase", ref: branch },
+    });
+  }
+
   // The dialog collects the branch + options; the switcher owns the mutations
   // (they feed `busy`) and dispatches them here after closing the picker.
   function runPicker(
@@ -798,7 +822,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     if (mode === "rebase") {
       rebaseBranch.mutate(branch, {
         onSuccess: () => toast.success(`Rebased onto ${branch}`),
-        onError,
+        onError: (e) => {
+          if (beginRebaseRecovery(e, branch)) return;
+          onError(e);
+        },
       });
     } else {
       const squash = mode === "squash";
@@ -842,13 +869,35 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
   // The dialog collects the two branches; the switcher owns the mutation (it
   // feeds `busy`). Conflicts leave the rebase in progress for the conflict
   // banner, exactly like the plain rebase above.
+  //
+  // Proactive rather than error-triggered: the dialog already knows the tree is
+  // dirty, and git would refuse before touching anything, so offering the
+  // compound up front beats a round-trip that can only fail.
   function runRebaseOnto(newBase: string, oldBase: string) {
     setRebaseOntoOpen(false);
+    const request = {
+      operationLabel: "rebase",
+      detail: newBase,
+      detailPreposition: "onto",
+      reappliedMessage: `Rebased onto ${newBase} and reapplied your changes.`,
+      plainMessage: `Rebased onto ${newBase}`,
+      run: { op: "rebaseOnto", newBase, oldBase },
+    } as const;
+    if (hasTrackedChanges) {
+      recovery.begin(request);
+      return;
+    }
     rebaseOnto.mutate(
       { newBase, oldBase },
       {
         onSuccess: () => toast.success(`Rebased onto ${newBase}`),
-        onError,
+        // `hasTrackedChanges` is a query-state read that can trail the tree: a
+        // file saved between the check and the run still deserves the offer, so
+        // a dirty refusal routes back into the same recovery.
+        onError: (e) => {
+          if (recovery.handleError(e, request)) return;
+          onError(e);
+        },
       },
     );
   }
@@ -2077,14 +2126,10 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         isProtected={(name) => isDeletionBlocked(rulesConfig, name)}
         isInWorktree={(name) => worktreeByBranch.has(name)}
         prMergedByBranch={mergedPrByBranch}
-        // Only the closed list carries merged PRs. A failed read ends the wait
-        // but is not an answer, so the dialog is told which of the two it got.
-        prMergedPending={
-          prsWanted &&
-          !closedPrs.isError &&
-          (closedPrs.isFetching || closedPrs.isPlaceholderData)
-        }
-        prMergedFailed={prsWanted && closedPrs.isError}
+        // Only the closed list carries merged PRs, and `canGh` is what says the
+        // query runs at all — so the dialog is told which of the four it got,
+        // never-ran included.
+        prCheckState={prCheckStateFrom(canGh, closedPrs)}
       />
 
       <ConfirmDialog
@@ -2268,7 +2313,6 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         otherBranches={otherBranches}
         currentLabel={currentLabel}
         defaultBranch={defaultName}
-        hasChanges={hasChanges}
         isPushed={Boolean(head?.upstream) && !head?.upstreamGone}
       />
 

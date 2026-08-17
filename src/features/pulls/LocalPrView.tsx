@@ -19,6 +19,7 @@ import {
 import type { ReactNode } from "react";
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { DisabledReasonButton } from "@/components/disabled-reason-button";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -340,6 +341,46 @@ export function LocalPrView({
       id: pr.id,
       mutate: (cur) => ({ ...cur, approved: !cur.approved }),
     });
+  }
+
+  // A typed note rides Close/Reopen rather than being discarded by them.
+  const draftRidesStateChange = !!comment.trim();
+
+  /** Close/Reopen, carrying any typed note. The note is appended in the SAME
+   *  record mutation as the status flip, so the store can never persist one
+   *  without the other; the draft clears only once that write lands. */
+  function setStatus(next: "open" | "closed") {
+    // Appending the note makes this non-idempotent, and the mutate callback
+    // re-reads the record from disk — so a second click lands after the first
+    // note is already stored and would post it twice.
+    if (!pr || update.isPending) return;
+    const note = comment.trim();
+    update.mutate(
+      {
+        id: pr.id,
+        mutate: (cur) => ({
+          ...cur,
+          comments: note
+            ? [
+                ...cur.comments,
+                {
+                  id: crypto.randomUUID(),
+                  body: note,
+                  createdAt: new Date().toISOString(),
+                },
+              ]
+            : cur.comments,
+          status: next,
+          closedAt: next === "closed" ? new Date().toISOString() : undefined,
+        }),
+      },
+      {
+        onSuccess: () => setComment(""),
+        // Nothing was written, the note included — say so rather than leave a
+        // silent no-op behind a button that promised to post it.
+        onError: toastError,
+      },
+    );
   }
 
   function openEdit() {
@@ -938,22 +979,22 @@ export function LocalPrView({
                 {ghStatus.data?.provider === "gitlab" ? "GitLab" : "GitHub"}
               </Button>
             )}
-            <Button
+            {/* The label swaps while a note rides along: the action changed
+                meaning, and only the label reaches a viewer before the click. */}
+            <DisabledReasonButton
               variant="outline"
               size="sm"
-              onClick={() =>
-                update.mutate({
-                  id: pr.id,
-                  mutate: (cur) => ({
-                    ...cur,
-                    status: "closed",
-                    closedAt: new Date().toISOString(),
-                  }),
-                })
+              disabled={update.isPending}
+              reason="Saving…"
+              onClick={() => setStatus("closed")}
+              title={
+                draftRidesStateChange
+                  ? "Closes and posts your draft as a comment"
+                  : undefined
               }
             >
-              Close
-            </Button>
+              {draftRidesStateChange ? "Close with comment" : "Close"}
+            </DisabledReasonButton>
             <span className="flex-1" />
             {/* GitHub-style "Update branch": only when head has fallen behind
                 base. Merges base into head (in a throwaway worktree, so it
@@ -1052,23 +1093,21 @@ export function LocalPrView({
         {pr.status === "closed" && (
           <>
             <span className="flex-1" />
-            <Button
+            <DisabledReasonButton
               variant="outline"
               size="sm"
-              onClick={() =>
-                update.mutate({
-                  id: pr.id,
-                  mutate: (cur) => ({
-                    ...cur,
-                    status: "open",
-                    closedAt: undefined,
-                  }),
-                })
+              disabled={update.isPending}
+              reason="Saving…"
+              onClick={() => setStatus("open")}
+              title={
+                draftRidesStateChange
+                  ? "Reopens and posts your draft as a comment"
+                  : undefined
               }
             >
               <ArrowCounterClockwiseIcon data-icon="inline-start" />
-              Reopen
-            </Button>
+              {draftRidesStateChange ? "Reopen with comment" : "Reopen"}
+            </DisabledReasonButton>
           </>
         )}
       </div>

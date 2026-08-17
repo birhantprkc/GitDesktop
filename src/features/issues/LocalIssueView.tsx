@@ -13,6 +13,7 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { useState } from "react";
+import { DisabledReasonButton } from "@/components/disabled-reason-button";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -123,10 +124,49 @@ export function LocalIssueView({
   }
 
   const isOpen = issue.status === "open";
+  // A typed note rides Close/Reopen rather than being discarded by them.
+  const draftRidesStateChange = !!comment.trim();
 
   function openEdit() {
     if (!issue) return;
     edit.openEdit({ title: issue.title, body: issue.body });
+  }
+
+  /** Close/Reopen, carrying any typed note. The note is appended in the SAME
+   *  record mutation as the status flip, so the store can never persist one
+   *  without the other; the draft clears only once that write lands. */
+  function setStatus(next: "open" | "closed") {
+    // Appending the note makes this non-idempotent, and the mutate callback
+    // re-reads the record from disk — so a second click lands after the first
+    // note is already stored and would post it twice.
+    if (!issue || update.isPending) return;
+    const note = comment.trim();
+    update.mutate(
+      {
+        id: issue.id,
+        mutate: (cur) => ({
+          ...cur,
+          comments: note
+            ? [
+                ...cur.comments,
+                {
+                  id: crypto.randomUUID(),
+                  body: note,
+                  createdAt: new Date().toISOString(),
+                },
+              ]
+            : cur.comments,
+          status: next,
+          closedAt: next === "closed" ? new Date().toISOString() : undefined,
+        }),
+      },
+      {
+        onSuccess: () => setComment(""),
+        // Nothing was written, the note included — say so rather than leave a
+        // silent no-op behind a button that promised to post it.
+        onError: toastError,
+      },
+    );
   }
 
   return (
@@ -371,38 +411,40 @@ export function LocalIssueView({
                     : `Publish to ${ghStatus.data?.provider === "gitlab" ? "GitLab" : "GitHub"}`}
               </Button>
             )}
-            <Button
+            {/* The label swaps while a note rides along: the action changed
+                meaning, and only the label reaches a viewer before the click. */}
+            <DisabledReasonButton
               variant="outline"
               size="sm"
-              onClick={() =>
-                update.mutate({
-                  id: issue.id,
-                  mutate: (cur) => ({
-                    ...cur,
-                    status: "closed",
-                    closedAt: new Date().toISOString(),
-                  }),
-                })
+              disabled={update.isPending}
+              reason="Saving…"
+              onClick={() => setStatus("closed")}
+              title={
+                draftRidesStateChange
+                  ? "Closes and posts your draft as a comment"
+                  : undefined
               }
             >
-              Close
-            </Button>
+              {draftRidesStateChange ? "Close with comment" : "Close"}
+            </DisabledReasonButton>
           </>
         )}
         {!isOpen && (
-          <Button
+          <DisabledReasonButton
             variant="outline"
             size="sm"
-            onClick={() =>
-              update.mutate({
-                id: issue.id,
-                mutate: (cur) => ({ ...cur, status: "open" }),
-              })
+            disabled={update.isPending}
+            reason="Saving…"
+            onClick={() => setStatus("open")}
+            title={
+              draftRidesStateChange
+                ? "Reopens and posts your draft as a comment"
+                : undefined
             }
           >
             <ArrowCounterClockwiseIcon data-icon="inline-start" />
-            Reopen
-          </Button>
+            {draftRidesStateChange ? "Reopen with comment" : "Reopen"}
+          </DisabledReasonButton>
         )}
       </div>
 
