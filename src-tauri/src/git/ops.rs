@@ -2676,9 +2676,12 @@ pub(crate) async fn finish_local_pr_merge(
                     let already = lower.contains("nothing to commit")
                         || lower.contains("no changes added");
                     if !already {
+                        // Both streams: a failing `commit` can report on stdout alone
+                        // (measured, git 2.51.1), which stderr-only renders as the
+                        // bare "git exited with code 1".
                         return Err(AppError::Git {
                             code: commit.code,
-                            stderr: commit.stderr,
+                            stderr: commit.full_failure_text(),
                         });
                     }
                 }
@@ -3275,9 +3278,12 @@ pub(crate) async fn finish_remote_pr_resolve(
             let already =
                 lower.contains("nothing to commit") || lower.contains("no changes added");
             if !already {
+                // Both streams: a failing `commit` can report on stdout alone
+                // (measured, git 2.51.1), which stderr-only renders as the bare
+                // "git exited with code 1".
                 return Err(AppError::Git {
                     code: commit.code,
-                    stderr: commit.stderr,
+                    stderr: commit.full_failure_text(),
                 });
             }
         }
@@ -3399,8 +3405,8 @@ pub(crate) async fn find_remote_pr_resolve(
 }
 
 /// Maps a raw git output into a `Result`, turning a non-zero exit into
-/// `AppError::Git` (so `run_git_raw` calls in the worktree can distinguish a
-/// clean commit from a conflict via the returned `Err`, while still surfacing the
+/// `AppError::Git` (so `run_git_raw` call sites can distinguish a clean commit
+/// from a conflict via the returned `Err`, while still surfacing the
 /// unmerged-paths signal for the conflict branch).
 fn check_code(o: crate::git::runner::GitOutput) -> AppResult<()> {
     if o.code == 0 {
@@ -3653,18 +3659,30 @@ pub(crate) async fn rewrite_commits_with_timeouts(
         // the branch position — a killed reset can still have moved it).
         let rewound = failure.is_none();
         if failure.is_none() {
+            // Raw plus `check_code`, never a mutating runner: this loop runs inside
+            // the compound's own `repo_lock` hold. Failures land on either stream —
+            // a conflicted pick splits `could not apply` (stderr) from its `CONFLICT (…`
+            // file list (stdout), and `commit` reports a squash that left nothing to
+            // commit on stdout alone — so a stderr-only error would carry half a
+            // message, or none at all.
             'steps: for step in steps {
                 let single_pick = step.hashes.len() == 1 && step.message.is_none();
                 if single_pick {
                     let args = ["cherry-pick", step.hashes[0].as_str()];
-                    if let Err(e) = run_git(Some(repo_path), &args, pick_timeout).await {
+                    if let Err(e) = run_git_raw(Some(repo_path), &args, pick_timeout)
+                        .await
+                        .and_then(check_code)
+                    {
                         failure = Some(e);
                         break 'steps;
                     }
                 } else {
                     let mut args = vec!["cherry-pick", "-n"];
                     args.extend(step.hashes.iter().map(String::as_str));
-                    if let Err(e) = run_git(Some(repo_path), &args, pick_timeout).await {
+                    if let Err(e) = run_git_raw(Some(repo_path), &args, pick_timeout)
+                        .await
+                        .and_then(check_code)
+                    {
                         failure = Some(e);
                         break 'steps;
                     }
@@ -3676,7 +3694,10 @@ pub(crate) async fn rewrite_commits_with_timeouts(
                     } else {
                         vec!["commit", "-m", message]
                     };
-                    if let Err(e) = run_git(Some(repo_path), &commit_args, DEFAULT_TIMEOUT).await {
+                    if let Err(e) = run_git_raw(Some(repo_path), &commit_args, DEFAULT_TIMEOUT)
+                        .await
+                        .and_then(check_code)
+                    {
                         failure = Some(e);
                         break 'steps;
                     }
@@ -4413,6 +4434,13 @@ mod tests {
                     stderr.contains("your branch is unchanged"),
                     "a completed rollback must say so: {stderr}"
                 );
+                // Below the verdict, git's whole report: the replay loop splits it
+                // across both streams exactly like `cherry_pick_onto`'s loop.
+                assert!(
+                    stderr.contains("could not apply")
+                        && stderr.contains("CONFLICT (content): Merge conflict in a.txt"),
+                    "the verdict must carry git's diagnostic AND its file list: {stderr}"
+                );
             }
             Ok(()) => panic!("the conflicting rewrite must fail"),
             Err(e) => panic!("expected a Git error, got {e:?}"),
@@ -4421,6 +4449,94 @@ mod tests {
         let status = git(&repo, &["status", "--porcelain"]).await;
         assert!(status.trim().is_empty(), "tree should be clean: {status}");
 
+    }
+
+    /// The multi-hash pick splits its report the same way the single-hash one
+    /// does, and it is a separate call site — so it needs its own conflict.
+    #[tokio::test]
+    async fn conflicting_squash_rolls_back_and_carries_gits_report() {
+        let (dir, repo) = setup_repo("conflict-squash").await;
+        let base = rev(&repo, "HEAD").await;
+        commit_file(&repo, dir.path(), "a.txt", "v1\n", "one").await;
+        let c1 = rev(&repo, "HEAD").await;
+        commit_file(&repo, dir.path(), "a.txt", "v2\n", "two").await;
+        let c2 = rev(&repo, "HEAD").await;
+        let orig = rev(&repo, "HEAD").await;
+
+        let state = AppState::default();
+        // Squashing them newest-first replays "two"'s patch (v1→v2) onto v0 first,
+        // so the `cherry-pick -n` leg conflicts before any commit is attempted.
+        let result = rewrite_commits(
+            &state,
+            &repo,
+            &base,
+            &[RewriteStep {
+                hashes: vec![c2, c1],
+                message: Some("combined".into()),
+                edit: false,
+            }],
+        )
+        .await;
+        match result {
+            Err(AppError::Git { ref stderr, .. }) => {
+                assert_verdict_shape(stderr, "was rolled back");
+                assert!(
+                    stderr.contains("CONFLICT (content): Merge conflict in a.txt"),
+                    "the verdict must carry git's stdout file list: {stderr}"
+                );
+            }
+            Ok(()) => panic!("the conflicting squash must fail"),
+            Err(e) => panic!("expected a Git error, got {e:?}"),
+        }
+        assert_eq!(rev(&repo, "HEAD").await, orig);
+        let status = git(&repo, &["status", "--porcelain"]).await;
+        assert!(status.trim().is_empty(), "tree should be clean: {status}");
+    }
+
+    /// The other half of the family: a squash whose commits cancel out fails at
+    /// `commit`, which reports on STDOUT alone — a stderr-only error would leave
+    /// the verdict with no explanation under it at all.
+    #[tokio::test]
+    async fn empty_squash_rolls_back_and_carries_gits_report() {
+        let (dir, repo) = setup_repo("empty-squash").await;
+        let base = rev(&repo, "HEAD").await;
+        commit_file(&repo, dir.path(), "a.txt", "v1\n", "one").await;
+        let c1 = rev(&repo, "HEAD").await;
+        // Restores the base content, so replaying the pair as one commit onto
+        // `base` nets an empty tree change.
+        commit_file(&repo, dir.path(), "a.txt", "v0\n", "two").await;
+        let c2 = rev(&repo, "HEAD").await;
+        let orig = rev(&repo, "HEAD").await;
+
+        let state = AppState::default();
+        let result = rewrite_commits(
+            &state,
+            &repo,
+            &base,
+            &[RewriteStep {
+                hashes: vec![c1, c2],
+                message: Some("combined".into()),
+                edit: false,
+            }],
+        )
+        .await;
+        match result {
+            Err(AppError::Git { ref stderr, .. }) => {
+                assert_verdict_shape(stderr, "was rolled back");
+                // git's whole sentence, not the bare "nothing to commit": the
+                // verdict's own cause line already says that much, so the short
+                // form passes even when git's report was dropped entirely.
+                assert!(
+                    stderr.contains("nothing to commit, working tree clean"),
+                    "the verdict must carry git's stdout-only report: {stderr}"
+                );
+            }
+            Ok(()) => panic!("the empty squash must fail"),
+            Err(e) => panic!("expected a Git error, got {e:?}"),
+        }
+        assert_eq!(rev(&repo, "HEAD").await, orig);
+        let status = git(&repo, &["status", "--porcelain"]).await;
+        assert!(status.trim().is_empty(), "tree should be clean: {status}");
     }
 
     /// The rollback must run for every failure class, not just a conflict — a
@@ -7008,6 +7124,68 @@ detached
             rev(&repo, &base).await,
             base_before,
             "KNOWN: an all-ours squash advances nothing"
+        );
+    }
+
+    /// The premise the two conclude-with-commit legs rest on
+    /// (`finish_local_pr_merge`, `finish_remote_pr_resolve`): a `git commit` that
+    /// refuses writes its whole report to STDOUT and leaves stderr EMPTY, so an
+    /// error carrying stderr alone renders as the bare "git exited with code 1".
+    /// That is the split `full_failure_text` exists to close.
+    ///
+    /// Pinned here rather than at those call sites because no real-repo fixture
+    /// can reach them with this shape: every OTHER commit refusal measured (git
+    /// 2.51.1) — a rejecting hook, an empty message, a signing failure — reports
+    /// on stderr, and git redirects hook output to stderr too, so a hook cannot
+    /// stage the stdout case either.
+    #[tokio::test]
+    async fn a_refusing_commit_reports_on_stdout_with_stderr_empty() {
+        let (dir, repo) = setup_repo("commit-streams").await;
+
+        // Clean tree, nothing staged.
+        let clean = run_git_raw(Some(&repo), &["commit", "-m", "x"], DEFAULT_TIMEOUT)
+            .await
+            .unwrap();
+        assert_ne!(clean.code, 0, "a commit with nothing staged must refuse");
+        assert!(
+            clean.stderr.trim().is_empty(),
+            "stderr staying empty is the whole problem: {}",
+            clean.stderr
+        );
+        assert!(
+            clean.stdout_lossy().contains("nothing to commit"),
+            "git's report rides stdout: {}",
+            clean.stdout_lossy()
+        );
+
+        // Same refusal with an untracked file present is a DIFFERENT sentence —
+        // and the one neither `already` allow-list substring matches, so it is the
+        // shape that reaches the error build rather than being swallowed.
+        std::fs::write(dir.path().join("untracked.txt"), "u\n").unwrap();
+        let untracked = run_git_raw(Some(&repo), &["commit", "-m", "x"], DEFAULT_TIMEOUT)
+            .await
+            .unwrap();
+        assert_ne!(
+            untracked.code, 0,
+            "a commit refusing over only-untracked files must still refuse"
+        );
+        assert!(
+            untracked.stderr.trim().is_empty(),
+            "stderr staying empty is the whole problem: {}",
+            untracked.stderr
+        );
+        let report = untracked.stdout_lossy();
+        assert!(
+            report.contains("nothing added to commit but untracked files present"),
+            "git's report rides stdout: {report}"
+        );
+        // This variant's sentence matches NEITHER allow-list substring, so it
+        // reaches the error build even off combined output — the blind spot that
+        // makes full_failure_text() load-bearing at both conclude-with-commit legs.
+        let lower = report.to_lowercase();
+        assert!(
+            !lower.contains("nothing to commit") && !lower.contains("no changes added"),
+            "the untracked refusal must not match the tolerate-it substrings: {report}"
         );
     }
 
