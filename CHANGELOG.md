@@ -12,6 +12,157 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-08-17
+
+### Changed
+
+- Conversation controls now explain themselves when they're unavailable. Reaction
+  chips, a discussion's upvote chip, the add-reaction picker and a comment box's
+  **Comment** / **Clear** buttons name the hold ("Loading this issue…", "Posting
+  your comment…") as a tooltip and to screen readers, and stay reachable by
+  keyboard while they say it, so you can always find out what a control is
+  waiting on.
+- Linux builds now target the Ubuntu 24.04 toolchain, so the packages track a
+  current system baseline. This raises the minimum glibc generation they need:
+  distributions older than the 24.04 era can no longer run them.
+- **Submit review** always shows all three verdicts. **Approve** and **Request
+  changes** stay on screen and say what they're waiting on (a note that they
+  become available once GitDesktop connects to that repository's host), so it's
+  clear the option exists and what makes it usable.
+
+### Fixed
+
+- The Welcome, Settings, Help, and Explore screens no longer grow a stray
+  window scrollbar while the activity strip is showing along the bottom.
+- A plan, research run, or agent-session turn that fails keeps what the agent
+  had written (including agents that deliver their text only at the end), so
+  the transcript shows the partial work instead of nothing.
+- **Clean up branches** now sees the work that landed on the default branch through
+  a pull request, not only the merges your local history records, so squash- and
+  rebase-merged branches turn up in the list with a `merged #123` badge naming the
+  pull request that took them. The match goes by branch name, so it only ever badges
+  a row: what comes pre-checked is still what your own history shows — merged into
+  the default branch, or idle past the window you picked.
+- A comment you've typed now goes out with **Close** or **Reopen**. On issues,
+  pull requests, discussions and local PRs/issues the control says so while a
+  draft is waiting (**Close with comment** on the buttons, *posts your draft* on
+  a discussion's menu items); the comment posts first, then the state changes,
+  and your text stays put if the comment can't be posted.
+- Revert, cherry-pick and rebase conflicts now list the conflicted files in the
+  error details, and a Continue that still has unresolved paths names them.
+- Conflicted **reverts** and **merges** now name themselves the way a cherry-pick
+  or rebase already did ("Revert paused — resolve the conflicts, then
+  continue"), with git's own output kept under **Details** and the conflict bar
+  in **Changes** ready to finish or abort it.
+- Conflict resolution now belongs to the repository it started in. Switching
+  repositories ends any resolution in progress, so a **Resolve all** walk always
+  works through the conflicts of the repository you're looking at.
+- A small change deep in a very large file now shows its diff immediately.
+  Diffs past the highlighter's line ceiling render as plain text either way, and
+  the pane no longer sits blank waiting on highlighting it wasn't going to use.
+- Context you expanded in a large diff now stays expanded when its
+  background-thread syntax highlighting arrives. Highlighting for big
+  TextMate-rendered files (Rust, TSX, Astro, Svelte, and the rest) paints into
+  the diff already on screen, so the view keeps your expanded context and your
+  place instead of snapping back to the collapsed layout.
+- Every action on a conversation now waits, and says it's waiting, until the
+  entity on screen is the one you selected. On a discussion that covers **Lock**,
+  **Unlock**, **Close**, **Reopen**, **Delete**, the **Labels** picker and the
+  per-comment **Edit**, **Delete**, **Hide**, **Unhide** and **Mark as answer**; on
+  issues and pull requests it covers comment **Hide** / **Unhide**. Arrowing
+  quickly through a list used to leave a window where any of them acted on the
+  entity you'd just left, so a label toggle or a hide could land on the wrong one.
+- Switching between pull requests no longer flashes the wrong footer action:
+  **Ready for review** and **Convert to draft** now wait for the incoming pull
+  request's own draft state instead of borrowing the previous one's for a beat.
+  Their keyboard shortcuts wait on the same state, so neither can act on the pull
+  request you just left.
+- A line selection in the staging diff can now cover added **and** removed lines
+  at once. Hold the platform modifier (**Ctrl**, **Cmd** on macOS) while dragging
+  the line numbers and the new run joins the selection instead of replacing it,
+  so a single **Stage**, **Unstage**, or **Discard** can carry a whole edit —
+  both halves of a rewritten line, across as many hunks as you like. A plain
+  drag still starts a fresh selection, and the hint above the diff names the key
+  for your platform.
+- Completing a local pull-request merge now leaves the base branch's own history
+  alone. If the branch moved at all while the merge was being prepared (a commit
+  landing from another window or worktree, or a reset winding it back during a
+  long conflict-resolution session), the merge stops and says so, with your
+  resolution still waiting where you left it, ready to re-run from where the
+  branch now stands.
+- On macOS, the menu bar's **New repository**, **Add local repository**, **Clone
+  repository**, and **Settings** entries now wait while one of the dialogs they
+  would collide with is open (the app's repo dialogs, and **Explore**'s own clone
+  dialog), so what you're filling in stays in front instead of a second dialog
+  landing on top of it.
+- Merging a branch into the one you're on while you have uncommitted changes now
+  offers to set them aside, merge, and put them back — the same stash-and-reapply
+  recovery pulling and updating a branch already offer, and **Automatically stash
+  and reapply on pull, merge, rebase, and branch updates** (Settings → General)
+  covers merges along with the rest. Squash, no-fast-forward, and strategy
+  merges still report the refusal, since the recovery would have to redo them
+  as a plain merge.
+- A pull request whose mergeability can't be read now says which forge it couldn't
+  reach and offers **Retry**, where the strip used to stay blank. It also falls back
+  to the local conflict prediction, so a clash visible from your last fetch is still
+  named, and still resolvable, while the forge answer is out of reach.
+- When a provider's model list arrives in a shape GitDesktop can't read, the model
+  picker says so in its own words — "The provider's response didn't match the
+  expected format." A genuine provider or network failure still quotes the
+  provider's own explanation, so the two cases stay tellable apart.
+- Clicking a pull-request notification now opens that PR on the tab the event
+  happened on — a new comment, approval, or merge lands on **Conversation**, and a
+  finished AI review lands on **Review**. Checks notifications leave your current
+  tab alone, since the checks rollup sits in the PR header either way.
+- A pull request that won't load now opens with a plain explanation: which host
+  it couldn't be loaded from, with the underlying error kept beneath it. Starting
+  up offline reads as a connection problem rather than a pull request that has
+  gone missing, and **Retry** shows that it's working while the read is in flight.
+- A pull that runs into merge conflicts now reports git's own verdict and the
+  conflicted files it stopped on.
+- Rebasing with uncommitted changes now offers to stash and reapply them, the
+  way pull and merge already do. **Change base…** no longer refuses to run on a
+  dirty working tree either.
+- A **revert** that hits a conflict now gets the same treatment as a merge or
+  rebase: the conflict bar names it and offers **Continue revert** and **Abort**,
+  and the guards that protect an operation in flight (stashing, editing history,
+  promoting a worktree) hold while it is open. The same guards now also cover the
+  window a multi-commit squash or fixup leaves behind when it stops on a conflict.
+- When discarding a pending review fails, GitDesktop now says so, even if you
+  moved to another tab while it was clearing: pending comments can never
+  quietly survive a discard you believed had worked.
+- An expanded review under **Previous reviews** now scrolls inside its own box, so
+  the pull request's Close and Merge controls stay reachable however long the
+  findings run. Any stored review, and any kept partial output, can now be copied
+  in one click.
+- An AI review that hits its time limit now keeps what the reviewer already wrote.
+  The findings stay on screen (including for Codex, which delivers its answer in
+  one piece at the end) and are saved with the pull request, labelled **Timed
+  out — partial output kept**, so they're still there after a restart. Kept output
+  also gets its own row under **Previous reviews**, where it can be read, copied or
+  cleared like any other record, and an automated review that runs out of time
+  keeps its output the same way. Kept output is never treated as a finished review:
+  it doesn't feed the next run's context and doesn't count as coverage for
+  automated reviews.
+- Stack suggestions now explain themselves when they stay quiet: a full page of
+  open pull requests to scan, a stack state it couldn't read, or fork pull
+  requests that can't be chained each get a one-line note where the suggestion
+  would otherwise sit.
+- **Update branch** on a GitHub pull request now shows the update running and
+  confirms it only once it has landed. The strip holds on *GitHub is updating
+  this branch…* (controls disabled, with the reason on hover) until the branch
+  is confirmed caught up, so the confirmation you get matches the state of the
+  branch.
+- The welcome screen scrolls within its own pane, keeping the header and the
+  activity strip in place. A long list of repositories or a short window stays
+  fully reachable, and the content is still centered whenever it fits.
+- Removing a worktree now stays on screen until it finishes. A big folder can
+  take minutes, so the removal shows at the top of the repository the whole
+  time, even after the confirmation closes; its row in **Worktrees** says
+  "Removing…" and holds every action except copying its path, and a second
+  attempt on the same worktree is turned away instead of queueing behind the
+  first.
+
 ## [0.9.1] - 2026-08-16
 
 ### Changed
@@ -2975,7 +3126,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/theBGuy/GitDesktop/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/theBGuy/GitDesktop/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/theBGuy/GitDesktop/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/theBGuy/GitDesktop/compare/v0.7.0...v0.8.0
