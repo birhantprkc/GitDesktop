@@ -94,6 +94,26 @@ first production build after its timestamp — the daily cron, or any earlier
 push/release rebuild — so a timestamp past ~00:37 UTC waits for the next
 daily run unless an unrelated rebuild lands sooner.
 
+## Reader-facing prose outside the blog (README, changelog fragments, in-app guide, site copy)
+
+The blog rules above are post-specific in their mechanics (wrap band, closers,
+scheduling), but the core tells are register-independent. Apply these to ALL
+reader-facing prose — `README.md`, `changelog.d/` fragments, the in-app guide
+(`src/features/help/content.ts`), and site copy outside the blog:
+
+- **No paired "— aside —" interrupters** — recast with commas or parentheses.
+  Single em-dash glosses are fine in moderation; the paired interrupter is the
+  tell, not the gloss. Quoted UI strings are exempt: quote the app's copy
+  verbatim, whatever punctuation it carries.
+- **No earnestness performance or valuation tics** ("honest", "genuinely",
+  "truly" as sincerity markers; "worth knowing") and **no takeaway scaffolds**
+  ("the key insight…", "here's the part that…").
+- **Antithesis budget**: keep "X, not Y" where the contrast IS the technical
+  point; cut reflex uses.
+
+The in-app guide's back-catalogue predates this rule and gets swept as its own
+change; new or edited guide sections follow it now.
+
 ## Everyday commands
 
 ```sh

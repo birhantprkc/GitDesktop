@@ -1,4 +1,4 @@
-- Every action on a conversation now waits — and says it's waiting — until the
+- Every action on a conversation now waits, and says it's waiting, until the
   entity on screen is the one you selected. On a discussion that covers **Lock**,
   **Unlock**, **Close**, **Reopen**, **Delete**, the **Labels** picker and the
   per-comment **Edit**, **Delete**, **Hide**, **Unhide** and **Mark as answer**; on

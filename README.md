@@ -115,7 +115,7 @@ delete), and deep links to the settings GitHub keeps browser-only.
 A unified or split diff with syntax highlighting, collapsible surrounding
 context, and image diffing. Filter the changes list by path or category. The
 working-tree diff is one whole-file view with hunk- and line-level staging
-and discarding (drag across the line numbers; hold Ctrl — Cmd on macOS — to
+and discarding (drag across the line numbers; hold Ctrl, or Cmd on macOS, to
 add to a selection, so one selection can mix added and removed lines across
 hunks), including committing or discarding only part of a brand-new
 (untracked) file. Stage, unstage, or discard single files or a
@@ -133,11 +133,11 @@ divergence vs. the default branch (labeled with the default's name), and a
 PR badge.
 
 - **Clean up branches** ⭐: one reviewed list that archives or deletes every
-  stale branch (merged into the default branch — directly or by a recent
-  pull request, so squash and rebase merges count — or with no commits in a
-  chosen window). Pull-request matches go by branch name, so they only badge
+  stale branch — merged into the default branch (directly, or by a recent
+  pull request, so squash and rebase merges count) or with no commits in a
+  chosen window. Pull-request matches go by branch name, so they only badge
   a row with the PR that took it; pre-checking still comes from your own
-  history — merged into the default branch, or idle past that window.
+  history: merged into the default branch, or idle past that window.
 - **Advanced merge tooling** ⭐: predicts a merge's result in memory before
   you commit (fast-forward, already up to date, clean, or exactly which
   files will conflict), with `--no-ff` and a clearly cautioned auto-resolve
@@ -357,7 +357,7 @@ PR (comments and all) in one click.
   confirmation, since that rewrites the contributor's branch. GitHub runs that
   update as a background job, and the strip holds on it until a fresh
   comparison shows the branch caught up. A workflow run GitHub is **holding
-  for approval** — its gate on a first-time contributor — carries **Approve
+  for approval** (its gate on a first-time contributor) carries **Approve
   and run** on the run itself and in the PR's checks list. And publishing a
   local branch that already holds an open fork PR's commits offers to push
   them to the **contributor's fork branch** instead of leaving a stray copy
@@ -484,8 +484,8 @@ Security to turn scanning on. Repository advisories have no such switch;
 they're only published on public repositories.
 
 On a **GitLab** repo the same tab reads the newest completed **pipeline**
-for your checked-out branch — falling back to the default branch, and
-saying so — and lists its **SAST**, **secret detection**, and **code
+for your checked-out branch (falling back to the default branch, and
+saying so) and lists its **SAST**, **secret detection**, and **code
 quality** findings straight out of the pipeline's report artifacts,
 including scans that run in triggered child pipelines. Those
 analyzers run on every GitLab tier, Free included; it's GitLab's own
@@ -496,14 +496,14 @@ pipeline**; a finding's detail adds its severity, `file:line`, the scanner
 that raised it, its identifiers as links, the description, and **View file
 on GitLab** — a permalink to that line at the scanned commit. Detected
 secret *values* never leave the report: the raw extract is dropped before a
-finding reaches the app. Each section explains itself instead of looking
-clean — scanning not set up (with **Open scanning setup on GitLab**), a
+finding reaches the app. Rather than looking clean, each section explains
+itself: scanning not set up (with **Open scanning setup on GitLab**), a
 report GitLab won't serve (add the `gl-*-report.json` to `artifacts:paths`
 in the job that produces it), expired artifacts, nothing finished yet, an
-access problem, or a check that didn't complete — so an empty section only
+access problem, or a check that didn't complete. An empty section only
 reads as clean once a parsed report proves it, and a partly unreadable
-pipeline says how much was lost. When one cause covers all three — no
-pipeline to read yet, or one problem across every category — a single card
+pipeline says how much was lost. When one cause covers all three (no
+pipeline to read yet, or one problem across every category), a single card
 stands in for them.
 
 ### Insights

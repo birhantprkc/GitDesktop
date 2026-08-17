@@ -67,6 +67,27 @@ export function readFragments(dir) {
   return { files, groups };
 }
 
+// Split a fragment body into its bullets, each flattened to a single line: a
+// "- " line opens a bullet, "  "-indented lines continue it, blanks are skipped.
+const bulletsOf = (lines) => {
+  const bullets = [];
+  for (const line of lines) {
+    if (line.startsWith("- ")) bullets.push([line.slice(2).trim()]);
+    else if (line.trim() === "") continue;
+    else if (line.startsWith("  ") && bullets.length > 0)
+      bullets[bullets.length - 1].push(line.trim());
+  }
+  return bullets.map((parts) => parts.join(" "));
+};
+
+// Quoted UI copy is the app's own wording and legitimately carries em-dashes,
+// so code, bold, and double-quoted spans come out before the count.
+const withoutQuotedSpans = (text) =>
+  text
+    .replace(/`[^`]*`/g, "")
+    .replace(/\*\*[^*]+\*\*/g, "")
+    .replace(/"[^"]*"/g, "");
+
 /**
  * Validate every changelog.d entry without assembling. Returns a list of
  * `{ file, problem }` — empty when everything is consumable. Unlike
@@ -109,6 +130,7 @@ export function validateFragments(dir) {
       continue;
     }
     const lines = body.split("\n");
+    const problemsBefore = problems.length;
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i];
       if (line === "" || line.startsWith("- ") || line.startsWith("  ")) continue;
@@ -119,6 +141,16 @@ export function validateFragments(dir) {
         )}`,
       });
       break;
+    }
+    if (problems.length > problemsBefore) continue;
+    const interrupter = bulletsOf(lines).some(
+      (bullet) => (withoutQuotedSpans(bullet).match(/—/g) || []).length >= 2,
+    );
+    if (interrupter) {
+      problems.push({
+        file: name,
+        problem: `two or more em-dashes in one bullet reads as a paired "— aside —" interrupter — recast with commas or parentheses; quoted UI copy is exempt inside backticks, **bold**, or "quotes" (see CLAUDE.md "Reader-facing prose outside the blog")`,
+      });
     }
   }
   return problems;
