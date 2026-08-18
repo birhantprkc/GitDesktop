@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isDirtyTreeRefusal } from "@/lib/error-summary";
+import { useUiStore } from "@/lib/stores/ui";
 import { isAppError } from "@/lib/tauri/invoke";
 import { COLD_START_NO_GH, COLD_START_NO_GIT } from "@/lib/test-mode";
 import { toastError } from "@/lib/toast";
@@ -3116,6 +3117,12 @@ function useRepoMutation<TArgs, TData>(
      *  commit uses this so the emptied list, cleared draft, and toast appear
      *  together. (As a result it does NOT invalidate on error.) */
     refetchBeforeSuccess?: boolean;
+    /** Runs on success before any invalidation fires (react-query awaits
+     *  `onSuccess` ahead of `onSettled`), so store state can be fixed up while the
+     *  cache still describes the pre-mutation world. Must be synchronous — an
+     *  async callback's rejection escapes the containment; a synchronous throw
+     *  is contained and logged, and the invalidation still runs. */
+    onSuccess?: (data: TData, variables: TArgs) => void;
   } = {},
 ) {
   const queryClient = useQueryClient();
@@ -3131,16 +3138,27 @@ function useRepoMutation<TArgs, TData>(
         queryClient.invalidateQueries({ queryKey }),
       ),
     );
+  // A caller's hook must not take the mutation down with it: a throw here would
+  // otherwise skip the invalidation, or report a succeeded mutation as failed.
+  const notifySuccess = (data: TData, variables: TArgs) => {
+    try {
+      opts.onSuccess?.(data, variables);
+    } catch (e) {
+      console.error("[queries] mutation onSuccess failed", e);
+    }
+  };
   return useMutation({
     mutationFn,
     ...(opts.refetchBeforeSuccess
       ? {
-          onSuccess: async () => {
+          onSuccess: async (data: TData, variables: TArgs) => {
+            notifySuccess(data, variables);
             await invalidate();
             void invalidateAfter();
           },
         }
       : {
+          onSuccess: notifySuccess,
           onSettled: () => {
             void invalidate();
             void invalidateAfter();
@@ -3803,8 +3821,20 @@ export function useStashCount(repo: string) {
 }
 
 export function useRenameBranch(repo: string) {
-  return useRepoMutation(repo, (args: { oldName: string; newName: string }) =>
-    api.gitRenameBranch(repo, args.oldName, args.newName),
+  return useRepoMutation(
+    repo,
+    (args: { oldName: string; newName: string }) =>
+      api.gitRenameBranch(repo, args.oldName, args.newName),
+    {
+      // Re-key the branch's commit draft before the status refetch reports the new
+      // name, so the draft (and any generation streaming into it) survives.
+      // Renames from outside the app (MCP, a terminal `git branch -m`) have no such
+      // hook and still lose the draft when the ambient poll flips the key.
+      onSuccess: (_data, args) =>
+        useUiStore
+          .getState()
+          .migrateCommitDraft(repo, args.oldName, args.newName),
+    },
   );
 }
 

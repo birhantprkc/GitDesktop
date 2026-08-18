@@ -41,6 +41,20 @@ const OP_LABELS: Record<
   },
 };
 
+/** What Abort undoes, per op. A cherry-pick can be reached from "Cherry-pick to
+ *  branch…", which switched branches to get here and whose abort does NOT switch
+ *  back — so its copy promises this branch back, never the whole repository. */
+const ABORT_DESCRIPTIONS: Record<RepoOp, string> = {
+  merge:
+    "Abandons the in-progress merge and restores the repository to the state before it started. Any conflict resolutions you've made will be lost.",
+  rebase:
+    "Abandons the in-progress rebase and restores the repository to the state before it started. Any conflict resolutions you've made will be lost.",
+  "cherry-pick":
+    "Abandons the in-progress cherry-pick and restores this branch to the state before the pick started. You stay on this branch, and any conflict resolutions you've made will be lost.",
+  revert:
+    "Abandons the in-progress revert and restores the repository to the state before it started. Any conflict resolutions you've made will be lost.",
+};
+
 /** The `RepoOpState` flags that name an operation. Derived, so a renamed field
  *  breaks here; `editPaused` is excluded because it modifies `rebasing` rather
  *  than naming an op of its own. */
@@ -149,12 +163,24 @@ export function ConflictBanner({
               }
               onClick={() =>
                 continueOp.mutate(op, {
-                  onSuccess: () =>
+                  onSuccess: (recorded) => {
+                    // Only a resolution that emptied the pick reaches this: a commit
+                    // whose changes the destination already had never conflicts, so
+                    // it is skipped inside the pick itself and never pauses here.
+                    // The flag speaks for that one pick — a longer sequence may
+                    // still have applied its remaining commits.
+                    if (!recorded) {
+                      toast.info(
+                        "Commit skipped — your resolution left nothing to commit.",
+                      );
+                      return;
+                    }
                     toast.success(
                       op === "merge"
                         ? "Merge completed"
                         : `${opVerb} continued`,
-                    ),
+                    );
+                  },
                   onError,
                 })
               }
@@ -172,7 +198,7 @@ export function ConflictBanner({
                   <DialogDescription>
                     {editPaused
                       ? "Abandons the rebase and restores your branch to its original history. Any changes you've amended into this commit are lost."
-                      : `Abandons the in-progress ${op} and restores the repository to the state before it started. Any conflict resolutions you've made will be lost.`}
+                      : ABORT_DESCRIPTIONS[op]}
                   </DialogDescription>
                 </DialogHeader>
                 <DialogFooter>

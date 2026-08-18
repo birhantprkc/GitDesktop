@@ -2,7 +2,8 @@ import { invoke } from "@/lib/tauri/invoke";
 
 /** The clean and marked versions of one conflicted file, for AI resolution. */
 export interface ConflictSides {
-  /** The working-tree file with conflict markers — the primary input. */
+  /** The working-tree file with conflict markers — the primary input. Not every
+   *  conflict has markers; a modify/delete file is the surviving side's content. */
   working: string;
   /** Common-ancestor version (stage 1); null for add/add conflicts. */
   base: string | null;
@@ -35,7 +36,8 @@ export const resolveConflict = (
 ) => invoke<void>("git_resolve_conflict", { repoPath, path, content, stage });
 
 /** Resolves a whole conflicted file by taking one side: "ours" (current/HEAD)
- *  or "theirs" (incoming). Writes that side + stages it. Works for binary too. */
+ *  or "theirs" (incoming). Writes that side + stages it, or removes the file when
+ *  that side has no version at this path. Works for binary too. */
 export const checkoutConflictSide = (
   repoPath: string,
   path: string,

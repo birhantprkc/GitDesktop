@@ -306,8 +306,13 @@ export const gitOpState = (repoPath: string) =>
 export const gitOpAbort = (repoPath: string, op: RepoOp) =>
   invoke<void>("git_op_abort", { repoPath, op });
 
+/** Resolves true when the operation completed normally, false when the pending
+ *  cherry-pick was skipped because the resolution left nothing to commit. The
+ *  flag speaks for that pick alone: it fully describes a single-commit
+ *  cherry-pick, while a longer sequence may still have applied its remaining
+ *  picks. */
 export const gitOpContinue = (repoPath: string, op: RepoOp) =>
-  invoke<void>("git_op_continue", { repoPath, op });
+  invoke<boolean>("git_op_continue", { repoPath, op });
 
 /** Base64 file content at a rev (null rev = working tree; null result = absent). */
 export const gitFileBase64 = (
@@ -440,9 +445,11 @@ export interface CherryPickRangeResult {
 }
 
 /** Copies `hashes` (oldest-first) onto `targetBranch` and leaves you there.
- *  A failed pick rolls `targetBranch` back to its prior tip and returns you
- *  to your starting branch; the error says when either rollback step failed
- *  and how to recover. */
+ *  A single commit that conflicts stops on `targetBranch` with the pick in
+ *  progress, for the conflict banner to continue or abort. Every other failure
+ *  (and any failure in a multi-commit batch) rolls `targetBranch` back to its
+ *  prior tip and returns you to your starting branch; the error says when
+ *  either rollback step failed and how to recover. */
 export const gitCherryPickOnto = (
   repoPath: string,
   hashes: string[],
