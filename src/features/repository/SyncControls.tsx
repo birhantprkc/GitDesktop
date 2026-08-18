@@ -513,8 +513,10 @@ export function SyncControls({ repoPath }: { repoPath: string }) {
             <DialogDescription>
               Your branch and {head?.upstream} have diverged (usually after
               amending or resetting a pushed commit). Force pushing rewrites the
-              remote branch to match your local one. Uses --force-with-lease, so
-              it aborts if someone else pushed new work in the meantime.
+              remote branch to match your local one. Uses --force-with-lease
+              and, where your Git can check it, --force-if-includes — the pair
+              aborts rather than overwrite work your branch doesn't include,
+              even work a background fetch has already seen.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

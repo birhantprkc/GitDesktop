@@ -114,6 +114,12 @@ const REFSPEC_ALLOWLIST = [
   },
   {
     file: "git/remote.rs",
+    fn: "branch_has_reflog",
+    rationale:
+      "read-only `reflog exists` probe (never a refspec); the name is either git_push_core's branch, validated with validate_ref_name at the arm entry, or `symbolic-ref --short` output — git's own ref name",
+  },
+  {
+    file: "git/remote.rs",
     fn: "parse_upstream_tracking_matches_real_for_each_ref_output",
     rationale: "#[cfg(test)] fixture — the branch name is a test literal",
   },
