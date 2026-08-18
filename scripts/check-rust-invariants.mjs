@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Static gate for three Rust invariants that have each cost this repo a fix
+// Static gate for four Rust invariants that have each cost this repo a fix
 // round. Text-level checks over `src-tauri/src/**/*.rs` — no compiler, no deps,
 // Node built-ins only — so they run anywhere `node` does:
 //
@@ -10,6 +10,13 @@
 //      the process table.
 //   C. sync `#[tauri::command]` — a blocking command body runs on the main
 //      thread and freezes the UI.
+//   D. stderr-only `AppError::Git` — whole families of git command report a
+//      failure on STDOUT with stderr EMPTY (a conflicted merge, a refused
+//      `commit`, a conflicted `stash pop`), so an error built from stderr alone
+//      renders to the user as the bare "git exited with code N".
+//      `GitOutput::full_failure_text()` is the shaping that carries both halves.
+//      Scoped to `AppError::Git` constructions on purpose: the `Gh`/`Glab`
+//      variants are tuple-shaped and their CLIs do not split a report this way.
 //
 // Each check carries an ALLOWLIST of `{ file, fn, rationale }` records. RATCHET
 // RULE: the lists only shrink by default. Adding an entry is a reviewed change —
@@ -23,6 +30,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { stripComments } from "./check-banned-patterns.mjs";
 
 const SRC = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -183,6 +192,67 @@ const SYNC_COMMAND_ALLOWLIST = [
   },
 ];
 
+// Check D. Sites whose git command provably reports on stderr alone, verified by
+// reading each one: read-only scans and parses, where a non-zero exit is git
+// refusing the READ (bad revision, unreadable path) rather than a working-tree
+// operation half-finishing across two streams.
+const STDERR_ONLY_ALLOWLIST = [
+  {
+    file: "git/ai_ignore.rs",
+    fn: "filter_ignored",
+    rationale: "`check-ignore` read — stdout is the match list, never a report",
+  },
+  {
+    file: "git/branches.rs",
+    fn: "git_set_branch_archived",
+    rationale: "`config` write — no working-tree operation to half-finish",
+  },
+  {
+    file: "git/compare.rs",
+    fn: "run_grep",
+    rationale: "`grep` read — stdout is the match list, never a report",
+  },
+  {
+    file: "git/conflict.rs",
+    fn: "git_diff_contents",
+    rationale:
+      "`show`/`cat-file` read — stdout is the file content being parsed",
+  },
+  {
+    file: "git/diff.rs",
+    fn: "git_diff_file",
+    rationale: "`diff` read — stdout is the patch being parsed",
+  },
+  {
+    file: "git/diff.rs",
+    fn: "git_session_file_diff",
+    rationale: "`diff --no-index` read — stdout is the patch being parsed",
+  },
+  {
+    file: "git/ops.rs",
+    fn: "classify_failure",
+    rationale:
+      "`report` is a parameter, so no binding is in range — its doc contract requires full_failure_text() and every caller passes it",
+  },
+  {
+    file: "git/ops.rs",
+    fn: "git_rebase_edit",
+    rationale:
+      "interactive-rebase START failure, reached only when nothing is in progress — a paused rebase returns Ok, so there is no stdout report to lose",
+  },
+  {
+    file: "git/runner.rs",
+    fn: "run_git_input",
+    rationale:
+      "THE stderr-only contract itself — callers whose failure rides stdout take run_git_raw and shape it with full_failure_text()",
+  },
+  {
+    file: "git/todos.rs",
+    fn: "git_todo_scan",
+    rationale: "`grep` read — stdout is the match list, never a report",
+  },
+];
+
 // ------------------------------------------------------------------- helpers
 
 /** Every `.rs` file under `src-tauri/src`, as absolute paths. */
@@ -330,6 +400,253 @@ export function checkSyncCommands(file, _src, lines, hits) {
   }
 }
 
+// An `AppError::Git { … }` whose `stderr:` field is built from stderr alone.
+// The verdict is read from the FIELD VALUE as an expression, never from the
+// surrounding text: a comment naming `full_failure_text` must not disarm the
+// check, and a value that only names a binding is chased through its
+// initializers, so substituting `.stderr` anywhere along that chain is caught.
+// The constructor is delimited by brace balance, not a line count — every
+// fail-open this check has had came from a scan that ended too early.
+//
+// Requiring a `stderr:` FIELD is what keeps destructuring out — `{ stderr, .. }`
+// binds a name, it does not assign one. A pattern that RENAMES (`stderr: a_err`)
+// still looks like a field, and its binding resolves to nothing; those live in
+// test code, which this check skips by span (see `testModuleSpans`).
+const GIT_CTOR_RE = /AppError::Git\s*\{/g;
+const STDERR_READ_RE = /\b[A-Za-z_]\w*\s*\.\s*stderr\b/;
+const BARE_IDENT_RE = /^[A-Za-z_]\w*$/;
+const FULL_FAILURE_TEXT_RE = /\bfull_failure_text\s*\(/;
+// `full_failure_text` ENDS with this name, so the character in front is the only
+// thing telling the substituting helper from the combining one.
+const SUBSTITUTING_RE = /(?:^|[^_\w])failure_text\s*\(/;
+const STDERR_ONLY_FIX =
+  "a failing git command can report on STDOUT with stderr empty (gd-conventions) — " +
+  "shape the error with GitOutput::full_failure_text(), or allowlist with rationale";
+const SUBSTITUTION_FIX =
+  "GitOutput::failure_text() SUBSTITUTES one stream for the other, so it drops half " +
+  "of any report that splits — use full_failure_text(), or allowlist with rationale";
+const UNRESOLVED_FIX =
+  "this stderr value names a binding the checker cannot resolve, so it cannot tell " +
+  "which shaping built it — inline the shaping, or allowlist with rationale";
+
+/** Character spans of every `#[cfg(test)]`-gated `mod`, as `[open, close]` brace
+ *  indices. The invariant governs how PRODUCTION code shapes a user-facing
+ *  error; test code destructures those same shapes, and a fail-closed binding
+ *  check reads every renaming pattern as an unresolvable field.
+ *
+ *  Spans, not a cut at the first attribute: a cut leaves every constructor after
+ *  a test module unscanned, which is a fail-open that grows with the file.
+ *  Matching `mod` specifically is load-bearing too — `#[cfg(test)]` also gates
+ *  statics, functions and even `if let` blocks (`app_store.rs`), whose next
+ *  brace would otherwise be read as a module body. */
+export function testModuleSpans(text) {
+  // Outer attributes may sit between the gate and the module
+  // (`#[cfg(test)] #[allow(…)] mod tests {`); only whitespace separates them, so
+  // tolerating a run of them cannot skip over an intervening ITEM.
+  const attr =
+    /#\[cfg\(\s*(?:all\(\s*)?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{/g;
+  const spans = [];
+  for (let m = attr.exec(text); m; m = attr.exec(text)) {
+    const open = m.index + m[0].length - 1;
+    const close = open + 1 + braceBody(text, open).length;
+    spans.push([open, close]);
+    attr.lastIndex = close;
+  }
+  return spans;
+}
+
+/** Index of a char literal's closing quote at `i`, or -1 when the `'` opens a
+ *  LIFETIME (`&'a str`, `State<'_, AppState>`) instead. Rust reuses the
+ *  character, and reading a lifetime as an open quote swallows the rest of the
+ *  scan as string content — silently, and as a pass. */
+function charLiteralEnd(text, i) {
+  const m = /^'(?:\\u\{[0-9a-fA-F]*\}|\\.|[^\\'])'/.exec(text.slice(i, i + 24));
+  return m ? i + m[0].length - 1 : -1;
+}
+
+/** Index of the closing delimiter of the string or char literal starting at `i`,
+ *  or -1 when the character opens neither.
+ *
+ *  A RAW literal (`r"…"`, `br#"…"#`) ends at a quote followed by its own hash
+ *  count and honors no escapes at all, so it needs its own branch: the
+ *  escape-aware scan walks straight past the closing quote of
+ *  `r"\\?\"` (`git/worktree.rs`) and reads the rest of the file as string
+ *  content. `b"…"` / `c"…"` are NOT raw and stay on the escape-aware branch.
+ *  An unterminated literal ends at the text, so a scan can never run past its
+ *  own input. */
+function literalEnd(text, i) {
+  if (text[i] === "'") return charLiteralEnd(text, i);
+  const raw = /^(?:b|c)?r(#*)"/.exec(text.slice(i, i + 16));
+  if (raw) {
+    const close = `"${raw[1]}`;
+    const at = text.indexOf(close, i + raw[0].length);
+    return at === -1 ? text.length - 1 : at + close.length - 1;
+  }
+  if (text[i] !== '"') return -1;
+  for (let j = i + 1; j < text.length; j++) {
+    if (text[j] === "\\") j++;
+    else if (text[j] === '"') return j;
+  }
+  return text.length - 1;
+}
+
+/** The body of the `{ … }` opening at `openIdx`, brace-balanced. Rustfmt and a
+ *  long field expression can push `stderr:` arbitrarily far down a constructor,
+ *  and a fixed line window that ends before it reads as "no stderr field" — a
+ *  pass, on the shape most likely to be wrong. */
+export function braceBody(text, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < text.length; i++) {
+    const lit = literalEnd(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}" && --depth === 0)
+      return text.slice(openIdx + 1, i);
+  }
+  // Unbalanced (a truncated file): hand back the remainder rather than nothing,
+  // so a `stderr:` below still gets read.
+  return text.slice(openIdx + 1);
+}
+
+/** Index just past the `stderr:` field's colon in a constructor `body`, or -1.
+ *  Found by scanning at depth 0 outside literals rather than by matching text:
+ *  an earlier field whose STRING happens to contain `stderr: …` would otherwise
+ *  answer for the real field and hide it. */
+function stderrFieldStart(body) {
+  let depth = 0;
+  for (let i = 0; i < body.length; i++) {
+    const lit = literalEnd(body, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    const c = body[i];
+    if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c)) depth--;
+    else if (depth === 0 && /[A-Za-z_]/.test(c)) {
+      let j = i;
+      while (j < body.length && /\w/.test(body[j])) j++;
+      let k = j;
+      while (k < body.length && /\s/.test(body[k])) k++;
+      // `::` is a path, not a field.
+      if (
+        body.slice(i, j) === "stderr" &&
+        body[k] === ":" &&
+        body[k + 1] !== ":"
+      )
+        return k + 1;
+      i = j - 1;
+    }
+  }
+  return -1;
+}
+
+/** The `stderr:` field's value expression, or null when the constructor `body`
+ *  has no such field. Scans to the `,` or `}` that closes the field at bracket
+ *  depth 0, skipping literals so a `format!("…{stderr}")` brace cannot end it. */
+export function stderrFieldValue(body) {
+  const start = stderrFieldStart(body);
+  if (start < 0) return null;
+  let depth = 0;
+  let out = "";
+  for (let i = start; i < body.length; i++) {
+    const lit = literalEnd(body, i);
+    if (lit >= 0) {
+      out += body.slice(i, lit + 1);
+      i = lit;
+      continue;
+    }
+    const c = body[i];
+    if ("([{".includes(c)) depth++;
+    else if (")]".includes(c)) depth--;
+    else if (c === "}") {
+      if (depth === 0) break;
+      depth--;
+    } else if (c === "," && depth === 0) break;
+    out += c;
+  }
+  return out.trim();
+}
+
+/** The initializer of the nearest preceding `let <name> = …`, bounded by the
+ *  enclosing signature so a same-named binding in another function can't answer.
+ *  null when there is none — a parameter, or a pattern's binding. */
+export function bindingInitializer(lines, fromIdx, name) {
+  const decl = new RegExp(
+    `\\blet\\s+(?:mut\\s+)?${name}\\s*(?::[^=]*)?=\\s*(.*)$`,
+  );
+  for (let i = fromIdx; i >= 0 && i > fromIdx - 40; i--) {
+    if (FN_RE.test(lines[i])) return null;
+    const m = decl.exec(lines[i]);
+    if (!m) continue;
+    let init = m[1];
+    for (
+      let j = i + 1;
+      !init.includes(";") && j < i + 6 && j < lines.length;
+      j++
+    ) {
+      init += lines[j];
+    }
+    return init;
+  }
+  return null;
+}
+
+/** The fix a stderr field value earns, or null when it is correctly shaped.
+ *
+ *  Follows a chain of bare-ident aliases (`let stderr = out.stderr; let report =
+ *  stderr; … stderr: report`), because stopping after one hop lands on a value
+ *  none of the shaping tests match — which reads as correctly shaped. The
+ *  seen-set bounds the walk and makes a mutually-recursive pair fail closed,
+ *  like every other step the checker cannot resolve. */
+function stderrValueVerdict(value, lines, ctorIdx) {
+  const seen = new Set();
+  for (let expr = value; ; ) {
+    if (FULL_FAILURE_TEXT_RE.test(expr)) return null;
+    if (SUBSTITUTING_RE.test(expr)) return SUBSTITUTION_FIX;
+    if (STDERR_READ_RE.test(expr)) return STDERR_ONLY_FIX;
+    if (!BARE_IDENT_RE.test(expr)) return null;
+    if (seen.has(expr)) return UNRESOLVED_FIX;
+    seen.add(expr);
+    const init = bindingInitializer(lines, ctorIdx, expr);
+    if (init === null) return UNRESOLVED_FIX;
+    // Judge the WHOLE initializer. The split below truncates at the first `;`,
+    // including one inside a string (`format!("a; {}", out.stderr)`), so it is
+    // only ever good enough to name the next alias — never to decide a verdict.
+    if (FULL_FAILURE_TEXT_RE.test(init)) return null;
+    if (SUBSTITUTING_RE.test(init)) return SUBSTITUTION_FIX;
+    if (STDERR_READ_RE.test(init)) return STDERR_ONLY_FIX;
+    expr = init.split(";")[0].trim();
+  }
+}
+
+export function checkStderrOnlyGitError(file, _src, lines, hits) {
+  const code = stripComments(lines);
+  const codeSrc = code.join("\n");
+  const spans = testModuleSpans(codeSrc);
+  GIT_CTOR_RE.lastIndex = 0;
+  for (let m = GIT_CTOR_RE.exec(codeSrc); m; m = GIT_CTOR_RE.exec(codeSrc)) {
+    if (spans.some(([s, e]) => m.index > s && m.index < e)) continue;
+    const line = codeSrc.slice(0, m.index).split("\n").length;
+    const open = m.index + m[0].length - 1;
+    const value = stderrFieldValue(braceBody(codeSrc, open));
+    if (value === null) continue;
+    const fix = stderrValueVerdict(value, code, line - 1);
+    if (fix === null) continue;
+    const fn = enclosingFn(lines, line - 1);
+    hits.push({
+      file,
+      line,
+      fn,
+      allowlisted: allowed(STDERR_ONLY_ALLOWLIST, file, fn),
+      fix,
+    });
+  }
+}
+
 // ---------------------------------------------------------------------- main
 
 function main() {
@@ -350,6 +667,12 @@ function main() {
       name: "C. sync #[tauri::command]",
       run: checkSyncCommands,
       allowlist: SYNC_COMMAND_ALLOWLIST,
+      hits: [],
+    },
+    {
+      name: "D. stderr-only AppError::Git",
+      run: checkStderrOnlyGitError,
+      allowlist: STDERR_ONLY_ALLOWLIST,
       hits: [],
     },
   ];

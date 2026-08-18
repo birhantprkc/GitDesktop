@@ -25,6 +25,7 @@ import {
 import {
   checkRefspecTemplates,
   checkSecretArgv,
+  checkStderrOnlyGitError,
   checkSyncCommands,
   enclosingFn,
   staleAllowlistEntries,
@@ -316,6 +317,300 @@ test("sync #[tauri::command] is caught, async is not, unreadable fails closed", 
   assert.equal(failClosed.length, 1);
   assert.equal(failClosed[0].fn, "<unresolved>");
   assert.equal(failClosed[0].allowlisted, false);
+});
+
+test("stderr-only AppError::Git is caught, bare and format!-wrapped", () => {
+  const src = [
+    "async fn plain(out: GitOutput) -> AppError {",
+    "    AppError::Git {",
+    "        code: out.code,",
+    "        stderr: out.stderr,",
+    "    }",
+    "}",
+    "async fn wrapped(out: GitOutput) -> AppError {",
+    "    AppError::Git {",
+    "        code: out.code,",
+    '        stderr: format!("prefix\\n{}", out.stderr),',
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.deepEqual(
+    hits.map((h) => h.fn),
+    ["plain", "wrapped"],
+  );
+  assert.equal(hits[0].allowlisted, false);
+});
+
+test("stderr-only check ignores correct shaping and bare binding patterns", () => {
+  const src = [
+    "async fn shaped(out: GitOutput) -> AppError {",
+    "    AppError::Git {",
+    "        code: out.code,",
+    "        stderr: out.full_failure_text(),",
+    "    }",
+    "}",
+    "fn matched(e: AppError) -> bool {",
+    '    matches!(e, AppError::Git { stderr, .. } if stderr.contains("x"))',
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.deepEqual(hits, []);
+});
+
+test("a stderr value naming a binding is judged by that binding's initializer", () => {
+  // The shape the conflict batch itself uses (`let report = …; stderr: report`):
+  // the field alone says nothing, so substituting `.stderr` into the binding
+  // later has to stay visible.
+  const src = [
+    "async fn good(commit: GitOutput) -> AppError {",
+    "    let report = commit.full_failure_text();",
+    "    let _lower = report.to_lowercase();",
+    "    AppError::Git {",
+    "        code: commit.code,",
+    "        stderr: report,",
+    "    }",
+    "}",
+    "async fn bad(commit: GitOutput) -> AppError {",
+    "    let report = commit.stderr;",
+    "    AppError::Git {",
+    "        code: commit.code,",
+    "        stderr: report,",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.deepEqual(
+    hits.map((h) => h.fn),
+    ["bad"],
+  );
+});
+
+test("an unresolvable stderr binding fails closed", () => {
+  // A parameter has no initializer in range, so the checker cannot know which
+  // shaping built it — that is a finding, not a pass.
+  const src = [
+    "async fn passthrough(code: i32, report: String) -> AppError {",
+    "    AppError::Git {",
+    "        code,",
+    "        stderr: report,",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].fn, "passthrough");
+  assert.match(hits[0].fix, /cannot resolve/);
+});
+
+test("failure_text() substitution is caught apart from the combining helper", () => {
+  const src = [
+    "async fn substituting(out: GitOutput) -> AppError {",
+    "    AppError::Git {",
+    "        code: out.code,",
+    "        stderr: out.failure_text(),",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].fix, /SUBSTITUTES/);
+});
+
+test("a comment naming full_failure_text does not disarm the check", () => {
+  // The verdict is read from the field VALUE as an expression; a window-wide
+  // substring test would have accepted this site on the strength of its prose.
+  const src = [
+    "async fn commented(out: GitOutput) -> AppError {",
+    "    // full_failure_text() is what this should use.",
+    "    AppError::Git {",
+    "        code: out.code,",
+    "        stderr: out.stderr,",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].fn, "commented");
+});
+
+test("a chain of stderr aliases is followed to its shaping", () => {
+  // One hop lands on a bare ident that matches none of the shaping tests, which
+  // reads as correctly shaped — so the walk has to continue.
+  const src = [
+    "async fn chained_bad(out: GitOutput) -> AppError {",
+    "    let raw = out.stderr;",
+    "    let report = raw;",
+    "    AppError::Git {",
+    "        code: out.code,",
+    "        stderr: report,",
+    "    }",
+    "}",
+    "async fn chained_ok(out: GitOutput) -> AppError {",
+    "    let raw = out.full_failure_text();",
+    "    let report = raw;",
+    "    AppError::Git {",
+    "        code: out.code,",
+    "        stderr: report,",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.deepEqual(
+    hits.map((h) => h.fn),
+    ["chained_bad"],
+  );
+  assert.match(hits[0].fix, /full_failure_text/);
+});
+
+test("a cycle of stderr aliases fails closed", () => {
+  const src = [
+    "async fn looped(out: GitOutput) -> AppError {",
+    "    let first = second;",
+    "    let second = first;",
+    "    AppError::Git {",
+    "        code: out.code,",
+    "        stderr: first,",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].fix, /cannot resolve/);
+});
+
+test("a stderr field beyond a six-line constructor is still read", () => {
+  // Brace balance, not a line count: rustfmt and a long field list push the
+  // field down, and a window that ends first reads as "no stderr field".
+  const src = [
+    "async fn padded(out: GitOutput) -> AppError {",
+    "    AppError::Git {",
+    "        // one",
+    "        // two",
+    "        // three",
+    "        // four",
+    "        // five",
+    "        // six",
+    "        // seven",
+    "        code: out.code,",
+    "        stderr: out.stderr,",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].fn, "padded");
+});
+
+test("an alias initializer is judged whole, not truncated at a `;`", () => {
+  // The `;` that ends the statement can also sit inside a string literal, and
+  // the truncated head matches no shaping test and is not an ident — a pass.
+  const src = [
+    "async fn semicolon_in_literal(out: GitOutput) -> AppError {",
+    '    let report = format!("a; {}", out.stderr);',
+    "    AppError::Git {",
+    "        code: out.code,",
+    "        stderr: report,",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].fn, "semicolon_in_literal");
+  assert.match(hits[0].fix, /full_failure_text/);
+});
+
+test("a `stderr:` inside a string literal does not answer for the real field", () => {
+  // Matching the first `stderr:` in the text lets an earlier field's STRING
+  // stand in for the field — and a string naming the correct helper passes.
+  const src = [
+    "async fn masked(out: GitOutput) -> AppError {",
+    "    AppError::Git {",
+    '        code: fallback("shape it as stderr: out.full_failure_text()"),',
+    "        stderr: out.stderr,",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].fn, "masked");
+  assert.match(hits[0].fix, /full_failure_text/);
+});
+
+test("a raw string literal does not swallow the rest of a constructor", () => {
+  // `r"\\?\"` ends at its own quote — raw literals honor no escapes — but an
+  // escape-aware scan reads the trailing backslash as escaping that quote and
+  // consumes everything after it, so the real field is never reached.
+  const src = [
+    "async fn raw_in_ctor(out: GitOutput) -> AppError {",
+    "    AppError::Git {",
+    String.raw`        code: parse(r"\\?\"),`,
+    "        stderr: out.stderr,",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].fn, "raw_in_ctor");
+});
+
+test("an attribute-decorated test module is still recognized as a span", () => {
+  // The gate and the `mod` can be separated by outer attributes; missing the
+  // span reads every renaming pattern inside it as an unresolvable field.
+  const src = [
+    "#[cfg(test)]",
+    "#[allow(clippy::too_many_lines)]",
+    "mod tests {",
+    "    fn renamed(e: &AppError) {",
+    "        if let AppError::Git { code: c, stderr: text } = e {",
+    "            drop((c, text));",
+    "        }",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.deepEqual(hits, []);
+});
+
+test("test modules are skipped by SPAN, so production code after one is scanned", () => {
+  // A renaming pattern (`stderr: text`) is indistinguishable from an
+  // unresolvable field, and only tests carry them. Cutting the scan at the
+  // module instead of bounding it would leave everything below unchecked.
+  const src = [
+    "#[cfg(test)]",
+    "mod tests {",
+    "    fn renamed(e: &AppError) {",
+    "        if let AppError::Git { code: c, stderr: text } = e {",
+    "            drop((c, text));",
+    "        }",
+    "    }",
+    "}",
+    "async fn after_tests(out: GitOutput) -> AppError {",
+    "    AppError::Git {",
+    "        code: out.code,",
+    "        stderr: out.stderr,",
+    "    }",
+    "}",
+  ].join("\n");
+  const hits = [];
+  checkStderrOnlyGitError("fixture.rs", src, src.split("\n"), hits);
+  assert.deepEqual(
+    hits.map((h) => h.fn),
+    ["after_tests"],
+  );
 });
 
 // ----------------------------------------------------------- check-dead-surface

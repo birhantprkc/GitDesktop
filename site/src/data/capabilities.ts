@@ -93,7 +93,7 @@ export const capabilities: Capability[] = [
   {
     group: "Branches & history",
     label:
-      "Clean up branches in bulk — archive or delete stale ones in one sweep, including branches a pull request merged",
+      "Clean up branches in bulk — archive or delete stale ones in one sweep, including branches merged through a pull request",
     highlight: true,
   },
   {
@@ -162,6 +162,11 @@ export const capabilities: Capability[] = [
     group: "Pull requests & review",
     label:
       "See when a pull request won't merge cleanly — and resolve the conflicts in-app, in an isolated worktree",
+  },
+  {
+    group: "Pull requests & review",
+    label:
+      "A merge blocked by branch protection names the required checks still unmet (GitHub)",
   },
   {
     group: "Pull requests & review",
