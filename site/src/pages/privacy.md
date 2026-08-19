@@ -80,17 +80,19 @@ This site is static. It has no accounts, sets no cookies, and runs no
 advertising or cross-site tracking.
 
 <!-- Web Analytics is enabled account-side (Cloudflare dashboard → Web
-     Analytics, "Automatic setup" on the proxied zone). It is EDGE-derived: no
-     beacon script is injected into the served HTML, which is what keeps the
-     "no other third-party scripts" claim below literally true. If collection
-     is ever switched to beacon-based, update both claims. Re-verified live
-     2026-07-25: zero references to static.cloudflareinsights.com in the
-     served apex HTML, browser UA included. -->
+     Analytics, "Automatic setup" on the proxied zone). Cloudflare's proxy
+     injects the beacon into HTML responses at the edge, so it is absent from
+     the Astro source and from any build output. Verify against the live site
+     with `Accept: text/html`: injection is gated on that header, so a default
+     `curl` (Accept: */*) returns a beacon-free page and reads as a false
+     negative. -->
 
 - **Traffic measurement.** The site uses **Cloudflare Web Analytics**:
-  cookie-free, aggregate measurement (page views and referrers, derived at
-  Cloudflare's edge), with no client-side state and no cross-site profiles.
-  It is processed by Cloudflare under
+  cookie-free, aggregate measurement of page views and referrers, with no
+  cross-site profiles. Cloudflare's proxy adds its measurement script
+  (`static.cloudflareinsights.com/beacon.min.js`) to each page; the script
+  sets no cookies and keeps no state in your browser. It is processed by
+  Cloudflare under
   [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/).
 - **Hosting.** The site is served by Cloudflare Pages; like any host, Cloudflare
   processes standard request data (your IP address, user agent) to deliver the
@@ -100,8 +102,8 @@ advertising or cross-site tracking.
   buttons stay current; that request (and your IP) goes to GitHub, and the
   installers themselves download from GitHub Releases.
 
-Fonts and every other asset are served from gitdesktop.app itself; there are no
-other third-party scripts or embeds.
+Fonts and every other asset are served from gitdesktop.app itself. The only
+third-party script is Cloudflare's analytics beacon described above.
 
 ## Retention
 
