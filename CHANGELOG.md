@@ -12,6 +12,78 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-08-19
+
+### Changed
+
+- **Cherry-pick to branch** with a single commit now pauses on the destination
+  branch when it conflicts, so you resolve it in the app and continue like any
+  other conflict — and a resolution that keeps the destination's own version
+  finishes from the banner too. **Operation history** shows the pick as
+  *Paused* until you finish or abort it. Picking several commits at once still rolls the
+  whole batch back, and the dialog now refuses to start while another merge,
+  rebase, cherry-pick or revert is in progress.
+- **A blocked merge names what it's waiting on.** When a GitHub pull request
+  merges cleanly but the base branch's protection rules won't let it land, the
+  strip under the header now says so and lists the required checks still
+  outstanding, and a refused merge repeats that line alongside the forge's own
+  message. **Merge** stays available, since whoever holds bypass permission on
+  those rules can merge anyway.
+
+### Fixed
+
+- **Accept all current** / **Accept all incoming** now resolve a conflict where
+  that side deleted the file — taking the side takes the deletion. The conflict
+  view names which side removed it, so the choice is clear before you make it.
+- Cancelling an agent turn and immediately sending a new prompt keeps the two
+  turns apart: the cancelled turn keeps its own late output and saved transcript,
+  and the new turn streams and checkpoints on its own.
+- Archived branches stay archived: **Cherry-pick to branch…** lists (and
+  pre-selects) only active branches, **Unarchive** is available on the branch
+  you're checked out on, and the default branch can no longer be archived.
+- **Clean up branches** shows which branches are merged from your local history
+  even with no connection (the branch switcher's ahead/behind counts work
+  offline too), and announces its progress line to screen readers.
+- **Clean up branches** now tells you when it's waiting for a connection to
+  check which branches were merged through a pull request.
+- When git refuses a commit (a hook rejects it, or nothing is staged), the error
+  now shows git's own report. Covers the commit box, an agent session's commit,
+  and the squash behind **Keep**.
+- Conflicts now name what they hit. **Update from main** on the branch you're
+  on, a stash pop or apply, and merge, rebase, cherry-pick, revert and pull all
+  list the conflicted files and carry git's full report in **Details** — and a
+  conflicted stash reapply says the stash was kept.
+- When editing history hits a conflict, the error details now carry git's full
+  report, including the list of conflicted files — and a squash that leaves
+  nothing to commit now says so.
+- Force pushes now pass `--force-if-includes` alongside `--force-with-lease`:
+  the push refuses to overwrite work you haven't incorporated, even when a
+  background fetch has already brought it into your remote-tracking refs
+  (which is enough to satisfy the lease alone). On a Git older than 2.30,
+  or a branch without a reflog for the check to read, pushes keep the
+  lease-only guard, and the success toast says so.
+- A force push that Git blocks now explains what happened (the remote moved
+  since your last fetch, or it holds commits your branch hasn't incorporated)
+  instead of showing raw Git output; the full text is still one click away under
+  Details.
+- GitLab sign-in, accounts, and Git credentials now pick up self-managed hosts
+  from hand-edited `glab` configs, including ones written with YAML anchors,
+  aliases, comments, or quoted host names.
+- GitLab error messages and the sign-in code screen no longer carry `glab`'s own
+  "update available" notice when the installed CLI is out of date.
+- When finishing a pull-request conflict resolution fails, the error now carries
+  git's whole explanation.
+- Promote a worktree and its dialog closes right away — the removal step shows the
+  same in-progress line and **Removing…** row as deleting one, and the promote
+  finishes in the background.
+- Renaming the branch you're on carries your commit draft over to the new name,
+  and a commit message being generated at the time keeps streaming into it.
+- Notes for reviewers follow a branch through a rename, so the Create-PR dialog
+  still seeds them under the branch's new name.
+- While a worktree removal runs in the background, the branch menu's worktree
+  actions now stand down with the reason on the label (matching the Worktrees
+  manager) instead of failing against a half-deleted folder.
+
 ## [0.9.2] - 2026-08-17
 
 ### Changed
@@ -3126,7 +3198,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/theBGuy/GitDesktop/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/theBGuy/GitDesktop/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/theBGuy/GitDesktop/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/theBGuy/GitDesktop/compare/v0.8.0...v0.9.0
