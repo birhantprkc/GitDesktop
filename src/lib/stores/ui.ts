@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { CommitAuthor, RepoInfo } from "@/lib/git/types";
+import type { CommitAuthor, RemoteLens, RepoInfo } from "@/lib/git/types";
 import type { PrSection } from "@/lib/pulls/pr-section";
 import { startViewTransition } from "@/lib/view-transition";
 
@@ -140,10 +140,14 @@ const EMPTY_COMMIT_DRAFT: CommitDraft = {
  *  same set openRepo / openPr reset, hoisted so the run/agent navigations
  *  stay in lockstep. Staying in the same repo keeps the user's other selections. */
 const CROSS_REPO_RESET: Partial<UiState> = {
+  // Absent on purpose: `queuedMerges` keys embed the repoPath (and lens), so
+  // entries can't leak across repos, and clearing here would kill the queued-merge
+  // chip's promised session persistence on any repo round-trip.
   compareBranch: null,
   localPrCreate: null,
   selectedPr: null,
   pendingPrSection: null,
+  pendingReviewId: null,
   selectedIssue: null,
   selectedDiscussion: null,
   pendingIssueDraft: null,
@@ -164,6 +168,23 @@ const CROSS_REPO_RESET: Partial<UiState> = {
   activeDraftKey: null,
   draftKeyRemaps: {},
 };
+
+/** Key a queued merge by the SAME identity the PR view uses — repo + number +
+ *  lens. The lens is part of it because a fork's origin and upstream can both
+ *  carry a pull request numbered 7, and the view flips lens while staying
+ *  mounted: without it, one lens's chip shows on the other, and the
+ *  clear-on-non-OPEN effect deletes the other's record.
+ *
+ *  Opaque (never parsed back) and collision-free read from the RIGHT: the lens is
+ *  a fixed two-value enum and the number is digits, so neither trailing segment
+ *  can contain `#` however exotic the path in front of them is. */
+export function queuedMergeKey(
+  repoPath: string,
+  number: number,
+  lens: RemoteLens,
+): string {
+  return `${repoPath}#${number}#${lens}`;
+}
 
 /** Key a commit draft so each repo + branch keeps its own message. A git branch
  *  name can't contain a colon, so the key stays unambiguous. */
@@ -213,6 +234,13 @@ interface UiState {
    *  `${provider}|${host}|${expiresAt}`. In-memory only (never persisted), so a
    *  dismissed notice returns next launch until the token is actually renewed. */
   dismissedExpiryNotices: Set<string>;
+  /** Pull requests whose merge the forge accepted into a MERGE QUEUE rather than
+   *  landing, keyed by {@link queuedMergeKey}. Nothing the app can fetch carries
+   *  that state (no mergeStateStatus member reports it), so the accepted outcome
+   *  is the only evidence there is — recorded here so the chip survives a switch
+   *  away and back. In-memory only: a relaunch forgets, and the PR's own state
+   *  takes over once it lands. */
+  queuedMerges: Record<string, true>;
   repoPath: string | null;
   repoName: string | null;
   repoTab: RepoTab;
@@ -224,6 +252,11 @@ interface UiState {
    *  notification row's click-through so the event's own tab opens; null asks
    *  for no switch. Consumed and cleared by the PR detail views. */
   pendingPrSection: PrSection | null;
+  /** Review the Pulls view should scroll to once the opened PR's details land —
+   *  set from a review notification's click-through, null when the event names no
+   *  review. Consumed by the PR detail view, which hands it to its own reveal
+   *  state rather than reading it per render. */
+  pendingReviewId: string | null;
   /** Selected issue on the Issues tab. */
   selectedIssue: SelectedIssue | null;
   /** Selected discussion (by number) on the Discussions tab. */
@@ -303,6 +336,14 @@ interface UiState {
     repoName: string;
     ref: string;
     section: PrSection | null;
+    /** Review to scroll to once the PR's details land; omitted/null = none. */
+    reviewId?: string | null;
+    /** Store-external state this navigation depends on (the caller's repo-lens
+     *  write), run inside the SAME view-transition callback as the selection.
+     *  Written outside it, it would land a render early — the transition callback
+     *  is deferred on Chromium — pairing the new lens with the old PR number and
+     *  fetching a pair the user never selected. */
+    beforeSelect?: () => void;
   }) => void;
   /** Open a repo (if not already) and land on a workflow run in the Actions tab —
    *  used by a notification's click-through. Atomic, like openPr. */
@@ -330,6 +371,9 @@ interface UiState {
   closeReconnect: () => void;
   /** Dismiss the token-expiry notice for `key` (session-scoped, not persisted). */
   dismissExpiryNotice: (key: string) => void;
+  /** Record / forget that a PR's merge went into the forge's merge queue. */
+  markMergeQueued: (key: string) => void;
+  clearMergeQueued: (key: string) => void;
   closeSettings: () => void;
   openHelp: () => void;
   closeHelp: () => void;
@@ -339,6 +383,7 @@ interface UiState {
   setCompareBranch: (branch: string | null) => void;
   selectPr: (pr: SelectedPr | null) => void;
   setPendingPrSection: (section: PrSection | null) => void;
+  setPendingReviewId: (reviewId: string | null) => void;
   selectIssue: (issue: SelectedIssue | null) => void;
   selectDiscussion: (discussion: { number: number } | null) => void;
   setPendingIssueDraft: (
@@ -448,12 +493,14 @@ export const useUiStore = create<UiState>()((set, get) => {
     activityOpen: false,
     reconnectTarget: null,
     dismissedExpiryNotices: new Set<string>(),
+    queuedMerges: {},
     repoPath: null,
     repoName: null,
     repoTab: "changes",
     compareBranch: null,
     selectedPr: null,
     pendingPrSection: null,
+    pendingReviewId: null,
     selectedIssue: null,
     selectedDiscussion: null,
     pendingIssueDraft: null,
@@ -505,6 +552,10 @@ export const useUiStore = create<UiState>()((set, get) => {
       ),
     openPr: (target) =>
       startViewTransition(() => {
+        // Before the set, inside this callback: react-query updates an
+        // observer's result synchronously, so the flush below renders the
+        // caller's write and this selection in one pass.
+        target.beforeSelect?.();
         const switchingRepo = get().repoPath !== target.repoPath;
         set({
           view: "repo",
@@ -518,6 +569,10 @@ export const useUiStore = create<UiState>()((set, get) => {
           ...(switchingRepo ? CROSS_REPO_RESET : {}),
           selectedPr: { kind: target.kind, id: target.ref },
           pendingPrSection: target.section,
+          // In THIS set, not a follow-up one: a second set() would be clobbered
+          // (see openCommit's note), and the reveal target must land with the
+          // selection it belongs to.
+          pendingReviewId: target.reviewId ?? null,
         });
       }),
     openRun: (target) =>
@@ -551,8 +606,12 @@ export const useUiStore = create<UiState>()((set, get) => {
     // Atomic (a follow-up set() would be clobbered); rationale in the compareCommitHash doc.
     setCompareBranch: (branch) =>
       set({ compareBranch: branch, compareCommitHash: null }),
-    selectPr: (pr) => set({ selectedPr: pr }),
+    // Clears any armed reveal in the SAME set (openPr's atomicity): a review
+    // request belongs to the PR the notification opened, and picking another
+    // from the list would leave it armed to fire on a later return to that one.
+    selectPr: (pr) => set({ selectedPr: pr, pendingReviewId: null }),
     setPendingPrSection: (section) => set({ pendingPrSection: section }),
+    setPendingReviewId: (reviewId) => set({ pendingReviewId: reviewId }),
     selectIssue: (issue) => set({ selectedIssue: issue }),
     selectDiscussion: (discussion) => set({ selectedDiscussion: discussion }),
     setPendingIssueDraft: (draft) => set({ pendingIssueDraft: draft }),
@@ -608,6 +667,14 @@ export const useUiStore = create<UiState>()((set, get) => {
       set((s) => ({
         dismissedExpiryNotices: new Set(s.dismissedExpiryNotices).add(key),
       })),
+    markMergeQueued: (key) =>
+      set((s) => ({ queuedMerges: { ...s.queuedMerges, [key]: true } })),
+    clearMergeQueued: (key) =>
+      set((s) => {
+        if (!s.queuedMerges[key]) return {};
+        const { [key]: _gone, ...rest } = s.queuedMerges;
+        return { queuedMerges: rest };
+      }),
     closeSettings: () =>
       startViewTransition(() => set({ view: get().previousView })),
     openHelp: () =>
