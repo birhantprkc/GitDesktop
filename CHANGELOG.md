@@ -12,6 +12,78 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-08-20
+
+### Added
+
+- **Branch rules** gains a **Promotion branches** list — name the branches whose
+  pull requests carry work onward, like `staging`, and GitDesktop stops offering
+  to update those pull requests from their base. It covers the
+  `staging` → `production` flows and upstream-lens pull requests the
+  default-branch detection can't see, and the strip names the head as a promotion
+  branch for this repository.
+
+### Changed
+
+- **Settings → About** now flags a Git or GitHub CLI that's older than a feature
+  needs, naming what breaks and offering the download link; opening an issue with
+  an outdated GitHub CLI now says which version it needs.
+- Reverting, cherry-picking, checking out a commit or a tag, taking a whole side
+  of a conflicted file, and applying or popping a stash from the **Stashes**
+  dialog now confirm first, each naming exactly what changes and what stays
+  safe. Undoing a branch's first commit confirms too, since that one deletes the
+  branch's ref instead of moving it back. The **Change base of…** and rebase
+  dialogs now say up front that the commits they replay get new ids.
+- The AI-generate shortcut now works in the dialogs that carry a **Generate**
+  button (branches, issue drafts, release notes, squash messages, scripts,
+  publish, and repo settings, alongside the commit box and PR dialogs it
+  already served), and those buttons' tooltips show the current binding. Edit
+  history's per-commit reword buttons are the exception. The shortcut's label
+  in **Settings → Keyboard** is now *Generate with AI*. Alongside: the commit
+  box's **Commit** tooltip shows your actual binding rather than a hardcoded
+  one, and Enter in the task dialog's description no longer fires a generation
+  with nothing to go on.
+- The issue view's comment box now spans the full width beneath the sidebar,
+  matching pull requests and discussions, and **Comment** sits at the
+  bottom-right where a form's submit is looked for, with close and reopen to its
+  left. The same widening applies to Jira issues. A new palette action, **Focus
+  the comment box**, jumps to the comment box on any conversation view. Closing
+  an issue, pull request, or discussion on your forge now asks first, since
+  watchers are notified and reopening can't unsend that.
+- Merging a stacked pull request into a base that uses GitHub's **merge queue**
+  now leaves a **Queued to merge** chip on the pull request beside the toast, so
+  the waiting state stays visible until the queue lands it or the pull request
+  closes. The chip lasts for the app session.
+
+### Fixed
+
+- Forking a repository from the Explore tab works with GitHub CLI 2.88 and
+  newer.
+- With **Hide AI features** on, the squash dialog and Edit history's reword
+  rows no longer show their **Generate** buttons.
+- A notification now lands exactly where its event happened: clicking a
+  pull-request entry applies the fork/upstream view the event belongs to
+  before opening the PR, and a review entry scrolls the conversation to the
+  review itself once the data is in (GitHub). Older entries keep working as
+  before.
+- Promotion pull requests (ones whose head is the repository's default branch,
+  like `main` → `staging`) no longer offer **Update branch**, which would merge
+  the base back into the default branch. The strip explains that the gap is
+  expected and needs no closing, and the Update button now names the operation
+  it performs (**Merges base into head**).
+- **A remote-rebased branch gets the right remedy.** When the remote rewrote
+  your branch (a server-side rebase or force-push, like GitHub's *Update branch
+  → rebase*) and every commit here already landed upstream under new ids, the
+  Pull menu and the branch's context menu offer a confirmed **Reset to
+  _origin/…_** that lines the two up without losing anything, and the
+  force-push confirmation warns that pushing would put the old history back.
+  With commits of your own on top, the confirmation counts what's at stake and
+  points at **Pull with rebase**, and the merge routes that would duplicate the
+  rewritten history stand down with the reason. When Git can't confirm the
+  rewrite (no reflog to read, say), the usual divergence controls stay exactly
+  as they are and no reset is offered. And once GitHub finishes an **Update
+  branch**, a background fetch brings the header's counts current.
+
 ## [0.9.3] - 2026-08-19
 
 ### Changed
@@ -3198,7 +3270,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/theBGuy/GitDesktop/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/theBGuy/GitDesktop/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/theBGuy/GitDesktop/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/theBGuy/GitDesktop/compare/v0.9.0...v0.9.1
