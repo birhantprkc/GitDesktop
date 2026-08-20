@@ -72,6 +72,8 @@ import {
 } from "@/lib/git/queries";
 import type { PrThreadOut } from "@/lib/git/types";
 import { SUBMIT_HINT } from "@/lib/hotkeys/binding";
+import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
+import { useConfirm } from "@/lib/stores/confirm";
 import { useUiStore } from "@/lib/stores/ui";
 import { parseableDate } from "@/lib/time";
 import { toastError, toastErrorWithNote } from "@/lib/toast";
@@ -219,6 +221,7 @@ export function DiscussionView({
   const setRepoTab = useUiStore((s) => s.setRepoTab);
   const setPendingIssueDraft = useUiStore((s) => s.setPendingIssueDraft);
   const selectDiscussion = useUiStore((s) => s.selectDiscussion);
+  const selectedDiscussion = useUiStore((s) => s.selectedDiscussion);
 
   const composerRef = useRef<MarkdownEditorHandle>(null);
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
@@ -248,6 +251,18 @@ export function DiscussionView({
 
   const onError = (e: unknown) => toastError(e);
   const d = details.data;
+
+  // The palette's route to the comment box, so reaching it never depends on
+  // tabbing the whole thread. Only the view that owns the selection answers —
+  // the mounted one lags it through a switch.
+  useHotkeyAction(
+    "focus-comment",
+    () => composerRef.current?.focus(),
+    selectedDiscussion?.number === number &&
+      !!d &&
+      !details.isPlaceholderData &&
+      !details.isError,
+  );
 
   if (details.isPending) {
     return (
@@ -456,6 +471,16 @@ export function DiscussionView({
     // Captured before the await: posting clears the draft, and the error arm
     // below has to know a comment already went out.
     const withComment = draftRidesStateChange;
+    // Ahead of the riding draft: a cancelled confirm must leave the comment
+    // unposted.
+    const ok = await useConfirm.getState().ask({
+      title: `Close discussion #${d.number}?`,
+      body: `Everyone watching is notified and the discussion leaves the open list. Reopening puts it back, but the notification can't be unsent.${
+        withComment ? " Your draft posts as a comment first." : ""
+      }`,
+      confirmLabel: withComment ? "Close with comment" : "Close discussion",
+    });
+    if (!ok) return;
     if (!(await postRidingDraft(d.id))) return;
     closeDiscussion.mutate(
       { discussionId: d.id, reason },
