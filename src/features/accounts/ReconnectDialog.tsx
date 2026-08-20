@@ -16,6 +16,7 @@ import {
   forgeReconnectCancel,
   openInTerminal,
 } from "@/lib/git/api";
+import { isReconnectHostSafe } from "@/lib/git/host";
 import { useInvalidateAfterReconnect } from "@/lib/git/queries";
 import { providerLabel, type ReconnectEvent } from "@/lib/git/types";
 import { useSettings } from "@/lib/settings/queries";
@@ -58,10 +59,11 @@ export function ReconnectDialog() {
           for each open — and unmounts (cancelling its live session) on close. */}
       {target && (
         <ReconnectFlow
-          key={`${target.provider}|${target.host}|${target.mode}`}
+          key={`${target.provider}|${target.host}|${target.mode}|${(target.scopes ?? []).join(",")}`}
           provider={target.provider}
           host={target.host}
           mode={target.mode}
+          scopes={target.scopes}
           onClose={closeReconnect}
         />
       )}
@@ -73,11 +75,13 @@ function ReconnectFlow({
   provider,
   host,
   mode,
+  scopes,
   onClose,
 }: {
   provider: "github" | "gitlab";
   host: string;
   mode: "login" | "refresh";
+  scopes?: string[];
   onClose: () => void;
 }) {
   const label = providerLabel(provider);
@@ -94,13 +98,18 @@ function ReconnectFlow({
   const primaryRef = useRef<HTMLButtonElement>(null);
   const autoCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // The copy-paste fallback must match the flow the dialog was driving: a GitHub
-  // "refresh" maps to `gh auth refresh` (preserves granted scopes), everything else to
-  // `auth login --web` (glab has no `refresh` subcommand — login re-runs OAuth for it in
-  // both modes).
-  const fallbackCommand =
-    isGitHub && mode === "refresh"
-      ? `gh auth refresh --hostname ${host}`
+  // The copy-paste fallback must match the flow the dialog was driving, argv spelling
+  // included: a GitHub "refresh" maps to `gh auth refresh` (preserves granted scopes,
+  // plus one `-s` per requested scope), everything else to `auth login --web` (glab has
+  // no `refresh` subcommand — login re-runs OAuth for it in both modes).
+  // gh refreshes the host's ACTIVE account, so on a multi-account host the scopes land
+  // wherever `gh auth switch` last pointed.
+  // Null when the host fails the reconnect grammar, so a crafted remote host can't
+  // put shell syntax into the copyable command (the in-app flow re-validates anyway).
+  const fallbackCommand = !isReconnectHostSafe(host)
+    ? null
+    : isGitHub && mode === "refresh"
+      ? `gh auth refresh --hostname ${host}${(scopes ?? []).map((s) => ` -s ${s}`).join("")}`
       : `${isGitHub ? "gh" : "glab"} auth login --hostname ${host} --web`;
 
   // Handle streamed events without re-subscribing the channel on every render:
@@ -146,7 +155,14 @@ function ReconnectFlow({
     const sessionId = crypto.randomUUID();
     sessionIdRef.current = sessionId;
     setPhase({ kind: "starting" });
-    forgeReconnect({ sessionId, provider, host, mode, onEvent }).catch((e) => {
+    forgeReconnect({
+      sessionId,
+      provider,
+      host,
+      mode,
+      scopes,
+      onEvent,
+    }).catch((e) => {
       // A hard launch failure (CLI missing, spawn error) surfaces as a failed
       // finish so the fallbacks (terminal / copy command) are offered.
       if (sessionIdRef.current === sessionId) {
@@ -287,18 +303,20 @@ function ReconnectFlow({
               </Button>
             )}
           </div>
-          <p className="text-muted-foreground">
-            Or run{" "}
-            <button
-              type="button"
-              className="cursor-pointer font-mono underline underline-offset-2"
-              onClick={() => copyText(fallbackCommand, "Command copied")}
-              title="Copy command"
-            >
-              {fallbackCommand}
-            </button>{" "}
-            in a terminal.
-          </p>
+          {fallbackCommand && (
+            <p className="text-muted-foreground">
+              Or run{" "}
+              <button
+                type="button"
+                className="cursor-pointer font-mono underline underline-offset-2"
+                onClick={() => copyText(fallbackCommand, "Command copied")}
+                title="Copy command"
+              >
+                {fallbackCommand}
+              </button>{" "}
+              in a terminal.
+            </p>
+          )}
         </div>
       )}
     </DialogContent>
