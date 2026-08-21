@@ -177,14 +177,26 @@ pub async fn clone_credential_config(clone_url: &str) -> AppResult<Vec<String>> 
     let glab = crate::agent::resolve_named(&["glab"], None)
         .await
         .ok_or(AppError::GlabNotFound)?;
+    // The gate takes the BARE host (glab's `hosts:` keys are port-stripped), the KEY the
+    // authority — git won't match a portless credential key against a ported request, so
+    // a self-managed host on `:8443` would silently never see glab's token.
     let host = crate::forge::remote_host(clone_url).unwrap_or_else(|| "gitlab.com".to_string());
+    let authority =
+        crate::forge::remote_authority(clone_url).unwrap_or_else(|| "gitlab.com".to_string());
     // glab's signed-in hosts are the `hosts:` keys of its config.yml (written by
     // `glab auth login`) — the established repo signal, not a new `glab auth
     // status` probe. No entry → inject nothing; git's ambient helpers still run.
+    // Gate is bare-only (our reader port-strips these keys), so a bare-registered glab
+    // passes it yet serves a ported remote nothing — measured on glab 1.105:
+    // `auth git-credential get` with `host=gitlab.com:8443` answers EMPTY at exit 0. Fine:
+    // a ported instance needs a ported login anyway, and the funnel keeps its ambient retry.
     if !crate::forge::glab::known_hosts().await.contains(&host) {
         return Ok(Vec::new());
     }
-    Ok(gitlab_credential_entries(&host, &glab.display().to_string()))
+    Ok(gitlab_credential_entries(
+        &authority,
+        &glab.display().to_string(),
+    ))
 }
 
 /// The one-shot `-c` credential entries for a signed-in GitLab host — a
@@ -192,11 +204,18 @@ pub async fn clone_credential_config(clone_url: &str) -> AppResult<Vec<String>> 
 /// URL (empty value clears the helper list per gitcredentials(7); the trailing `=`
 /// is load-bearing — `-c name` without it sets boolean `true`), entry[1] installs
 /// glab as the sole helper so no ambient helper can shadow it. Reset MUST come
-/// first — consumers prefix `-c` pairs in Vec order. Pure/format-only.
-fn gitlab_credential_entries(host: &str, glab_path: &str) -> Vec<String> {
+/// first — consumers prefix `-c` pairs in Vec order. `authority` is `host[:port]`, not
+/// a bare host: git matches credential keys by authority. A crafted remote can drive
+/// characters git reads as config syntax through the URL parse, so an authority failing
+/// [`crate::forge::is_safe_authority`] emits NOTHING — git falls back to ambient helpers
+/// rather than to an injected one. Pure/format-only.
+fn gitlab_credential_entries(authority: &str, glab_path: &str) -> Vec<String> {
+    if !crate::forge::is_safe_authority(authority) {
+        return Vec::new();
+    }
     vec![
-        format!("credential.https://{host}.helper="),
-        format!("credential.https://{host}.helper=!\"{glab_path}\" auth git-credential"),
+        format!("credential.https://{authority}.helper="),
+        format!("credential.https://{authority}.helper=!\"{glab_path}\" auth git-credential"),
     ]
 }
 
@@ -5044,7 +5063,14 @@ pub async fn publish_repo(
 
     // A push failure after this point self-recovers: origin exists, so the repo
     // flips GitLab-ready and the normal Push button takes over.
-    let config = clone_credential_config(&project.http_url_to_repo).await?;
+    // A plain-http instance can only get inert `credential.https://…` entries, so skip
+    // the injection — and with it a hard `GlabNotFound` that would block the push for
+    // nothing. The https path keeps `?`: glab got us this far, so its absence is real.
+    let config = if crate::forge::is_https_remote(&project.http_url_to_repo) {
+        clone_credential_config(&project.http_url_to_repo).await?
+    } else {
+        Vec::new()
+    };
     let mut push_args: Vec<&str> = Vec::new();
     for entry in &config {
         push_args.push("-c");
@@ -5179,7 +5205,12 @@ pub async fn create_mr(
     // An MR needs the branch on the remote first.
     let origin =
         crate::git::remote::git_remote_url(repo_path.to_string(), "origin".to_string()).await?;
-    let config = clone_credential_config(&origin).await?;
+    // Same http gate as `publish_repo`: inert entries aren't worth a hard `GlabNotFound`.
+    let config = if crate::forge::is_https_remote(&origin) {
+        clone_credential_config(&origin).await?
+    } else {
+        Vec::new()
+    };
     let mut push_args: Vec<&str> = Vec::new();
     for entry in &config {
         push_args.push("-c");
@@ -8410,6 +8441,9 @@ mod tests {
             entries[1],
             "credential.https://gitlab.com.helper=!\"/abs/glab\" auth git-credential"
         );
+        // No host is special-cased: a port rides through on the canonical host too.
+        let ported = gitlab_credential_entries("gitlab.com:8443", "/abs/glab");
+        assert_eq!(ported[0], "credential.https://gitlab.com:8443.helper=");
     }
 
     #[test]
@@ -8421,6 +8455,37 @@ mod tests {
             entries[1],
             "credential.https://gitlab.example.com.helper=!\"/abs/glab\" auth git-credential"
         );
+        // A ported instance keys on the authority — git won't match a portless key.
+        let ported = gitlab_credential_entries("gitlab.example.com:8443", "/abs/glab");
+        assert_eq!(ported[0], "credential.https://gitlab.example.com:8443.helper=");
+        assert_eq!(
+            ported[1],
+            "credential.https://gitlab.example.com:8443.helper=!\"/abs/glab\" auth git-credential"
+        );
+    }
+
+    #[test]
+    fn ported_remote_gates_on_bare_host_but_keys_on_authority() {
+        // The trap `clone_credential_config` threads: glab's `hosts:` keys are
+        // port-stripped, so the gate needs the bare host while the key needs the port.
+        let url = "https://gitlab.example.com:8443/g/s/r.git";
+        assert_eq!(crate::forge::remote_host(url).as_deref(), Some("gitlab.example.com"));
+        assert_eq!(
+            crate::forge::remote_authority(url).as_deref(),
+            Some("gitlab.example.com:8443"),
+        );
+        let entries =
+            gitlab_credential_entries(&crate::forge::remote_authority(url).unwrap(), "/abs/glab");
+        assert_eq!(entries[0], "credential.https://gitlab.example.com:8443.helper=");
+    }
+
+    #[test]
+    fn a_crafted_authority_emits_no_entries_at_all() {
+        // Fail OPEN to ambient rather than installing an attacker's `!`-shell helper.
+        assert!(
+            gitlab_credential_entries("gitlab.com:443.helper=!evil #", "/abs/glab").is_empty()
+        );
+        assert!(gitlab_credential_entries("gitlab.com;evil", "/abs/glab").is_empty());
     }
 
     #[test]

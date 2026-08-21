@@ -139,12 +139,14 @@ const nearPair = (a, b) => {
   return perFile(re);
 };
 
+/** Scanner: the union of several scanners — one check, one allowlist, every
+ *  route to the same banned thing (including routes that want different
+ *  views: `perLine` for a token, `perFile` for one that can wrap). */
+const anyOf = (scans) => (v) => [...new Set(scans.flatMap((scan) => scan(v)))];
+
 /** Scanner: the union of several `nearPair`s — one check, one allowlist, every
  *  Tailwind spelling of the same idiom. */
-const anyPair = (pairs) => {
-  const scans = pairs.map(([a, b]) => nearPair(a, b));
-  return (v) => [...new Set(scans.flatMap((scan) => scan(v)))];
-};
+const anyPair = (pairs) => anyOf(pairs.map(([a, b]) => nearPair(a, b)));
 
 // The same hover-reveal in each of its Tailwind spellings: the hiding utility
 // paired with the `group-hover:` class that undoes it. `inline` and
@@ -183,6 +185,26 @@ const HOVER_REVEAL_PAIRS = [
 // first argument measures 27 chars (PR #208 review round 1).
 const SET_QUERY_DATA_RE =
   /setQueryData\s*(?:<[^(]*?>)?\s*\([^;]{0,200},\s*undefined\s*[),]/g;
+
+// A `.mutate(` call in any spelling — the token, not the callbacks object it
+// may carry. Matching the object instead would have to recognize every way one
+// reaches the call: inline literal, hoisted variable (`.mutate(v, opts)` — the
+// shape 5 of the settings sections used, and still live elsewhere under src/),
+// spread, shorthand keys. The token has no such surface, and it costs nothing
+// here because the directory this check applies to has no `.mutate(` calls left
+// at all — every mutation there is awaited. `.mutateAsync(` does not match: the
+// `(` must follow `mutate` directly.
+const MUTATE_CALL_RE = /\.mutate\s*\(/;
+
+// The dot-less route to the same call: `const { mutate } = useX()` (a live idiom
+// elsewhere in src/) reaches `.mutate` off a destructured binding, so the token
+// above never sees it. The `\b` after `mutate` is what keeps `{ mutateAsync }`
+// clean, while a renamed `{ mutate: save }` still hits. Run over the whole-file
+// view, not per line: a destructure long enough to wrap is a shape this codebase
+// already produces (15 wrapped hook destructures under src/, none binding
+// `mutate` today), and `[^}]*` can't cross the destructure's own closing brace,
+// so the joined view adds no reach.
+const DESTRUCTURED_MUTATE_RE = /\bconst\s*\{[^}]*\bmutate\b[^}]*\}\s*=/g;
 
 // Vendored shadcn/Base UI primitives are off-limits to edit (CLAUDE.md), so a
 // hit inside them could only ever be silenced by an allowlist entry, never
@@ -246,6 +268,17 @@ export const CHECKS = [
     allowlist: [],
     message:
       "setQueryData(key, undefined) is a silent no-op in TanStack v5 — snapshot and restore the previous value instead",
+  },
+  {
+    name: "mutate-in-repo-settings",
+    // Scoped to the settings dialog's own tree, whose sections unmount on BOTH
+    // dialog close and every rail section switch (the keyed crossfade). The
+    // wider app's call sites are a separate tier and are not scanned here.
+    appliesTo: (file) => file.startsWith("src/features/repo-settings/"),
+    scan: anyOf([perLine(MUTATE_CALL_RE), perFile(DESTRUCTURED_MUTATE_RE)]),
+    allowlist: [],
+    message:
+      "react-query gates per-call mutation callbacks on the observer still having listeners, so a dialog close or rail section switch mid-flight drops the toast, teardown, and navigation that lived in them — every mutation here awaits mutateAsync and puts its outcome in the continuation, so a bare .mutate( (or a `const { mutate }` destructure that reaches one) needs an allowlist entry with rationale",
   },
 ];
 

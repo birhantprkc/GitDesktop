@@ -51,6 +51,82 @@ pub(crate) fn remote_host(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+/// A TCP port as a URL spells one: 1-5 ASCII digits. Deliberately not range-checked —
+/// git and the CLIs reject an out-of-range port themselves; this only has to guarantee
+/// the segment carries no config or shell syntax.
+fn is_port(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 5 && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Whether a string is safe to interpolate as the authority of a `credential.https://…`
+/// config key or a `--hostname` argv: host `[A-Za-z0-9.-]+` plus an optional numeric
+/// port. THE reconnect/credential host grammar — `valid_reconnect_host` delegates here
+/// and `isReconnectHostSafe` (`src/lib/git/host.ts`) mirrors it, so the three can't
+/// drift. Needed because `remote_host`/`remote_authority` only split on `/` and `:`, so
+/// a crafted remote can carry `=`, `;`, `$`, or a space through them.
+pub(crate) fn is_safe_authority(value: &str) -> bool {
+    let (host, port) = match value.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (value, None),
+    };
+    if host.is_empty() || !host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    {
+        return false;
+    }
+    port.is_none_or(is_port)
+}
+
+/// The `host[:port]` AUTHORITY of a remote URL — [`remote_host`] plus the port it
+/// drops, when that port is one (see [`is_port`]); a non-numeric segment is not a port
+/// and yields the bare host. Host lowercased; `None` on no parseable host. Three
+/// URL-decomposition idioms live here and each has one job: `remote_host` (bare host)
+/// for gates, routing and detection; `remote_authority` for credential-helper keys;
+/// [`fork_url_from_origin`]'s path-splice for preserving a whole URL.
+///
+/// scp form (`git@host:path`) yields the BARE host — that `:` is a path separator and
+/// scp syntax has no port slot (ported SSH uses `ssh://`), and ssh remotes never reach
+/// the https-gated credential paths anyway.
+///
+/// A real port is returned as written, no `:443` special-casing: measured against git
+/// 2.51 (`git credential fill`, isolated config), a `host:port` key matches a ported
+/// request, git normalizes the DEFAULT port both directions, and a portless key does NOT
+/// match a `:8443` request — so the authority is the only key that always matches.
+pub(crate) fn remote_authority(url: &str) -> Option<String> {
+    let url = url.trim();
+    let (had_scheme, rest) = match url.split_once("://") {
+        Some((_, after)) => (true, after),
+        None => (false, url),
+    };
+    // Drop an optional `user@` (rsplit so `user@host` keeps `host`).
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, host)| host);
+    // The authority ends at the first `/`; without a scheme the remaining `:` is scp's
+    // path separator, so trim there too.
+    let authority = rest.split('/').next().unwrap_or("");
+    let authority = if had_scheme {
+        authority
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    let (host, port) = match authority.split_once(':') {
+        // Only a real 1-5 digit port is carried. Anything else — an empty port, a mangled
+        // IPv6 fragment, or a crafted `443.helper=!cmd #` — falls back to the bare host:
+        // this string is interpolated into a `-c credential.https://…` key, and git splits
+        // a `-c` at its FIRST `=`, so a non-numeric port smuggles an attacker-chosen
+        // `!`-shell helper onto a key that still matches the real host.
+        Some((h, p)) if is_port(p) => (h, Some(p)),
+        Some((h, _)) => (h, None),
+        None => (authority, None),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    let host = host.to_ascii_lowercase();
+    Some(match port {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
+}
+
 /// The `owner/name` (or `group/subgroup/name`) path of a remote URL — the part
 /// after the host, with any `.git` suffix and surrounding slashes trimmed.
 /// Complements [`remote_host`]; `None` when there's no path. Handles both
@@ -243,7 +319,7 @@ pub(crate) async fn detect_non_github(repo_path: &str) -> Option<(Provider, Stri
     None
 }
 
-/// The one-shot `-c credential.https://<host>.helper` entries authenticating a
+/// The one-shot `-c credential.https://<authority>.helper` entries authenticating a
 /// network op on `remote`, resolved to the provider CLI's ABSOLUTE path. The
 /// provider comes from the REQUESTED remote's own host, so a cross-forge
 /// origin/upstream pair each gets the right CLI's helper.
@@ -319,9 +395,13 @@ fn provider_for_remote_host(host: &str, glab_hosts: &[String]) -> Option<Provide
 /// True when a remote URL uses HTTPS (credential helpers apply). SSH forms
 /// (`git@host:…`, `ssh://…`) and others return false — as does plain `http://`,
 /// since the helper entry we format keys on `credential.https://…` and would
-/// never match an http remote anyway.
+/// never match an http remote anyway. The scheme is matched case-insensitively —
+/// schemes are case-insensitive per RFC 3986, and a `HTTPS://` remote that read as
+/// non-https would silently skip the helper injection.
 fn is_https_remote(url: &str) -> bool {
-    url.trim().starts_with("https://")
+    url.trim()
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
 }
 
 /// The provider tag the frontend keys labels on (`"github"`/`"gitlab"`/
@@ -845,9 +925,9 @@ pub async fn forge_provider_features(provider: Provider) -> AppResult<ProviderFe
 
 /// Clone a repo, supplying provider auth that plain `git clone` lacks. A private
 /// GitLab repo needs glab's token, injected as a ONE-SHOT `git -c` credential helper
-/// (no persistent config, no token in the URL) — glab IS GitLab's auth path, so that
-/// arm stays strict. GitHub gets the same one-shot gh helper when gh is present but
-/// falls open to git's ambient auth when it isn't. Returns the path.
+/// (no persistent config, no token in the URL); GitHub gets the same one-shot gh
+/// helper. Both fall open to git's ambient auth when their CLI is absent. Returns the
+/// path.
 #[tauri::command]
 pub async fn forge_clone(
     provider: Provider,
@@ -860,9 +940,18 @@ pub async fn forge_clone(
     // what finds the sentinel-account seed — and interactive helpers suppressed. No
     // stored token → URL and behavior untouched (ambient auth still works).
     let mut clone_url = url;
+    // The helper entries key on `credential.https://…`, so a non-https URL can only get
+    // inert config — the gate skips that plus the CLI-resolve probes. Both arms fail
+    // open: ambient auth or a public repo must still clone when the CLI is absent.
+    let https = is_https_remote(&clone_url);
     let extra = match provider {
-        Provider::GitLab => gitlab::clone_credential_config(&clone_url).await?,
-        Provider::GitHub => github::clone_credential_config(&clone_url).await.unwrap_or_default(),
+        Provider::GitLab if https => {
+            gitlab::clone_credential_config(&clone_url).await.unwrap_or_default()
+        }
+        Provider::GitHub if https => {
+            github::clone_credential_config(&clone_url).await.unwrap_or_default()
+        }
+        Provider::GitLab | Provider::GitHub => Vec::new(),
         Provider::Bitbucket => {
             if bitbucket::seed_git_credential().await {
                 clone_url = bitbucket::strip_https_userinfo(&clone_url);
@@ -3894,12 +3983,94 @@ mod tests {
     }
 
     #[test]
+    fn remote_authority_keeps_the_port_remote_host_drops() {
+        // The whole point: a non-default port survives, verbatim.
+        assert_eq!(
+            remote_authority("https://gitlab.acme.com:8443/g/s/r.git").as_deref(),
+            Some("gitlab.acme.com:8443"),
+        );
+        // No port → identical to `remote_host`.
+        assert_eq!(
+            remote_authority("https://github.com/o/r").as_deref(),
+            Some("github.com"),
+        );
+        // An explicit default port is kept as written — git normalizes it either way.
+        assert_eq!(
+            remote_authority("https://gitlab.acme.com:443/g/r.git").as_deref(),
+            Some("gitlab.acme.com:443"),
+        );
+        // scp form: the `:` is a PATH separator, never a port.
+        assert_eq!(
+            remote_authority("git@github.com:o/r.git").as_deref(),
+            Some("github.com"),
+        );
+        // Userinfo is dropped, port kept.
+        assert_eq!(
+            remote_authority("https://user@gitlab.acme.com:8443/g/r.git").as_deref(),
+            Some("gitlab.acme.com:8443"),
+        );
+        // Scheme case doesn't matter; the host lowercases, the port rides along.
+        assert_eq!(
+            remote_authority("HTTPS://GitLab.Acme.com:8443/g/r").as_deref(),
+            Some("gitlab.acme.com:8443"),
+        );
+        // A degenerate empty port drops the `:`, matching the gate's bare host.
+        assert_eq!(
+            remote_authority("https://gitlab.example.com:/g/r.git").as_deref(),
+            Some("gitlab.example.com"),
+        );
+        // The full 5-digit range is a real port and survives.
+        assert_eq!(
+            remote_authority("https://gitlab.acme.com:65535/g/r.git").as_deref(),
+            Some("gitlab.acme.com:65535"),
+        );
+        // A non-numeric port is not a port — fall back to the bare host.
+        assert_eq!(
+            remote_authority("https://gitlab.acme.com:8443x/g/r.git").as_deref(),
+            Some("gitlab.acme.com"),
+        );
+        // No host → None (local path).
+        assert_eq!(remote_authority("/local/path"), None);
+    }
+
+    #[test]
+    fn a_crafted_port_segment_never_reaches_a_credential_key() {
+        // A remote URL any opened repo's .git/config can carry. git splits a `-c` at its
+        // FIRST `=`, so keeping this port verbatim would key an attacker-chosen `!`-shell
+        // helper on `credential.https://github.com:443` — which matches plain github.com.
+        let poisoned = "https://github.com:443.helper=!evil #/o/r.git";
+        assert_eq!(remote_authority(poisoned).as_deref(), Some("github.com"));
+        // The gate's own spelling is unchanged, so the two agree again.
+        assert_eq!(remote_host(poisoned).as_deref(), Some("github.com"));
+    }
+
+    #[test]
+    fn is_safe_authority_admits_hosts_and_numeric_ports_only() {
+        assert!(is_safe_authority("github.com"));
+        assert!(is_safe_authority("gitlab.acme-corp.com:8443"));
+        assert!(is_safe_authority("gitlab.acme.com:65535"));
+        // Config/shell syntax a crafted remote can carry through the URL parse.
+        assert!(!is_safe_authority("github.com:443.helper=!evil #"));
+        assert!(!is_safe_authority("github.com;rm -rf /"));
+        assert!(!is_safe_authority("github.com:8443x"));
+        assert!(!is_safe_authority("git hub.com"));
+        assert!(!is_safe_authority("host:"));
+        assert!(!is_safe_authority("host:123456"));
+        assert!(!is_safe_authority(":8443"));
+        assert!(!is_safe_authority(""));
+    }
+
+    #[test]
     fn is_https_remote_distinguishes_https_from_ssh() {
         assert!(is_https_remote("https://github.com/o/r.git"));
         assert!(!is_https_remote("git@github.com:o/r.git"));
         assert!(!is_https_remote("ssh://git@github.com/o/r.git"));
         // Plain http never matches the https-keyed helper entry we format.
         assert!(!is_https_remote("http://github.example.com/o/r.git"));
+        // Schemes are case-insensitive; `HTTPS://` is still https.
+        assert!(is_https_remote("HTTPS://github.com/o/r.git"));
+        assert!(is_https_remote("  HttPs://github.com/o/r.git  "));
+        assert!(!is_https_remote("HTTP://github.example.com/o/r.git"));
     }
 
     #[test]

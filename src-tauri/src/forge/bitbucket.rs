@@ -2858,7 +2858,16 @@ async fn evict_git_credential() {
 /// sentinel seed, and re-prompts — on Windows GCM as well as macOS osxkeychain.
 /// Non-`https` URLs and URLs without userinfo pass through unchanged.
 pub(crate) fn strip_https_userinfo(url: &str) -> String {
-    let Some(rest) = url.strip_prefix("https://") else {
+    // Scheme matched case-insensitively AND after trimming, in lockstep with
+    // `forge::is_https_remote`: a remote that passed that gate but skipped this rewrite
+    // would be seeded `credential.interactive=false` with no `insteadOf`, turning a
+    // prompt into a hard auth failure.
+    let trimmed = url.trim_start();
+    let Some(rest) = trimmed
+        .get(..8)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        .map(|_| &trimmed[8..])
+    else {
         return url.to_string();
     };
     let (authority, path) = match rest.split_once('/') {
@@ -2883,7 +2892,9 @@ pub(crate) fn strip_https_userinfo(url: &str) -> String {
 ///  - For a userinfo remote (`https://user@bitbucket.org/…`): a transient
 ///    `url.<stripped>.insteadOf=<url>` rewrite so git's credential lookup resolves to the
 ///    bare host and finds the sentinel seed (see [`strip_https_userinfo`]). The stored
-///    remote is never mutated. Safe as a `-c` key: Bitbucket URLs contain no `=`.
+///    remote is never mutated. Safe as a `-c` key even for a crafted remote: the
+///    immutable `url.` section prefix can never parse as `credential.*.helper`, and a
+///    smuggled `=` only truncates into an inert `url.*` key or lands in the value.
 pub(crate) fn bitbucket_credential_entries(url: &str) -> Vec<String> {
     let mut entries = vec![CREDENTIAL_NONINTERACTIVE.to_string()];
     let stripped = strip_https_userinfo(url);
@@ -5388,6 +5399,36 @@ mod tests {
         assert_eq!(
             strip_https_userinfo("git@bitbucket.org:ws/repo.git"),
             "git@bitbucket.org:ws/repo.git"
+        );
+        // Mixed-case scheme strips too — `forge::is_https_remote` admits it, so skipping
+        // the rewrite here would seed a non-interactive op with no credential match.
+        assert_eq!(
+            strip_https_userinfo("HTTPS://alice@bitbucket.org/ws/repo.git"),
+            "https://bitbucket.org/ws/repo.git"
+        );
+        // http:// is still not https.
+        assert_eq!(
+            strip_https_userinfo("http://alice@bitbucket.org/ws/repo.git"),
+            "http://alice@bitbucket.org/ws/repo.git"
+        );
+        // Leading whitespace: `is_https_remote` trims before matching, so this must too —
+        // otherwise the gate admits a remote whose rewrite silently no-ops.
+        assert_eq!(
+            strip_https_userinfo("  https://alice@bitbucket.org/ws/repo.git"),
+            "https://bitbucket.org/ws/repo.git"
+        );
+    }
+
+    #[test]
+    fn mixed_case_https_still_gets_its_insteadof_rewrite() {
+        // The regression the case-insensitive gate would otherwise open: interactive
+        // suppressed with no rewrite = a hard auth failure instead of a prompt.
+        let entries = bitbucket_credential_entries("HTTPS://alice@bitbucket.org/ws/repo.git");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], "credential.interactive=false");
+        assert_eq!(
+            entries[1],
+            "url.https://bitbucket.org/ws/repo.git.insteadOf=HTTPS://alice@bitbucket.org/ws/repo.git"
         );
     }
 

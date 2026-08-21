@@ -754,8 +754,9 @@ pub async fn create_issue(
 /// gh's token via an ABSOLUTE gh path — works even when git's ambient `!gh` helper
 /// can't find gh (macOS launchd's minimal GUI PATH) or gh never installed the HTTPS
 /// helper. Nothing is written to git config; no token enters the URL. Returns the
-/// `[reset, helper]` pair ONLY when gh has a STORED token for `host` — otherwise an
-/// empty Vec, so ambient helpers (keychain, git-credential-manager) still run. That
+/// `[reset, helper]` pair ONLY when gh has a STORED token for the remote's authority OR
+/// its bare host — otherwise an empty Vec, so ambient helpers (keychain,
+/// git-credential-manager) still run. That
 /// check proves the token EXISTS, not that it's valid; the ambient fallback in
 /// [`crate::git::remote::run_git_mutating_with_creds`] covers a revoked one. Missing
 /// gh → `Err(GhNotFound)`, so `.unwrap_or_default()` callers stay fail-open.
@@ -765,31 +766,56 @@ pub async fn clone_credential_config(clone_url: &str) -> AppResult<Vec<String>> 
         .await
         .ok_or(AppError::GhNotFound)?;
     let host = crate::forge::remote_host(clone_url).unwrap_or_else(|| "github.com".to_string());
-    if !gh_authenticated(&host).await {
+    let authority =
+        crate::forge::remote_authority(clone_url).unwrap_or_else(|| "github.com".to_string());
+    // Key on the spelling that actually ANSWERED. Keying a ported authority that only the
+    // bare host authenticated would sever the ambient chain for `host:port` and install a
+    // gh that answers empty there — and the clone path has no ambient retry.
+    let Some(key) = gh_authenticated_for(&authority, &host).await else {
         return Ok(Vec::new());
-    }
-    Ok(github_credential_entries(&host, &gh.display().to_string()))
+    };
+    Ok(github_credential_entries(&key, &gh.display().to_string()))
 }
 
 /// The one-shot `-c` credential entries for an authenticated GitHub host — a
 /// `[reset, helper]` pair. Pure/format-only.
 ///
 /// entry[0] SEVERS git's accumulated helper chain for this URL: `-c
-/// credential.https://<host>.helper=` sets the EMPTY string, which git treats as
+/// credential.https://<authority>.helper=` sets the EMPTY string, which git treats as
 /// "clear the helpers so far" (gitcredentials(7)). The trailing `=` is load-bearing —
 /// `-c name` without it sets boolean true and breaks the reset. entry[1] installs gh
 /// as the sole helper so an ambient one earlier in the chain (macOS `osxkeychain`)
 /// can't shadow it. Order matters: reset FIRST — consumers prefix `-c` in Vec order.
-fn github_credential_entries(host: &str, gh_path: &str) -> Vec<String> {
+/// `authority` is `host[:port]`, not a bare host: git matches credential keys by
+/// authority. A crafted remote can drive characters git reads as config syntax through
+/// the URL parse, so an authority failing [`crate::forge::is_safe_authority`] emits
+/// NOTHING — git falls back to ambient helpers rather than to an injected one.
+fn github_credential_entries(authority: &str, gh_path: &str) -> Vec<String> {
+    if !crate::forge::is_safe_authority(authority) {
+        return Vec::new();
+    }
     vec![
-        format!("credential.https://{host}.helper="),
-        github_credential_entry(host, gh_path),
+        format!("credential.https://{authority}.helper="),
+        github_credential_entry(authority, gh_path),
     ]
 }
 
-/// The one-shot `-c` credential-helper config value for a GitHub host. Pure/format-only.
-fn github_credential_entry(host: &str, gh_path: &str) -> String {
-    format!("credential.https://{host}.helper=!\"{gh_path}\" auth git-credential")
+/// The one-shot `-c` credential-helper config value for a GitHub authority. Pure/format-only.
+fn github_credential_entry(authority: &str, gh_path: &str) -> String {
+    format!("credential.https://{authority}.helper=!\"{gh_path}\" auth git-credential")
+}
+
+/// The spelling gh holds a token for — its AUTHORITY if that answers, else its bare host,
+/// else `None`. gh's host registry is port-SENSITIVE (measured, gh 2.94:
+/// `--hostname github.com:443` exits 1 where the bare host exits 0), so a
+/// `gh auth login --hostname host:8443` user answers only to the authority. Callers key
+/// their credential entries on the RETURNED string: a helper installed under a spelling
+/// gh doesn't know would answer empty on every fill.
+async fn gh_authenticated_for(authority: &str, host: &str) -> Option<String> {
+    if authority != host && gh_authenticated(authority).await {
+        return Some(authority.to_string());
+    }
+    gh_authenticated(host).await.then(|| host.to_string())
 }
 
 /// Whether gh has a STORED token for `host` — the gate deciding whether to inject the
@@ -800,7 +826,10 @@ fn github_credential_entry(host: &str, gh_path: &str) -> String {
 ///
 /// SECURITY: `gh auth token`'s stdout IS the user's token — only the exit code is
 /// read; the output is dropped and never logged or formatted anywhere.
-async fn gh_authenticated(host: &str) -> bool {
+///
+/// `host` must be spelled as gh has it registered: the registry is port-SENSITIVE
+/// (case-insensitive), so a ported host answers only to its full `host:port` authority.
+pub(super) async fn gh_authenticated(host: &str) -> bool {
     if let Some(hit) = auth_cache_get(host, GH_AUTH_TTL) {
         return hit;
     }
@@ -1287,6 +1316,9 @@ mod tests {
             entries[1],
             "credential.https://github.com.helper=!\"/abs/gh\" auth git-credential"
         );
+        // No host is special-cased: a port rides through on the canonical host too.
+        let ported = github_credential_entries("github.com:8443", "/abs/gh");
+        assert_eq!(ported[0], "credential.https://github.com:8443.helper=");
     }
 
     #[test]
@@ -1298,6 +1330,71 @@ mod tests {
             entries[1],
             "credential.https://github.example.com.helper=!\"/abs/gh\" auth git-credential"
         );
+        // A ported GHES keys on the authority — git won't match a portless key.
+        let ported = github_credential_entries("github.example.com:8443", "/abs/gh");
+        assert_eq!(ported[0], "credential.https://github.example.com:8443.helper=");
+        assert_eq!(
+            ported[1],
+            "credential.https://github.example.com:8443.helper=!\"/abs/gh\" auth git-credential"
+        );
+    }
+
+    // The auth cache is a process-wide static and `gh_authenticated` reads it before
+    // spawning, so priming it makes these hermetic (distinct host keys per test).
+    #[tokio::test]
+    async fn ported_authority_answers_and_is_the_spelling_keyed() {
+        // The blocker case: `gh auth login --hostname ghes-p.example.com:8443` registers
+        // ONLY the authority, so a bare-host-only gate would inject nothing.
+        auth_cache_put("ghes-p.example.com:8443", true);
+        auth_cache_put("ghes-p.example.com", false);
+        assert_eq!(
+            gh_authenticated_for("ghes-p.example.com:8443", "ghes-p.example.com").await,
+            Some("ghes-p.example.com:8443".to_string()),
+        );
+    }
+
+    #[tokio::test]
+    async fn bare_match_is_keyed_bare_even_for_a_ported_remote() {
+        // Registered portless, remote written with a port: keying the authority here would
+        // sever ambient for `host:port` and install a gh that answers empty there.
+        auth_cache_put("ghes-b.example.com:8443", false);
+        auth_cache_put("ghes-b.example.com", true);
+        assert_eq!(
+            gh_authenticated_for("ghes-b.example.com:8443", "ghes-b.example.com").await,
+            Some("ghes-b.example.com".to_string()),
+        );
+    }
+
+    #[tokio::test]
+    async fn neither_spelling_registered_fails_the_gate() {
+        auth_cache_put("ghes-n.example.com:8443", false);
+        auth_cache_put("ghes-n.example.com", false);
+        assert_eq!(
+            gh_authenticated_for("ghes-n.example.com:8443", "ghes-n.example.com").await,
+            None,
+        );
+    }
+
+    #[tokio::test]
+    async fn ported_remote_keys_on_the_spelling_that_answered() {
+        let url = "https://ghes-k.example.com:8443/o/r.git";
+        let host = crate::forge::remote_host(url).unwrap();
+        let authority = crate::forge::remote_authority(url).unwrap();
+        assert_eq!(host, "ghes-k.example.com");
+        assert_eq!(authority, "ghes-k.example.com:8443");
+        // Authority registered → the ported key, which is the whole point of the fix.
+        auth_cache_put("ghes-k.example.com:8443", true);
+        auth_cache_put("ghes-k.example.com", false);
+        let key = gh_authenticated_for(&authority, &host).await.unwrap();
+        let entries = github_credential_entries(&key, "/abs/gh");
+        assert_eq!(entries[0], "credential.https://ghes-k.example.com:8443.helper=");
+    }
+
+    #[test]
+    fn a_crafted_authority_emits_no_entries_at_all() {
+        // Fail OPEN to ambient rather than installing an attacker's `!`-shell helper.
+        assert!(github_credential_entries("github.com:443.helper=!evil #", "/abs/gh").is_empty());
+        assert!(github_credential_entries("github.com;evil", "/abs/gh").is_empty());
     }
 
     // --- gh-auth TTL cache (mirrors remote.rs's cache tests). Distinct host keys

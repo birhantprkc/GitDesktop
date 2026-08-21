@@ -131,13 +131,31 @@ pub async fn forge_session_health(repo_path: String) -> AppResult<SessionHealth>
 }
 
 /// The GitHub host for a repo, from its `origin` URL when parseable, else
-/// `github.com`. Deliberately no `gh repo view` — that's a network round-trip this
-/// cheap health check must avoid; the origin host is enough to scope `gh auth status`.
+/// `github.com` — as gh spells it, so a ported remote resolves to the `host:port`
+/// authority gh registered it under. Deliberately no `gh repo view` — that's a network
+/// round-trip this cheap health check must avoid; the extra probe on a ported remote is
+/// gh's local-only, memoized `auth token`.
 async fn github_host_for_repo(repo_path: &str) -> String {
-    match crate::git::remote::git_remote_url(repo_path.to_string(), "origin".to_string()).await {
-        Ok(url) => crate::forge::remote_host(&url).unwrap_or_else(|| "github.com".to_string()),
-        Err(_) => "github.com".to_string(),
+    let Ok(url) =
+        crate::git::remote::git_remote_url(repo_path.to_string(), "origin".to_string()).await
+    else {
+        return "github.com".to_string();
+    };
+    let host = crate::forge::remote_host(&url).unwrap_or_else(|| "github.com".to_string());
+    let authority = crate::forge::remote_authority(&url).unwrap_or_else(|| "github.com".to_string());
+    // Only the ported spelling is gated — it is the one this function SYNTHESIZES, and a
+    // rejected one must fall back rather than be probed. The parsed host passes through as
+    // read: substituting a default would report a different host's session as this repo's.
+    if authority != host
+        && crate::forge::is_safe_authority(&authority)
+        && crate::forge::github::gh_authenticated(&authority).await
+    {
+        // gh registers a ported host under its full authority, so `--hostname <bare>`
+        // would report a signed-in ported GHES as signed-out. The same string then keys
+        // the `auth status --json hosts` map.
+        return authority;
     }
+    host
 }
 
 // ── forge_accounts_health (account-scoped) ──────────────────────────────────────
@@ -770,14 +788,13 @@ impl Drop for ReconnectGuard {
     }
 }
 
-/// A reconnect host must be a bare hostname: no port, no scheme, no path. Narrow
-/// on purpose — the value becomes a `--hostname` argument, and the CLIs key their
-/// stored credentials by exactly this spelling.
+/// A reconnect host is a hostname with an optional numeric port — no scheme, no path,
+/// no shell syntax. The port is allowed because `gh auth login --hostname host:8443` is
+/// exactly how a ported instance registers, and the value becomes a `--hostname`
+/// argument the CLIs key their stored credentials by. One grammar, shared with the
+/// credential-key guard so the two can't drift.
 fn valid_reconnect_host(host: &str) -> bool {
-    !host.is_empty()
-        && host
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    crate::forge::is_safe_authority(host)
 }
 
 /// The most extra scopes one reconnect may request — a scope hint asks for one, and
@@ -1832,11 +1849,14 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_host_grammar_stays_bare() {
+    fn reconnect_host_grammar_allows_a_numeric_port_only() {
         assert!(valid_reconnect_host("github.com"));
         assert!(valid_reconnect_host("gitlab.example-corp.com"));
+        // A ported instance registers with gh/glab under `host:port`, so the reconnect
+        // flow must accept the same spelling the health check reports.
+        assert!(valid_reconnect_host("gitlab.example.com:8443"));
         assert!(!valid_reconnect_host("")); // empty
-        assert!(!valid_reconnect_host("gitlab.example.com:8443")); // port
+        assert!(!valid_reconnect_host("gitlab.example.com:8443x")); // not a port
         assert!(!valid_reconnect_host("https://gitlab.example.com")); // scheme
         assert!(!valid_reconnect_host("gitlab.example.com/path")); // path
         assert!(!valid_reconnect_host("host --flag")); // argv injection
