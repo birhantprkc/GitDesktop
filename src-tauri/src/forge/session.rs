@@ -788,11 +788,12 @@ impl Drop for ReconnectGuard {
     }
 }
 
-/// A reconnect host is a hostname with an optional numeric port — no scheme, no path,
-/// no shell syntax. The port is allowed because `gh auth login --hostname host:8443` is
-/// exactly how a ported instance registers, and the value becomes a `--hostname`
-/// argument the CLIs key their stored credentials by. One grammar, shared with the
-/// credential-key guard so the two can't drift.
+/// A reconnect host is a hostname, or a bracketed IPv6 literal, with an optional
+/// numeric port — no scheme, no path, no shell syntax. The port is allowed because
+/// `gh auth login --hostname host:8443` is exactly how a ported instance registers,
+/// and the value becomes a `--hostname` argument the CLIs key their stored
+/// credentials by. One grammar, shared with the credential-key guard so the two
+/// can't drift.
 fn valid_reconnect_host(host: &str) -> bool {
     crate::forge::is_safe_authority(host)
 }
@@ -1855,6 +1856,9 @@ mod tests {
         // A ported instance registers with gh/glab under `host:port`, so the reconnect
         // flow must accept the same spelling the health check reports.
         assert!(valid_reconnect_host("gitlab.example.com:8443"));
+        // A bracketed IPv6 literal is what the health check reports for such a remote.
+        assert!(valid_reconnect_host("[2001:db8::1]:8443"));
+        assert!(!valid_reconnect_host("[::1")); // unterminated bracket
         assert!(!valid_reconnect_host("")); // empty
         assert!(!valid_reconnect_host("gitlab.example.com:8443x")); // not a port
         assert!(!valid_reconnect_host("https://gitlab.example.com")); // scheme

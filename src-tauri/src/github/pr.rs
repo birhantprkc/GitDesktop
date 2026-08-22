@@ -38,12 +38,23 @@ struct RepoView {
 
 /// The host of a repo URL like `https://github.acme.com/owner/repo` →
 /// `github.acme.com`. None when it isn't an http(s)-style URL. Tolerates an
-/// optional `user@` prefix and `:port` suffix.
+/// optional `user@` prefix and `:port` suffix. A bracketed IPv6 literal keeps its
+/// brackets, matching `remote_host`'s spelling; a malformed bracket is no host.
 fn host_from_url(url: &str) -> Option<String> {
     let after = url.split_once("://").map(|(_, rest)| rest)?;
     let authority = after.split('/').next().unwrap_or("");
     let host = authority.rsplit('@').next().unwrap_or(authority);
-    let host = host.split(':').next().unwrap_or(host);
+    let host = if host.starts_with('[') {
+        let (span, suffix) = crate::forge::bracketed_split(host)?;
+        // A `:`-led suffix rides the port slot and is dropped, like the bare arm drops
+        // it; any other suffix is no host.
+        if !suffix.is_empty() && !suffix.starts_with(':') {
+            return None;
+        }
+        span
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
     (!host.is_empty()).then(|| host.to_string())
 }
 
@@ -7151,6 +7162,20 @@ mod tests {
         );
         // Not an http(s)-style URL → no host.
         assert_eq!(host_from_url("git@github.com:owner/repo.git"), None);
+        // A bracketed IPv6 literal survives whole, with or without a port.
+        assert_eq!(
+            host_from_url("https://[2001:db8::1]:8443/o/r").as_deref(),
+            Some("[2001:db8::1]")
+        );
+        assert_eq!(
+            host_from_url("https://[2001:db8::1]/o/r").as_deref(),
+            Some("[2001:db8::1]")
+        );
+        // A malformed bracket fails closed rather than yielding a truncated host.
+        assert_eq!(host_from_url("https://[2001:db8::1/o/r"), None);
+        assert_eq!(host_from_url("https://[]/o/r"), None);
+        // So does a suffix after `]` that isn't a port.
+        assert_eq!(host_from_url("https://[2001:db8::1]junk/o/r"), None);
     }
 
     #[test]
