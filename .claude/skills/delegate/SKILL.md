@@ -84,9 +84,9 @@ Objective: <one paragraph — what and why>
 Files in scope: <explicit list; the implementer must not touch others>
 Contracts: <types/interfaces/commands it must expose or consume>
 Acceptance criteria: <checkable statements>
-Verification: <SCOPED checks only — tsc; biome lint on pre-existing files and
-  full `biome ci` on files the package AUTHORS (new files are LF, so the
-  format check is safe — and CI runs it); the whole-project build runs once,
+Verification: <SCOPED checks only — `tsc -b`; the LF-copy `__cigate__` biome ci
+  gate on EVERY ts/tsx the package edits or authors (see Environment notes —
+  `biome lint` alone is NOT the CI gate); the whole-project build runs once,
   orchestrator-side, at integration>
 Docs-sync: <README/site/help/changelog items, or "orchestrator handles">
 Out of scope: <adjacent things it must leave alone>
@@ -202,14 +202,19 @@ it is a design-time question.
 - Subagents receive CLAUDE.md and the session-start memory snapshot
   automatically; they do NOT see mid-session memory edits or your
   conversation. Everything a package needs must be in its spec.
-- **Worktree runs** (validated 2026-07-02): fresh worktrees check out CRLF
-  (`core.autocrlf=true`), so tree-wide `biome check` fails on formatting
-  noise — for git-materialized files the reliable worktree gates are
-  `tsc -b`, `biome lint`, and `pnpm build`. Files AUTHORED in the session
-  (Write emits LF) additionally need scoped `pnpm exec biome ci <file>`: CI
-  runs the format check that lint skips, and a new file's format defect
-  passes every lint-only gate (cost PR #151 a red CI). Deps need
-  `pnpm install` first. If the main checkout advances
+- **Worktree runs** (validated 2026-07-02; format-gate form hardened across
+  several CI reds since): fresh worktrees check out CRLF (`core.autocrlf=true`),
+  so tree-wide `biome check`/`ci` false-fails on formatting noise. The reliable
+  worktree gates are `tsc -b`, `pnpm build`, and — for EVERY ts/tsx a package
+  edits or authors, in every spec and every fix round — the LF-copy `biome ci`
+  form: copy the file LF-normalized to `__cigate__<name>` beside the original
+  (so config resolves; or a temp dir with `--config-path=.`), run literal
+  `pnpm exec biome ci` on the copy, delete it. `biome lint` alone is NOT the CI
+  gate (it skips the formatter and assists), `--formatter-enabled=false`
+  disables exactly the layer under test, and stdin modes both skip assists AND
+  echo their input, so an output-vs-input diff can never fail. Negative-control
+  the gate once per session: an over-wrapped line appended to a copy must go
+  red. Deps need `pnpm install` first. If the main checkout advances
   mid-run, the final patch may not apply clean — re-apply divergent hunks by
   hand against current HEAD. Clean up with `git worktree remove` + `prune`
   (Windows: node_modules may need `cmd /c rd /s /q` afterwards).
