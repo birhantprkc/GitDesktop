@@ -537,8 +537,13 @@ export interface ForgeRepo {
 }
 
 export interface ForgeRepoList {
-  /** The signed-in user's login, so the UI lists their own repos first. */
+  /** The signed-in user's login. Kept on the wire; no frontend consumer today. */
   viewer: string;
+  /** The `owner` namespaces that count as the viewer's own — a set because "yours" is
+   *  provider-shaped: a login on GitHub and GitLab, any workspace you belong to on
+   *  Bitbucket. Drives the own-repo Fork gate and the yours-first grouping; empty
+   *  means unresolved, so both fail open. */
+  ownedNamespaces: string[];
   repos: ForgeRepo[];
 }
 
@@ -1403,13 +1408,17 @@ export interface RulesetSummary {
   sourceType: string;
 }
 
-/** The full ruleset object (raw GitHub schema, snake_case) for the editor. */
+/** The full ruleset object (raw GitHub schema, snake_case) for the editor. Only what
+ *  the editor reads is modelled; the object carries the rest of GitHub's schema, and
+ *  a save spreads those fields back so the full PUT replace doesn't drop them. */
 export interface RulesetFull {
   id: number;
   name: string;
   target?: string;
   enforcement: string;
-  conditions?: { ref_name?: { include?: string[]; exclude?: string[] } };
+  conditions?: {
+    ref_name?: { include?: string[]; exclude?: string[] };
+  } & Record<string, unknown>;
   bypass_actors?: unknown[];
   rules?: { type: string; parameters?: Record<string, unknown> }[];
 }
@@ -1690,9 +1699,12 @@ export interface PrCheckOut {
   /** GitHub Actions job id, parsed from `.../actions/runs/<runId>/job/<jobId>`.
    *  Absent when the URL has no job segment (or isn't an Actions URL). */
   jobId?: string;
-  /** CheckRun `startedAt`; absent for a StatusContext (it has no start). */
+  /** When the check began — a CheckRun `startedAt`, or a StatusContext's creation
+   *  time, which gh reports under this same key. Absent only when the rollup
+   *  carried no real time. */
   startedAt?: string;
-  /** CheckRun `completedAt`; absent for a StatusContext. */
+  /** CheckRun `completedAt`. A StatusContext reports no completion at all, so start
+   *  time is the only key both rollup arms can be ordered by. */
   completedAt?: string;
 }
 
