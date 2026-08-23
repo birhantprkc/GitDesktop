@@ -12,6 +12,74 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-08-23
+
+### Changed
+
+- GitLab merge requests blocked on approvals, pipelines, discussions, or other
+  rules show the reason in the mergeability banner before you try to merge.
+- Permission-scope hints in repository settings open the in-app reconnect flow
+  with the scope they need, alongside the copyable `gh auth refresh` command.
+- The session, plan, and research model pickers search their suggestions as you
+  type and take any model id you enter, so a custom provider's model reaches the
+  agent CLI exactly as typed.
+
+### Fixed
+
+- Explore recognizes Bitbucket repositories in workspaces you belong to, so Fork
+  no longer appears on them.
+- Review notes and operation-journal records survive concurrent writes from the
+  app and its MCP server.
+- Worktree rename, lock, unlock, repair and create, stash apply, drop and
+  restore, and history edits report their result even when their dialog closes
+  while the operation is still running; a paused rebase still lands you on the
+  Changes tab.
+- Forking from Explore or the repository menu reports its outcome even if you
+  navigate away while the fork is being prepared, and the new fork shows up under
+  Your repositories; a star that can't be saved now says so.
+- Self-managed GitLab hosts are detected from quoted config keys, including
+  quoted `host:port` and `https://host` forms.
+- Hiding AI features hides finished AI activity (reviews, agent runs, plans, and
+  research) from the activity dock and inbox, and mutes AI-event desktop
+  notifications; runs already in flight stay visible until they finish.
+- Remotes hosted at a bracketed IPv6 address, like
+  `https://[2001:db8::1]:8443/group/repo`, are recognized as the host they name, so
+  provider detection, credential handling, and the reconnect commands see the real host.
+- Merges, conflict resolution, branch updates, and stash-and-reapply recoveries
+  on local pull requests report their outcome and update the pull request even
+  when you switch tabs or leave the pull request while they run.
+- GitDesktop's MCP server resolves its `--repo` path to the canonical spelling,
+  so operation history and records saved under older path spellings stay in
+  sync with the app, whichever way the client config writes the path.
+- Refused merges show the blocking reason in the app's own words, on GitHub and
+  GitLab.
+- Operation history marks a cherry-pick that was finished or aborted outside the
+  app as "Ended outside the app", and those records age out of the history cap
+  normally.
+- Self-managed GitLab and GitHub Enterprise instances on a non-default HTTPS
+  port authenticate with your `glab`/`gh` session, and the repository view's
+  sign-in status reflects them.
+- Repository-settings saves, deletes and toggles report their result even
+  when the settings dialog closes or you switch to another settings section
+  while the change is still in flight — General, collaborators and webhooks, rulesets,
+  secrets and variables, Pages, security, the Sponsor button, GitLab and
+  Bitbucket project settings, and every danger-zone action.
+- Repository settings opens straight away with a loading skeleton, and Esc
+  or a click outside cancels it while it's still loading.
+- A pull request's blocked-merge line names what the base branch is waiting on:
+  it reads the newest run of each required check, and counts a run GitHub has
+  marked stale as still outstanding.
+- Opening a ruleset that can't be loaded shows the error and the way back to the
+  list, and the editor opens only once the ruleset's own settings are in hand.
+- Editing a ruleset preserves the settings its editor doesn't show, including
+  required checks pinned to a specific app, required conversation resolution,
+  and excluded branch patterns.
+- The ruleset editor covers branch rulesets: tag and push rulesets keep their
+  enforcement control in the list and say where to edit them. Custom branch
+  patterns are read one per line, so a pattern containing a comma stays intact.
+- Local pull requests and issues survive concurrent writes from multiple
+  GitDesktop MCP servers working in the same repository.
+
 ## [0.9.4] - 2026-08-20
 
 ### Added
@@ -3270,7 +3338,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.5...HEAD
+[0.9.5]: https://github.com/theBGuy/GitDesktop/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/theBGuy/GitDesktop/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/theBGuy/GitDesktop/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/theBGuy/GitDesktop/compare/v0.9.1...v0.9.2
