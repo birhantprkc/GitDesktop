@@ -3099,14 +3099,21 @@ export function useStarRepo() {
 }
 
 /** Fork a repo by owner/name. Returns the {@link ForgeForkResult} so the caller
- *  can offer "Clone the fork" (and warn when it's not yet clonable). */
+ *  can offer "Clone the fork" (and warn when it's not yet clonable). The new fork
+ *  belongs in the provider's own-repos list; invalidating at the mutation level
+ *  keeps that refresh alive after the calling pane unmounts. */
 export function useForkRepoByName() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (args: {
       provider: ForgeProvider;
       owner: string;
       name: string;
     }) => api.forgeForkRepo(args.provider, args.owner, args.name),
+    onSettled: (_d, _e, args) =>
+      void queryClient.invalidateQueries({
+        queryKey: ["forge-repos", args.provider],
+      }),
   });
 }
 
@@ -4960,8 +4967,14 @@ export function useCheckoutPr(repo: string, lens: RemoteLens) {
 }
 
 export function useForkRepo(repo: string) {
-  return useRepoMutation(repo, (contributeToParent: boolean) =>
-    api.ghRepoFork(repo, contributeToParent),
+  return useRepoMutation(
+    repo,
+    (contributeToParent: boolean) => api.ghRepoFork(repo, contributeToParent),
+    // `invalidate` replaces the default, so the repo subtree is named again
+    // alongside the own-repos list the new fork joins. GitHub by construction:
+    // the GitLab and Bitbucket menu arms open the host's fork page instead, so
+    // only GitHub reaches this gh-backed command.
+    { invalidate: [repoKeys.all(repo), ["forge-repos", "github"]] },
   );
 }
 

@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { highlightJson } from "@/features/diff/shiki-highlighter";
 import { copyText } from "@/lib/clipboard";
+import { presentError } from "@/lib/error-summary";
 import {
   isReconnectHostSafe,
   reconnectHostArg,
@@ -13,6 +14,40 @@ import {
 import { useGhScopes } from "@/lib/git/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
+
+/**
+ * The destructive error card the repo-settings surfaces share: a title, the
+ * failure as one humanized line, then any hint. `presentError` is what makes the
+ * line humanized, and it reads the plain `AppError` object every `invoke`
+ * rejection carries, which is not an `Error` instance.
+ * `children` render between message and hint — the slot the scope note takes,
+ * which needs hooks this card shouldn't own.
+ */
+export function AsyncErrorCard({
+  title,
+  error,
+  hint,
+  children,
+}: {
+  title: ReactNode;
+  error: unknown;
+  /** A closing note in the card's own muted style (permissions, next steps). */
+  hint?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
+      <p className="font-medium text-destructive">{title}</p>
+      {error != null && (
+        <p className="mt-1 text-muted-foreground">
+          {presentError(error).summary}
+        </p>
+      )}
+      {children}
+      {hint && <div className="mt-2 text-muted-foreground">{hint}</div>}
+    </div>
+  );
+}
 
 /**
  * The shared loading / error / empty / list shell for the repo-settings async
@@ -57,16 +92,9 @@ export function AsyncListBody({
   }
   if (error) {
     return (
-      <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
-        <p className="font-medium text-destructive">{errorTitle}</p>
-        {error instanceof Error && (
-          <p className="mt-1 text-muted-foreground">{error.message}</p>
-        )}
+      <AsyncErrorCard title={errorTitle} error={error} hint={errorHint}>
         {errorScope && <ScopeErrorHint scope={errorScope} />}
-        {errorHint && (
-          <div className="mt-2 text-muted-foreground">{errorHint}</div>
-        )}
-      </div>
+      </AsyncErrorCard>
     );
   }
   if (empty) {

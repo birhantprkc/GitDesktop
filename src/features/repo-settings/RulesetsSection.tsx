@@ -1,6 +1,7 @@
 import { CaretLeftIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { DisabledReasonButton } from "@/components/disabled-reason-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +27,7 @@ import {
 } from "@/lib/git/queries";
 import type { RulesetEnforcement, RulesetFull } from "@/lib/git/types";
 import { toastError } from "@/lib/toast";
-import { AsyncListBody, InlineConfirm } from "./parts";
+import { AsyncErrorCard, AsyncListBody, InlineConfirm } from "./parts";
 
 const ENFORCEMENTS: { value: RulesetEnforcement; label: string }[] = [
   { value: "active", label: "Active" },
@@ -46,6 +47,10 @@ const REF_SCOPE_ITEMS: Record<string, string> = {
   all: "All branches",
   custom: "Custom patterns…",
 };
+
+/** Shown by both ruleset surfaces when a load fails — a 403 is the likeliest
+ *  reason, and rulesets are admin-only on GitHub. */
+const ADMIN_HINT = "Managing rulesets needs repo-admin access.";
 
 /** Rule types we model in the editor. Any others on an edited ruleset are
  *  preserved untouched (so advanced rules aren't dropped). */
@@ -96,33 +101,38 @@ const BLANK: Draft = {
   requireSignatures: false,
 };
 
-const splitLines = (s: string) =>
-  s
-    .split(/[\n,]+/)
-    .map((x) => x.trim())
-    .filter(Boolean);
-
-/** Check contexts split on newlines only: a context can carry a comma of its own,
- *  because GitHub Actions builds a matrix job's name by joining its values with
- *  ", ". Splitting there would save contexts no run will ever report. */
-const splitCheckLines = (s: string) =>
+/** The one-per-line textareas split on newlines only, never commas: a check
+ *  context can carry one because GitHub Actions builds a matrix job's name by
+ *  joining its values with ", ", and a ref pattern can carry one because git
+ *  permits commas in refnames. Splitting there would save entries that nothing
+ *  ever matches. */
+const splitNonEmptyLines = (s: string) =>
   s
     .split(/\r?\n/)
     .map((x) => x.trim())
     .filter(Boolean);
 
 function rulesetToDraft(rs: RulesetFull): Draft {
-  const include = rs.conditions?.ref_name?.include ?? [];
+  // Stored JSON, checked at the array AND the element: this runs in a useMemo on
+  // the render path, where a throw reaches no toast — and the patterns below are
+  // string-replaced.
+  const storedInclude = rs.conditions?.ref_name?.include;
+  const include = Array.isArray(storedInclude)
+    ? storedInclude.filter((p): p is string => typeof p === "string")
+    : [];
   const refScope = include.includes("~DEFAULT_BRANCH")
     ? "default"
     : include.includes("~ALL")
       ? "all"
       : "custom";
-  const byType = (t: string) => rs.rules?.find((r) => r.type === t);
+  const rules = storedRules(rs);
+  const byType = (t: string) => rules.find((r) => r.type === t);
   const pr = byType("pull_request")?.parameters ?? {};
   const checks = byType("required_status_checks")?.parameters ?? {};
-  const contexts =
-    (checks.required_status_checks as { context: string }[] | undefined) ?? [];
+  // The number Input seeds only from a whole count of 0 or more; anything else
+  // (NaN, a fraction, Infinity, a negative) falls back to 1. draftToBody refuses
+  // anything but a whole 0-10 on save, so no rejected shape reaches the wire.
+  const approvals = Number(pr.required_approving_review_count ?? 1);
   return {
     name: rs.name ?? "",
     enforcement: (rs.enforcement as RulesetEnforcement) ?? "active",
@@ -132,12 +142,14 @@ function rulesetToDraft(rs: RulesetFull): Draft {
         ? include.map((p) => p.replace(/^refs\/heads\//, "")).join("\n")
         : "",
     requirePr: !!byType("pull_request"),
-    approvals: Number(pr.required_approving_review_count ?? 1),
+    approvals: Number.isInteger(approvals) && approvals >= 0 ? approvals : 1,
     dismissStale: !!pr.dismiss_stale_reviews_on_push,
     codeOwner: !!pr.require_code_owner_review,
     lastPush: !!pr.require_last_push_approval,
     requireChecks: !!byType("required_status_checks"),
-    checkContexts: contexts.map((c) => c.context).join("\n"),
+    checkContexts: storedCheckEntries(rs)
+      .map((c) => c.context)
+      .join("\n"),
     strictChecks: !!checks.strict_required_status_checks_policy,
     blockForcePush: !!byType("non_fast_forward"),
     restrictDeletions: !!byType("deletion"),
@@ -152,21 +164,72 @@ const REF_INCLUDES: Record<Draft["refScope"], (d: Draft) => string[]> = {
   default: () => ["~DEFAULT_BRANCH"],
   all: () => ["~ALL"],
   custom: (d) =>
-    splitLines(d.customPatterns).map((p) =>
+    splitNonEmptyLines(d.customPatterns).map((p) =>
       p.startsWith("refs/") ? p : `refs/heads/${p}`,
     ),
+};
+
+type StoredRule = NonNullable<RulesetFull["rules"]>[number];
+
+/** The stored rules, normalized: a non-array `rules` or a null element throws on
+ *  the render path, where the seed runs inside a useMemo with no toast to catch
+ *  it. Neither shape is reachable from GitHub, which types every rule — and a
+ *  typeless element is unusable anyway, since the editor and the unmodeled-rule
+ *  `extra` pass both key on `type`. */
+const storedRules = (original: RulesetFull | undefined): StoredRule[] => {
+  const rules = original?.rules;
+  return Array.isArray(rules)
+    ? rules.filter((r) => typeof r?.type === "string")
+    : [];
 };
 
 /** The stored parameters of one rule on the ruleset being edited. A save is a full
  *  PUT replace, so every managed rule is rebuilt FROM these rather than from the
  *  draft alone — the draft models a subset of each rule's fields. */
 const storedParameters = (original: RulesetFull | undefined, type: string) =>
-  original?.rules?.find((r) => r.type === type)?.parameters;
+  storedRules(original).find((r) => r.type === type)?.parameters;
+
+/** The stored required-status-check entries — the frontend's one reader of that
+ *  raw array (the branch-rules surface reads it again in `github/rulesets.rs`),
+ *  so the seed, the repeat check and the save can't diverge on its shape. An
+ *  entry without a string context is dropped rather than rebuilt into the PUT:
+ *  it names no check and carries no pin worth keeping (unmodeled RULES still
+ *  ride along via `extra`). A non-array value — never seen from GitHub, whose
+ *  schema always sends an array — normalizes to empty instead of blocking the
+ *  editor. */
+const storedCheckEntries = (
+  original: RulesetFull | undefined,
+): { context: string }[] => {
+  const stored = storedParameters(
+    original,
+    "required_status_checks",
+  )?.required_status_checks;
+  if (!Array.isArray(stored)) return [];
+  return stored.filter(
+    (entry): entry is { context: string } => typeof entry?.context === "string",
+  );
+};
+
+/** Whether the stored ruleset requires one check context through several entries.
+ *  Those usually differ only by their app pin (`integration_id`), which this
+ *  editor doesn't show — so they read as identical repeated lines. */
+const hasRepeatedCheckContexts = (original: RulesetFull | undefined) => {
+  const contexts = storedCheckEntries(original).map((c) => c.context);
+  return new Set(contexts).size !== contexts.length;
+};
 
 function draftToBody(
   d: Draft,
   original?: RulesetFull,
 ): Record<string, unknown> {
+  // Refused at the boundary the approvals input already draws, so a count outside
+  // it fails loudly here rather than as a 422 from GitHub.
+  if (
+    d.requirePr &&
+    (!Number.isInteger(d.approvals) || d.approvals < 0 || d.approvals > 10)
+  ) {
+    throw new Error("Required approvals must be a whole number from 0 to 10.");
+  }
   const include = REF_INCLUDES[d.refScope](d);
   const rules: Record<string, unknown>[] = [];
   if (d.requirePr) {
@@ -190,11 +253,8 @@ function draftToBody(
     // to one app (`integration_id`) and GitHub accepts several pins under a single
     // context, neither of which this editor displays, so a save must preserve every
     // entry rather than reduce a context to one. Fresh lines have no pin to keep.
-    const storedList =
-      (checks?.required_status_checks as { context: string }[] | undefined) ??
-      [];
     const storedChecks = new Map<string, { context: string }[]>();
-    for (const entry of storedList) {
+    for (const entry of storedCheckEntries(original)) {
       const queue = storedChecks.get(entry.context);
       if (queue) queue.push(entry);
       else storedChecks.set(entry.context, [entry]);
@@ -205,7 +265,8 @@ function draftToBody(
         do_not_enforce_on_create: false,
         ...checks,
         strict_required_status_checks_policy: d.strictChecks,
-        required_status_checks: splitCheckLines(d.checkContexts).map(
+        // After the spread on purpose: it replaces the raw stored array.
+        required_status_checks: splitNonEmptyLines(d.checkContexts).map(
           (context) => storedChecks.get(context)?.shift() ?? { context },
         ),
       },
@@ -216,7 +277,7 @@ function draftToBody(
   if (d.linearHistory) rules.push({ type: "required_linear_history" });
   if (d.requireSignatures) rules.push({ type: "required_signatures" });
   // Preserve rule types the editor doesn't model.
-  const extra = (original?.rules ?? []).filter(
+  const extra = storedRules(original).filter(
     (r) => !MANAGED_RULE_TYPES.includes(r.type),
   );
   return {
@@ -325,10 +386,13 @@ function RulesetList({
         emptyLabel="No rulesets yet."
         skeletonClassName="h-12 w-full"
         errorTitle="Couldn't load rulesets."
-        errorHint="Managing rulesets needs repo-admin access."
+        errorHint={ADMIN_HINT}
       >
         {rulesets.data?.map((rs) => {
           const org = rs.sourceType === "Organization";
+          // The editor models branch rulesets only — its scope control and rules
+          // are branch-shaped, and saving one converts a tag/push ruleset's target.
+          const canEdit = rs.target === "branch";
           return (
             <div
               key={rs.id}
@@ -374,13 +438,15 @@ function RulesetList({
                       ))}
                     </SelectContent>
                   </Select>
-                  <Button
+                  <DisabledReasonButton
                     size="sm"
                     variant="ghost"
+                    disabled={!canEdit}
+                    reason="Only branch rulesets can be edited here — manage tag and push rulesets on GitHub."
                     onClick={() => onEdit(rs.id)}
                   >
                     Edit
-                  </Button>
+                  </DisabledReasonButton>
                   <Button
                     size="sm"
                     variant="ghost"
@@ -410,16 +476,51 @@ function RulesetEditor({
   onDone: () => void;
 }) {
   const existing = useRuleset(repoPath, id);
-  if (id != null && existing.isLoading) {
-    return <Skeleton className="h-64 w-full" />;
-  }
+  // The form only ever mounts on loaded data: a save is a full-replace PUT built
+  // from `original`, so a form seeded blank would wipe the ruleset's bypass
+  // actors, unmodeled rules and conditions. (The create path fetches nothing.)
+  const body = (() => {
+    switch (true) {
+      // `isPending`, not `isLoading`: a fetch react-query paused for being
+      // offline is neither loading nor errored, and the error arm below would
+      // blame permissions for it.
+      case id != null && existing.isPending:
+        return <Skeleton className="h-64 w-full" />;
+      // Gated on absent data, not on `isError`: a failed background refetch keeps
+      // the last good ruleset, and unmounting the form there would silently
+      // discard a half-authored draft.
+      case id != null && !existing.data:
+        return (
+          <AsyncErrorCard
+            title="Couldn't load this ruleset."
+            error={existing.error}
+            hint={ADMIN_HINT}
+          />
+        );
+      default:
+        return (
+          <RulesetForm
+            repoPath={repoPath}
+            id={id}
+            original={existing.data}
+            onDone={onDone}
+          />
+        );
+    }
+  })();
+
   return (
-    <RulesetForm
-      repoPath={repoPath}
-      id={id}
-      original={id != null ? existing.data : undefined}
-      onDone={onDone}
-    />
+    <div className="min-w-0 space-y-4">
+      <button
+        type="button"
+        onClick={onDone}
+        className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <CaretLeftIcon />
+        Back to rulesets
+      </button>
+      {body}
+    </div>
   );
 }
 
@@ -442,13 +543,16 @@ function RulesetForm({
     [original],
   );
   const [d, setD] = useState<Draft>(seed);
+  const repeatedChecks = hasRepeatedCheckContexts(original);
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setD((p) => ({ ...p, [key]: value }));
 
   async function save() {
     try {
-      // Inside the try: building the body reads the stored ruleset's own shape, so
-      // a malformed one must surface as a toast rather than a silent no-op.
+      // Inside the try: building the body reads the stored ruleset's own shape,
+      // and a malformed one (a `rules` that isn't an array, say) throws here, as
+      // does an out-of-range approval count in the draft — a toast beats both a
+      // silent no-op and a 422. Check entries are the exception, normalized first.
       const body = draftToBody(d, original);
       if (id != null) await update.mutateAsync({ id, body });
       else await create.mutateAsync(body);
@@ -461,15 +565,6 @@ function RulesetForm({
 
   return (
     <div className="min-w-0 space-y-4">
-      <button
-        type="button"
-        onClick={onDone}
-        className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <CaretLeftIcon />
-        Back to rulesets
-      </button>
-
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label htmlFor="ruleset-name">Name</Label>
@@ -591,6 +686,12 @@ function RulesetForm({
               autoComplete="off"
               spellCheck={false}
             />
+            {repeatedChecks && (
+              <p className="text-[11px] text-muted-foreground">
+                This ruleset requires the same check more than once — keep every
+                line to keep them all.
+              </p>
+            )}
             <RuleToggle
               label="Require branches to be up to date before merging"
               checked={d.strictChecks}
