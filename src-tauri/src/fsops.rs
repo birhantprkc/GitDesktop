@@ -333,10 +333,7 @@ fn substitute_path(tokens: &[String], path: &str) -> Vec<String> {
 }
 
 /// True when `program` ends in a Windows batch extension (`.cmd`/`.bat`,
-/// case-insensitive). Rust ≥1.77 routes batch files through `cmd.exe` (the
-/// BatBadBut CVE mitigation), which silently re-introduces a shell and `%VAR%`
-/// expansion — exactly what the shell-free custom-command mode must avoid — so
-/// a resolved batch file is rejected rather than launched.
+/// case-insensitive).
 fn is_batch_file(program: &str) -> bool {
     let lower = program.to_ascii_lowercase();
     lower.ends_with(".cmd") || lower.ends_with(".bat")
@@ -409,7 +406,9 @@ async fn launch_custom_command(command: &str, path: &str) -> AppResult<()> {
     let resolved = ensure_absolute(resolved, &std::env::current_dir().map_err(AppError::Io)?);
 
     // SECURITY: reject batch files on the RESOLVED path — a bare `foo` on PATH
-    // can resolve to `foo.cmd`, which Rust would run through cmd.exe.
+    // can resolve to `foo.cmd`, which runs through `cmd.exe`, silently
+    // reintroducing a shell and `%VAR%` expansion that the shell-free
+    // custom-command mode must avoid.
     if is_batch_file(&resolved.to_string_lossy()) {
         return Err(AppError::InvalidArgument(format!(
             "terminal command points at a batch file ({}); point at the real \
@@ -1044,29 +1043,33 @@ pub async fn open_with_program(program: String, path: String) -> AppResult<()> {
     // rather than trying to spawn the bundle directory as a command.
     #[cfg(target_os = "macos")]
     if is_app_bundle(&program) {
-        std::process::Command::new("open")
-            .args(["-a", program.as_str(), path.as_str()])
+        let mut c = std::process::Command::new("open");
+        // `open` hands off to LaunchServices, which starts the app in a fresh
+        // session that doesn't inherit our environment, so the scrub only affects
+        // the `open` child itself (belt-and-braces) and no `ELECTRON_RUN_AS_NODE`
+        // removal is needed here.
+        crate::agent::sanitize_child_env(&mut c);
+        c.args(["-a", program.as_str(), path.as_str()])
             .spawn()
             .map_err(AppError::Io)?;
         return Ok(());
     }
-    let lower = program.to_lowercase();
-    // .cmd/.bat shims (like VS Code's `code.cmd`) can't be spawned directly
-    let shim = lower.ends_with(".cmd") || lower.ends_with(".bat");
-    let mut cmd = if shim {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", &program, &path]);
-        c
-    } else {
-        let mut c = std::process::Command::new(&program);
-        crate::agent::sanitize_child_env(&mut c);
-        c.arg(&path);
-        c
-    };
+    // Spawn a `.cmd`/`.bat` shim (e.g. VS Code's `code.cmd`) DIRECTLY, not via
+    // `cmd /C`: std (≥1.77.2) then applies its batch-file argument escaping
+    // (CVE-2024-24576), whereas `cmd /C <shim> <path>` runs the untrusted `path`
+    // unquoted, so a space-free filename like `a&calc&b` from a cloned repo injects
+    // commands. A toolchain pin below that floor would silently reopen this.
+    let mut cmd = std::process::Command::new(&program);
+    crate::agent::sanitize_child_env(&mut cmd);
+    cmd.arg(&path);
     // When this app is launched from a VS Code terminal, ELECTRON_RUN_AS_NODE=1
     // is in our environment; an Electron editor inheriting it runs as plain
     // Node and tries to *execute* the file instead of opening it.
     cmd.env_remove("ELECTRON_RUN_AS_NODE");
+    // The `.cmd`/`.bat` extension only means anything to Windows, which spawns a
+    // transient cmd.exe console to run the shim — hide it below.
+    #[cfg(windows)]
+    let shim = is_batch_file(&program);
     #[cfg(windows)]
     if shim {
         use std::os::windows::process::CommandExt;
@@ -1393,7 +1396,7 @@ mod tests {
     }
 
     #[test]
-    fn is_batch_file_rejects_cmd_and_bat_case_insensitively() {
+    fn is_batch_file_matches_cmd_and_bat_case_insensitively() {
         assert!(is_batch_file("C:\\tools\\wt.cmd"));
         assert!(is_batch_file("C:\\tools\\wt.CMD"));
         assert!(is_batch_file("launch.bat"));
