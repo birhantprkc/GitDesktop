@@ -19,6 +19,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use tauri_plugin_http::reqwest;
 
@@ -31,7 +32,8 @@ use crate::forge::http::{
 };
 use crate::forge::model::{
     namespace_set, Capabilities, CompletedReviewerOut, ForgeForkResult, ForgeRepo, ForgeRepoList,
-    ForgeSearchList, ForgeSearchRepo, ForgeStatus, ForgeUserRef, Implemented, Provider,
+    ForgeSearchList, ForgeSearchRepo, ForgeStatus, ForgeTimelineEventOut, ForgeUserRef, Implemented,
+    Provider,
 };
 use crate::forge::{
     cap_readme, validate_owner, validate_repo_name, FORK_POLL_ATTEMPTS, FORK_POLL_DELAY,
@@ -42,7 +44,7 @@ use crate::github::actions::{RunDetail, RunJob, WorkflowRun};
 use crate::github::pr::{
     ApprovalState, CommitCommentOut, DraftCommentIn, PrAuthor, PrCiRefIn, PrCiStatus, PrCommitOut,
     PrDetails, PrFileOut, PrInfo, PrListLabel, PrMergeability, PrPollInfo, PrRef, PrThreadOut,
-    PrTimelineEventOut, ReviewSubmitOut, ReviewThreadOut,
+    ReviewSubmitOut, ReviewThreadOut,
 };
 
 /// Whether this process has SUCCESSFULLY seeded git's credential store this session
@@ -1412,12 +1414,12 @@ struct BbActivityApproval {
 }
 
 /// The PR's activity timeline — state changes (merge/decline) and review verdicts
-/// (approve / request-changes) — mapped onto the neutral `PrTimelineEventOut` union,
+/// (approve / request-changes) — mapped onto the neutral `ForgeTimelineEventOut` union,
 /// oldest→newest. Bitbucket's arm of `forge_pr_timeline`. Deliberately omits
 /// `update`-commit events and `comment` activity (commits + comments come from
 /// `pr.commits`/`pr.comments` on the frontend); Bitbucket has no label/reopen/draft/
 /// review-request events. Best-effort: a failed fetch yields an empty timeline.
-pub async fn pr_activity(repo_path: &str, number: u64) -> AppResult<Vec<PrTimelineEventOut>> {
+pub async fn pr_activity(repo_path: &str, number: u64) -> AppResult<Vec<ForgeTimelineEventOut>> {
     let creds = http::load_credentials().await?;
     let (ws, slug) = workspace_slug(repo_path).await?;
     // Bitbucket rejects pagelen > 50 on the activity endpoint ("Invalid pagelen").
@@ -1430,14 +1432,16 @@ pub async fn pr_activity(repo_path: &str, number: u64) -> AppResult<Vec<PrTimeli
         .await
         .unwrap_or_default();
 
-    let mut events: Vec<PrTimelineEventOut> = page
+    let mut events: Vec<ForgeTimelineEventOut> = page
         .values
         .into_iter()
         .filter_map(map_activity_entry)
         .collect();
 
-    // Sort ascending by date (empty dates sort first, stably).
-    events.sort_by(|a, b| bb_timeline_date(a).cmp(bb_timeline_date(b)));
+    // Sort ascending by INSTANT, stably. Bitbucket stamps activity in the actor's
+    // local offset ("…-04:00"), so a lexicographic compare of the raw strings puts
+    // mixed offsets out of chronological order. Undated/unparseable events sort first.
+    events.sort_by_cached_key(bb_timeline_instant);
     Ok(events)
 }
 
@@ -1446,31 +1450,36 @@ pub async fn pr_activity(repo_path: &str, number: u64) -> AppResult<Vec<PrTimeli
 /// Pure (unit-tested). An `update` is only an event when it carries a `changes.status`
 /// transition AND landed on a terminal state — an OPEN update editing draft/title is
 /// skipped; the `update.state` string (not the internal `status.new`) drives the kind.
-fn map_activity_entry(entry: BbActivity) -> Option<PrTimelineEventOut> {
+fn map_activity_entry(entry: BbActivity) -> Option<ForgeTimelineEventOut> {
     if let Some(u) = entry.update {
         let changed = u.changes.and_then(|c| c.status).is_some();
         if !changed {
             return None;
         }
-        let actor = u.author.as_ref().map(user_login).unwrap_or_default();
+        let actor = bb_actor(u.author.as_ref());
         let date = u.date;
         match u.state.as_str() {
-            "MERGED" => Some(PrTimelineEventOut::Merged {
+            "MERGED" => Some(ForgeTimelineEventOut::Merged {
                 actor,
                 commit_oid: None,
                 date,
             }),
-            "DECLINED" | "SUPERSEDED" => Some(PrTimelineEventOut::Closed { actor, date }),
+            // Bitbucket reports no close reason, so `state_reason` stays empty.
+            "DECLINED" | "SUPERSEDED" => Some(ForgeTimelineEventOut::Closed {
+                actor,
+                state_reason: String::new(),
+                date,
+            }),
             _ => None,
         }
     } else if let Some(a) = entry.approval {
-        Some(PrTimelineEventOut::Approved {
-            actor: a.user.as_ref().map(user_login).unwrap_or_default(),
+        Some(ForgeTimelineEventOut::Approved {
+            actor: bb_actor(a.user.as_ref()),
             date: a.date,
         })
     } else if let Some(a) = entry.changes_requested {
-        Some(PrTimelineEventOut::ChangesRequested {
-            actor: a.user.as_ref().map(user_login).unwrap_or_default(),
+        Some(ForgeTimelineEventOut::ChangesRequested {
+            actor: bb_actor(a.user.as_ref()),
             date: a.date,
         })
     } else {
@@ -1478,23 +1487,56 @@ fn map_activity_entry(entry: BbActivity) -> Option<PrTimelineEventOut> {
     }
 }
 
-/// The date field of a `PrTimelineEventOut` produced by [`pr_activity`] — the sort
-/// key. Exhaustive over the union so a new variant can't silently sort as "".
-fn bb_timeline_date(e: &PrTimelineEventOut) -> &str {
-    match e {
-        PrTimelineEventOut::Merged { date, .. }
-        | PrTimelineEventOut::Closed { date, .. }
-        | PrTimelineEventOut::Approved { date, .. }
-        | PrTimelineEventOut::ChangesRequested { date, .. }
-        | PrTimelineEventOut::Unapproved { date, .. }
-        | PrTimelineEventOut::Labeled { date, .. }
-        | PrTimelineEventOut::Reopened { date, .. }
-        | PrTimelineEventOut::ForcePushed { date, .. }
-        | PrTimelineEventOut::ReviewRequested { date, .. }
-        | PrTimelineEventOut::ReadyForReview { date, .. }
-        | PrTimelineEventOut::ConvertToDraft { date, .. }
-        | PrTimelineEventOut::Renamed { date, .. } => date,
+/// A Bitbucket timeline actor as a neutral user ref: the braced account `uuid` as
+/// `id`, [`user_login`]'s display name as `label`. A uuid-less payload falls back
+/// to the display name — a deliberate deviation from the pickers, which drop such
+/// users: a timeline row still names whoever acted. A missing user yields an
+/// all-empty ref, rendered as no actor.
+fn bb_actor(u: Option<&BbUser>) -> ForgeUserRef {
+    let login = u.map(user_login).unwrap_or_default();
+    ForgeUserRef {
+        id: u
+            .and_then(|x| x.uuid.clone())
+            .unwrap_or_else(|| login.clone()),
+        label: login,
+        avatar_url: u.map(user_avatar).unwrap_or_default(),
+        is_bot: false,
     }
+}
+
+/// The date field of a `ForgeTimelineEventOut` produced by [`pr_activity`], verbatim.
+/// Exhaustive over the union so a new variant can't silently read as "".
+fn bb_timeline_date(e: &ForgeTimelineEventOut) -> &str {
+    match e {
+        ForgeTimelineEventOut::Merged { date, .. }
+        | ForgeTimelineEventOut::Closed { date, .. }
+        | ForgeTimelineEventOut::Approved { date, .. }
+        | ForgeTimelineEventOut::ChangesRequested { date, .. }
+        | ForgeTimelineEventOut::Unapproved { date, .. }
+        | ForgeTimelineEventOut::Labeled { date, .. }
+        | ForgeTimelineEventOut::Reopened { date, .. }
+        | ForgeTimelineEventOut::ForcePushed { date, .. }
+        | ForgeTimelineEventOut::ReviewRequested { date, .. }
+        | ForgeTimelineEventOut::ReadyForReview { date, .. }
+        | ForgeTimelineEventOut::ConvertToDraft { date, .. }
+        | ForgeTimelineEventOut::Renamed { date, .. }
+        | ForgeTimelineEventOut::Assigned { date, .. }
+        | ForgeTimelineEventOut::Milestoned { date, .. }
+        | ForgeTimelineEventOut::CrossReferenced { date, .. }
+        | ForgeTimelineEventOut::Connected { date, .. }
+        | ForgeTimelineEventOut::Pinned { date, .. }
+        | ForgeTimelineEventOut::Locked { date, .. }
+        | ForgeTimelineEventOut::Transferred { date, .. }
+        | ForgeTimelineEventOut::MarkedAsDuplicate { date, .. } => date,
+    }
+}
+
+/// The sort key behind [`pr_activity`]'s ordering: the event's date as an INSTANT.
+/// `None` for an empty or unparseable stamp, which `Option`'s ordering places before
+/// every dated event. Comparing parsed instants is what makes the order correct across
+/// Bitbucket's mixed local offsets — the raw strings don't sort chronologically.
+fn bb_timeline_instant(e: &ForgeTimelineEventOut) -> Option<DateTime<FixedOffset>> {
+    DateTime::parse_from_rfc3339(bb_timeline_date(e)).ok()
 }
 
 /// Map one non-deleted/non-pending comment onto a neutral thread. The body is the raw
@@ -5483,7 +5525,7 @@ mod tests {
         from_bb_pr(serde_json::from_str(json).expect("PR should parse"))
     }
 
-    fn activity(json: &str) -> Option<PrTimelineEventOut> {
+    fn activity(json: &str) -> Option<ForgeTimelineEventOut> {
         map_activity_entry(serde_json::from_str(json).expect("activity should parse"))
     }
 
@@ -5492,12 +5534,15 @@ mod tests {
         // Shape from the live `approval` activity entry.
         let ev = activity(
             r#"{"approval":{"date":"2026-07-03T21:12:55.697902-04:00",
-                "user":{"display_name":"Casey Approver","uuid":"{0f39}"}}}"#,
+                "user":{"display_name":"Casey Approver","uuid":"{0f39}",
+                        "links":{"avatar":{"href":"https://bb/casey.png"}}}}}"#,
         )
         .expect("approval is a timeline event");
         match ev {
-            PrTimelineEventOut::Approved { actor, date } => {
-                assert_eq!(actor, "Casey Approver");
+            ForgeTimelineEventOut::Approved { actor, date } => {
+                assert_eq!(actor.id, "{0f39}");
+                assert_eq!(actor.label, "Casey Approver");
+                assert_eq!(actor.avatar_url, "https://bb/casey.png");
                 assert_eq!(date, "2026-07-03T21:12:55.697902-04:00");
             }
             _ => panic!("expected Approved"),
@@ -5511,7 +5556,13 @@ mod tests {
                 "user":{"display_name":"Ada"}}}"#,
         )
         .expect("changes_requested is a timeline event");
-        assert!(matches!(ev, PrTimelineEventOut::ChangesRequested { .. }));
+        // No `links.avatar` → empty URL, never guessed; no `uuid` → id falls back
+        // to the display name rather than shipping empty.
+        assert!(matches!(
+            ev,
+            ForgeTimelineEventOut::ChangesRequested { actor, .. }
+                if actor.id == "Ada" && actor.label == "Ada" && actor.avatar_url.is_empty()
+        ));
     }
 
     #[test]
@@ -5523,7 +5574,7 @@ mod tests {
                 "changes":{"status":{"old":"open","new":"fulfilled"}}}}"#,
         )
         .expect("a status-changing MERGED update is an event");
-        assert!(matches!(ev, PrTimelineEventOut::Merged { .. }));
+        assert!(matches!(ev, ForgeTimelineEventOut::Merged { .. }));
     }
 
     #[test]
@@ -5534,7 +5585,11 @@ mod tests {
                 "changes":{"status":{"old":"open","new":"rejected"}}}}"#,
         )
         .expect("a status-changing DECLINED update is an event");
-        assert!(matches!(ev, PrTimelineEventOut::Closed { .. }));
+        // Bitbucket reports no close reason.
+        assert!(matches!(
+            ev,
+            ForgeTimelineEventOut::Closed { state_reason, .. } if state_reason.is_empty()
+        ));
     }
 
     #[test]
@@ -5552,6 +5607,27 @@ mod tests {
         .is_none());
         // A comment activity carries neither update/approval/changes_requested.
         assert!(activity(r#"{"comment":{"id":1}}"#).is_none());
+    }
+
+    #[test]
+    fn activity_sort_orders_by_instant_across_mixed_offsets() {
+        // Bitbucket stamps in the actor's local offset, so string order and instant
+        // order disagree: "…T21:00:00-04:00" is 01:00Z the NEXT day, later than
+        // "…T23:00:00Z", yet it sorts first lexicographically.
+        let local_evening = "2026-07-03T21:00:00-04:00";
+        let utc_late = "2026-07-03T23:00:00Z";
+        assert!(local_evening < utc_late, "the string order is the trap");
+
+        let ev = |date: &str| ForgeTimelineEventOut::Approved {
+            actor: bb_actor(None),
+            date: date.to_string(),
+        };
+        let mut events = [ev(local_evening), ev(utc_late), ev("")];
+        events.sort_by_cached_key(bb_timeline_instant);
+        let dates: Vec<&str> = events.iter().map(bb_timeline_date).collect();
+        // Undated first, then the true chronological order — the reverse of the
+        // strings for the dated pair.
+        assert_eq!(dates, vec!["", utc_late, local_evening]);
     }
 
     #[test]
