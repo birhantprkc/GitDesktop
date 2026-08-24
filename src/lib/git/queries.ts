@@ -20,6 +20,7 @@ import {
   conflictSides,
   resolveConflict,
 } from "./conflict";
+import { literalPathspec } from "./glob";
 import { repoIdentity } from "./repo-identity";
 import type {
   BbEnvironment,
@@ -3324,6 +3325,16 @@ export function useCheckoutConflictSide(repo: string) {
     repo,
     (args: { path: string; side: "ours" | "theirs" }) =>
       checkoutConflictSide(repo, args.path, args.side),
+    { invalidate: conflictFileKeys(repo) },
+  );
+}
+
+/** Stages a conflicted file exactly as it stands on disk — edited, emptied, or
+ *  removed — which marks the conflict resolved. */
+export function useMarkConflictResolved(repo: string) {
+  return useRepoMutation(
+    repo,
+    (path: string) => api.gitStage(repo, [literalPathspec(path)]),
     { invalidate: conflictFileKeys(repo) },
   );
 }
