@@ -1300,6 +1300,12 @@ export const forgeStatus = (repoPath: string) =>
 export const forgeListRepos = (provider: ForgeProvider) =>
   invoke<ForgeRepoList>("forge_list_repos", { provider });
 
+/** The namespaces the signed-in user owns on a provider — derived from the
+ *  same probes as `forgeListRepos`' `ownedNamespaces`, without the repository
+ *  list. */
+export const forgeOwnedNamespaces = (provider: ForgeProvider) =>
+  invoke<string[]>("forge_owned_namespaces", { provider });
+
 // ── Explore: search / browse / fork / star / README ──────────────────────────
 //
 // The Explore surface searches and browses repositories on a provider. An empty
