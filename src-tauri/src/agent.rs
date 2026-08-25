@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Notify;
 
@@ -686,9 +686,73 @@ async fn resolve(kind: AgentKind, bin_path: Option<&str>) -> Option<PathBuf> {
 
 // --- detection -------------------------------------------------------------
 
+/// Per-stream cap on captured output. `Command::output` buffers without limit,
+/// so a runaway or compromised child could exhaust memory before the timeout
+/// (which bounds duration, not bytes). No legitimate capture here approaches it
+/// — the largest, `opencode models`, is tens of KB.
+const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Drains `stdout` and `stderr` concurrently into capped buffers, returning the
+/// captured bytes and whether either stream exceeded `cap`. Reading both at once
+/// is what keeps a full pipe from deadlocking the child; this stays a pure reader
+/// (no child handle), so the caller kills on overflow and any `AsyncRead` drives
+/// it in a unit test.
+async fn capture_capped<O, E>(
+    stdout: &mut O,
+    stderr: &mut E,
+    cap: usize,
+) -> AppResult<(Vec<u8>, Vec<u8>, bool)>
+where
+    O: AsyncRead + Unpin,
+    E: AsyncRead + Unpin,
+{
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut obuf = [0u8; 8192];
+    let mut ebuf = [0u8; 8192];
+    let (mut odone, mut edone) = (false, false);
+    let mut overflowed = false;
+    loop {
+        tokio::select! {
+            r = stdout.read(&mut obuf), if !odone => {
+                let n = r.map_err(AppError::Io)?;
+                if n == 0 {
+                    odone = true;
+                } else {
+                    let room = cap - out.len();
+                    out.extend_from_slice(&obuf[..n.min(room)]);
+                    // `>` not `>=`: output landing exactly on the cap is within the
+                    // limit — a later non-empty read (room == 0) flags real overflow.
+                    if n > room {
+                        overflowed = true;
+                        break;
+                    }
+                }
+            }
+            r = stderr.read(&mut ebuf), if !edone => {
+                let n = r.map_err(AppError::Io)?;
+                if n == 0 {
+                    edone = true;
+                } else {
+                    let room = cap - err.len();
+                    err.extend_from_slice(&ebuf[..n.min(room)]);
+                    if n > room {
+                        overflowed = true;
+                        break;
+                    }
+                }
+            }
+            else => break,
+        }
+    }
+    Ok((out, err, overflowed))
+}
+
 /// Runs a short command and returns (exit code, stdout, stderr) as separate
 /// streams — what a line parser needs, since a banner on stderr must not
-/// interleave into the data being parsed.
+/// interleave into the data being parsed. Each stream is capped at
+/// `MAX_CAPTURE_BYTES`: a child that writes past it is killed and the call
+/// fails with `AppError::Command` rather than returning a truncated capture.
 pub(crate) async fn run_capture_parts(
     program: &Path,
     args: &[&str],
@@ -706,14 +770,35 @@ pub(crate) async fn run_capture_parts(
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     cmd.kill_on_drop(true);
 
-    let out = tokio::time::timeout(timeout, cmd.output())
-        .await
-        .map_err(|_| AppError::Timeout(timeout.as_secs()))?
-        .map_err(AppError::Io)?;
+    let mut child = cmd.spawn().map_err(AppError::Io)?;
+    let mut stdout = child.stdout.take().expect("stdout piped");
+    let mut stderr = child.stderr.take().expect("stderr piped");
+    let (status, out, err, overflowed) = tokio::time::timeout(timeout, async {
+        let (out, err, overflowed) =
+            capture_capped(&mut stdout, &mut stderr, MAX_CAPTURE_BYTES).await?;
+        // On overflow the child is still writing to a now-unread pipe, so kill it
+        // before waiting; otherwise wait reaps the process that closed its streams.
+        if overflowed {
+            let _ = child.start_kill();
+        }
+        let status = child.wait().await.map_err(AppError::Io)?;
+        Ok::<_, AppError>((status, out, err, overflowed))
+    })
+    .await
+    .map_err(|_| AppError::Timeout(timeout.as_secs()))??;
+    if overflowed {
+        // Past the cap the capture is truncated, so its exit code and partial
+        // output are meaningless — fail deterministically rather than let a caller
+        // parse a fragment (or a racing exit 0) as a complete, successful result.
+        return Err(AppError::Command(format!(
+            "{} produced more than {MAX_CAPTURE_BYTES} bytes on stdout or stderr",
+            program.display()
+        )));
+    }
     Ok((
-        out.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
+        status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out).into_owned(),
+        String::from_utf8_lossy(&err).into_owned(),
     ))
 }
 
@@ -3092,6 +3177,56 @@ mod child_env_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn capture_capped_round_trips_both_streams_under_cap() {
+        let (mut o, mut e): (&[u8], &[u8]) = (b"hello stdout", b"a banner line");
+        let (out, err, overflowed) = capture_capped(&mut o, &mut e, 64).await.unwrap();
+        assert_eq!(out.as_slice(), b"hello stdout");
+        assert_eq!(err.as_slice(), b"a banner line");
+        assert!(!overflowed);
+    }
+
+    #[tokio::test]
+    async fn capture_capped_truncates_and_flags_over_cap() {
+        let big = vec![b'x'; 100];
+        let (mut o, mut e): (&[u8], &[u8]) = (big.as_slice(), b"");
+        let (out, err, overflowed) = capture_capped(&mut o, &mut e, 16).await.unwrap();
+        assert_eq!(out.len(), 16);
+        assert!(err.is_empty());
+        assert!(overflowed);
+    }
+
+    #[tokio::test]
+    async fn capture_capped_truncates_and_flags_over_cap_on_stderr() {
+        // The stderr arm is a twin of the stdout arm — cover its boundary
+        // independently so a drift there can't hide behind stdout-only tests.
+        let big = vec![b'x'; 100];
+        let (mut o, mut e): (&[u8], &[u8]) = (b"", big.as_slice());
+        let (out, err, overflowed) = capture_capped(&mut o, &mut e, 16).await.unwrap();
+        assert!(out.is_empty());
+        assert_eq!(err.len(), 16);
+        assert!(overflowed);
+    }
+
+    #[tokio::test]
+    async fn capture_capped_allows_output_exactly_at_cap() {
+        // Output landing exactly on the cap is within the limit, not truncation
+        // — on either stream (each arm carries its own boundary comparison, so
+        // an over-cap test alone can't tell `>` from `>=`).
+        let exact = vec![b'y'; 16];
+        let (mut o, mut e): (&[u8], &[u8]) = (exact.as_slice(), b"");
+        let (out, err, overflowed) = capture_capped(&mut o, &mut e, 16).await.unwrap();
+        assert_eq!(out.len(), 16);
+        assert!(!overflowed);
+        assert!(err.is_empty());
+
+        let (mut o, mut e): (&[u8], &[u8]) = (b"", exact.as_slice());
+        let (out, err, overflowed) = capture_capped(&mut o, &mut e, 16).await.unwrap();
+        assert_eq!(err.len(), 16);
+        assert!(!overflowed);
+        assert!(out.is_empty());
+    }
 
     // Real opencode `run --format json` lines (captured 2026-06-23, v1.17.9).
     const STEP_START: &str = r#"{"type":"step_start","sessionID":"ses_abc","part":{"type":"step-start"}}"#;

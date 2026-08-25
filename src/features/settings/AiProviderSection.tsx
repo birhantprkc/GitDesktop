@@ -48,7 +48,7 @@ import {
 import { LOGIN_COMMAND } from "@/lib/ai/cli-client";
 import { createAiClient } from "@/lib/ai/client";
 import type { ReviewContextSize } from "@/lib/ai/context-budget";
-import { useAvailableModels } from "@/lib/ai/models";
+import { modelPickerEmptyText, useAvailableModels } from "@/lib/ai/models";
 import {
   ALL_PROVIDER_IDS,
   defaultModelForProvider,
@@ -110,14 +110,20 @@ function ModelPicker({
   allowedHosts: string[];
 }) {
   const keyPreview = useSecretPreview(value.provider);
+  const isCli = isCliProvider(value.provider);
+  // Listing a CLI's catalog spawns it, so a CLI provider's probe waits for the
+  // user to reach the picker — sticky, matching the session and PR-review
+  // pickers. HTTP providers keep fetching eagerly: reaching Settings → AI is
+  // itself the intent, and the cost is a GET, not a subprocess.
+  const [modelsWanted, setModelsWanted] = useState(false);
   const availableModels = useAvailableModels(
     value,
     Boolean(keyPreview.data),
     allowedHosts,
+    { enabled: !isCli || modelsWanted },
   );
   const catalog = availableModels.data;
   const models = catalog?.models ?? [];
-  const isCli = isCliProvider(value.provider);
   const modelMemory = useRef<Partial<Record<AiProviderId, string>>>({});
   // Only a failed fetch carries unbounded provider prose, so it alone is clamped and
   // given a tooltip; every other line is short enough to render whole.
@@ -134,12 +140,17 @@ function ModelPicker({
       case isCli &&
         catalog?.live !== true &&
         catalog?.cause !== "failed" &&
-        !availableModels.isPending:
+        !availableModels.isFetching:
         return "Model passed to the CLI — leave blank for its default";
-      case availableModels.isPending:
-        return "Loading models…";
+      // A settled live list outranks an in-flight refetch: an HTTP provider's
+      // background refetch (staleTime + focus refetch) keeps its `live` data, so
+      // "Loading…" must not flash over the shown count. First load and a provider
+      // switch both change the query key, so `live` is false on the placeholder
+      // and the loading case still wins there.
       case catalog?.live === true:
         return `${models.length} models from ${PROVIDER_LABELS[value.provider]}`;
+      case availableModels.isFetching:
+        return "Loading models…";
       case failureReason !== undefined:
         return `Suggestions only — couldn't load the live list: ${failureReason}`;
       case catalog?.cause === "empty":
@@ -200,6 +211,9 @@ function ModelPicker({
             if (model) onChange({ ...value, model });
           }}
           openOnInputClick
+          onOpenChange={(open) => {
+            if (open) setModelsWanted(true);
+          }}
         >
           <ComboboxInput
             id={`${idPrefix}-model`}
@@ -207,10 +221,11 @@ function ModelPicker({
             placeholder={
               defaultModelForProvider(value.provider) || "Account default"
             }
+            onFocus={() => setModelsWanted(true)}
           />
           <ComboboxContent>
             <ComboboxEmpty>
-              No matching models — the typed id is used as-is
+              {modelPickerEmptyText(availableModels.isFetching)}
             </ComboboxEmpty>
             <ComboboxList>
               {(item: string) => (

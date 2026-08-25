@@ -37,7 +37,7 @@ import { Switch } from "@/components/ui/switch";
 import { detectAgentCli, providerKind } from "@/lib/ai/agent";
 import { LOGIN_COMMAND } from "@/lib/ai/cli-client";
 import { buildAiCommentBody } from "@/lib/ai/comment-branding";
-import { useAvailableModels } from "@/lib/ai/models";
+import { modelPickerEmptyText, useAvailableModels } from "@/lib/ai/models";
 import {
   defaultModelForProvider,
   PROVIDER_LABELS,
@@ -410,12 +410,8 @@ export function PrReviewPanel({
               }
             />
             <ComboboxContent>
-              {/* `isFetching`, never `isPending` — a catalog that was never
-                  requested must not read as loading. */}
               <ComboboxEmpty>
-                {available.isFetching
-                  ? "Loading models…"
-                  : "Uses the typed id as-is"}
+                {modelPickerEmptyText(available.isFetching)}
               </ComboboxEmpty>
               <ComboboxList>
                 {(item: string) => (
