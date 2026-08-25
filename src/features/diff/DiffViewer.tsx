@@ -37,7 +37,12 @@ import {
   useFileDiff,
   useRepoStatus,
 } from "@/lib/git/queries";
-import { formatBinding, isMac } from "@/lib/hotkeys/binding";
+import {
+  bindingToAriaKeyshortcuts,
+  formatBinding,
+  isMac,
+} from "@/lib/hotkeys/binding";
+import { useEffectiveBindings, useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { useSaveSettings, useSettings } from "@/lib/settings/queries";
 import { useConflictResolve } from "@/lib/stores/conflict-resolve";
 import type { SelectedFile } from "@/lib/stores/ui";
@@ -120,7 +125,7 @@ export function DiffViewer({ repoPath }: { repoPath: string }) {
 
   return (
     <WorkingTreeDiff
-      key={`${deferredFile.staged}:${deferredFile.path}`}
+      key={`${repoPath}:${deferredFile.staged}:${deferredFile.path}`}
       repoPath={repoPath}
       file={deferredFile}
     />
@@ -165,13 +170,28 @@ function WorkingTreeDiff({
     // A new (untracked) file has no committed version to revert to — the
     // confirm wording changes from "revert to last committed" to "remove".
     newFile?: boolean;
+    // The diff text the confirm's `run` was built against — see the close
+    // effect below.
+    forText: string;
   } | null>(null);
   // Declared with the hooks above the `!hunkMode` early return below.
   const shownDiscard = useRetained(discard);
   // The drag-selected lines to stage/unstage/discard — file-wide, since the
   // single whole-file view lets a selection span multiple hunks.
-  const [selection, setSelection] = useState<SelectedLine[] | null>(null);
-  const clearSelection = useCallback(() => setSelection(null), []);
+  const [selectionState, setSelectionState] = useState<{
+    lines: SelectedLine[];
+    forText: string;
+  } | null>(null);
+  const clearSelection = useCallback(() => setSelectionState(null), []);
+  // `parsed`, `hunkMode`, and `busy` are computed above the `!hunkMode` early
+  // return because the hotkey registrations below run unconditionally and read
+  // them.
+  const busy =
+    applyPatch.isPending ||
+    applyPartial.isPending ||
+    discardUntracked.isPending;
+  const selectionBinding =
+    useEffectiveBindings().get("stage-selected-lines") ?? null;
 
   const parsed: ParsedDiff | null = useMemo(() => {
     const data = diff.data;
@@ -194,6 +214,34 @@ function WorkingTreeDiff({
   // so part of a new file can be committed. Binary/huge untracked files have
   // `parsed === null` and still fall through to the whole-file view below.
   const hunkMode = parsed !== null && parsed.hunks.length > 0;
+  // A selection is valid only against the diff text it was dragged against —
+  // stale by text means every consumer sees no selection at the same instant.
+  const selection =
+    selectionState !== null && selectionState.forText === diff.data?.text
+      ? selectionState.lines
+      : null;
+  // One contextual chord: stage the selection on an unstaged file's diff,
+  // unstage it on a staged one — mirroring the banner's primary button. Dead
+  // while the Discard confirm is open (the global listener has no dialog guard)
+  // and while the non-staging fallback renders.
+  useHotkeyAction(
+    "stage-selected-lines",
+    () => applySelection({ cached: true, reverse: file.staged }),
+    hunkMode && selection !== null && !busy && discard === null,
+  );
+  useHotkeyAction(
+    "clear-line-selection",
+    clearSelection,
+    hunkMode && selection !== null && !busy && discard === null,
+  );
+  // Any Discard confirm's `run` captured line numbers (or a hunk) at open
+  // time — close it the moment the diff text moves on from the text it was
+  // opened against (a refetch while the dialog is up), whichever arm opened it.
+  const liveText = diff.data?.text;
+  useEffect(() => {
+    if (discard !== null && discard.forText !== liveText) setDiscard(null);
+  }, [discard, liveText]);
+
   if (!hunkMode) {
     return (
       <DiffSurface
@@ -218,10 +266,18 @@ function WorkingTreeDiff({
   }
 
   const onError = (e: unknown) => toastError(e);
-  const busy =
-    applyPatch.isPending ||
-    applyPartial.isPending ||
-    discardUntracked.isPending;
+  // Shortcut hints on the selection banner: `aria-keyshortcuts` keeps the chord
+  // off the accessible name, the title makes it discoverable. Both omitted when
+  // the action is unbound.
+  const selectionActionLabel = file.staged ? "Unstage" : "Stage";
+  const selectionTitle =
+    selectionBinding === null
+      ? undefined
+      : `${selectionActionLabel} (${formatBinding(selectionBinding)})`;
+  const selectionKeyshortcuts =
+    selectionBinding === null
+      ? undefined
+      : bindingToAriaKeyshortcuts(selectionBinding);
 
   function applyHunk(
     hunk: DiffHunk,
@@ -261,6 +317,7 @@ function WorkingTreeDiff({
       setDiscard({
         label: hunk.header,
         newFile: untracked,
+        forText: diff.data?.text ?? "",
         run: untracked
           ? () => discardLines(hunkAddedNewLines(hunk))
           : () => applyHunk(hunk, { cached: false, reverse: true }),
@@ -295,6 +352,8 @@ function WorkingTreeDiff({
               variant="secondary"
               size="xs"
               disabled={busy}
+              title={selectionTitle}
+              aria-keyshortcuts={selectionKeyshortcuts}
               onClick={() => applySelection({ cached: true, reverse: true })}
             >
               Unstage
@@ -305,6 +364,8 @@ function WorkingTreeDiff({
                 variant="secondary"
                 size="xs"
                 disabled={busy}
+                title={selectionTitle}
+                aria-keyshortcuts={selectionKeyshortcuts}
                 onClick={() => applySelection({ cached: true, reverse: false })}
               >
                 Stage
@@ -318,6 +379,7 @@ function WorkingTreeDiff({
                   setDiscard({
                     label: `${selection.length} selected ${selection.length === 1 ? "line" : "lines"}`,
                     newFile: untracked,
+                    forText: diff.data?.text ?? "",
                     run: untracked
                       ? () =>
                           discardLines(
@@ -365,6 +427,13 @@ function WorkingTreeDiff({
               {file.staged ? "unstage" : "stage"} just those lines. Hold{" "}
               {ADDITIVE_MODIFIER} while dragging to add to the selection, so one
               selection can mix added and removed lines.
+              {selectionBinding !== null && (
+                <>
+                  {" "}
+                  Press {formatBinding(selectionBinding)} to{" "}
+                  {file.staged ? "unstage" : "stage"} the selection.
+                </>
+              )}
             </span>
             <button
               type="button"
@@ -398,7 +467,9 @@ function WorkingTreeDiff({
           staged={file.staged}
           busy={busy}
           selection={selection}
-          onSelect={setSelection}
+          onSelect={(lines, forText) =>
+            setSelectionState(lines === null ? null : { lines, forText })
+          }
           onHunkAction={onHunkAction}
         />
       </div>
@@ -614,7 +685,7 @@ function StagingDiffView({
   staged: boolean;
   busy: boolean;
   selection: SelectedLine[] | null;
-  onSelect: (lines: SelectedLine[] | null) => void;
+  onSelect: (lines: SelectedLine[] | null, forText: string) => void;
   onHunkAction: (hunk: DiffHunk, kind: "stage" | "unstage" | "discard") => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -737,7 +808,9 @@ function StagingDiffView({
         const next = additiveRef.current
           ? mergeSelection(selectedRef.current, lines)
           : lines;
-        onSelectRef.current(next.length ? next : null);
+        // Stamp against the text these rows were BUILT from — the live
+        // diff.data.text can already be newer while the deferred render lags.
+        onSelectRef.current(next.length ? next : null, deferredText);
       },
     });
     paintLines(container, selectedRef.current ?? []); // re-assert after (re)mount
@@ -745,7 +818,7 @@ function StagingDiffView({
       container.removeEventListener("mousedown", onMouseDownCapture, true);
       manager.destroy();
     };
-  }, [diffFile, viewMode]);
+  }, [diffFile, viewMode, deferredText]);
 
   // Paint the committed selection from state (incl. cleared → []).
   useEffect(() => {
