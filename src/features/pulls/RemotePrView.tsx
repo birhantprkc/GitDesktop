@@ -53,6 +53,7 @@ import {
   useEditTitleBody,
 } from "@/features/conversations/EditTitleBodyDialog";
 import { LabelsPopover } from "@/features/conversations/LabelsPopover";
+import { ProjectsPopover } from "@/features/conversations/ProjectsPopover";
 import { makeQuoteReply } from "@/features/conversations/quoteReply";
 import { ReactionBar } from "@/features/conversations/ReactionBar";
 import { AuthorAvatar, LabelChip } from "@/features/conversations/Thread";
@@ -2360,12 +2361,17 @@ export function RemotePrView({
           <span className="text-success">+{pr.additions}</span>
           <span className="text-destructive">-{pr.deletions}</span>
         </div>
-        {/* Entity-keyed pickers: each seeds a draft on open, commits it on
-            close against LIVE props, and a keyboard PR switch leaves the popover
-            open; unkeyed, the old draft lands on the new PR. Labels/assignees
-            prefix keys as SIBLINGS: duplicate keys in one children array make
-            React drop the earlier duplicates' unmount, leaking stale rows.
-            Reviewers' prefix is consistency: own wrapper div. */}
+        {/* Entity-keyed pickers — labels, assignees, projects, reviewers: each
+            seeds a draft on open, commits it on close against LIVE props, and a
+            keyboard PR switch leaves the popover open; unkeyed, the old draft
+            lands on the new PR. Projects is the exception to the commit clause:
+            its memberships come from a query rather than props, so its close
+            diffs the draft against the set SEEDED at open (or at the first settle
+            after it), never the live one — live items serve only as the item-id
+            lookup for unlinks.
+            Labels/assignees/projects prefix keys as SIBLINGS: duplicate keys in
+            one children array make React drop the earlier duplicates' unmount,
+            leaking stale rows. Reviewers' prefix is consistency: own wrapper div. */}
         {isOpen && canEditLabels ? (
           <LabelsPopover
             key={`labels-${entityKey}`}
@@ -2420,6 +2426,21 @@ export function RemotePrView({
             </div>
           )
         )}
+        {/* GitHub Projects membership (GitHub-only). Unlike labels/assignees it has
+            no read-only fallback: its chips come from their own query rather than
+            from `pr`, so a closed PR would pay a fetch to show them. */}
+        {isOpen && providerKey === "github" ? (
+          <ProjectsPopover
+            key={`projects-${entityKey}`}
+            repoPath={repoPath}
+            enabled
+            kind="pr"
+            number={number}
+            contentId={pr.id}
+            lens={lens}
+            disabledReason={pickerReason}
+          />
+        ) : null}
         {/* Reviewers picker (all three providers). A closed/merged PR falls back to
             read-only chips. Bot requests (e.g. Copilot) are display-only and split out
             here so the popover's onChange — which emits its `value` as the desired
