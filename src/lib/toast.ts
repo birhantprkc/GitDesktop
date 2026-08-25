@@ -39,6 +39,28 @@ export function toastErrorWithNote(e: unknown, note: string) {
   showErrorToast(e, note);
 }
 
+/**
+ * Toast copy for a bulk ignore / AI-exclude. `total` is LINES written; `added`
+ * is the Rust command's count actually appended — it skips lines already
+ * present (.gitignore) or already in EFFECT (aiignore, where a later `!`
+ * revives a line). Lines ≠ selected entries: a `\`-holding path emits a
+ * `/`-separated twin line, so `total` can exceed the selection.
+ */
+export function ignoreToast(
+  added: number,
+  total: number,
+  file: string,
+): string {
+  const entries = (n: number) => `entr${n === 1 ? "y" : "ies"}`;
+  if (added === 0)
+    return total === 1
+      ? `Entry already in ${file}`
+      : `All ${total} ${entries(total)} already in ${file}`;
+  if (added < total)
+    return `Added ${added} of ${total} ${entries(total)} to ${file}`;
+  return `Added ${added} ${entries(added)} to ${file}`;
+}
+
 function showErrorToast(e: unknown, note: string | undefined) {
   const presentation = presentError(e);
   toast.error(presentation.summary, {

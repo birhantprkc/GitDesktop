@@ -2187,6 +2187,23 @@ notes**, and **repository descriptions**.
   (the file, its folder, or its file type — or a multi-selection) appends to
   \`.gitdesktop/aiignore\`, creating it if needed — an anchored line (\`/src/config.ts\`,
   \`/vendor/\`) for exactly the file or folder you picked.
+- **See what your patterns hide.** The repo ⋮ menu → *Manage files…* has an **AI
+  excluded** tab (also a command palette entry of its own, **AI excluded files**,
+  which opens straight onto it). It lists every tracked or untracked file the
+  patterns hide right now, plus any file whose name can't be read as text: those
+  are always kept from AI, in their own always-hidden row. Rule-hidden files are
+  labelled with the rule that decided them and whether it came from **Repo**
+  (\`.gitdesktop/aiignore\`) or **Global** (Settings). Untracked files your
+  \`.gitignore\` already hides aren't listed, since they never reach an AI feature.
+  Above the list are your rules in evaluation order with how many files each one
+  hides; click a rule to narrow the list to its own matches. A \`!\` line that
+  decides nothing is flagged right there, and where an earlier rule excludes the
+  folder it sits in, the flag carries the fix (exclude \`dir/*\` rather than
+  \`dir/\`). Select files and **Remove** the rules behind them — repo rules are
+  deleted from \`.gitdesktop/aiignore\`, so commit the change to share it; global
+  rules leave your Settings patterns and stop applying in every repository. Going
+  the other way, the **Tracked** tab's **Exclude … from AI** hides a whole selection
+  in one step.
 - **Hide AI** (Settings → General) hides the AI surfaces (finished AI activity in the
   activity dock and notification inbox included), mutes AI desktop notifications, and
   pauses your automations — nothing new runs or posts while it's on. Your configuration

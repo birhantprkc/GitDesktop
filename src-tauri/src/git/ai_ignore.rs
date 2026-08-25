@@ -29,28 +29,33 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 
+use serde::Serialize;
 use tempfile::TempPath;
 use tokio::sync::OnceCell;
 
 use crate::error::{AppError, AppResult};
-use crate::git::diff::{parse_numstat_z, parse_numstat_z_rows, DiffStatRow};
+use crate::git::diff::{parse_numstat_z_rows, DiffStatRow};
 use crate::git::runner::{run_git, run_git_raw, run_git_raw_input, DEFAULT_TIMEOUT};
 use crate::git::types::DiffStatEntry;
 
 /// The lines of an AI-ignore list the matcher acts on — trimmed, with blanks and
-/// `#` comments dropped — plus whether any of them is a POSITIVE (non-`!`) line.
+/// `#` comments dropped — each paired with its index in the CALLER'S list, plus
+/// whether any of them is a POSITIVE (non-`!`) line.
 ///
 /// Order is preserved and load-bearing: gitignore is last-match-wins, so a `!`
 /// un-ignore only re-includes what an EARLIER line hid, and the caller's
 /// concatenation order decides precedence.
 ///
+/// The indices are what lets [`git_ai_ignore_verdicts`] name a deciding line in
+/// the caller's own numbering, where a dropped line still occupies its slot.
+///
 /// The flag exists because a list of nothing but `!` lines can never hide
 /// anything — a negation alone causes no ignoring — so callers short-circuit on
 /// it rather than spawning git to be told nothing matched.
-fn actionable_lines(patterns: &[String]) -> (Vec<&str>, bool) {
-    let mut lines: Vec<&str> = Vec::new();
+fn actionable_lines_indexed(patterns: &[String]) -> (Vec<(usize, &str)>, bool) {
+    let mut lines: Vec<(usize, &str)> = Vec::new();
     let mut has_positive = false;
-    for raw in patterns {
+    for (index, raw) in patterns.iter().enumerate() {
         let line = crate::fsops::trim_ignore_pattern(raw);
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -58,13 +63,26 @@ fn actionable_lines(patterns: &[String]) -> (Vec<&str>, bool) {
         // An embedded newline would smuggle EXTRA pattern lines into the excludes
         // file past this per-line classification — the smuggled tail could be a
         // negation while the entry classifies by its first character as positive.
-        if line.contains('\n') || line.contains('\r') {
+        // A NUL is dropped on the same grounds: it is the verbose pass's record
+        // separator, so one inside a pattern desynchronizes the four-token split
+        // and every later record in the batch names the wrong rule.
+        if line.contains('\n') || line.contains('\r') || line.contains('\0') {
             continue;
         }
         has_positive |= !line.starts_with('!');
-        lines.push(line);
+        lines.push((index, line));
     }
     (lines, has_positive)
+}
+
+/// [`actionable_lines_indexed`] without the caller-list indices — the shape the
+/// filtering paths need. One classification, so no path can drift from another.
+fn actionable_lines(patterns: &[String]) -> (Vec<&str>, bool) {
+    let (lines, has_positive) = actionable_lines_indexed(patterns);
+    (
+        lines.into_iter().map(|(_, line)| line).collect(),
+        has_positive,
+    )
 }
 
 /// The repo's effective `core.ignorecase`. Unset (or unreadable) means `false`,
@@ -126,20 +144,15 @@ async fn neutral_repo() -> AppResult<PathBuf> {
     Ok(dir.path().to_path_buf())
 }
 
-/// The subset of `paths` that the AI-ignore `exclude` lines hide, evaluated by
-/// git's own gitignore engine.
+/// `check-ignore` over `paths` with `lines` as the only rules in play, returning
+/// its raw `-z` stdout and the excludes-file path exactly as `core.excludesFile`
+/// received it — git echoes that spelling back as a verbose record's `<source>`
+/// (measured, git 2.51.1), so the caller can verify a record came from OUR list.
+/// `verbose` selects the four-token `<source> <linenum> <pattern> <path>` records
+/// instead of bare paths.
 ///
-/// `check-ignore --no-index --stdin` matches *arbitrary* paths — they need not
-/// exist in the working tree or the index — which is what lets callers ask about
-/// a remote PR's changed-file list, or about one conflicted path without
-/// depending on how the index happens to hold it. The pattern lines go into a
-/// temp excludes file IN ORDER, so semantics are gitignore's own, `!` un-ignore
-/// lines and their last-match-wins precedence included.
-///
-/// `paths` are repo-relative, forward-slashed. Empty `paths`, or an `exclude`
-/// carrying no positive line (see [`actionable_lines`]), short-circuits to `[]`
-/// without spawning git; so does "nothing matched" (check-ignore's exit code 1,
-/// which is not an error).
+/// The one spawn path of the AI-ignore engine: every property below is part of
+/// the privacy boundary, so no caller re-derives one.
 ///
 /// Matching runs in [`neutral_repo`] rather than the user's repo, so their AI
 /// patterns are the only rules in play — but `repo_path` still decides case
@@ -160,15 +173,12 @@ async fn neutral_repo() -> AppResult<PathBuf> {
 /// can pre-create the path, and nothing can be swapped in between the write and
 /// git's read. Removed explicitly below on both arms, with the handle's own drop
 /// as a backstop.
-pub async fn filter_ignored(
+async fn run_check_ignore(
     repo_path: &str,
     paths: &[String],
-    exclude: &[String],
-) -> AppResult<Vec<String>> {
-    let (lines, has_positive) = actionable_lines(exclude);
-    if paths.is_empty() || !has_positive {
-        return Ok(Vec::new());
-    }
+    lines: &[&str],
+    verbose: bool,
+) -> AppResult<(String, String)> {
     let icase = repo_ignorecase(repo_path).await;
     let neutral = neutral_repo().await?.to_string_lossy().into_owned();
 
@@ -189,52 +199,75 @@ pub async fn filter_ignored(
     .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?
     .map_err(AppError::Io)?;
 
+    // Forward slashes: a `-c` value is config-parsed, and a Windows temp path's
+    // backslashes would be read as escapes. Git accepts `/` on every platform.
+    let excludes_arg = excludes_file.to_string_lossy().replace('\\', "/");
     let result = async {
-        // Forward slashes: a `-c` value is config-parsed, and a Windows temp path's
-        // backslashes would be read as escapes. Git accepts `/` on every platform.
-        let config = format!(
-            "core.excludesFile={}",
-            excludes_file.to_string_lossy().replace('\\', "/")
-        );
+        let config = format!("core.excludesFile={excludes_arg}");
         let mut stdin = paths.join("\0");
         stdin.push('\0');
         let case = format!("core.ignorecase={icase}");
-        let out = run_git_raw_input(
-            Some(&neutral),
-            &[
-                "-c",
-                &config,
-                "-c",
-                &case,
-                "check-ignore",
-                "--no-index",
-                "--stdin",
-                "-z",
-            ],
-            Some(&stdin),
-            DEFAULT_TIMEOUT,
-        )
-        .await?;
-        // 0 = at least one path matched, 1 = none matched (not an error).
+        let mut args: Vec<&str> = vec![
+            "-c",
+            &config,
+            "-c",
+            &case,
+            "check-ignore",
+            "--no-index",
+            "--stdin",
+            "-z",
+        ];
+        if verbose {
+            args.push("--verbose");
+        }
+        let out = run_git_raw_input(Some(&neutral), &args, Some(&stdin), DEFAULT_TIMEOUT).await?;
+        // 0 = at least one path matched a rule, 1 = none did (not an error).
         if out.code > 1 {
             return Err(AppError::Git {
                 code: out.code,
                 stderr: out.stderr,
             });
         }
-        // `-z` output is NUL-TERMINATED, so the split yields a trailing empty
-        // element; nothing else needs trimming (no CR, no quoting).
-        Ok(out
-            .stdout_lossy()
-            .split('\0')
-            .filter(|p| !p.is_empty())
-            .map(String::from)
-            .collect())
+        Ok(out.stdout_lossy())
     }
     .await;
 
     let _ = tokio::fs::remove_file(&excludes_file).await;
-    result
+    result.map(|stdout| (stdout, excludes_arg))
+}
+
+/// The subset of `paths` that the AI-ignore `exclude` lines hide, evaluated by
+/// git's own gitignore engine.
+///
+/// `check-ignore --no-index --stdin` matches *arbitrary* paths — they need not
+/// exist in the working tree or the index — which is what lets callers ask about
+/// a remote PR's changed-file list, or about one conflicted path without
+/// depending on how the index happens to hold it. The pattern lines go into a
+/// temp excludes file IN ORDER, so semantics are gitignore's own, `!` un-ignore
+/// lines and their last-match-wins precedence included.
+///
+/// `paths` are repo-relative, forward-slashed. Empty `paths`, or an `exclude`
+/// carrying no positive line (see [`actionable_lines_indexed`]), short-circuits
+/// to `[]` without spawning git; so does "nothing matched" (check-ignore's exit
+/// code 1, which is not an error). The spawn itself, and the security properties
+/// around it, live in [`run_check_ignore`].
+pub async fn filter_ignored(
+    repo_path: &str,
+    paths: &[String],
+    exclude: &[String],
+) -> AppResult<Vec<String>> {
+    let (lines, has_positive) = actionable_lines(exclude);
+    if paths.is_empty() || !has_positive {
+        return Ok(Vec::new());
+    }
+    let (stdout, _) = run_check_ignore(repo_path, paths, &lines, false).await?;
+    // `-z` output is NUL-TERMINATED, so the split yields a trailing empty
+    // element; nothing else needs trimming (no CR, no quoting).
+    Ok(stdout
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+        .collect())
 }
 
 /// [`filter_ignored`] as a command: which of `paths` the user's AI-ignore
@@ -250,11 +283,87 @@ pub async fn git_filter_ai_ignored(
     filter_ignored(&repo_path, &paths, &exclude).await
 }
 
+/// One decided path from the AI-ignore engine's verbose pass.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiIgnoreVerdict {
+    /// The path exactly as the caller sent it (byte-identical).
+    pub path: String,
+    /// 0-based index into the `exclude` list AS THE CALLER PASSED IT (comments,
+    /// blanks and dropped lines still occupy their index) of the deciding line.
+    pub pattern_index: u32,
+    /// The deciding line as the matcher read it (trimmed).
+    pub pattern: String,
+    /// True when the deciding line is a `!` negation — the path is NOT hidden.
+    pub negated: bool,
+}
+
+/// [`filter_ignored`]'s verbose twin: for each of `paths` that any AI-ignore line
+/// decides, WHICH line decided it. The excluded-files view attributes a hidden
+/// file to its rule with this, and detects a DEAD `!` — git reports the parent
+/// DIRECTORY rule for a file its own re-include cannot reach, so a negation that
+/// decides nothing is a negation the user should be warned about.
+///
+/// Unlike [`filter_ignored`] a negation-only list is still evaluated: its `!`
+/// lines match paths, and reporting that truthfully is the point. Only empty
+/// `paths` or a list with no actionable line skips the spawn.
+///
+/// A path no line matches is simply absent from the result — git prints a record
+/// only for a match — and a matched path's `negated` verdict says it is visible
+/// to the model, so the non-negated subset is exactly [`filter_ignored`]'s answer.
+#[tauri::command]
+pub async fn git_ai_ignore_verdicts(
+    repo_path: String,
+    paths: Vec<String>,
+    exclude: Vec<String>,
+) -> AppResult<Vec<AiIgnoreVerdict>> {
+    let (lines, _) = actionable_lines_indexed(&exclude);
+    if paths.is_empty() || lines.is_empty() {
+        return Ok(Vec::new());
+    }
+    let kept: Vec<&str> = lines.iter().map(|(_, line)| *line).collect();
+    let (stdout, excludes) = run_check_ignore(&repo_path, &paths, &kept, true).await?;
+
+    // Four NUL-separated tokens per record: source, line number, pattern, path.
+    // The line number is 1-based into the excludes file just written — i.e. into
+    // `kept` — which carries the caller's own index alongside it.
+    let tokens: Vec<&str> = stdout.split('\0').collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 3 < tokens.len() {
+        let (source, linenum, path) = (tokens[i], tokens[i + 1], tokens[i + 3]);
+        i += 4;
+        // Only OUR excludes file may decide. Nothing else can reach the neutral
+        // repo today (its `.git/info/exclude` is emptied and it has no tracked
+        // files), so a foreign source would be a rule we never showed the user,
+        // reported under a line number that names the wrong pattern.
+        if path.is_empty() || source.replace('\\', "/") != excludes {
+            continue;
+        }
+        let Some(&(index, line)) = linenum
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|n| lines.get(n))
+        else {
+            continue;
+        };
+        out.push(AiIgnoreVerdict {
+            path: path.to_string(),
+            pattern_index: index as u32,
+            // OUR kept line rather than git's token: bytes we wrote ourselves.
+            pattern: line.to_string(),
+            negated: line.starts_with('!'),
+        });
+    }
+    Ok(out)
+}
+
 /// U+FFFD — what a non-UTF-8 byte in a filename becomes on the way in.
 const REPLACEMENT: char = '\u{FFFD}';
 
-/// How many times [`filtered_diff`] re-runs its two passes when the tree moved
-/// underneath them.
+/// How many times [`filtered_diff`] re-runs its two passes when what they name
+/// changed underneath them.
 const MAX_ATTEMPTS: u32 = 3;
 
 /// Byte ceiling on the content pass's whole argv. The exclude list grows with
@@ -271,13 +380,17 @@ const TERM_BUDGET: usize = 16_000;
 pub struct FilteredDiff {
     pub text: String,
     pub files: Vec<DiffStatEntry>,
-    /// Changed files (rename pairs count once) the patterns hid.
+    /// Changed files (rename pairs count once) kept out of the diff — pattern
+    /// matches plus unreadable names, which hide with no patterns at all.
     pub excluded_files: u32,
 }
 
-/// Whether an AI-ignore list can hide anything — the flag a caller needs to keep
-/// its unfiltered command shape when it cannot. A list of nothing but `!` lines
-/// is inert (a negation causes no ignoring), so it takes the unfiltered path.
+/// Whether an AI-ignore list can hide anything: a list of nothing but `!` lines
+/// is inert, since a negation causes no ignoring. Its two readers give it
+/// different meanings — [`filtered_diff`] keeps its unfiltered command shape on
+/// an inert list unless a changed name is unreadable (that hides with no patterns
+/// at all), and `git_branch_diff` reads it as the pin-vs-recheck discriminant,
+/// since pinning a ref range is only worth a spawn where filtering is certain.
 pub fn has_positive_pattern(patterns: &[String]) -> bool {
     actionable_lines(patterns).1
 }
@@ -346,9 +459,10 @@ fn widened_glob_for_name(path: &str) -> String {
 /// (measured, git 2.51.1).
 ///
 /// `recheck` re-reads the names after the content pass and retries on a mismatch,
-/// for callers whose diff reads mutable state (index, working tree) — a file
-/// appearing between the passes would otherwise enter the diff unchecked.
-/// Callers over immutable trees pin their refs instead and pass `false`.
+/// for callers whose two passes can disagree — a diff over the index or working
+/// tree, or over a ref range whose refs can move — since a file appearing between
+/// them would otherwise enter the diff unchecked. Only a caller that pinned its
+/// range to immutable trees may pass `false`.
 ///
 /// Errors when the exclude terms would exceed [`TERM_BUDGET`]: an empty result
 /// there would read to every caller as "everything was ignored" while survivors
@@ -365,16 +479,27 @@ pub async fn filtered_diff(
     // `--cached --numstat` returns the same root-relative rows from a
     // subdirectory). So these spawns stay byte-identical to the unfiltered
     // command, and the common case pays nothing.
+    //
+    // The fast RETURN carries a second condition: every changed name decoded
+    // cleanly. An unreadable name is hidden with no pattern configured at all, so
+    // one here falls through to the two-pass flow — which hides it on the same
+    // unconditional rule — rather than shipping its content under a `[]` verdict.
     if !has_positive_pattern(exclude) {
         let (content, stat) = tokio::try_join!(
             run_git(Some(repo_path), content_args, DEFAULT_TIMEOUT),
             run_git(Some(repo_path), numstat_args, DEFAULT_TIMEOUT)
         )?;
-        return Ok(FilteredDiff {
-            text: content.stdout_lossy(),
-            files: parse_numstat_z(&stat.stdout_lossy()),
-            excluded_files: 0,
-        });
+        let rows = parse_numstat_z_rows(&stat.stdout_lossy());
+        if !rows
+            .iter()
+            .any(|row| row.names.iter().any(|n| n.contains(REPLACEMENT)))
+        {
+            return Ok(FilteredDiff {
+                text: content.stdout_lossy(),
+                files: rows.into_iter().map(|row| row.entry).collect(),
+                excluded_files: 0,
+            });
+        }
     }
 
     // Pin every spawn below to the working-tree toplevel. PATHSPEC elements
@@ -515,8 +640,13 @@ mod tests {
         assert!(lines.is_empty(), "{lines:?}");
         assert!(!has_positive);
         assert!(!has_positive_pattern(&smuggled));
-        // A bare CR is dropped on the same grounds.
+        // A bare CR is dropped on the same grounds, and so is a NUL — the verbose
+        // pass splits its records on that byte, so one inside a pattern would
+        // misattribute every later record in the batch.
         assert!(actionable_lines(&["a\rb".to_string()]).0.is_empty());
+        let nul = ["*.env\0!secrets.env".to_string()];
+        assert!(actionable_lines(&nul).0.is_empty());
+        assert!(!has_positive_pattern(&nul));
         // …but a TRAILING newline is just line noise: it trims away and the
         // pattern still counts.
         let trailing = ["*.env\n".to_string()];
@@ -1214,6 +1344,220 @@ mod tests {
         assert!(by_gitignore.contains(&"notes.md".to_string()));
     }
 
+    /// Every verdict for `paths`, keyed by path — the fixtures below all ask
+    /// about one path at a time.
+    async fn verdicts_for(
+        repo: &str,
+        paths: &[&str],
+        exclude: &[&str],
+    ) -> Vec<AiIgnoreVerdict> {
+        git_ai_ignore_verdicts(
+            repo.to_string(),
+            paths.iter().map(|p| p.to_string()).collect(),
+            exclude.iter().map(|p| p.to_string()).collect(),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// The one verdict for `path`, or `None` when no line decided it.
+    fn verdict_for<'a>(
+        verdicts: &'a [AiIgnoreVerdict],
+        path: &str,
+    ) -> Option<&'a AiIgnoreVerdict> {
+        verdicts.iter().find(|v| v.path == path)
+    }
+
+    /// The verbose engine agrees with the filtering one on EVERY measured row:
+    /// the non-negated verdicts are exactly what `git_filter_ai_ignored` hides.
+    /// The UI reads these verdicts to tell the user a file is withheld, so a
+    /// drift here is a file reported hidden that still reaches a model.
+    #[tokio::test]
+    async fn verdicts_agree_with_the_filter_on_every_measured_row() {
+        let (_dir, repo) = parity_repo().await;
+        let all: Vec<String> = FIXTURE.iter().map(|p| p.to_string()).collect();
+
+        for (patterns, expected) in PARITY {
+            let want: BTreeSet<String> = expected.iter().map(|p| p.to_string()).collect();
+            let owned: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
+
+            let verdicts = git_ai_ignore_verdicts(repo.clone(), all.clone(), owned.clone())
+                .await
+                .unwrap();
+            let hidden: BTreeSet<String> = verdicts
+                .iter()
+                .filter(|v| !v.negated)
+                .map(|v| v.path.clone())
+                .collect();
+            assert_eq!(hidden, want, "verdicts, patterns {patterns:?}");
+
+            let filtered: BTreeSet<String> =
+                git_filter_ai_ignored(repo.clone(), all.clone(), owned)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .collect();
+            assert_eq!(hidden, filtered, "filter parity, patterns {patterns:?}");
+
+            // Every verdict points back at a line the caller passed, quoted as
+            // the matcher read it.
+            for v in &verdicts {
+                let raw = patterns[v.pattern_index as usize];
+                assert_eq!(
+                    v.pattern,
+                    crate::fsops::trim_ignore_pattern(raw),
+                    "patterns {patterns:?}, path {}",
+                    v.path
+                );
+            }
+        }
+    }
+
+    /// A verdict names its deciding line by the CALLER'S index, comments and
+    /// blanks still occupying theirs — the UI looks the rule up in the list it
+    /// passed, so an index off by the dropped lines attributes the wrong rule.
+    #[tokio::test]
+    async fn verdicts_name_the_deciding_line_by_the_callers_index() {
+        let (_dir, repo) = parity_repo().await;
+
+        // A negation decides, and is reported as such even though the path is
+        // NOT hidden.
+        let verdicts = verdicts_for(
+            &repo,
+            &["docs/notes.md", "notes.md"],
+            &["*.md", "!docs/notes.md"],
+        )
+        .await;
+        let negated = verdict_for(&verdicts, "docs/notes.md").expect("a decided path");
+        assert!(negated.negated);
+        assert_eq!(negated.pattern_index, 1);
+        assert_eq!(negated.pattern, "!docs/notes.md");
+        assert!(
+            !verdicts
+                .iter()
+                .any(|v| !v.negated && v.path == "docs/notes.md"),
+            "the negated path is not in the hidden set"
+        );
+        let hidden = verdict_for(&verdicts, "notes.md").expect("a decided path");
+        assert!(!hidden.negated);
+        assert_eq!(hidden.pattern_index, 0);
+
+        // Droppable lines keep their slots: `*.log` is index 2 and `!app.log`
+        // index 3, though the excludes file holds only those two lines.
+        let verdicts = verdicts_for(
+            &repo,
+            &["app.log", "deep/app.log", "docs/a.log", "docs/sub/b.log"],
+            &["# comment", "", "*.log", "!app.log"],
+        )
+        .await;
+        // `app.log` carries no slash, so the negation re-includes it at ANY depth
+        // (measured, git 2.51.1) — both `app.log` fixtures answer to index 3.
+        for path in ["app.log", "deep/app.log"] {
+            let v = verdict_for(&verdicts, path).expect("a decided path");
+            assert_eq!(v.pattern_index, 3, "{path}");
+            assert!(v.negated, "{path}");
+            assert_eq!(v.pattern, "!app.log");
+        }
+        for path in ["docs/a.log", "docs/sub/b.log"] {
+            let v = verdict_for(&verdicts, path).expect("a decided path");
+            assert_eq!(v.pattern_index, 2, "{path}");
+            assert!(!v.negated, "{path}");
+            assert_eq!(v.pattern, "*.log");
+        }
+    }
+
+    /// A `!` that cannot re-include its file decides NOTHING, and the verdicts
+    /// say so: git reports the parent-directory rule instead. That absence is
+    /// what the UI warns on — the line looks effective in the list and is not.
+    #[tokio::test]
+    async fn a_dead_negation_never_decides_a_verdict() {
+        let (_dir, repo) = parity_repo().await;
+        let verdicts = verdicts_for(
+            &repo,
+            &["build/x.txt", "docs/build/y.txt"],
+            &["build/", "!build/x.txt"],
+        )
+        .await;
+
+        let v = verdict_for(&verdicts, "build/x.txt").expect("a decided path");
+        assert_eq!(v.pattern_index, 0, "the directory rule decides");
+        assert_eq!(v.pattern, "build/");
+        assert!(!v.negated, "…so the file stays hidden");
+        assert!(
+            verdicts.iter().all(|v| v.pattern_index != 1),
+            "the re-include decides nothing: {verdicts:?}"
+        );
+    }
+
+    /// `\!` escapes the marker: the line is a POSITIVE pattern naming a file
+    /// whose name starts with `!`, so a verdict from it must not read as a
+    /// re-include (which would report a hidden file as visible).
+    #[tokio::test]
+    async fn an_escaped_marker_is_not_a_negation() {
+        let (_dir, repo) = parity_repo().await;
+        let verdicts = verdicts_for(&repo, &["!important.txt"], &["\\!important.txt"]).await;
+
+        let v = verdict_for(&verdicts, "!important.txt").expect("a decided path");
+        assert!(!v.negated);
+        assert_eq!(v.pattern_index, 0);
+        assert_eq!(v.pattern, "\\!important.txt");
+    }
+
+    /// A negation-only list hides nothing, but its lines still MATCH — and the
+    /// verbose pass reports them. `filter_ignored` short-circuits such a list;
+    /// this one must not, or the UI could never show why a rule is inert.
+    #[tokio::test]
+    async fn a_negation_only_list_is_still_evaluated() {
+        let (_dir, repo) = parity_repo().await;
+        let verdicts = verdicts_for(&repo, &["notes.md", "keep.txt"], &["!notes.md"]).await;
+
+        let v = verdict_for(&verdicts, "notes.md").expect("a decided path");
+        assert!(v.negated);
+        assert_eq!(v.pattern_index, 0);
+        assert!(
+            verdicts.iter().all(|v| v.negated),
+            "nothing is hidden: {verdicts:?}"
+        );
+        assert!(verdict_for(&verdicts, "keep.txt").is_none(), "unmatched");
+
+        // The two short-circuits: nothing to ask about, and nothing to ask with.
+        assert!(verdicts_for(&repo, &[], &["!notes.md"]).await.is_empty());
+        assert!(verdicts_for(&repo, &["notes.md"], &["# c", "  "])
+            .await
+            .is_empty());
+    }
+
+    /// A verdict's path is byte-identical to the one that went in. The UI joins
+    /// these against its own file list, so any rewriting drops the file from the
+    /// excluded view while the patterns still hide it.
+    #[tokio::test]
+    async fn verdict_paths_are_byte_identical_to_the_input() {
+        let (_dir, repo) = parity_repo().await;
+        let paths = [
+            "café.md",
+            "docs/日本語.md",
+            // Quotes as literal filename characters: git C-dequotes these
+            // without `-z` and hands back the unquoted name.
+            "\"quoted\".md",
+            "plain.md",
+            "keep.txt",
+        ];
+
+        let verdicts = verdicts_for(&repo, &paths, &["*.md"]).await;
+        assert_eq!(
+            verdicts.iter().map(|v| v.path.as_str()).collect::<Vec<_>>(),
+            ["café.md", "docs/日本語.md", "\"quoted\".md", "plain.md"],
+            "every decided path comes back exactly as sent"
+        );
+        for v in &verdicts {
+            assert!(
+                paths.contains(&v.path.as_str()),
+                "`{}` is not one of the input strings",
+                v.path
+            );
+        }
+    }
+
     /// A list of nothing but `!` lines is inert — it cannot hide anything — so it
     /// takes the unfiltered fast path rather than spawning the two-pass flow.
     #[tokio::test]
@@ -1446,15 +1790,9 @@ mod tests {
         rows.extend_from_slice(format!("100644 blob {blob}\tkeep.txt\n").as_bytes());
         let (base, head) = commit_tree_pair(&repo, &rows).await;
 
-        let filtered = git_branch_diff(
-            repo.clone(),
-            base.clone(),
-            head.clone(),
-            None,
-            Some(vec!["*.env".to_string()]),
-        )
-        .await
-        .unwrap();
+        let filtered = git_branch_diff(repo, base, head, None, Some(vec!["*.env".to_string()]))
+            .await
+            .unwrap();
         assert_eq!(
             filtered
                 .files
@@ -1465,16 +1803,68 @@ mod tests {
         );
         assert_eq!(filtered.excluded_files, 1);
         assert!(!filtered.text.contains("caf"), "{}", filtered.text);
+    }
 
-        // Control: unfiltered, the lossy row is present under its lossy name.
-        let all = git_branch_diff(repo, base, head, None, None).await.unwrap();
+    /// An unreadable name is hidden with NO pattern configured — the "hidden
+    /// unconditionally" rule owes nothing to the user's list. A list that hides
+    /// nothing (empty, or negations only) still takes the two-pass flow when a
+    /// changed name lost bytes, because its content would otherwise ship while
+    /// every disclosure surface reported the file withheld.
+    #[tokio::test]
+    async fn an_unreadable_name_is_hidden_even_with_no_patterns() {
+        let (_dir, repo) = seed_repo("lossy-nopattern").await;
+        let blob = seed_blob(&repo).await;
+
+        // A lone `0xE9` is not valid UTF-8, so this name arrives as
+        // `caf\u{FFFD}.env`; the fixture rides the object DB because Windows git
+        // refuses such a name in the index.
+        let mut rows: Vec<u8> = format!("100644 blob {blob}\t").into_bytes();
+        rows.extend_from_slice(b"caf\xE9.env\n");
+        rows.extend_from_slice(format!("100644 blob {blob}\tkeep.txt\n").as_bytes());
+        let (base, head) = commit_tree_pair(&repo, &rows).await;
+
+        // Two inputs, not three shapes: `git_branch_diff` unwraps `None` to an
+        // empty list, so an absent argument and an empty one are one exclude.
+        for patterns in [None, Some(vec!["!keep.txt".to_string()])] {
+            let label = format!("{patterns:?}");
+            let out = git_branch_diff(
+                repo.clone(),
+                base.clone(),
+                head.clone(),
+                None,
+                patterns.clone(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                out.files
+                    .iter()
+                    .map(|f| f.path.as_str())
+                    .collect::<Vec<_>>(),
+                ["keep.txt"],
+                "{label}: the lossy row is not listed"
+            );
+            assert_eq!(out.excluded_files, 1, "{label}: disclosed");
+            assert!(!out.text.contains("caf"), "{label}: {}", out.text);
+        }
+
+        // An inert list over cleanly-decodable names returns the FULL diff: the
+        // fall-through above is conditional on an unreadable name, not on the list.
+        let mut clean: Vec<u8> = format!("100644 blob {blob}\ta.txt\n").into_bytes();
+        clean.extend_from_slice(format!("100644 blob {blob}\tkeep.txt\n").as_bytes());
+        let (base, head) = commit_tree_pair(&repo, &clean).await;
+        let out = git_branch_diff(repo, base, head, None, Some(vec![]))
+            .await
+            .unwrap();
         assert_eq!(
-            all.files
+            out.files
                 .iter()
                 .map(|f| f.path.as_str())
                 .collect::<Vec<_>>(),
-            ["caf\u{FFFD}.env", "keep.txt"]
+            ["a.txt", "keep.txt"]
         );
+        assert_eq!(out.excluded_files, 0);
+        assert!(out.text.contains("+++ b/a.txt"), "{}", out.text);
     }
 
     /// A `repo_path` BELOW the toplevel still filters correctly, because the
