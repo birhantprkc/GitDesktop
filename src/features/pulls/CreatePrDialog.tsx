@@ -841,6 +841,12 @@ export function CreatePrDialog({
                     <TagIcon data-icon="inline-start" />
                     Labels
                   </Popover.Trigger>
+                  {/* Bare on purpose: this component's body renders above
+                      DialogContent's PanelPortalReset, so a
+                      usePanelPortalContainer() call here returns the panel
+                      container and the popup would land behind the dialog
+                      backdrop. (Pickers rendered as children inside the
+                      dialog read undefined.) */}
                   <Popover.Portal>
                     <Popover.Positioner
                       align="start"

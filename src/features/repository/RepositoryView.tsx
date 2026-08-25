@@ -14,12 +14,14 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
   lazy,
+  type ReactNode,
   Suspense,
   useDeferredValue,
   useEffect,
   useState,
   useTransition,
 } from "react";
+import { PanelPortalBoundary } from "@/components/panel-portal";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -159,6 +161,27 @@ const FINDING_KEY: {
 // correlation the map already encodes is asserted once, here.
 function findingKey(f: SelectedFinding): string {
   return (FINDING_KEY[f.type] as (finding: SelectedFinding) => string)(f);
+}
+
+// Every repo tab panel goes through this: the <Activity> + boundary pairing is
+// the invariant, and wrapping <Activity> alone re-mints the stranded-popup bug.
+// Module scope is required — declared inside RepositoryView it would be a new
+// component type each render, remounting every panel and losing the state
+// <Activity> exists to preserve (filters, selections, scroll). <Activity>
+// defers hidden panels' *effects* but NOT React Query fetches, so a heavy tab
+// like Insights gates its queries on the panel's own `active`-style props.
+function TabPanel({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Activity mode={active ? "visible" : "hidden"}>
+      <PanelPortalBoundary>{children}</PanelPortalBoundary>
+    </Activity>
+  );
 }
 
 export function RepositoryView() {
@@ -387,12 +410,6 @@ export function RepositoryView() {
 
   if (!repoPath) return null;
 
-  // Panels live inside <Activity> so switching tabs preserves their state
-  // (filters, selections, scroll) instead of unmounting them. <Activity> defers
-  // hidden panels' *effects*, but NOT React Query fetches (those run during
-  // render/commit) — so a heavy tab like Insights must gate its queries on its
-  // own visibility, not rely on being hidden. See `active` below.
-  const mode = (tab: RepoTab) => (repoTab === tab ? "visible" : "hidden");
   const secondaryTabs = SECONDARY_TABS.filter((t) => aiEnabled || !t.ai);
   const activeSecondary = secondaryTabs.find((t) => t.tab === repoTab);
 
@@ -461,69 +478,69 @@ export function RepositoryView() {
               </DropdownMenu>
             </TabsList>
           </Tabs>
-          <Activity mode={mode("changes")}>
+          <TabPanel active={repoTab === "changes"}>
             <ChangesPanel repoPath={repoPath} />
             <CommitBox repoPath={repoPath} />
-          </Activity>
-          <Activity mode={mode("history")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "history"}>
             <HistoryPanel repoPath={repoPath} />
-          </Activity>
-          <Activity mode={mode("compare")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "compare"}>
             <ComparePanel repoPath={repoPath} />
-          </Activity>
-          <Activity mode={mode("pulls")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "pulls"}>
             <PullRequestsPanel repoPath={repoPath} />
-          </Activity>
-          <Activity mode={mode("issues")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "issues"}>
             <IssuesPanel repoPath={repoPath} />
-          </Activity>
-          <Activity mode={mode("discussions")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "discussions"}>
             <DiscussionsPanel repoPath={repoPath} />
-          </Activity>
-          <Activity mode={mode("actions")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "actions"}>
             <ActionsPanel repoPath={repoPath} active={repoTab === "actions"} />
-          </Activity>
-          <Activity mode={mode("findings")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "findings"}>
             <FindingsPanel
               repoPath={repoPath}
               active={repoTab === "findings"}
             />
-          </Activity>
-          <Activity mode={mode("tags")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "tags"}>
             <TagsPanel repoPath={repoPath} />
-          </Activity>
-          <Activity mode={mode("insights")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "insights"}>
             <InsightsPanel
               repoPath={repoPath}
               active={repoTab === "insights"}
             />
-          </Activity>
-          <Activity mode={mode("code-todos")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "code-todos"}>
             <CodeTodosPanel
               repoPath={repoPath}
               active={repoTab === "code-todos"}
             />
-          </Activity>
-          <Activity mode={mode("tasks")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "tasks"}>
             <TasksPanel />
-          </Activity>
+          </TabPanel>
           {aiEnabled && (
-            <Activity mode={mode("agent")}>
+            <TabPanel active={repoTab === "agent"}>
               {agentSeen && (
                 <Suspense fallback={null}>
                   <SessionList repoPath={repoPath} />
                 </Suspense>
               )}
-            </Activity>
+            </TabPanel>
           )}
         </aside>
         <main className="min-w-0 flex-1">
-          <Activity mode={mode("changes")}>
+          <TabPanel active={repoTab === "changes"}>
             <Suspense fallback={null}>
               <DiffViewer repoPath={repoPath} />
             </Suspense>
-          </Activity>
-          <Activity mode={mode("history")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "history"}>
             {deferredCommitHash ? (
               <CommitDetailView repoPath={repoPath} hash={deferredCommitHash} />
             ) : (
@@ -532,8 +549,8 @@ export function RepositoryView() {
                 message="Select a commit to see its changes"
               />
             )}
-          </Activity>
-          <Activity mode={mode("compare")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "compare"}>
             {deferredCompareCommitHash ? (
               <CommitDetailView
                 repoPath={repoPath}
@@ -553,8 +570,8 @@ export function RepositoryView() {
                 message="Pick a branch to compare against"
               />
             )}
-          </Activity>
-          <Activity mode={mode("pulls")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "pulls"}>
             {deferredPr?.kind === "remote" ? (
               <RemotePrView
                 repoPath={repoPath}
@@ -568,8 +585,8 @@ export function RepositoryView() {
                 message="Select a pull request"
               />
             )}
-          </Activity>
-          <Activity mode={mode("issues")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "issues"}>
             {deferredIssue?.kind === "remote" ? (
               <RemoteIssueView
                 repoPath={repoPath}
@@ -585,8 +602,8 @@ export function RepositoryView() {
                 message="Select an issue"
               />
             )}
-          </Activity>
-          <Activity mode={mode("discussions")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "discussions"}>
             {deferredDiscussion ? (
               <DiscussionView
                 repoPath={repoPath}
@@ -598,8 +615,8 @@ export function RepositoryView() {
                 message="Select a discussion"
               />
             )}
-          </Activity>
-          <Activity mode={mode("actions")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "actions"}>
             {selectedRunId !== null ? (
               <RunDetailView
                 key={selectedRunId}
@@ -613,8 +630,8 @@ export function RepositoryView() {
                 message="Select a workflow run"
               />
             )}
-          </Activity>
-          <Activity mode={mode("findings")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "findings"}>
             {selectedFinding ? (
               <FindingDetailView
                 key={findingKey(selectedFinding)}
@@ -627,15 +644,15 @@ export function RepositoryView() {
                 message="Select a finding"
               />
             )}
-          </Activity>
-          <Activity mode={mode("tags")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "tags"}>
             {deferredTag ? (
               <TagDetailView repoPath={repoPath} tag={deferredTag.tag} />
             ) : (
               <DiffPlaceholder icon={TagIcon} message="Select a tag" />
             )}
-          </Activity>
-          <Activity mode={mode("code-todos")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "code-todos"}>
             {deferredTodo ? (
               <CodeTodoDetailView
                 repoPath={repoPath}
@@ -647,11 +664,11 @@ export function RepositoryView() {
             ) : (
               <DiffPlaceholder icon={ListChecksIcon} message="Select a TODO" />
             )}
-          </Activity>
-          <Activity mode={mode("tasks")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "tasks"}>
             <TaskRunView />
-          </Activity>
-          <Activity mode={mode("insights")}>
+          </TabPanel>
+          <TabPanel active={repoTab === "insights"}>
             {insightsSeen && (
               <Suspense fallback={null}>
                 <InsightsBoard
@@ -660,15 +677,15 @@ export function RepositoryView() {
                 />
               </Suspense>
             )}
-          </Activity>
+          </TabPanel>
           {aiEnabled && (
-            <Activity mode={mode("agent")}>
+            <TabPanel active={repoTab === "agent"}>
               {agentSeen && (
                 <Suspense fallback={null}>
                   <SessionView repoPath={repoPath} />
                 </Suspense>
               )}
-            </Activity>
+            </TabPanel>
           )}
         </main>
       </div>
