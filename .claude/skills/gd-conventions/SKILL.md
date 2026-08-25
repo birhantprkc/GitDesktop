@@ -78,7 +78,10 @@ route to one of those ops imports the existing prompt, never re-spells it.
 
 **Command palette.** Any new tab/surface/action needs an ACTIONS entry in
 `src/lib/hotkeys/registry.ts` + `useHotkeyAction` wiring in the same change
-(`defaultBinding: null` = palette-only). Missed twice before.
+(`defaultBinding: null` = palette-only). Missed twice before. Labels use the
+words the user reads on screen — the palette matcher is a plain substring, so
+"AI-excluded files" missed a user typing "ai excluded" off the tab labeled
+"AI excluded" (live-caught, #255); no hyphens the UI itself doesn't show.
 
 **Mod-key display.** Shortcut hints render via `isMac` / `formatBinding` from
 `@/lib/hotkeys/binding` — never a literal ⌘ or "Ctrl+"; only labels branch.
