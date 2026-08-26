@@ -21,7 +21,9 @@ Where this file and generic best practice disagree, this file wins.
    in the session scratchpad or `C:/temp`, never the repo; destructive
    experiments happen in a throwaway repo under `C:/temp`.
 3. **Don't edit `src/components/ui/`** — vendored shadcn/Base UI primitives.
-   Fix at the feature/call-site level.
+   Fix at the feature/call-site level. That folder's `README.md` inventories
+   the sanctioned local modifications (a re-vendor silently reverts them);
+   any future sanctioned edit updates it in the same change.
 4. **Never repo-wide `cargo fmt`** in `src-tauri` (~35 files of collateral).
    New files only: `rustfmt <that file>`.
 5. **Report from evidence.** Verification claims come from command output in
@@ -152,6 +154,12 @@ build-order lottery (tailwind-merge 3.6.0; in-repo: `data-open:animate-none!`).
   one breaks Resume. Hard invariant.
 - `<Activity>`-hidden subtrees still render and fetch — gate query `enabled`
   on the active tab; gate agent-surface notifications on the tab being watched.
+- Open-TRANSITION resets ride `useSeedOnOpen` (`src/lib/use-seed-on-open.ts`) —
+  a bare `useEffect(() => { if (open) seed(); }, [open])` re-fires when a hidden
+  `<Activity>` tab re-mounts its effects on show, wiping the user's draft. The
+  carve-out: data-arrival seeds (`[open, thatQuery.data]`) and `onOpenChange`
+  seeds stay bare, and each must be idempotent — never stomping a user's pick.
+  The `seed-effect-on-open` guard allowlists the recorded ones.
 - Zustand + view transitions: `openRepo`/`closeRepo`/`openSettings` issue
   deferred sets that clobber a plain `set()` right after — navigate in ONE
   atomic action.
