@@ -156,6 +156,10 @@ words the user reads on screen — the palette matcher is a plain substring, so
 **Layout gotchas.** `DialogContent` is a grid — truncating flex content needs
 `min-w-0` on the grid item; cap tall dialogs at `max-h-[85vh]`. Link-styled
 clickables add `cursor-pointer` at the call site (vendored Button sets none).
+Main-side panels (children of RepositoryView's `<main>`, a display:block host) root
+with `flex h-full min-h-0 flex-col` — `flex-1` is inert there, and the panel's
+natural height document-scrolls the whole tab, chrome included (#261's
+InsightsBoard was the outlier; every other main-side panel already complies).
 Tailwind animation overrides need the `!` important modifier — tw-merge doesn't
 dedupe the animate group, so `animate-none` vs an existing `animate-in` is a
 build-order lottery (tailwind-merge 3.6.0; in-repo: `data-open:animate-none!`).
