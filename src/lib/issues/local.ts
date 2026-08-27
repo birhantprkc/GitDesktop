@@ -108,10 +108,12 @@ async function writeAll(key: string, issues: LocalIssue[]): Promise<void> {
   await store.save();
 }
 
-/** Re-read `local-issues.json` from disk into the in-memory store. Kept symmetric
- *  with the local-PR store's reconcile-before-mutate discipline (see reloadLocalPrs);
- *  local issues have no external writer today, but every mutation reloads first so the
- *  API is uniform and future-proof if one is ever added. */
+/** Re-read `local-issues.json` from disk into the in-memory store. The MCP server
+ *  (`--allow-write`) writes it out of process (create/comment/status); without a
+ *  reload the autoSave store would clobber those writes on the next GUI mutation.
+ *  `ignoreDefaults` fully matches the store to disk (so external deletes drop).
+ *  Registered in `@/lib/mcp-writable-stores` so the focus sweep makes external
+ *  writes visible without a relaunch. */
 export async function reloadLocalIssues(): Promise<void> {
   return serialize(reloadRaw);
 }
