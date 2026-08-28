@@ -1,1 +1,0 @@
-- Compare tab: ahead/behind commit rows now show tag chips, matching History.

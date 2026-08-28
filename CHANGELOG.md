@@ -12,6 +12,171 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-28
+
+### Added
+
+- Actions tab: run rows now have a context menu — re-run or cancel the run, run its
+  workflow again with the picker already on that workflow, open it on the forge, or
+  copy its link; the same re-run, cancel, and run actions are in the command palette.
+- **AI excluded files.** A new tab in **Manage files…** (repo ⋮ menu, or the
+  **AI excluded files** command) shows every file your AI ignore patterns hide
+  right now, each labelled with the rule that hid it and whether that rule came
+  from the repo's `.gitdesktop/aiignore` or your global settings. Your rules sit
+  above the list in evaluation order with per-rule match counts; click one to see
+  just its files. A `!` line that decides nothing is flagged there, with the fix
+  where an enclosing folder rule is the cause. Select files and remove the rules
+  behind them, from either source. The **Tracked** tab also gained an
+  **Exclude … from AI** button that hides a whole selection in one step.
+- **Line counts on the changes list.** File rows in the Changes tab now show
+  how many lines they add and remove, so you can size a change before opening
+  its diff. The Staged and Changes rows count separately: a file you staged and
+  then edited again shows what's staged for the commit on one row and what's
+  still outside it on the other. Binary files read `bin`, and untracked files
+  show no counts (git has nothing to compare them against yet).
+- **Collapsible comment box.** Fold the comment box down to a one-line strip to
+  read more of the thread, on every conversation surface — pull requests and
+  issues (local, on the forge, and Jira), discussions, and commits. Approve,
+  Review, and Close stay on the strip, a saved draft shows its first line there,
+  and the choice is remembered across every surface and across restarts.
+  **Collapse or expand the comment box** is in the command palette.
+- Compare tab: ahead/behind commit rows now have a context menu — check the commit
+  out, cherry-pick it, create a branch or tag from it, or copy its SHA; commits on
+  your branch can also be reverted.
+- **Fork activity card on Insights.** See a repository's recently active direct
+  forks (up to ten, most recent first), each with its latest activity, stars
+  where it has any, and a link to it on the forge, plus the total fork count
+  and a link to the full list. It works on GitHub, GitLab, and Bitbucket, and
+  on GitHub a per-fork **Compare** fetches ahead/behind counts, showing which
+  forks carry commits yours doesn't.
+- **GitHub Projects on issues and pull requests.** See which GitHub Projects an
+  issue or open pull request belongs to right where you're reading it, and link or
+  unlink it from a picker covering both the repository's projects and the owner's —
+  your changes apply when the picker closes. GitHub only; if your sign-in is
+  missing the `project` scope the picker says so and helps you reconnect.
+- **Issue activity timeline.** Issues now show their full activity alongside the
+  comments, date-sorted oldest to newest: labels, assignees, milestones, title
+  renames, "mentioned this in" cross-references, linked pull requests, and state
+  changes. A cross-reference row pointing inside the repository jumps straight to
+  the pull request or issue it names (browsing a fork's parent under the Upstream
+  lens keeps those rows as plain text). Works on GitHub and GitLab.
+- **Filter the keyboard shortcuts list.** **Settings → Keyboard** now opens with
+  a filter box, so reaching one action out of well over a hundred takes a few
+  keystrokes: type part of an action's name, a category like `Branches & stash`,
+  or the shortcut itself (`shift`, `mod+p`, `F5`), and type `unbound` to find the
+  actions that have no key yet. Categories with no matches drop out as you type,
+  and **Focus the filter** jumps straight to the box.
+- **Mention & reference autocomplete on GitHub and GitLab.** Type `@` in a
+  comment box, a reply, an edit, a diff line comment, or a release's notes to
+  pick a person, and `#` to pick from the recently updated open issues and pull
+  requests — GitLab also offers `!` for merge requests. Arrow keys move through
+  the suggestions, Enter or Tab accepts one, and Esc dismisses. Each forge
+  offers only the references it turns into links.
+- The model picker for opencode sessions now lists your catalog from
+  `opencode models` (custom providers included); the Settings → AI and PR
+  review pickers show the same live list.
+- **Stage a line selection from the keyboard.** Drag-select lines in a diff and
+  press Ctrl+Shift+Enter (Cmd+Shift+Enter on macOS) to stage them, or to unstage
+  them on the staged side of a file — a selection that spans several hunks and
+  mixes added and removed lines included. The chord is rebindable in Settings →
+  Keyboard, and **Stage selected files**, **Unstage selected files**, and
+  **Clear line selection** join the command palette.
+- **Submodule manager.** The **Submodules** dialog now manages submodules end to
+  end: add one from a URL, remove it (its cached repository data can go too, or
+  stay so the submodule can be restored), update to the commit your repo records
+  or to the tip of the branch a submodule tracks, edit a submodule's URL or
+  tracked branch, and open one as its own repository. Adding, removing, and
+  editing stage the change for you to commit, and **Submodules** and **Add
+  submodule** are both in the command palette. Cloning a repository has a **Clone
+  submodules** checkbox that initializes every submodule, including nested ones.
+
+### Changed
+
+- Opening a Bitbucket repository is lighter on the Bitbucket API: deciding whether
+  to offer **Fork** now reads only your workspace list, instead of listing
+  repositories from every workspace you belong to.
+- Checking out a commit or tag now shows a toast naming it and the
+  detached HEAD state.
+- **Command search finds what you mean.** Both the command palette and the filter
+  in **Settings → Keyboard** now match your words in any order and ignore hyphens,
+  so `cancel pipeline` reaches **Cancel workflow run/pipeline** and `rerun` reaches
+  **Re-run workflow run/pipeline**. Searching by shortcut in Settings works exactly
+  as before.
+- Compare tab: ahead/behind commit rows now show tag chips, matching History.
+- Choosing the opencode CLI as an AI provider now starts on the CLI's account
+  default model instead of pinning a hosted id — opencode rotates those, so a
+  pinned one can go stale; clear the model box if an older saved id lingers.
+- Pull request and merge request headers now arrange the meta fields your forge
+  provides (labels, assignees, projects, reviewers) in a label/value grid — two
+  fields per line where the panel has room, one where it doesn't.
+- Dropdown pickers now ellipsize long names that don't fit the open list and
+  show the full name on hover; the closed field shows the full name on hover
+  as well when its value is clipped. This covers the branch pickers in the
+  merge, rebase, rebase-onto, cherry-pick, and worktree dialogs and across
+  repository settings, plus the workflow, pipeline, environment, line-endings,
+  and commit-message model pickers.
+- Timeline event rows on pull requests and issues now show the actor's avatar
+  beside their name.
+
+### Fixed
+
+- Screen readers announce each file's change kind in file lists (Modified,
+  Added, Deleted, …).
+- Row tooltips ("View commit" in the PR timeline, "Open this check" on a
+  check run) now appear when the mouse rests on the row's name.
+- Cloning from a local Windows path with backslashes (`C:\...`) works.
+- Conflict editor: files resolved in an external editor can now be marked
+  resolved and staged in place — including modify/delete conflicts where you
+  edited the surviving file, and files you emptied, or deleted while both
+  sides still have a version.
+- Right-clicking blank space in the History list, a file list (commit, PR, or
+  Compare views), or the repository list does not open an empty context-menu
+  popup.
+- Long branch names in the default-branch picker of a GitHub repository's
+  settings show their full name on hover.
+- Dialogs running a history rewrite, a worktree rename, or a worktree lock now
+  stay put until the operation settles: Escape, clicking outside, and the close
+  button no longer dismiss them mid-flight.
+- Screen readers now announce line counts as "N lines added, N lines deleted"
+  (and binary files as such) everywhere the app shows +/− counts.
+- Opening a file in an editor configured as a `.cmd`/`.bat` shim (VS Code's
+  `code.cmd`, for example) now passes the file path to the editor exactly as
+  written, whatever characters the file name contains.
+- On the changed-files list, Space selects the focused row and leaves the
+  list's scroll position alone, and Enter or Space on a row's stage/unstage
+  toggle activates just that toggle.
+- **Insights scrolls in place.** The repository header, the tab strip, and the
+  time-window toggle stay in view while the charts and cards scroll on their own,
+  and the Overview panel scrolls independently when it runs long.
+- Panels that load on demand (the diff, Insights, Agent sessions, the
+  terminal, syntax settings) show loading placeholders.
+- Arrow keys move the caret while typing in task and review editors.
+- Local issues written by MCP agents (new issues, comments, status changes) now
+  appear when the app window regains focus, without a restart.
+- opencode agent sessions and reviews now always run in the directory the app
+  assigns them (a session's isolated worktree, a review's repository), even when
+  GitDesktop is launched from a shell such as Git Bash that exports `PWD`.
+- Creating a pull request now stays visible if you close the dialog before it
+  finishes: a status strip shows it running, reopening keeps what you typed, and
+  a duplicate create for the same branch is refused with a reason.
+- A PR's divergence count comes from an exact base…head comparison; a fork
+  head that can't be addressed exactly reads as unknown.
+- Keyboard-activating a button inside a PR task row (view comment, task menu)
+  now triggers that button instead of toggling the task.
+- Repository settings opens with a single smooth backdrop fade, and keyboard
+  shortcuts stay inside the dialog while it loads.
+- Git operations run with Windows long-path support, so deeply nested
+  repositories work (including conflict resolution), and path-length errors
+  explain how to enable long paths for other tools.
+- The Run workflow picker shows which workflows can be started manually on the
+  chosen branch or tag: ones without a `workflow_dispatch` trigger are marked,
+  and the dialog says so in plain language before you run anything.
+- Dialogs now survive tab switches: switch away and back, and the one you left
+  open is still there with everything you had entered.
+- Pickers, menus and dropdowns now stay with the tab they belong to: switch
+  away and back, and the one you left open is still there, with whatever you
+  had typed or ticked.
+
 ## [0.9.6] - 2026-08-23
 
 ### Fixed
@@ -3362,7 +3527,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.9.6...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/theBGuy/GitDesktop/compare/v0.9.6...v0.10.0
 [0.9.6]: https://github.com/theBGuy/GitDesktop/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/theBGuy/GitDesktop/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/theBGuy/GitDesktop/compare/v0.9.3...v0.9.4
