@@ -84,9 +84,18 @@ route to one of those ops imports the existing prompt, never re-spells it.
 **Command palette.** Any new tab/surface/action needs an ACTIONS entry in
 `src/lib/hotkeys/registry.ts` + `useHotkeyAction` wiring in the same change
 (`defaultBinding: null` = palette-only). Missed twice before. Labels use the
-words the user reads on screen — the palette matcher is a plain substring, so
-"AI-excluded files" missed a user typing "ai excluded" off the tab labeled
-"AI excluded" (live-caught, #255); no hyphens the UI itself doesn't show.
+words the user reads on screen. Action-text search lives in
+`src/lib/hotkeys/search.ts` (`queryTokens` + `matchesActionText`), shared by the
+palette and Settings → Keyboard so a query can't hit in one and miss in the
+other — a new surface searching ACTIONS imports it rather than re-spelling the
+match. It AND-s the query's whitespace-separated tokens over label + category
+with hyphens stripped from both sides, so word order, gaps, and hyphenation cost
+nothing ("cancel pipeline" finds "Cancel workflow run/pipeline", "rerun" finds
+"Re-run…", and #255's "ai excluded" against a tab labeled "AI excluded" would
+match today). Each token still has to be a literal substring of what remains, so
+a label built from different words than the surface shows stays unfindable.
+Keyboard's binding arms deliberately stay literal — key text means its
+separators.
 
 **Mod-key display.** Shortcut hints render via `isMac` / `formatBinding` from
 `@/lib/hotkeys/binding` — never a literal ⌘ or "Ctrl+"; only labels branch.
@@ -158,6 +167,12 @@ words the user reads on screen — the palette matcher is a plain substring, so
 - Shared-ContextMenu suppression for non-target right-clicks goes through
   `suppressContextMenu` (`src/lib/context-menu.ts`) — `preventDefault` alone
   still opens Base UI's menu as an empty popup.
+- CI copy comes from `src/features/actions/status.tsx`, never hand-spelled: the
+  provider's noun via `ciRunNoun` (labels and toasts derive from it, so no
+  surface says "run" beside another's "pipeline"), the gitlab-or-bitbucket test
+  via `isPipelineProvider`, and the re-run offers, titles, and cancel wording
+  via `rerunOffers`/`RERUN_TITLES`/`cancelLabel` — shared so the runs list and
+  the run detail view can't drift.
 
 **Layout gotchas.** `DialogContent` is a grid — truncating flex content needs
 `min-w-0` on the grid item; cap tall dialogs at `max-h-[85vh]`. Link-styled
