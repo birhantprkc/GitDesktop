@@ -173,6 +173,19 @@ separators.
   via `isPipelineProvider`, and the re-run offers, titles, and cancel wording
   via `rerunOffers`/`RERUN_TITLES`/`cancelLabel` — shared so the runs list and
   the run detail view can't drift.
+- Header meta fields (the PR header's label/value grid: labels, assignees,
+  projects, reviewers) render through `MetaValueCell` / `MetaFieldLabel`
+  (`src/components/meta-field-cells.tsx`) — never a hand-rolled `role="group"`
+  value cell or a re-spelled empty-dash placeholder. A forge user inside one of
+  those cells is a `UserChip` from the same module — never a hand-rolled
+  avatar + truncating-label span — and any chip that shares a value cell with
+  another but keeps its own markup wears the `USER_CHIP_CLASS` box. The
+  pickers emit those two cells only under their `cells` prop; unset, each still
+  renders its own inline trigger+chips row. Scope is that grid alone:
+  `MrTimeTracking` (GitLab-only) deliberately keeps its own full-width row below
+  it, and form-dialog field groups (CreatePrDialog / CreateIssueDialog's `Label`
+  + `aria-labelledby` wrappers) are a richer separate pattern this rule doesn't
+  govern.
 
 **Layout gotchas.** `DialogContent` is a grid — truncating flex content needs
 `min-w-0` on the grid item; cap tall dialogs at `max-h-[85vh]`. Link-styled
