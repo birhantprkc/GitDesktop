@@ -202,6 +202,32 @@ function longPathSummary(text: string): string | null {
   return LONG_PATH_MARKERS.some((m) => m.test(text)) ? LONG_PATH_SUMMARY : null;
 }
 
+/** GitHub's secret push protection refusing a push (block measured verbatim,
+ *  2026-08-11). The `GH013` code heading the block is deliberately NOT a marker:
+ *  it covers every repository rule violation, so a branch-name rule would borrow
+ *  advice about secrets. Start-anchored only — GitHub pads every `remote:` line
+ *  with trailing spaces. The Rust canary
+ *  `push_protection_stderr_still_matches_the_frontend_markers` (git/remote.rs)
+ *  pins these shapes against the measured stderr. */
+const PUSH_PROTECTION_MARKERS = [
+  /^[ \t]*remote:[ \t]*-[ \t]*GITHUB PUSH PROTECTION\b/m,
+  /^[ \t]*remote:[ \t]*-[ \t]*Push cannot contain secrets\b/m,
+];
+
+/** GitHub refuses the ref update, so the commits never land and the cheap
+ *  remedy — rewriting them — is still open. Saying that is the point: a user
+ *  who reads this as a transient failure retries past it. */
+const PUSH_PROTECTION_SUMMARY =
+  "GitHub blocked this push because it detected a likely secret, so the commits were not added to the repository. Remove the secret from the commits and push again, or if it is a false positive, open the unblock link GitHub printed in the details.";
+
+/** The humanized line for a push blocked by secret push protection, or null when
+ *  the text carries no such block. */
+function pushProtectionSummary(text: string): string | null {
+  return PUSH_PROTECTION_MARKERS.some((m) => m.test(text))
+    ? PUSH_PROTECTION_SUMMARY
+    : null;
+}
+
 /** The `git` kind is the only one carrying a stderr blob distinct from its
  *  message; every other kind folds its detail into `message` itself. */
 function gitStderr(e: AppError): string {
@@ -425,8 +451,11 @@ export function presentError(e: unknown): ErrorPresentation {
     // A rejection reason is read from the COMBINED text: it rides the `stderr`
     // blob, which the fall-through below deliberately never reads.
     // A path-length failure outranks conflict framing: git could not write the
-    // tree, so no conflict flow is actually waiting to be resolved.
+    // tree, so no conflict flow is actually waiting to be resolved. Push
+    // protection outranks both: the remote refused the push whole, which is
+    // neither a conflict nor the non-fast-forward story below.
     const summary =
+      pushProtectionSummary(combined) ??
       longPathSummary(combined) ??
       (isConflict
         ? conflictSummary(combined)

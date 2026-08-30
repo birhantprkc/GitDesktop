@@ -82,5 +82,32 @@ export const gdDiff = {
       scope: ["entity.other.attribute-name"],
       settings: { foreground: "var(--gd-syn-attr)" },
     },
+    {
+      // Prose markup (mdx today). MDX scopes its bold/italic/link as
+      // `string.other.*` and its list markers as `variable.*`, so those already
+      // colour above; these carry the rest. `markup.code` is deliberately
+      // unmapped — it wraps a whole fenced block and would tint the embedded
+      // language's plain text. `entity.name.section` is deliberately NOT here:
+      // heading text nests it under `markup.heading`, and TOML uses it for
+      // `[table]` headers, which this theme must not restyle.
+      scope: ["markup.heading"],
+      settings: { foreground: "var(--gd-syn-func)", fontStyle: "bold" },
+    },
+    {
+      scope: ["markup.bold"],
+      settings: { foreground: "var(--gd-syn-variable)", fontStyle: "bold" },
+    },
+    {
+      scope: ["markup.italic"],
+      settings: { foreground: "var(--gd-syn-variable)", fontStyle: "italic" },
+    },
+    {
+      scope: ["markup.quote"],
+      settings: { foreground: "var(--gd-syn-comment)", fontStyle: "italic" },
+    },
+    {
+      scope: ["markup.inline.raw", "markup.raw"],
+      settings: { foreground: "var(--gd-syn-string)" },
+    },
   ],
 } satisfies ThemeRegistration;
