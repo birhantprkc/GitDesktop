@@ -48,7 +48,7 @@ Other useful commands:
 
 ```sh
 pnpm build                                        # typecheck (tsc) + bundle the frontend
-pnpm lint                                         # Biome — formats and lints ./src
+pnpm lint                                         # Biome — formats and lints ./src and ./site (a --write rewrite)
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 ```
 
@@ -156,10 +156,11 @@ from the git history.
 For any **user-facing feature**, keep the docs in step in the same change:
 
 - **README.md** — add or extend the relevant bullet under *Highlights* / *Features*.
-- **`site/`** — add the feature to the `capabilities` list in
-  `site/src/pages/index.astro` (and a feature section when it warrants one), in both
-  the **AI-native** and **Just Git** views as applicable; non-AI features belong in
-  both, AI features in the AI view only. `cd site && pnpm build` to verify.
+- **`site/`** — add the capability to `site/src/data/capabilities.ts` (the
+  catalog's source of truth — `index.astro` and `features.astro` render from it),
+  and a `FeatureRow` section in `site/src/pages/index.astro` when it warrants
+  one; non-AI features belong in both the **AI-native** and **Just Git** views,
+  AI features in the AI view only. `cd site && pnpm build` to verify.
 - Marketing-site screenshots for the **Just Git** view should be captured with the
   app's *Hide AI features* setting on, so they match the AI-hidden experience.
 

@@ -88,9 +88,9 @@ machine, proceed without it).
    form is sanctioned and allowlisted; run it before reporting:
    `pnpm exec biome check --write <files in your scope>`. What you must NOT
    run is the full-tree rewrite (`pnpm lint`, i.e. `biome check --write
-   ./src/`): it mutates every file under `src/`, including the user's
-   parallel uncommitted work and sibling packages — an out-of-scope write no
-   matter who runs it. Tree-wide, verify with the check-only
+   ./src/ ./site/`): it mutates every file under `src/` and `site/`, including
+   the user's parallel uncommitted work and sibling packages — an out-of-scope
+   write no matter who runs it. Tree-wide, verify with the check-only
    `pnpm exec biome check ./src/`. If a full-tree rewrite happened anyway,
    report exactly which out-of-scope files changed — don't revert files you
    don't own.

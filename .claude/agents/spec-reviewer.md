@@ -48,7 +48,8 @@ reset, stash, rm, clean, push, pull, fetch, merge, rebase, tag, branch
 create/delete, worktree, remote, and config.
 
 **Verification commands — check-only forms only.** `pnpm lint` runs
-`biome check --write ./src/` and REWRITES source files; never run it. Allowed:
+`biome check --write ./src/ ./site/` and REWRITES source files; never run it.
+Allowed:
 
 ```sh
 pnpm exec tsc -b                       # typecheck, no source mutation

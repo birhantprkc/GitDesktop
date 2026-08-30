@@ -43,18 +43,20 @@ pnpm run checks                        # guard scripts + self-tests — CI quali
 Frontend changes run the first pair; Rust changes add the cargo pair. Not
 "done" until green.
 
-⚠ **`pnpm lint` is a rewrite, not a check** — it runs
-`biome check --write ./src/`, mutating every file under `src/` including the
-user's parallel work. Implementers fix only their own files via
-`pnpm exec biome check --write <files in scope>`; reviewers never run any
-`--write` form.
+⚠ **`pnpm lint` is a rewrite, not a check** — it runs `biome check --write
+./src/ ./site/`, mutating every file under `src/` AND `site/` including
+the user's parallel work. Implementers fix only their own files via the
+targeted `pnpm exec biome check --write <files in scope>`; reviewers never
+run any `--write` form.
 
 ⚠ **`biome check` false-fails on CRLF (this Windows worktree).** autocrlf checks
 files out CRLF, and `biome check` (formatter included) flags a CR on **unedited**
-files as an error — a red result that isn't yours. To verify YOUR change, run
-`pnpm exec biome lint <your files>` (lint only, no formatter) plus
-`git diff --numstat` (content-only edits show small, balanced counts; a whole-file
-EOL flip shows huge matched +/−). Never "fix" it by converting line endings.
+files as an error — a red result that isn't yours. The one trustworthy local
+gate is the CI form over LF-normalized copies: copy each edited file to a
+`__cigate__<name>` sibling (CRLF→LF), run `pnpm exec biome ci` on the copies,
+delete them after. `biome lint` is NOT a gate — it skips the formatter and
+assist layers `biome ci` enforces (a measured false clean, three CI reds).
+Never "fix" a red by converting line endings.
 
 ## Frontend conventions
 
