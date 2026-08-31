@@ -1,4 +1,4 @@
-import { type ComponentProps, type ReactNode, useId } from "react";
+import { type ComponentProps, type ReactNode, useEffect, useId } from "react";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -186,16 +186,27 @@ export function SelectControl({
   value,
   onValueChange,
   disabled,
+  disabledItems,
+  order,
   annotations,
   sizeToContent = false,
 }: {
   label?: ReactNode;
-  /** value → display label; option order follows the object's key order. */
+  /** value → display label; rendered in the object's key order unless `order`
+   *  overrides it. */
   items: Record<string, string>;
   /** The selected key; "" (or a key absent from `items`) shows no selection. */
   value: string;
   onValueChange: (value: string) => void;
   disabled?: boolean;
+  /** Option keys rendered as disabled rows — unselectable and skipped by
+   *  typeahead, though arrow-key highlight still visits them (aria-disabled). */
+  disabledItems?: ReadonlySet<string>;
+  /** Explicit option order. `items` is an object, so integer-like keys sort
+   *  ahead of the rest whatever order it was built in — any caller whose values
+   *  can be all-digits (logins, slugs) passes the order it means. Must hold
+   *  exactly the keys of `items`, no extras or duplicates. */
+  order?: readonly string[];
   /** Optional per-option trailing content (e.g. status chips), keyed by value.
    *  Rendered after a truncating label; keys with no entry render label-only.
    *  Never surfaces in the closed trigger — that reads the `items` map. */
@@ -209,6 +220,33 @@ export function SelectControl({
   // Opt-in rich rows: wrap the label so it can truncate and leave room for a
   // trailing annotation. Plain callers keep the exact prior markup.
   const rich = sizeToContent || annotations !== undefined;
+  const entries: [string, string][] = order
+    ? order.map((optionValue) => [
+        optionValue,
+        items[optionValue] ?? optionValue,
+      ])
+    : Object.entries(items);
+  // A mismatched `order` is never repaired here: a key it omits is dropped, a key
+  // only it holds renders its raw value as the label, and nothing is reordered —
+  // silently fixing a caller's bug would hide a wrong list from the user. Today's
+  // callers derive `order` and `items` from one source, so this guards future ones.
+  // In an effect, not the render body (StrictMode double-invokes render); the
+  // literal `import.meta.env.DEV` leads the `&&` so Vite drops the whole block.
+  useEffect(() => {
+    if (import.meta.env.DEV && order) {
+      const missing = Object.keys(items).filter((k) => !order.includes(k));
+      const extra = order.filter((k) => !(k in items));
+      const duplicate = order.filter((k, i) => order.indexOf(k) !== i);
+      if (missing.length || extra.length || duplicate.length) {
+        console.warn("SelectControl: `order` does not match `items`", {
+          label,
+          missing,
+          extra,
+          duplicate,
+        });
+      }
+    }
+  }, [items, order, label]);
   return (
     <div className="space-y-2">
       {label && <Label htmlFor={id}>{label}</Label>}
@@ -233,14 +271,22 @@ export function SelectControl({
               }
             : {})}
         >
-          {Object.entries(items).map(([optionValue, display]) =>
+          {entries.map(([optionValue, display]) =>
             rich ? (
-              <SelectItem key={optionValue} value={optionValue}>
+              <SelectItem
+                key={optionValue}
+                value={optionValue}
+                disabled={disabledItems?.has(optionValue)}
+              >
                 <span className="min-w-0 flex-1 truncate">{display}</span>
                 {annotations?.[optionValue]}
               </SelectItem>
             ) : (
-              <SelectItem key={optionValue} value={optionValue}>
+              <SelectItem
+                key={optionValue}
+                value={optionValue}
+                disabled={disabledItems?.has(optionValue)}
+              >
                 {display}
               </SelectItem>
             ),
@@ -257,6 +303,8 @@ export function SelectField({
   label,
   items,
   disabled,
+  disabledItems,
+  order,
   annotations,
   sizeToContent = false,
 }: Omit<ComponentProps<typeof SelectControl>, "value" | "onValueChange">) {
@@ -268,6 +316,8 @@ export function SelectField({
       value={field.state.value}
       onValueChange={(v) => field.handleChange(v)}
       disabled={disabled}
+      disabledItems={disabledItems}
+      order={order}
       annotations={annotations}
       sizeToContent={sizeToContent}
     />
