@@ -14,6 +14,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type ReactNode, useRef, useState } from "react";
 import { DisabledReasonButton } from "@/components/disabled-reason-button";
+import { ListRowSkeletons } from "@/components/list-row-skeleton";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +26,6 @@ import {
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
 import { LoadMoreRow, PAGE_SIZE } from "@/features/conversations/LoadMoreRow";
 import { ForgeNotReady } from "@/features/repository/ForgeNotReady";
 import {
@@ -401,13 +401,10 @@ function PathLabel({ path, line }: { path: string; line: number | null }) {
   );
 }
 
-function RowSkeletons() {
-  return (
-    <div className="space-y-2 p-3">
-      <Skeleton className="h-10 w-full" />
-      <Skeleton className="h-10 w-full" />
-    </div>
-  );
+// `name` per call site: several sections load independently and can all be
+// pending at once, so one shared noun would announce the same region repeatedly.
+function RowSkeletons({ name }: { name: string }) {
+  return <ListRowSkeletons rows={2} lines={2} indent={false} name={name} />;
 }
 
 /** A full-width, in-flow explanation of why a category has no usable data, with
@@ -1453,7 +1450,7 @@ export function FindingsPanel({
           without containment a long list leaks a window scrollbar. */}
       <ScrollArea className="min-h-0 flex-1 overflow-hidden">
         {forge.isPending ? (
-          <RowSkeletons />
+          <RowSkeletons name="security findings" />
         ) : !ready ? (
           <ForgeNotReady repoPath={repoPath} feature="security findings" />
         ) : !supported ? (
@@ -1464,7 +1461,7 @@ export function FindingsPanel({
           gl.isError ? (
             <LoadFailed category="findings" onRetry={() => gl.refetch()} />
           ) : !glOut ? (
-            <RowSkeletons />
+            <RowSkeletons name="security findings" />
           ) : glOut.pipelineState !== "found" ? (
             <GlNoPipelineCard
               state={glOut.pipelineState}
@@ -1574,7 +1571,7 @@ export function FindingsPanel({
                 onRetry={() => alerts.refetch()}
               />
             ) : !alertsOut ? (
-              <RowSkeletons />
+              <RowSkeletons name="dependency alerts" />
             ) : alertsOut.availability !== "available" ? (
               <UnavailableCard
                 availability={alertsOut.availability}
@@ -1679,7 +1676,7 @@ export function FindingsPanel({
                 onRetry={() => codeScanning.refetch()}
               />
             ) : !codeScanningOut ? (
-              <RowSkeletons />
+              <RowSkeletons name="code scanning alerts" />
             ) : codeScanningOut.availability !== "available" ? (
               <UnavailableCard
                 availability={codeScanningOut.availability}
@@ -1800,7 +1797,7 @@ export function FindingsPanel({
                 onRetry={() => secrets.refetch()}
               />
             ) : !secretsOut ? (
-              <RowSkeletons />
+              <RowSkeletons name="secret scanning alerts" />
             ) : secretsOut.availability !== "available" ? (
               <UnavailableCard
                 availability={secretsOut.availability}
@@ -1926,7 +1923,7 @@ export function FindingsPanel({
                 onRetry={() => advisories.refetch()}
               />
             ) : !advisoriesOut ? (
-              <RowSkeletons />
+              <RowSkeletons name="advisories" />
             ) : advisoriesOut.availability !== "available" ? (
               <UnavailableCard
                 availability={advisoriesOut.availability}

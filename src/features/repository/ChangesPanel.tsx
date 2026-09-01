@@ -712,11 +712,38 @@ export function ChangesPanel({
 
   if (status.isPending) {
     return (
-      <div className="flex-1 space-y-2 p-3">
-        <Skeleton className="h-4 w-24" />
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-      </div>
+      // Geometry copied from the empty state (Empty gap-4 p-6; EmptyMedia
+      // size-8 mb-2; header gap-2) so a clean tree resolves its icon/title
+      // onto these bars. The 150ms animation delay keeps a fast status
+      // resolve from ever painting a placeholder. A dirty tree resolves
+      // top-anchored instead; the placeholder bets on the clean-tree outcome
+      // (owner call), so that swap is a content change, not an anchor miss.
+      // A delayed paint isn't motion, so the 0-duration animation runs
+      // unconditionally; the fade is the motion-safe layer on top.
+      <>
+        {/* Outside the aria-busy subtree, for the same reason as the shared
+            skeleton component. It may announce for a load that resolves inside
+            the 150ms visual delay — a polite region, accepted. */}
+        <span role="status" className="sr-only">
+          Loading changes…
+        </span>
+        <div
+          aria-busy
+          className="flex flex-1 flex-col items-center justify-center gap-4 p-6 animate-in fade-in-0 delay-150 duration-0 fill-mode-backwards motion-safe:duration-200"
+        >
+          {/* pb-28 reserves the action stack the swap actually paints: the
+              compare query stays disabled until status resolves and the forge
+              probe hasn't answered yet, so the PR / View-on-GitHub buttons
+              cannot be present (3 h-7 buttons + gaps). They pop in as those
+              queries land — that later shift is the empty state's own,
+              independent of this placeholder. */}
+          <div className="flex flex-col items-center gap-2 pb-28">
+            <Skeleton className="mb-2 size-8" />
+            <Skeleton className="h-5 w-32" />
+            <Skeleton className="h-5 w-36" />
+          </div>
+        </div>
+      </>
     );
   }
 

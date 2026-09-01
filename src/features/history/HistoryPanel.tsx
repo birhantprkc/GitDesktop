@@ -9,6 +9,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { CommitAuthorAvatar } from "@/components/commit-author-avatar";
+import { ListRowSkeletons } from "@/components/list-row-skeleton";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,7 +28,6 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { AmendForcePushDialog } from "@/features/commit/AmendForcePushDialog";
 import { copyText } from "@/lib/clipboard";
@@ -79,6 +79,8 @@ import {
 } from "./HistoryDialogs";
 import { SquashDialog } from "./RewriteDialogs";
 import { useAmendWithConfirm } from "./useAmendCommit";
+
+const FILTER_PLACEHOLDER = "Filter loaded commits, or search all history";
 
 export function HistoryPanel({ repoPath }: { repoPath: string }) {
   const log = useLog(repoPath);
@@ -348,11 +350,21 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
 
   if (log.isPending) {
     return (
-      <div className="flex-1 space-y-3 p-3">
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-      </div>
+      <>
+        <div className="border-b p-2">
+          {/* A disabled copy of the header below, so the rows don't shift when
+              the log lands. */}
+          <Input
+            disabled
+            placeholder={FILTER_PLACEHOLDER}
+            className="h-7"
+            autoComplete="off"
+          />
+        </div>
+        <div className="flex-1">
+          <ListRowSkeletons rows={3} lines={2} indent={false} name="commits" />
+        </div>
+      </>
     );
   }
 
@@ -739,7 +751,7 @@ export function HistoryPanel({ repoPath }: { repoPath: string }) {
             // Clearing the box returns to filtering the loaded pages.
             if (!e.target.value.trim()) setSearchMode(false);
           }}
-          placeholder="Filter loaded commits, or search all history"
+          placeholder={FILTER_PLACEHOLDER}
           className="h-7"
           autoComplete="off"
         />
