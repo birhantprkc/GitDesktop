@@ -24,6 +24,13 @@ import { diffLang } from "@/features/diff/diff-lang";
 import { forgeRepoUrl } from "@/lib/git/api";
 import { issueDetailsOptions } from "@/lib/git/queries";
 import type { RemoteLens } from "@/lib/git/types";
+import { createCardLatch } from "@/lib/hover-card-latch";
+import {
+  CARD_CLOSE_DELAY,
+  CARD_OPEN_DELAY,
+  cancelFrame,
+  cancelTimer,
+} from "@/lib/hover-card-timing";
 import { lensKey } from "@/lib/repo-lens/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { toastError } from "@/lib/toast";
@@ -33,6 +40,7 @@ import { hljsUpgradeStore, upgradeToFullHljs } from "./markdown-hljs";
 import {
   cachedRefKind,
   isPullRefUrl,
+  type MarkdownForgeTarget,
   MarkdownRefCard,
   type MarkdownRefTarget,
 } from "./markdown-ref-card";
@@ -99,12 +107,6 @@ md.use({
 // active context names a provider (see markdown-refs.ts).
 md.use({ extensions: [forgeRefExtension] });
 
-// The preview card renders without a `PreviewCard.Trigger` — one card serves a
-// whole body, positioned at whichever anchor is active — so none of Base UI's
-// hover machinery applies and the delays are hand-rolled from its own constants.
-const CARD_OPEN_DELAY = 600;
-const CARD_CLOSE_DELAY = 300;
-
 /** The card's own subtree, for telling "the pointer left the anchor" apart from
  *  "the pointer moved into the card" — which the DOM reports identically, the
  *  popup being portaled out of the body. Both slots: `hover-card.tsx` stamps the
@@ -112,20 +114,48 @@ const CARD_CLOSE_DELAY = 300;
 const CARD_POPUP_SELECTOR =
   '[data-slot="hover-card-content"],[data-slot="hover-card-portal"]';
 
-function cancelTimer(
-  ref: React.RefObject<ReturnType<typeof setTimeout> | null>,
-) {
-  if (ref.current !== null) {
-    clearTimeout(ref.current);
-    ref.current = null;
-  }
+/** The schemes a rendered link leaves the app for. One constant, because the
+ *  click dispatch and the preview card have to admit exactly the same set — a
+ *  link the card describes but the click doesn't open (or the reverse) is a
+ *  disagreement the user sees.
+ *  Case-insensitive because schemes are: marked emits `HTTPS://…` verbatim and
+ *  DOMPurify's own allowlist keeps it, so a case-sensitive test would hand the
+ *  click back to the webview — navigating the app away, with no card on the
+ *  deceptive-looking links this most needs to expose. */
+const EXTERNAL_HREF = /^(https?:|mailto:)/i;
+
+/** A body's handle on its own card — every field stable for the body's life, so
+ *  the object doubles as that body's identity in the latch below. */
+interface CardOwner {
+  timer: React.RefObject<ReturnType<typeof setTimeout> | null>;
+  frame: React.RefObject<number | null>;
+  pointerAnchor: React.RefObject<HTMLAnchorElement | null>;
+  setTarget: (target: MarkdownRefTarget | null) => void;
 }
 
-function cancelFrame(ref: React.RefObject<number | null>) {
-  if (ref.current !== null) {
-    cancelAnimationFrame(ref.current);
-    ref.current = null;
-  }
+/** Everything that can open or hold one body's card, torn down together. The
+ *  pointer claim goes with it: a card closed from outside its own routes fires
+ *  no `pointerout`, and a claim left set would block that body's next keyboard
+ *  card from closing on blur. */
+function resetCard(owner: CardOwner) {
+  cancelTimer(owner.timer);
+  cancelFrame(owner.frame);
+  owner.pointerAnchor.current = null;
+  owner.setTarget(null);
+  releaseCard(owner);
+}
+
+/** This family is every rendered Markdown body, so the two cards it keeps apart
+ *  are typically a conversation's description and one of its comments. */
+const { claim: claimCard, release: releaseCard } =
+  createCardLatch<CardOwner>(resetCard);
+
+/** The external link this anchor addresses, or null when it isn't one. Read off
+ *  the RAW href attribute, exactly as the click dispatch does, rather than the
+ *  resolved `anchor.href` — so the card names the URL the click will open. */
+function linkTarget(anchor: HTMLAnchorElement): MarkdownRefTarget | null {
+  const href = anchor.getAttribute("href");
+  return href && EXTERNAL_HREF.test(href) ? { kind: "external", href } : null;
 }
 
 /** Natural-size floor, both axes, for an image the viewer will open: it clears
@@ -268,6 +298,14 @@ export function Markdown({
   // blur path must not close a card the mouse owns, and only the anchor's
   // identity can tell that apart from a claim on some unrelated reference.
   const cardPointerAnchor = useRef<HTMLAnchorElement | null>(null);
+  // Built once: the latch compares bodies by this object's identity, so it has
+  // to outlive every render.
+  const [card] = useState<CardOwner>(() => ({
+    timer: cardTimer,
+    frame: cardFrame,
+    pointerAnchor: cardPointerAnchor,
+    setTarget: setCardTarget,
+  }));
   const cardId = useId();
   const bodyRef = useRef<HTMLDivElement>(null);
   // Null is closed. The viewer copies src strings rather than nodes, so this
@@ -288,14 +326,14 @@ export function Markdown({
   // `html` is the trigger, not a value this reads — same shape as the parse memo.
   // biome-ignore lint/correctness/useExhaustiveDependencies: html is the intentional reset trigger
   useEffect(() => {
-    cancelTimer(cardTimer);
-    cancelFrame(cardFrame);
-    cardPointerAnchor.current = null;
-    setCardTarget(null);
+    closeCardNow();
     setLightbox(null);
+    // Unmount (or another re-parse) must drop the claim too: a body that still
+    // held it would tear down whichever card claims it next.
     return () => {
       cancelTimer(cardTimer);
       cancelFrame(cardFrame);
+      releaseCard(card);
     };
   }, [html]);
 
@@ -316,6 +354,10 @@ export function Markdown({
       // block the blur path from closing the NEXT card (pointerover re-arms it).
       cardPointerAnchor.current = null;
       setCardTarget(null);
+      // Released explicitly rather than through `resetCard`, which would also
+      // cancel a pending focus-open — one measuring AFTER this scroll, so it
+      // opens at a rect that is still good.
+      releaseCard(card);
     };
     const raf = requestAnimationFrame(() => {
       subscribed = true;
@@ -328,7 +370,7 @@ export function Markdown({
       window.removeEventListener("scroll", close, true);
       window.removeEventListener("resize", close);
     };
-  }, [cardTarget]);
+  }, [cardTarget, card]);
 
   // The open card describes its anchor. Set on the node rather than rendered:
   // the anchor is injected HTML, same as the image affordances below. The
@@ -377,14 +419,24 @@ export function Markdown({
     const imgs = lightboxImagesIn(root);
     const index = imgs.indexOf(img);
     if (index < 0) return;
-    cancelTimer(cardTimer);
-    cancelFrame(cardFrame);
-    cardPointerAnchor.current = null;
-    setCardTarget(null);
+    closeCardNow();
     setLightbox({ images: imgs.map(toLightboxImage), index });
   }
 
+  /** Drop the card and every intent behind it — the open one, a pending hover
+   *  timer, and a pending focus frame. Every path that takes the user somewhere
+   *  else ends here: both anchor branches of the click dispatch, and the
+   *  lightbox, which would otherwise position a card against a hidden body. */
+  function closeCardNow() {
+    resetCard(card);
+  }
+
+  /** The one open route — both the hover timer and the focus frame land here, so
+   *  claiming the latch here is what makes the card exclusive across bodies.
+   *  Re-opening this body's own card is not a takeover: `claimCard` tears down
+   *  the previous holder only when it is a different one. */
   function showCard(anchor: HTMLAnchorElement, target: MarkdownRefTarget) {
+    claimCard(card);
     cancelTimer(cardTimer);
     setCardAnchor(anchor);
     setCardRect(anchor.getBoundingClientRect());
@@ -399,12 +451,13 @@ export function Markdown({
       cardTimer.current = null;
       cardPointerAnchor.current = null;
       setCardTarget(null);
+      releaseCard(card);
     }, CARD_CLOSE_DELAY);
   }
 
   function onPointerOver(e: React.PointerEvent) {
     const anchor = (e.target as HTMLElement).closest("a");
-    const target = anchor && refTarget(anchor);
+    const target = anchor && anyTarget(anchor);
     if (!anchor || !target) return;
     cardPointerAnchor.current = anchor;
     // Cancels the close armed on the way out — of the anchor itself, or of the
@@ -425,7 +478,7 @@ export function Markdown({
 
   function onPointerOut(e: React.PointerEvent) {
     const anchor = (e.target as HTMLElement).closest("a");
-    if (!anchor || !refTarget(anchor)) return;
+    if (!anchor || !anyTarget(anchor)) return;
     // Crossing into the card is not leaving it. The popup portals outside this
     // wrapper, so the browser reports the move as a plain pointerout on the
     // anchor; treating that as a close would arm a timer the popup's own enter
@@ -446,7 +499,7 @@ export function Markdown({
 
   function onFocusCapture(e: React.FocusEvent) {
     const anchor = (e.target as HTMLElement).closest("a");
-    const target = anchor && refTarget(anchor);
+    const target = anchor && anyTarget(anchor);
     if (!anchor || !target) return;
     // Keyboard arrival only. Landing on a reference by Tab is already the
     // deliberate ask the hover delay waits for, but a click focuses the anchor
@@ -466,7 +519,7 @@ export function Markdown({
 
   function onBlurCapture(e: React.FocusEvent) {
     const anchor = (e.target as HTMLElement).closest("a");
-    if (!anchor || !refTarget(anchor)) return;
+    if (!anchor || !anyTarget(anchor)) return;
     // A pending focus-open belongs to the anchor being blurred, so it dies here
     // whatever the pointer is doing — otherwise it would open a card for a
     // reference the keyboard has already left.
@@ -481,6 +534,10 @@ export function Markdown({
     if (claim !== null && claim === cardAnchor) return;
     cancelTimer(cardTimer);
     setCardTarget(null);
+    // Released explicitly, not via `resetCard`: a pointer claim on some OTHER
+    // reference has to survive this close (that is what lets a keyboard card on
+    // B close while the mouse rests on A).
+    releaseCard(card);
   }
 
   /**
@@ -490,7 +547,7 @@ export function Markdown({
    * row and every value against the grammar the renderer emits. Synchronous
    * because the click handler decides whether to claim the event on its answer.
    */
-  function refTarget(anchor: HTMLAnchorElement): MarkdownRefTarget | null {
+  function refTarget(anchor: HTMLAnchorElement): MarkdownForgeTarget | null {
     if (!refs) return null;
     const kind = anchor.dataset.ref;
     if (!isEmittableRefKind(refs.provider, kind)) return null;
@@ -504,8 +561,16 @@ export function Markdown({
       : null;
   }
 
+  /** Whatever this anchor opens a preview card for. A forge reference wins over
+   *  the link it also is — a rendered `#12` carries an href too, and its card
+   *  describes the item, not the URL. Every hover and focus route reads this
+   *  one answer, so the card opens on the same set of anchors either way. */
+  function anyTarget(anchor: HTMLAnchorElement): MarkdownRefTarget | null {
+    return refTarget(anchor) ?? linkTarget(anchor);
+  }
+
   /** Navigate to whatever a validated reference target points at. */
-  async function openRef(target: MarkdownRefTarget) {
+  async function openRef(target: MarkdownForgeTarget) {
     if (!refs) return;
     const { repoPath, lens } = refs;
     const { kind } = target;
@@ -607,12 +672,19 @@ export function Markdown({
       const target = refTarget(anchor);
       if (target) {
         e.preventDefault();
+        // Same reason as the external branch below: `@user` and the cross-lens
+        // number path both hand off to the system browser, and the in-app ones
+        // switch the view out from under the card either way.
+        closeCardNow();
         void openRef(target);
         return;
       }
       const href = anchor.getAttribute("href");
-      if (href && /^(https?:|mailto:)/.test(href)) {
+      if (href && EXTERNAL_HREF.test(href)) {
         e.preventDefault();
+        // The system browser takes focus from here, so a card that is open (or
+        // one frame from opening) would hang over an app the user has left.
+        closeCardNow();
         openUrl(href);
       }
       return;
@@ -694,33 +766,38 @@ export function Markdown({
           (Tailwind compiles it to `> :not(:last-child)`) would otherwise hang a
           phantom margin off the body. Context crosses a portal, so the popup's
           own `usePanelPortalContainer()` still scopes it to the panel. */}
-      {refs
-        ? createPortal(
-            <MarkdownRefCard
-              id={cardId}
-              refs={refs}
-              target={cardTarget}
-              rect={cardRect}
-              onOpenChange={(open) => {
-                if (open) return;
-                cancelTimer(cardTimer);
-                cardPointerAnchor.current = null;
-                setCardTarget(null);
-              }}
-              onPointerEnter={() => {
-                // Inside the popup the pointer claims the card, so it claims the
-                // anchor the card belongs to — the blur path compares identities.
-                cardPointerAnchor.current = cardAnchor;
-                cancelTimer(cardTimer);
-              }}
-              onPointerLeave={() => {
-                cardPointerAnchor.current = null;
-                scheduleCardClose();
-              }}
-            />,
-            document.body,
-          )
-        : null}
+      {/* Unconditional: an external link previews on every surface, including
+          the ones with no forge context at all (the help screen, AI output).
+          The card takes `refs` only for the reference kinds, which can't arise
+          without it. */}
+      {createPortal(
+        <MarkdownRefCard
+          id={cardId}
+          refs={refs}
+          target={cardTarget}
+          rect={cardRect}
+          onOpenChange={(open) => {
+            if (open) return;
+            cancelTimer(cardTimer);
+            cardPointerAnchor.current = null;
+            setCardTarget(null);
+            // Explicit release rather than `resetCard`, which would also cancel
+            // a pending focus-open the dismissal never addressed.
+            releaseCard(card);
+          }}
+          onPointerEnter={() => {
+            // Inside the popup the pointer claims the card, so it claims the
+            // anchor the card belongs to — the blur path compares identities.
+            cardPointerAnchor.current = cardAnchor;
+            cancelTimer(cardTimer);
+          }}
+          onPointerLeave={() => {
+            cardPointerAnchor.current = null;
+            scheduleCardClose();
+          }}
+        />,
+        document.body,
+      )}
       <ImageLightbox
         images={shownLightbox?.images ?? NO_IMAGES}
         index={shownLightbox?.index ?? 0}
