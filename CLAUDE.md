@@ -97,6 +97,31 @@ first production build after its timestamp — the daily cron, or any earlier
 push/release rebuild — so a timestamp past ~00:37 UTC waits for the next
 daily run unless an unrelated rebuild lands sooner.
 
+## Shipping a blog post — the post is not the whole deliverable
+
+A post ships with a **cover set**, every time, in the same change. Do it
+unprompted, the same way feature work updates its docs:
+
+1. **The post** — `site/src/content/blog/<slug>.md`, copy following the
+   anti-AI-tell rules above, frontmatter per the collection schema, `pubDate`
+   set per the scheduling mechanics above.
+2. **The cover set** — `design/linkedin/<slug>/`. Copy `_template/` there,
+   sketch two or three real alternatives (not variations on one idea), judge
+   them at feed width in `out/thumbs.png`, set `CHOSEN`, then run
+   `node design/linkedin/<slug>/build.mjs`. One run publishes `cover.png`
+   (2400x1256, the LinkedIn master), `cover-1200.png`, and `cover-devto.png`
+   (1000x420). The shared canvas, the series motifs, and the class names the
+   kit reserves are all in `design/linkedin/README.md`.
+3. **Verify the site still builds** — `cd site && pnpm build`.
+
+No changelog fragment: the blog is site-only work, and steps 1–2 are the
+record.
+
+`design/` is gitignored, which is why this needs writing down at all: a missing
+cover shows up in no diff and no CI check, so nothing but this list will catch
+it. Confirm `design/linkedin/<slug>/cover.png` exists on disk before calling a
+post shipped. A fresh clone having no covers is expected, not a gap to fill.
+
 ## Reader-facing prose outside the blog (README, changelog fragments, in-app guide, site copy)
 
 The blog rules above are post-specific in their mechanics (wrap band, closers,
