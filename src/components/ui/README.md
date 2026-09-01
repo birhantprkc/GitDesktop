@@ -93,6 +93,31 @@ grep -n 'available-width' src/components/ui/popover.tsx
 No match means that file's width delta is gone. `popover.tsx` carries the
 panel-portal delta too, so check both of its markers.
 
+## Anchor forwarding
+
+A third delta, again sharing no code with the two above. Base UI positions a
+popup against its `*Trigger`; a caller whose trigger is not the element the
+popup should line up with hands the positioner an element itself, through the
+`anchor` prop the wrapper otherwise swallows.
+
+- **`combobox.tsx`** — `ComboboxContent`'s `Pick` from its `Positioner.Props`
+  includes `anchor`, forwards it to the `Positioner`, and stamps the popup's
+  `data-chips={!!anchor}`. A chips-shaped combobox types into a small input
+  inside the chip row, so its list belongs against the whole field, not that
+  input; the `data-chips` flag is what then drops the popup's `--anchor-width`
+  plus `--spacing(7)` floor so it can match that field exactly. No call site
+  passes `anchor` today, so the app demonstrates neither half — weigh that
+  under *Check before re-applying* below.
+
+Grep the file after regenerating it:
+
+```sh
+grep -n '"anchor"' src/components/ui/combobox.tsx
+```
+
+No match means the anchor delta is gone. That file carries the panel-portal
+delta too, so check both of its markers.
+
 ## Check before re-applying
 
 If one of these has to be re-created, confirm it is still needed. Verify

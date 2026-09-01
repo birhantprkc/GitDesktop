@@ -515,6 +515,16 @@ export const capabilities: Capability[] = [
     label:
       "Reference autolinks — #123, @user, and GitLab's !123 open the issue, pull request, or profile they name",
   },
+  {
+    group: "Keyboard & Markdown",
+    label:
+      "Reference preview cards — hover or Tab to a #123 or !123 for its state, title & author, or to an @user for their avatar & handle",
+  },
+  {
+    group: "Keyboard & Markdown",
+    label:
+      "Fullscreen image viewer — screenshots in any rendered body and both sides of an image diff, with fit/100% zoom and arrow-key stepping in fit view",
+  },
 
   // — AI · generate & review —
   {
