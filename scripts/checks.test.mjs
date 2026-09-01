@@ -46,6 +46,7 @@ const modKey = scanner("hand-rolled-mod-key");
 const inlineClipTitle = scanner("inline-clip-title");
 const selectItemClipTitle = scanner("select-item-clip-title");
 const setQueryData = scanner("setQueryData-noop");
+const settingsRollback = scanner("async-settings-rollback");
 const bareMutate = scanner("bare-mutate-in-converted-trees");
 const menuSuppression = scanner("context-menu-suppression");
 const loneActivity = scanner("lone-activity-boundary");
@@ -325,6 +326,113 @@ test("setQueryData-noop does not reach across a `;` statement boundary", () => {
     "logger.debug(label, undefined);",
   ].join("\n");
   assert.deepEqual(setQueryData(source), []);
+});
+
+test("async-settings-rollback flags an optimistic patch whose onError refetches", () => {
+  // The pre-fix shape, in both its bodies: the arrow the two settings hooks
+  // used, and the block detail-rail used to clear its focus arm in.
+  const arrow = [
+    "queryClient.setQueryData(settingsKeys.settings, updated);",
+    "saveSettings.mutate(updated, {",
+    "  onError: () =>",
+    "    queryClient.invalidateQueries({ queryKey: settingsKeys.settings }),",
+    "});",
+  ].join("\n");
+  assert.deepEqual(settingsRollback(arrow), [3]);
+  const block = [
+    "queryClient.setQueryData(settingsKeys.settings, updated);",
+    "saveSettings.mutate(updated, {",
+    "  onError: () => {",
+    "    refocus.current = null;",
+    "    queryClient.invalidateQueries({ queryKey: settingsKeys.settings });",
+    "  },",
+    "});",
+  ].join("\n");
+  assert.deepEqual(settingsRollback(block), [3]);
+});
+
+test("async-settings-rollback gates on a TYPED optimistic patch too", () => {
+  // The gate is all-or-nothing per file: a spelling it can't see turns the whole
+  // check off there. The repo already types the sibling read
+  // (`getQueryData<AppSettings>`), so the typed write is a plausible next edit —
+  // including the nested-generic form a `<[^>]*>` group would stop short of.
+  for (const call of [
+    "queryClient.setQueryData<AppSettings>(settingsKeys.settings, updated);",
+    "queryClient.setQueryData<Record<string, AppSettings>>(settingsKeys.settings, u);",
+  ]) {
+    const source = [
+      call,
+      "saveSettings.mutate(updated, {",
+      "  onError: () =>",
+      "    queryClient.invalidateQueries({ queryKey: settingsKeys.settings }),",
+      "});",
+    ].join("\n");
+    assert.deepEqual(settingsRollback(source), [3], `should gate on ${call}`);
+  }
+});
+
+test("async-settings-rollback pairs across functions, not just adjacent code", () => {
+  // The property `onlyWhen` exists for: the gating patch and the mutation it
+  // guards can live in different functions of the same hook file, far outside
+  // any proximity window. Padding is deliberately >PAIR_GAP (160).
+  const source = [
+    "export function useSomethingCollapsed() {",
+    "  function apply(next) {",
+    "    queryClient.setQueryData(settingsKeys.settings, updated);",
+    "  }",
+    "  const pad1 = someHelper(alpha, beta, gamma, delta, epsilon, zeta, eta);",
+    "  const pad2 = someHelper(alpha, beta, gamma, delta, epsilon, zeta, eta);",
+    "  const pad3 = someHelper(alpha, beta, gamma, delta, epsilon, zeta, eta);",
+    "  const pad4 = someHelper(alpha, beta, gamma, delta, epsilon, zeta, eta);",
+    "  function persist(updated) {",
+    "    saveSettings.mutate(updated, {",
+    "      onError: () =>",
+    "        queryClient.invalidateQueries({ queryKey: settingsKeys.settings }),",
+    "    });",
+    "  }",
+    "}",
+  ].join("\n");
+  assert.deepEqual(settingsRollback(source), [11]);
+});
+
+test("async-settings-rollback needs BOTH halves, in the same file", () => {
+  // No live file trips the onError half today — every settings invalidate under
+  // src/ is success-path. The gate is forward-looking: a file that refetches
+  // settings from an onError with nothing optimistic to roll back stays clean.
+  const noPatch = [
+    "remove.mutate(path, {",
+    "  onError: () =>",
+    "    queryClient.invalidateQueries({ queryKey: settingsKeys.settings }),",
+    "});",
+  ].join("\n");
+  assert.deepEqual(settingsRollback(noPatch), []);
+  // The happy-path reconcile every settings mutation carries is onSuccess, so
+  // the patch alone never pairs with it.
+  const onSuccess = [
+    "queryClient.setQueryData(settingsKeys.settings, updated);",
+    "return useMutation({",
+    "  mutationFn: saveSettingsMerged,",
+    "  onSuccess: () =>",
+    "    queryClient.invalidateQueries({ queryKey: settingsKeys.settings }),",
+    "});",
+  ].join("\n");
+  assert.deepEqual(settingsRollback(onSuccess), []);
+});
+
+test("async-settings-rollback leaves the guarded synchronous restore alone", () => {
+  // The useApplyTheme shape this check exists to hold: latest-write guard, then
+  // the snapshot written straight back.
+  const fixed = [
+    "queryClient.setQueryData(settingsKeys.settings, updated);",
+    "saveSettings.mutate(updated, {",
+    "  onError: () => {",
+    "    const latest = queryClient.getQueryData(settingsKeys.settings);",
+    "    if (latest?.theme !== next) return;",
+    "    queryClient.setQueryData(settingsKeys.settings, current);",
+    "  },",
+    "});",
+  ].join("\n");
+  assert.deepEqual(settingsRollback(fixed), []);
 });
 
 test("bare-mutate-in-converted-trees flags every way a call reaches its callbacks", () => {

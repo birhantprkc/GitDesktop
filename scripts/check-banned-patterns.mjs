@@ -144,6 +144,16 @@ const nearPair = (a, b) => {
  *  views: `perLine` for a token, `perFile` for one that can wrap). */
 const anyOf = (scans) => (v) => [...new Set(scans.flatMap((scan) => scan(v)))];
 
+/** Scanner: `scan`'s hits, but only in files whose whole-file view also matches
+ *  `gate` — a file-scoped AND for a class where each half is legitimate alone,
+ *  so only their co-presence is the defect. The `lastIndex` reset is what makes
+ *  a `g`-flagged `gate` safe: `test` is stateful with one, so it would otherwise
+ *  resume mid-file and alternate between hit and miss down the file list. */
+const onlyWhen = (gate, scan) => (v) => {
+  gate.lastIndex = 0;
+  return gate.test(v.text) ? scan(v) : [];
+};
+
 /** Scanner: the union of several `nearPair`s — one check, one allowlist, every
  *  Tailwind spelling of the same idiom. */
 const anyPair = (pairs) => anyOf(pairs.map(([a, b]) => nearPair(a, b)));
@@ -307,6 +317,38 @@ const ACTIVITY_JSX_RE = /<Activity(?![\w$])/;
 // converted site had.
 const NULL_FALLBACK_RE = /\bfallback\s*=\s*\{\s*null\s*\}/g;
 
+// The two halves of an async settings rollback. The gate: an OPTIMISTIC patch of
+// the settings cache — the file flips the preference itself so the UI can commit
+// before the store write resolves. The hit: that file's mutation `onError`
+// restoring by REFETCH rather than by writing the snapshot back, which lands the
+// restore a commit or more later — too late for a focus hand-off armed on the
+// flip, so focus drops to <body> on a refused write.
+// Co-presence is the class, and the gate is FORWARD-looking: nothing trips the
+// onError half today — every settings invalidate under src/ is success-path, and
+// settings/queries.ts's lone `onError` sits 467 normalized chars from the next
+// one, well past PAIR_GAP (measured while sizing this check). What the gate buys
+// is that a file which legitimately refetches settings from an `onError` with
+// nothing optimistic to roll back (DangerZone, RepoList, useRepoVisibilityProbe
+// are each one edit from that shape) can never read as a violation.
+// The cost of file-scoping, accepted: one file that patches the settings cache
+// for its own feature AND refetches settings from an unrelated mutation's
+// onError pairs them anyway — a loud false positive, allowlist as remedy. It
+// buys the reverse, which matters more: the patch and the mutation it guards may
+// sit in different functions of the same hook file, and a proximity pair would
+// miss that. The reported line is the `onError`, which is the site to rewrite.
+// The optional type-argument group uses the same `<[^(]*?>` class as
+// SET_QUERY_DATA_RE above, for the same reason: a `<[^>]*>` group stops at the
+// INNER `>` of a nested generic (`setQueryData<Record<string, Foo>>`), and the
+// lazy run bounded by the call's own paren resolves it. Missing a typed spelling
+// here would turn this file's whole gate off, not just skip one line.
+const OPTIMISTIC_SETTINGS_PATCH_RE =
+  /setQueryData\s*(?:<[^(]*?>)?\s*\(\s*settingsKeys\.settings\b/;
+const ONERROR_SETTINGS_REFETCH_RE = new RegExp(
+  `\\bonError\\b[\\s\\S]{0,${PAIR_GAP}}?invalidateQueries\\s*\\(\\s*\\{\\s*` +
+    `queryKey:\\s*settingsKeys\\.settings\\b`,
+  "g",
+);
+
 export const CHECKS = [
   {
     name: "hover-reveal",
@@ -385,6 +427,18 @@ export const CHECKS = [
     allowlist: [],
     message:
       "setQueryData(key, undefined) is a silent no-op in TanStack v5 — snapshot and restore the previous value instead",
+  },
+  {
+    name: "async-settings-rollback",
+    // Not a UI idiom — it applies wherever the settings cache is patched.
+    appliesTo: () => true,
+    scan: onlyWhen(
+      OPTIMISTIC_SETTINGS_PATCH_RE,
+      perFile(ONERROR_SETTINGS_REFETCH_RE),
+    ),
+    allowlist: [],
+    message:
+      "an optimistically patched settings write rolls back SYNCHRONOUSLY — snapshot the previous value and setQueryData it back under a latest-write guard (useApplyTheme, src/lib/settings/queries.ts), never invalidateQueries: the refetch restores a commit or more later, so a collapse toggle's focus hand-off has nothing to ride and focus drops to <body>",
   },
   {
     name: "bare-mutate-in-converted-trees",

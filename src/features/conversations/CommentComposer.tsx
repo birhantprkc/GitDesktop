@@ -95,11 +95,12 @@ export function CommentComposer({
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const editorWrapRef = useRef<HTMLDivElement>(null);
   const peekRef = useRef<HTMLButtonElement>(null);
-  // The scroll region measured at expand time, when the reader was sitting at
-  // its bottom — null otherwise. The ELEMENT is held rather than re-walked on
-  // the commit: un-hiding the editor changes which containers overflow, so a
-  // second walk can answer with a different element than the one the pin
-  // decision was made against.
+  // The scroll region measured before the box grows (an expand, or the rollback
+  // of a refused collapse), when the reader was sitting at its bottom; null
+  // otherwise. The ELEMENT is held rather than re-walked on the commit:
+  // un-hiding the editor changes which containers overflow, so a second walk can
+  // answer with a different element than the one the pin decision was made
+  // against.
   const repinRef = useRef<HTMLElement | null>(null);
   // What the expanded/collapsed render owes the user once it commits. The
   // un-hide rides a react-query cache notify, whose batching can land after any
@@ -107,27 +108,38 @@ export function CommentComposer({
   // that actually flipped `collapsed` — never on wall clock.
   const pendingRef = useRef<"focus" | "preview" | null>(null);
   const pendingPeekRef = useRef(false);
+  // A hand-off frame is scheduled but hasn't landed. Focus sits on <body> for
+  // that whole window (longer still if the window is backgrounded, where rAF is
+  // suspended), so a rejection arriving inside it must read as "focus is ours".
+  const handoffRef = useRef(false);
 
   const { collapsed, setCollapsed, toggle } = useComposerCollapsed(
     () => expand("focus"),
     collapse,
+    rollback,
   );
+
+  /** The scroll region an about-to-grow box owes a re-pin, or null when the
+   *  reader isn't sitting at its bottom. Call BEFORE the flip: growing the box
+   *  shrinks the region above it, carrying the last comment off-screen. */
+  function measurePinRegion(): HTMLElement | null {
+    const region = findScrollRegion(
+      rootRef.current?.previousElementSibling ?? null,
+    );
+    if (!region) return null;
+    const atBottom =
+      region.scrollHeight - region.scrollTop - region.clientHeight <= 8;
+    return atBottom ? region : null;
+  }
 
   /** Reveal the box, and record what the expanded render owes: focus, or the
    *  Preview tab. */
   function expand(then: "focus" | "preview") {
-    // Growing the box shrinks the scroll region above it, which would carry the
-    // last comment off-screen for a reader sitting at the bottom.
-    const region = findScrollRegion(
-      rootRef.current?.previousElementSibling ?? null,
-    );
-    const pinned =
-      !!region &&
-      region.scrollHeight - region.scrollTop - region.clientHeight <= 8;
+    const pinned = measurePinRegion();
     // Arm follow-ups only on a real transition: a write the hook declined leaves
     // no commit to consume them, and a stale flag would fire on a later expand.
     const changed = setCollapsed(false);
-    repinRef.current = changed && pinned ? region : null;
+    repinRef.current = changed ? pinned : null;
     pendingRef.current = changed ? then : null;
   }
 
@@ -136,6 +148,25 @@ export function CommentComposer({
     // unmounts with the expanded row; the palette closes), so focus would fall to
     // <body> without re-homing it on the peek strip.
     pendingPeekRef.current = setCollapsed(true);
+  }
+
+  /** A refused write is restoring the box to `restoredCollapsed`: arm whatever
+   *  that commit's effect owes, since it unmounts (peek button) or hides
+   *  (editor) the control focus is on. Gated on focus being in the composer, or
+   *  on its way there in a scheduled hand-off — a user who moved on must not be
+   *  yanked back. */
+  function rollback(restoredCollapsed: boolean) {
+    if (
+      !handoffRef.current &&
+      !rootRef.current?.contains(document.activeElement)
+    )
+      return;
+    if (restoredCollapsed) {
+      pendingPeekRef.current = true;
+      return;
+    }
+    repinRef.current = measurePinRegion();
+    pendingRef.current = "focus";
   }
 
   // No dependency list: the handle closes over `collapsed` and over locals the
@@ -170,7 +201,11 @@ export function CommentComposer({
     pendingPeekRef.current = false;
     // One frame, inside the commit that mounted the strip: the palette dialog
     // returns focus to its trigger as it closes, and would otherwise win.
-    requestAnimationFrame(() => peekRef.current?.focus());
+    handoffRef.current = true;
+    requestAnimationFrame(() => {
+      handoffRef.current = false;
+      peekRef.current?.focus();
+    });
   }, [collapsed]);
 
   // The expand commit. Re-pin before focusing — and the two can't fight anyway:
@@ -188,7 +223,9 @@ export function CommentComposer({
     pendingRef.current = null;
     // One frame, inside the commit that revealed the editor: a quote reply fires
     // from a Base UI menu whose close-time focus-return would otherwise steal it.
+    handoffRef.current = true;
     requestAnimationFrame(() => {
+      handoffRef.current = false;
       if (pending === "preview") editorRef.current?.showPreview();
       else editorRef.current?.focus();
     });
