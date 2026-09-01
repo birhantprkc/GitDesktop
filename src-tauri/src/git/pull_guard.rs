@@ -15,7 +15,10 @@ use crate::error::{AppError, AppResult};
 use crate::git::autostash::{autostash_push, settle, AutostashOutcome};
 use crate::git::history::validate_hash;
 use crate::git::remote::run_git_with_creds_once;
-use crate::git::runner::{run_git, run_git_raw, DEFAULT_TIMEOUT, NETWORK_TIMEOUT};
+use crate::git::runner::{
+    acquire_repo_lock, run_git, run_git_raw, DEFAULT_TIMEOUT, LOCK_WAIT_TIMEOUT,
+    NETWORK_LOCK_WAIT_TIMEOUT, NETWORK_TIMEOUT,
+};
 use crate::state::AppState;
 
 /// One commit the fork-point verdict would rewrite away, as the decision UI names
@@ -491,9 +494,14 @@ fn parse_dropped(stdout: &str) -> Vec<DroppedCommit> {
 /// pull that bare git refuses outright ("no such ref was fetched"). Pruned, the
 /// upstream ref stops resolving and that refusal is what the user sees.
 ///
-/// The caller must already hold the repo lock, so every step here uses the
-/// lock-free runners — `run_git_mutating*` would re-acquire it and deadlock.
+/// The caller must already hold the repo's working-tree lock, so every step here
+/// uses the lock-free runners — `run_git_mutating*` would re-acquire it and
+/// deadlock. The NETWORK lock is taken around the fetch and held through the plan's
+/// reads (that nesting direction only), so the whole verdict rests on ONE snapshot
+/// of the tracking refs: the background auto-fetch shares that domain and would
+/// otherwise be free to move them between the fetch and the revs read off it.
 pub(crate) async fn probe(
+    state: &AppState,
     repo: &str,
     target: &PullTarget,
     cred: &[String],
@@ -503,21 +511,33 @@ pub(crate) async fn probe(
     if current_branch(repo).await.as_deref() != Some(target.branch.as_str()) {
         return Ok(None);
     }
-    if target.remote != "." {
-        let out = run_git_with_creds_once(
-            repo,
-            cred,
-            &["fetch", "--prune", &target.remote],
-            NETWORK_TIMEOUT,
-        )
-        .await?;
-        if out.code != 0 {
-            return Err(AppError::Git {
-                code: out.code,
-                stderr: out.full_failure_text(),
-            });
+    // ONE network hold spanning the fetch AND every read below it: the verdict is
+    // only sound on the refs this fetch produced, and the background auto-fetch runs
+    // in this same domain — released in between, it can move
+    // `refs/remotes/<remote>/<branch>` under the four reads and the plan then mixes
+    // two snapshots. `None` for a local upstream, which reads no remote-tracking ref.
+    let _net_guard = match target.remote.as_str() {
+        "." => None,
+        remote => {
+            let network = state.network_lock(repo).await;
+            let guard =
+                acquire_repo_lock(&network, NETWORK_LOCK_WAIT_TIMEOUT, "a fetch").await?;
+            let out = run_git_with_creds_once(
+                repo,
+                cred,
+                &["fetch", "--prune", remote],
+                NETWORK_TIMEOUT,
+            )
+            .await?;
+            if out.code != 0 {
+                return Err(AppError::Git {
+                    code: out.code,
+                    stderr: out.full_failure_text(),
+                });
+            }
+            Some(guard)
         }
-    }
+    };
 
     // The local side of every rev below is HEAD, not the branch NAME: rev-parse
     // resolves `refs/tags/<n>` ahead of `refs/heads/<n>`, so a tag sharing the
@@ -570,14 +590,14 @@ pub(crate) async fn guarded_pull(state: &AppState, repo: &str) -> AppResult<bool
     // autostash compounds do.
     let cred = credentials(repo, &target).await?;
 
-    let lock = state.repo_lock(repo).await;
-    let _guard = lock.lock().await;
+    let domain = state.working_tree_lock(repo).await;
+    let _guard = acquire_repo_lock(&domain, LOCK_WAIT_TIMEOUT, "a pull").await?;
     // Re-read under the lock: `resolve` saw the tree before it, and another window
     // pausing a rebase in that gap would leave this one rebasing onto a conflict.
     if mid_op(repo).await {
         return Ok(false);
     }
-    let Some(plan) = probe(repo, &target, &cred).await? else {
+    let Some(plan) = probe(state, repo, &target, &cred).await? else {
         return Ok(false);
     };
     if !plan.dropped().is_empty() {
@@ -619,10 +639,10 @@ pub(crate) async fn guarded_pull_autostash(
     };
     let cred = credentials(repo, &target).await?;
 
-    let lock = state.repo_lock(repo).await;
-    let _guard = lock.lock().await;
+    let domain = state.working_tree_lock(repo).await;
+    let _guard = acquire_repo_lock(&domain, LOCK_WAIT_TIMEOUT, "a pull").await?;
     crate::git::ops::refuse_mid_op(repo).await?;
-    let Some(plan) = probe(repo, &target, &cred).await? else {
+    let Some(plan) = probe(state, repo, &target, &cred).await? else {
         return Ok(None);
     };
     if !plan.dropped().is_empty() {
@@ -855,8 +875,8 @@ pub(crate) async fn git_pull_rebase_decided_core(
         &expected_tip,
     )?;
 
-    let lock = state.repo_lock(&repo_path).await;
-    let _guard = lock.lock().await;
+    let domain = state.working_tree_lock(&repo_path).await;
+    let _guard = acquire_repo_lock(&domain, LOCK_WAIT_TIMEOUT, "a pull").await?;
     // Names what the user asked for: this arm stashes nothing, so `refuse_mid_op`'s
     // "Can't stash …" would describe an operation that isn't happening.
     crate::git::ops::refuse_mid_op_for(&repo_path, "pull").await?;
@@ -955,8 +975,8 @@ pub(crate) async fn git_pull_rebase_decided_autostash_core(
         &expected_tip,
     )?;
 
-    let lock = state.repo_lock(&repo_path).await;
-    let _guard = lock.lock().await;
+    let domain = state.working_tree_lock(&repo_path).await;
+    let _guard = acquire_repo_lock(&domain, LOCK_WAIT_TIMEOUT, "a pull").await?;
     crate::git::ops::refuse_mid_op(&repo_path).await?;
     ensure_on_expected_commit(&repo_path, &decided.branch, &expected_tip).await?;
 

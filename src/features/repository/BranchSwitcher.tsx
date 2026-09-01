@@ -1416,10 +1416,19 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
     // flight — the map is empty until it lands, which would offer Archive on a
     // branch the answer excludes. A FAILED read falls through to best-effort:
     // no answer is coming, and holding the item forever helps no one.
+    // A branch whose worktree is being removed is the one exception, and it
+    // reads the removal store, not the worktree list: git goes on listing a
+    // worktree until its removal finishes, and this query is gated on the menu
+    // or the cleanup dialog being open, so `inWorktree` refuses on an answer
+    // that is either still true or already stale. Promote entries are excluded
+    // by `promotePhase`: a promote removes the worktree to CHECK THAT BRANCH
+    // OUT here, so archiving it mid-flight would hide the branch you land on.
     const archiveBlockedReason = (() => {
       if (branch.archived) return null;
       if (branch.isCurrent) return "current branch";
       if (branch.name === defaultName) return "default branch";
+      if (removals.some((r) => r.branch === branch.name && !r.promotePhase))
+        return null;
       if (userWorktrees.data === undefined && !userWorktrees.isError)
         return "checking worktrees…";
       if (inWorktree) return "checked out in another worktree";
@@ -2427,6 +2436,15 @@ export function BranchSwitcher({ repoPath }: { repoPath: string }) {
         currentBranch={currentName}
         isProtected={(name) => isDeletionBlocked(rulesConfig, name)}
         isInWorktree={(name) => worktreeByBranch.has(name)}
+        // From the removal store, not the worktree read: `isInWorktree` still
+        // matches a worktree git lists until its removal finishes, and that
+        // read is gated on this menu or the dialog being open, so it can lag —
+        // either way the exclusion holds a branch already on its way out. A
+        // promote's removal (`promotePhase`) doesn't count: it frees the branch
+        // to check it out here, and archiving would hide what you land on.
+        isWorktreeRemoving={(name) =>
+          removals.some((r) => r.branch === name && !r.promotePhase)
+        }
         // The map is empty until the read lands and stays empty if it fails, so
         // the dialog is told which, and holds its list rather than acting on an
         // exclusion that isn't answering yet.
