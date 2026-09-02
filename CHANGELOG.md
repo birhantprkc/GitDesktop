@@ -12,6 +12,107 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-02
+
+### Added
+
+- Deleting a worktree can archive its branch automatically once the removal
+  finishes — a checkbox in the delete dialog, offered for branches other than
+  the default one, so a branch you're done with tidies itself away without a
+  second trip to the branch menu.
+- Pop out the commit box into a dialog — a roomier editor with your staged files
+  listed alongside, reachable from the commit box or the command palette from any
+  tab, even with the sidebar collapsed.
+- **Images open fullscreen.** Click a screenshot in a rendered description, comment, or
+  discussion, or either side of an image diff, and it fills the window with its label and
+  pixel dimensions, a **Fit** / **100%** toggle, and **Open in browser** for an image
+  loaded from the web. In **Fit** view ← and → step through the other images in the
+  same body; at **100%** the arrow keys pan the zoomed image instead. Esc closes, and every
+  image the viewer opens is reachable by Tab and Enter.
+- **Link previews.** Hover a link in any rendered description, comment, or release
+  note, or land on it with Tab, and a card shows where it goes: a web link gives you
+  the domain and the full URL right away, then the page's title, description, and
+  image where the site publishes them, while a `mailto:` link shows the address.
+  **Fetch link previews** under **Settings → General** turns that lookup off when
+  you want the destination alone.
+- **Mention autocomplete in local PRs and issues.** On GitHub and GitLab repos,
+  a local pull request's or issue's description and comment box complete `@`
+  people and `#` issues and pull requests, with GitLab adding `!` for merge
+  requests, the same way the hosted conversation surfaces do.
+- **Owner picker when publishing to GitHub.** The publish dialog now opens with an
+  **Owner** select listing your account and your organizations, and creates the
+  repository under the one you choose. Organizations that don't let you create
+  repositories are listed as disabled, with the reason on the row.
+- **References are links.** `#123` and `@user` now open what they name from any
+  rendered body: descriptions, comments, review threads, AI reviews, and release
+  notes. On GitHub, `#123` opens that issue or pull request in the app, whichever
+  it turns out to be; on GitLab, `#123` opens the issue and `!123` the merge
+  request. `@user` opens the profile in your browser. Bitbucket bodies leave
+  references plain, matching Bitbucket itself, and a reference inside a code span
+  or fence stays plain text everywhere.
+- **Reference previews.** Hover a `#123`, `!123`, or `@user` in any rendered body, or
+  land on one with Tab, and a card shows what you'd be opening: state (Open, Merged,
+  Closed, or Draft) beside the number, then the title and author, or the avatar and
+  handle for a person. Esc dismisses it.
+- The worktree manager shows when each worktree was last active, so the ones
+  you've finished with are easy to spot.
+
+### Changed
+
+- The **Changes** tab holds its place while it loads: the placeholder sits
+  where the clean-tree summary lands, and a quick load skips it entirely.
+- Selecting lines in a diff keeps the diff exactly where it is. The
+  selected-line count and the **Stage** / **Unstage** / **Discard** actions now
+  appear in the file toolbar, which tints while a selection is live.
+- Dependency hovercards on the **Insights** page open at your cursor, and Tab
+  to a package's name opens its card from the keyboard.
+- Pull request, workflow run, and pipeline list rows now give the branch its
+  own line, so branch names and ages stay readable on narrow panels.
+- Loading placeholders in the **Issues**, **Pull requests**, **Actions**,
+  **Discussions**, **History**, **Tags**, **Compare**, and **Findings** lists
+  now match the rows they load into, so lists stay steady on first open.
+- **MDX files** now highlight in diffs, covering the `export` and JSX header,
+  the prose body, and `ts`, `js`, `tsx` and `sql` fenced code blocks. **MDX** is
+  also available in the diff language picker if you want to apply it to another
+  extension.
+- GitDesktop now fits narrow and split-screen layouts: the sidebar narrows as
+  the window does, the file list collapses and the diff toolbar slims down when
+  space is tight, and the minimum window width dropped from 960px to 640px, so
+  it fits half of a 1080p display even at 150% scaling. The sidebar and diff
+  file list can also be collapsed on demand from the command palette or a
+  keyboard shortcut.
+
+### Fixed
+
+- A branch checked out in another worktree stays in the branch list. **Archive**
+  is disabled for it and the menu item names the reason; **Clean up branches**
+  leaves it out of both its archive and delete lists.
+- Publishing a local pull request names the repository's own provider: on a
+  Bitbucket repository the **Publish to Bitbucket** button, its logo, and the
+  confirmation dialog all say Bitbucket. The local pull request and local issue
+  dialogs describe the flow in provider-neutral terms.
+- When saving the **comment box**'s collapsed state doesn't stick, the box
+  returns to its previous state immediately and keeps keyboard focus on the
+  restored control (the one-line strip or the editor).
+- Promoting a worktree keeps a status line on screen through every step:
+  removing its worktree, stashing your main workspace changes, then checking out
+  the branch — so a slow promote reads as running, right up to the moment the
+  branch lands.
+- **Pull with rebase** now looks ahead for commits that an upstream rewrite would
+  take off your branch, names them, and asks whether to keep them (replayed on top
+  of the new upstream tip) or drop them. A drop is recorded in **Operation
+  history**; rebase pulls with nothing at risk run as they always have, with no
+  prompt.
+- A push that GitHub's secret push protection blocks now explains itself: the
+  commits were not added to the repository, and you can rewrite them to remove
+  the secret or use the unblock link GitHub printed when it's a false positive.
+- Worktree lists read straight from the repository, with or without a
+  connection: the **Worktrees** manager, the promote dialog's checks, and the
+  branch pickers' "checked out in another worktree" badges all work offline.
+- Staging, committing and branch actions keep working while a worktree is being
+  removed, and while a fetch or push runs. An action that does still have to
+  wait says what it is waiting for instead of hanging.
+
 ## [0.10.0] - 2026-08-28
 
 ### Added
@@ -3527,7 +3628,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/theBGuy/GitDesktop/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/theBGuy/GitDesktop/compare/v0.9.6...v0.10.0
 [0.9.6]: https://github.com/theBGuy/GitDesktop/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/theBGuy/GitDesktop/compare/v0.9.4...v0.9.5
