@@ -845,9 +845,9 @@ on the file's context menu, and in the command palette ({{kbd:command-palette}})
 file's sides and streams a proposal; you review it as a diff against your side, flip to the
 proposed file or the *ours* / *theirs* / *base* versions, then **Accept & stage** to apply
 it — nothing is written until you accept. **Regenerate** for another attempt, or **Discard**
-to drop it. The banner's **Resolve all with AI** walks every conflict in turn. It runs on
-any provider, including local Ollama and keyless Claude Code / Codex agents, and skips files
-matched by your AI ignore patterns.{{/ai}}`,
+to drop it. The banner's **Resolve all with AI** walks every conflict in turn (switching
+tabs ends the walk). It runs on any provider, including local Ollama and keyless Claude
+Code / Codex agents, and skips files matched by your AI ignore patterns.{{/ai}}`,
   },
   {
     id: "pull-requests",
@@ -928,17 +928,17 @@ each one reports.
 
 CI checks appear as a **rollup summary** — **✓ N passed · ✕ M failed · ● K pending ·
 ⊖ J skipped**, each count with its own icon and word so status never rides on color
-alone. Skipped checks (plus neutral or stale ones) show as their own muted segment rather
-than masquerading as pending. It auto-expands whenever something has failed. Expanding lists
-the checks failures-first (arrow-navigable). A **GitHub Actions** check that's still
-**running** shows its **current step** right in the row and, when expanded, a **live step
-checklist** that updates as the run progresses; a finished Actions check **peeks its job
-log inline** instead — without leaving the PR — **copy** the log with the button in its
-top-right corner — with an **Open full run** link. An external check (Vercel and the
-like) links straight out to its details. **GitLab MRs** get the same rollup from the MR's
-pipeline jobs, with the same **inline log peek**; **Bitbucket PRs** get it from the PR's
-commit build statuses, but those **link out only** (name, state, and URL — Bitbucket
-exposes no fetchable job logs).
+alone. Skipped checks (plus neutral, stale, or cancelled ones) show as their own muted
+segment rather than masquerading as pending. It auto-expands whenever something has
+failed. Expanding lists the checks failures-first (arrow-navigable). A **GitHub
+Actions** check that's still **running** shows its **current step** right in the row
+and, when expanded, a **live step checklist** that updates as the run progresses; a
+finished Actions check **peeks its job log inline** instead — without leaving the PR —
+**copy** the log with the button in its top-right corner — with an **Open full run**
+link. An external check (Vercel and the like) links straight out to its details.
+**GitLab MRs** get the same rollup from the MR's pipeline jobs, with the same **inline
+log peek**; **Bitbucket PRs** get it from the PR's commit build statuses, but those
+**link out only** (name, state, and URL — Bitbucket exposes no fetchable job logs).
 
 Comments, replies, edits, and descriptions use a Markdown editor with **Write / Preview**
 tabs and a formatting toolbar (bold, italic, headings, quote, code, links, and bulleted
@@ -1012,14 +1012,15 @@ tree are untouched, the same way a local PR's merge works (see *Local PRs* below
 takes the view over with the conflicted files and the in-app conflict editor (see
 *Syncing & conflicts*).{{ai}} **Resolve with AI** is offered on the strip itself — it
 opens the resolution and starts walking the conflicts with AI straight away — and again
-inside, where it reads **Resolve all with AI** while more than one file is left. Both
-need AI turned on with a review model configured, and every proposal is yours to review
-before it lands.{{/ai}} Once every conflict is resolved, **Finish & push** commits the
-merge and pushes it to the pull request's **head branch**, so the pull request itself
-picks the resolution up. That push is **never forced**: if the head moved while you were
-working, it's refused and your resolution is kept rather than overwritten. **Discard**
-deletes the hidden worktree and touches nothing else. Leave a resolution unfinished and
-it's offered back the next time you open that pull request, as **Continue resolving**.
+inside, where it reads **Resolve all with AI** while more than one file is left
+(switching tabs ends the walk). Both need AI turned on with a review model configured,
+and every proposal is yours to review before it lands.{{/ai}} Once every conflict is
+resolved, **Finish & push** commits the merge and pushes it to the pull request's
+**head branch**, so the pull request itself picks the resolution up. That push is
+**never forced**: if the head moved while you were working, it's refused and your
+resolution is kept rather than overwritten. **Discard** deletes the hidden worktree and
+touches nothing else. Leave a resolution unfinished and it's offered back the next time
+you open that pull request, as **Continue resolving**.
 
 This flow stops at a pull request **from a fork**: finishing a resolution means pushing
 it to a head branch in the contributor's repository, which the conflict resolver doesn't
@@ -1068,9 +1069,9 @@ on both **GitHub** and **GitLab**.
 On **GitHub** the refusal is the base branch's rules going unmet, and the line names
 what is outstanding: **Merge is blocked — waiting on: build, fragment.** GitDesktop
 asks GitHub what that branch requires and matches it against the checks on this pull
-request, counting a context as outstanding when it has never reported, or when its
-most recent run failed, is still running, or has gone stale. Four are named, then
-*and N more*. Where the rules also require approving reviews, the count rides along:
+request, counting a context as outstanding when it has never reported, or when its most
+recent run failed, was cancelled, is still running, or has gone stale. Four are named,
+then *and N more*. Where the rules also require approving reviews, the count rides along:
 **The rules also require 2 approving reviews.** Wherever the specific requirements
 can't be named, the line falls back to **Merge is blocked by the base branch's
 protection rules.** When only the approval count is known it reads **…protection
@@ -1193,7 +1194,8 @@ line, and the composer says so.
 Create a PR with **Create pull request** ({{kbd:create-pr}}) or from the Compare tab — as
 a **draft** if you like, and set its **labels** and **assignees** right in the dialog
 (GitHub and GitLab; Bitbucket PRs have neither, so it shows only its reviewers picker
-instead). A **Linked issues** row (GitHub and GitLab, wherever the repo has an issue
+instead); the label picker says when labels couldn't be loaded.
+A **Linked issues** row (GitHub and GitLab, wherever the repo has an issue
 tracker) lets you reference real repo issues on create: chips are **auto-detected** from
 your branch name and commit subjects (a \`fix/123-…\` branch seeds \`#123\`, validated
 against your actual issues), and you can add more by hand with **Link issue**. Each chip
@@ -1217,7 +1219,8 @@ whatever you've already picked (never invented), and can **propose issue links**
 picked only from a grounded shortlist of your open issues (AI-picked chips carry a
 **sparkle**; a proposed *Closes* still lands as a safe *Relates to* you can toggle up) —
 or, on a Bitbucket repo with a linked Jira project, linked-Jira keys to mention, drawn
-from the same kind of grounded shortlist so it never invents a key.
+from the same kind of grounded shortlist so it never invents a key. A suggested name
+that isn't one of the repository's labels is called out beneath the **Labels** field.
 The same **Generate** button is on the **Edit** dialog too, so you can
 write or regenerate an existing PR's title and description at any time — including for pull
 requests from forks. The Create dialog also has an optional collapsed **Notes for

@@ -61,11 +61,13 @@ function latestReportedRun(runs: PrCheckOut[]): PrCheckOut | null {
   return latest;
 }
 
-/** Whether one run leaves its context still to come. STALE counts here but not in
- *  the rollup's presentation: GitHub's passing set is success, skipped or neutral,
- *  so a stale run holds the merge even though it reads as a finished result. */
+/** Whether one run leaves its context still to come. STALE and CANCELLED count
+ *  here but not in the rollup's presentation: GitHub's passing set is success,
+ *  skipped or neutral, so either holds the merge until it re-runs even though both
+ *  read as finished, neutral results. */
 function isOutstanding(check: PrCheckOut, provider: ForgeProvider): boolean {
-  if (check.status.toUpperCase() === "STALE") return true;
+  const s = check.status.toUpperCase();
+  if (s === "STALE" || s === "CANCELLED") return true;
   const { bucket } = checkPresentation(check.status, provider);
   return bucket === "failed" || bucket === "pending";
 }
@@ -91,9 +93,9 @@ export function unmetRequiredChecks(
   }
   return required.filter((context) => {
     const named = runs.get(context);
-    // Unmet = never reported, still running, failed, or gone stale — what a viewer
-    // is waiting on. A skipped or neutral run has reported a conclusion GitHub
-    // accepts, so naming it as something still to come would be wrong.
+    // Unmet = never reported, still running, failed, stale, or cancelled — what a
+    // viewer is waiting on. A skipped or neutral run has reported a conclusion GitHub
+    // accepts; cancelled shares their muted presentation but not that acceptance.
     if (!named) return true;
     // The newest DATED run decides, and an undated one is never overruled by it:
     // nothing orders that run against the others, so it has to clear on its own.

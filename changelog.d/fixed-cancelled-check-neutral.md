@@ -1,0 +1,1 @@
+- Cancelled check runs read as neutral: their own glyph and label in the checks panel, a neutral CI dot on GitLab and Bitbucket PR rows, and required checks still hold the merge until they re-run green.

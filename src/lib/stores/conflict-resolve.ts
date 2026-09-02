@@ -66,14 +66,13 @@ export const useConflictResolve = create<ConflictResolveState>()(
   }),
 );
 
-// A resolve walk belongs to the repo it started in. `conflict-resolve` is a
-// separate store, so the ui store's CROSS_REPO_RESET can't reach it — subscribe
-// to repo changes and drop the walk here. Without this the walk survives a repo
-// switch: the diff pane opens a resolution view for a path that belongs to the
-// OLD tree (or, on a same-named path, resolves the wrong file), and a queued
-// "resolve all" run keeps advancing through the previous repo's conflicts.
+// A resolve walk belongs to the repo AND tab it started on; this store is separate,
+// so the ui store's CROSS_REPO_RESET can't reach it — drop the walk when either
+// changes. Tabs stay mounted under `<Activity>`, so a surviving walk could be adopted
+// by another tab's resolve surface against a different tree. Subscriptions fire
+// synchronously inside the ui setter, ahead of the commit that flips visibility.
 useUiStore.subscribe((s, prev) => {
-  if (s.repoPath === prev.repoPath) return;
+  if (s.repoPath === prev.repoPath && s.repoTab === prev.repoTab) return;
   const { activePath, queue } = useConflictResolve.getState();
   if (activePath !== null || queue.length > 0) {
     useConflictResolve.setState({ activePath: null, queue: [] });

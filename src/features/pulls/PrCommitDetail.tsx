@@ -276,6 +276,11 @@ export function PrCommitDetail({
               canComment={canCommentCommits}
               remoteLabel={remoteLabel}
               diffSections={sections}
+              // While placeholder, `sections` belongs to the previously selected
+              // commit, so a position-derived line would resolve against the wrong
+              // patch. (This mounts only once the diff settled, so load/error
+              // windows never reach it.)
+              diffReady={diff.isSuccess && !diff.isPlaceholderData}
               selectedPath={effectivePath}
               onSelectFile={setSelectedPath}
               lens={lens}

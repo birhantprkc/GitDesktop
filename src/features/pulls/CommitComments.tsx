@@ -10,6 +10,7 @@ import { DeleteCommentDialog } from "@/features/conversations/DeleteCommentDialo
 import { Thread } from "@/features/conversations/Thread";
 import { useMentionCandidates } from "@/features/conversations/useMentionCandidates";
 import type { DiffLineAnchor } from "@/features/diff/DiffSurface";
+import { clipTitleFromText } from "@/lib/clip-title";
 import type { splitUnifiedDiff } from "@/lib/git/diff-split";
 import {
   useCommitComments,
@@ -222,10 +223,10 @@ function toThread(c: CommitCommentOut): PrThreadOut {
 /**
  * The comment surface for a single commit: whole-commit comments as a flat thread
  * list, line-anchored comments grouped by `path:line`, and a whole-commit composer.
- * The diff pane renders anchored comments inline via `lineAnchors`, but ONLY for
- * the selected file — so the labelled group here lists every anchored comment that
- * isn't visible inline (another file, or unresolvable to a new-side line), so none
- * is ever silently dropped.
+ * Inline rendering in the diff pane needs BOTH the selected file and a resolved
+ * new-side line: selected-file comments that miss lead the group below, marked
+ * couldn't-place once `diffReady` says the file's patch was actually walked, and
+ * every other anchored comment follows under its path — so none is silently dropped.
  *
  * It owns its pane sizing: a bottom pane capped at 45% of its flex-column parent,
  * so a caller drops it in as a sibling rather than wrapping it.
@@ -241,6 +242,7 @@ export function CommitComments({
   lens,
   stale = false,
   enabled = true,
+  diffReady = true,
 }: {
   repoPath: string;
   sha: string;
@@ -264,6 +266,11 @@ export function CommitComments({
    *  component STAYS MOUNTED so per-commit drafts survive a commit that doesn't
    *  (yet) support them; the read is disabled with it. */
   enabled?: boolean;
+  /** Whether `diffSections` reflects a settled read of THIS commit's patch. False
+   *  (loading, errored, or another commit's placeholder) makes a `position`-derived
+   *  line unresolvable, so the couldn't-place marker is withheld rather than blaming
+   *  the comment for a missing patch. */
+  diffReady?: boolean;
 }) {
   const comments = useCommitComments(repoPath, enabled ? sha : null, lens);
   const createComment = useCreateCommitComment(repoPath, lens);
@@ -297,17 +304,29 @@ export function CommitComments({
 
   // Anchored comments NOT visible inline: one renders inline only when it's on the
   // selected file AND resolves to a new-side line. Everything else surfaces below
-  // under its `path:line` label, with the resolved line when we have one.
-  const hiddenAnchored = useMemo(() => {
-    return anchored
+  // under its `path:line` label, with the resolved line when we have one. Until
+  // `diffReady`, no patch-derived line counts as resolved — its inline anchor doesn't
+  // exist yet, so excluding the comment here would hide it. A server-provided `line`
+  // never depends on the patch and stays resolved throughout.
+  // Selected-file entries lead the group: they're retained only when their line
+  // didn't resolve, and under a cross-file label they read as another file's comment.
+  const orderedHidden = useMemo(() => {
+    const retained = anchored
       .map((c) => {
         const path = c.path as string;
         const line =
-          c.line ?? lineFromPosition(diffSections?.get(path), c.position);
+          c.line ??
+          (diffReady
+            ? lineFromPosition(diffSections?.get(path), c.position)
+            : null);
         return { comment: c, path, line, startLine: c.startLine };
       })
       .filter(({ path, line }) => !(path === selectedPath && line != null));
-  }, [anchored, diffSections, selectedPath]);
+    return [
+      ...retained.filter(({ path }) => path === selectedPath),
+      ...retained.filter(({ path }) => path !== selectedPath),
+    ];
+  }, [anchored, diffSections, selectedPath, diffReady]);
 
   // Parents serve the previous commit's content as placeholder while arrowing
   // through history, so hold writes until the shown commit is the addressed one.
@@ -400,9 +419,9 @@ export function CommitComments({
               />
             ))}
 
-            {hiddenAnchored.length > 0 && (
+            {orderedHidden.length > 0 && (
               <div className="space-y-3">
-                {hiddenAnchored.map(({ comment: c, path, line, startLine }) => {
+                {orderedHidden.map(({ comment: c, path, line, startLine }) => {
                   // A valid range labels `path:start–end`; a single line (or an
                   // unresolved line) keeps `path:line` / `path`.
                   const lineLabel =
@@ -412,22 +431,57 @@ export function CommitComments({
                         ? `:${startLine}–${line}`
                         : `:${line}`;
                   const label = `${path}${lineLabel}`;
+                  // The open file never offers a jump (it's already shown), and only
+                  // claims the comment is unplaceable once the patch has been walked:
+                  // an unread patch resolves no line either, and would blame the
+                  // comment for a diff that simply hasn't loaded.
+                  const ownFile = path === selectedPath;
+                  const labelNode = (() => {
+                    switch (true) {
+                      case ownFile && diffReady:
+                        // The annotation is the point of this label, so only the
+                        // path truncates — it keeps its own clipped-text tooltip.
+                        return (
+                          <p className="flex items-baseline text-[11px] text-muted-foreground">
+                            <span
+                              className="min-w-0 truncate font-mono"
+                              onMouseEnter={clipTitleFromText}
+                            >
+                              {path}
+                            </span>
+                            <span className="shrink-0 font-sans">
+                              {" · couldn't place in this diff"}
+                            </span>
+                          </p>
+                        );
+                      case ownFile:
+                        return (
+                          <p className="truncate font-mono text-[11px] text-muted-foreground">
+                            {label}
+                          </p>
+                        );
+                      case onSelectFile !== undefined:
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => onSelectFile(path)}
+                            className="block max-w-full cursor-pointer truncate text-left font-mono text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                            title={`Open ${label} in the diff`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      default:
+                        return (
+                          <p className="truncate font-mono text-[11px] text-muted-foreground">
+                            {label}
+                          </p>
+                        );
+                    }
+                  })();
                   return (
                     <div key={c.id} className="space-y-1">
-                      {onSelectFile ? (
-                        <button
-                          type="button"
-                          onClick={() => onSelectFile(path)}
-                          className="block max-w-full cursor-pointer truncate text-left font-mono text-[11px] text-muted-foreground hover:text-foreground hover:underline"
-                          title={`Open ${label} in the diff`}
-                        >
-                          {label}
-                        </button>
-                      ) : (
-                        <p className="truncate font-mono text-[11px] text-muted-foreground">
-                          {label}
-                        </p>
-                      )}
+                      {labelNode}
                       <Thread
                         thread={toThread(c)}
                         onSaveEdit={
