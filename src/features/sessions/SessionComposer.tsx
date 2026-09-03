@@ -35,11 +35,11 @@ import { useRepoKeys, useSettings } from "@/lib/settings/queries";
 import { useUiStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
 import {
-  AGENT_LABELS,
   AgentPicker,
   ComposerOptions,
   type Isolation,
   type IsolationNote,
+  imageMissingAgentText,
   ModelPicker,
   type RunMode,
 } from "./AgentPickers";
@@ -136,7 +136,7 @@ function isolationNoteFor({
   if (!agentInImage && perAgentCopy)
     return {
       tone: "warn",
-      text: `The agent image wasn't built with ${AGENT_LABELS[agent]} — add it under Settings → AI and rebuild.`,
+      text: imageMissingAgentText(agent),
       settingsAction: true,
     };
   if (!status.imageMatches)
@@ -1059,6 +1059,15 @@ export function SessionComposer({
           effort: startEffort,
         }}
         estimate={costEstimate}
+        // Only a containerized run can fail on image membership; undefined means
+        // the arms run on the host, where every agent is fair game — or settings
+        // never loaded (an errored load doesn't hold submit), where a defined []
+        // would falsely flag every arm.
+        imageAgents={
+          isContainer && settings.data
+            ? (settings.data.agentImageProviders ?? [])
+            : undefined
+        }
         onRun={runEnsemble}
       />
     </>
