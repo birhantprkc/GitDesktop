@@ -42,7 +42,11 @@ pub struct PtyState {
 /// Control side of one PTY: the master (resize), an input queue, and the child
 /// (kill). The reader is owned by the streaming thread, not here.
 struct PtyHandle {
-    master: Box<dyn MasterPty + Send>,
+    /// Behind its own `Arc<Mutex<…>>` so `pty_resize` can clone it out of the map,
+    /// release the map lock, and only then make the blocking OS call; the mutex is
+    /// what makes that clone shareable at all, since `Arc<T>: Send` needs `T: Send +
+    /// Sync` and the bare `Box<dyn MasterPty + Send>` is not `Sync`.
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     /// Queues input for the PTY's writer thread. The writer itself lives there, so
     /// a child that stops reading can never block a caller holding the PTY map
     /// lock; dropping this handle closes the channel, which ends that thread.
@@ -582,7 +586,7 @@ pub async fn pty_open(
     let prev = state.ptys.lock().unwrap().insert(
         id.clone(),
         PtyHandle {
-            master: pair.master,
+            master: Arc::new(Mutex::new(pair.master)),
             input,
             queued,
             child,
@@ -685,12 +689,23 @@ pub fn pty_write(state: State<'_, PtyState>, id: String, data: String) -> AppRes
     Ok(())
 }
 
-/// Resizes the PTY when the terminal element resizes.
+/// Resizes the PTY when the terminal element resizes. Sync command (main thread),
+/// so the master is cloned OUT of the map and the guard dropped before the resize:
+/// that is an OS call, and holding the map lock across it stalls `pty_write`,
+/// `pty_close` and the reader threads on a resize storm (the writer thread owns
+/// its channel and never touches the map).
+///
+/// A resize racing `pty_close` keeps the MASTER alive past the map entry's removal
+/// for the length of one OS call; the result is discarded either way, and teardown
+/// owns the handle's child and temp-script halves regardless.
 #[tauri::command]
 pub fn pty_resize(state: State<'_, PtyState>, id: String, cols: u16, rows: u16) -> AppResult<()> {
-    let map = state.ptys.lock().unwrap();
-    if let Some(h) = map.get(&id) {
-        let _ = h.master.resize(PtySize {
+    let master = {
+        let map = state.ptys.lock().unwrap();
+        map.get(&id).map(|h| Arc::clone(&h.master))
+    };
+    if let Some(master) = master {
+        let _ = master.lock().unwrap().resize(PtySize {
             rows: rows.max(1),
             cols: cols.max(1),
             pixel_width: 0,
@@ -907,6 +922,27 @@ mod tests {
     /// concurrency tests key on the two fields `pty_write` touches.
     type TestPtys = Arc<Mutex<HashMap<String, (Sender<Vec<u8>>, Arc<AtomicUsize>)>>>;
 
+    /// The resize side of the PTY map: a real master needs a live child, so this
+    /// mirrors the one field `pty_resize` touches, wrapping included.
+    type TestResizePtys = Arc<Mutex<HashMap<String, Arc<Mutex<WedgedResizer>>>>>;
+
+    /// Blocks inside `resize` until released — the OS resize call that has not
+    /// returned yet.
+    struct WedgedResizer {
+        entered: Sender<()>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+    }
+    impl WedgedResizer {
+        fn resize(&self) {
+            let _ = self.entered.send(());
+            let (lock, cv) = &*self.release;
+            let mut go = lock.lock().unwrap();
+            while !*go {
+                go = cv.wait(go).unwrap();
+            }
+        }
+    }
+
     /// Appends every write to a shared buffer, so a test can assert ordering.
     struct RecordingWriter(Arc<Mutex<Vec<u8>>>);
     impl Write for RecordingWriter {
@@ -1062,9 +1098,48 @@ mod tests {
     }
 
     #[test]
+    fn a_blocked_resize_leaves_the_pty_map_lock_free() {
+        // `resize` is an OS call on the main thread, so `pty_resize` clones the master
+        // out and DROPS the map guard before making it — `pty_write` and `pty_close`
+        // take that same lock and must stay reachable through a resize storm.
+        // Shape mirror over a test map, like the write test above (see
+        // `TestResizePtys`) — it pins the clone-then-drop shape, not `pty_resize`'s body.
+        let ptys: TestResizePtys = Arc::default();
+        let (entered_tx, entered) = channel();
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        ptys.lock().unwrap().insert(
+            "t".to_string(),
+            Arc::new(Mutex::new(WedgedResizer {
+                entered: entered_tx,
+                release: gate.clone(),
+            })),
+        );
+
+        let resizing = ptys.clone();
+        let resize = std::thread::spawn(move || {
+            let master = {
+                let map = resizing.lock().unwrap();
+                map.get("t").map(Arc::clone)
+            };
+            master.expect("the handle is registered").lock().unwrap().resize();
+        });
+        entered
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the resizing thread should have reached the blocking resize");
+        assert!(
+            ptys.try_lock().is_ok(),
+            "a blocked resize is holding the PTY map lock — pty_close would be stuck"
+        );
+
+        release(&gate);
+        resize.join().unwrap();
+    }
+
+    #[test]
     fn writing_under_the_map_lock_blocks_close_control() {
-        // Negative control for the test above: the pre-fix shape (write_all under the
-        // map lock) DOES block a `pty_close`-style acquire, so that assertion can fail.
+        // Negative control for `a_wedged_write_leaves_the_pty_map_lock_free`: the
+        // pre-fix shape (write_all under the map lock) DOES block a `pty_close`-style
+        // acquire, so that assertion can fail.
         let writers: Arc<Mutex<HashMap<String, WedgedWriter>>> = Arc::default();
         let (writer, wedge) = wedged_writer();
         writers.lock().unwrap().insert("t".to_string(), writer);
