@@ -71,6 +71,11 @@ export function ConflictResolveView({
   // Bumped on each run so a superseded continuation (cancel / regenerate /
   // navigate-away) can't settle the shared state the newer run now owns.
   const genRef = useRef(0);
+  // Whether a resolution is genuinely in flight. Tracked explicitly rather than
+  // derived from phase/`generating`: both lag the decision points — `generating`
+  // stays true across a cancel's kill round-trip, and the phase is still
+  // "streaming" while the finished proposal is being diffed.
+  const runningRef = useRef(false);
   const textRef = useLatestRef(text);
   // The resolve view shares the diff pane's width budget, so the preview takes
   // the same legibility gate: below it, render unified.
@@ -87,6 +92,7 @@ export function ConflictResolveView({
     setProposed("");
     setPreviewDiff(null);
     setPhase("loading");
+    runningRef.current = true;
 
     let resolved: ConflictSides;
     try {
@@ -100,6 +106,7 @@ export function ConflictResolveView({
       resolved = await conflictSides(repoPath, path, exclude);
     } catch (e) {
       if (gen === genRef.current) {
+        runningRef.current = false;
         toastError(e);
         setPhase("idle");
       }
@@ -108,6 +115,7 @@ export function ConflictResolveView({
     if (gen !== genRef.current) return;
     setSides(resolved);
     if (resolved.aiIgnored) {
+      runningRef.current = false;
       setPhase("blocked");
       return;
     }
@@ -125,6 +133,7 @@ export function ConflictResolveView({
     setPhase("streaming");
     const completed = await run(reviewAi, { system, prompt, repoPath });
     if (gen !== genRef.current) return;
+    runningRef.current = false;
     // A failed or cancelled run leaves a partial (or provider-error) buffer behind;
     // proposing a "resolution" from it would corrupt the file. The hook already
     // toasted a failure (cancels stay silent by design) — just let the user retry.
@@ -151,39 +160,67 @@ export function ConflictResolveView({
     setPhase("ready");
   }
 
+  // Set by the teardown below when it cut a session short, so the next setup can
+  // tell a resumable interruption from a session that settled on its own.
+  const interruptedRef = useRef(false);
   // Auto-start once per mounted file. Remounts (keyed on path in DiffViewer) as
   // the resolve-all walk advances, so each conflict kicks off on arrival.
-  const kickoff = useEffectEvent(() => void start());
+  // `<Activity>` replays this effect on every show, so only a fresh session or one
+  // the teardown below interrupted restarts: a settled phase never restarts, and a
+  // cancelled run waits behind Try again — it lands on the same "idle" phase as an
+  // interrupted one, so the flag is what tells those two apart.
+  const kickoff = useEffectEvent(() => {
+    const resume = interruptedRef.current;
+    interruptedRef.current = false;
+    if (phase === "ready" || phase === "blocked") return;
+    if (phase !== "loading" && !resume) return;
+    void start();
+  });
   // biome-ignore lint/correctness/useExhaustiveDependencies: start once per file
   useEffect(() => {
     kickoff();
   }, [path]);
-  // DiffViewer swaps this view out (it's keyed on path) the moment another file
-  // is selected, so without this an in-flight resolution keeps streaming — and
-  // billing — into an orphaned component.
-  useEffect(() => () => cancel(), [cancel]);
+  // DiffViewer swaps this view out (keyed on path) the moment another file is
+  // selected, so without this a streaming resolution keeps billing into an
+  // orphaned component; `<Activity>` hide runs it too. The flag marks a run this
+  // teardown cut short — never a user cancel, never one that already settled.
+  // Before the stream starts there is nothing to cancel: `run` clears it on entry.
+  useEffect(
+    () => () => {
+      if (runningRef.current) interruptedRef.current = true;
+      cancel();
+    },
+    [cancel],
+  );
 
   function handleCancel() {
     genRef.current++;
+    runningRef.current = false;
     cancel();
     setPhase("idle");
   }
 
-  function accept() {
-    resolve.mutate(
-      { path, content: proposed, stage: true },
-      {
-        onSuccess: () => {
-          toast.success(
-            queue.length > 0
-              ? `Resolved ${baseName(path)} — next conflict`
-              : `Resolved ${baseName(path)}`,
-          );
-          advance();
-        },
-        onError: toastError,
-      },
-    );
+  // Awaited, not per-call callbacks: `<Activity>` hide tears this observer's
+  // subscription down, and react-query drops per-call callbacks once an observer
+  // has no listeners — the walk would stall pinned to an already-resolved file.
+  async function accept() {
+    try {
+      await resolve.mutateAsync({ path, content: proposed, stage: true });
+      // This continuation can outlive the walk that armed it (another surface armed
+      // its own walk, or the repo-switch clear fired) during the mutation, so both
+      // the wording and the advance come from a fresh read gated on it still
+      // being ours.
+      const walk = useConflictResolve.getState();
+      const owns = walk.scopePath === repoPath && walk.activePath === path;
+      toast.success(
+        owns && walk.queue.length > 0
+          ? `Resolved ${baseName(path)} — next conflict`
+          : `Resolved ${baseName(path)}`,
+      );
+      if (owns) walk.advance();
+    } catch (e) {
+      toastError(e);
+    }
   }
 
   // "Reject this proposal": in a resolve-all run, skip to the next file (leaving
@@ -347,7 +384,7 @@ export function ConflictResolveView({
               size="sm"
               className="ml-auto"
               disabled={resolve.isPending}
-              onClick={accept}
+              onClick={() => void accept()}
             >
               {resolve.isPending ? (
                 <Spinner data-icon="inline-start" />

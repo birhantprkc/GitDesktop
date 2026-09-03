@@ -176,10 +176,10 @@ import {
 import { useRepoLens } from "@/lib/repo-lens/queries";
 import { useAiEnabled } from "@/lib/settings/queries";
 import { useConfirm } from "@/lib/stores/confirm";
-import { useConflictResolve } from "@/lib/stores/conflict-resolve";
 import { queuedMergeKey, useUiStore } from "@/lib/stores/ui";
 import { toastError, toastErrorWithNote } from "@/lib/toast";
 import { useKeyedEntityState } from "@/lib/use-keyed-entity-state";
+import { useLatestRef } from "@/lib/use-latest-ref";
 import { useRetained } from "@/lib/use-retained";
 import { cn } from "@/lib/utils";
 import { ChecksRollup } from "./ChecksRollup";
@@ -322,6 +322,10 @@ export function RemotePrView({
   // removing the upstream remote collapses the gate, so the same number becomes a
   // different repo's PR.
   const entityKey = `${repoPath}#${lens}#${number}`;
+  // Live identity for mutation continuations: this view swaps PRs without
+  // unmounting, so a callback's captured `entityKey` says which PR it was started
+  // on and this says which one is on screen now.
+  const entityKeyRef = useLatestRef(entityKey);
   // The viewer's push permission on the lens repo — the axis the per-action
   // forge flags don't cover. Only fetched once a provider is known; an
   // unanswered probe leaves every control exactly as it is.
@@ -477,12 +481,13 @@ export function RemotePrView({
   const updateBranch = usePrUpdateBranch(repoPath);
   const mergeRemotePr = useMergeRemotePr(repoPath, lens);
   const abortRemotePrResolve = useAbortRemotePrResolve(repoPath);
-  // The AI-resolution store the takeover follows — the banner's "Resolve with AI"
-  // seeds its walk here so the surface opens already working through the files.
-  const startAll = useConflictResolve((s) => s.startAll);
   // The conflict resolution this view is driving — started here or resumed from the
-  // rediscovered worktree. Non-null takes the whole view over.
-  const [resolve, setResolve] = useState<RemotePrResolveHandle | null>(null);
+  // rediscovered worktree. Non-null takes the whole view over. `aiPaths` rides along
+  // so the takeover arms its own walk: only the surface that owns a tree starts one
+  // for it, which is what keeps a remount from inheriting a stale run.
+  const [resolve, setResolve] = useState<
+    (RemotePrResolveHandle & { aiPaths?: string[] }) | null
+  >(null);
   const editComment = useEditPrComment(repoPath, lens);
   const deleteComment = useDeletePrComment(repoPath, lens);
   const editReviewComment = useEditReviewComment(repoPath, lens);
@@ -671,8 +676,9 @@ export function RemotePrView({
   // offer the PREVIOUS PR's. Retain the last FRESH value and the PR it belonged to;
   // a mismatch means nothing fresh has landed for this one yet, and neither action is
   // offered. Both retained values are primitives — an object would re-set every
-  // render. The stale arms feed null so a mount landing mid-switch seeds neither.
-  const retainedDraftFor = useRetained(
+  // render. The stale arms feed null so a mount landing mid-switch seeds neither,
+  // and the settled identity keys the checks rollup for the same reason.
+  const settledEntityKey = useRetained(
     details.isPlaceholderData ? null : entityKey,
     !details.isPlaceholderData,
   );
@@ -680,7 +686,7 @@ export function RemotePrView({
     details.isPlaceholderData ? null : (details.data?.isDraft ?? null),
     !details.isPlaceholderData,
   );
-  const shownIsDraft = retainedDraftFor === entityKey ? retainedIsDraft : null;
+  const shownIsDraft = settledEntityKey === entityKey ? retainedIsDraft : null;
   // Palette twins of the footer's draft controls — same `setDraft` mutation, same
   // frozen identity, and Ready also fires the ready-review automation. Registration
   // is effect-synced, so an `enabled` term alone still leaves the keypress a frame
@@ -1153,42 +1159,57 @@ export function RemotePrView({
   /** Enter the isolated-worktree resolution: a merge that pauses there on conflicts,
    *  and just pushes when there are none. `withAi` hands the conflicts the backend
    *  just reported straight to the AI walk, so the takeover opens already working. */
-  function runResolve(withAi: boolean) {
+  async function runResolve(withAi: boolean) {
     if (details.isPlaceholderData || resolve) return;
     const info = details.data;
     if (!info) return;
-    // Always route through the backend, even when `findResolve` reports a worktree: it
-    // re-attaches to one for this PR+lens from live porcelain rather than a cached read
-    // (and does so before any fetch, so continuing stays fast). A cached handle can be
-    // stale — a just-discarded one would mount the takeover on a deleted path.
-    mergeRemotePr.mutate(
-      { number, base: info.baseRefName, head: info.headRefName },
-      {
-        onSuccess: (outcome) => {
-          if (outcome.status === "pushed") {
-            toast.success(
-              `No conflicts after all — merged ${info.baseRefName} and pushed`,
-            );
-            return;
-          }
-          if (outcome.worktreePath && outcome.worktreeId) {
-            setResolve({
-              worktreePath: outcome.worktreePath,
-              worktreeId: outcome.worktreeId,
-            });
-            // The takeover follows this same store's `activePath`, so starting the walk
-            // here makes it open each file as the AI works through it.
-            if (withAi && outcome.conflicts.length > 0)
-              startAll(outcome.conflicts);
-            return;
-          }
-          // "conflicts" with no worktree to open is a broken outcome — say so rather
-          // than leaving the user on an unchanged view wondering what happened.
-          toast.error("Could not open the conflict resolution worktree");
-        },
-        onError,
-      },
-    );
+    const startedFor = entityKey;
+    // Awaited, not per-call callbacks: an `<Activity>` hide mid-merge tears this
+    // observer's subscription down, and react-query drops per-call callbacks once an
+    // observer has no listeners — the takeover would never open for a worktree the
+    // backend had already made, and the push toast would go unsaid.
+    try {
+      // Always route through the backend, even when `findResolve` reports a worktree:
+      // it re-attaches to one for this PR+lens from live porcelain rather than a
+      // cached read (and does so before any fetch, so continuing stays fast). A cached
+      // handle can be stale — a just-discarded one would mount the takeover on a
+      // deleted path.
+      const outcome = await mergeRemotePr.mutateAsync({
+        number,
+        base: info.baseRefName,
+        head: info.headRefName,
+      });
+      if (outcome.status === "pushed") {
+        // Deliberately unguarded, and self-contextualizing instead: the push
+        // landed on the forge whether or not the user navigated away, and the
+        // named PR keeps the toast honest from any screen.
+        toast.success(
+          `No conflicts after all — merged ${info.baseRefName} into #${number} and pushed`,
+        );
+        return;
+      }
+      // Past the pushed arm this continuation can outlive the PR it was started
+      // on (the view swaps PRs without unmounting), so nothing below is adopted
+      // once the entity moved; the paused worktree stays resumable from the old
+      // PR via "Continue resolving".
+      if (startedFor !== entityKeyRef.current) return;
+      if (outcome.worktreePath && outcome.worktreeId) {
+        setResolve({
+          worktreePath: outcome.worktreePath,
+          worktreeId: outcome.worktreeId,
+          aiPaths:
+            withAi && outcome.conflicts.length > 0
+              ? outcome.conflicts
+              : undefined,
+        });
+        return;
+      }
+      // "conflicts" with no worktree to open is a broken outcome — say so rather
+      // than leaving the user on an unchanged view wondering what happened.
+      toast.error("Could not open the conflict resolution worktree");
+    } catch (e) {
+      onError(e);
+    }
   }
 
   async function discardResolve() {
@@ -1211,7 +1232,7 @@ export function RemotePrView({
   // server has flipped back to mergeable, and the banner offers it there.
   useHotkeyAction(
     "pr-resolve-conflicts",
-    () => runResolve(false),
+    () => void runResolve(false),
     isSelectedPr &&
       !details.isPlaceholderData &&
       (canResolveConflicts || resolveWorktree !== null) &&
@@ -2246,6 +2267,7 @@ export function RemotePrView({
           worktreePath={resolve.worktreePath}
           worktreeId={resolve.worktreeId}
           lens={lens}
+          aiPaths={resolve.aiPaths}
           onDone={() => setResolve(null)}
         />
       </div>
@@ -2609,11 +2631,20 @@ export function RemotePrView({
         {stackOfferNote ? (
           <p className="text-xs text-muted-foreground">{stackOfferNote}</p>
         ) : null}
+        {/* Keyed per PR: the rollup latches its auto-open and remembers the
+            collapse you chose, and this view swaps PRs without remounting. The
+            SETTLED identity, not the live one — `pr` is the previous PR's
+            placeholder until fresh details land, and seeding off those would
+            auto-expand the new PR from the old one's checks. Nothing settled yet
+            gets a per-PR `pending-` key, so the settle still remounts and two
+            placeholder PRs never share one. */}
         <ChecksRollup
+          key={settledEntityKey ?? `pending-${entityKey}`}
           checks={pr.checks}
           repoPath={repoPath}
           provider={providerKey}
           crossRepository={!!pr.crossRepository}
+          unmetRequiredContexts={blockedRequirements}
         />
         <div className="flex flex-wrap gap-1 pt-1">
           {availableSections.map((s) => (
@@ -2665,8 +2696,8 @@ export function RemotePrView({
         updateAwaitingDefault={defaultBranchSettling}
         updateAwaitingRules={rulesSettling}
         updateSubmitting={updateBranch.isPending}
-        onResolve={() => runResolve(false)}
-        onResolveWithAi={() => runResolve(true)}
+        onResolve={() => void runResolve(false)}
+        onResolveWithAi={() => void runResolve(true)}
         onDiscard={() => void discardResolve()}
         onRetry={mergeability.retry}
         onUpdateBranch={() => void runUpdateBranch(false)}
