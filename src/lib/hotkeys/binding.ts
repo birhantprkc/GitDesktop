@@ -153,6 +153,27 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+/** Surfaces that consume plain keystrokes without being editable targets, where
+ *  a bare-key binding would double-act — the target half of the pair, with
+ *  {@link isTypeaheadKey} as the key half. `combobox` is the measured case: a
+ *  CLOSED Base UI select trigger runs value-mutating typeahead with no
+ *  preventDefault. `listbox` is excluded: the app's lists navigate by arrows
+ *  alone and are its primary keyboard surfaces. */
+export function isTypeaheadTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return (
+    target.closest('[role="menu"],[role="menubar"],[role="combobox"]') !== null
+  );
+}
+
+/** Whether a binding is the kind of keystroke a typeahead surface consumes — a
+ *  printable character. Named keys (f1, f5, …) are not typeahead input, so a
+ *  registered one still has to reach the listener's preventDefault. */
+export function isTypeaheadKey(binding: string): boolean {
+  const key = bindingKey(binding);
+  return key.length === 1 || key === "space";
+}
+
 /** Native text-editing combos a hotkey must never shadow while typing. */
 const EDITING_COMBOS = new Set([
   "mod+a",
@@ -165,12 +186,24 @@ const EDITING_COMBOS = new Set([
   "mod+shift+v",
 ]);
 
+/** Whether a binding carries a real modifier — plain keys and `shift+key` are
+ *  typing. Every dispatcher gates its editable and typeahead guards on this one
+ *  test, so the predicate can't drift between them. */
+export function hasModifier(binding: string): boolean {
+  return binding.includes("mod+") || binding.includes("alt+");
+}
+
+/** The key token of a canonical binding — whatever follows the fixed
+ *  mod → alt → shift prefix, so the `+` key survives (`shift++` → `+`). */
+export function bindingKey(binding: string): string {
+  return binding.replace(/^(?:mod\+)?(?:alt\+)?(?:shift\+)?/, "");
+}
+
 /**
- * Whether a binding is allowed to fire while focus sits in a text field:
- * it must carry a real modifier (plain keys and shift+key are typing) and
- * not collide with the native editing combos.
+ * Whether a binding is allowed to fire while focus sits in a text field: it
+ * must carry a real modifier and not collide with the native editing combos.
  */
 export function firesInEditable(binding: string): boolean {
-  if (!binding.includes("mod+") && !binding.includes("alt+")) return false;
+  if (!hasModifier(binding)) return false;
   return !EDITING_COMBOS.has(binding);
 }

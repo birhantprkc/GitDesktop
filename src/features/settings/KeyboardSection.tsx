@@ -4,7 +4,13 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { withForm } from "@/lib/form";
-import { eventToBinding, formatBinding } from "@/lib/hotkeys/binding";
+import {
+  bindingKey,
+  eventToBinding,
+  formatBinding,
+  hasModifier,
+  isTypeaheadKey,
+} from "@/lib/hotkeys/binding";
 import { dispatchAction, useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import {
   ACTIONS,
@@ -15,11 +21,57 @@ import { matchesActionText, queryTokens } from "@/lib/hotkeys/search";
 import { cn } from "@/lib/utils";
 import { settingsFormOpts } from "./settings-form";
 
-/** Bindings must carry a real modifier or be a function key — anything a
- *  user could type into a text field is rejected during recording. */
+/** Keys refused without a modifier because they activate whatever has focus,
+ *  on every surface. Space is deliberately NOT here — binding a single key to
+ *  stage or select is the primary ask — so it binds, and the note on assignment
+ *  carries its cost: a live bound action takes the keypress a focused button or
+ *  checkbox would have used, and page scroll with it. */
+const ACTIVATION_KEYS = new Set(["enter"]);
+
+/** Keys that scroll or move a selection on their own. A bare binding on one
+ *  preventDefaults it on every surface where the action is live, so list
+ *  navigation and scrolling die app-wide. */
+const NAV_KEYS = new Set([
+  "up",
+  "down",
+  "left",
+  "right",
+  "home",
+  "end",
+  "pageup",
+  "pagedown",
+]);
+
+/** Without a modifier, only the activation and navigation keys above are
+ *  refused: each already means something on every focused surface. Every other
+ *  key binds, because the dispatcher holds modifier-less bindings back wherever
+ *  the keystroke is already typing or driving a menu. */
 function isBindableCombo(binding: string): boolean {
-  if (/^f\d{1,2}$/.test(binding)) return true;
-  return binding.includes("mod+") || binding.includes("alt+");
+  if (hasModifier(binding)) return true;
+  const key = bindingKey(binding);
+  return !ACTIVATION_KEYS.has(key) && !NAV_KEYS.has(key);
+}
+
+/** What accepting a modifier-less binding costs. The menu-and-picker clause is
+ *  true only of character keys, which is all typeahead consumes; Space earns a
+ *  longer line, being the one bindable key whose native job is activating the
+ *  focused control, so a live action takes that keypress instead. */
+function consequenceNote(binding: string): string {
+  const zones = isTypeaheadKey(binding)
+    ? "while you're typing or in a menu or picker"
+    : "while you're typing";
+  const quiet = `${formatBinding(binding)} stays quiet ${zones}, and fires anywhere else`;
+  return bindingKey(binding) === "space"
+    ? `${quiet} — including on a focused button, where it replaces the button's own Space press.`
+    : `${quiet}.`;
+}
+
+/** Why a refused key can't stand alone. The two sets collide with different
+ *  things, so each names what the bare key would have taken over. */
+function refusalNote(binding: string): string {
+  return ACTIVATION_KEYS.has(bindingKey(binding))
+    ? `Enter activates the focused control, so this shortcut needs ${formatBinding("mod")} or ${formatBinding("alt")} added.`
+    : `That key scrolls and navigates on its own, so this shortcut needs ${formatBinding("mod")} or ${formatBinding("alt")} added.`;
 }
 
 export const KeyboardSection = withForm({
@@ -43,7 +95,9 @@ export const KeyboardSection = withForm({
       return ACTIONS.find((a) => a.id === id)?.defaultBinding ?? null;
     };
 
-    function setBinding(id: string, binding: string | null) {
+    /** Assigns or clears a binding, returning true when it posted the steal
+     *  message — that note outranks any softer one the caller would add. */
+    function setBinding(id: string, binding: string | null): boolean {
       const next = { ...overrides };
       let stolenFrom: string | null = null;
       if (binding) {
@@ -61,11 +115,12 @@ export const KeyboardSection = withForm({
       if (binding === def) delete next[id];
       else next[id] = binding;
       form.setFieldValue("hotkeys", next);
-      setNote(
+      const stealNote =
         stolenFrom && binding
           ? `${formatBinding(binding)} was taken from "${stolenFrom}", which is now unbound.`
-          : null,
-      );
+          : null;
+      setNote(stealNote);
+      return stealNote !== null;
     }
 
     // While recording, capture every keypress before the app's own hotkey
@@ -92,12 +147,15 @@ export const KeyboardSection = withForm({
       const binding = eventToBinding(e);
       if (!binding) return; // bare modifier — keep waiting
       if (!isBindableCombo(binding)) {
-        setNote(
-          `Shortcuts need a modifier (${formatBinding("mod")} or ${formatBinding("alt")}) or a function key, so they can't collide with typing.`,
-        );
+        setNote(refusalNote(binding));
         return;
       }
-      setBinding(id, binding);
+      // The assignment always stands; a modifier-less binding only earns a note
+      // about where it stays quiet, and never over the steal message. (Chords
+      // are exempt: the quiet zones named by the note don't apply to them.)
+      if (!setBinding(id, binding) && !hasModifier(binding)) {
+        setNote(consequenceNote(binding));
+      }
       setRecordingId(null);
     });
 

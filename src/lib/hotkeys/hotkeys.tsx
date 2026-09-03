@@ -5,7 +5,14 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useSettings } from "@/lib/settings/queries";
-import { eventToBinding, firesInEditable, isEditableTarget } from "./binding";
+import {
+  eventToBinding,
+  firesInEditable,
+  hasModifier,
+  isEditableTarget,
+  isTypeaheadKey,
+  isTypeaheadTarget,
+} from "./binding";
 import { ACTIONS, type ActionId } from "./registry";
 
 interface HandlerEntry {
@@ -137,6 +144,15 @@ export function useHotkeysListener() {
     const binding = eventToBinding(e);
     if (!binding) return;
     if (isEditableTarget(e.target) && !firesInEditable(binding)) return;
+    // Typeahead surfaces only ever swallow modifier-less bindings, and only
+    // character keys, which is all typeahead consumes: a mod/alt chord and a
+    // named key alike keep firing everywhere.
+    if (
+      !hasModifier(binding) &&
+      isTypeaheadKey(binding) &&
+      isTypeaheadTarget(e.target)
+    )
+      return;
     const id = byBinding.get(binding);
     // Registered-vs-unregistered rule. A chord OWNED by an on-screen surface —
     // an action with at least one live handler, even a disabled one — must

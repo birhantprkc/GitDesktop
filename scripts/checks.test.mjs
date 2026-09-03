@@ -53,6 +53,8 @@ const loneActivity = scanner("lone-activity-boundary");
 const seedOnOpen = scanner("seed-effect-on-open");
 const diffStatPair = scanner("hand-rolled-diff-stat");
 const nullFallback = scanner("null-suspense-fallback");
+const bareGroupLabel = scanner("bare-group-label");
+const unguardedDispatcher = scanner("unguarded-binding-dispatcher");
 
 test("hover-reveal catches every Tailwind spelling of the idiom", () => {
   for (const classes of [
@@ -700,9 +702,10 @@ test("hand-rolled-diff-stat exempts the component file and vendored ui only", ()
 });
 
 test("null-suspense-fallback flags the literal on one line or wrapped", () => {
-  assert.deepEqual(nullFallback("<Suspense fallback={null}>{kids}</Suspense>"), [
-    1,
-  ]);
+  assert.deepEqual(
+    nullFallback("<Suspense fallback={null}>{kids}</Suspense>"),
+    [1],
+  );
   // The formatter's shape: the prop on its own line, with inner spacing.
   const wrapped = [
     "<Suspense",
@@ -722,6 +725,238 @@ test("null-suspense-fallback leaves a real fallback and a forwarded prop alone",
     "<Suspense fallback={compact ? null : <Skeleton />}>{kids}</Suspense>",
   ])
     assert.deepEqual(nullFallback(source), [], `should ignore ${source}`);
+});
+
+test("bare-group-label flags an attribute-less Label caption", () => {
+  const caption = [
+    '<div className="space-y-2">',
+    "  <Label>Rules</Label>",
+    '  <RuleToggle label="Require a pull request" checked={d.requirePr} />',
+    "</div>",
+  ].join("\n");
+  assert.deepEqual(bareGroupLabel(caption), [2]);
+  assert.deepEqual(bareGroupLabel("<Label>{label}</Label>"), [1]);
+  // Two captions in one file are two findings, so a partial conversion can't
+  // read as clean once the first is fixed.
+  const two = ["<Label>Features</Label>", "<Label>Commits</Label>"].join("\n");
+  assert.deepEqual(bareGroupLabel(two), [1, 2]);
+});
+
+test("bare-group-label flags a styled caption — className is not association", () => {
+  // The most common spelling of the defect: a caption that looks deliberate
+  // because it carries styling, but still names nothing.
+  for (const source of [
+    '<Label className="text-xs">Rules</Label>',
+    '<Label className="text-xs text-muted-foreground">Pending invitations</Label>',
+    // Styled AND self-closing, in both spellings.
+    '<Label className="text-xs" />',
+    "<Label/>",
+    "<Label />",
+  ])
+    assert.deepEqual(bareGroupLabel(source), [1], `should flag ${source}`);
+});
+
+test("bare-group-label sees an open tag the formatter split across lines", () => {
+  // The joined view is what makes this work: it trims each line and rejoins
+  // with one space, which the `\s` between attributes absorbs.
+  const split = [
+    "<Label",
+    "  key={e.id}",
+    '  className="flex items-center gap-1.5 text-xs"',
+    ">",
+    "  Trigger events",
+    "</Label>",
+  ].join("\n");
+  assert.deepEqual(bareGroupLabel(split), [1]);
+  // A split open tag that DOES associate still passes — the lookahead reaches
+  // across the rejoined attributes.
+  const splitAssociated = [
+    "<Label",
+    "  htmlFor={`${idBase}-name`}",
+    '  className="text-xs"',
+    ">",
+  ].join("\n");
+  assert.deepEqual(bareGroupLabel(splitAssociated), []);
+});
+
+test("bare-group-label leaves every ASSOCIATED label alone", () => {
+  for (const source of [
+    // The single-control idiom.
+    '<Label htmlFor="pages-cname">Custom domain</Label>',
+    // The group idiom LabeledGroup emits — the id is what names the group.
+    "<Label id={id}>{label}</Label>",
+    // Association plus styling: the id still answers for the whole tag.
+    '<Label id={invitesLabelId} className="text-xs text-muted-foreground">',
+    // A lowercase `<label>` is the DOM element, not this component.
+    '<label className="flex items-center gap-2"><Checkbox />Issues</label>',
+    // The LabeledGroup call site itself.
+    '<LabeledGroup label="Rules">{children}</LabeledGroup>',
+  ])
+    assert.deepEqual(bareGroupLabel(source), [], `should ignore ${source}`);
+  // Comment stripping keeps the doc comment that NAMES the banned shape clean.
+  assert.deepEqual(
+    bareGroupLabel("// a bare `<Label>` names nothing for assistive tech"),
+    [],
+  );
+});
+
+test("bare-group-label allowlists whole files, and exempts vendored ui", () => {
+  const check = CHECKS.find((c) => c.name === "bare-group-label");
+  assert.equal(check.appliesTo("src/components/ui/label.tsx"), false);
+  assert.equal(check.appliesTo("src/components/form/labeled-group.tsx"), true);
+  assert.equal(
+    check.appliesTo("src/features/repo-settings/PagesSection.tsx"),
+    true,
+  );
+  // Both kinds of entry are keyed per file: a deferred file's two captions are
+  // suppressed by its single entry, a WRAPPING label (implicit association, which
+  // neither htmlFor nor id can express) is suppressed by its own, and an unlisted
+  // file still reports.
+  const files = [
+    "src/features/pulls/LinkedIssuesField.tsx",
+    "src/features/repo-settings/GitLabVariablesSection.tsx",
+    "src/features/repo-settings/GitLabWebhooksSection.tsx",
+    "src/features/repo-settings/PagesSection.tsx",
+  ];
+  const views = new Map([
+    [
+      "src/features/pulls/LinkedIssuesField.tsx",
+      view("<Label>Linked issues</Label>\n<Label>Linked issues</Label>"),
+    ],
+    [
+      "src/features/repo-settings/GitLabVariablesSection.tsx",
+      view(
+        '<Label className="flex items-center gap-1.5 text-xs">\n<Checkbox checked={isProtected} />\nProtected\n</Label>',
+      ),
+    ],
+    // A wrapping label whose open tag the formatter split — the webhook shape.
+    [
+      "src/features/repo-settings/GitLabWebhooksSection.tsx",
+      view(
+        [
+          "<Label",
+          "  key={e.id}",
+          '  className="flex items-center gap-1.5 text-xs font-normal"',
+          ">",
+          "  <Checkbox checked={events.includes(e.id)} />",
+          "  {e.label}",
+          "</Label>",
+        ].join("\n"),
+      ),
+    ],
+    [
+      "src/features/repo-settings/PagesSection.tsx",
+      view("<Label>Source</Label>"),
+    ],
+  ]);
+  const { violations } = runCheck(check, files, views);
+  assert.deepEqual(violations, [
+    "src/features/repo-settings/PagesSection.tsx:1",
+  ]);
+});
+
+test("unguarded-binding-dispatcher flags a swallowing dispatch with no guard", () => {
+  // The shape the class fix closed: a second listener matching the live event
+  // against a user binding and swallowing the key, with no editable guard.
+  const source = [
+    "function onKeyDown(e) {",
+    "  const binding = eventToBinding(e);",
+    "  if (binding && binding === effective) {",
+    "    e.preventDefault();",
+    "    run();",
+    "  }",
+    "}",
+  ].join("\n");
+  assert.deepEqual(unguardedDispatcher(source), [2]);
+});
+
+test("unguarded-binding-dispatcher needs both tokens and clears on the full clause", () => {
+  // Each token alone is ordinary: a binding read that swallows nothing, and a
+  // preventDefault with no binding comparison at all.
+  assert.deepEqual(
+    unguardedDispatcher("const hint = eventToBinding(e) ?? null;"),
+    [],
+  );
+  assert.deepEqual(unguardedDispatcher("e.preventDefault();"), []);
+  // The WHOLE clause named ANYWHERE in the file clears it — the coarseness is
+  // the documented trade: presence, not proof it guards this path. Mirrors the
+  // canonical clause in hotkeys.tsx, because fixtures get copied.
+  const guarded = [
+    "function onKeyDown(e) {",
+    "  const binding = eventToBinding(e);",
+    "  if (!binding) return;",
+    "  if (isEditableTarget(e.target) && !firesInEditable(binding)) return;",
+    "  if (",
+    "    !hasModifier(binding) &&",
+    "    isTypeaheadKey(binding) &&",
+    "    isTypeaheadTarget(e.target)",
+    "  )",
+    "    return;",
+    "  if (binding === effective) e.preventDefault();",
+    "}",
+  ].join("\n");
+  assert.deepEqual(unguardedDispatcher(guarded), []);
+});
+
+test("unguarded-binding-dispatcher flags a HALF-guarded dispatcher", () => {
+  // The two guards refuse different surfaces, so one without the other still
+  // steals keys from the surface it does not cover.
+  const editableOnly = [
+    "function onKeyDown(e) {",
+    "  if (isEditableTarget(e.target)) return;",
+    "  const binding = eventToBinding(e);",
+    "  if (binding === effective) e.preventDefault();",
+    "}",
+  ].join("\n");
+  assert.deepEqual(unguardedDispatcher(editableOnly), [3]);
+  const typeaheadOnly = [
+    "function onKeyDown(e) {",
+    "  if (isTypeaheadTarget(e.target)) return;",
+    "  const binding = eventToBinding(e);",
+    "  if (binding === effective) e.preventDefault();",
+    "}",
+  ].join("\n");
+  assert.deepEqual(unguardedDispatcher(typeaheadOnly), [3]);
+  // A key-narrowing helper is NOT a substitute for either target guard.
+  const narrowingOnly = [
+    "function onKeyDown(e) {",
+    "  if (!isTypeaheadKey(binding)) return;",
+    "  const binding = eventToBinding(e);",
+    "  if (binding === effective) e.preventDefault();",
+    "}",
+  ].join("\n");
+  assert.deepEqual(unguardedDispatcher(narrowingOnly), [3]);
+  // Two of three is still a subset: both target guards without the key half
+  // is the drift shape — one dispatcher narrowing by key, its twin not.
+  const targetsOnly = [
+    "function onKeyDown(e) {",
+    "  if (isEditableTarget(e.target)) return;",
+    "  if (isTypeaheadTarget(e.target)) return;",
+    "  const binding = eventToBinding(e);",
+    "  if (binding === effective) e.preventDefault();",
+    "}",
+  ].join("\n");
+  assert.deepEqual(unguardedDispatcher(targetsOnly), [4]);
+});
+
+test("unguarded-binding-dispatcher allowlists the non-rebindable dispatchers", () => {
+  const check = CHECKS.find((c) => c.name === "unguarded-binding-dispatcher");
+  const files = [
+    "src/features/settings/KeyboardSection.tsx",
+    "src/features/pulls/SomeNewView.tsx",
+  ];
+  const dispatcher = [
+    "const binding = eventToBinding(e);",
+    "if (binding === effective) e.preventDefault();",
+  ].join("\n");
+  const views = new Map([
+    ["src/features/settings/KeyboardSection.tsx", view(dispatcher)],
+    ["src/features/pulls/SomeNewView.tsx", view(dispatcher)],
+  ]);
+  // The recorder is exempt by contract; a NEW file with the same shape is not.
+  assert.deepEqual(runCheck(check, files, views).violations, [
+    "src/features/pulls/SomeNewView.tsx:1",
+  ]);
 });
 
 test("an allowlist entry whose file no longer has the pattern is stale", () => {
@@ -837,9 +1072,11 @@ test("compare-endpoint check flags an interpolated basehead, either side", () =>
     "repos/{slug}/compare/main...{head}",
     "repos/{slug}/compare/{base}...{owner}:{branch}?per_page=1",
   ]) {
-    const src = ["fn build() -> String {", `    format!("${template}")`, "}"].join(
-      "\n",
-    );
+    const src = [
+      "fn build() -> String {",
+      `    format!("${template}")`,
+      "}",
+    ].join("\n");
     const hits = [];
     checkCompareEndpoints("fixture.rs", src, src.split("\n"), hits);
     assert.equal(hits.length, 1, `should flag ${template}`);
@@ -854,9 +1091,11 @@ test("compare-endpoint check ignores a fully literal path and the slug alone", (
     "repos/{slug}/compare/main...dev",
     "repos/{slug}/pulls/{number}",
   ]) {
-    const src = ["fn build() -> String {", `    format!("${template}")`, "}"].join(
-      "\n",
-    );
+    const src = [
+      "fn build() -> String {",
+      `    format!("${template}")`,
+      "}",
+    ].join("\n");
     const hits = [];
     checkCompareEndpoints("fixture.rs", src, src.split("\n"), hits);
     assert.deepEqual(hits, [], `should ignore ${template}`);

@@ -11,6 +11,7 @@ import {
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import { type ComponentType, useState } from "react";
 import { toast } from "sonner";
+import { LabeledGroup } from "@/components/form/labeled-group";
 import { NavRail, type NavRailGroup } from "@/components/NavRail";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
@@ -351,11 +352,12 @@ export function RepoSettingsDialog({
   // affordance — only the General sections have one, and they publish it here,
   // keyed by the section they mounted under so the crossfade's outgoing section
   // can't answer the chord (see `useGenerateActionSink`).
-  // The swallow below is unconditional whatever the active section: this dialog
+  // The chord is swallowed below whenever it may fire, whatever the active
+  // section (the hook mirrors the global listener's own guards): this dialog
   // opens over any tab, including Changes where the global
-  // generate-commit-message action is live, so a chord that leaked would write
-  // a commit message behind the dialog. `enabled: true` is that swallow; the
-  // published action's own gate decides whether anything actually runs.
+  // generate-commit-message action is live, so a chord that leaked would
+  // write a commit message behind the dialog. `enabled: true` is that
+  // swallow; the published action's own gate decides whether anything runs.
   const generate = useGenerateActionSink(activeSection);
   const generateChord = useGenerateChord({
     enabled: true,
@@ -932,8 +934,7 @@ function WebhookForm({
         </div>
       </div>
 
-      <div className="space-y-2">
-        <Label>Events</Label>
+      <LabeledGroup label="Events">
         <label className="flex cursor-pointer items-center gap-2 text-xs">
           <Switch checked={allEvents} onCheckedChange={setAllEvents} />
           Send me everything
@@ -954,7 +955,7 @@ function WebhookForm({
             ))}
           </div>
         )}
-      </div>
+      </LabeledGroup>
 
       <div className="flex items-center justify-between gap-4">
         <label className="flex cursor-pointer items-center gap-2 text-xs">
