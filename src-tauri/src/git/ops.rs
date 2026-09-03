@@ -2480,9 +2480,10 @@ pub(crate) async fn classify_failure(
 
 /// A short, stable hash of the repo path, kept in sync BY HAND with
 /// `worktree.rs::repo_hash` (both hash the lower-cased path with `DefaultHasher`).
-/// Resolve worktrees must land under the same `<app_data>/worktrees/<repo-hash>`
-/// root, because that placement is what makes `git_worktree_list_user` hide them
-/// from the user-facing worktree manager (`is_session_worktree`'s app-data check).
+/// Resolve worktrees — and `branches.rs`'s `gd-update-*` checkouts — must land
+/// under the same `<app_data>/worktrees/<repo-hash>` root, because that placement
+/// is what makes `git_worktree_list_user` hide them from the user-facing worktree
+/// manager (`is_session_worktree`'s app-data check).
 fn repo_hash(repo_path: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -2495,11 +2496,11 @@ fn repo_hash(repo_path: &str) -> String {
 /// `dirs::data_dir()` (as `local_prs.rs` / `oplog.rs` do) since the local-PR
 /// merge commands carry no `AppHandle`. Tauri's `app_data_dir()` is exactly
 /// `dirs::data_dir()/<identifier>`, so this points at the same directory.
-fn worktree_root_dir(repo_path: &str) -> AppResult<std::path::PathBuf> {
+pub(crate) fn worktree_root_dir(repo_path: &str) -> AppResult<std::path::PathBuf> {
     let data = dirs::data_dir()
         .ok_or_else(|| AppError::Command("could not resolve the app-data directory".to_string()))?;
     Ok(data
-        .join("com.thebguy.gitdesktop")
+        .join(crate::local_prs::APP_IDENTIFIER)
         .join("worktrees")
         .join(repo_hash(repo_path)))
 }
@@ -4703,8 +4704,8 @@ mod tests {
 
     /// Pins the runner's zero-budget contract, both halves: a timeout is reported,
     /// and git never runs (a `git init` under it leaves no repository behind). A
-    /// red here means the guard in `run_git_raw_input` is gone and every killed-git
-    /// test below is silently racing the child again.
+    /// red here means the guard in `run_git_raw_input_bytes` is gone and every
+    /// killed-git test below is silently racing the child again.
     #[tokio::test]
     async fn a_zero_budget_times_out_without_running_git() {
         let (dir, repo) = setup_repo("zero-budget").await;
@@ -7260,6 +7261,33 @@ detached
                 "C:/repos/app".to_string(),
                 "C:/data/worktrees/h/gd-resolve-abc".to_string(),
             ]
+        );
+    }
+
+    /// `worktree_root_dir` hardcodes the bundle identifier, but the filter that
+    /// hides our internal checkouts (`is_session_worktree`'s app-data arm) reads
+    /// Tauri's `app_data_dir()`, i.e. `dirs::data_dir()/<identifier>` from
+    /// `tauri.conf.json`. Renaming the identifier there alone would strand every
+    /// hidden family (`gd-resolve-*`, `gd-update-*`) outside that filter with no
+    /// other signal, so the two sides are pinned against each other here — the
+    /// non-circular half of the mint-path tests, which check a path against the
+    /// resolver that built it.
+    #[test]
+    fn worktree_root_dir_uses_the_shipped_bundle_identifier() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json"))
+            .expect("tauri.conf.json parses");
+        let identifier = conf["identifier"]
+            .as_str()
+            .expect("tauri.conf.json declares an identifier");
+        let data = dirs::data_dir().expect("the app-data directory resolves");
+        let root = worktree_root_dir("C:\\repos\\app").expect("the worktree root resolves");
+        let under = root
+            .strip_prefix(&data)
+            .expect("the worktree root sits under the app-data directory");
+        assert_eq!(
+            under.components().next().map(|c| c.as_os_str()),
+            Some(std::ffi::OsStr::new(identifier)),
+            "worktree_root_dir's identifier drifted from tauri.conf.json's"
         );
     }
 
