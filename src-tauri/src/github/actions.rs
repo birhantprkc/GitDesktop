@@ -21,6 +21,25 @@ where
     Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }
 
+/// The numeric twin of [`de_null_string`]: an explicit `null` where a REST id is
+/// expected folds to 0 rather than failing the whole page's parse.
+fn de_null_u64<'de, D>(d: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<u64>::deserialize(d)?.unwrap_or_default())
+}
+
+/// The list twin of [`de_null_u64`]: an explicit `null` where a REST array is expected
+/// reads as empty rather than failing the enclosing envelope's parse.
+fn de_null_vec<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
+}
+
 fn validate_ref(name: &str) -> AppResult<()> {
     if name.is_empty() || name.starts_with('-') {
         return Err(AppError::InvalidArgument(format!("invalid ref: {name}")));
@@ -146,6 +165,19 @@ pub struct RunDetail {
     pub jobs: Vec<RunJob>,
 }
 
+/// One page of CI runs, provider-neutral: the rows plus what the provider will say
+/// about how much more there is. `total_count` is `None` when the provider reports no
+/// total, so a UI can tell "unknown" from a real count.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CiRunPage {
+    pub runs: Vec<WorkflowRun>,
+    /// Total runs matching the query, when the provider reports one
+    /// (GitHub always; Bitbucket when its envelope carries `size`; GitLab never).
+    pub total_count: Option<u64>,
+    pub has_more: bool,
+}
+
 /// A repo workflow, for the "Run workflow" picker.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,37 +192,280 @@ pub struct Workflow {
     pub state: String,
 }
 
-const RUN_LIST_FIELDS: &str = "databaseId,number,displayTitle,status,conclusion,workflowName,workflowDatabaseId,headBranch,event,createdAt,startedAt,updatedAt,url,headSha";
 const RUN_VIEW_FIELDS: &str = "databaseId,number,displayTitle,status,conclusion,workflowName,headBranch,event,createdAt,url,headSha,jobs";
 /// Failed-step logs can run to many MB; keep the tail (failures land at the end).
 const RUN_LOG_CAP: usize = 200_000;
 
-/// Recent workflow runs, newest first; optionally scoped to one branch.
+/// The `repos/{slug}/actions/runs` envelope. Tolerant by design — forge JSON is
+/// untrusted, so a shape change degrades one field instead of sinking the page.
+#[derive(Debug, Default, Deserialize)]
+struct RestRunPage {
+    #[serde(default, deserialize_with = "de_null_u64")]
+    total_count: u64,
+    #[serde(default, deserialize_with = "de_null_vec")]
+    workflow_runs: Vec<RestRun>,
+}
+
+/// One run as REST spells it — the snake_case twin of the `gh run list` JSON the
+/// [`WorkflowRun`] field names follow. Every field is null-tolerant, ids included:
+/// GitHub sends `null` for an undecided `conclusion` and for timestamps that haven't
+/// happened, and an explicit null anywhere must cost that one field, not the page.
+#[derive(Debug, Default, Deserialize)]
+struct RestRun {
+    #[serde(default, deserialize_with = "de_null_u64")]
+    id: u64,
+    #[serde(default, deserialize_with = "de_null_u64")]
+    run_number: u64,
+    #[serde(default, deserialize_with = "de_null_u64")]
+    workflow_id: u64,
+    #[serde(default, deserialize_with = "de_null_string")]
+    display_title: String,
+    #[serde(default, deserialize_with = "de_null_string")]
+    status: String,
+    #[serde(default, deserialize_with = "de_null_string")]
+    conclusion: String,
+    /// The RUN's name, NOT the workflow's: a `run-name:` workflow and GitHub's dynamic
+    /// workflows put a per-run string here (measured on theBGuy/GitDesktop: workflow
+    /// 298718218 "Dependabot Updates" spells its runs "npm_and_yarn in /. for fast-uri
+    /// - Update #1553823451"). Only a `workflow_id` lookup yields the workflow name.
+    #[serde(default, deserialize_with = "de_null_string")]
+    name: String,
+    #[serde(default, deserialize_with = "de_null_string")]
+    head_branch: String,
+    #[serde(default, deserialize_with = "de_null_string")]
+    event: String,
+    #[serde(default, deserialize_with = "de_null_string")]
+    created_at: String,
+    #[serde(default, deserialize_with = "de_null_string")]
+    run_started_at: String,
+    #[serde(default, deserialize_with = "de_null_string")]
+    updated_at: String,
+    /// The BROWSER url; REST's `url` is the API endpoint, which no surface links to.
+    #[serde(default, deserialize_with = "de_null_string")]
+    html_url: String,
+    #[serde(default, deserialize_with = "de_null_string")]
+    head_sha: String,
+}
+
+/// Map one REST run onto the neutral row. `workflow_names` is the `workflow_id` →
+/// workflow-name index; a run whose id it doesn't carry (an unlisted or since-deleted
+/// workflow, or a workflow fetch that failed) falls back to the run's own `name`,
+/// which is the workflow name for every workflow that doesn't override it.
+fn from_rest_run(r: RestRun, workflow_names: &HashMap<u64, String>) -> WorkflowRun {
+    let workflow_name = workflow_names
+        .get(&r.workflow_id)
+        .cloned()
+        .unwrap_or(r.name);
+    WorkflowRun {
+        id: r.id,
+        number: r.run_number,
+        display_title: r.display_title,
+        status: r.status,
+        conclusion: r.conclusion,
+        workflow_name,
+        workflow_database_id: r.workflow_id,
+        head_branch: r.head_branch,
+        event: r.event,
+        created_at: r.created_at,
+        started_at: r.run_started_at,
+        updated_at: r.updated_at,
+        url: r.html_url,
+        head_sha: r.head_sha,
+    }
+}
+
+/// The `gh api` argv for one run page. Pure, so the invariants below are testable
+/// without a spawn: `--method GET` is mandatory (`gh api` with `-f` fields present
+/// defaults to POST, and only under GET do they become query params), every field rides
+/// `-f` and never `-F` (`-F`'s leading-`@` magic reads host files), and
+/// `exclude_pull_requests=true` — what `gh run list` itself sends — suppresses a per-run
+/// array nothing here consumes. `branch` must already be validated.
+fn run_page_args(endpoint: &str, limit: u32, page: u32, branch: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "api".into(),
+        "--method".into(),
+        "GET".into(),
+        endpoint.into(),
+        "-f".into(),
+        format!("per_page={limit}"),
+        "-f".into(),
+        format!("page={page}"),
+        "-f".into(),
+        "exclude_pull_requests=true".into(),
+    ];
+    if let Some(b) = branch.filter(|s| !s.is_empty()) {
+        args.push("-f".into());
+        args.push(format!("branch={b}"));
+    }
+    args
+}
+
+/// Whether a page follows the 1-based `page` just fetched. BOTH conditions must
+/// hold: the count math alone could promise pages past a provider-side window, and a
+/// short page ends paging whatever the count says.
+fn gh_has_more(fetched: usize, limit: u32, page: u32, total_count: u64) -> bool {
+    fetched == limit as usize && u64::from(page) * u64::from(limit) < total_count
+}
+
+/// How long a repo's workflow-name index stays trusted, per direction. Bounds the
+/// SECOND `gh` spawn every run-list fetch would otherwise pay — multiplied by the header
+/// badge's 8–30s poll and by one spawn per loaded page on the Actions panel's 5s poll.
+/// Staleness runs one way: a workflow added or renamed inside the window has its runs
+/// labeled with their own `name` until the entry expires, which for all but dynamic and
+/// `run-name:` workflows is the same string. A FAILED fetch is cached too, under the far
+/// shorter window: persistent failure (a rate limit is the case that matters, since it
+/// arrives exactly when spawning hurts) must not re-spawn per fetch, but recovery has to
+/// be quick.
+const WORKFLOW_NAME_TTL: NameTtl = NameTtl {
+    ok: Duration::from_secs(300),
+    error: Duration::from_secs(30),
+};
+
+/// The two windows [`WORKFLOW_NAME_CACHE`] serves, picked by whether the stored entry
+/// came from a failed fetch — one cache, both directions, like [`ProbeTtl`].
+#[derive(Debug, Clone, Copy)]
+struct NameTtl {
+    ok: Duration,
+    error: Duration,
+}
+
+/// A cached index and whether it came from a FAILED fetch. The flag picks the window and
+/// keeps an error's empty map distinguishable from a repo that genuinely has no
+/// workflows, which is a real answer and holds for the full `ok` window.
+struct CachedNames {
+    fetched_at: Instant,
+    names: HashMap<u64, String>,
+    errored: bool,
+}
+
+/// Cache map keyed by `(repo_path, slug)`.
+type WorkflowNameCache = Mutex<HashMap<(String, String), CachedNames>>;
+
+/// Per-`(repo, slug)` workflow-name index. `repo_path` is in the key for the same
+/// reason [`DISPATCH_PROBE_CACHE`] carries it: `gh_origin_slug` strips the authority,
+/// so an Enterprise remote and a github.com remote can present the same `owner/repo`
+/// and would otherwise share one repo's names.
+static WORKFLOW_NAME_CACHE: OnceLock<WorkflowNameCache> = OnceLock::new();
+
+fn workflow_name_cache() -> &'static WorkflowNameCache {
+    WORKFLOW_NAME_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The cached index for `(repo_path, slug)`, only if an entry exists AND is still inside
+/// its own direction's window. The lock is held just long enough to clone the map.
+fn workflow_names_get(repo_path: &str, slug: &str, ttl: NameTtl) -> Option<HashMap<u64, String>> {
+    let guard = workflow_name_cache().lock().unwrap();
+    let entry = guard.get(&(repo_path.to_string(), slug.to_string()))?;
+    let window = if entry.errored { ttl.error } else { ttl.ok };
+    (entry.fetched_at.elapsed() < window).then(|| entry.names.clone())
+}
+
+/// Record a fetched `names` index for `(repo_path, slug)`, stamped now.
+fn workflow_names_put(repo_path: &str, slug: &str, names: HashMap<u64, String>) {
+    workflow_name_cache().lock().unwrap().insert(
+        (repo_path.to_string(), slug.to_string()),
+        CachedNames {
+            fetched_at: Instant::now(),
+            names,
+            errored: false,
+        },
+    );
+}
+
+/// Record that the fetch for `(repo_path, slug)` FAILED: an empty index under the short
+/// window, so a persistent failure costs one spawn per window instead of one per fetch.
+fn workflow_names_put_failure(repo_path: &str, slug: &str) {
+    workflow_name_cache().lock().unwrap().insert(
+        (repo_path.to_string(), slug.to_string()),
+        CachedNames {
+            fetched_at: Instant::now(),
+            names: HashMap::new(),
+            errored: true,
+        },
+    );
+}
+
+/// The `workflow_id` → name index backing every run row's `workflowName`, served from
+/// [`WORKFLOW_NAME_CACHE`] within [`WORKFLOW_NAME_TTL`] — a hit spawns no `gh` at all.
+/// Advisory: a failed fetch yields an EMPTY index (every row falls back to its own
+/// `name`), cached under [`WORKFLOW_NAME_TTL`]'s short error window so a persistent
+/// failure can't re-spawn per fetch while recovery stays quick. Bounded by
+/// [`fetch_workflows`]' 100-workflow limit: runs of workflows past it read as their own
+/// names. No single-flight, matching this file's other caches: concurrent misses
+/// compute the same value and the last write wins.
+async fn workflow_name_index(repo_path: &str, slug: &str) -> HashMap<u64, String> {
+    if let Some(hit) = workflow_names_get(repo_path, slug, WORKFLOW_NAME_TTL) {
+        return hit;
+    }
+    match fetch_workflows(repo_path, slug).await {
+        Ok(list) => {
+            let names: HashMap<u64, String> =
+                list.into_iter().map(|w| (w.id, w.name)).collect();
+            workflow_names_put(repo_path, slug, names.clone());
+            names
+        }
+        Err(_) => {
+            workflow_names_put_failure(repo_path, slug);
+            HashMap::new()
+        }
+    }
+}
+
+/// One page of workflow runs, newest first; optionally scoped to one branch. `page`
+/// is 1-based.
+///
+/// REST rather than `gh run list`, which has no page flag; [`run_page_args`] holds the
+/// argv and the constraints that shape it.
+///
+/// The workflow-name index resolves alongside, concurrently, because a run's REST
+/// `name` is the RUN's name — `gh run list` resolves `workflowName` through the same
+/// `workflow_id` lookup, and skipping it would label every dynamic/`run-name:` run
+/// with its own title. [`workflow_name_index`] serves it from cache when it can, so a
+/// fetch inside its TTL spawns no additional `gh` for the name index.
+pub async fn gh_run_page(
+    repo_path: String,
+    limit: u32,
+    page: u32,
+    branch: Option<String>,
+) -> AppResult<CiRunPage> {
+    let limit = limit.clamp(1, 100);
+    let page = page.max(1);
+    let slug = crate::github::gh_origin_slug(&repo_path).await?;
+    let endpoint = format!("repos/{slug}/actions/runs");
+    let branch = branch.as_deref().filter(|s| !s.is_empty());
+    if let Some(b) = branch {
+        validate_ref(b)?;
+    }
+    let args = run_page_args(&endpoint, limit, page, branch);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (out, workflow_names) = tokio::join!(
+        run_gh(Some(&repo_path), &arg_refs, GH_NETWORK_TIMEOUT),
+        workflow_name_index(&repo_path, &slug),
+    );
+    let parsed: RestRunPage = serde_json::from_str(&out?.stdout_lossy())
+        .map_err(|e| AppError::Gh(format!("could not parse the workflow runs: {e}")))?;
+    let total_count = parsed.total_count;
+    let runs: Vec<WorkflowRun> = parsed
+        .workflow_runs
+        .into_iter()
+        .map(|r| from_rest_run(r, &workflow_names))
+        .collect();
+    Ok(CiRunPage {
+        has_more: gh_has_more(runs.len(), limit, page, total_count),
+        runs,
+        total_count: Some(total_count),
+    })
+}
+
+/// Recent workflow runs, newest first; optionally scoped to one branch — the first
+/// page of [`gh_run_page`]. One fetch path, so the badge, notifications, MCP, and the
+/// Actions panel can't drift on the field mapping.
 pub async fn gh_run_list(
     repo_path: String,
     limit: u32,
     branch: Option<String>,
 ) -> AppResult<Vec<WorkflowRun>> {
-    let limit = limit.clamp(1, 100).to_string();
-    let slug = crate::github::gh_origin_slug(&repo_path).await?;
-    let mut args: Vec<&str> = vec![
-        "run",
-        "list",
-        "-R",
-        slug.as_str(),
-        "-L",
-        limit.as_str(),
-        "--json",
-        RUN_LIST_FIELDS,
-    ];
-    if let Some(b) = branch.as_deref().filter(|s| !s.is_empty()) {
-        validate_ref(b)?;
-        args.push("--branch");
-        args.push(b);
-    }
-    let out = run_gh(Some(&repo_path), &args, GH_NETWORK_TIMEOUT).await?;
-    serde_json::from_str(&out.stdout_lossy())
-        .map_err(|e| AppError::Gh(format!("could not parse gh run list: {e}")))
+    Ok(gh_run_page(repo_path, limit, 1, branch).await?.runs)
 }
 
 /// One run with its jobs and steps.
@@ -321,6 +596,9 @@ pub async fn gh_job_logs(repo_path: String, job_id: u64) -> AppResult<String> {
     Ok(text)
 }
 
+/// `-L 100` because gh's own default stops at 50 (measured, gh 2.94), and this list is
+/// what names every run row's workflow — a truncated tail would silently degrade those
+/// rows to their run names.
 async fn fetch_workflows(repo_path: &str, slug: &str) -> AppResult<Vec<Workflow>> {
     let out = run_gh(
         Some(repo_path),
@@ -330,6 +608,8 @@ async fn fetch_workflows(repo_path: &str, slug: &str) -> AppResult<Vec<Workflow>
             "-R",
             slug,
             "--all",
+            "-L",
+            "100",
             "--json",
             "id,name,path,state",
         ],
@@ -787,6 +1067,446 @@ mod tests {
                 value["id"]
             );
         }
+    }
+
+    /// The page envelope crosses the same hand-maintained TS boundary as
+    /// `WorkflowRun`, and `totalCount` must reach the UI as `null` — not `0` — when a
+    /// provider reports no total, since the panel prints the count only when it has one.
+    #[test]
+    fn ci_run_page_wire_shape_is_pinned() {
+        let page = CiRunPage {
+            runs: Vec::new(),
+            total_count: Some(4085),
+            has_more: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&page).unwrap(),
+            json!({ "runs": [], "totalCount": 4085, "hasMore": true })
+        );
+
+        let unknown = CiRunPage {
+            runs: Vec::new(),
+            total_count: None,
+            has_more: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&unknown).unwrap(),
+            json!({ "runs": [], "totalCount": null, "hasMore": false })
+        );
+    }
+
+    /// Field values captured verbatim from `gh api --method GET
+    /// repos/theBGuy/GitDesktop/actions/runs`, trimmed to the keys the mapping reads
+    /// plus the `url`/`name` pair REST spells differently from the neutral row. The id
+    /// is past 2^32, so a `u32` field would truncate rather than merely warn.
+    #[test]
+    fn rest_runs_map_onto_the_neutral_row() {
+        let body = r#"{
+            "total_count": 4085,
+            "workflow_runs": [
+                {
+                    "id": 33705563157,
+                    "name": "changelog",
+                    "head_branch": "fix/resolve-walk-scope-required-checks",
+                    "head_sha": "195b9e99c92fe7814cd9b063cf0ddeda1f3d4d19",
+                    "path": ".github/workflows/changelog.yml",
+                    "display_title": "fix(pulls,conflicts): scope AI resolve walks",
+                    "run_number": 1346,
+                    "event": "pull_request",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "workflow_id": 307406754,
+                    "url": "https://api.github.com/repos/theBGuy/GitDesktop/actions/runs/33705563157",
+                    "html_url": "https://github.com/theBGuy/GitDesktop/actions/runs/33705563157",
+                    "created_at": "2026-09-03T01:54:57Z",
+                    "updated_at": "2026-09-03T01:55:13Z",
+                    "run_started_at": "2026-09-03T01:54:57Z"
+                },
+                {
+                    "id": null,
+                    "name": null,
+                    "run_number": null,
+                    "workflow_id": null,
+                    "display_title": "a row stripped to nulls",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": "https://github.com/theBGuy/GitDesktop/actions/runs/0",
+                    "created_at": "2026-09-03T01:00:00Z",
+                    "updated_at": "2026-09-03T01:00:10Z"
+                },
+                {
+                    "id": 33705353404,
+                    "name": "quality",
+                    "head_branch": null,
+                    "head_sha": "195b9e99c92fe7814cd9b063cf0ddeda1f3d4d19",
+                    "display_title": "queued run",
+                    "run_number": 396,
+                    "event": "workflow_dispatch",
+                    "status": "queued",
+                    "conclusion": null,
+                    "workflow_id": 334643035,
+                    "html_url": "https://github.com/theBGuy/GitDesktop/actions/runs/33705353404",
+                    "created_at": "2026-09-03T01:51:49Z",
+                    "updated_at": "2026-09-03T01:52:24Z",
+                    "run_started_at": null
+                }
+            ]
+        }"#;
+        let parsed: RestRunPage = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed.total_count, 4085);
+        // Both ids are absent from the index here, exercising the `name` fallback;
+        // the divergent case has its own test below.
+        let names = HashMap::new();
+        let runs: Vec<WorkflowRun> = parsed
+            .workflow_runs
+            .into_iter()
+            .map(|r| from_rest_run(r, &names))
+            .collect();
+
+        let first = &runs[0];
+        assert_eq!(first.id, 33_705_563_157);
+        assert_eq!(first.number, 1346);
+        assert_eq!(
+            first.display_title,
+            "fix(pulls,conflicts): scope AI resolve walks"
+        );
+        assert_eq!(first.status, "completed");
+        assert_eq!(first.conclusion, "success");
+        assert_eq!(first.workflow_name, "changelog");
+        assert_eq!(first.workflow_database_id, 307_406_754);
+        assert_eq!(first.head_branch, "fix/resolve-walk-scope-required-checks");
+        assert_eq!(first.event, "pull_request");
+        assert_eq!(first.created_at, "2026-09-03T01:54:57Z");
+        assert_eq!(first.started_at, "2026-09-03T01:54:57Z");
+        assert_eq!(first.updated_at, "2026-09-03T01:55:13Z");
+        assert_eq!(
+            first.url,
+            "https://github.com/theBGuy/GitDesktop/actions/runs/33705563157",
+            "url must be the BROWSER url, never REST's api `url`"
+        );
+        assert_eq!(
+            first.head_sha,
+            "195b9e99c92fe7814cd9b063cf0ddeda1f3d4d19"
+        );
+
+        // An explicitly-nulled row: `#[serde(default)]` alone covers a MISSING key, not
+        // an explicit null, so without the null-tolerant ids this row would fail the
+        // whole page's parse and the panel would show nothing at all.
+        assert_eq!(runs.len(), 3, "a null-id row must not sink the page");
+        let nulled = &runs[1];
+        assert_eq!(nulled.id, 0);
+        assert_eq!(nulled.number, 0);
+        assert_eq!(nulled.workflow_database_id, 0);
+        assert_eq!(nulled.workflow_name, "");
+        assert_eq!(nulled.display_title, "a row stripped to nulls");
+
+        // A still-running run: the three nullable fields fold to "" rather than
+        // failing the parse or reaching the UI as null.
+        let third = &runs[2];
+        assert_eq!(third.conclusion, "");
+        assert_eq!(third.started_at, "");
+        assert_eq!(third.head_branch, "");
+        assert_eq!(third.status, "queued");
+    }
+
+    /// REST's per-run `name` is the RUN's name, so a dynamic or `run-name:` workflow
+    /// makes it diverge from the workflow's. Values captured from
+    /// theBGuy/GitDesktop: `gh run list` answers `workflowName: "Dependabot Updates"`
+    /// for run 33710268988, where REST's `name` is the update's own title.
+    #[test]
+    fn the_workflow_index_wins_over_a_runs_own_name() {
+        let body = r#"{
+            "total_count": 4085,
+            "workflow_runs": [
+                {
+                    "id": 33710268988,
+                    "name": "npm_and_yarn in /. for fast-uri - Update #1553823451",
+                    "display_title": "npm_and_yarn in /. for fast-uri - Update #1553823451",
+                    "run_number": 812,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "workflow_id": 298718218,
+                    "head_branch": "master",
+                    "event": "dynamic",
+                    "html_url": "https://github.com/theBGuy/GitDesktop/actions/runs/33710268988",
+                    "created_at": "2026-09-03T04:11:02Z",
+                    "updated_at": "2026-09-03T04:11:44Z",
+                    "run_started_at": "2026-09-03T04:11:02Z"
+                },
+                {
+                    "id": 33717811001,
+                    "name": "changelog",
+                    "display_title": "chore: bump",
+                    "run_number": 1350,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "workflow_id": 307406754,
+                    "head_branch": "master",
+                    "event": "push",
+                    "html_url": "https://github.com/theBGuy/GitDesktop/actions/runs/33717811001",
+                    "created_at": "2026-09-03T05:00:00Z",
+                    "updated_at": "2026-09-03T05:00:20Z",
+                    "run_started_at": "2026-09-03T05:00:00Z"
+                },
+                {
+                    "id": 33700936127,
+                    "name": "Running Copilot Code Review",
+                    "display_title": "Running Copilot Code Review",
+                    "run_number": 91,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "workflow_id": 999999999,
+                    "head_branch": "master",
+                    "event": "dynamic",
+                    "html_url": "https://github.com/theBGuy/GitDesktop/actions/runs/33700936127",
+                    "created_at": "2026-09-03T00:10:00Z",
+                    "updated_at": "2026-09-03T00:10:30Z",
+                    "run_started_at": "2026-09-03T00:10:00Z"
+                }
+            ]
+        }"#;
+        let names: HashMap<u64, String> = [
+            (298_718_218u64, "Dependabot Updates".to_string()),
+            (307_406_754u64, "changelog".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let parsed: RestRunPage = serde_json::from_str(body).unwrap();
+        let runs: Vec<WorkflowRun> = parsed
+            .workflow_runs
+            .into_iter()
+            .map(|r| from_rest_run(r, &names))
+            .collect();
+
+        assert_eq!(
+            runs[0].workflow_name, "Dependabot Updates",
+            "a dynamic workflow's runs must carry the WORKFLOW name, not the run's"
+        );
+        assert_eq!(
+            runs[0].display_title, "npm_and_yarn in /. for fast-uri - Update #1553823451",
+            "the run's own name still belongs in the title"
+        );
+        // A workflow whose runs don't override the name: index and fallback agree.
+        assert_eq!(runs[1].workflow_name, "changelog");
+        // Absent from the index (deleted workflow, or a failed advisory fetch) — the
+        // run's own name stands in rather than the row going blank.
+        assert_eq!(runs[2].workflow_name, "Running Copilot Code Review");
+
+        // An empty index is exactly the failed-fetch case: every row degrades, none is
+        // dropped and none goes empty.
+        let parsed: RestRunPage = serde_json::from_str(body).unwrap();
+        let degraded: Vec<WorkflowRun> = parsed
+            .workflow_runs
+            .into_iter()
+            .map(|r| from_rest_run(r, &HashMap::new()))
+            .collect();
+        assert_eq!(degraded.len(), 3);
+        assert!(degraded.iter().all(|r| !r.workflow_name.is_empty()));
+        assert_eq!(
+            degraded[0].workflow_name,
+            "npm_and_yarn in /. for fast-uri - Update #1553823451"
+        );
+    }
+
+    /// Both windows zero — every name entry reads as expired whatever its direction.
+    const EXPIRED_NAMES: NameTtl = NameTtl {
+        ok: Duration::ZERO,
+        error: Duration::ZERO,
+    };
+
+    /// The name index is process-wide and shared by every test in this binary, so each
+    /// test keys its entries under its own repo path and slug.
+    #[test]
+    fn workflow_names_are_served_within_the_ttl_and_expire_after_it() {
+        let (repo, slug) = ("C:/repos/wf-ttl", "o/wf-ttl");
+        let names: HashMap<u64, String> = [(298_718_218u64, "Dependabot Updates".to_string())]
+            .into_iter()
+            .collect();
+
+        // A never-fetched key reads as absent, so the first call fetches.
+        assert_eq!(
+            workflow_names_get(repo, slug, WORKFLOW_NAME_TTL),
+            None,
+            "an unfetched key must not read as an empty index"
+        );
+
+        workflow_names_put(repo, slug, names.clone());
+        assert_eq!(
+            workflow_names_get(repo, slug, WORKFLOW_NAME_TTL),
+            Some(names.clone())
+        );
+        // Both windows zero: every entry reads as expired whatever its direction, which
+        // is how this stands in for elapsed-past-TTL without sleeping.
+        assert_eq!(workflow_names_get(repo, slug, EXPIRED_NAMES), None);
+
+        // An EMPTY index is a real answer (a repo with no workflows) and round-trips
+        // as a hit, not as an absence.
+        let (empty_repo, empty_slug) = ("C:/repos/wf-empty", "o/wf-empty");
+        workflow_names_put(empty_repo, empty_slug, HashMap::new());
+        assert_eq!(
+            workflow_names_get(empty_repo, empty_slug, WORKFLOW_NAME_TTL),
+            Some(HashMap::new())
+        );
+
+        // The shipped windows: the success one matches the frontend's `useWorkflows`
+        // staleTime, and the error one is far shorter so recovery stays quick.
+        assert_eq!(WORKFLOW_NAME_TTL.ok, Duration::from_secs(300));
+        assert_eq!(WORKFLOW_NAME_TTL.error, Duration::from_secs(30));
+        assert!(WORKFLOW_NAME_TTL.error < WORKFLOW_NAME_TTL.ok);
+    }
+
+    /// A failed fetch caches an empty index so a rate-limited repo can't re-spawn `gh`
+    /// on every run-list fetch — but under the short window, and never mistaken for the
+    /// real (and equally empty) answer a workflow-less repo gives.
+    #[test]
+    fn a_failed_workflow_fetch_is_cached_briefly_and_separately() {
+        let (repo, slug) = ("C:/repos/wf-error", "o/wf-error");
+        workflow_names_put_failure(repo, slug);
+
+        // Inside the short window it serves, so the next fetch spawns nothing.
+        assert_eq!(
+            workflow_names_get(repo, slug, WORKFLOW_NAME_TTL),
+            Some(HashMap::new())
+        );
+
+        // Same age, same entry — only the errored flag decides the window. This one is
+        // past the error window and still inside the success one.
+        let past_the_error_window = NameTtl {
+            ok: Duration::from_secs(300),
+            error: Duration::ZERO,
+        };
+        assert_eq!(
+            workflow_names_get(repo, slug, past_the_error_window),
+            None,
+            "an error entry must expire on the SHORT window, not the long one"
+        );
+
+        // A workflow-less repo's genuinely empty index is a success and keeps the long
+        // window under the very same read.
+        let (ok_repo, ok_slug) = ("C:/repos/wf-error-ok", "o/wf-error-ok");
+        workflow_names_put(ok_repo, ok_slug, HashMap::new());
+        assert_eq!(
+            workflow_names_get(ok_repo, ok_slug, past_the_error_window),
+            Some(HashMap::new()),
+            "a real empty answer must not inherit the error window"
+        );
+
+        // A later success replaces the error entry in place.
+        let names: HashMap<u64, String> =
+            [(307_406_754u64, "changelog".to_string())].into_iter().collect();
+        workflow_names_put(repo, slug, names.clone());
+        assert_eq!(
+            workflow_names_get(repo, slug, past_the_error_window),
+            Some(names)
+        );
+    }
+
+    #[test]
+    fn every_workflow_name_key_axis_misses_independently() {
+        let (repo, slug) = ("C:/repos/wf-keys", "o/wf-keys");
+        let names: HashMap<u64, String> = [(307_406_754u64, "changelog".to_string())]
+            .into_iter()
+            .collect();
+        workflow_names_put(repo, slug, names);
+
+        assert_eq!(
+            workflow_names_get(repo, "other/wf-keys", WORKFLOW_NAME_TTL),
+            None,
+            "a different slug must re-fetch"
+        );
+        // The host-collision guard: `gh_origin_slug` strips the authority, so a GHE
+        // remote and a github.com remote can present the SAME slug. Two checkouts on
+        // that slug must not share an index.
+        assert_eq!(
+            workflow_names_get("C:/repos/wf-keys-enterprise", slug, WORKFLOW_NAME_TTL),
+            None,
+            "the same slug in a different checkout must re-fetch, not inherit"
+        );
+    }
+
+    #[test]
+    fn a_short_page_or_an_exhausted_count_ends_paging() {
+        // Full page with more behind it.
+        assert!(gh_has_more(40, 40, 1, 4085));
+        // Full page that exactly consumes the total.
+        assert!(!gh_has_more(40, 40, 2, 80));
+        // Short page — no next page however large the total claims to be.
+        assert!(!gh_has_more(17, 40, 1, 4085));
+        // Full page past the total (a provider-side window; count math alone would
+        // keep promising pages).
+        assert!(!gh_has_more(40, 40, 3, 100));
+        // Empty page.
+        assert!(!gh_has_more(0, 40, 5, 4085));
+    }
+
+    /// A body missing the envelope entirely (an error object, a shape change) parses to
+    /// an empty page instead of erroring — the tolerant-JSON posture forge reads take.
+    /// Explicit nulls are the case `#[serde(default)]` alone does NOT cover: it fills a
+    /// MISSING key, while a null at either key would sink the whole parse.
+    #[test]
+    fn a_foreign_envelope_reads_as_an_empty_page() {
+        let parsed: RestRunPage = serde_json::from_str(r#"{"message":"Not Found"}"#).unwrap();
+        assert_eq!(parsed.total_count, 0);
+        assert!(parsed.workflow_runs.is_empty());
+        assert!(!gh_has_more(0, 40, 1, 0));
+
+        for body in [
+            r#"{"total_count":null,"workflow_runs":null}"#,
+            r#"{"total_count":null,"workflow_runs":[]}"#,
+            r#"{"total_count":7,"workflow_runs":null}"#,
+        ] {
+            let parsed: RestRunPage = serde_json::from_str(body)
+                .unwrap_or_else(|e| panic!("an explicit null must not sink {body}: {e}"));
+            assert!(parsed.workflow_runs.is_empty(), "body: {body}");
+        }
+    }
+
+    /// The argv invariants `gh_run_page`'s correctness rests on, pinned without a spawn.
+    #[test]
+    fn run_page_argv_keeps_its_invariants() {
+        let args = run_page_args("repos/o/r/actions/runs", 40, 2, None);
+
+        // `gh api` with `-f` fields present defaults to POST; only under GET do they
+        // become query params.
+        let method = args.iter().position(|a| a == "--method").expect("--method");
+        assert_eq!(args[method + 1], "GET");
+
+        // `-F`'s leading-`@` magic reads a HOST FILE into the value. Never, anywhere.
+        assert!(
+            !args.iter().any(|a| a == "-F"),
+            "no field may ride -F: {args:?}"
+        );
+
+        // Every field-shaped arg is introduced by `-f`.
+        for (i, arg) in args.iter().enumerate() {
+            if arg.contains('=') {
+                assert_eq!(args[i - 1], "-f", "{arg} must ride -f: {args:?}");
+            }
+        }
+
+        assert!(args.iter().any(|a| a == "per_page=40"), "{args:?}");
+        assert!(args.iter().any(|a| a == "page=2"), "{args:?}");
+        assert!(
+            args.iter().any(|a| a == "exclude_pull_requests=true"),
+            "{args:?}"
+        );
+        assert!(args.iter().any(|a| a == "repos/o/r/actions/runs"), "{args:?}");
+
+        // The branch field appears only when a branch is given, and only as a `-f`.
+        assert!(!args.iter().any(|a| a.starts_with("branch=")), "{args:?}");
+        for absent in [None, Some("")] {
+            let args = run_page_args("repos/o/r/actions/runs", 40, 1, absent);
+            assert!(
+                !args.iter().any(|a| a.starts_with("branch=")),
+                "{absent:?} must add no branch field: {args:?}"
+            );
+        }
+        let scoped = run_page_args("repos/o/r/actions/runs", 40, 1, Some("feat/x"));
+        let at = scoped
+            .iter()
+            .position(|a| a == "branch=feat/x")
+            .unwrap_or_else(|| panic!("{scoped:?}"));
+        assert_eq!(scoped[at - 1], "-f", "{scoped:?}");
     }
 
     #[test]

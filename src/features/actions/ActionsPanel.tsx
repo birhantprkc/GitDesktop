@@ -31,11 +31,11 @@ import {
   useRepoWriteAccess,
   writeAccessReason,
 } from "@/lib/git/queries";
-import type { WorkflowRun } from "@/lib/github/actions";
+import type { CiRunPage, WorkflowRun } from "@/lib/github/actions";
 import {
   useCancelRun,
   useRerunRun,
-  useWorkflowRuns,
+  useWorkflowRunPages,
 } from "@/lib/github/actions";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
 import { listKeyboardNav } from "@/lib/list-keyboard-nav";
@@ -52,6 +52,26 @@ import {
   StatusIcon,
   statusLabel,
 } from "./status";
+
+/** The loaded pages as one list, deduped by run id with the first occurrence
+ *  winning. Page-number paging over a list that PREPENDS shifts rows across the
+ *  boundary whenever a refetch lands after new runs started, so the same run can come
+ *  back on two pages — duplicate React keys, and a selection bound to whichever twin
+ *  rendered first. Freshness follows that rule: page one's copy of a twin is the one
+ *  rendered, even where the later page holds the newer snapshot, until the next
+ *  refetch of the page it sits on. */
+function dedupeRuns(pages: CiRunPage[] | undefined): WorkflowRun[] {
+  const seen = new Set<number>();
+  const out: WorkflowRun[] = [];
+  for (const page of pages ?? []) {
+    for (const run of page.runs) {
+      if (seen.has(run.id)) continue;
+      seen.add(run.id);
+      out.push(run);
+    }
+  }
+  return out;
+}
 
 export function ActionsPanel({
   repoPath,
@@ -111,7 +131,7 @@ export function ActionsPanel({
   const rerun = useRerunRun(repoPath);
   const cancel = useCancelRun(repoPath);
 
-  const runs = useWorkflowRuns(
+  const runs = useWorkflowRunPages(
     repoPath,
     ghReady,
     active,
@@ -153,7 +173,10 @@ export function ActionsPanel({
   );
 
   const query = filterText.trim().toLowerCase();
-  const allRuns = runs.data ?? [];
+  const allRuns = dedupeRuns(runs.data?.pages);
+  // Page one's snapshot of the provider's total; null where the provider reports
+  // none (GitLab), which the count line then omits rather than guessing.
+  const totalCount = runs.data?.pages[0]?.totalCount ?? null;
   const visible = allRuns.filter(
     (r) =>
       !query ||
@@ -252,7 +275,10 @@ export function ActionsPanel({
           <ForgeNotReady repoPath={repoPath} feature={ciFeature} />
         ) : runs.isPending ? (
           <ListRowSkeletons rows={3} lines={3} name={ciFeature} />
-        ) : runs.isError ? (
+        ) : runs.isError && allRuns.length === 0 ? (
+          // Only when there is nothing to show: a failed Load more also flips isError
+          // while every already-loaded page survives in the cache, and that failure
+          // belongs on the Load-more row rather than replacing the whole list.
           <p className="px-3 py-4 text-xs text-muted-foreground">
             Couldn't load {runNoun} runs. Refresh to try again.
           </p>
@@ -386,6 +412,30 @@ export function ActionsPanel({
               )}
             </ContextMenuContent>
           </ContextMenu>
+        )}
+        {/* Outside the branches above so a filtered-to-nothing list can still be
+            deepened: paging is what brings older matches within reach. */}
+        {runs.hasNextPage && (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="h-7 w-full justify-center border-b text-muted-foreground"
+            disabled={runs.isFetchingNextPage}
+            onClick={() => runs.fetchNextPage()}
+          >
+            {runs.isFetchingNextPage
+              ? "Loading…"
+              : runs.isFetchNextPageError
+                ? "Couldn't load more — try again"
+                : "Load more"}
+            {/* The count describes what was LOADED, which says nothing about a
+                filtered view — it returns when the filter clears. Suppressed on the
+                retry label too: the row says one thing at a time. */}
+            {totalCount !== null &&
+              !query &&
+              !runs.isFetchNextPageError &&
+              ` · Showing ${allRuns.length.toLocaleString()} of ${totalCount.toLocaleString()}`}
+          </Button>
         )}
       </ScrollArea>
 

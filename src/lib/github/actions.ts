@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { invoke } from "@/lib/tauri/invoke";
 
 // ── Types (mirror the Rust structs in github/actions.rs) ─────────────────────
@@ -73,6 +78,13 @@ export interface Workflow {
   state: string;
 }
 
+export interface CiRunPage {
+  runs: WorkflowRun[];
+  /** Total matching runs when the provider reports one (GitHub; sometimes Bitbucket); null otherwise. */
+  totalCount: number | null;
+  hasMore: boolean;
+}
+
 // ── Status helpers ───────────────────────────────────────────────────────────
 
 const ACTIVE_STATUSES = new Set([
@@ -102,6 +114,21 @@ export const forgeCiRunList = (
   invoke<WorkflowRun[]>("forge_ci_run_list", {
     repoPath,
     limit,
+    branch: branch?.trim() || null,
+  });
+
+/** One page of runs (`page` is 1-based), plus the provider's total and whether more
+ *  remain — the paged read behind the Actions panel's Load more. */
+export const forgeCiRunPage = (
+  repoPath: string,
+  limit: number,
+  page: number,
+  branch?: string,
+) =>
+  invoke<CiRunPage>("forge_ci_run_page", {
+    repoPath,
+    limit,
+    page,
     branch: branch?.trim() || null,
   });
 
@@ -204,6 +231,52 @@ export function useWorkflowRuns(
       (query.state.data ?? []).some((r) => isRunActive(r.status))
         ? 5000
         : false,
+  });
+}
+
+/** The Actions panel's run list, paged so the repo's whole history is reachable.
+ *  `active` (the Actions tab being visible) gates the fetch so a hidden tab stops
+ *  fetching; the key stays inside the `["repo", repo, "actions"]` subtree the panel's
+ *  mutations invalidate. */
+export function useWorkflowRunPages(
+  repo: string,
+  enabled: boolean,
+  active: boolean,
+  branch?: string,
+) {
+  // Normalize once: the key and the wire value must be the same string, or two
+  // spellings of one branch would each get their own cache entry.
+  const b = branch?.trim() || "";
+  return useInfiniteQuery({
+    queryKey: ["repo", repo, "actions", "runs-paged", b] as const,
+    queryFn: ({ pageParam }) => forgeCiRunPage(repo, 40, pageParam, b),
+    initialPageParam: 1,
+    getNextPageParam: (last, pages) =>
+      last.hasMore ? pages.length + 1 : undefined,
+    enabled: enabled && active,
+    // Three paths replay EVERY loaded page serially — the 5s poll, a window-focus
+    // refetch, and a remount past staleTime (leaving and re-entering the Actions tab
+    // flips `enabled`) — so their cost scales with how deep the user has paged, and the
+    // budget they spend is GitHub's shared 5,000 requests/hour that every other gh
+    // surface in the app draws on too. Twenty loaded pages on a 5s tick would be
+    // thousands of requests an hour on its own, so all three gate on at most one
+    // loaded page: past page 1 the data never goes stale on its own and neither
+    // automatic refetch arms, while a panel with NO page yet (failed first fetch)
+    // keeps the focus-refetch recovery it always had. Refresh still updates everything loaded, and the Actions mutations'
+    // `invalidateQueries` still refetches — an invalidated query is stale whatever the
+    // staleTime says, and `refetch()` never consults it.
+    staleTime: (query) =>
+      (query.state.data?.pages.length ?? 0) > 1
+        ? Number.POSITIVE_INFINITY
+        : 10_000,
+    refetchInterval: (query) => {
+      const pages = query.state.data?.pages ?? [];
+      return pages.length === 1 &&
+        pages[0].runs.some((r) => isRunActive(r.status))
+        ? 5000
+        : false;
+    },
+    refetchOnWindowFocus: (query) => (query.state.data?.pages.length ?? 0) <= 1,
   });
 }
 
