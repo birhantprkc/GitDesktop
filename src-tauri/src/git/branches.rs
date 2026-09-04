@@ -251,6 +251,10 @@ pub(crate) async fn git_rename_branch_core(
 ) -> AppResult<()> {
     validate_ref_name(&old_name)?;
     validate_ref_name(&new_name)?;
+    // `branch -m` does NOT refuse a branch checked out elsewhere — it retargets that
+    // worktree's HEAD silently, which under a running update means renaming the branch
+    // out from under it.
+    crate::git::update_marker::refuse_if_branch_updating(state, &repo_path, &old_name).await?;
     run_git_mutating(
         state,
         &repo_path,
@@ -311,6 +315,38 @@ async fn worktree_holding_branch(repo_path: &str, name: &str) -> Option<String> 
         .map(|(path, _)| path)
 }
 
+/// Arbitrates a `worktree_holding_branch` hit that turns out to be an UPDATE's hidden
+/// `gd-update-*` checkout. `true` means "cleared — re-probe"; `false` leaves the
+/// caller's own message to speak, which is also the answer whenever the marker proves
+/// nothing: an unreadable lock, or a checkout from a pre-marker build that may still be
+/// mid-update. Only a lock that EXISTS and is acquirable authorizes the age-free
+/// removal, and only a HELD one authorizes a refusal.
+async fn clear_update_holder(
+    state: &AppState,
+    repo_path: &str,
+    branch: &str,
+    holder: &str,
+) -> AppResult<bool> {
+    use crate::git::update_marker::{self as marker, LockProbe};
+    // Root-scoped: a `gd-update-*` worktree the USER made, outside our app-data root, is
+    // their own and takes the ordinary path however its neighbours look.
+    if !marker::is_managed_update_worktree(repo_path, holder) {
+        return Ok(false);
+    }
+    match marker::update_worktree_probe(holder) {
+        LockProbe::Live => Err(marker::branch_update_refusal(branch)),
+        LockProbe::Released => {
+            if marker::claim_dead_update_worktree(state, repo_path, holder).await {
+                return Ok(true);
+            }
+            // Provably dead but unclaimable (the admin domain was busy) — the hidden
+            // path is nothing the user can act on, so name the state instead.
+            Err(marker::interrupted_update_refusal(branch))
+        }
+        LockProbe::Missing | LockProbe::Unknown => Ok(false),
+    }
+}
+
 /// Force-deletes a local branch (the UI confirms first, GitHub Desktop style).
 #[tauri::command]
 pub async fn git_delete_branch(
@@ -327,14 +363,28 @@ pub(crate) async fn git_delete_branch_core(
     name: String,
 ) -> AppResult<()> {
     validate_ref_name(&name)?;
+    // Two halves of one window: the marker covers an update that has minted but not yet
+    // registered its checkout (the `worktree add` is the long part), the porcelain arm
+    // below covers it once registered. Heal-free — the healing lives in the claim arm.
+    crate::git::update_marker::refuse_if_branch_updating_no_heal(&repo_path, &name)?;
     // Pre-mutation guard: git's own refusal for a branch checked out in a worktree
     // is terse. Detect the holding worktree here — shared by every caller, not just
     // the switcher's UI guard — and surface an actionable message.
     if let Some(path) = worktree_holding_branch(&repo_path, &name).await {
-        return Err(AppError::Command(format!(
-            "{name} is checked out in the worktree at {path} — remove that worktree \
-             (or switch it to another branch) before deleting {name}."
-        )));
+        // An update's hidden checkout is nothing the user can act on by that path, so
+        // it takes its own arm: refused while live, swept and re-probed once dead.
+        let swept = clear_update_holder(state, &repo_path, &name, &path).await?;
+        let held = if swept {
+            worktree_holding_branch(&repo_path, &name).await
+        } else {
+            Some(path)
+        };
+        if let Some(path) = held {
+            return Err(AppError::Command(format!(
+                "{name} is checked out in the worktree at {path} — remove that worktree \
+                 (or switch it to another branch) before deleting {name}."
+            )));
+        }
     }
     run_git_mutating(
         state,
@@ -476,6 +526,7 @@ pub(crate) async fn git_checkout_branch_core(
     name: String,
 ) -> AppResult<()> {
     validate_ref_name(&name)?;
+    crate::git::update_marker::refuse_if_branch_updating(state, &repo_path, &name).await?;
     run_git_mutating(state, &repo_path, &["switch", &name], DEFAULT_TIMEOUT).await?;
     Ok(())
 }
@@ -495,6 +546,9 @@ pub async fn git_checkout_remote_branch(
 ) -> AppResult<()> {
     validate_ref_name(&remote)?;
     validate_ref_name(&name)?;
+    // A live update means a LOCAL `name` already exists and is held, so this switch
+    // collides on it rather than creating anything.
+    crate::git::update_marker::refuse_if_branch_updating(&state, &repo_path, &name).await?;
     run_git_mutating(
         &state,
         &repo_path,
@@ -1011,15 +1065,29 @@ pub(crate) async fn branch_reset_to_upstream(
         )));
     }
 
+    // Two halves of one window, as in `git_delete_branch_core`: the marker covers an
+    // update that has minted but not yet registered its checkout, the porcelain arm
+    // below covers it once registered. Heal-free — healing lives in the claim arm.
+    crate::git::update_marker::refuse_if_branch_updating_no_heal(repo_path, branch)?;
     // Pre-mutation guards: git refuses both of these itself, but only after the
     // user has confirmed a destructive action, and its wording names neither
     // remedy. The linked-worktree probe excludes THIS checkout, so the current
     // branch takes its own arm.
     if let Some(path) = worktree_holding_branch(repo_path, branch).await {
-        return Err(AppError::Command(format!(
-            "{branch} is checked out in the worktree at {path} — switch that worktree \
-             to another branch (or remove it) before resetting {branch}."
-        )));
+        // An update's hidden checkout names no remedy the user can follow; it is
+        // refused while live and swept once dead (see `clear_update_holder`).
+        let swept = clear_update_holder(state, repo_path, branch, &path).await?;
+        let held = if swept {
+            worktree_holding_branch(repo_path, branch).await
+        } else {
+            Some(path)
+        };
+        if let Some(path) = held {
+            return Err(AppError::Command(format!(
+                "{branch} is checked out in the worktree at {path} — switch that worktree \
+                 to another branch (or remove it) before resetting {branch}."
+            )));
+        }
     }
     let current = run_git_raw(
         Some(repo_path),
@@ -1079,6 +1147,18 @@ pub(crate) async fn update_branch_from(
             "a branch can't be updated from itself".to_string(),
         ));
     }
+    // One guard covers both self-collisions: a second update of the same branch, and
+    // the fast-forward arm's `fetch . <base>:<branch>`, which git refuses outright
+    // against a branch held by the first update's checkout. Heal-free deliberately —
+    // this path's own `worktree add` takes the admin domain, and a detached sweep
+    // fired here would win it first and time that bounded acquire out.
+    crate::git::update_marker::refuse_if_branch_updating_no_heal(repo_path, branch)?;
+    // Healing, in two tiers. THIS branch's provably-dead leftovers go first and
+    // synchronously, so the first update after a crash clears its own predecessor
+    // before the add rather than racing it; everything else waits for the age gate and
+    // is skipped outright while the admin domain is busy.
+    crate::git::update_marker::claim_dead_updates_for_branch(state, repo_path, branch).await;
+    crate::git::update_marker::sweep_orphaned_update_worktrees(state, repo_path).await;
 
     // Mutating refs — serialize against other writes to this repo's working tree.
     let domain = state.working_tree_lock(repo_path).await;
@@ -1183,15 +1263,33 @@ pub(crate) async fn update_branch_from(
     if let Some(root) = tmp.parent() {
         std::fs::create_dir_all(root).map_err(AppError::Io)?;
     }
+    // Before the `worktree add`, which is the longest part of the window this marker
+    // exists to announce. A failure to mint refuses the update: an app-data write that
+    // fails is the same failure domain as materializing the checkout itself.
+    let marker = crate::git::update_marker::UpdateMarker::create_for(&tmp, branch)?;
     let tmp_str = tmp.to_string_lossy().to_string();
-    merge_diverged_in_worktree(state, repo_path, &tmp_str, branch, base, &pins).await
+    merge_diverged_in_worktree(
+        state,
+        repo_path,
+        &tmp_str,
+        branch,
+        base,
+        &pins,
+        Some(marker),
+    )
+    .await
 }
 
 /// Where an update's throwaway checkout goes: `<app-data>/worktrees/<repo-hash>/
-/// gd-update-<unique>`. Resolution only — creating the root is the caller's job,
-/// which keeps this callable from a test without writing under the real app data.
+/// gd-update-<unique>`. Resolution only — creating the root is the caller's job.
+///
+/// Through `update_marker::root_for`, not `ops::worktree_root_dir` directly, so the
+/// mint and the guards that police it can never disagree about which root they mean.
+/// Alone among that function's callers this one PROPAGATES an unresolvable root instead
+/// of failing open: a guard that cannot resolve simply stays quiet, but a mint that
+/// cannot would put a checkout where nothing is watching it.
 fn update_worktree_path(repo_path: &str) -> AppResult<std::path::PathBuf> {
-    Ok(crate::git::ops::worktree_root_dir(repo_path)?
+    Ok(crate::git::update_marker::root_for(repo_path)?
         .join(format!("gd-update-{}", unique_suffix())))
 }
 
@@ -1239,37 +1337,63 @@ async fn merge_diverged_in_worktree(
     branch: &str,
     base: &str,
     pins: &UpdatePins,
+    marker: Option<crate::git::update_marker::UpdateMarker>,
 ) -> AppResult<String> {
-    run_git_worktree_admin(
+    // A killed add can still leave a registered entry over a partial directory, so its
+    // early return settles the marker rather than dropping it: the checkout it may have
+    // left behind needs a recoverable marker exactly as much as a finished one does.
+    if let Err(e) = run_git_worktree_admin(
         state,
         repo_path,
         &["worktree", "add", "--quiet", tmp, branch],
         WORKTREE_OP_TIMEOUT,
     )
-    .await?;
+    .await
+    {
+        settle_marker(marker, tmp);
+        return Err(e);
+    }
 
     let result = verify_pin_and_merge(state, repo_path, tmp, branch, base, pins).await;
 
     // Try-then-detach is the only teardown shape with no bad arm: a bounded acquire
     // that gave up on `Busy` would leak the throwaway worktree, and a synchronous
     // unbounded one holds a finished update's command hostage for the minutes a
-    // node_modules-scale removal can hold the shared admin domain. A quit or crash
-    // while the detached task waits leaks the `gd-update-*` DIRECTORY — the registry
-    // entry self-heals through `worktree::prune_worktrees_if_free` only once the
-    // directory is gone; a surviving directory keeps the entry and the branch hold.
+    // node_modules-scale removal can hold the shared admin domain. On both arms the
+    // marker outlives the checkout, since the branch stays held until the directory is
+    // gone, and `settle_marker` keeps it on disk when the removal did not finish. A
+    // quit or crash leaks the directory with its marker still beside it — released, so
+    // the next branch operation clears it without waiting out the age gate.
     let domain = state.worktree_admin_lock(repo_path).await;
     match try_acquire_repo_lock(&domain, "a worktree operation") {
-        Some(_admin) => remove_tmp_worktree(repo_path, tmp).await,
+        Some(_admin) => {
+            remove_tmp_worktree(repo_path, tmp).await;
+            settle_marker(marker, tmp);
+        }
         None => {
             let (repo, tmp) = (repo_path.to_string(), tmp.to_string());
             tauri::async_runtime::spawn(async move {
                 let _admin = acquire_repo_lock_unbounded(&domain, "a worktree operation").await;
                 remove_tmp_worktree(&repo, &tmp).await;
+                settle_marker(marker, &tmp);
             });
         }
     }
 
     result
+}
+
+/// Drops `marker` after a teardown attempt. Its files go only when the checkout is
+/// confirmed gone; a surviving directory keeps them, unlocked, so the age-free claims
+/// can recover it on the next branch operation. Deleting them there would leave a
+/// markerless holder instead, which nothing may clear until the age gate expires.
+fn settle_marker(marker: Option<crate::git::update_marker::UpdateMarker>, tmp: &str) {
+    let Some(mut marker) = marker else { return };
+    // try_exists: an UNREADABLE answer must retain (the sidecars' deletion is the one
+    // destructive direction here); only a confirmed-gone checkout lets them go.
+    if std::path::Path::new(tmp).try_exists().unwrap_or(true) {
+        marker.retain_for_recovery();
+    }
 }
 
 /// `worktree remove --force` then `prune`, both best-effort and both lock-free: every
@@ -1453,7 +1577,8 @@ mod tests {
     use super::{
         branch_reset_to_upstream, branch_rewrite_status, build_create_branch_args,
         divergence_out_of_range, git_branch_merge_states, git_branches, git_create_branch_core,
-        git_default_branch, git_rename_branch_core, merge_diverged_in_worktree,
+        git_default_branch, git_delete_branch_core, git_rename_branch_core,
+        merge_diverged_in_worktree,
         parse_cherry_counts, parse_upstream_track, update_branch_from, update_worktree_path,
         validate_branch_name, validate_ref_name, BranchRewriteStatus, MergePair, UpdatePins,
     };
@@ -2577,13 +2702,20 @@ mod tests {
         }
     }
 
-    /// The throwaway checkout is minted under the app-data worktrees root, which is
-    /// what keeps it out of the worktree manager, with a unique `gd-update-` name.
-    /// Shape only — resolving a path creates nothing under the real app data.
+    /// The throwaway checkout is minted as a direct child of the SAME root the marker
+    /// guards read, with a unique `gd-update-` name — which is what keeps it out of the
+    /// worktree manager and inside `is_managed_update_worktree`'s scope. That root being
+    /// the app-data one in production is `root_for`'s non-test arm, pinned by
+    /// `ops::worktree_root_dir_uses_the_shipped_bundle_identifier`. Shape only: resolving
+    /// a path creates nothing.
     #[test]
-    fn update_worktree_path_sits_under_the_app_data_root() {
+    fn update_worktree_path_sits_directly_under_the_marker_root() {
+        use crate::git::update_marker as marker;
+        let (_temp, root) = temp_base("mint-root");
+        let _serialized = marker::test_root_lock();
+        let _override = marker::TestRootOverride::set(&root);
+
         let repo = "C:\\repos\\app";
-        let root = crate::git::ops::worktree_root_dir(repo).expect("app-data root resolves");
         let first = update_worktree_path(repo).expect("update path resolves");
         assert_eq!(first.parent(), Some(root.as_path()));
         let name = first
@@ -2591,6 +2723,10 @@ mod tests {
             .and_then(|s| s.to_str())
             .expect("the mint has a basename");
         assert!(name.starts_with("gd-update-"), "{name}");
+        assert!(
+            marker::is_managed_update_worktree(repo, &first.to_string_lossy()),
+            "the mint must land inside the scope its own guards enforce"
+        );
         assert_ne!(
             first,
             update_worktree_path(repo).expect("update path resolves"),
@@ -2694,6 +2830,7 @@ mod tests {
                 branch_tip: base_sha.clone(),
                 base_sha,
             },
+            None,
         )
         .await
         .unwrap_err();
@@ -2808,6 +2945,7 @@ mod tests {
                 branch_tip: feature_tip.clone(),
                 base_sha: pinned_base,
             },
+            None,
         )
         .await
         .unwrap_err();
@@ -2887,6 +3025,7 @@ mod tests {
                 branch_tip: feature_tip.clone(),
                 base_sha: pinned_base,
             },
+            None,
         )
         .await;
         assert!(
@@ -2959,6 +3098,7 @@ mod tests {
                 branch_tip: feature_tip.clone(),
                 base_sha: alien_tip,
             },
+            None,
         )
         .await
         .unwrap_err();
@@ -3022,6 +3162,7 @@ mod tests {
                 branch_tip: feature_tip.clone(),
                 base_sha: pinned_base,
             },
+            None,
         )
         .await
         .unwrap_err();
@@ -3080,6 +3221,7 @@ mod tests {
                 branch_tip: feature_tip.clone(),
                 base_sha: pinned_base,
             },
+            None,
         )
         .await
         .unwrap_err();
@@ -3144,6 +3286,7 @@ mod tests {
                 branch_tip: feature_tip,
                 base_sha: pinned_base,
             },
+            None,
         )
         .await
         .expect("a fast-forwarded base still merges");
@@ -3199,6 +3342,7 @@ mod tests {
                 branch_tip: feature_tip,
                 base_sha: pinned_base.clone(),
             },
+            None,
         )
         .await
         .expect("an unmoved base merges cleanly");
@@ -3235,5 +3379,131 @@ mod tests {
             "git's own merge subject survives: {subject}"
         );
         assert!(!tmp.exists(), "the throwaway worktree is torn down");
+    }
+
+    /// A repo with `feature` tracking the default branch through the local `.` remote,
+    /// so `feature@{upstream}` resolves without a network or a second repo. Returns the
+    /// temp guard, the repo path, and the upstream tip.
+    async fn repo_with_local_upstream(tag: &str) -> (tempfile::TempDir, String, String) {
+        let (guard, base_dir) = temp_base(tag);
+        let repo = base_dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let repo_s = repo.to_string_lossy().into_owned();
+        init_repo(&repo_s, "a.txt").await;
+        let main = run(&repo_s, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .trim()
+            .to_string();
+        run(&repo_s, &["branch", "feature"]).await;
+        // One call sets both `branch.feature.remote` (`.`) and `.merge`, which keeps
+        // any `refs/heads/<name>` template out of this fixture entirely.
+        run(&repo_s, &["branch", "--set-upstream-to", &main, "feature"]).await;
+        let tip = run(&repo_s, &["rev-parse", &format!("{main}^{{commit}}")])
+            .await
+            .trim()
+            .to_string();
+        (guard, repo_s, tip)
+    }
+
+    /// The PRE-ADD window: an update has minted its marker but its `worktree add` has
+    /// not registered anything yet, so `worktree list` is empty. Both porcelain-only
+    /// sites must still refuse — without this guard a delete succeeds here and the
+    /// update dies moments later on a missing ref.
+    // The serializing guard MUST span the awaits — it is what keeps the process-wide
+    // root override installed for the whole body.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_live_marker_refuses_delete_and_reset_before_the_checkout_exists() {
+        use crate::git::update_marker as marker;
+        let (_guard, repo_s, tip) = repo_with_local_upstream("premint-guard").await;
+        let root = std::path::Path::new(&repo_s)
+            .parent()
+            .unwrap()
+            .join("worktrees");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let _serialized = marker::test_root_lock();
+        let _override = marker::TestRootOverride::set(&root);
+        // Minted, not yet added: nothing is in the worktree registry.
+        let _live = marker::UpdateMarker::create_for(&root.join("gd-update-live"), "feature")
+            .expect("the marker mints");
+
+        let state = AppState::default();
+        let expected = marker::branch_update_refusal("feature").to_string();
+        let deleted = git_delete_branch_core(&state, repo_s.clone(), "feature".into())
+            .await
+            .expect_err("a delete during the pre-add window is refused");
+        assert_eq!(deleted.to_string(), expected);
+        let reset = branch_reset_to_upstream(&state, &repo_s, "feature", &tip)
+            .await
+            .expect_err("a reset during the pre-add window is refused");
+        assert_eq!(reset.to_string(), expected);
+        assert!(
+            !run(&repo_s, &["branch", "--list", "feature"])
+                .await
+                .trim()
+                .is_empty(),
+            "and the branch is still there"
+        );
+    }
+
+    /// The post-add half, both outcomes. A RELEASED marker over a registered checkout is
+    /// claimed age-free and the delete then succeeds; a MARKERLESS one (a pre-marker
+    /// build's checkout, which may still be running) is left alone and takes the
+    /// pre-existing generic message naming the holding worktree.
+    // The serializing guard MUST span the awaits — it is what keeps the process-wide
+    // root override installed for the whole body.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_registered_holder_is_claimed_when_released_and_left_when_markerless() {
+        use crate::git::update_marker as marker;
+        let (_guard, repo_s, _tip) = repo_with_local_upstream("registered-holder").await;
+        let root = std::path::Path::new(&repo_s)
+            .parent()
+            .unwrap()
+            .join("worktrees");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let _serialized = marker::test_root_lock();
+        let _override = marker::TestRootOverride::set(&root);
+        let state = AppState::default();
+
+        // MARKERLESS: registered, no sidecars — the generic message, unchanged.
+        let bare = root.join("gd-update-premarker");
+        let bare_s = bare.to_string_lossy().into_owned();
+        run(&repo_s, &["worktree", "add", "--quiet", &bare_s, "feature"]).await;
+        let err = git_delete_branch_core(&state, repo_s.clone(), "feature".into())
+            .await
+            .expect_err("a markerless holder still blocks the delete");
+        assert!(
+            err.to_string().starts_with("feature is checked out in the worktree at")
+                && err.to_string().ends_with(
+                    "(or switch it to another branch) before deleting feature."
+                ),
+            "the pre-marker path keeps its original wording: {err}"
+        );
+        assert!(bare.exists(), "and its checkout is untouched");
+        run(&repo_s, &["worktree", "remove", "--force", &bare_s]).await;
+
+        // RELEASED: registered, sidecars present, lock free — claimed with no age gate.
+        // The pair is WRITTEN, not minted-and-dropped: a crashed update's lock is
+        // released by the OS, and on Linux `drop` cannot be relied on to release one in
+        // a process-spawning test binary (see `write_released_marker`).
+        let dead = root.join("gd-update-crashed");
+        let dead_s = dead.to_string_lossy().into_owned();
+        run(&repo_s, &["worktree", "add", "--quiet", &dead_s, "feature"]).await;
+        marker::write_released_marker(&root, "gd-update-crashed", "feature");
+
+        git_delete_branch_core(&state, repo_s.clone(), "feature".into())
+            .await
+            .expect("a released holder is cleared and the delete proceeds");
+        assert!(!dead.exists(), "the orphaned checkout was removed");
+        assert!(
+            run(&repo_s, &["branch", "--list", "feature"])
+                .await
+                .trim()
+                .is_empty(),
+            "and the branch it was holding is gone"
+        );
     }
 }

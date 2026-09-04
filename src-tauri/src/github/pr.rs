@@ -1776,9 +1776,51 @@ pub async fn gh_pr_unminimize_comment(repo_path: String, comment_id: String) -> 
 
 /// Checks out a PR's branch locally (handles fork-sourced PRs too).
 #[tauri::command]
-pub async fn gh_pr_checkout(repo_path: String, number: u64, lens: Option<String>) -> AppResult<()> {
+pub async fn gh_pr_checkout(
+    state: tauri::State<'_, crate::state::AppState>,
+    repo_path: String,
+    number: u64,
+    lens: Option<String>,
+) -> AppResult<()> {
     let n = number.to_string();
     let slug = crate::github::gh_lens_slug(&repo_path, lens.as_deref()).await?;
+    // Ask gh which branch this PR lands on, so the guard can name it: an update's
+    // window runs to minutes on the diverged path, and a repo-scoped refusal would
+    // block checkouts of every OTHER branch for all of it. Any failure of this extra
+    // read (offline, no such PR, an older gh) falls back to the repo-scoped guard
+    // rather than failing the checkout on a guard's behalf.
+    let view = run_gh(
+        Some(&repo_path),
+        &[
+            "pr",
+            "view",
+            &n,
+            "--repo",
+            &slug,
+            "--json",
+            "headRefName,isCrossRepository",
+        ],
+        GH_TIMEOUT,
+    )
+    .await
+    .ok()
+    .and_then(|out| serde_json::from_str::<serde_json::Value>(&out.stdout_lossy()).ok());
+    // Only a PR from this same repo checks out under its own `headRefName`; gh gives a
+    // fork's branch a prefixed local name whose shape has changed between gh versions,
+    // so guessing it is not worth the guard — a cross-repository PR keeps repo scope.
+    // `isCrossRepository` must say false explicitly: an absent field proves nothing.
+    let branch = view
+        .as_ref()
+        .filter(|v| v["isCrossRepository"].as_bool() == Some(false))
+        .and_then(|v| v["headRefName"].as_str())
+        .map(str::trim)
+        .filter(|b| !b.is_empty());
+    match branch {
+        Some(branch) => {
+            crate::git::update_marker::refuse_if_branch_updating(&state, &repo_path, branch).await?
+        }
+        None => crate::git::update_marker::refuse_if_any_updating(&state, &repo_path).await?,
+    }
     run_gh(
         Some(&repo_path),
         &["pr", "checkout", &n, "--repo", &slug],

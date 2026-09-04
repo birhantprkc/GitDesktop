@@ -723,6 +723,10 @@ pub(crate) async fn cherry_pick_onto_with_timeouts(
     // uncommitted work when target is the current branch — refuse first.
     ensure_clean_tree(repo_path).await?;
 
+    // With the other pre-flight guards, so nothing is journaled or switched before an
+    // update holding `target` is ruled out.
+    crate::git::update_marker::refuse_if_branch_updating(state, repo_path, target_branch).await?;
+
     // Where we are now, so we can return on failure. A detached HEAD has no
     // branch name, so fall back to restoring its commit directly.
     let original_ref = run_git(
@@ -2552,6 +2556,18 @@ pub(crate) fn parse_worktree_paths(porcelain: &str) -> Vec<String> {
         .collect()
 }
 
+/// The worktree checking `branch` out, from one `worktree list --porcelain` read.
+/// Both parsers emit one entry per stanza in list order, so the zip pairs each path
+/// with its own branch; a detached stanza (our resolve worktrees) carries an empty
+/// name and never matches.
+fn worktree_holding(porcelain: &str, branch: &str) -> Option<String> {
+    parse_worktree_paths(porcelain)
+        .into_iter()
+        .zip(parse_worktree_branches(porcelain))
+        .find(|(_, b)| b == branch)
+        .map(|(path, _)| path)
+}
+
 /// Whether a worktree path is one of our resolve worktrees — its final path
 /// segment starts with `gd-resolve-`. The basename is the reliable signal:
 /// `git_merge_local_pr` names them `gd-resolve-<id>`, and porcelain may
@@ -2676,22 +2692,61 @@ async fn finalize_base(
         return Ok(());
     }
 
-    // Is `base` checked out in some OTHER worktree? `paths` and `branches` come
-    // from the same porcelain stanzas in list order, so they line up per stanza.
-    // Our resolve worktree is detached, so it never carries `base` as a branch and
-    // is safely excluded.
+    use crate::git::update_marker::{self as marker, LockProbe};
+
+    // An update that has minted its marker but not yet registered its checkout is
+    // invisible to the porcelain read below, so the marker covers that half of the
+    // window and the arm below covers it once registered. Heal-free: this call's own
+    // continuation takes the admin domain to tear the resolve worktree down.
+    marker::refuse_if_branch_updating_no_heal(repo_path, base)?;
+
+    // Is `base` checked out in some OTHER worktree? Our resolve worktree is detached,
+    // so it never carries `base` as a branch and is safely excluded.
     let listed = run_git(
         Some(repo_path),
         &["worktree", "list", "--porcelain"],
         DEFAULT_TIMEOUT,
     )
     .await?;
-    let porcelain = listed.stdout_lossy();
-    let owning_worktree = parse_worktree_paths(&porcelain)
-        .into_iter()
-        .zip(parse_worktree_branches(&porcelain))
-        .find(|(_, branch)| branch == base)
-        .map(|(path, _)| path);
+    let mut owning_worktree = worktree_holding(&listed.stdout_lossy(), base);
+
+    // An update's hidden checkout is never a fast-forward target: advancing `base`
+    // under a running update moves the branch it pinned and kills it at its pin verify.
+    // Only a HELD lock refuses and only a RELEASED one authorizes the age-free removal;
+    // a marker that proves neither — and any `gd-update-*` worktree outside our own
+    // root, which is the user's — leaves this routing exactly as it was before markers
+    // existed, which the update's own pin verify already makes data-safe.
+    let managed = |w: &&str| marker::is_managed_update_worktree(repo_path, w);
+    if let Some(holder) = owning_worktree.as_deref().filter(managed).map(str::to_string) {
+        match marker::update_worktree_probe(&holder) {
+            LockProbe::Live => return Err(marker::branch_update_refusal(base)),
+            LockProbe::Released => {
+                if !marker::claim_dead_update_worktree(state, repo_path, &holder).await {
+                    return Err(marker::interrupted_update_refusal(base));
+                }
+                let relisted = run_git(
+                    Some(repo_path),
+                    &["worktree", "list", "--porcelain"],
+                    DEFAULT_TIMEOUT,
+                )
+                .await?;
+                owning_worktree = worktree_holding(&relisted.stdout_lossy(), base);
+                // Another update may hold `base` by now. Same rule as above, so each
+                // message stays true: a held lock says running, a released one says
+                // interrupted, and an unprovable one routes as it always did.
+                if let Some(next) = owning_worktree.as_deref().filter(managed) {
+                    match marker::update_worktree_probe(next) {
+                        LockProbe::Live => return Err(marker::branch_update_refusal(base)),
+                        LockProbe::Released => {
+                            return Err(marker::interrupted_update_refusal(base))
+                        }
+                        LockProbe::Missing | LockProbe::Unknown => {}
+                    }
+                }
+            }
+            LockProbe::Missing | LockProbe::Unknown => {}
+        }
+    }
 
     if let Some(worktree) = owning_worktree {
         // Route the fast-forward INTO the worktree holding `base` so its index and
@@ -9733,5 +9788,44 @@ detached
 
         assert!(created);
         assert_eq!(stash_count(&repo).await, 1);
+    }
+
+    /// A local-PR merge must never advance `base` while an update holds it. The marker
+    /// alone is the signal in the PRE-ADD window — nothing is in `worktree list` yet —
+    /// so `finalize_base` has to refuse before it reads the porcelain at all.
+    // The serializing guard MUST span the awaits — it is what keeps the process-wide
+    // root override installed for the whole body.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn finalize_base_refuses_while_an_update_holds_the_base_branch() {
+        use crate::git::update_marker as marker;
+        let (dir, repo) = setup_repo("finalize-update-guard").await;
+        git(&repo, &["branch", "feature"]).await;
+        let tip = rev(&repo, "refs/heads/feature").await;
+        let root = dir.path().join("gd-worktrees");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let _serialized = marker::test_root_lock();
+        let _override = marker::TestRootOverride::set(&root);
+        let _live = marker::UpdateMarker::create_for(&root.join("gd-update-live"), "feature")
+            .expect("the marker mints");
+
+        let state = AppState::default();
+        let current = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await
+            .trim()
+            .to_string();
+        let err = finalize_base(&state, &repo, "feature", &tip, &current, Some(&tip))
+            .await
+            .expect_err("advancing a branch an update is merging is refused");
+        assert_eq!(
+            err.to_string(),
+            marker::branch_update_refusal("feature").to_string()
+        );
+        assert_eq!(
+            rev(&repo, "refs/heads/feature").await,
+            tip,
+            "and the branch is exactly where it was"
+        );
     }
 }
