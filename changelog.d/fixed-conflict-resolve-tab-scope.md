@@ -1,1 +1,0 @@
-- AI conflict resolution stays where it started: a resolve walk can't be picked up by another tab or pull request, and it keeps its place while you glance elsewhere.

@@ -1,1 +1,0 @@
-- The Actions panel now reaches a repository's full run history: **Load more** pages older runs in from the provider, with the total run count alongside it where the provider reports one.

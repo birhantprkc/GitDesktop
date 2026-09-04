@@ -12,6 +12,71 @@ under `changelog.d/` (see its README); those are assembled here at release time 
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-04
+
+### Changed
+
+- The Actions panel now reaches a repository's full run history: **Load more** pages older runs in from the provider, with the total run count alongside it where the provider reports one.
+- Git operations on one repository now recognize it across path spellings and
+  subfolders, and a linked worktree's transfers and worktree maintenance take
+  their turn with the main checkout's instead of racing.
+- The ruleset editor names the app behind each pinned required check, so a
+  context required through several app pins reads as distinct entries.
+- Keyboard shortcuts can be a single key: record one in **Settings → Keyboard** —
+  a bare character key stays quiet while you're typing or in a menu or picker,
+  then fires anywhere else.
+
+### Fixed
+
+- AI-generated text (reviews, security audits, debug explainers, plans, release notes, issue drafts, research) enumerates as (1), (2) and reserves #N for deliberate references to real issues and pull requests.
+- Blame's commit hovercards now show one card at a time: opening one by keyboard
+  or by hover closes any other, and scrolling the file dismisses the open card.
+- While **Update from** brings a branch up to date behind the scenes, the
+  Worktrees manager and the branch lists show only your own work: the update's
+  temporary checkout stays out of both.
+- Staging keeps working while a branch update prepares its temporary worktree,
+  and an update that can no longer proceed says exactly why: the branch moved,
+  the base was rewritten or deleted.
+- Cancelled check runs read as neutral: their own glyph and label in the checks panel, a neutral CI dot on GitLab and Bitbucket PR rows, and required checks still hold the merge until they re-run green — on GitHub, a required check that was cancelled or went stale sorts right after failures, tagged "required", and auto-opens the rollup.
+- A commit comment without a resolvable diff line now shows a clear "couldn't place in this diff" marker when you're viewing its file.
+- AI conflict resolution stays where it started: a resolve walk can't be picked up by another tab or pull request, and it keeps its place while you glance elsewhere.
+- Container sessions, image builds, the Test shell, and cleanup now use whichever
+  container engine is actually running: with both Docker and Podman installed, a
+  stopped Docker no longer blocks a running Podman (and vice versa).
+- Best-of-N runs in a container now flag, per arm, an agent the image wasn't
+  built with, so you can fix the arm before you spend on the run.
+- GitHub calls that target a repository now run against that repository's own host
+  whenever you're signed in to that host: pull requests, Actions, releases, and
+  rulesets on a GitHub Enterprise remote reach its instance, and a `GH_HOST` left set
+  in your shell no longer redirects them.
+- Plan and Research now respect your Default agent setting from the very first
+  submit after launch, matching the session composer.
+- PR label suggestions are steadier: clear-cut fixes propose the matching label more reliably, a suggestion that isn't a repo label is called out beneath the Labels field, and the picker says when labels couldn't be loaded.
+- Pulls and fetches keep the local tags a `fetch.pruneTags` configuration would
+  prune, and repositories whose remote fetch writes outside the usual
+  remote-tracking refs (mirror-style refspecs) pull the way plain `git pull`
+  does.
+- Staging, committing, and other local Git work stay available while a pull is
+  transferring on the everyday setup (a branch tracking its remote, stock pull
+  configuration); the merge or rebase then applies exactly the commits that
+  fetch delivered.
+- When a remote turns down a push, fetch, or clone, the reason now reads as one
+  line: a read-only mirror or archived repository, missing credentials,
+  credentials the remote rejected, or an account without permission on that
+  repository.
+- Required status checks match by name even when a ruleset authored elsewhere
+  pads a context with whitespace, so the blocked-merge line on a pull request
+  and the ruleset editor now read the same contexts.
+- Screen readers now announce which group a settings control belongs to:
+  captions like Rules, Features, and Events name their group of toggles across
+  the repository-settings and app-settings surfaces.
+- The integrated terminal stays responsive while its pane is being resized:
+  typed input and closing the pane remain available through a resize storm.
+- Acting on a branch while **Update from** is bringing it up to date (switching to
+  it, renaming, deleting, or cherry-picking onto it) now says exactly that, and asks
+  you to try again when the update finishes. After a crash or a forced quit, the app
+  clears the update's leftover hidden checkout and frees the branch it was holding.
+
 ## [0.11.0] - 2026-09-02
 
 ### Added
@@ -3628,7 +3693,8 @@ built on Tauri 2; every GitHub feature runs through the GitHub CLI (`gh`).
 - Diff-renderer exceptions are caught by an error boundary instead of taking
   down the whole app.
 
-[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/theBGuy/GitDesktop/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/theBGuy/GitDesktop/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/theBGuy/GitDesktop/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/theBGuy/GitDesktop/compare/v0.9.6...v0.10.0
 [0.9.6]: https://github.com/theBGuy/GitDesktop/compare/v0.9.5...v0.9.6
