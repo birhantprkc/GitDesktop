@@ -185,6 +185,7 @@ import { cn } from "@/lib/utils";
 import { ChecksRollup } from "./ChecksRollup";
 import { LinkedIssuesField } from "./LinkedIssuesField";
 import { PendingReviewBar } from "./PendingReviewBar";
+import { PendingReviewStrip } from "./PendingReviewStrip";
 import { PrActivityFeed, usePrThreadClaims } from "./PrActivityFeed";
 import { PrCommitDetail } from "./PrCommitDetail";
 import {
@@ -2705,6 +2706,20 @@ export function RemotePrView({
         retryBusy={mergeability.isFetching}
       />
 
+      {/* Same slot as the banner above, and shown whatever section is active: an
+          unfinished review is PR state, and the feed no longer carries a row for it.
+          GitHub allows one per viewer — the first is the only one. */}
+      <PendingReviewStrip
+        repoPath={repoPath}
+        lens={lens}
+        number={number}
+        review={threadClaims.pendingReviews[0]}
+        prUrl={pr.url}
+        remoteLabel={remoteLabel}
+        stale={detailsStale}
+        selected={isSelectedPr}
+      />
+
       {aiEnabled && canComment && section === "review" && (
         <PrReviewPanel
           prKind="remote"
@@ -2947,11 +2962,15 @@ export function RemotePrView({
                 revealThreadId={revealThreadId}
                 onRevealed={() => setRevealThreadId(null)}
               />
-              {pr.reviews.length === 0 &&
+              {/* What the FEED holds, not what the payload does: the viewer's own
+                  pending review and its draft line comments are carried by the notice
+                  strip, so counting either here would silence this line over an empty
+                  feed. */}
+              {threadClaims.renderedReviews.length === 0 &&
                 pr.comments.length === 0 &&
                 pr.commits.length === 0 &&
                 !timeline.data?.length &&
-                !reviewThreads.data?.length && (
+                threadClaims.visibleThreadCount === 0 && (
                   <p className="text-xs text-muted-foreground">
                     No activity yet.
                   </p>
@@ -3159,10 +3178,13 @@ export function RemotePrView({
             fileDiff={fileDiff}
             isPending={prDiff.isPending}
             isError={prDiff.isError}
-            // The same threads + handlers/gates the Conversation block uses —
-            // reuse the top-level read/mutations, don't re-fetch. Quoting from a
-            // diff card feeds the view-level composer (persists to Conversation).
-            threads={reviewThreads.data}
+            // The same threads + handlers/gates the Conversation block uses — one
+            // filtered list off the top-level read, not a second fetch, so an
+            // unsubmitted GitHub review's drafts stay out of BOTH tabs rather than
+            // anchoring here as ordinary Reply/Resolve threads. The app's own drafts
+            // arrive separately below, badged. Quoting from a diff card feeds the
+            // view-level composer (persists to Conversation).
+            threads={threadClaims.visibleThreads}
             drafts={drafts.data}
             repoPath={repoPath}
             lens={lens}

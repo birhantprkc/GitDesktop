@@ -17,6 +17,7 @@ import type {
   PrThreadOut,
   ReviewThreadOut,
 } from "@/lib/git/types";
+import { dropDraftsByReviewIds } from "@/lib/pulls/pending-review-threads";
 import { parseableDate } from "@/lib/time";
 import {
   coalesceCommitRuns,
@@ -35,8 +36,13 @@ import {
 
 /** Which reviews render, and which line-comment threads each of them claims. */
 export interface PrThreadClaims {
-  /** Reviews worth a row: a visible body, or a state to report. */
+  /** Reviews worth a row: a visible body, or a state to report — never the viewer's
+   *  own PENDING review, which the notice strip carries instead. */
   renderedReviews: PrThreadOut[];
+  /** The viewer's own unfinished reviews, which the notice strip owns instead of the
+   *  feed. GitHub returns a PENDING review only to its author and allows one at a
+   *  time; the array shape keeps the derivation total. */
+  pendingReviews: PrThreadOut[];
   /** Threads grouped by the review that owns them — one pass, reused for the
    *  claimed-id set and each review's inline slice. */
   threadsByReview: Map<string, ReviewThreadOut[]>;
@@ -49,6 +55,16 @@ export interface PrThreadClaims {
   claimedThreadIds: Set<string>;
   /** Threads no review claimed — the residual block under the feed. */
   residualThreads: ReviewThreadOut[];
+  /** Every thread that survives the pending-draft filter — the ONE list both the
+   *  Conversation feed and the Files pane's line anchors read, so the viewer's
+   *  unsubmitted drafts can't be hidden on one tab and posted-looking on the other.
+   *  `undefined` (not `[]`) while the read hasn't landed, so a consumer can still
+   *  tell loading from empty. */
+  visibleThreads: ReviewThreadOut[] | undefined;
+  /** {@link visibleThreads}' length, 0 while it's still loading — what the feed can
+   *  actually render, claimed and residual together. The empty state reads this
+   *  rather than the raw query length, which still counts drafts nothing renders. */
+  visibleThreadCount: number;
 }
 
 /**
@@ -66,10 +82,20 @@ export function usePrThreadClaims(
     // `reviewId`; always "" on GitLab/Bitbucket, which don't model reviews).
     // Claimed threads render inline under their review; the rest fall to the
     // residual block.
-    const renderedReviews = (reviews ?? []).filter(
-      (r) => hasVisibleBody(r.body) || r.state,
+    const all = reviews ?? [];
+    // A PENDING review is the viewer's own unsubmitted draft — dateless, so a feed row
+    // would sort ahead of everything. Excluded on STATE, not on body: a started review
+    // can already carry a draft summary. The notice strip names the review instead,
+    // and `dropDraftsByReviewIds` takes its line comments out of the threads read.
+    const pendingReviews = all.filter((r) => r.state === "PENDING");
+    const renderedReviews = all.filter(
+      (r) => r.state !== "PENDING" && (hasVisibleBody(r.body) || r.state),
     );
-    const threads = reviewThreads ?? [];
+    // Non-empty ids only — see `dropDraftsByReviewIds` on why an "" member is unsafe.
+    const pendingIds = new Set(
+      pendingReviews.map((r) => r.id).filter((id) => id !== ""),
+    );
+    const threads = dropDraftsByReviewIds(reviewThreads ?? [], pendingIds);
     const threadsByReview = new Map<string, ReviewThreadOut[]>();
     // The thread a wrapper review wraps: the FIRST thread holding a comment whose
     // `reviewId` is that review's — a map rather than a per-row scan over every
@@ -113,11 +139,16 @@ export function usePrThreadClaims(
     const residualThreads = threads.filter((t) => !claimedThreadIds.has(t.id));
     return {
       renderedReviews,
+      pendingReviews,
       threadsByReview,
       wrapperReviewIds,
       wrappedThreadFor,
       claimedThreadIds,
       residualThreads,
+      // The `?? []` above is an internal convenience; the loading arm is preserved
+      // here rather than reported as an empty result.
+      visibleThreads: reviewThreads === undefined ? undefined : threads,
+      visibleThreadCount: threads.length,
     };
   }, [reviews, reviewThreads]);
 }

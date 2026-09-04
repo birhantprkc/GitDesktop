@@ -9,6 +9,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ignoreLines, REPLACEMENT_CHAR } from "@/lib/ai/ignore";
 import { isDirtyTreeRefusal } from "@/lib/error-summary";
+import { dropDraftsByReviewIds } from "@/lib/pulls/pending-review-threads";
 import { reloadReviewNotes } from "@/lib/review-notes/store";
 import { useUiStore } from "@/lib/stores/ui";
 import { isAppError } from "@/lib/tauri/invoke";
@@ -4788,6 +4789,64 @@ export function useUnrequestChangesPr(repo: string) {
   return useRepoMutation(repo, (number: number) =>
     api.forgePrUnrequestChanges(repo, number),
   );
+}
+
+/** Delete the viewer's unfinished (PENDING) review, dropping it from the cached PR
+ *  details optimistically so the notice strip goes at once. The review-threads cache
+ *  is patched in the same breath: the feed hides that review's drafts by matching them
+ *  against the PENDING review, so dropping only the review would flash the drafts in as
+ *  ordinary comments until the settle refetch lands. Rollback is field-scoped on the
+ *  details key (only `reviews`, so a concurrent assignee-set survives); the threads key
+ *  holds nothing else, so it restores whole. GitHub-only — no other provider models a
+ *  pending review. */
+export function useDiscardPendingReview(repo: string, lens: RemoteLens) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { number: number; reviewId: string }) =>
+      api.ghPrDiscardPendingReview(repo, args.reviewId),
+    onMutate: async (args) => {
+      // An "" id would hand dropDraftsByReviewIds a set member its contract bans;
+      // skipping the patch keeps the caches whole while the backend rejects the call.
+      if (!args.reviewId) return;
+      const key = ["repo", repo, "pr", lens, args.number] as const;
+      const threadsKey = prReviewThreadsKey(repo, args.number, lens);
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: key }),
+        queryClient.cancelQueries({ queryKey: threadsKey }),
+      ]);
+      const prev = queryClient.getQueryData<PrDetails>(key);
+      const prevThreads =
+        queryClient.getQueryData<ReviewThreadOut[]>(threadsKey);
+      queryClient.setQueryData<PrDetails>(key, (d) =>
+        d
+          ? { ...d, reviews: d.reviews.filter((r) => r.id !== args.reviewId) }
+          : d,
+      );
+      queryClient.setQueryData<ReviewThreadOut[]>(threadsKey, (list) =>
+        list ? dropDraftsByReviewIds(list, new Set([args.reviewId])) : list,
+      );
+      return { key, threadsKey, prevReviews: prev?.reviews, prevThreads };
+    },
+    onError: (_e, _args, ctx) => {
+      if (ctx === undefined) return;
+      // Locals, not `ctx.x`: a property read doesn't stay narrowed inside the
+      // updater closure below.
+      const { key, threadsKey, prevReviews, prevThreads } = ctx;
+      if (prevReviews !== undefined) {
+        queryClient.setQueryData<PrDetails>(key, (cur) =>
+          cur ? { ...cur, reviews: prevReviews } : cur,
+        );
+      }
+      if (prevThreads !== undefined) {
+        queryClient.setQueryData(threadsKey, prevThreads);
+      }
+    },
+    // Prefix-matches the threads key too, so one invalidate reconciles both.
+    onSettled: (_d, _e, args) =>
+      queryClient.invalidateQueries({
+        queryKey: ["repo", repo, "pr", lens, args.number],
+      }),
+  });
 }
 
 /** Toggle a PR/MR's draft state both ways on all three providers. `lens` threads the
