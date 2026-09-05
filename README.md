@@ -133,6 +133,11 @@ and unstaging a selection sit in the command palette too); discarding a
 whole untracked file goes to the recycle bin. Commit with title + body,
 co-authors suggested from history, amend, undo, reset, and revert.
 
+Markdown and MDX files add a Raw / Preview toggle to the diff, so you can
+read a doc change as rendered prose (headings, tables, and code blocks) on
+the working tree, commit details, stashes, and an agent session's worktree
+changes.
+
 ### Branches
 
 Switch (with a bring-changes / stash prompt), create, rename, delete, and

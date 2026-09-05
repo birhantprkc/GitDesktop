@@ -25,6 +25,7 @@ import {
 import { DisabledReasonButton } from "@/components/disabled-reason-button";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
+import { decodeBase64Utf8 } from "@/lib/git/api";
 import { useFileAtRev } from "@/lib/git/queries";
 import type { FileDiff } from "@/lib/git/types";
 import { useHotkeyAction } from "@/lib/hotkeys/hotkeys";
@@ -50,6 +51,12 @@ import { djb2 } from "./highlight-worker-shared";
 import { installHljsGapIsolation } from "./hljs-gap-isolation";
 import { ImageDiff, ImagePanes, type ImageRevs, imageMime } from "./ImageDiff";
 import {
+  canPreviewMarkdown,
+  type MarkdownDiffView,
+  MarkdownDocPreview,
+  MarkdownViewToggle,
+} from "./MarkdownPreview";
+import {
   ensureBuiltinShikiLang,
   ensureShikiGrammars,
   isBuiltinShikiLang,
@@ -59,7 +66,10 @@ import {
 } from "./shiki-highlighter";
 import { SPLIT_MIN_CONTAINER_PX } from "./split-threshold";
 import { ensureCustomLanguages } from "./syntax";
-import { useHiddenTriggerFocus } from "./use-hidden-trigger-focus";
+import {
+  useFocusOnControlsSwap,
+  useHiddenTriggerFocus,
+} from "./use-hidden-trigger-focus";
 import { useWorkerHighlight, type WorkerAsts } from "./use-worker-highlight";
 
 /**
@@ -156,14 +166,6 @@ function diffMaxLineNumbers(diffText: string): { old: number; new: number } {
   return { old: maxOld, new: maxNew };
 }
 
-/** Decode base64 file bytes (from git_file_base64) to a UTF-8 string. */
-function decodeBase64Utf8(b64: string): string {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
-}
-
 /** The persisted Unified/Split preference toggle. */
 export function DiffModeToggle({
   splitDisabled = false,
@@ -183,10 +185,11 @@ export function DiffModeToggle({
     // DisabledReasonButton's wrapper span has no `data-slot`, so it opts out of
     // ButtonGroup's border-collapse/rounding child selectors — this call site
     // owns the seam on the Button instead (same arrangement as SyncControls).
-    <ButtonGroup>
+    <ButtonGroup aria-label="Diff view mode">
       <Button
         variant={effectiveViewMode === "unified" ? "secondary" : "ghost"}
         size="xs"
+        aria-pressed={effectiveViewMode === "unified"}
         onClick={() =>
           !splitDisabled &&
           settings.data &&
@@ -198,6 +201,7 @@ export function DiffModeToggle({
       <DisabledReasonButton
         variant={effectiveViewMode === "split" ? "secondary" : "ghost"}
         size="xs"
+        aria-pressed={effectiveViewMode === "split"}
         disabled={splitDisabled}
         reason="Pane too narrow for split view"
         className="border-l-0 focus-visible:relative focus-visible:z-10"
@@ -1228,14 +1232,26 @@ export function DiffContent({
   // The picker's trigger is hidden below @md, so the palette action is its only
   // route at narrow widths — which makes the open state the toolbar's to own.
   const [langOpen, setLangOpen] = useState(false);
+  // Raw ⇄ Preview for markdown/MDX files. Per-file and never persisted — a
+  // sticky global "preview" would be meaningless on the non-markdown files
+  // that are most of a diff list, so every file opens on Raw.
+  const [mdView, setMdView] = useState<MarkdownDiffView>("raw");
+  const [prevMdPath, setPrevMdPath] = useState(filePath);
+  // Guarded same-component reset during render (React's adjust-state-when-
+  // props-change idiom, same as RenderedDiff's prevPath resets): it converges
+  // before commit, where an effect would paint the outgoing file's view first.
+  if (prevMdPath !== filePath) {
+    setPrevMdPath(filePath);
+    if (mdView !== "raw") setMdView("raw");
+  }
   const {
     wrapRef: langWrapRef,
     controlsRef,
     returnFocusIfTriggerHidden,
   } = useHiddenTriggerFocus();
   // Computed above the early-return chain (which the `emptyDiff` arm joins, so
-  // the text is trimmed once) because the registration below is a hook: offer
-  // the action only in the states that actually render the picker.
+  // the text is trimmed once) because the registrations below are hooks: offer
+  // each action only in the states that actually render its control.
   const emptyDiff = data !== undefined && data.text.trim() === "";
   const showsToolbar =
     !isPending &&
@@ -1244,10 +1260,20 @@ export function DiffContent({
     data.filePath === filePath &&
     !data.isBinary &&
     !emptyDiff;
+  const canPreview =
+    showsToolbar && canPreviewMarkdown(filePath, repoPath, contentRevs);
+  const previewOn = canPreview && mdView === "preview";
+  useFocusOnControlsSwap(previewOn, controlsRef);
   useHotkeyAction(
     "change-diff-language",
     () => setLangOpen(true),
-    showsToolbar && Boolean(fileExt(filePath)),
+    // In Preview the picker isn't mounted, so the action would open nothing.
+    showsToolbar && !previewOn && Boolean(fileExt(filePath)),
+  );
+  useHotkeyAction(
+    "toggle-markdown-preview",
+    () => setMdView((v) => (v === "raw" ? "preview" : "raw")),
+    canPreview,
   );
 
   // Diffs load near-instantly from local git, so a skeleton only adds a flash
@@ -1295,8 +1321,9 @@ export function DiffContent({
         </span>
         {/* ~200px of unshrinkable text, so it shows only where the pane has the
             room; the sr-only twin carries it at every width, and `aria-hidden`
-            on the visible copy keeps the two from announcing twice. */}
-        {data.isTruncated && (
+            on the visible copy keeps the two from announcing twice. Hidden in
+            Preview, which reads the full file rather than the truncated diff. */}
+        {data.isTruncated && !previewOn && (
           <>
             <span aria-hidden className="hidden shrink-0 @2xl/diff-pane:inline">
               (truncated — diff too large)
@@ -1314,49 +1341,74 @@ export function DiffContent({
           tabIndex={-1}
           className="flex min-h-7 shrink-0 items-center gap-1.5 outline-none"
         >
-          {/* The only variable-width control here (its label follows the
-              language name), so it's the one that goes under @md — leaving the
-              row a fixed floor. It must stay laid out while its popup is open,
-              though: Base UI anchors to the trigger, and a display:none trigger
-              positions the popup at 0,0. `empty:hidden` keeps the row's gap off
-              an extensionless file, where the picker renders nothing. */}
-          <span
-            ref={langWrapRef}
-            className="hidden @md/diff-pane:flex empty:hidden has-[[data-popup-open]]:flex"
-          >
-            <DiffLanguagePicker
-              filePath={filePath}
-              open={langOpen}
-              onOpenChange={(open) => {
-                setLangOpen(open);
-                if (!open) returnFocusIfTriggerHidden();
-              }}
-            />
-          </span>
-          <DiffModeToggle splitDisabled={narrowPane} />
+          {canPreview && (
+            <MarkdownViewToggle view={mdView} onChange={setMdView} />
+          )}
+          {/* The picker and Unified/Split configure the raw diff, so they
+              leave the cluster while Preview is up (the same swap this row
+              already does for the working-tree selection actions). */}
+          {!previewOn && (
+            <>
+              {/* The only variable-width control here (its label follows the
+                  language name), so it's the one that goes under @md — leaving
+                  the row a fixed floor. It must stay laid out while its popup
+                  is open, though: Base UI anchors to the trigger, and a
+                  display:none trigger positions the popup at 0,0.
+                  `empty:hidden` keeps the row's gap off an extensionless file,
+                  where the picker renders nothing. */}
+              <span
+                ref={langWrapRef}
+                className="hidden @md/diff-pane:flex empty:hidden has-[[data-popup-open]]:flex"
+              >
+                <DiffLanguagePicker
+                  filePath={filePath}
+                  open={langOpen}
+                  onOpenChange={(open) => {
+                    setLangOpen(open);
+                    if (!open) returnFocusIfTriggerHidden();
+                  }}
+                />
+              </span>
+              <DiffModeToggle splitDisabled={narrowPane} />
+            </>
+          )}
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {svgPreview && repoPath && imageRevs && (
-          <div className="border-b">
-            <ImagePanes
-              repoPath={repoPath}
+        {previewOn && repoPath && contentRevs ? (
+          // Passed the raw revs, not the truncation-stripped pair below:
+          // preview reads the file, not the diff, so it works on exactly the
+          // truncated diffs content mode gives up on.
+          <MarkdownDocPreview
+            repoPath={repoPath}
+            filePath={filePath}
+            revs={contentRevs}
+          />
+        ) : (
+          <>
+            {svgPreview && repoPath && imageRevs && (
+              <div className="border-b">
+                <ImagePanes
+                  repoPath={repoPath}
+                  filePath={filePath}
+                  revs={imageRevs}
+                />
+              </div>
+            )}
+            <GitDiffView
               filePath={filePath}
-              revs={imageRevs}
+              text={data.text}
+              repoPath={repoPath}
+              // A truncated diff was cut by the byte cap and can't line up
+              // with the full file text, so don't try whole-file highlighting
+              // there.
+              contentRevs={data.isTruncated ? undefined : contentRevs}
+              lineAnchors={lineAnchors}
+              lineWidget={lineWidget}
+              forceUnified={narrowPane}
             />
-          </div>
+          </>
         )}
-        <GitDiffView
-          filePath={filePath}
-          text={data.text}
-          repoPath={repoPath}
-          // A truncated diff was cut by the byte cap and can't line up with the
-          // full file text, so don't try whole-file highlighting there.
-          contentRevs={data.isTruncated ? undefined : contentRevs}
-          lineAnchors={lineAnchors}
-          lineWidget={lineWidget}
-          forceUnified={narrowPane}
-        />
       </div>
     </div>
   );
